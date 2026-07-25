@@ -76,11 +76,11 @@ Admin
 
 - 汇总卡片：总数、正常、限流、异常、禁用，以及可用配额合计；
 - 本地关键词搜索（邮箱）、状态与类型筛选；
-- 表格列：账号 ID、脱敏邮箱、类型、来源、状态、配额、最后使用时间、操作；
+- 表格列与原 `chatgpt2api` 账号池的运营视图一致：账号 ID、类型、来源、状态、脱敏账号信息、创建时间、额度、恢复时间、在途图片数、成功、失败和操作；小屏通过表格横向滚动保留完整列，不压缩成不可读的窄列；
 - 支持多选，批量刷新、批量删除和批量导出；
 - 所有 token 只允许后端返回的脱敏值用于辅助识别，页面不提供 token 复制按钮。
 
-账号 ID 应成为所有写操作的唯一标识。页面不得以 token、邮箱或表格下标作为 API 请求标识。旧页面中的恢复时间、图片在途数、成功/失败计数和创建时间不属于当前 `AccountView` 合同，不是本轮页面的阻塞项；若未来确有运营需求，必须由账号池 owner 扩展只读 view 后再接入。
+账号 ID 应成为所有写操作的唯一标识。页面不得以 token、邮箱或表格下标作为 API 请求标识。账号池 owner 的非敏感只读 `AccountView` 已提供 `restore_at`、`image_inflight`、`success`、`fail` 和 `created_at`，用于该运营表格；其中在途图片数为当前进程运行态，进程重启后归零。与旧页面不同，账号列使用稳定账号 ID，邮箱继续脱敏，且不显示或复制完整 token。
 
 #### 导入、编辑、刷新与删除
 
@@ -104,7 +104,7 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 
 - 生成表单：`owner_id`、`client_task_id`、prompt、model、size、quality；`client_task_id` 默认生成 UUID，并允许重新生成；
 - 编辑表单：在生成表单的基础上提交至少一张图片。首轮支持 data URL 或已可访问的图片 URL；不额外引入上传/文件服务；
-- 任务列表：任务 ID、会话标识（若有）、模式、模型、状态、进度、耗时、错误摘要、结果缩略图、提交/更新时间；
+- 任务列表：任务 ID、会话标识（若有）、模式、模型、状态、进度、耗时、错误摘要、结果缩略图、提交/更新时间；状态与已知进度用中文运营语义显示，错误高亮且截断，缩略图可预览；窄屏保留横向滚动，避免任务字段和操作按钮相互挤压；
 - 自动轮询只针对当前页面发起且未终态的任务；离开页签、切换 owner 或页面卸载时取消 timer；
 - “恢复轮询”只对非终态或可恢复失败任务可点，默认 `extra_timeout_secs=30`；
 - 图片可点击预览。后端返回的 URL 必须作为普通图片资源加载，不能内联不可信 HTML。
@@ -155,7 +155,7 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 仅在下列需求不能由现有响应满足时，才允许补最小接口，且必须先更新本设计和合同测试：
 
 1. 图片缩略图 URL 不是 Admin 同源受控 URL，或无法由浏览器直接安全访问时，可增加一个只读、Admin 鉴权、路径严格校验的图片读取端点；不得暴露通用 `/files/**`。
-2. 账号或任务列表确需展示当前合同以外的运营字段（例如恢复时间、图片在途数、成功/失败计数或客户端任务 ID）时，由其 owner 补充稳定的非敏感只读 view；不得退化为以脱敏 token 作标识。
+2. 账号或任务列表确需展示当前合同以外的运营字段时，由其 owner 补充稳定的非敏感只读 view；不得退化为以脱敏 token 作标识。账号池的恢复时间、图片在途数、成功/失败计数和创建时间已由账号池 owner 实现并覆盖合同测试。
 3. 图片任务响应不含状态、进度、错误摘要或安全结果引用时，补充只读 task view，不把上游原始响应透传给浏览器。
 
 不应为了页面而增加：远端存储、压缩清理、通用上传、代理配置、账号密码重登或另一套图片任务持久化。
@@ -240,9 +240,10 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 | 位置 | 变更 |
 | --- | --- |
 | `web/admin/index.html` | 新增一级页签「ChatGPT Web」与二级「账号池 / 图片任务 / 图片库」；导入/编辑/刷新/OAuth/导出、显式 owner 图片任务、图片网格/标签/删除与 lightbox；路由 hash `#/chatgpt/{accounts\|tasks\|images}` |
+| `internal/modules/application/chatgptaccountpool/pkg/events/contract.go`、`internal/modules/application/chatgptaccountpool/internal/store/store.go` | 账号池 owner 的只读 view 补齐恢复时间、在途图片数、成功/失败计数和创建时间；图片结果写入成功/失败计数，在途数仅代表当前进程运行态 |
 | `internal/modules/application/adminapi/service/admin/handler.go` | 最小只读内容端点 `GET /api/chatgpt/images/content?path=&thumb=`；列表响应将 `url`/`thumbnail_url` 重写为 Admin 同源受控 URL |
 | `internal/modules/application/adminapi/biz/chatgpt.go` | `GetChatGPTImageBytes` / `GetChatGPTImageThumbnail` 经 EventHub 调用 imagestore owner |
-| `internal/modules/application/adminapi/service/admin/chatgpt_accounts_test.go` | 列表 URL 重写、内容端点成功/路径穿越/503 合同测试 |
+| `internal/modules/application/adminapi/service/admin/chatgpt_accounts_test.go` | 账号运营字段与敏感字段脱敏、列表 URL 重写、内容端点成功/路径穿越/503 合同测试 |
 
 ### 最小 API 合同补充
 
@@ -253,6 +254,8 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 - `GET .../api/chatgpt/images` 返回的图片 URL 统一为上述 content 端点，不再使用未挂载的 `/images/**` 公共路径
 
 未增加：远端存储、压缩清理、通用上传、代理配置、密码重登、平行图片任务持久化。
+
+账号池表格使用稳定账号 ID 替代旧页面 token 列，其他运营列与原 `chatgpt2api` 对齐；窄屏保留横向滚动，避免把表格压缩成逐字换行。完整 token、proxy 与未脱敏邮箱仍不进入普通管理页。
 
 ### 验证结果
 

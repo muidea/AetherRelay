@@ -211,7 +211,9 @@ func (s *Store) List() []events.AccountView {
 		if acc == nil {
 			continue
 		}
-		out = append(out, toView(acc, true))
+		view := toView(acc, true)
+		view.ImageInflight = s.imageInflight[token]
+		out = append(out, view)
 	}
 	return out
 }
@@ -275,6 +277,13 @@ func extraString(acc *Account, key string) string {
 		return ""
 	}
 	return asString(acc.Extra[key])
+}
+
+func extraInt(acc *Account, key string) int {
+	if acc == nil || acc.Extra == nil {
+		return 0
+	}
+	return asInt(acc.Extra[key])
 }
 
 func jwtClaims(token string) map[string]any {
@@ -901,8 +910,18 @@ func (s *Store) MarkImageResult(token string, success bool) (events.AccountView,
 			acc.Status = StatusLimited
 		}
 	}
+	if acc.Extra == nil {
+		acc.Extra = map[string]any{}
+	}
+	if success {
+		acc.Extra["success"] = extraInt(acc, "success") + 1
+	} else {
+		acc.Extra["fail"] = extraInt(acc, "fail") + 1
+	}
 	_ = s.saveLocked()
-	return toView(acc, true), true
+	view := toView(acc, true)
+	view.ImageInflight = s.imageInflight[token]
+	return view, true
 }
 
 func (s *Store) AcquireTextToken(exclude []string) (events.AccountView, bool) {
@@ -974,6 +993,10 @@ func toView(acc *Account, withToken bool) events.AccountView {
 		SourceType: acc.SourceType,
 		Status:     acc.Status,
 		Quota:      acc.Quota,
+		RestoreAt:  extraString(acc, "restore_at"),
+		Success:    extraInt(acc, "success"),
+		Fail:       extraInt(acc, "fail"),
+		CreatedAt:  acc.CreatedAt,
 		Proxy:      acc.Proxy,
 		LastUsedAt: acc.LastUsedAt,
 	}

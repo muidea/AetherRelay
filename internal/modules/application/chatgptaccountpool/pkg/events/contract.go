@@ -27,15 +27,20 @@ const (
 )
 
 type AccountView struct {
-	ID          string `json:"id"`
-	Email       string `json:"email,omitempty"`
-	Type        string `json:"type,omitempty"`
-	SourceType  string `json:"source_type,omitempty"`
-	Status      string `json:"status"`
-	Quota       int    `json:"quota"`
-	AccessToken string `json:"access_token,omitempty"`
-	Proxy       string `json:"proxy,omitempty"`
-	LastUsedAt  string `json:"last_used_at,omitempty"`
+	ID            string `json:"id"`
+	Email         string `json:"email,omitempty"`
+	Type          string `json:"type,omitempty"`
+	SourceType    string `json:"source_type,omitempty"`
+	Status        string `json:"status"`
+	Quota         int    `json:"quota"`
+	RestoreAt     string `json:"restore_at,omitempty"`
+	ImageInflight int    `json:"image_inflight"`
+	Success       int    `json:"success"`
+	Fail          int    `json:"fail"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	AccessToken   string `json:"access_token,omitempty"`
+	Proxy         string `json:"proxy,omitempty"`
+	LastUsedAt    string `json:"last_used_at,omitempty"`
 }
 
 type ListCommand struct{}

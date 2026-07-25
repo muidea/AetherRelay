@@ -47,12 +47,34 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 	if !ok {
 		t.Fatal("acquire after release failed")
 	}
-	s.MarkImageResult(acc2.AccessToken, true)
+	result, marked := s.MarkImageResult(acc2.AccessToken, true)
+	if !marked || result.Success != 1 || result.Fail != 0 || result.ImageInflight != 1 {
+		t.Fatalf("image result accounting=%+v marked=%v", result, marked)
+	}
 	s.ReleaseImageSlot(acc2.AccessToken)
 
 	h := s.Health()
 	if h.Total != 2 {
 		t.Fatalf("total=%d", h.Total)
+	}
+}
+
+func TestListProjectsLegacyAccountOperationsFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	if err := os.WriteFile(path, []byte(`[{"access_token":"token-a","status":"正常","quota":2,"created_at":"2026-07-26T01:02:03Z","restore_at":"2026-07-26T03:04:05Z","success":4,"fail":2}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(path, 1)
+	if _, ok := s.AcquireImageToken("", "", nil); !ok {
+		t.Fatal("acquire image token")
+	}
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("items=%d", len(items))
+	}
+	item := items[0]
+	if item.CreatedAt == "" || item.RestoreAt == "" || item.ImageInflight != 1 || item.Success != 4 || item.Fail != 2 {
+		t.Fatalf("legacy account operations view=%+v", item)
 	}
 }
 

@@ -28,7 +28,19 @@ type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
 func (unavailableChatGPTRuntimeStub) ChatGPTWebEnabled() bool { return false }
 
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
-	return []accevents.AccountView{{ID: "account-1", AccessToken: "token-very-secret", Proxy: "http://private.invalid"}}, nil
+	return []accevents.AccountView{{
+		ID:            "account-1",
+		Email:         "operator@example.invalid",
+		Status:        "正常",
+		Quota:         7,
+		RestoreAt:     "2026-07-27T01:02:03Z",
+		ImageInflight: 1,
+		Success:       9,
+		Fail:          2,
+		CreatedAt:     "2026-07-26T01:02:03Z",
+		AccessToken:   "token-very-secret",
+		Proxy:         "http://private.invalid",
+	}}, nil
 }
 func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, _ string) (accevents.AddResult, error) {
 	s.addedTokens = append([]string(nil), tokens...)
@@ -113,8 +125,14 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	list.RemoteAddr = "127.0.0.1:1234"
 	listRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(listRecorder, list)
-	if listRecorder.Code != http.StatusOK || strings.Contains(listRecorder.Body.String(), "very-secret") || strings.Contains(listRecorder.Body.String(), "private.invalid") {
+	body := listRecorder.Body.String()
+	if listRecorder.Code != http.StatusOK || strings.Contains(body, "very-secret") || strings.Contains(body, "private.invalid") {
 		t.Fatalf("list=%d %s", listRecorder.Code, listRecorder.Body.String())
+	}
+	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("list response missing account operations field %q: %s", field, body)
+		}
 	}
 
 	add := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(`{"tokens":["new-token"]}`))

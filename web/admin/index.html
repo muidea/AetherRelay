@@ -29,6 +29,20 @@
     .status-normal{color:#237804;background:#f6ffed;border-color:#b7eb8f}.status-limited{color:#ad6800;background:#fffbe6;border-color:#ffe58f}.status-abnormal{color:#cf1322;background:#fff1f0;border-color:#ffa39e}.status-disabled{color:#595959;background:#fafafa;border-color:#d9d9d9}
     .task-form{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}.task-form .full{grid-column:1/-1}.muted-box{padding:14px;border:1px dashed var(--border);border-radius:8px;color:var(--muted);text-align:center;background:#fafafa}
     @media(max-width:760px){.task-form{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}}
+    .task-id-row{display:flex;gap:8px;align-items:stretch}.task-id-row .control{min-width:0}.task-id-row .btn{flex:0 0 auto;white-space:nowrap}.cg-account-toolbar .toolbar-meta,.cg-image-toolbar .toolbar-meta{white-space:nowrap}.table-wrap{-webkit-overflow-scrolling:touch;overscroll-behavior-inline:contain}
+    .task-owner-bar{background:linear-gradient(135deg,#fafcff,#f4f8ff)}.task-owner-bar .field{max-width:760px}.task-owner-controls{display:flex;gap:10px;align-items:stretch}.task-owner-controls .control{min-width:0}.task-owner-controls .btn{flex:0 0 auto;min-width:96px;white-space:nowrap}.task-submit-card{padding:14px 16px;margin-bottom:16px}.task-submit-toolbar{border:0;padding:0 0 12px;min-height:auto}.task-submit-toolbar .toolbar-title{display:flex;align-items:center;gap:8px}.task-mode-switch{display:flex;gap:6px;align-items:center}.task-mode-switch .btn{min-width:76px}.task-mode-switch .btn.active{color:#0958d9;background:#e6f4ff;border-color:#91caff;font-weight:600}.task-submit-actions{display:flex;justify-content:flex-end;gap:8px}.task-submit-actions .btn{min-width:104px}.cg-task-table{min-width:1490px}.cg-task-table th,.cg-task-table td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cg-task-table th:nth-child(1){width:132px}.cg-task-table th:nth-child(2){width:140px}.cg-task-table th:nth-child(3){width:72px}.cg-task-table th:nth-child(4){width:108px}.cg-task-table th:nth-child(5){width:86px}.cg-task-table th:nth-child(6){width:132px}.cg-task-table th:nth-child(7){width:74px}.cg-task-table th:nth-child(8){width:188px}.cg-task-table th:nth-child(9){width:184px}.cg-task-table th:nth-child(10),.cg-task-table th:nth-child(11){width:126px}.cg-task-table th:nth-child(12){width:96px}.task-progress{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;color:#595959}.task-elapsed{font-variant-numeric:tabular-nums}.task-error{color:#cf1322}.task-results{display:flex;gap:5px;flex-wrap:wrap;min-height:48px;align-items:center}.task-results-empty{color:var(--muted);font-size:12px}.task-date{font-variant-numeric:tabular-nums}.task-status-queued{color:#595959;background:#fafafa;border-color:#d9d9d9}.task-status-running{color:#0958d9;background:#e6f4ff;border-color:#91caff}.task-status-success{color:#237804;background:#f6ffed;border-color:#b7eb8f}.task-status-error{color:#cf1322;background:#fff1f0;border-color:#ffa39e}.cg-task-table .task-actions{overflow:visible;text-overflow:clip;white-space:nowrap}
+    /* Keep the account-pool operations view aligned with chatgpt2api.  The
+       table deliberately scrolls on narrow displays instead of squeezing
+       operational columns into unreadable fragments. */
+    .cg-account-table{min-width:1480px}.cg-account-table th,.cg-account-table td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cg-account-table th:nth-child(1){width:42px}.cg-account-table th:nth-child(2){width:145px}.cg-account-table th:nth-child(3){width:84px}.cg-account-table th:nth-child(4){width:92px}.cg-account-table th:nth-child(5){width:84px}.cg-account-table th:nth-child(6){width:150px}.cg-account-table th:nth-child(7){width:126px}.cg-account-table th:nth-child(8){width:72px}.cg-account-table th:nth-child(9){width:172px}.cg-account-table th:nth-child(10),.cg-account-table th:nth-child(11),.cg-account-table th:nth-child(12){width:58px}.cg-account-table th:nth-child(13){width:150px}.cg-account-table .actions{overflow:visible;text-overflow:clip}.cg-account-table .restore-time{line-height:1.35;white-space:normal}.cg-account-table .restore-relative{font-weight:600;color:#595959}.account-inflight{font-weight:600;color:#d46b08}
+    @media(max-width:760px){
+      .header{height:auto;min-height:64px;padding:10px 16px;gap:8px 12px;flex-wrap:wrap;align-items:center}.brand{min-width:0}.brand h1{font-size:17px}.brand small,.header-status span{display:none}.header-status{margin-left:auto}.nav{order:3;width:100%;margin:0;gap:6px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}.nav a{flex:0 0 auto;white-space:nowrap;padding:6px 10px}
+      main{padding:18px 16px 32px}.hero{margin-bottom:16px;gap:12px}.hero h2{font-size:22px}.hero p{font-size:13px}.subnav{margin-bottom:14px}.subnav button{flex:1 1 0;padding:4px 8px}
+      .cg-account-toolbar .search{order:2;width:100%;margin-left:0}.cg-account-toolbar select{flex:1 1 calc(50% - 4px);width:auto!important;min-width:0}.cg-account-toolbar .cg-toolbar-actions{order:3;width:100%;margin-left:0;gap:6px}.cg-account-toolbar .cg-toolbar-actions .btn{flex:1 1 calc(50% - 3px);padding:4px 8px}
+      .cg-image-toolbar #cgImgStart,.cg-image-toolbar #cgImgEnd{margin-left:0!important;flex:1 1 calc(50% - 4px);width:calc(50% - 4px)!important;min-width:0}.cg-image-toolbar #cgImgTagFilter{flex:1 1 100%;width:100%!important}.cg-image-toolbar .cg-toolbar-actions{width:100%;margin-left:0!important}.cg-image-toolbar .cg-toolbar-actions .btn{flex:1}
+      .owner-bar{padding:12px}.owner-bar .field{min-width:0;flex-basis:100%}.task-owner-controls{flex-direction:column}.task-owner-controls #cgTaskReload{width:100%}.task-id-row .btn{min-width:88px}.task-submit-card{padding:12px}.task-submit-toolbar{gap:8px}.task-submit-toolbar .toolbar-title{width:100%}.task-mode-switch{width:100%}.task-mode-switch .btn{flex:1}.task-submit-actions .btn{width:100%}.cg-progress{overflow-wrap:anywhere}.image-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px}#cgImgDisk,#cgImgFree{font-size:clamp(21px,6vw,26px);line-height:1.3;overflow-wrap:anywhere}
+      .modal-head{height:52px;padding:0 16px}.modal-body{padding:18px 16px 6px}.modal-foot{padding:12px 16px}.modal-foot .btn{flex:1}.toast-wrap{right:12px;left:12px;top:auto;bottom:12px}.toast{min-width:0;max-width:none}
+    }
   </style>
 </head>
 <body>
@@ -137,7 +151,7 @@
         </section>
         <div id="cgRefreshProgress" class="cg-progress hidden"></div>
         <section class="card">
-          <div class="toolbar">
+          <div class="toolbar cg-account-toolbar">
             <span class="toolbar-title">账号列表</span>
             <span class="toolbar-meta" id="cgAccMeta"></span>
             <input id="cgAccSearch" class="search" type="search" autocomplete="off" placeholder="搜索脱敏邮箱">
@@ -164,31 +178,30 @@
       </div>
 
       <div id="cgPanelTasks" class="hidden">
-        <div class="owner-bar">
+        <div class="owner-bar task-owner-bar">
           <div class="field">
             <label class="label required" for="cgTaskOwner">owner_id</label>
-            <input id="cgTaskOwner" class="control" autocomplete="off" placeholder="任务隔离边界，必填">
+            <div class="task-owner-controls"><input id="cgTaskOwner" class="control" autocomplete="off" placeholder="任务隔离边界，必填"><button type="button" class="btn" id="cgTaskReload">查询任务</button></div>
             <div class="help">切换 owner 会清空当前任务列表与轮询，不会静默使用固定共享 owner。</div>
           </div>
-          <button type="button" class="btn" id="cgTaskReload">查询任务</button>
         </div>
-        <section class="card" style="padding:14px 16px;margin-bottom:16px">
-          <div class="toolbar" style="border:0;padding:0 0 10px;min-height:auto"><span class="toolbar-title">提交图片任务</span>
-            <div class="cg-toolbar-actions">
+        <section class="card task-submit-card">
+          <div class="toolbar task-submit-toolbar"><span class="toolbar-title">提交图片任务</span>
+            <div class="task-mode-switch">
               <button type="button" class="btn" id="cgTaskModeGen" data-task-mode="generation">文生图</button>
               <button type="button" class="btn" id="cgTaskModeEdit" data-task-mode="edit">图生图</button>
             </div>
           </div>
           <form id="cgTaskForm" class="task-form" autocomplete="off">
             <div class="field"><label class="label required" for="cgTaskClientId">client_task_id</label>
-              <div style="display:flex;gap:8px"><input id="cgTaskClientId" class="control mono" required autocomplete="off"><button type="button" class="btn" id="cgTaskRegenId">重新生成</button></div>
+              <div class="task-id-row"><input id="cgTaskClientId" class="control mono" required autocomplete="off"><button type="button" class="btn" id="cgTaskRegenId">重新生成</button></div>
             </div>
             <div class="field"><label class="label" for="cgTaskModel">model</label><input id="cgTaskModel" class="control" autocomplete="off" placeholder="可选"></div>
             <div class="field"><label class="label" for="cgTaskSize">size</label><input id="cgTaskSize" class="control" autocomplete="off" placeholder="例如 1024x1024"></div>
             <div class="field"><label class="label" for="cgTaskQuality">quality</label><input id="cgTaskQuality" class="control" autocomplete="off" placeholder="可选"></div>
             <div class="field full"><label class="label required" for="cgTaskPrompt">prompt</label><textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off"></textarea></div>
             <div class="field full hidden" id="cgTaskImagesField"><label class="label required" for="cgTaskImages">images（data URL 或可访问 URL，每行一个）</label><textarea id="cgTaskImages" class="control" rows="3" autocomplete="off" placeholder="data:image/png;base64,...&#10;https://example.invalid/a.png"></textarea></div>
-            <div class="field full" style="display:flex;justify-content:flex-end;gap:8px">
+            <div class="field full task-submit-actions">
               <button type="submit" class="btn btn-primary" id="cgTaskSubmit">提交任务</button>
             </div>
           </form>
@@ -207,7 +220,7 @@
           <div class="stat"><div class="stat-label">磁盘剩余</div><div class="stat-value" id="cgImgFree">—</div></div>
         </section>
         <section class="card">
-          <div class="toolbar">
+          <div class="toolbar cg-image-toolbar">
             <span class="toolbar-title">图片库</span>
             <span class="toolbar-meta" id="cgImgMeta"></span>
             <input id="cgImgStart" class="control" type="date" style="width:150px;min-height:30px;margin-left:auto" title="开始日期">
@@ -358,6 +371,24 @@ function maskEmail(email){
   const shown=name.length<=2?name[0]+"*":name.slice(0,2)+"***";
   return esc(shown+"@"+domain);
 }
+function formatAccountDate(value){
+  const raw=String(value||"").trim();
+  if(!raw)return "—";
+  const date=new Date(raw);
+  if(Number.isNaN(date.getTime()))return raw.slice(0,16);
+  return date.toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
+}
+function formatRestoreAt(value){
+  const raw=String(value||"").trim();
+  if(!raw)return {absolute:"—",relative:""};
+  const date=new Date(raw);
+  if(Number.isNaN(date.getTime()))return {absolute:raw.slice(0,19),relative:""};
+  const seconds=Math.max(0,Math.ceil((date.getTime()-Date.now())/1000));
+  const absolute=formatAccountDate(raw);
+  if(seconds===0)return {absolute,relative:"已到恢复时间"};
+  const totalHours=Math.ceil(seconds/3600);
+  return {absolute,relative:`剩余 ${Math.floor(totalHours/24)}天 ${totalHours%24}小时`};
+}
 async function request(url,options={}){
   const opts={cache:"no-store",credentials:"same-origin",...options};
   const r=await fetch(url,opts);
@@ -461,6 +492,17 @@ function statusTag(status){
   const cls=map[status]||"tag-default";
   return `<span class="tag ${cls}">${esc(status||"—")}</span>`;
 }
+function taskStatusTag(status){
+  const value=String(status||"").toLowerCase();
+  const map={queued:"task-status-queued",running:"task-status-running",success:"task-status-success",error:"task-status-error",failed:"task-status-error",cancelled:"task-status-error",canceled:"task-status-error"};
+  const labels={queued:"排队中",running:"处理中",success:"成功",error:"失败",failed:"失败",cancelled:"已取消",canceled:"已取消"};
+  return `<span class="tag ${map[value]||"tag-default"}">${esc(labels[value]||status||"—")}</span>`;
+}
+function taskProgressLabel(progress){
+  const value=String(progress||"").trim();
+  const labels={queued:"等待调度",getting_account:"正在获取账号",starting_generation:"正在提交生成",starting_edit:"正在提交编辑",resuming_poll:"正在恢复轮询",receiving_image:"正在接收结果"};
+  return labels[value]||value||"—";
+}
 
 async function loadChatGPTAccounts(){
   const box=$("cgAccTable");
@@ -512,16 +554,24 @@ function renderChatGPTAccounts(){
   if(!rows.length){$("cgAccTable").className="";$("cgAccTable").innerHTML=`<div class="empty">${all.length?"没有匹配的账号":"尚未导入账号"}</div>`;return}
   const body=rows.map(a=>{
     const checked=state.cg.selected.has(a.id)?"checked":"";
-    const last=a.last_used_at?new Date(a.last_used_at).toLocaleString():"—";
+    const quota=Number.isFinite(Number(a.quota))?Number(a.quota):0;
+    const inflight=Math.max(0,Number(a.image_inflight)||0);
+    const success=Math.max(0,Number(a.success)||0);
+    const fail=Math.max(0,Number(a.fail)||0);
+    const restore=formatRestoreAt(a.restore_at);
     return `<tr>
       <td><input type="checkbox" data-acc-check="${esc(a.id)}" ${checked}></td>
       <td class="mono" title="${esc(a.id)}">${esc(a.id)}</td>
-      <td>${maskEmail(a.email)}</td>
       <td>${esc(a.type||"—")}</td>
       <td>${esc(a.source_type||"—")}</td>
       <td>${statusTag(a.status)}</td>
-      <td>${Number.isFinite(Number(a.quota))?a.quota:"—"}</td>
-      <td>${esc(last)}</td>
+      <td>${maskEmail(a.email)}</td>
+      <td class="subtle">${esc(formatAccountDate(a.created_at))}</td>
+      <td><span class="tag">${quota}</span></td>
+      <td class="subtle restore-time" title="${esc(String(a.restore_at||""))}">${restore.relative?`<div class="restore-relative">${esc(restore.relative)}</div>`:""}<div>${esc(restore.absolute)}</div></td>
+      <td class="${inflight>0?"account-inflight":"subtle"}" title="${inflight>0?"当前正在生成的图片数；号池空闲时持续大于 0，可能表示并发槽位未释放。":"当前无在途生图任务"}">${inflight}</td>
+      <td class="subtle">${success}</td>
+      <td class="subtle">${fail}</td>
       <td><div class="actions">
         <button class="link-btn" data-acc-edit="${esc(a.id)}">编辑</button>
         <button class="link-btn" data-acc-refresh="${esc(a.id)}" ${state.cg.refresh.busy?"disabled":""}>刷新</button>
@@ -530,9 +580,9 @@ function renderChatGPTAccounts(){
     </tr>`;
   }).join("");
   $("cgAccTable").className="";
-  $("cgAccTable").innerHTML=`<div class="table-wrap"><table style="min-width:1100px"><thead><tr>
+  $("cgAccTable").innerHTML=`<div class="table-wrap"><table class="cg-account-table"><thead><tr>
     <th style="width:42px"><input type="checkbox" id="cgAccCheckAll" title="全选当前筛选"></th>
-    <th>账号 ID</th><th>邮箱</th><th>类型</th><th>来源</th><th>状态</th><th>配额</th><th>最后使用</th><th>操作</th>
+    <th>账号</th><th>类型</th><th>来源</th><th>状态</th><th>账号信息</th><th>创建时间</th><th>额度</th><th>恢复时间</th><th>在途</th><th>成功</th><th>失败</th><th>操作</th>
   </tr></thead><tbody>${body}</tbody></table></div>`;
   const allBox=$("cgAccCheckAll");
   if(allBox){
@@ -828,23 +878,24 @@ function renderChatGPTTasks(){
     }).join("");
     const elapsed=t.elapsed_secs!=null?`${Number(t.elapsed_secs).toFixed(1)}s`:(t.duration_ms!=null?`${t.duration_ms}ms`:"—");
     const resumeDisabled=canResumeTask(t)&&!state.cg.tasks.resumeBusy.has(t.id)?"":"disabled";
+    const error=String(t.error||"").trim();
     return `<tr>
       <td class="mono" title="${esc(t.id)}">${esc((t.id||"").slice(0,12))}${(t.id||"").length>12?"…":""}</td>
-      <td class="mono subtle">${esc(t.conversation_id||"—")}</td>
+      <td class="mono subtle" title="${esc(t.conversation_id||"")}">${esc(t.conversation_id||"—")}</td>
       <td>${esc(t.mode||"—")}</td>
       <td>${esc(t.model||"—")}</td>
-      <td>${statusTag(t.status)}</td>
-      <td>${esc(t.progress||"—")}</td>
-      <td>${esc(elapsed)}</td>
-      <td title="${esc(t.error||"")}">${esc((t.error||"—").slice(0,80))}</td>
-      <td><div style="display:flex;gap:4px;flex-wrap:wrap">${thumbs||"—"}</div></td>
-      <td class="subtle">${t.created_at?new Date(t.created_at).toLocaleString():"—"}</td>
-      <td class="subtle">${t.updated_at?new Date(t.updated_at).toLocaleString():"—"}</td>
-      <td><button class="link-btn" data-task-resume="${esc(t.id)}" ${resumeDisabled}>恢复轮询</button></td>
+      <td>${taskStatusTag(t.status)}</td>
+      <td><span class="task-progress" title="${esc(String(t.progress||""))}">${esc(taskProgressLabel(t.progress))}</span></td>
+      <td class="task-elapsed">${esc(elapsed)}</td>
+      <td class="${error?"task-error":"subtle"}" title="${esc(error)}">${esc((error||"—").slice(0,80))}</td>
+      <td><div class="task-results">${thumbs||'<span class="task-results-empty">暂无结果</span>'}</div></td>
+      <td class="subtle task-date">${esc(formatAccountDate(t.created_at))}</td>
+      <td class="subtle task-date">${esc(formatAccountDate(t.updated_at))}</td>
+      <td class="task-actions"><button class="link-btn" data-task-resume="${esc(t.id)}" ${resumeDisabled}>恢复轮询</button></td>
     </tr>`;
   }).join("");
   $("cgTaskTable").className="";
-  $("cgTaskTable").innerHTML=`<div class="table-wrap"><table style="min-width:1280px"><thead><tr>
+  $("cgTaskTable").innerHTML=`<div class="table-wrap"><table class="cg-task-table"><thead><tr>
     <th>任务 ID</th><th>会话</th><th>模式</th><th>模型</th><th>状态</th><th>进度</th><th>耗时</th><th>错误</th><th>结果</th><th>提交</th><th>更新</th><th>操作</th>
   </tr></thead><tbody>${rows}</tbody></table></div>`;
   document.querySelectorAll("[data-task-resume]").forEach(btn=>btn.onclick=()=>resumeTask(btn.dataset.taskResume));
