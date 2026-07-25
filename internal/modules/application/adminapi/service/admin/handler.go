@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,10 +52,19 @@ type ChatGPTRuntime interface {
 	ListChatGPTImageTags(context.Context) (imgevents.ListTagsResult, error)
 	SetChatGPTImageTags(context.Context, string, []string) (imgevents.SetTagsResult, error)
 	DeleteChatGPTImages(context.Context, []string) (imgevents.DeleteResult, error)
+	GetChatGPTImageBytes(context.Context, string) ([]byte, error)
+	GetChatGPTImageThumbnail(context.Context, string) ([]byte, error)
 	SubmitChatGPTImageGeneration(context.Context, taskevents.SubmitGenerationCommand) (taskevents.SubmitResult, error)
 	SubmitChatGPTImageEdit(context.Context, taskevents.SubmitEditCommand) (taskevents.SubmitResult, error)
 	ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error)
 	ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error)
+}
+
+// chatGPTAvailability is intentionally optional to keep isolated HTTP tests
+// focused on the transport contract. The production Admin runtime implements
+// it and reports whether ChatGPT Web was enabled at process start.
+type chatGPTAvailability interface {
+	ChatGPTWebEnabled() bool
 }
 
 type Handler struct {
@@ -187,6 +197,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case strings.HasPrefix(rel, "/api/chatgpt/") && !h.chatGPTWebAvailable():
+		writeError(w, http.StatusServiceUnavailable, "chatgpt web is not enabled")
 	case (rel == "/" || rel == "") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
@@ -243,6 +255,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case rel == "/api/chatgpt/images" && r.Method == http.MethodGet:
 		h.listChatGPTImages(w, r)
+	case rel == "/api/chatgpt/images/content" && r.Method == http.MethodGet:
+		h.serveChatGPTImageContent(w, r)
 	case rel == "/api/chatgpt/images/storage" && r.Method == http.MethodGet:
 		h.chatGPTImageStorage(w, r)
 	case rel == "/api/chatgpt/images/tags" && r.Method == http.MethodGet:
@@ -274,17 +288,92 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) chatGPTWebAvailable() bool {
+	if h.chatGPT == nil {
+		return false
+	}
+	availability, ok := h.chatGPT.(chatGPTAvailability)
+	return !ok || availability.ChatGPTWebEnabled()
+}
+
 func (h *Handler) listChatGPTImages(w http.ResponseWriter, r *http.Request) {
 	if h.chatGPT == nil {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
-	out, err := h.chatGPT.ListChatGPTImages(r.Context(), adminImageBaseURL(r), strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")))
+	// BaseURL is unused for public serving; rewrite below to Admin-authenticated content URLs.
+	out, err := h.chatGPT.ListChatGPTImages(r.Context(), "", strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	rewriteChatGPTImageURLs(h.adminBasePath(), &out)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// serveChatGPTImageContent is a minimal Admin-authenticated, path-validated image
+// reader. It does not expose a general /files/** surface.
+func (h *Handler) serveChatGPTImageContent(w http.ResponseWriter, r *http.Request) {
+	if h.chatGPT == nil {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	// Reject traversal and absolute paths before store; store also applies safeRel.
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || filepath.IsAbs(path) || strings.Contains(clean, "\\") {
+		writeError(w, http.StatusBadRequest, "invalid image path")
+		return
+	}
+	thumb := r.URL.Query().Get("thumb") == "1" || strings.EqualFold(r.URL.Query().Get("variant"), "thumbnail")
+	var (
+		payload []byte
+		err     error
+	)
+	if thumb {
+		payload, err = h.chatGPT.GetChatGPTImageThumbnail(r.Context(), clean)
+	} else {
+		payload, err = h.chatGPT.GetChatGPTImageBytes(r.Context(), clean)
+	}
+	if err != nil {
+		writeError(w, http.StatusNotFound, "image not found")
+		return
+	}
+	if len(payload) == 0 {
+		writeError(w, http.StatusNotFound, "image not found")
+		return
+	}
+	contentType := http.DetectContentType(payload)
+	if thumb {
+		contentType = "image/png"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
+func rewriteChatGPTImageURLs(adminBase string, out *imgevents.ListResult) {
+	if out == nil {
+		return
+	}
+	adminBase = strings.TrimRight(adminBase, "/")
+	if adminBase == "" {
+		adminBase = "/admin"
+	}
+	for i := range out.Items {
+		path := strings.TrimSpace(out.Items[i].Path)
+		if path == "" {
+			continue
+		}
+		out.Items[i].URL = adminBase + "/api/chatgpt/images/content?path=" + url.QueryEscape(path)
+		out.Items[i].ThumbnailURL = adminBase + "/api/chatgpt/images/content?path=" + url.QueryEscape(path) + "&thumb=1"
+	}
 }
 func (h *Handler) chatGPTImageStorage(w http.ResponseWriter, r *http.Request) {
 	if h.chatGPT == nil {

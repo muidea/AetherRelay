@@ -134,7 +134,11 @@ chatgpt_web:
 
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、查看 API Key 用量、筛选事件和导出 CSV。ChatGPT Web 的账号、图片和图片任务 API 同样位于该前缀；当前不额外提供账号/图片管理页面。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量，以及在「ChatGPT Web」页签中维护账号池、图片任务与本地图片库。相关管理 API 同样位于该前缀下的 `/api/chatgpt/**`。
+
+ChatGPT Web 管理页依赖对应运行时组件（账号池 / 图片任务 / 图片存储）已装配；若组件未启用，页面会显示不可用状态而不是空数据。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。账号导出、OAuth 回调与完整 token 不会写入浏览器持久化存储。
+
+`chatgpt_web.enabled` 在进程启动时决定 ChatGPT Web 的运行组件是否装配。关闭时，`/api/chatgpt/**` 返回 `503 chatgpt web is not enabled`；不能只在运行中修改 YAML 后立即使用，启用或关闭该能力后必须重启 ai-proxy。
 
 ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
 

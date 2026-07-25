@@ -52,6 +52,18 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 设计细节见 [Admin 登录安全设计](admin-login-security-design-2026-07-23.md)。
 
+## ChatGPT Web 管理页运维注意
+
+Admin 管理台一级页签「ChatGPT Web」提供账号池、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin` 写保护。
+
+- **账号导出**：`POST .../api/chatgpt/accounts/export` 是唯一有意返回明文 token 的接口。必须二次确认；响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图。下载后立即销毁本地副本。
+- **OAuth 导入**：授权 URL、callback 与 session id 只应停留在管理员当前浏览器会话的内存中；不要把它们写进 URL 书签、共享剪贴板记录或监控日志。
+- **图片删除**：图片库删除不可恢复；批量删除前确认路径列表。图片内容通过 Admin 鉴权同源端点 `GET .../api/chatgpt/images/content?path=` 读取（可选 `thumb=1`），路径经严格校验，不提供通用 `/files/**`。
+- **owner_id**：图片任务以 `owner_id` 为隔离边界。运维代提任务时必须显式指定，不要共用一个长期固定 owner 混放不同业务方的任务。
+- 组件未装配时相关 API 返回 `503`；页面会显示不可用状态，这不代表“没有账号/图片”。
+
+设计与页面合同见 [ChatGPT Web 管理页收口设计](chatgpt-web-admin-closure-design-2026-07-26.md)。
+
 ## 指标与统计
 
 Prometheus 指标均以 `ai_proxy_` 为前缀：

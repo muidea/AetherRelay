@@ -235,3 +235,30 @@ func (s *Admin) DeleteChatGPTImages(ctx context.Context, paths []string) (imgeve
 	}
 	return result, nil
 }
+
+// GetChatGPTImageBytes returns original image bytes for a store-relative path.
+// Path validation and traversal rejection stay in the image store owner.
+func (s *Admin) GetChatGPTImageBytes(ctx context.Context, path string) ([]byte, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicGetBytes, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.GetBytesCommand{RelativePath: path})).Get()
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt image content unavailable")
+	}
+	result, ok := value.(imgevents.GetBytesResult)
+	if !ok {
+		return nil, fmt.Errorf("invalid chatgpt image content result")
+	}
+	return result.Bytes, nil
+}
+
+// GetChatGPTImageThumbnail returns a PNG thumbnail for a store-relative path.
+func (s *Admin) GetChatGPTImageThumbnail(ctx context.Context, path string) ([]byte, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicGetThumbnail, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.GetThumbnailCommand{RelativePath: path})).Get()
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt image thumbnail unavailable")
+	}
+	result, ok := value.(imgevents.GetThumbnailResult)
+	if !ok {
+		return nil, fmt.Errorf("invalid chatgpt image thumbnail result")
+	}
+	return result.Bytes, nil
+}

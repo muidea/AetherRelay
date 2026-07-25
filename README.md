@@ -14,7 +14,7 @@ make run
 
 默认地址为 `http://127.0.0.1:8080`。启动后可访问：
 
-- [Provider 管理与使用统计](http://127.0.0.1:8080/admin/)（默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
+- [Provider、客户端 Key、使用统计与 ChatGPT Web 管理](http://127.0.0.1:8080/admin/)（默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
 - `GET /healthz`
 - `GET /metrics`、`GET /stats`（默认仅 loopback）
 
@@ -47,6 +47,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创�
 | 配置、客户端 Key、Provider 管理 | [配置参考](docs/configuration.md) |
 | 客户端 Key 管理收口 | [客户端 API Key 管理设计](docs/client-api-key-management-design-2026-07-20.md) |
 | Admin 账号密码登录 | [Admin 登录安全设计](docs/admin-login-security-design-2026-07-23.md) |
+| ChatGPT Web 账号池、图片任务与图片库管理页 | [ChatGPT Web 管理页收口设计](docs/chatgpt-web-admin-closure-design-2026-07-26.md) |
 | OpenAI/Anthropic 统一文本流式输出 | [统一文本流式 SSE 收口设计](docs/unified-sse-streaming-design-2026-07-23.md) |
 | 协议端点、模型路由、转换与错误合同 | [Provider Capability Contract](docs/provider-capability-contract-design-2026-07-15.md) |
 | DuckDB 用量、Admin API、Web 统计 | [API Key 用量与 DuckDB 收口方案](docs/api-key-usage-duckdb-web-closure-plan-2026-07-17.md) |

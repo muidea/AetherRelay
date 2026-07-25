@@ -20,6 +20,15 @@
     .toast-wrap{position:fixed;right:24px;top:82px;z-index:100;display:flex;flex-direction:column;gap:10px}.toast{min-width:280px;max-width:420px;padding:12px 16px;border-radius:7px;background:#fff;box-shadow:var(--shadow);border:1px solid var(--line);display:flex;gap:10px;animation:slide .2s ease-out}.toast-success{border-left:3px solid var(--success)}.toast-error{border-left:3px solid var(--danger)}@keyframes slide{from{transform:translateX(20px);opacity:0}}.notice{margin-bottom:16px;padding:10px 14px;border:1px solid #ffe58f;border-radius:6px;background:#fffbe6;color:#614700;display:none}
     .range-group{display:flex;gap:6px;flex-wrap:wrap}.range-group .btn.active{color:#fff;background:var(--primary);border-color:var(--primary)}.usage-filters{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;margin:0 0 16px}.usage-filters .control{min-width:0}.charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}.chart-card{padding:12px 14px}.chart-title{font-weight:600;margin-bottom:8px}.chart-svg{width:100%;height:180px;background:#fafcff;border:1px solid var(--line);border-radius:6px}.panel{display:none}.panel.active{display:block}.event-row{cursor:pointer}.event-row td:first-child{border-left:3px solid transparent}.event-row.status-1xx td:first-child,.event-row.status-3xx td:first-child{border-left-color:#91caff}.event-row.status-2xx td:first-child{border-left-color:var(--success)}.event-row.status-4xx td:first-child{border-left-color:var(--warning)}.event-row.status-5xx td:first-child{border-left-color:var(--danger)}.event-row.status-pending td:first-child{border-left-color:#bfbfbf}.event-row:hover{background:#f5f8ff}.status-pill{display:inline-flex;align-items:center;min-height:22px;padding:1px 7px;border:1px solid;border-radius:11px;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}.status-1xx .status-pill,.status-3xx .status-pill{color:#0958d9;background:#e6f4ff;border-color:#91caff}.status-2xx .status-pill{color:#237804;background:#f6ffed;border-color:#b7eb8f}.status-4xx .status-pill{color:#ad6800;background:#fffbe6;border-color:#ffe58f}.status-5xx .status-pill{color:#cf1322;background:#fff1f0;border-color:#ffa39e}.status-pending .status-pill{color:#595959;background:#fafafa;border-color:#d9d9d9}.event-detail{display:grid;grid-template-columns:150px 1fr;gap:10px;margin:0}.event-detail dt{color:var(--muted)}.event-detail dd{margin:0;word-break:break-all}@media(max-width:760px){.usage-filters{grid-template-columns:1fr 1fr}}
     @media(max-width:900px){.stats,.charts{grid-template-columns:1fr 1fr}.header{padding:0 16px}main{padding:20px 16px}}.hidden{display:none!important}
+    .subnav{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}.subnav button{height:32px;padding:4px 14px;border:1px solid var(--border);border-radius:6px;background:#fff;color:#595959;cursor:pointer}.subnav button.active,.subnav button:hover{color:var(--primary);border-color:#91caff;background:#e6f4ff}
+    .cg-toolbar-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:auto}.cg-progress{margin:0 0 12px;padding:10px 12px;border:1px solid #91caff;border-radius:6px;background:#e6f4ff;color:#0958d9;font-size:13px}
+    .image-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;padding:14px}.image-card{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff;display:flex;flex-direction:column}.image-card .thumb-wrap{aspect-ratio:1;background:#f5f7fa;display:grid;place-items:center;cursor:pointer;overflow:hidden}.image-card img{width:100%;height:100%;object-fit:cover;display:block}.image-card .meta{padding:8px 10px;font-size:12px;color:#595959;display:flex;flex-direction:column;gap:4px}.image-card .meta .row{display:flex;align-items:center;justify-content:space-between;gap:6px}.image-card .check{margin:0}
+    .thumb-inline{width:48px;height:48px;object-fit:cover;border-radius:4px;border:1px solid var(--line);cursor:pointer;background:#fafafa}
+    .lightbox{border:0;padding:0;max-width:min(920px,96vw);background:transparent}.lightbox::backdrop{background:rgba(0,0,0,.72)}.lightbox-inner{background:#111;border-radius:10px;overflow:hidden;max-height:92vh;display:flex;flex-direction:column}.lightbox-inner img{max-width:100%;max-height:80vh;object-fit:contain;display:block;margin:0 auto;background:#000}.lightbox-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:#1f1f1f;color:#fff}
+    .owner-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:#fafcff}.owner-bar .field{margin:0;min-width:220px;flex:1}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+    .status-normal{color:#237804;background:#f6ffed;border-color:#b7eb8f}.status-limited{color:#ad6800;background:#fffbe6;border-color:#ffe58f}.status-abnormal{color:#cf1322;background:#fff1f0;border-color:#ffa39e}.status-disabled{color:#595959;background:#fafafa;border-color:#d9d9d9}
+    .task-form{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}.task-form .full{grid-column:1/-1}.muted-box{padding:14px;border:1px dashed var(--border);border-radius:8px;color:var(--muted);text-align:center;background:#fafafa}
+    @media(max-width:760px){.task-form{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}}
   </style>
 </head>
 <body>
@@ -30,6 +39,7 @@
       <a href="#/providers" id="navProviders" class="active">Provider 管理</a>
       <a href="#/client-keys" id="navClientKeys">客户端 Key</a>
       <a href="#/usage" id="navUsage">使用统计</a>
+      <a href="#/chatgpt" id="navChatGPT">ChatGPT Web</a>
     </nav>
     <div class="header-status"><i class="dot" id="storeDot"></i><span id="storeLabel">本地管理模式</span><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
   </header>
@@ -103,6 +113,115 @@
         <div id="eventTable" class="loading"><div class="spin"></div></div>
       </section>
     </section>
+
+    <section id="panelChatGPT" class="panel">
+      <section class="hero">
+        <div>
+          <h2>ChatGPT Web</h2>
+          <p>管理 ChatGPT Web 账号池、图片任务与本地图片库。本页仅面向管理员，敏感字段不会展示或持久化。</p>
+        </div>
+      </section>
+      <div class="subnav" role="tablist" aria-label="ChatGPT Web 子页签">
+        <button type="button" id="cgSubAccounts" class="active" data-cg-sub="accounts">账号池</button>
+        <button type="button" id="cgSubTasks" data-cg-sub="tasks">图片任务</button>
+        <button type="button" id="cgSubImages" data-cg-sub="images">图片库</button>
+      </div>
+      <div id="cgUnavailable" class="notice" style="display:none">ChatGPT Web 组件未启用或不可用。<button type="button" class="btn" id="cgRetry" style="margin-left:10px">重试</button></div>
+
+      <div id="cgPanelAccounts">
+        <section class="stats" id="cgAccountStats">
+          <div class="stat"><div class="stat-label">账号总数</div><div class="stat-value" id="cgAccTotal">—</div></div>
+          <div class="stat"><div class="stat-label">正常 / 限流</div><div class="stat-value" id="cgAccNormal">—</div></div>
+          <div class="stat"><div class="stat-label">异常 / 禁用</div><div class="stat-value" id="cgAccAbnormal">—</div></div>
+          <div class="stat"><div class="stat-label">可用配额合计</div><div class="stat-value" id="cgAccQuota">—</div></div>
+        </section>
+        <div id="cgRefreshProgress" class="cg-progress hidden"></div>
+        <section class="card">
+          <div class="toolbar">
+            <span class="toolbar-title">账号列表</span>
+            <span class="toolbar-meta" id="cgAccMeta"></span>
+            <input id="cgAccSearch" class="search" type="search" autocomplete="off" placeholder="搜索脱敏邮箱">
+            <select id="cgAccStatusFilter" class="control" style="width:120px;min-height:30px;margin-left:0">
+              <option value="">全部状态</option>
+              <option value="正常">正常</option>
+              <option value="限流">限流</option>
+              <option value="异常">异常</option>
+              <option value="禁用">禁用</option>
+            </select>
+            <select id="cgAccTypeFilter" class="control" style="width:120px;min-height:30px">
+              <option value="">全部类型</option>
+            </select>
+            <div class="cg-toolbar-actions">
+              <button type="button" class="btn" id="cgAccRefreshSelected">刷新选中</button>
+              <button type="button" class="btn" id="cgAccExportSelected">导出选中</button>
+              <button type="button" class="btn link-danger" id="cgAccDeleteSelected">删除选中</button>
+              <button type="button" class="btn" id="cgAccOAuth">OAuth 导入</button>
+              <button type="button" class="btn btn-primary" id="cgAccImport">导入 Token</button>
+            </div>
+          </div>
+          <div id="cgAccTable" class="loading"><div class="spin"></div><div>正在读取账号…</div></div>
+        </section>
+      </div>
+
+      <div id="cgPanelTasks" class="hidden">
+        <div class="owner-bar">
+          <div class="field">
+            <label class="label required" for="cgTaskOwner">owner_id</label>
+            <input id="cgTaskOwner" class="control" autocomplete="off" placeholder="任务隔离边界，必填">
+            <div class="help">切换 owner 会清空当前任务列表与轮询，不会静默使用固定共享 owner。</div>
+          </div>
+          <button type="button" class="btn" id="cgTaskReload">查询任务</button>
+        </div>
+        <section class="card" style="padding:14px 16px;margin-bottom:16px">
+          <div class="toolbar" style="border:0;padding:0 0 10px;min-height:auto"><span class="toolbar-title">提交图片任务</span>
+            <div class="cg-toolbar-actions">
+              <button type="button" class="btn" id="cgTaskModeGen" data-task-mode="generation">文生图</button>
+              <button type="button" class="btn" id="cgTaskModeEdit" data-task-mode="edit">图生图</button>
+            </div>
+          </div>
+          <form id="cgTaskForm" class="task-form" autocomplete="off">
+            <div class="field"><label class="label required" for="cgTaskClientId">client_task_id</label>
+              <div style="display:flex;gap:8px"><input id="cgTaskClientId" class="control mono" required autocomplete="off"><button type="button" class="btn" id="cgTaskRegenId">重新生成</button></div>
+            </div>
+            <div class="field"><label class="label" for="cgTaskModel">model</label><input id="cgTaskModel" class="control" autocomplete="off" placeholder="可选"></div>
+            <div class="field"><label class="label" for="cgTaskSize">size</label><input id="cgTaskSize" class="control" autocomplete="off" placeholder="例如 1024x1024"></div>
+            <div class="field"><label class="label" for="cgTaskQuality">quality</label><input id="cgTaskQuality" class="control" autocomplete="off" placeholder="可选"></div>
+            <div class="field full"><label class="label required" for="cgTaskPrompt">prompt</label><textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off"></textarea></div>
+            <div class="field full hidden" id="cgTaskImagesField"><label class="label required" for="cgTaskImages">images（data URL 或可访问 URL，每行一个）</label><textarea id="cgTaskImages" class="control" rows="3" autocomplete="off" placeholder="data:image/png;base64,...&#10;https://example.invalid/a.png"></textarea></div>
+            <div class="field full" style="display:flex;justify-content:flex-end;gap:8px">
+              <button type="submit" class="btn btn-primary" id="cgTaskSubmit">提交任务</button>
+            </div>
+          </form>
+        </section>
+        <section class="card">
+          <div class="toolbar"><span class="toolbar-title">任务列表</span><span class="toolbar-meta" id="cgTaskMeta"></span></div>
+          <div id="cgTaskTable" class="muted-box">请先填写 owner_id 后查询任务。</div>
+        </section>
+      </div>
+
+      <div id="cgPanelImages" class="hidden">
+        <section class="stats">
+          <div class="stat"><div class="stat-label">图片数量</div><div class="stat-value" id="cgImgCount">—</div></div>
+          <div class="stat"><div class="stat-label">图片占用</div><div class="stat-value" id="cgImgSize">—</div></div>
+          <div class="stat"><div class="stat-label">磁盘已用 / 总量</div><div class="stat-value" id="cgImgDisk">—</div></div>
+          <div class="stat"><div class="stat-label">磁盘剩余</div><div class="stat-value" id="cgImgFree">—</div></div>
+        </section>
+        <section class="card">
+          <div class="toolbar">
+            <span class="toolbar-title">图片库</span>
+            <span class="toolbar-meta" id="cgImgMeta"></span>
+            <input id="cgImgStart" class="control" type="date" style="width:150px;min-height:30px;margin-left:auto" title="开始日期">
+            <input id="cgImgEnd" class="control" type="date" style="width:150px;min-height:30px" title="结束日期">
+            <select id="cgImgTagFilter" class="control" style="width:140px;min-height:30px"><option value="">全部标签</option></select>
+            <div class="cg-toolbar-actions" style="margin-left:0">
+              <button type="button" class="btn" id="cgImgReload">刷新</button>
+              <button type="button" class="btn link-danger" id="cgImgDeleteSelected">删除选中</button>
+            </div>
+          </div>
+          <div id="cgImgGrid" class="loading"><div class="spin"></div><div>正在读取图片…</div></div>
+        </section>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -131,6 +250,79 @@
 </dialog>
 <dialog id="clientKeyDialog"><form id="clientKeyForm" autocomplete="off"><div class="modal-head"><span class="modal-title">新建客户端 Key</span><button class="close" type="button" id="closeClientKeyDialog">×</button></div><div class="modal-body"><div class="field"><label class="label required" for="clientKeyID">ID</label><input id="clientKeyID" class="control" name="client_key_id" autocomplete="off" required pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="例如 ci-agent"></div><div class="field"><label class="check"><input id="clientKeyEnabled" type="checkbox" checked> 创建后立即启用</label></div></div><div class="modal-foot"><button class="btn" type="button" id="cancelClientKey">取消</button><button class="btn btn-primary" type="submit">创建</button></div></form></dialog>
 <dialog id="clientSecretDialog"><div class="modal-head"><span class="modal-title">请立即复制 API Key</span><button class="close" type="button" id="closeClientSecret">×</button></div><div class="modal-body"><p class="help">关闭后无法再次查看。</p><input id="clientSecret" class="control" readonly autocomplete="off"></div><div class="modal-foot"><button class="btn btn-primary" id="copyClientSecret">复制</button></div></dialog>
+
+<dialog id="cgImportDialog">
+  <form id="cgImportForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title">导入 Access Token</span><button class="close" type="button" id="cgImportClose">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label class="label required" for="cgImportTokens">tokens</label><textarea id="cgImportTokens" class="control" required rows="8" placeholder="每行一个 access token，也可用逗号分隔；也支持 accounts.json"></textarea><div class="help">支持 token 文本，或 JSON 数组（字符串 / 含 access_token 的对象）。仅提交 access token 集合；不会显示或回显完整 token。</div></div>
+      <div class="field"><label class="label" for="cgImportSource">source_type</label>
+        <select id="cgImportSource" class="control"><option value="">留空</option><option value="web">手工导入（web）</option></select>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" id="cgImportCancel">取消</button><button class="btn btn-primary" type="submit" id="cgImportSubmit">导入</button></div>
+  </form>
+</dialog>
+<dialog id="cgEditDialog">
+  <form id="cgEditForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title">编辑账号</span><button class="close" type="button" id="cgEditClose">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label class="label">账号 ID</label><input id="cgEditID" class="control mono" readonly></div>
+      <div class="field"><label class="label" for="cgEditType">type</label><input id="cgEditType" class="control" autocomplete="off" placeholder="例如 plus / free"></div>
+      <div class="field"><label class="label" for="cgEditStatus">status</label>
+        <select id="cgEditStatus" class="control"><option value="正常">正常</option><option value="限流">限流</option><option value="异常">异常</option><option value="禁用">禁用</option></select>
+      </div>
+      <div class="field"><label class="label" for="cgEditQuota">quota</label><input id="cgEditQuota" class="control" type="number" min="0" step="1" autocomplete="off"></div>
+      <div class="help">出于安全设计，页面不展示或编辑 proxy / token。</div>
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" id="cgEditCancel">取消</button><button class="btn btn-primary" type="submit" id="cgEditSubmit">保存</button></div>
+  </form>
+</dialog>
+<dialog id="cgOAuthDialog">
+  <form id="cgOAuthForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title">OAuth 导入</span><button class="close" type="button" id="cgOAuthClose">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label class="label" for="cgOAuthHint">email_hint（可选）</label><input id="cgOAuthHint" class="control" autocomplete="off"></div>
+      <div id="cgOAuthStepStart">
+        <p class="help">点击开始后，在浏览器中完成上游登录，再把回调 URL/地址粘贴回来。授权 URL 与 session 仅保存在本页内存，不会写入浏览器存储。</p>
+        <button type="button" class="btn btn-primary" id="cgOAuthStart">开始 OAuth</button>
+      </div>
+      <div id="cgOAuthStepFinish" class="hidden">
+        <div class="notice" style="display:block;margin-top:12px">会话进行中。请完成上游登录后提交 callback；取消会销毁内存状态。</div>
+        <div class="field" style="margin-top:12px"><label class="label required" for="cgOAuthCallback">callback</label><textarea id="cgOAuthCallback" class="control" rows="3" placeholder="粘贴完整 callback URL 或地址"></textarea></div>
+        <div class="help" id="cgOAuthExpireHint"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" type="button" id="cgOAuthCancel">取消</button>
+      <button class="btn btn-primary hidden" type="submit" id="cgOAuthFinish">完成导入</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="cgExportDialog">
+  <div class="modal-head"><span class="modal-title">确认导出账号</span><button class="close" type="button" id="cgExportClose">×</button></div>
+  <div class="modal-body">
+    <p>将导出 <strong id="cgExportCount">0</strong> 个账号的敏感凭据（含 access/refresh token 等）。</p>
+    <p class="help">导出内容不会在页面预览，也不会写入 localStorage/sessionStorage。下载完成后立即释放内存引用。</p>
+  </div>
+  <div class="modal-foot"><button class="btn" type="button" id="cgExportCancel">取消</button><button class="btn btn-primary" type="button" id="cgExportConfirm">确认导出并下载</button></div>
+</dialog>
+<dialog id="cgTagsDialog">
+  <form id="cgTagsForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title">编辑标签</span><button class="close" type="button" id="cgTagsClose">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label class="label">path</label><input id="cgTagsPath" class="control mono" readonly></div>
+      <div class="field"><label class="label" for="cgTagsInput">tags（逗号或换行分隔）</label><textarea id="cgTagsInput" class="control" rows="3"></textarea></div>
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" id="cgTagsCancel">取消</button><button class="btn btn-primary" type="submit">保存</button></div>
+  </form>
+</dialog>
+<dialog id="cgLightbox" class="lightbox">
+  <div class="lightbox-inner">
+    <div class="lightbox-bar"><span id="cgLightboxTitle">预览</span><button class="btn" type="button" id="cgLightboxClose">关闭</button></div>
+    <img id="cgLightboxImg" alt="预览图片">
+  </div>
+</dialog>
 <div class="toast-wrap" id="toasts"></div>
 
 <script>
@@ -146,24 +338,724 @@ function authHeaders(extra={}){
 function goLogin(){authState.csrf="";authState.username="";location.replace(ADMIN_BASE+"/login");}
 
 const capabilityOptions={openai:["chat_completions","responses","completions","embeddings"],anthropic:["messages"]};
-const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false};
+const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
+  cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
+    oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
+    tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
+    images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
+const uniq=arr=>[...new Set(arr)];
 function compact(n){n=Number(n)||0;const a=Math.abs(n);if(a>=1e9)return(n/1e9).toFixed(2)+"B";if(a>=1e6)return(n/1e6).toFixed(2)+"M";if(a>=1e3)return(n/1e3).toFixed(1)+"K";return String(Math.round(n*100)/100)}
+function newUUID(){if(crypto&&crypto.randomUUID)return crypto.randomUUID();return "t-"+Date.now().toString(16)+"-"+Math.random().toString(16).slice(2,10)}
+function maskEmail(email){
+  email=String(email||"").trim();
+  if(!email)return "—";
+  const at=email.indexOf("@");
+  if(at<=0)return esc(email[0]+"***");
+  const name=email.slice(0,at),domain=email.slice(at+1);
+  const shown=name.length<=2?name[0]+"*":name.slice(0,2)+"***";
+  return esc(shown+"@"+domain);
+}
 async function request(url,options={}){
   const opts={cache:"no-store",credentials:"same-origin",...options};
   const r=await fetch(url,opts);
   if(r.status===401){goLogin();throw new Error("需要登录");}
   if(r.status===204)return null;
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(data?.error?.message||`请求失败 (${r.status})`);
-  return data;
+  const ct=r.headers.get("content-type")||"";
+  if(ct.includes("application/json")||ct.includes("text/json")||!ct){
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      const err=new Error(data?.error?.message||`请求失败 (${r.status})`);
+      err.status=r.status;err.payload=data;throw err;
+    }
+    return data;
+  }
+  if(!r.ok){
+    const err=new Error(`请求失败 (${r.status})`);err.status=r.status;throw err;
+  }
+  return r;
 }
 
-function parseHash(){const h=location.hash||"#/providers";const [path,qs]=h.replace(/^#\/?/,"").split("?");const p=new URLSearchParams(qs||"");const tab=path.startsWith("usage")?"usage":path.startsWith("client-keys")?"client-keys":"providers";return {tab,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||""}}
-function setHash(){const q=new URLSearchParams();if(state.tab==="usage"){q.set("range",state.range);[["api_key_id",state.apiKeyFilter],["provider",state.providerFilter],["model",state.modelFilter],["outcome",state.outcomeFilter],["estimated",state.estimatedFilter],["from",state.from],["to",state.to]].forEach(([k,v])=>{if(v)q.set(k,v)});location.hash="#/usage?"+q.toString()}else location.hash="#/"+state.tab}
-function showTab(tab){state.tab=tab;$("panelProviders").classList.toggle("active",tab==="providers");$("panelClientKeys").classList.toggle("active",tab==="client-keys");$("panelUsage").classList.toggle("active",tab==="usage");$("navProviders").classList.toggle("active",tab==="providers");$("navClientKeys").classList.toggle("active",tab==="client-keys");$("navUsage").classList.toggle("active",tab==="usage");if(tab==="usage"){loadFilterOptions(false);loadUsage(true)}else if(tab==="client-keys")loadClientKeys();else loadProviders()}
+function parseHash(){
+  const h=location.hash||"#/providers";
+  const [path,qs]=h.replace(/^#\/?/,"").split("?");
+  const p=new URLSearchParams(qs||"");
+  let tab="providers";
+  let cgSub="accounts";
+  if(path.startsWith("usage"))tab="usage";
+  else if(path.startsWith("client-keys"))tab="client-keys";
+  else if(path.startsWith("chatgpt")){
+    tab="chatgpt";
+    const parts=path.split("/");
+    if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts")cgSub=parts[1];
+  }
+  return {tab,cgSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||""};
+}
+function setHash(){
+  if(state.tab==="usage"){
+    const q=new URLSearchParams();
+    q.set("range",state.range);
+    [["api_key_id",state.apiKeyFilter],["provider",state.providerFilter],["model",state.modelFilter],["outcome",state.outcomeFilter],["estimated",state.estimatedFilter],["from",state.from],["to",state.to]].forEach(([k,v])=>{if(v)q.set(k,v)});
+    location.hash="#/usage?"+q.toString();
+    return;
+  }
+  if(state.tab==="chatgpt"){
+    const sub=state.cg.sub||"accounts";
+    const q=new URLSearchParams();
+    if(sub==="tasks"&&state.cg.tasks.owner)q.set("owner_id",state.cg.tasks.owner);
+    location.hash="#/chatgpt/"+sub+(q.toString()?"?"+q.toString():"");
+    return;
+  }
+  location.hash="#/"+state.tab;
+}
+function showTab(tab){
+  if(state.tab==="chatgpt"&&tab!=="chatgpt")stopAllTaskPolling();
+  state.tab=tab;
+  $("panelProviders").classList.toggle("active",tab==="providers");
+  $("panelClientKeys").classList.toggle("active",tab==="client-keys");
+  $("panelUsage").classList.toggle("active",tab==="usage");
+  $("panelChatGPT").classList.toggle("active",tab==="chatgpt");
+  $("navProviders").classList.toggle("active",tab==="providers");
+  $("navClientKeys").classList.toggle("active",tab==="client-keys");
+  $("navUsage").classList.toggle("active",tab==="usage");
+  $("navChatGPT").classList.toggle("active",tab==="chatgpt");
+  if(tab==="usage"){loadFilterOptions(false);loadUsage(true)}
+  else if(tab==="client-keys")loadClientKeys();
+  else if(tab==="chatgpt")showChatGPTSub(state.cg.sub||"accounts");
+  else loadProviders();
+}
+function showChatGPTSub(sub){
+  if(state.cg.sub==="tasks"&&sub!=="tasks")stopAllTaskPolling();
+  state.cg.sub=sub||"accounts";
+  $("cgPanelAccounts").classList.toggle("hidden",state.cg.sub!=="accounts");
+  $("cgPanelTasks").classList.toggle("hidden",state.cg.sub!=="tasks");
+  $("cgPanelImages").classList.toggle("hidden",state.cg.sub!=="images");
+  $("cgSubAccounts").classList.toggle("active",state.cg.sub==="accounts");
+  $("cgSubTasks").classList.toggle("active",state.cg.sub==="tasks");
+  $("cgSubImages").classList.toggle("active",state.cg.sub==="images");
+  if(state.tab==="chatgpt")setHash();
+  if(state.cg.sub==="accounts")loadChatGPTAccounts();
+  else if(state.cg.sub==="tasks"){
+    setTaskMode(state.cg.tasks.mode||"generation");
+    if(!($("cgTaskClientId").value||"").trim())$("cgTaskClientId").value=newUUID();
+    if((state.cg.tasks.owner||"").trim())loadChatGPTTasks(false);
+    else renderTaskGuide();
+  }else loadChatGPTImages();
+}
+function setChatGPTUnavailable(msg){
+  state.cg.available=false;
+  const box=$("cgUnavailable");
+  box.style.display="block";
+  // Preserve the retry button sibling; only update the leading text node.
+  if(box.firstChild&&box.firstChild.nodeType===3)box.firstChild.textContent=(msg||"ChatGPT Web 组件未启用或不可用。")+" ";
+  else box.insertBefore(document.createTextNode((msg||"ChatGPT Web 组件未启用或不可用。")+" "),box.firstChild);
+}
+function setChatGPTAvailable(){
+  state.cg.available=true;
+  $("cgUnavailable").style.display="none";
+}
+function statusTag(status){
+  const map={"正常":"status-normal","限流":"status-limited","异常":"status-abnormal","禁用":"status-disabled"};
+  const cls=map[status]||"tag-default";
+  return `<span class="tag ${cls}">${esc(status||"—")}</span>`;
+}
+
+async function loadChatGPTAccounts(){
+  const box=$("cgAccTable");
+  box.className="loading";box.innerHTML=`<div class="spin"></div><div>正在读取账号…</div>`;
+  try{
+    const data=await request(apiURL("/api/chatgpt/accounts"));
+    setChatGPTAvailable();
+    state.cg.accounts=Array.isArray(data.items)?data.items:(Array.isArray(data)?data:[]);
+    // drop selections that no longer exist
+    const ids=new Set(state.cg.accounts.map(a=>a.id));
+    state.cg.selected.forEach(id=>{if(!ids.has(id))state.cg.selected.delete(id)});
+    const types=uniq(state.cg.accounts.map(a=>a.type).filter(Boolean)).sort();
+    const typeSel=$("cgAccTypeFilter");
+    const prev=typeSel.value;
+    typeSel.innerHTML=`<option value="">全部类型</option>`+types.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
+    if(types.includes(prev))typeSel.value=prev;
+    renderChatGPTAccounts();
+  }catch(e){
+    if(e.status===503){setChatGPTUnavailable(e.message);box.innerHTML=`<div class="empty">${esc(e.message||"ChatGPT Web 组件未启用或不可用")}</div>`;return}
+    box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+function filteredAccounts(){
+  const q=(state.cg.query||"").trim().toLowerCase();
+  const st=state.cg.status||"";
+  const tp=state.cg.type||"";
+  return state.cg.accounts.filter(a=>{
+    if(st&&a.status!==st)return false;
+    if(tp&&a.type!==tp)return false;
+    if(q){
+      const email=String(a.email||"").toLowerCase();
+      const id=String(a.id||"").toLowerCase();
+      if(!email.includes(q)&&!id.includes(q))return false;
+    }
+    return true;
+  });
+}
+function renderChatGPTAccounts(){
+  const rows=filteredAccounts();
+  const all=state.cg.accounts;
+  $("cgAccDeleteSelected").disabled=state.cg.accountDeleteBusy;
+  const counts={total:all.length,正常:0,限流:0,异常:0,禁用:0,quota:0};
+  all.forEach(a=>{if(counts[a.status]!=null)counts[a.status]++;if(a.status==="正常"||a.status==="限流")counts.quota+=(Number(a.quota)||0)});
+  $("cgAccTotal").textContent=counts.total;
+  $("cgAccNormal").textContent=`${counts["正常"]} / ${counts["限流"]}`;
+  $("cgAccAbnormal").textContent=`${counts["异常"]} / ${counts["禁用"]}`;
+  $("cgAccQuota").textContent=counts.quota;
+  $("cgAccMeta").textContent=`显示 ${rows.length} / ${all.length}`;
+  if(!rows.length){$("cgAccTable").className="";$("cgAccTable").innerHTML=`<div class="empty">${all.length?"没有匹配的账号":"尚未导入账号"}</div>`;return}
+  const body=rows.map(a=>{
+    const checked=state.cg.selected.has(a.id)?"checked":"";
+    const last=a.last_used_at?new Date(a.last_used_at).toLocaleString():"—";
+    return `<tr>
+      <td><input type="checkbox" data-acc-check="${esc(a.id)}" ${checked}></td>
+      <td class="mono" title="${esc(a.id)}">${esc(a.id)}</td>
+      <td>${maskEmail(a.email)}</td>
+      <td>${esc(a.type||"—")}</td>
+      <td>${esc(a.source_type||"—")}</td>
+      <td>${statusTag(a.status)}</td>
+      <td>${Number.isFinite(Number(a.quota))?a.quota:"—"}</td>
+      <td>${esc(last)}</td>
+      <td><div class="actions">
+        <button class="link-btn" data-acc-edit="${esc(a.id)}">编辑</button>
+        <button class="link-btn" data-acc-refresh="${esc(a.id)}" ${state.cg.refresh.busy?"disabled":""}>刷新</button>
+        <button class="link-btn link-danger" data-acc-del="${esc(a.id)}" ${state.cg.accountDeleteBusy?"disabled":""}>删除</button>
+      </div></td>
+    </tr>`;
+  }).join("");
+  $("cgAccTable").className="";
+  $("cgAccTable").innerHTML=`<div class="table-wrap"><table style="min-width:1100px"><thead><tr>
+    <th style="width:42px"><input type="checkbox" id="cgAccCheckAll" title="全选当前筛选"></th>
+    <th>账号 ID</th><th>邮箱</th><th>类型</th><th>来源</th><th>状态</th><th>配额</th><th>最后使用</th><th>操作</th>
+  </tr></thead><tbody>${body}</tbody></table></div>`;
+  const allBox=$("cgAccCheckAll");
+  if(allBox){
+    allBox.checked=rows.length>0&&rows.every(a=>state.cg.selected.has(a.id));
+    allBox.indeterminate=rows.some(a=>state.cg.selected.has(a.id))&&!allBox.checked;
+    allBox.onchange=()=>{rows.forEach(a=>{if(allBox.checked)state.cg.selected.add(a.id);else state.cg.selected.delete(a.id)});renderChatGPTAccounts()};
+  }
+  document.querySelectorAll("[data-acc-check]").forEach(el=>el.onchange=()=>{const id=el.dataset.accCheck;if(el.checked)state.cg.selected.add(id);else state.cg.selected.delete(id)});
+  document.querySelectorAll("[data-acc-edit]").forEach(el=>el.onclick=()=>openEditAccount(el.dataset.accEdit));
+  document.querySelectorAll("[data-acc-refresh]").forEach(el=>el.onclick=()=>refreshAccounts([el.dataset.accRefresh]));
+  document.querySelectorAll("[data-acc-del]").forEach(el=>el.onclick=()=>deleteAccounts([el.dataset.accDel]));
+}
+function selectedAccountIDs(){return [...state.cg.selected]}
+function clearImportSensitiveFields(){$("cgImportTokens").value="";$("cgImportSource").value=""}
+function openImportDialog(){clearImportSensitiveFields();$("cgImportDialog").showModal()}
+function closeImportDialog(){clearImportSensitiveFields();$("cgImportDialog").close()}
+function parseImportTokens(value){
+  const raw=String(value||"").trim();
+  if(!raw)return [];
+  if(!/^[\[{]/.test(raw))return uniq(splitList(raw));
+  let parsed;
+  try{parsed=JSON.parse(raw)}catch(_){throw new Error("账号 JSON 格式无效")}
+  const items=Array.isArray(parsed)?parsed:(parsed&&Array.isArray(parsed.accounts)?parsed.accounts:[parsed]);
+  const tokens=[];
+  for(const item of items){
+    if(typeof item==="string"){tokens.push(item);continue}
+    if(item&&typeof item==="object"&&typeof item.access_token==="string"){tokens.push(item.access_token);continue}
+    throw new Error("账号 JSON 仅支持 token 字符串或含 access_token 的对象")
+  }
+  return uniq(tokens.map(token=>token.trim()).filter(Boolean));
+}
+async function submitImport(e){
+  e.preventDefault();
+  let tokens;
+  try{tokens=parseImportTokens($("cgImportTokens").value)}catch(err){toast(err.message,"error");return}
+  if(!tokens.length){toast("请至少提供一个 token","error");return}
+  const body={tokens};
+  const st=$("cgImportSource").value.trim();
+  if(st)body.source_type=st;
+  $("cgImportSubmit").disabled=true;
+  try{
+    const res=await request(apiURL("/api/chatgpt/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    toast(`导入完成：新增 ${res.added||0}，跳过 ${res.skipped||0}`);
+    closeImportDialog();
+    await loadChatGPTAccounts();
+  }catch(err){toast(err.message,"error")}
+  finally{$("cgImportSubmit").disabled=false}
+}
+function openEditAccount(id){
+  const acc=state.cg.accounts.find(a=>a.id===id);
+  if(!acc)return;
+  $("cgEditID").value=acc.id;
+  $("cgEditType").value=acc.type||"";
+  $("cgEditStatus").value=acc.status||"正常";
+  $("cgEditQuota").value=Number.isFinite(Number(acc.quota))?acc.quota:0;
+  $("cgEditDialog").showModal();
+}
+async function submitEdit(e){
+  e.preventDefault();
+  const id=$("cgEditID").value.trim();
+  if(!id)return;
+  const body={type:$("cgEditType").value.trim(),status:$("cgEditStatus").value,quota:Number($("cgEditQuota").value)};
+  if(!Number.isFinite(body.quota)||body.quota<0){toast("quota 必须是非负整数","error");return}
+  $("cgEditSubmit").disabled=true;
+  try{
+    await request(apiURL(`/api/chatgpt/accounts/${encodeURIComponent(id)}`),{method:"PATCH",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    toast("账号已更新");
+    $("cgEditDialog").close();
+    await loadChatGPTAccounts();
+  }catch(err){toast(err.message,"error")}
+  finally{$("cgEditSubmit").disabled=false}
+}
+async function deleteAccounts(ids){
+  ids=uniq((ids||[]).filter(Boolean));
+  if(!ids.length){toast("请先选择账号","error");return}
+  if(state.cg.accountDeleteBusy){toast("账号删除正在进行中","error");return}
+  if(!confirm(`确认删除 ${ids.length} 个账号？此操作不可恢复。`))return;
+  state.cg.accountDeleteBusy=true;
+  renderChatGPTAccounts();
+  try{
+    await request(apiURL("/api/chatgpt/accounts"),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});
+    ids.forEach(id=>state.cg.selected.delete(id));
+    toast("账号已删除");
+    await loadChatGPTAccounts();
+  }catch(err){toast(err.message,"error")}
+  finally{state.cg.accountDeleteBusy=false;renderChatGPTAccounts()}
+}
+async function refreshAccounts(ids){
+  ids=uniq((ids||[]).filter(Boolean));
+  if(!ids.length){toast("请先选择账号","error");return}
+  if(state.cg.refresh.busy){toast("已有刷新任务进行中","error");return}
+  state.cg.refresh.busy=true;
+  try{
+    const res=await request(apiURL("/api/chatgpt/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({account_ids:ids})});
+    const pid=res.progress_id||res.ProgressID||"";
+    if(!pid){toast("未返回 progress_id","error");state.cg.refresh.busy=false;return}
+    state.cg.refresh.progressId=pid;
+    $("cgRefreshProgress").classList.remove("hidden");
+    $("cgRefreshProgress").textContent=`刷新进行中… progress_id=${pid}`;
+    pollRefreshProgress(pid);
+  }catch(err){toast(err.message,"error");state.cg.refresh.busy=false;renderChatGPTAccounts()}
+}
+async function pollRefreshProgress(pid){
+  if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}
+  let delay=1000,fails=0;
+  const tick=async()=>{
+    try{
+      const p=await request(apiURL(`/api/chatgpt/accounts/refresh/progress/${encodeURIComponent(pid)}`));
+      fails=0;
+      const done=Boolean(p.done);
+      $("cgRefreshProgress").textContent=`刷新进度 ${p.processed||0}/${p.total||0}`+(done?"（已完成）":"…")+(p.error?` · ${p.error}`:"");
+      if(done){
+        state.cg.refresh.busy=false;state.cg.refresh.progressId="";state.cg.refresh.timer=null;
+        toast("账号刷新完成");
+        setTimeout(()=>$("cgRefreshProgress").classList.add("hidden"),2500);
+        await loadChatGPTAccounts();
+        return;
+      }
+      delay=Math.min(delay+1000,5000);
+      state.cg.refresh.timer=setTimeout(tick,delay);
+    }catch(err){
+      fails++;
+      if(fails>=3){
+        state.cg.refresh.busy=false;state.cg.refresh.timer=null;
+        $("cgRefreshProgress").textContent=`刷新进度查询失败：${err.message}。请手动刷新列表。`;
+        toast(err.message,"error");
+        renderChatGPTAccounts();
+        return;
+      }
+      delay=Math.min(delay+1000,5000);
+      state.cg.refresh.timer=setTimeout(tick,delay);
+    }
+  };
+  tick();
+}
+function openOAuthDialog(){
+  clearOAuthMemory();
+  $("cgOAuthHint").value="";
+  $("cgOAuthCallback").value="";
+  $("cgOAuthStepStart").classList.remove("hidden");
+  $("cgOAuthStepFinish").classList.add("hidden");
+  $("cgOAuthFinish").classList.add("hidden");
+  $("cgOAuthDialog").showModal();
+}
+function clearOAuthMemory(){
+  state.cg.oauth.sessionId="";
+  state.cg.oauth.authorizeURL="";
+  state.cg.oauth.expiresIn=0;
+  $("cgOAuthCallback").value="";
+  $("cgOAuthExpireHint").textContent="";
+}
+async function startOAuth(){
+  $("cgOAuthStart").disabled=true;
+  try{
+    const body={};
+    const hint=$("cgOAuthHint").value.trim();
+    if(hint)body.email_hint=hint;
+    const res=await request(apiURL("/api/chatgpt/accounts/oauth/start"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    state.cg.oauth.sessionId=res.session_id||"";
+    state.cg.oauth.authorizeURL=res.authorize_url||"";
+    state.cg.oauth.expiresIn=Number(res.expires_in)||0;
+    if(!state.cg.oauth.sessionId||!state.cg.oauth.authorizeURL)throw new Error("OAuth 启动响应不完整");
+    $("cgOAuthStepStart").classList.add("hidden");
+    $("cgOAuthStepFinish").classList.remove("hidden");
+    $("cgOAuthFinish").classList.remove("hidden");
+    $("cgOAuthExpireHint").textContent=state.cg.oauth.expiresIn?`会话约 ${state.cg.oauth.expiresIn}s 后过期。已在新窗口打开登录页（若被拦截请允许弹窗）。`:"已在新窗口打开登录页（若被拦截请允许弹窗）。";
+    // open without putting URL into page location or storage
+    window.open(state.cg.oauth.authorizeURL,"_blank","noopener,noreferrer");
+  }catch(err){toast(err.message,"error")}
+  finally{$("cgOAuthStart").disabled=false}
+}
+async function finishOAuth(e){
+  e.preventDefault();
+  const session_id=state.cg.oauth.sessionId;
+  const callback=$("cgOAuthCallback").value.trim();
+  if(!session_id||!callback){toast("会话未开始或 callback 为空","error");return}
+  $("cgOAuthFinish").disabled=true;
+  try{
+    await request(apiURL("/api/chatgpt/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id,callback})});
+    toast("OAuth 账号已导入");
+    clearOAuthMemory();
+    $("cgOAuthDialog").close();
+    await loadChatGPTAccounts();
+  }catch(err){toast(err.message,"error")}
+  finally{$("cgOAuthFinish").disabled=false}
+}
+function openExportDialog(ids){
+  ids=uniq((ids||[]).filter(Boolean));
+  if(!ids.length){toast("请先选择账号","error");return}
+  state.cg.exportIDs=ids;
+  $("cgExportCount").textContent=String(ids.length);
+  $("cgExportDialog").showModal();
+}
+async function confirmExport(){
+  const ids=state.cg.exportIDs.slice();
+  if(!ids.length)return;
+  $("cgExportConfirm").disabled=true;
+  let objectURL="";
+  try{
+    const res=await request(apiURL("/api/chatgpt/accounts/export"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});
+    // intentional secret-bearing payload: hold only long enough to build a Blob
+    const json=JSON.stringify(res);
+    const blob=new Blob([json],{type:"application/json"});
+    objectURL=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=objectURL;
+    a.download=`chatgpt-accounts-export-${new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")}.json`;
+    a.rel="noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("导出文件已开始下载");
+    $("cgExportDialog").close();
+    state.cg.exportIDs=[];
+  }catch(err){toast(err.message,"error")}
+  finally{
+    $("cgExportConfirm").disabled=false;
+    if(objectURL){try{URL.revokeObjectURL(objectURL)}catch(_){}}
+  }
+}
+
+function setTaskMode(mode){
+  state.cg.tasks.mode=mode==="edit"?"edit":"generation";
+  $("cgTaskModeGen").classList.toggle("active",state.cg.tasks.mode==="generation");
+  $("cgTaskModeEdit").classList.toggle("active",state.cg.tasks.mode==="edit");
+  $("cgTaskImagesField").classList.toggle("hidden",state.cg.tasks.mode!=="edit");
+}
+function renderTaskGuide(){
+  stopAllTaskPolling();
+  state.cg.tasks.items=[];
+  $("cgTaskMeta").textContent="";
+  $("cgTaskTable").className="muted-box";
+  $("cgTaskTable").textContent="请先填写 owner_id 后查询任务。缺失 owner_id 不会发送任务查询请求。";
+}
+function stopAllTaskPolling(){
+  const timers=state.cg.tasks.poll.timers;
+  timers.forEach(t=>clearTimeout(t));
+  timers.clear();
+  state.cg.tasks.poll.fails.clear();
+  state.cg.tasks.poll.started.clear();
+}
+function isTerminalTask(task){
+  const s=String(task?.status||"").toLowerCase();
+  return s==="success"||s==="error"||s==="failed"||s==="cancelled"||s==="canceled";
+}
+function canResumeTask(task){
+  if(!task)return false;
+  if(!isTerminalTask(task))return true;
+  const s=String(task.status||"").toLowerCase();
+  return s==="error"||s==="failed";
+}
+function taskImageSrc(item){
+  if(!item)return "";
+  if(item.b64_json)return `data:image/png;base64,${item.b64_json}`;
+  const url=String(item.url||"");
+  // rewrite legacy /images/ paths to admin content endpoint when possible
+  const m=url.match(/\/images\/(.+)$/);
+  if(m)return apiURL("/api/chatgpt/images/content?path="+encodeURIComponent(decodeURIComponent(m[1])));
+  if(url.startsWith(ADMIN_BASE)||url.startsWith("/"))return url;
+  return url;
+}
+function upsertTask(task){
+  if(!task||!task.id)return;
+  const idx=state.cg.tasks.items.findIndex(t=>t.id===task.id);
+  if(idx>=0)state.cg.tasks.items[idx]=task;else state.cg.tasks.items.unshift(task);
+}
+async function loadChatGPTTasks(keepPolling){
+  const owner=($("cgTaskOwner").value||state.cg.tasks.owner||"").trim();
+  state.cg.tasks.owner=owner;
+  if(!owner){renderTaskGuide();return}
+  if(!keepPolling)stopAllTaskPolling();
+  $("cgTaskTable").className="loading";$("cgTaskTable").innerHTML=`<div class="spin"></div><div>正在读取任务…</div>`;
+  try{
+    const data=await request(apiURL(`/api/chatgpt/image-tasks?owner_id=${encodeURIComponent(owner)}`));
+    setChatGPTAvailable();
+    state.cg.tasks.items=Array.isArray(data.items)?data.items:[];
+    renderChatGPTTasks();
+    state.cg.tasks.items.filter(t=>!isTerminalTask(t)).forEach(t=>startTaskPolling(t.id));
+  }catch(e){
+    if(e.status===503){setChatGPTUnavailable(e.message);$("cgTaskTable").className="";$("cgTaskTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return}
+    $("cgTaskTable").className="";$("cgTaskTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+function renderChatGPTTasks(){
+  const items=state.cg.tasks.items||[];
+  $("cgTaskMeta").textContent=`${items.length} 个任务 · owner=${state.cg.tasks.owner||"—"}`;
+  if(!items.length){$("cgTaskTable").className="";$("cgTaskTable").innerHTML=`<div class="empty">当前 owner 下暂无任务</div>`;return}
+  const rows=items.map(t=>{
+    const thumbs=(t.data||[]).slice(0,3).map((img,i)=>{
+      const src=taskImageSrc(img);
+      if(!src)return "";
+      return `<img class="thumb-inline" data-preview-src="${esc(src)}" data-preview-title="${esc(t.id)}" alt="result ${i+1}" loading="lazy">`;
+    }).join("");
+    const elapsed=t.elapsed_secs!=null?`${Number(t.elapsed_secs).toFixed(1)}s`:(t.duration_ms!=null?`${t.duration_ms}ms`:"—");
+    const resumeDisabled=canResumeTask(t)&&!state.cg.tasks.resumeBusy.has(t.id)?"":"disabled";
+    return `<tr>
+      <td class="mono" title="${esc(t.id)}">${esc((t.id||"").slice(0,12))}${(t.id||"").length>12?"…":""}</td>
+      <td class="mono subtle">${esc(t.conversation_id||"—")}</td>
+      <td>${esc(t.mode||"—")}</td>
+      <td>${esc(t.model||"—")}</td>
+      <td>${statusTag(t.status)}</td>
+      <td>${esc(t.progress||"—")}</td>
+      <td>${esc(elapsed)}</td>
+      <td title="${esc(t.error||"")}">${esc((t.error||"—").slice(0,80))}</td>
+      <td><div style="display:flex;gap:4px;flex-wrap:wrap">${thumbs||"—"}</div></td>
+      <td class="subtle">${t.created_at?new Date(t.created_at).toLocaleString():"—"}</td>
+      <td class="subtle">${t.updated_at?new Date(t.updated_at).toLocaleString():"—"}</td>
+      <td><button class="link-btn" data-task-resume="${esc(t.id)}" ${resumeDisabled}>恢复轮询</button></td>
+    </tr>`;
+  }).join("");
+  $("cgTaskTable").className="";
+  $("cgTaskTable").innerHTML=`<div class="table-wrap"><table style="min-width:1280px"><thead><tr>
+    <th>任务 ID</th><th>会话</th><th>模式</th><th>模型</th><th>状态</th><th>进度</th><th>耗时</th><th>错误</th><th>结果</th><th>提交</th><th>更新</th><th>操作</th>
+  </tr></thead><tbody>${rows}</tbody></table></div>`;
+  document.querySelectorAll("[data-task-resume]").forEach(btn=>btn.onclick=()=>resumeTask(btn.dataset.taskResume));
+  document.querySelectorAll("[data-preview-src]").forEach(img=>img.onclick=()=>openLightbox(img.dataset.previewSrc,img.dataset.previewTitle||"预览"));
+}
+function startTaskPolling(taskId){
+  if(!taskId||!state.cg.tasks.owner)return;
+  if(state.cg.tasks.poll.timers.has(taskId))return;
+  state.cg.tasks.poll.started.set(taskId,Date.now());
+  state.cg.tasks.poll.fails.set(taskId,0);
+  let delay=1000;
+  const tick=async()=>{
+    if(state.tab!=="chatgpt"||state.cg.sub!=="tasks"){state.cg.tasks.poll.timers.delete(taskId);return}
+    if(state.cg.tasks.poll.started.has(taskId)&&Date.now()-state.cg.tasks.poll.started.get(taskId)>10*60*1000){
+      state.cg.tasks.poll.timers.delete(taskId);
+      toast(`任务 ${taskId} 轮询超时，请手动恢复`,"error");
+      return;
+    }
+    try{
+      const data=await request(apiURL(`/api/chatgpt/image-tasks?owner_id=${encodeURIComponent(state.cg.tasks.owner)}&ids=${encodeURIComponent(taskId)}`));
+      state.cg.tasks.poll.fails.set(taskId,0);
+      const task=(data.items||[]).find(t=>t.id===taskId);
+      if(task){upsertTask(task);renderChatGPTTasks();
+        if(isTerminalTask(task)){state.cg.tasks.poll.timers.delete(taskId);return}
+      }
+      delay=Math.min(delay+1000,5000);
+      const handle=setTimeout(tick,delay);
+      state.cg.tasks.poll.timers.set(taskId,handle);
+    }catch(err){
+      const fails=(state.cg.tasks.poll.fails.get(taskId)||0)+1;
+      state.cg.tasks.poll.fails.set(taskId,fails);
+      if(fails>=3){
+        state.cg.tasks.poll.timers.delete(taskId);
+        toast(`任务 ${taskId} 轮询失败：${err.message}`,"error");
+        return;
+      }
+      delay=Math.min(delay+1000,5000);
+      const handle=setTimeout(tick,delay);
+      state.cg.tasks.poll.timers.set(taskId,handle);
+    }
+  };
+  const handle=setTimeout(tick,delay);
+  state.cg.tasks.poll.timers.set(taskId,handle);
+}
+async function submitTask(e){
+  e.preventDefault();
+  const owner=($("cgTaskOwner").value||"").trim();
+  const client_task_id=($("cgTaskClientId").value||"").trim()||newUUID();
+  const prompt=($("cgTaskPrompt").value||"").trim();
+  if(!owner){toast("owner_id 必填","error");return}
+  if(!prompt){toast("prompt 必填","error");return}
+  // owner change isolation
+  if(state.cg.tasks.owner&&state.cg.tasks.owner!==owner){stopAllTaskPolling();state.cg.tasks.items=[]}
+  state.cg.tasks.owner=owner;
+  $("cgTaskClientId").value=client_task_id;
+  const body={owner_id:owner,client_task_id,prompt};
+  const model=$("cgTaskModel").value.trim();if(model)body.model=model;
+  const size=$("cgTaskSize").value.trim();if(size)body.size=size;
+  const quality=$("cgTaskQuality").value.trim();if(quality)body.quality=quality;
+  let path="/api/chatgpt/image-tasks/generations";
+  if(state.cg.tasks.mode==="edit"){
+    path="/api/chatgpt/image-tasks/edits";
+    const images=uniq(splitList($("cgTaskImages").value));
+    if(!images.length){toast("图生图至少需要一张图片","error");return}
+    body.images=images;
+  }
+  $("cgTaskSubmit").disabled=true;
+  try{
+    const task=await request(apiURL(path),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    upsertTask(task);
+    renderChatGPTTasks();
+    if(!isTerminalTask(task))startTaskPolling(task.id);
+    $("cgTaskPrompt").value="";
+    $("cgTaskImages").value="";
+    $("cgTaskClientId").value=newUUID();
+    toast("任务已提交");
+    setHash();
+  }catch(err){toast(err.message,"error")}
+  finally{$("cgTaskSubmit").disabled=false}
+}
+async function resumeTask(taskId){
+  const owner=state.cg.tasks.owner;
+  if(!owner||!taskId)return;
+  if(state.cg.tasks.resumeBusy.has(taskId)){toast("该任务正在恢复轮询","error");return}
+  state.cg.tasks.resumeBusy.add(taskId);
+  renderChatGPTTasks();
+  try{
+    const task=await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}/resume-poll`),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({owner_id:owner,extra_timeout_secs:30})});
+    upsertTask(task);
+    renderChatGPTTasks();
+    if(!isTerminalTask(task)){
+      // reset polling window
+      if(state.cg.tasks.poll.timers.has(taskId)){clearTimeout(state.cg.tasks.poll.timers.get(taskId));state.cg.tasks.poll.timers.delete(taskId)}
+      startTaskPolling(taskId);
+    }
+    toast("已恢复轮询");
+  }catch(err){toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+}
+
+async function loadChatGPTImages(){
+  const box=$("cgImgGrid");
+  box.className="loading";box.innerHTML=`<div class="spin"></div><div>正在读取图片…</div>`;
+  const q=new URLSearchParams();
+  if(state.cg.images.start)q.set("start_date",state.cg.images.start);
+  if(state.cg.images.end)q.set("end_date",state.cg.images.end);
+  try{
+    const [list,tags,storage]=await Promise.all([
+      request(apiURL(`/api/chatgpt/images${q.toString()?"?"+q.toString():""}`)),
+      request(apiURL("/api/chatgpt/images/tags")),
+      request(apiURL("/api/chatgpt/images/storage"))
+    ]);
+    setChatGPTAvailable();
+    state.cg.images.items=Array.isArray(list.items)?list.items:[];
+    state.cg.images.tags=Array.isArray(tags.tags)?tags.tags:[];
+    state.cg.images.storage=storage||null;
+    const paths=new Set(state.cg.images.items.map(i=>i.path));
+    state.cg.images.selected.forEach(p=>{if(!paths.has(p))state.cg.images.selected.delete(p)});
+    renderChatGPTImages();
+  }catch(e){
+    if(e.status===503){setChatGPTUnavailable(e.message);box.className="";box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;return}
+    box.className="";box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+function filteredImages(){
+  const tag=state.cg.images.tag||"";
+  if(!tag)return state.cg.images.items;
+  return state.cg.images.items.filter(img=>(img.tags||[]).includes(tag));
+}
+function renderChatGPTImages(){
+  const storage=state.cg.images.storage||{};
+  $("cgImgCount").textContent=storage.image_count!=null?storage.image_count:(state.cg.images.items.length);
+  $("cgImgSize").textContent=storage.image_size_mb!=null?`${storage.image_size_mb} MB`:(storage.image_size_bytes!=null?compact(storage.image_size_bytes)+" B":"—");
+  $("cgImgDisk").textContent=(storage.disk_used_mb!=null&&storage.disk_total_mb!=null)?`${storage.disk_used_mb} / ${storage.disk_total_mb} MB`:"—";
+  $("cgImgFree").textContent=storage.disk_free_mb!=null?`${storage.disk_free_mb} MB`:"—";
+  const tagSel=$("cgImgTagFilter");
+  const prev=tagSel.value||state.cg.images.tag||"";
+  tagSel.innerHTML=`<option value="">全部标签</option>`+state.cg.images.tags.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
+  if(prev)tagSel.value=prev;
+  const items=filteredImages();
+  $("cgImgMeta").textContent=`显示 ${items.length} / ${state.cg.images.items.length}`;
+  if(!items.length){$("cgImgGrid").className="";$("cgImgGrid").innerHTML=`<div class="empty">${state.cg.images.items.length?"没有匹配的图片":"暂无本地图片"}</div>`;return}
+  $("cgImgGrid").className="image-grid";
+  $("cgImgGrid").innerHTML=items.map(img=>{
+    const thumb=img.thumbnail_url||img.url||"";
+    const full=img.url||thumb;
+    const checked=state.cg.images.selected.has(img.path)?"checked":"";
+    const tags=(img.tags||[]).map(t=>`<span class="tag tag-default">${esc(t)}</span>`).join(" ");
+    return `<div class="image-card">
+      <div class="thumb-wrap" data-img-preview="${esc(full)}" data-img-title="${esc(img.name||img.path||"")}">${thumb?`<img src="${esc(thumb)}" alt="" loading="lazy">`:"无预览"}</div>
+      <div class="meta">
+        <div class="row"><label class="check"><input type="checkbox" data-img-check="${esc(img.path)}" ${checked}> 选择</label><button type="button" class="link-btn" data-img-tags="${esc(img.path)}">标签</button></div>
+        <div class="subtle" title="${esc(img.path)}">${esc(img.created_at?new Date(img.created_at).toLocaleString():(img.date||"—"))}</div>
+        <div class="tags">${tags||'<span class="subtle">无标签</span>'}</div>
+      </div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("[data-img-check]").forEach(el=>el.onchange=()=>{const p=el.dataset.imgCheck;if(el.checked)state.cg.images.selected.add(p);else state.cg.images.selected.delete(p)});
+  document.querySelectorAll("[data-img-preview]").forEach(el=>el.onclick=()=>openLightbox(el.dataset.imgPreview,el.dataset.imgTitle||"预览"));
+  document.querySelectorAll("[data-img-tags]").forEach(el=>el.onclick=()=>openTagsDialog(el.dataset.imgTags));
+}
+function openLightbox(src,title){
+  if(!src)return;
+  $("cgLightboxImg").src=src;
+  $("cgLightboxTitle").textContent=title||"预览";
+  $("cgLightbox").showModal();
+}
+function closeLightbox(){
+  $("cgLightbox").close();
+  $("cgLightboxImg").removeAttribute("src");
+}
+function openTagsDialog(path){
+  const img=state.cg.images.items.find(i=>i.path===path);
+  if(!img)return;
+  $("cgTagsPath").value=path;
+  $("cgTagsInput").value=(img.tags||[]).join(", ");
+  $("cgTagsDialog").showModal();
+}
+async function submitTags(e){
+  e.preventDefault();
+  const path=$("cgTagsPath").value.trim();
+  const tags=uniq(splitList($("cgTagsInput").value));
+  try{
+    const res=await request(apiURL("/api/chatgpt/images/tags"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({path,tags})});
+    const img=state.cg.images.items.find(i=>i.path===path);
+    if(img)img.tags=res.tags||tags;
+    // refresh tag catalog lightly
+    const all=new Set(state.cg.images.tags);
+    (res.tags||tags).forEach(t=>all.add(t));
+    state.cg.images.tags=[...all].sort();
+    $("cgTagsDialog").close();
+    renderChatGPTImages();
+    toast("标签已更新");
+  }catch(err){toast(err.message,"error")}
+}
+async function deleteSelectedImages(){
+  const paths=[...state.cg.images.selected];
+  if(!paths.length){toast("请先选择图片","error");return}
+  if(state.cg.images.deleteBusy){toast("图片删除正在进行中","error");return}
+  if(!confirm(`确认删除 ${paths.length} 张图片？此操作不可恢复。`))return;
+  state.cg.images.deleteBusy=true;
+  $("cgImgDeleteSelected").disabled=true;
+  try{
+    await request(apiURL("/api/chatgpt/images/delete"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({paths})});
+    state.cg.images.selected.clear();
+    toast("图片已删除");
+    await loadChatGPTImages();
+  }catch(err){toast(err.message,"error")}
+  finally{state.cg.images.deleteBusy=false;$("cgImgDeleteSelected").disabled=false}
+}
+
 async function loadClientKeys(){try{const d=await request(apiURL("/api/client-api-keys"));state.clientKeys=d.client_api_keys||[];$("addClientKey").disabled=!d.writable;const rows=state.clientKeys.map(k=>{const managed=k.credential_source==="managed";return `<tr><td class="key-id" title="${esc(k.id)}">${esc(k.id)}</td><td><span class="tag ${managed?"tag-key-managed":"tag-key-external"}">${managed?"托管密钥":"外部配置"}</span></td><td><span class="tag ${k.enabled?"tag-status-active":"tag-status-disabled"}">${k.enabled?"已启用":"已禁用"}</span></td><td class="key-actions"><div class="actions"><button class="link-btn" data-key-toggle="${esc(k.id)}" data-enabled="${!k.enabled}">${k.enabled?"禁用":"启用"}</button><button class="link-btn" data-key-rotate="${esc(k.id)}">轮换</button><button class="link-btn link-danger" data-key-delete="${esc(k.id)}">删除</button></div></td></tr>`}).join("");const table=$("clientKeyTable");table.className="";table.innerHTML=`<div class="table-wrap"><table class="client-key-table"><colgroup><col style="width:42%"><col style="width:18%"><col style="width:14%"><col style="width:26%"></colgroup><thead><tr><th>ID</th><th>凭据来源</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows||`<tr><td colspan="4" class="empty">尚未配置客户端 Key</td></tr>`}</tbody></table></div>`;document.querySelectorAll("[data-key-toggle]").forEach(b=>b.onclick=()=>keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyToggle)}`),"PATCH",{enabled:b.dataset.enabled==="true"}));document.querySelectorAll("[data-key-rotate]").forEach(b=>b.onclick=()=>rotateClientKey(b.dataset.keyRotate));document.querySelectorAll("[data-key-delete]").forEach(b=>b.onclick=()=>{if(confirm(`删除 ${b.dataset.keyDelete}？`))keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyDelete)}`),"DELETE")})}catch(e){$("clientKeyTable").textContent=e.message}}
 async function keyRequest(url,method,body){try{await request(url,{method,headers:authHeaders({"Content-Type":"application/json"}),body:body?JSON.stringify(body):undefined});toast("客户端 Key 配置已保存");loadClientKeys()}catch(e){toast(e.message,"error")}}
 async function rotateClientKey(id){if(!confirm(`轮换 ${id}？旧 Key 将立即失效。`))return;try{const d=await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/rotate`),{method:"POST",headers:authHeaders()});showClientSecret(d.api_key);loadClientKeys()}catch(e){toast(e.message,"error")}}
@@ -321,8 +1213,90 @@ $("loadMoreEvents").onclick=()=>loadEvents(false);
 $("usageApply").onclick=()=>{const prevKey=filterOptionsCacheKey();state.apiKeyFilter=$("usageKeyFilter").value.trim();state.providerFilter=$("usageProviderFilter").value.trim();state.modelFilter=$("usageModelFilter").value.trim();state.outcomeFilter=$("usageOutcomeFilter").value.trim();state.estimatedFilter=$("usageEstimatedFilter").value;state.from=$("usageFrom").value?new Date($("usageFrom").value).toISOString():"";state.to=$("usageTo").value?new Date($("usageTo").value).toISOString():"";if(state.from||state.to)state.range="custom";setHash();if(filterOptionsCacheKey()!==prevKey)loadFilterOptions(true);loadUsage(true)};
 $("closeUsageEvent").onclick=()=>$("usageEventDialog").close();
 document.querySelectorAll("#rangeGroup .btn").forEach(btn=>btn.onclick=()=>{state.range=btn.dataset.range;if(state.range!=="custom"){state.from="";state.to=""}document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b===btn));setHash();loadFilterOptions(true);loadUsage(true)});
-function applyUsageState(p){Object.assign(state,p);$("usageEstimatedFilter").value=state.estimatedFilter;$("usageFrom").value=state.from?state.from.slice(0,16):"";$("usageTo").value=state.to?state.to.slice(0,16):"";document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b.dataset.range===state.range));if(state.filterOptions)fillFilterOptions(state.filterOptions);else{fillSelect($("usageKeyFilter"),"全部 API Key",[],state.apiKeyFilter);fillSelect($("usageProviderFilter"),"全部 Provider",[],state.providerFilter);fillSelect($("usageModelFilter"),"全部 Model",[],state.modelFilter);fillSelect($("usageOutcomeFilter"),"全部 Outcome",[],state.outcomeFilter)}}
-window.addEventListener("hashchange",()=>{const p=parseHash();applyUsageState(p);showTab(p.tab)});
+function applyUsageState(p){
+  state.range=p.range||"today";
+  state.apiKeyFilter=p.apiKeyFilter||"";
+  state.providerFilter=p.providerFilter||"";
+  state.modelFilter=p.modelFilter||"";
+  state.outcomeFilter=p.outcomeFilter||"";
+  state.estimatedFilter=p.estimatedFilter||"";
+  state.from=p.from||"";
+  state.to=p.to||"";
+  $("usageEstimatedFilter").value=state.estimatedFilter;
+  $("usageFrom").value=state.from?state.from.slice(0,16):"";
+  $("usageTo").value=state.to?state.to.slice(0,16):"";
+  document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b.dataset.range===state.range));
+  if(state.filterOptions)fillFilterOptions(state.filterOptions);
+  else{
+    fillSelect($("usageKeyFilter"),"全部 API Key",[],state.apiKeyFilter);
+    fillSelect($("usageProviderFilter"),"全部 Provider",[],state.providerFilter);
+    fillSelect($("usageModelFilter"),"全部 Model",[],state.modelFilter);
+    fillSelect($("usageOutcomeFilter"),"全部 Outcome",[],state.outcomeFilter);
+  }
+}
+function applyChatGPTState(p){
+  if(p.cgSub)state.cg.sub=p.cgSub;
+  if(typeof p.owner==="string"){
+    state.cg.tasks.owner=p.owner;
+    if($("cgTaskOwner"))$("cgTaskOwner").value=p.owner;
+  }
+}
+window.addEventListener("hashchange",()=>{
+  const p=parseHash();
+  applyUsageState(p);
+  applyChatGPTState(p);
+  showTab(p.tab);
+});
+window.addEventListener("pagehide",()=>{stopAllTaskPolling();clearOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+
+// ChatGPT Web events
+document.querySelectorAll("[data-cg-sub]").forEach(btn=>btn.onclick=()=>{state.cg.sub=btn.dataset.cgSub;setHash();showChatGPTSub(state.cg.sub)});
+$("cgRetry").onclick=()=>showChatGPTSub(state.cg.sub||"accounts");
+$("cgAccSearch").oninput=e=>{state.cg.query=e.target.value;renderChatGPTAccounts()};
+$("cgAccStatusFilter").onchange=e=>{state.cg.status=e.target.value;renderChatGPTAccounts()};
+$("cgAccTypeFilter").onchange=e=>{state.cg.type=e.target.value;renderChatGPTAccounts()};
+$("cgAccImport").onclick=openImportDialog;
+$("cgImportClose").onclick=$("cgImportCancel").onclick=closeImportDialog;
+$("cgImportForm").onsubmit=submitImport;
+$("cgImportDialog").addEventListener("close",clearImportSensitiveFields);
+$("cgEditClose").onclick=$("cgEditCancel").onclick=()=>$("cgEditDialog").close();
+$("cgEditForm").onsubmit=submitEdit;
+$("cgAccRefreshSelected").onclick=()=>refreshAccounts(selectedAccountIDs());
+$("cgAccDeleteSelected").onclick=()=>deleteAccounts(selectedAccountIDs());
+$("cgAccExportSelected").onclick=()=>openExportDialog(selectedAccountIDs());
+$("cgAccOAuth").onclick=openOAuthDialog;
+$("cgOAuthClose").onclick=$("cgOAuthCancel").onclick=()=>{clearOAuthMemory();$("cgOAuthDialog").close()};
+$("cgOAuthStart").onclick=startOAuth;
+$("cgOAuthForm").onsubmit=finishOAuth;
+$("cgExportClose").onclick=$("cgExportCancel").onclick=()=>{$("cgExportDialog").close();state.cg.exportIDs=[]};
+$("cgExportConfirm").onclick=confirmExport;
+
+$("cgTaskModeGen").onclick=()=>setTaskMode("generation");
+$("cgTaskModeEdit").onclick=()=>setTaskMode("edit");
+$("cgTaskRegenId").onclick=()=>{$("cgTaskClientId").value=newUUID()};
+$("cgTaskReload").onclick=()=>{
+  const owner=($("cgTaskOwner").value||"").trim();
+  if(state.cg.tasks.owner&&owner&&state.cg.tasks.owner!==owner){stopAllTaskPolling();state.cg.tasks.items=[]}
+  state.cg.tasks.owner=owner;
+  setHash();
+  loadChatGPTTasks(false);
+};
+$("cgTaskOwner").onchange=()=>{
+  const owner=($("cgTaskOwner").value||"").trim();
+  if(state.cg.tasks.owner&&owner!==state.cg.tasks.owner){stopAllTaskPolling();state.cg.tasks.items=[];renderTaskGuide()}
+  state.cg.tasks.owner=owner;
+};
+$("cgTaskForm").onsubmit=submitTask;
+
+$("cgImgStart").onchange=e=>{state.cg.images.start=e.target.value||"";loadChatGPTImages()};
+$("cgImgEnd").onchange=e=>{state.cg.images.end=e.target.value||"";loadChatGPTImages()};
+$("cgImgTagFilter").onchange=e=>{state.cg.images.tag=e.target.value||"";renderChatGPTImages()};
+$("cgImgReload").onclick=()=>loadChatGPTImages();
+$("cgImgDeleteSelected").onclick=deleteSelectedImages;
+$("cgTagsClose").onclick=$("cgTagsCancel").onclick=()=>$("cgTagsDialog").close();
+$("cgTagsForm").onsubmit=submitTags;
+$("cgLightboxClose").onclick=closeLightbox;
+$("cgLightbox").addEventListener("click",e=>{if(e.target===$("cgLightbox"))closeLightbox()});
 
 async function initAuthSession(){
   try{
@@ -342,8 +1316,12 @@ async function doLogout(){
 const logoutBtn=$("logoutBtn");if(logoutBtn)logoutBtn.onclick=()=>doLogout();
 // boot
 initAuthSession().finally(()=>{
-const boot=parseHash();applyUsageState(boot);showTab(boot.tab);
-state.usageTimer=setInterval(()=>{if(state.tab==="usage")loadUsage(false)},15000);
+  const boot=parseHash();
+  applyUsageState(boot);
+  applyChatGPTState(boot);
+  setTaskMode(state.cg.tasks.mode||"generation");
+  showTab(boot.tab);
+  state.usageTimer=setInterval(()=>{if(state.tab==="usage")loadUsage(false)},15000);
 });
 
 

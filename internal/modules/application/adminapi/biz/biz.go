@@ -68,6 +68,14 @@ func (s *Admin) ConfigSnapshot() config.Config {
 	return bootstrap.Config
 }
 
+// ChatGPTWebEnabled reports whether this Admin runtime was configured with the
+// ChatGPT Web component enabled. The component is assembled at process start,
+// so changing this setting requires a restart before its EventHub subscribers
+// can serve management requests.
+func (s *Admin) ChatGPTWebEnabled() bool {
+	return s.ConfigSnapshot().ChatGPTWeb.Enabled
+}
+
 func (s *Admin) UpdateConfig(cfg config.Config) error {
 	return configevents.Activate(context.Background(), s.EventHub(), s.ID(), cfg)
 }

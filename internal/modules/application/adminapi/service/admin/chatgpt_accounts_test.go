@@ -13,10 +13,19 @@ import (
 )
 
 type chatGPTAccountRuntimeStub struct {
-	addedTokens []string
-	deletedIDs  []string
-	updated     accevents.UpdateByIDCommand
+	addedTokens   []string
+	deletedIDs    []string
+	updated       accevents.UpdateByIDCommand
+	imageBytes    []string
+	imageThumbs   []string
+	imageList     imgevents.ListResult
+	imageListErr  error
+	imageBytesErr error
 }
+
+type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
+
+func (unavailableChatGPTRuntimeStub) ChatGPTWebEnabled() bool { return false }
 
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
 	return []accevents.AccountView{{ID: "account-1", AccessToken: "token-very-secret", Proxy: "http://private.invalid"}}, nil
@@ -49,6 +58,12 @@ func (s *chatGPTAccountRuntimeStub) FinishChatGPTOAuth(context.Context, string, 
 	return accevents.OAuthFinishResult{}, nil
 }
 func (s *chatGPTAccountRuntimeStub) ListChatGPTImages(context.Context, string, string, string) (imgevents.ListResult, error) {
+	if s.imageListErr != nil {
+		return imgevents.ListResult{}, s.imageListErr
+	}
+	if len(s.imageList.Items) > 0 {
+		return s.imageList, nil
+	}
 	return imgevents.ListResult{}, nil
 }
 func (s *chatGPTAccountRuntimeStub) ChatGPTImageStorage(context.Context) (imgevents.StorageStatsResult, error) {
@@ -62,6 +77,20 @@ func (s *chatGPTAccountRuntimeStub) SetChatGPTImageTags(context.Context, string,
 }
 func (s *chatGPTAccountRuntimeStub) DeleteChatGPTImages(context.Context, []string) (imgevents.DeleteResult, error) {
 	return imgevents.DeleteResult{}, nil
+}
+func (s *chatGPTAccountRuntimeStub) GetChatGPTImageBytes(_ context.Context, path string) ([]byte, error) {
+	s.imageBytes = append(s.imageBytes, path)
+	if s.imageBytesErr != nil {
+		return nil, s.imageBytesErr
+	}
+	return []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, nil
+}
+func (s *chatGPTAccountRuntimeStub) GetChatGPTImageThumbnail(_ context.Context, path string) ([]byte, error) {
+	s.imageThumbs = append(s.imageThumbs, path)
+	if s.imageBytesErr != nil {
+		return nil, s.imageBytesErr
+	}
+	return []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, nil
 }
 func (s *chatGPTAccountRuntimeStub) SubmitChatGPTImageGeneration(context.Context, taskevents.SubmitGenerationCommand) (taskevents.SubmitResult, error) {
 	return taskevents.SubmitResult{}, nil
@@ -104,5 +133,80 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	handler.ServeHTTP(updateRecorder, update)
 	if updateRecorder.Code != http.StatusOK || runtime.updated.ID != "account-1" || runtime.updated.Status == nil || *runtime.updated.Status != "禁用" || runtime.updated.Proxy == nil || *runtime.updated.Proxy != "" || strings.Contains(updateRecorder.Body.String(), "very-secret") {
 		t.Fatalf("update=%d command=%+v body=%s", updateRecorder.Code, runtime.updated, updateRecorder.Body.String())
+	}
+}
+
+func TestChatGPTImageListRewritesToAdminContentURLs(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{
+		imageList: imgevents.ListResult{Items: []imgevents.ImageItem{{
+			Path: "2026-07-26/demo.png",
+			Name: "demo.png",
+			URL:  "http://evil.example/images/2026-07-26/demo.png",
+		}}},
+	}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list images=%d %s", rec.Code, body)
+	}
+	if strings.Contains(body, "evil.example") || strings.Contains(body, `"/images/`) {
+		t.Fatalf("list still exposes public image URLs: %s", body)
+	}
+	if !strings.Contains(body, "/admin/api/chatgpt/images/content?path=") || !strings.Contains(body, "thumb=1") {
+		t.Fatalf("list missing admin content URLs: %s", body)
+	}
+}
+
+func TestChatGPTImageContentEndpoint(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+
+	okReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=2026-07-26%2Fdemo.png&thumb=1", nil)
+	okReq.RemoteAddr = "127.0.0.1:1234"
+	okRec := httptest.NewRecorder()
+	handler.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK || okRec.Header().Get("Cache-Control") != "no-store" || len(runtime.imageThumbs) != 1 || runtime.imageThumbs[0] != "2026-07-26/demo.png" {
+		t.Fatalf("content ok=%d cache=%q thumbs=%v body=%d", okRec.Code, okRec.Header().Get("Cache-Control"), runtime.imageThumbs, okRec.Body.Len())
+	}
+
+	badReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=../secret.png", nil)
+	badReq.RemoteAddr = "127.0.0.1:1234"
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("traversal path should be rejected, got %d %s", badRec.Code, badRec.Body.String())
+	}
+
+	absReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=%2Fetc%2Fpasswd", nil)
+	absReq.RemoteAddr = "127.0.0.1:1234"
+	absRec := httptest.NewRecorder()
+	handler.ServeHTTP(absRec, absReq)
+	if absRec.Code != http.StatusBadRequest {
+		t.Fatalf("absolute path should be rejected, got %d %s", absRec.Code, absRec.Body.String())
+	}
+
+	nilHandler := NewHandler("", &testRuntime{})
+	unavail := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=a.png", nil)
+	unavail.RemoteAddr = "127.0.0.1:1234"
+	unavailRec := httptest.NewRecorder()
+	nilHandler.ServeHTTP(unavailRec, unavail)
+	if unavailRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nil runtime should 503, got %d %s", unavailRec.Code, unavailRec.Body.String())
+	}
+}
+
+func TestChatGPTAdminReturnsUnavailableWhenFeatureDisabled(t *testing.T) {
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(unavailableChatGPTRuntimeStub{&chatGPTAccountRuntimeStub{}})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(`{"tokens":["redacted"]}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "chatgpt web is not enabled") {
+		t.Fatalf("disabled feature should return 503, got %d %s", rec.Code, rec.Body.String())
 	}
 }

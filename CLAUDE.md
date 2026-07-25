@@ -56,7 +56,7 @@ internal/pkg/aiproxyusage        DuckDB 用量 Store（Start/Complete/Dashboard/
 internal/pkg/aiproxymetrics      Registry、Prometheus 投影、SLO 巡检与 webhook（无 HTTP adapter）
 internal/pkg/aiproxymetricsport  Metrics Block 的 EventHub-backed 读写端口
 
-web/admin             嵌入二进制的管理页（Provider + 使用统计，go:embed，无 Node 构建链）
+web/admin             嵌入二进制的管理页（Provider、客户端 Key、使用统计、ChatGPT Web 账号/图片任务/图片库；go:embed，无 Node 构建链）
 cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 ```
 
