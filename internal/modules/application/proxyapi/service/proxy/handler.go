@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"ai-proxy/internal/pkg/aiproxyarchive"
 	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
@@ -36,6 +38,25 @@ type Handler struct {
 	metricsRegistry     metricsport.Port
 	driftTracker        *FingerprintDriftTracker
 	client              *http.Client
+	chatGPTText         chatgpttext.Executor
+	chatGPTImage        chatgptimage.Executor
+}
+
+// WithChatGPTTextExecutor binds proxyapi's owner-local ChatGPT execution
+// port. The HTTP service never receives an EventHub or an upstream client.
+func (h *Handler) WithChatGPTTextExecutor(executor chatgpttext.Executor) *Handler {
+	h.cfgMu.Lock()
+	h.chatGPTText = executor
+	h.cfgMu.Unlock()
+	return h
+}
+
+// WithChatGPTImageExecutor binds the local synchronous image orchestration port.
+func (h *Handler) WithChatGPTImageExecutor(executor chatgptimage.Executor) *Handler {
+	h.cfgMu.Lock()
+	h.chatGPTImage = executor
+	h.cfgMu.Unlock()
+	return h
 }
 
 type archiveRoundKey struct{}
@@ -144,7 +165,7 @@ func requireResolvedConfig(cfg config.Config) error {
 			continue
 		}
 		switch provider.Protocol {
-		case "openai", "anthropic":
+		case "openai", "anthropic", "chatgptweb":
 		case "":
 			return fmt.Errorf("provider %q: protocol unresolved", name)
 		default:
@@ -170,6 +191,13 @@ func requireResolvedConfig(cfg config.Config) error {
 			for _, capName := range provider.EndpointCapabilities {
 				if capName != config.EndpointCapabilityMessages {
 					return fmt.Errorf("provider %q: endpoint_capabilities %q invalid for anthropic protocol", name, capName)
+				}
+			}
+		}
+		if provider.Protocol == "chatgptweb" {
+			for _, capName := range provider.EndpointCapabilities {
+				if capName != config.EndpointCapabilityChatCompletions && capName != config.EndpointCapabilityImages {
+					return fmt.Errorf("provider %q: endpoint_capabilities %q invalid for chatgptweb protocol", name, capName)
 				}
 			}
 		}
@@ -221,13 +249,15 @@ func knownEndpointCapabilities() map[string]int {
 		config.EndpointCapabilityResponses:       2,
 		config.EndpointCapabilityCompletions:     3,
 		config.EndpointCapabilityEmbeddings:      4,
+		config.EndpointCapabilityImages:          5,
 	}
 }
 
 func knownModelOperations() map[string]int {
 	return map[string]int{
-		config.ModelOperationChatCompletions: 0,
-		config.ModelOperationEmbeddings:      1,
+		config.ModelOperationChatCompletions:  0,
+		config.ModelOperationEmbeddings:       1,
+		config.ModelOperationImageGenerations: 2,
 	}
 }
 
@@ -330,6 +360,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
 		h.handleChatCompletions(w, r, requestID)
+	case (r.URL.Path == "/v1/images/generations" || r.URL.Path == "/v1/images/edits") && r.Method == http.MethodPost:
+		h.handleImages(w, r, requestID)
 	case r.URL.Path == "/v1/messages" && r.Method == http.MethodPost:
 		h.handleAnthropicMessages(w, r, requestID)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
@@ -563,7 +595,7 @@ func (h *Handler) readLimitedUpstream(body io.Reader) ([]byte, error) {
 // isSupportedInbound 限制客户端只能访问标准 OpenAI / Anthropic path。
 func isSupportedInbound(method, path string) bool {
 	switch path {
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings":
+	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits":
 		return method == http.MethodPost
 	case "/v1/models":
 		return method == http.MethodGet || method == http.MethodPost
@@ -628,6 +660,10 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 	}
 	// model 路由仅使用 body.model + ResolvedModelRoute + TransportPlan authority。
 	h.archiveAndLogTransportPlan(round, r, plan, provider, stream)
+	if provider.Protocol == "chatgptweb" {
+		h.handleChatGPTWebChatCompletions(w, r, start, plan.RouteOwner, model, stream, body)
+		return
+	}
 
 	switch plan.Mode {
 	case TransportModeOpenAIToAnthropic:

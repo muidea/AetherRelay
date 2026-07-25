@@ -70,6 +70,15 @@ usage_store:
   threads: 2
   query_cache_seconds: 15
 
+# ChatGPT Web 账号池与图片能力。默认关闭；账号凭据不写入本配置，
+# 而是保存到 data_dir/accounts.json（该目录应设置为仅运行用户可读写）。
+# data_dir 为本地目录，相对路径相对于 config.yaml 所在目录解析。
+chatgpt_web:
+  enabled: false
+  data_dir: chatgpt-web-data
+  # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
+  refresh_account_interval_minute: 0
+
 providers:
   # 每个 enabled provider 必须显式声明 protocol、base_url、endpoint_capabilities。
   # 远程空 api_key 启动失败；仅 loopback 上游可设 allow_unauthenticated: true。
@@ -96,6 +105,12 @@ providers:
     api_key: ${ANTHROPIC_API_KEY}
     endpoint_capabilities: messages
     models: claude*
+  # ChatGPT Web 路由示例。模型仍必须在 model_catalog 显式登记。
+  # chatgptweb:
+  #   enabled: true
+  #   protocol: chatgptweb
+  #   endpoint_capabilities: chat_completions, images
+  #   models: gpt-*
 
 # 全局模型目录(各 provider 共用)。model ID 严格区分大小写(exact match)。
 # GET /v1/models 仅返回此处登记的模型,
@@ -117,3 +132,8 @@ model_catalog:
     context_window_tokens: 8192
     max_output_tokens: 8191
     operations: embeddings
+  # ChatGPT Web 图片模型示例；须与上方 chatgptweb Provider 的 models 匹配。
+  # gpt-image-1:
+  #   context_window_tokens: 128000
+  #   max_output_tokens: 16384
+  #   operations: image_generations

@@ -45,6 +45,23 @@ internal/modules/
     biz/                         EventHub-backed 配置、Usage 与 Metrics 依赖
     service/admin/               Admin 登录、Provider 管理与 usage HTTP adapter
     service/observability/       metrics、stats 与 stats SSE HTTP adapter
+  application/chatgptaccountpool/ ChatGPT Web 账号资源 Application Module
+    biz/                         账号状态、OAuth 刷新与 AccountPool owner 合同
+    internal/store/              accounts.json 兼容持久化（保留未知字段）
+    internal/oauth/              OAuth token 刷新与操作员辅助授权码交换
+    pkg/events/                  ChatGPT 账号资源的 typed EventHub 合同
+  application/chatgptimagetask/  ChatGPT 图片任务 Application Module
+    biz/                         账号分配、上游图片执行与本地持久化编排
+    internal/store/              image_tasks.json 兼容任务状态存储
+    pkg/events/                  图片任务 owner 的 typed EventHub 合同
+  blocks/chatgptwebupstream/     ChatGPT Web 上游技术 Block
+    biz/                         账号检查、文本流与图片 Web transport 编排
+    internal/client/             浏览器指纹、Chat requirements、文本/图片/上传协议
+    pkg/events/                  ChatGPT Web 上游 owner 的 typed EventHub 合同
+  blocks/chatgptimagestore/      ChatGPT 图片本地存储 Block
+    biz/                         图片、缩略图、标签与本地容量管理
+    internal/store/              image_index.json 兼容索引和本地文件操作
+    pkg/events/                  图片存储 owner 的 typed EventHub 合同
 
 internal/pkg/
   aiproxybootstrap/       process service → framework 启动基础设施的单次启动快照桥接
@@ -54,6 +71,7 @@ internal/pkg/
   aiproxyusage/           DuckDB usage store、查询、导出与迁移
   aiproxymetrics/         Registry、Prometheus 投影、SLO evaluator（无 HTTP route）
   aiproxymetricsport/     Metrics Block 的 EventHub-backed 读写端口
+  chatgptwebpaths/        ChatGPT Web 本地数据布局（无 lifecycle）
 
 internal/initiators/
   routeregistry/          magicEngine RouteRegistry、HTTP listener 与关闭信号基础设施
@@ -68,7 +86,7 @@ web/admin/                嵌入二进制的管理页
 - Usage 与 Metrics/SLO 是独立技术 Block，不暴露 HTTP route 或可变资源对象。Metrics Block 经 `MetricsPort` 接收记录事件和返回只读投影；Proxy 直接持有其唯一使用的 Client API Key 索引与 interaction archive。
 - Proxy API 与 Provider Admin 是有状态业务聚合 Module：它们通过 EventHub 获取 Block 依赖，并在 `Setup` 中注入 `RouteRegistryHelper`、在 `Run` 中注册各自路由。Admin 请求 Config Block 激活新配置，Config Block 同步命令 Proxy 应用新快照。Proxy 仅注册协议白名单路径，不依赖 Module Weight 确保路由优先级。
 - `internal/pkg/aiproxyarchive`、`internal/pkg/aiproxyclientauth`、`internal/pkg/aiproxyconfig`、`internal/pkg/aiproxyusage`、`internal/pkg/aiproxymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。
-- EventHub topic、Command 与 Result 由投递 owner 的 `pkg/events` 定义：Config、Usage、Metrics 和 Proxy 各自拥有其合同；`aiproxymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。
+- EventHub topic、Command、Data、Result 与 handler 由维护资源、状态或能力的 owner 在其 `pkg/events` 定义：调用方只导入并使用 owner 合同，不得按投递方复制 DTO 或 topic；`aiproxymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。
 - 新增 magicCommon plugin module 的前提是：具备独立 Setup/Run/Teardown、正式状态 owner、route/listener 或 EventHub 订阅，并由 `cmd` 显式加载；不得仅为缩短文件而创建 module。
 
 ## 变更规则

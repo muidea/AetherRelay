@@ -40,7 +40,7 @@ func (m *Module) Setup(ctx context.Context, hub event.Hub, background task.Backg
 	if routes.GetRouteRegistry() == nil {
 		return cd.NewError(cd.IllegalParam, "http route registry is unavailable")
 	}
-	m.handler = admin.NewHandlerWithUsage(bizPtr.ConfigPath(), bizPtr, bizPtr.UsageStore()).WithMetrics(bizPtr.Metrics())
+	m.handler = admin.NewHandlerWithUsage(bizPtr.ConfigPath(), bizPtr, bizPtr.UsageStore()).WithMetrics(bizPtr.Metrics()).WithChatGPTRuntime(bizPtr)
 	m.routes = routes
 	m.bizPtr = bizPtr
 	return nil

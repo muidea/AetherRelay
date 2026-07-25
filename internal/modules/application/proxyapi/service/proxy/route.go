@@ -54,6 +54,8 @@ func RouteLabel(r *http.Request) string {
 		return "completions"
 	case "/v1/embeddings":
 		return "embeddings"
+	case "/v1/images/generations", "/v1/images/edits":
+		return "images"
 	case "/v1/models":
 		return "models"
 	case "/healthz":
@@ -74,6 +76,8 @@ func OperationForPath(path string) string {
 		return config.ModelOperationChatCompletions
 	case "/v1/embeddings":
 		return config.ModelOperationEmbeddings
+	case "/v1/images/generations", "/v1/images/edits":
+		return config.ModelOperationImageGenerations
 	default:
 		return ""
 	}
@@ -85,7 +89,7 @@ func ClientProtocolForPath(path string) string {
 	switch path {
 	case "/v1/messages":
 		return ClientProtocolAnthropic
-	case "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/models":
+	case "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models":
 		return ClientProtocolOpenAI
 	default:
 		return ""
@@ -223,6 +227,11 @@ func applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, ow
 
 	switch clientEndpoint {
 	case "/v1/chat/completions":
+		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
+			base.UpstreamEndpoint = "chatgptweb"
+			base.Mode = TransportModeNative
+			return base, true
+		}
 		// OpenAI client → OpenAI native / Anthropic conversion
 		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
 			base.UpstreamEndpoint = "/v1/chat/completions"
@@ -261,6 +270,17 @@ func applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, ow
 	case "/v1/embeddings":
 		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityEmbeddings) {
 			base.UpstreamEndpoint = "/v1/embeddings"
+			base.Mode = TransportModeNative
+			return base, true
+		}
+	case "/v1/images/generations", "/v1/images/edits":
+		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityImages) {
+			base.UpstreamEndpoint = "chatgptweb_images"
+			base.Mode = TransportModeNative
+			return base, true
+		}
+		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityImages) {
+			base.UpstreamEndpoint = clientEndpoint
 			base.Mode = TransportModeNative
 			return base, true
 		}

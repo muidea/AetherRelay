@@ -35,7 +35,7 @@ model_catalog:
 
 每个 enabled Provider 必须显式设置：
 
-- `protocol`：`openai` 或 `anthropic`。
+- `protocol`：`openai`、`anthropic`，或 `chatgptweb`。`chatgptweb` 只支持 `chat_completions`，不配置 `base_url` 或 `api_key`；实际账号凭据只来自 ChatGPT Web 账号池。
 - `base_url`：可带或不带 `/v1`，代理会避免重复拼接。
 - `endpoint_capabilities`：上游直接支持的端点能力，不能由 protocol 自动推断。
 - `models`：用于启动期将 catalog model 解析为唯一 RouteOwner 的 pattern。
@@ -117,9 +117,36 @@ usage_store:
 
 `usage_store.path` 是单进程本地 DuckDB 文件，也是唯一在线用量 authority；多个实例不得共享同一路径。数据库文件应由运行用户保护，且不应提交到版本库。
 
+## ChatGPT Web 本地数据
+
+```yaml
+chatgpt_web:
+  enabled: false
+  data_dir: chatgpt-web-data
+  refresh_account_interval_minute: 0
+```
+
+- 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储和异步图片任务会一并装配。
+- `data_dir` 只接受本地目录；相对路径按 `config.yaml` 所在目录解析。账号数据位于 `accounts.json`，不得写入 YAML、环境变量、日志或版本库。
+- `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
+- ChatGPT Web 账号能力不自动向 `model_catalog` 注册模型。客户端可用模型和路由仍完全以 `model_catalog` 为准。
+- 使用 ChatGPT Web 时，Provider 必须声明 `protocol: chatgptweb`，并按需声明 `chat_completions`、`images`；对应模型还须在 `model_catalog` 声明 `chat_completions`、`image_generations` operation。它支持 `/v1/chat/completions`、`/v1/images/generations` 与 `/v1/images/edits`。
+
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、查看 API Key 用量、筛选事件和导出 CSV。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、查看 API Key 用量、筛选事件和导出 CSV。ChatGPT Web 的账号、图片和图片任务 API 同样位于该前缀；当前不额外提供账号/图片管理页面。
+
+ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
+
+```text
+POST   <base>/api/chatgpt/accounts                 # {"tokens":[...],"source_type":"web"}
+PATCH  <base>/api/chatgpt/accounts/{id}            # type/status/quota/proxy 的局部更新
+DELETE <base>/api/chatgpt/accounts                 # {"ids":[...]}
+POST   <base>/api/chatgpt/accounts/refresh         # {"account_ids":[...]}；空数组表示全部
+POST   <base>/api/chatgpt/accounts/export          # {"ids":[...]}；返回凭据，Cache-Control: no-store
+```
+
+导出属于刻意的敏感操作，只应在受控的本机或已启用 HTTPS 登录保护的 Admin 会话中调用；不要把响应写入日志、浏览器持久化存储或工单。
 
 ### 默认模式（`admin_auth_enabled: false`）
 

@@ -769,7 +769,7 @@ func TestLoadRejectsCaseFoldProviderDuplicate(t *testing.T) {
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://api.openai.com", APIKey: "b"},
 		},
 	}
-	if err := normalize(&cfg); err == nil {
+	if err := normalize(&cfg, ""); err == nil {
 		t.Fatal("expected case-fold duplicate provider error")
 	}
 }
@@ -796,7 +796,7 @@ func TestLoadAllowsCaseDifferentModelCatalogIDs(t *testing.T) {
 			},
 		},
 	}
-	if err := normalize(&cfg); err != nil {
+	if err := normalize(&cfg, ""); err != nil {
 		t.Fatalf("normalize case-different models: %v", err)
 	}
 	if err := validate(cfg); err != nil {
@@ -871,7 +871,7 @@ func TestLoadRejectsExactModelCatalogDuplicate(t *testing.T) {
 	// 模拟 map 键与 info.ID 不同但归一化后撞上同一 id 的情况:
 	// 再塞一个 name 不同、ID 相同的条目(通过二次写入 ensure 路径不方便,直接调 normalize 前构造)。
 	cfg.ModelCatalog["alias"] = ModelInfo{ID: "gpt-4o", Operations: []string{ModelOperationChatCompletions}}
-	if err := normalize(&cfg); err == nil {
+	if err := normalize(&cfg, ""); err == nil {
 		t.Fatal("expected exact duplicate model error")
 	}
 }
@@ -1319,6 +1319,60 @@ providers:
 	// raw file has no protocol field
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "protocol is required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadChatGPTWebConfigResolvesDataDirFromConfigFile(t *testing.T) {
+	configDir := t.TempDir()
+	path := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+chatgpt_web:
+  enabled: true
+  data_dir: runtime/chatgpt
+  refresh_account_interval_minute: 15
+providers:
+  local:
+    protocol: openai
+    base_url: http://127.0.0.1:9000/v1
+    allow_unauthenticated: true
+    endpoint_capabilities: chat_completions
+    models: local-*
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ChatGPTWeb.Enabled {
+		t.Fatal("chatgpt web should be enabled")
+	}
+	if got, want := cfg.ChatGPTWeb.DataDir, filepath.Join(configDir, "runtime", "chatgpt"); got != want {
+		t.Fatalf("chatgpt data dir = %q, want %q", got, want)
+	}
+	if got := cfg.ChatGPTWeb.RefreshAccountIntervalMinute; got != 15 {
+		t.Fatalf("refresh interval = %d, want 15", got)
+	}
+}
+
+func TestLoadRejectsRemoteChatGPTWebDataDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+chatgpt_web:
+  data_dir: https://storage.example/chatgpt
+providers:
+  local:
+    protocol: openai
+    base_url: http://127.0.0.1:9000/v1
+    allow_unauthenticated: true
+    endpoint_capabilities: chat_completions
+    models: local-*
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "local directory path") {
 		t.Fatalf("error = %v", err)
 	}
 }

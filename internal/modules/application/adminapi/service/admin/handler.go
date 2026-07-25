@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"sync"
 	"time"
 
+	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -32,12 +36,34 @@ type RuntimeConfig interface {
 	UpdateConfig(config.Config) error
 }
 
+type ChatGPTRuntime interface {
+	ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error)
+	AddChatGPTAccounts(context.Context, []string, string) (accevents.AddResult, error)
+	DeleteChatGPTAccounts(context.Context, []string) (accevents.DeleteResult, error)
+	UpdateChatGPTAccount(context.Context, accevents.UpdateByIDCommand) (accevents.UpdateResult, error)
+	ExportChatGPTAccounts(context.Context, []string) (accevents.ExportResult, error)
+	RefreshChatGPTAccountsByID(context.Context, []string) (accevents.RefreshResult, error)
+	ChatGPTAccountRefreshProgress(context.Context, string) (accevents.RefreshProgress, error)
+	StartChatGPTOAuth(context.Context, string) (accevents.OAuthStartResult, error)
+	FinishChatGPTOAuth(context.Context, string, string) (accevents.OAuthFinishResult, error)
+	ListChatGPTImages(context.Context, string, string, string) (imgevents.ListResult, error)
+	ChatGPTImageStorage(context.Context) (imgevents.StorageStatsResult, error)
+	ListChatGPTImageTags(context.Context) (imgevents.ListTagsResult, error)
+	SetChatGPTImageTags(context.Context, string, []string) (imgevents.SetTagsResult, error)
+	DeleteChatGPTImages(context.Context, []string) (imgevents.DeleteResult, error)
+	SubmitChatGPTImageGeneration(context.Context, taskevents.SubmitGenerationCommand) (taskevents.SubmitResult, error)
+	SubmitChatGPTImageEdit(context.Context, taskevents.SubmitEditCommand) (taskevents.SubmitResult, error)
+	ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error)
+	ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error)
+}
+
 type Handler struct {
 	configPath      string
 	runtime         RuntimeConfig
 	usageStore      usage.Store
 	metricsRegistry metricsport.Port
 	auth            *authState
+	chatGPT         ChatGPTRuntime
 	updateMu        sync.Mutex
 }
 
@@ -89,6 +115,8 @@ func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
 	}
 	return h
 }
+
+func (h *Handler) WithChatGPTRuntime(runtime ChatGPTRuntime) *Handler { h.chatGPT = runtime; return h }
 
 // WithMetrics 挂接 usage 查询的健康与错误观测；nil-safe，便于单测复用。
 func (h *Handler) WithMetrics(source any) *Handler {
@@ -181,9 +209,172 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.clientAPIKeyAction(w, r, rel)
 	case strings.HasPrefix(rel, "/api/usage/"):
 		h.usageAPI(w, r, rel)
+	case rel == "/api/chatgpt/accounts" && r.Method == http.MethodGet:
+		h.listChatGPTAccounts(w, r)
+	case rel == "/api/chatgpt/accounts" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.addChatGPTAccounts(w, r)
+		}
+	case rel == "/api/chatgpt/accounts" && r.Method == http.MethodDelete:
+		if h.requireAdminMutation(w, r) {
+			h.deleteChatGPTAccounts(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/accounts/") && r.Method == http.MethodPatch:
+		if h.requireAdminMutation(w, r) {
+			h.updateChatGPTAccount(w, r, rel)
+		}
+	case rel == "/api/chatgpt/accounts/export" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.exportChatGPTAccounts(w, r)
+		}
+	case rel == "/api/chatgpt/accounts/refresh" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.refreshChatGPTAccounts(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/accounts/refresh/progress/") && r.Method == http.MethodGet:
+		h.chatGPTAccountRefreshProgress(w, r, rel)
+	case rel == "/api/chatgpt/accounts/oauth/start" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.startChatGPTOAuth(w, r)
+		}
+	case rel == "/api/chatgpt/accounts/oauth/finish" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.finishChatGPTOAuth(w, r)
+		}
+	case rel == "/api/chatgpt/images" && r.Method == http.MethodGet:
+		h.listChatGPTImages(w, r)
+	case rel == "/api/chatgpt/images/storage" && r.Method == http.MethodGet:
+		h.chatGPTImageStorage(w, r)
+	case rel == "/api/chatgpt/images/tags" && r.Method == http.MethodGet:
+		h.listChatGPTImageTags(w, r)
+	case rel == "/api/chatgpt/images/tags" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.setChatGPTImageTags(w, r)
+		}
+	case rel == "/api/chatgpt/images/delete" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.deleteChatGPTImages(w, r)
+		}
+	case rel == "/api/chatgpt/image-tasks" && r.Method == http.MethodGet:
+		h.listChatGPTImageTasks(w, r)
+	case rel == "/api/chatgpt/image-tasks/generations" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.submitChatGPTImageGeneration(w, r)
+		}
+	case rel == "/api/chatgpt/image-tasks/edits" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.submitChatGPTImageEdit(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && strings.HasSuffix(rel, "/resume-poll") && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.resumeChatGPTImageTask(w, r, rel)
+		}
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (h *Handler) listChatGPTImages(w http.ResponseWriter, r *http.Request) {
+	if h.chatGPT == nil {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
+	out, err := h.chatGPT.ListChatGPTImages(r.Context(), adminImageBaseURL(r), strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+func (h *Handler) chatGPTImageStorage(w http.ResponseWriter, r *http.Request) {
+	if h.chatGPT == nil {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
+	out, err := h.chatGPT.ChatGPTImageStorage(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+func (h *Handler) listChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
+	if h.chatGPT == nil {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
+	out, err := h.chatGPT.ListChatGPTImageTags(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+func (h *Handler) setChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string   `json:"path"`
+		Tags []string `json:"tags"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&body) != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	out, err := h.chatGPT.SetChatGPTImageTags(r.Context(), body.Path, body.Tags)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+func (h *Handler) deleteChatGPTImages(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Paths []string `json:"paths"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&body) != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	out, err := h.chatGPT.DeleteChatGPTImages(r.Context(), body.Paths)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+func adminImageBaseURL(r *http.Request) string {
+	if r == nil || r.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func (h *Handler) listChatGPTAccounts(w http.ResponseWriter, r *http.Request) {
+	if h.chatGPT == nil {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt account pool is unavailable")
+		return
+	}
+	items, err := h.chatGPT.ListChatGPTAccounts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	for index := range items {
+		items[index].AccessToken = redactAccountToken(items[index].AccessToken)
+		items[index].Proxy = ""
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func redactAccountToken(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 8 {
+		return ""
+	}
+	return value[:4] + "..." + value[len(value)-4:]
 }
 
 func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request, rel string) {

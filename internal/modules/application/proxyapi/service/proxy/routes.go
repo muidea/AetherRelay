@@ -21,6 +21,8 @@ func RegisterRoutes(routes enginehttp.RouteRegistry, handler http.Handler) {
 		{pattern: "/v1/models", method: http.MethodGet},
 		{pattern: "/v1/models", method: http.MethodPost},
 		{pattern: "/v1/chat/completions", method: http.MethodPost},
+		{pattern: "/v1/images/generations", method: http.MethodPost},
+		{pattern: "/v1/images/edits", method: http.MethodPost},
 		{pattern: "/v1/messages", method: http.MethodPost},
 		{pattern: "/v1/responses", method: http.MethodPost},
 		{pattern: "/v1/completions", method: http.MethodPost},

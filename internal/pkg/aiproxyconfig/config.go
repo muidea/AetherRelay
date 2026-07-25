@@ -67,6 +67,9 @@ type Config struct {
 	ClientAPIKeys map[string]ClientAPIKey
 	// UsageStore 描述进程内嵌 DuckDB 持久化统计存储。路径与资源参数变更需重启。
 	UsageStore UsageStoreConfig
+	// ChatGPTWeb 是 ChatGPT Web 账号池和图片能力的本地运行配置。
+	// 它不包含账号凭据；账号数据只保存在 DataDir/accounts.json 中。
+	ChatGPTWeb ChatGPTWebConfig
 	Providers  map[string]Provider
 	// ModelCatalog 是全局模型元数据目录,供 GET /v1/models 使用;是请求路由与 /v1/models 的共同 authority。
 	ModelCatalog map[string]ModelInfo
@@ -111,8 +114,17 @@ type UsageStoreConfig struct {
 	QueryCacheSeconds int
 }
 
+// ChatGPTWebConfig 描述 ChatGPT Web 专属本地数据与账号刷新策略。
+// DataDir 为本地目录；相对路径相对于配置文件所在目录解析。
+// 该能力独立于 providers/model_catalog：模型路由仍由后两者唯一决定。
+type ChatGPTWebConfig struct {
+	Enabled                      bool
+	DataDir                      string
+	RefreshAccountIntervalMinute int
+}
+
 // ModelInfo 描述客户端可查询的模型能力与确定路由(各 provider 共用同一目录)。
-// Operations 为规范化执行合同,仅允许 chat_completions / embeddings。
+// Operations 为规范化执行合同。
 // RouteOwner 在启动校验后填入唯一匹配的 enabled provider 名。
 type ModelInfo struct {
 	ID                  string
@@ -191,6 +203,10 @@ func Load(path string) (Config, error) {
 			Threads:           2,
 			QueryCacheSeconds: 15,
 		},
+		ChatGPTWeb: ChatGPTWebConfig{
+			Enabled: false,
+			DataDir: "chatgpt-web-data",
+		},
 		Providers:    map[string]Provider{},
 		ModelCatalog: map[string]ModelInfo{},
 	}
@@ -206,7 +222,7 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	ensureProviderNames(&cfg)
-	if err := normalize(&cfg); err != nil {
+	if err := normalize(&cfg, path); err != nil {
 		return Config{}, err
 	}
 	if err := validate(cfg); err != nil {
@@ -257,7 +273,7 @@ func loadFile(path string, cfg *Config) error {
 		switch {
 		case indent == 0 && !hasValue:
 			switch key {
-			case "server", "providers", "model_catalog", "client_api_keys", "usage_store":
+			case "server", "providers", "model_catalog", "client_api_keys", "usage_store", "chatgpt_web":
 				section = key
 				providerName = ""
 				modelName = ""
@@ -283,6 +299,8 @@ func loadFile(path string, cfg *Config) error {
 			}
 		case section == "usage_store" && indent >= 2:
 			setErr = setUsageStore(cfg, key, expand(value))
+		case section == "chatgpt_web" && indent >= 2:
+			setErr = setChatGPTWeb(cfg, key, expand(value))
 		case section == "client_api_keys" && indent == 2 && !hasValue:
 			clientKeyID = key
 			providerName = ""
@@ -477,6 +495,28 @@ func setUsageStore(cfg *Config, key, value string) error {
 	return nil
 }
 
+func setChatGPTWeb(cfg *Config, key, value string) error {
+	switch key {
+	case "enabled":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.enabled: %w", err)
+		}
+		cfg.ChatGPTWeb.Enabled = b
+	case "data_dir":
+		cfg.ChatGPTWeb.DataDir = strings.TrimSpace(value)
+	case "refresh_account_interval_minute":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.refresh_account_interval_minute: %w", err)
+		}
+		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
+	default:
+		return fmt.Errorf("chatgpt_web: unknown key %q", key)
+	}
+	return nil
+}
+
 func ensureClientAPIKey(cfg *Config, id string) ClientAPIKey {
 	if cfg.ClientAPIKeys == nil {
 		cfg.ClientAPIKeys = map[string]ClientAPIKey{}
@@ -657,6 +697,23 @@ func applyEnv(cfg *Config) error {
 	if value := os.Getenv("AI_PROXY_USAGE_STORE_PATH"); value != "" {
 		cfg.UsageStore.Path = value
 	}
+	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_ENABLED"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CHATGPT_WEB_ENABLED: %w", err)
+		}
+		cfg.ChatGPTWeb.Enabled = b
+	}
+	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_DATA_DIR"); value != "" {
+		cfg.ChatGPTWeb.DataDir = value
+	}
+	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_REFRESH_ACCOUNT_INTERVAL_MINUTE"); value != "" {
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CHATGPT_WEB_REFRESH_ACCOUNT_INTERVAL_MINUTE: %w", err)
+		}
+		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
+	}
 	if value := os.Getenv("AI_PROXY_INTERACTION_DIR"); value != "" {
 		cfg.InteractionDir = value
 	}
@@ -748,7 +805,7 @@ func ensureProviderNames(cfg *Config) {
 	}
 }
 
-func normalize(cfg *Config) error {
+func normalize(cfg *Config, configPath string) error {
 	cfg.LogFormat = normalizeLogFormat(cfg.LogFormat)
 	if cfg.MaxRequestBodyBytes <= 0 {
 		cfg.MaxRequestBodyBytes = DefaultMaxRequestBodyBytes
@@ -763,6 +820,9 @@ func normalize(cfg *Config) error {
 		cfg.MaxSSELineBytes = DefaultMaxSSELineBytes
 	}
 	if err := normalizeUsageStore(&cfg.UsageStore); err != nil {
+		return err
+	}
+	if err := normalizeChatGPTWeb(&cfg.ChatGPTWeb, configPath); err != nil {
 		return err
 	}
 	if err := normalizeClientAPIKeys(cfg); err != nil {
@@ -821,7 +881,7 @@ func normalize(cfg *Config) error {
 			return fmt.Errorf("model_catalog.%s.operations: %w", id, err)
 		}
 		if len(ops) == 0 {
-			return fmt.Errorf("model_catalog.%s.operations: at least one of chat_completions, embeddings is required", id)
+			return fmt.Errorf("model_catalog.%s.operations: at least one of chat_completions, embeddings, image_generations is required", id)
 		}
 		info.Operations = ops
 		// model ID 严格区分大小写:DeepSeek-V4-Flash 与 deepseek-v4-flash 是两个不同模型。
@@ -870,6 +930,9 @@ func validate(cfg Config) error {
 		return err
 	}
 	if err := validateUsageStore(cfg.UsageStore); err != nil {
+		return err
+	}
+	if err := validateChatGPTWeb(cfg.ChatGPTWeb); err != nil {
 		return err
 	}
 	if err := validateProviders(cfg); err != nil {
@@ -940,18 +1003,23 @@ func validateProviders(cfg Config) error {
 			return fmt.Errorf("provider %q protocol is required (explicit; not inferred from name)", name)
 		}
 		switch provider.Protocol {
-		case "openai", "anthropic":
+		case "openai", "anthropic", "chatgptweb":
 		default:
 			return fmt.Errorf("provider %q has unknown protocol %q (want openai or anthropic)", name, provider.Protocol)
 		}
-		if strings.TrimSpace(provider.BaseURL) == "" {
+		if provider.Protocol != "chatgptweb" && strings.TrimSpace(provider.BaseURL) == "" {
 			return fmt.Errorf("provider %q base_url is required (explicit; not inferred from name)", name)
 		}
-		if err := validateHTTPBaseURL(provider.BaseURL); err != nil {
-			return fmt.Errorf("provider %q base_url: %w", name, err)
+		if provider.Protocol != "chatgptweb" && validateHTTPBaseURL(provider.BaseURL) != nil {
+			return fmt.Errorf("provider %q base_url is invalid", name)
 		}
-		if err := validateProviderAPIKey(name, provider); err != nil {
-			return err
+		if provider.Protocol != "chatgptweb" {
+			if err := validateHTTPBaseURL(provider.BaseURL); err != nil {
+				return fmt.Errorf("provider %q base_url: %w", name, err)
+			}
+			if err := validateProviderAPIKey(name, provider); err != nil {
+				return err
+			}
 		}
 		if len(provider.Models) == 0 {
 			return fmt.Errorf("provider %q models is required (explicit; not inferred from provider name or protocol)", name)
@@ -1258,8 +1326,9 @@ func normalizeCSVList(values []string, foldCase bool) []string {
 
 // 允许的 model_catalog.operations 取值(与 WorkOrch LLMOperation 对齐)。
 const (
-	ModelOperationChatCompletions = "chat_completions"
-	ModelOperationEmbeddings      = "embeddings"
+	ModelOperationChatCompletions  = "chat_completions"
+	ModelOperationEmbeddings       = "embeddings"
+	ModelOperationImageGenerations = "image_generations"
 )
 
 // parseModelOperations 解析 model_catalog.operations(逗号分隔或单值),保留已知枚举大小写折叠后的规范名。
@@ -1281,9 +1350,9 @@ func normalizeModelOperations(values []string) ([]string, error) {
 			continue
 		}
 		switch op {
-		case ModelOperationChatCompletions, ModelOperationEmbeddings:
+		case ModelOperationChatCompletions, ModelOperationEmbeddings, ModelOperationImageGenerations:
 		default:
-			return nil, fmt.Errorf("unknown operation %q (allowed: chat_completions, embeddings)", value)
+			return nil, fmt.Errorf("unknown operation %q (allowed: chat_completions, embeddings, image_generations)", value)
 		}
 		if _, ok := seen[op]; ok {
 			continue
@@ -1291,7 +1360,7 @@ func normalizeModelOperations(values []string) ([]string, error) {
 		seen[op] = struct{}{}
 		out = append(out, op)
 	}
-	// 稳定顺序:chat_completions 在前,embeddings 在后。
+	// 稳定顺序:chat_completions、embeddings、image_generations。
 	sort.SliceStable(out, func(i, j int) bool {
 		return operationRank(out[i]) < operationRank(out[j])
 	})
@@ -1304,6 +1373,8 @@ func operationRank(op string) int {
 		return 0
 	case ModelOperationEmbeddings:
 		return 1
+	case ModelOperationImageGenerations:
+		return 2
 	default:
 		return 100
 	}
@@ -1364,7 +1435,8 @@ func validateModelRoutes(cfg Config) error {
 }
 
 // validateModelOperationsAgainstProvider 保证每个 operation 的 canonical path 可被 provider 服务。
-// chat_completions → /v1/chat/completions; embeddings → /v1/embeddings。
+// chat_completions → /v1/chat/completions; embeddings → /v1/embeddings;
+// image_generations → /v1/images/generations.
 // 校验依据与请求期 TransportPlan 矩阵一致:protocol × direct endpoint capability × 已实现 conversion。
 func validateModelOperationsAgainstProvider(modelID string, operations []string, provider Provider) error {
 	for _, op := range operations {
@@ -1432,6 +1504,7 @@ const (
 	EndpointCapabilityResponses       = "responses"
 	EndpointCapabilityCompletions     = "completions"
 	EndpointCapabilityEmbeddings      = "embeddings"
+	EndpointCapabilityImages          = "images"
 )
 
 func parseEndpointCapabilities(value string) ([]string, error) {
@@ -1452,7 +1525,7 @@ func normalizeEndpointCapabilities(values []string) ([]string, error) {
 		}
 		switch capName {
 		case EndpointCapabilityChatCompletions, EndpointCapabilityMessages, EndpointCapabilityResponses,
-			EndpointCapabilityCompletions, EndpointCapabilityEmbeddings:
+			EndpointCapabilityCompletions, EndpointCapabilityEmbeddings, EndpointCapabilityImages:
 		default:
 			return nil, fmt.Errorf("unknown endpoint capability %q", value)
 		}
@@ -1480,6 +1553,8 @@ func endpointCapabilityRank(capName string) int {
 		return 3
 	case EndpointCapabilityEmbeddings:
 		return 4
+	case EndpointCapabilityImages:
+		return 5
 	default:
 		return 100
 	}
@@ -1490,7 +1565,7 @@ func validateProtocolEndpointCaps(protocol string, caps []string) error {
 		switch protocol {
 		case "openai":
 			switch capName {
-			case EndpointCapabilityChatCompletions, EndpointCapabilityResponses, EndpointCapabilityCompletions, EndpointCapabilityEmbeddings:
+			case EndpointCapabilityChatCompletions, EndpointCapabilityResponses, EndpointCapabilityCompletions, EndpointCapabilityEmbeddings, EndpointCapabilityImages:
 			case EndpointCapabilityMessages:
 				return fmt.Errorf("endpoint_capabilities messages is invalid for openai protocol (use chat_completions; conversion serves /v1/messages)")
 			default:
@@ -1499,10 +1574,14 @@ func validateProtocolEndpointCaps(protocol string, caps []string) error {
 		case "anthropic":
 			switch capName {
 			case EndpointCapabilityMessages:
-			case EndpointCapabilityChatCompletions, EndpointCapabilityResponses, EndpointCapabilityCompletions, EndpointCapabilityEmbeddings:
+			case EndpointCapabilityChatCompletions, EndpointCapabilityResponses, EndpointCapabilityCompletions, EndpointCapabilityEmbeddings, EndpointCapabilityImages:
 				return fmt.Errorf("endpoint_capabilities %q is invalid for anthropic protocol (use messages; conversion may serve /v1/chat/completions)", capName)
 			default:
 				return fmt.Errorf("unknown endpoint capability %q", capName)
+			}
+		case "chatgptweb":
+			if capName != EndpointCapabilityChatCompletions && capName != EndpointCapabilityImages {
+				return fmt.Errorf("endpoint_capabilities %q is invalid for chatgptweb protocol", capName)
 			}
 		}
 	}
@@ -1542,6 +1621,9 @@ func ProviderSupportsInboundPath(provider Provider, path string) bool {
 		if provider.Protocol == "anthropic" {
 			return ProviderHasDirectEndpoint(provider, EndpointCapabilityMessages)
 		}
+		if provider.Protocol == "chatgptweb" {
+			return ProviderHasDirectEndpoint(provider, EndpointCapabilityChatCompletions)
+		}
 	case "/v1/messages":
 		// anthropic 直通 messages; openai 声明 chat_completions 后可通过 conversion 服务。
 		if provider.Protocol == "anthropic" {
@@ -1556,6 +1638,11 @@ func ProviderSupportsInboundPath(provider Provider, path string) bool {
 		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityCompletions)
 	case "/v1/embeddings":
 		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityEmbeddings)
+	case "/v1/images/generations", "/v1/images/edits":
+		if provider.Protocol == "chatgptweb" {
+			return ProviderHasDirectEndpoint(provider, EndpointCapabilityImages)
+		}
+		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityImages)
 	}
 	return false
 }
@@ -1568,6 +1655,8 @@ func ServiceableInboundPaths(provider Provider) []string {
 		"/v1/responses",
 		"/v1/completions",
 		"/v1/embeddings",
+		"/v1/images/generations",
+		"/v1/images/edits",
 	}
 	out := make([]string, 0, len(candidates))
 	for _, path := range candidates {
@@ -1594,6 +1683,8 @@ func OperationToPrimaryInboundPath(operation string) string {
 		return "/v1/chat/completions"
 	case ModelOperationEmbeddings:
 		return "/v1/embeddings"
+	case ModelOperationImageGenerations:
+		return "/v1/images/generations"
 	default:
 		return ""
 	}
@@ -1823,6 +1914,41 @@ func validateUsageStore(us UsageStoreConfig) error {
 	}
 	if us.QueryCacheSeconds < 0 || us.QueryCacheSeconds > maxUsageStoreQueryCacheSeconds {
 		return fmt.Errorf("usage_store.query_cache_seconds must be between 0 and %d", maxUsageStoreQueryCacheSeconds)
+	}
+	return nil
+}
+
+func normalizeChatGPTWeb(web *ChatGPTWebConfig, configPath string) error {
+	if web == nil {
+		return fmt.Errorf("chatgpt_web is nil")
+	}
+	web.DataDir = strings.TrimSpace(web.DataDir)
+	if web.DataDir == "" {
+		web.DataDir = "chatgpt-web-data"
+	}
+	if strings.Contains(strings.ToLower(web.DataDir), "://") {
+		return fmt.Errorf("chatgpt_web.data_dir must be a local directory path")
+	}
+	if !filepath.IsAbs(web.DataDir) && strings.TrimSpace(configPath) != "" {
+		web.DataDir = filepath.Join(filepath.Dir(configPath), web.DataDir)
+	}
+	web.DataDir = filepath.Clean(web.DataDir)
+	return nil
+}
+
+func validateChatGPTWeb(web ChatGPTWebConfig) error {
+	path := strings.TrimSpace(web.DataDir)
+	if path == "" {
+		return fmt.Errorf("chatgpt_web.data_dir is required")
+	}
+	if strings.Contains(strings.ToLower(path), "://") {
+		return fmt.Errorf("chatgpt_web.data_dir must be a local directory path")
+	}
+	if web.RefreshAccountIntervalMinute < 0 {
+		return fmt.Errorf("chatgpt_web.refresh_account_interval_minute must be >= 0")
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return fmt.Errorf("chatgpt_web.data_dir %q is not a directory", path)
 	}
 	return nil
 }
