@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +23,8 @@ type chatGPTAccountRuntimeStub struct {
 	imageList     imgevents.ListResult
 	imageListErr  error
 	imageBytesErr error
+	exportedIDs   []string
+	exportedItems []accevents.ExportItem
 }
 
 type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
@@ -55,8 +58,9 @@ func (s *chatGPTAccountRuntimeStub) UpdateChatGPTAccount(_ context.Context, comm
 	s.updated = command
 	return accevents.UpdateResult{Item: accevents.AccountView{ID: command.ID, AccessToken: "token-very-secret", Proxy: "http://private.invalid"}}, nil
 }
-func (s *chatGPTAccountRuntimeStub) ExportChatGPTAccounts(context.Context, []string) (accevents.ExportResult, error) {
-	return accevents.ExportResult{}, nil
+func (s *chatGPTAccountRuntimeStub) ExportChatGPTAccounts(_ context.Context, ids []string) (accevents.ExportResult, error) {
+	s.exportedIDs = append([]string(nil), ids...)
+	return accevents.ExportResult{Items: append([]accevents.ExportItem(nil), s.exportedItems...)}, nil
 }
 func (s *chatGPTAccountRuntimeStub) RefreshChatGPTAccountsByID(context.Context, []string) (accevents.RefreshResult, error) {
 	return accevents.RefreshResult{}, nil
@@ -155,6 +159,36 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	handler.ServeHTTP(updateRecorder, update)
 	if updateRecorder.Code != http.StatusOK || runtime.updated.ID != "account-1" || runtime.updated.Status == nil || *runtime.updated.Status != "禁用" || runtime.updated.Proxy == nil || *runtime.updated.Proxy != "" || strings.Contains(updateRecorder.Body.String(), "very-secret") {
 		t.Fatalf("update=%d command=%+v body=%s", updateRecorder.Code, runtime.updated, updateRecorder.Body.String())
+	}
+}
+
+func TestChatGPTAccountExportUsesCompatiblePayloadShape(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{exportedItems: []accevents.ExportItem{{
+		Type: "codex", Email: "export@example.invalid", AccountID: "account-export",
+		AccessToken: "access-export", RefreshToken: "refresh-export", IDToken: "id-export",
+	}}}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/export", strings.NewReader(`{"ids":["account-export"]}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Header().Get("Content-Disposition"), "codex-accounts.json") || len(runtime.exportedIDs) != 1 || runtime.exportedIDs[0] != "account-export" {
+		t.Fatalf("export status=%d headers=%v ids=%v body=%s", rec.Code, rec.Header(), runtime.exportedIDs, rec.Body.String())
+	}
+	var item accevents.ExportItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &item); err != nil || item.AccessToken != "access-export" || strings.Contains(rec.Body.String(), `"items"`) {
+		t.Fatalf("export payload=%s err=%v item=%+v", rec.Body.String(), err, item)
+	}
+
+	emptyHandler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(&chatGPTAccountRuntimeStub{})
+	emptyReq := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/export", strings.NewReader(`{"ids":["account-empty"]}`))
+	emptyReq.RemoteAddr = "127.0.0.1:1234"
+	emptyReq.Header.Set("X-AI-Proxy-Admin", "1")
+	emptyRec := httptest.NewRecorder()
+	emptyHandler.ServeHTTP(emptyRec, emptyReq)
+	if emptyRec.Code != http.StatusBadRequest || !strings.Contains(emptyRec.Body.String(), "no complete accounts") {
+		t.Fatalf("empty export status=%d body=%s", emptyRec.Code, emptyRec.Body.String())
 	}
 }
 

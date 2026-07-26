@@ -128,10 +128,21 @@ func (h *Handler) exportChatGPTAccounts(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if len(result.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "no complete accounts to export; access_token, refresh_token, and id_token are required")
+		return
+	}
 	// Export is an intentional secret-bearing response: prevent intermediary
-	// storage, and never log response bodies in this handler.
+	// storage, and never log response bodies in this handler. Keep the
+	// chatgpt2api-compatible payload shape: one item is an object, multiple
+	// items are an array. Do not wrap it in an Admin-specific result object.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, result)
+	w.Header().Set("Content-Disposition", `attachment; filename="codex-accounts.json"`)
+	if len(result.Items) == 1 {
+		writeJSON(w, http.StatusOK, result.Items[0])
+		return
+	}
+	writeJSON(w, http.StatusOK, result.Items)
 }
 func (h *Handler) chatGPTAccountRefreshProgress(w http.ResponseWriter, r *http.Request, rel string) {
 	if h.chatGPT == nil {
