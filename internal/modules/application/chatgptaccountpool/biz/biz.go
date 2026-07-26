@@ -26,6 +26,9 @@ type Account struct {
 	store        *store.Store
 	topics       []string
 	refreshing   atomic.Bool
+	stopping     atomic.Bool
+	shutdownCtx  context.Context
+	shutdown     context.CancelFunc
 	refreshEvery time.Duration
 	oauth        *oauth.Client
 	bridge       oauthBridge
@@ -51,9 +54,12 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 }
 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery time.Duration) *Account {
+	shutdownCtx, shutdown := context.WithCancel(context.Background())
 	b := &Account{
 		Base:         basebiz.New(common.UnitID, hub, background),
 		store:        st,
+		shutdownCtx:  shutdownCtx,
+		shutdown:     shutdown,
 		refreshEvery: refreshEvery,
 		oauth:        oauth.NewClient(),
 		progress:     map[string]events.RefreshProgress{},
@@ -117,6 +123,10 @@ func (s *Account) handleRefresh(ev event.Event, result event.Result) {
 	if result == nil {
 		return
 	}
+	if s.stopping.Load() {
+		result.Set(nil, cd.NewError(cd.Unexpected, "account pool is shutting down"))
+		return
+	}
 	cmd, ok := ev.Data().(events.RefreshCommand)
 	if !ok {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid account refresh command"))
@@ -134,6 +144,10 @@ func (s *Account) handleRefresh(ev event.Event, result event.Result) {
 
 func (s *Account) handleRefreshByID(ev event.Event, result event.Result) {
 	if result == nil {
+		return
+	}
+	if s.stopping.Load() {
+		result.Set(nil, cd.NewError(cd.Unexpected, "account pool is shutting down"))
 		return
 	}
 	cmd, ok := ev.Data().(events.RefreshByIDCommand)
@@ -255,10 +269,14 @@ func (s *Account) Run(ctx context.Context) *cd.Error {
 }
 
 func (s *Account) Teardown(context.Context) {
+	// BackgroundRoutine does not wait for individual tasks before module
+	// teardown. Keep the store alive until task closures release Account, and
+	// make those tasks exit without further upstream or persistence work.
+	s.stopping.Store(true)
+	s.shutdown()
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
-	s.store = nil
 }
 
 func (s *Account) handleList(ev event.Event, result event.Result) {

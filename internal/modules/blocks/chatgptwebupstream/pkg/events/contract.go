@@ -20,7 +20,7 @@ const (
 type ModelOperation string
 
 const (
-	ModelOperationChatCompletions ModelOperation = "chat_completions"
+	ModelOperationChatCompletions  ModelOperation = "chat_completions"
 	ModelOperationImageGenerations ModelOperation = "image_generations"
 )
 

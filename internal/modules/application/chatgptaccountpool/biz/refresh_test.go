@@ -66,3 +66,46 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 		}
 	}
 }
+
+func TestManualRefreshInFlightDuringTeardownExitsSafely(t *testing.T) {
+	hub := event.NewHub(8)
+	defer hub.Terminate(context.Background())
+	background := task.NewBackgroundRoutine(8)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	if _, _, err := accounts.Add([]string{"account-token"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicGetUserInfo, func(event.Event, event.Result) {
+		close(started)
+		<-release
+	})
+	account := newAccount(hub, background, accounts, 0)
+	account.putProgress(accevents.RefreshProgress{ProgressID: "refresh", Errors: []accevents.RefreshError{}})
+	if err := background.AsyncFunction(func() {
+		account.runManualRefresh("refresh", []string{"account-token"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not reach upstream request")
+	}
+	account.Teardown(context.Background())
+	close(release)
+	if !background.Shutdown(context.Background()) {
+		t.Fatal("background routine did not stop")
+	}
+
+	if account.store == nil {
+		t.Fatal("teardown released store while background task can still reference it")
+	}
+	progress, found := account.getProgress("refresh")
+	if !found || !progress.Done || progress.Error != "account pool is shutting down" {
+		t.Fatalf("progress=%#v, found=%v", progress, found)
+	}
+}

@@ -136,19 +136,19 @@ type AccountModelEntry struct {
 // AccountModelSnapshot is the derived capability state of one account.
 // It never carries raw upstream responses or tokens.
 type AccountModelSnapshot struct {
-	AccountID   string              `json:"account_id"`
-	Models      []AccountModelEntry `json:"models"`
-	DiscoveredAt string             `json:"discovered_at"`
-	ExpiresAt   string              `json:"expires_at,omitempty"`
+	AccountID    string              `json:"account_id"`
+	Models       []AccountModelEntry `json:"models"`
+	DiscoveredAt string              `json:"discovered_at"`
+	ExpiresAt    string              `json:"expires_at,omitempty"`
 }
 
 // DiscoveryCandidate is a non-sensitive account identifier plus the access
 // credential needed by the discovery orchestrator. Credentials must stay on
 // the EventHub path and never appear in Admin HTTP responses.
 type DiscoveryCandidate struct {
-	AccountID   string
-	AccessToken string
-	Status      string
+	AccountID      string
+	AccessToken    string
+	Status         string
 	NeedsDiscovery bool
 }
 
@@ -178,10 +178,10 @@ type CatalogModel struct {
 
 type CatalogSnapshotCommand struct{}
 type CatalogSnapshotResult struct {
-	Version          uint64
-	Models           []CatalogModel
+	Version           uint64
+	Models            []CatalogModel
 	AvailableAccounts int
-	UpdatedAt        string
+	UpdatedAt         string
 }
 type RemoveInvalidCommand struct {
 	AccessToken string

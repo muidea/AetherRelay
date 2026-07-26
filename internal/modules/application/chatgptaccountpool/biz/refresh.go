@@ -113,18 +113,31 @@ func boundedRefreshError(message string) string {
 // refreshAccounts is deliberately single-flight. A slow upstream must not
 // queue overlapping account-wide scans on the framework BackgroundRoutine.
 func (s *Account) refreshAccounts() {
+	if s.stopping.Load() {
+		return
+	}
 	if !s.refreshing.CompareAndSwap(false, true) {
 		return
 	}
 	defer s.refreshing.Store(false)
 
 	s.refreshOAuthTokens()
+	if s.stopping.Load() {
+		return
+	}
 	for _, account := range s.store.RefreshCandidates() {
+		if s.stopping.Load() {
+			return
+		}
 		s.refreshAccount(account)
 	}
 }
 
 func (s *Account) runManualRefresh(progressID string, tokens []string) {
+	if s.stopping.Load() {
+		s.finishProgress(progressID, "account pool is shutting down")
+		return
+	}
 	if !s.refreshing.CompareAndSwap(false, true) {
 		s.finishProgress(progressID, "account refresh already running")
 		return
@@ -135,10 +148,23 @@ func (s *Account) runManualRefresh(progressID string, tokens []string) {
 	// before requesting ChatGPT Web account information. A manual refresh is
 	// expected to recover an expired OAuth access token, not merely report it.
 	s.refreshOAuthTokens()
+	if s.stopping.Load() {
+		s.finishProgress(progressID, "account pool is shutting down")
+		return
+	}
 	candidates := s.store.RefreshCandidatesFor(tokens)
 	s.replaceProgress(progressID, events.RefreshProgress{ProgressID: progressID, Total: len(candidates), Errors: []events.RefreshError{}})
 	for _, account := range candidates {
-		if err := s.refreshAccount(account); err != nil {
+		if s.stopping.Load() {
+			s.finishProgress(progressID, "account pool is shutting down")
+			return
+		}
+		err := s.refreshAccount(account)
+		if s.stopping.Load() {
+			s.finishProgress(progressID, "account pool is shutting down")
+			return
+		}
+		if err != nil {
 			s.updateProgress(progressID, account, err.Error(), false)
 			continue
 		}
@@ -148,16 +174,33 @@ func (s *Account) runManualRefresh(progressID string, tokens []string) {
 }
 
 func (s *Account) runManualRefreshByID(progressID string, ids []string) {
+	if s.stopping.Load() {
+		s.finishProgress(progressID, "account pool is shutting down")
+		return
+	}
 	if !s.refreshing.CompareAndSwap(false, true) {
 		s.finishProgress(progressID, "account refresh already running")
 		return
 	}
 	defer s.refreshing.Store(false)
 	s.refreshOAuthTokens()
+	if s.stopping.Load() {
+		s.finishProgress(progressID, "account pool is shutting down")
+		return
+	}
 	candidates := s.store.RefreshCandidatesForIDs(ids)
 	s.replaceProgress(progressID, events.RefreshProgress{ProgressID: progressID, Total: len(candidates), Errors: []events.RefreshError{}})
 	for _, account := range candidates {
-		if err := s.refreshAccount(account); err != nil {
+		if s.stopping.Load() {
+			s.finishProgress(progressID, "account pool is shutting down")
+			return
+		}
+		err := s.refreshAccount(account)
+		if s.stopping.Load() {
+			s.finishProgress(progressID, "account pool is shutting down")
+			return
+		}
+		if err != nil {
 			s.updateProgress(progressID, account, err.Error(), false)
 			continue
 		}
@@ -167,21 +210,36 @@ func (s *Account) runManualRefreshByID(progressID string, ids []string) {
 }
 
 func (s *Account) refreshAccount(account events.AccountView) error {
+	if s.stopping.Load() {
+		return context.Canceled
+	}
 	result := s.SendEvent(event.NewEvent(upevents.TopicGetUserInfo, s.ID(), upcommon.UnitID, nil, upevents.GetUserInfoCommand{
 		AccessToken: account.AccessToken,
 	}))
 	value, err := result.Get()
 	if err != nil {
+		if s.stopping.Load() {
+			return err
+		}
 		_ = s.store.RecordRefreshError(account.AccessToken, err.Error())
 		return err
 	}
 	info, ok := value.(upevents.GetUserInfoResult)
 	if !ok {
 		err := "invalid upstream account status result"
+		if s.stopping.Load() {
+			return context.Canceled
+		}
 		_ = s.store.RecordRefreshError(account.AccessToken, err)
 		return fmt.Errorf("%s", err)
 	}
+	if s.stopping.Load() {
+		return context.Canceled
+	}
 	if _, err := s.store.ApplyUpstreamInfo(account.AccessToken, info.Email, info.PlanType, info.Quota, info.RestoreAt); err != nil {
+		if s.stopping.Load() {
+			return err
+		}
 		_ = s.store.RecordRefreshError(account.AccessToken, err.Error())
 		return err
 	}
@@ -189,19 +247,31 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 }
 
 func (s *Account) refreshOAuthTokens() {
-	if s.oauth == nil {
+	if s.oauth == nil || s.stopping.Load() {
 		return
 	}
 	now := time.Now().UTC()
 	for _, candidate := range s.store.TokenRefreshCandidates(now, 24*time.Hour, 72*time.Hour, 6*time.Hour, 3) {
-		refreshed, refreshErr := s.oauth.Refresh(context.Background(), oauth.Request{
+		if s.stopping.Load() {
+			return
+		}
+		refreshed, refreshErr := s.oauth.Refresh(s.shutdownCtx, oauth.Request{
 			RefreshToken: candidate.RefreshToken,
 		})
 		if refreshErr != nil {
+			if s.stopping.Load() {
+				return
+			}
 			_ = s.store.RecordTokenRefreshError(candidate.AccessToken, refreshErr.Error())
 			continue
 		}
+		if s.stopping.Load() {
+			return
+		}
 		if _, _, err := s.store.ApplyRefreshedToken(candidate.AccessToken, refreshed.AccessToken, refreshed.RefreshToken, refreshed.IDToken); err != nil {
+			if s.stopping.Load() {
+				return
+			}
 			_ = s.store.RecordTokenRefreshError(candidate.AccessToken, err.Error())
 		}
 	}
