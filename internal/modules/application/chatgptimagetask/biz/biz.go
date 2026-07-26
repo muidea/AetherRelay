@@ -379,7 +379,6 @@ func (s *ImageTask) releaseImageSlot(accessToken string) {
 	value, err := s.SendEvent(event.NewEvent(accevents.TopicReleaseImageSlot, s.ID(), acccommon.UnitID, nil, accevents.ReleaseImageSlotCommand{AccessToken: accessToken})).Get()
 	if err != nil {
 		return
-		return
 	}
 	result, ok := value.(accevents.ReleaseImageSlotResult)
 	if !ok || !result.OK {
@@ -390,7 +389,6 @@ func (s *ImageTask) releaseImageSlot(accessToken string) {
 func (s *ImageTask) markImageResult(accessToken string, success bool) {
 	value, err := s.SendEvent(event.NewEvent(accevents.TopicMarkImageResult, s.ID(), acccommon.UnitID, nil, accevents.MarkImageResultCommand{AccessToken: accessToken, Success: success})).Get()
 	if err != nil {
-		return
 		return
 	}
 	if _, ok := value.(accevents.MarkImageResultResult); !ok {
