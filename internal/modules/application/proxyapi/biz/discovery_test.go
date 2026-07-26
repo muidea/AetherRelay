@@ -26,8 +26,8 @@ func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
 	var mu sync.Mutex
 	modelRequests := map[string]int{}
 	accountCandidates := []accevents.DiscoveryCandidate{
-		{AccountID: "backed-off", AccessToken: "token-backoff", NeedsDiscovery: true, DiscoveryDue: false},
-		{AccountID: "due", AccessToken: "token-due", NeedsDiscovery: true, DiscoveryDue: true},
+		{AccountID: "backed-off", AccessToken: "token-backoff", Proxy: "http://backed-off-proxy.invalid:8080", NeedsDiscovery: true, DiscoveryDue: false},
+		{AccountID: "due", AccessToken: "token-due", Proxy: "http://due-proxy.invalid:8080", NeedsDiscovery: true, DiscoveryDue: true},
 	}
 	accounts.Subscribe(accevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
 		result.Set(accevents.ListDiscoveryCandidatesResult{Candidates: accountCandidates}, nil)
@@ -44,6 +44,9 @@ func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
 		cmd, ok := ev.Data().(upevents.ListModelsCommand)
 		if !ok {
 			t.Fatalf("unexpected list models command: %#v", ev.Data())
+		}
+		if cmd.AccessToken == "token-due" && cmd.Proxy != "http://due-proxy.invalid:8080" {
+			t.Fatalf("due account proxy=%q", cmd.Proxy)
 		}
 		mu.Lock()
 		modelRequests[cmd.AccessToken]++

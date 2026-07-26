@@ -1116,6 +1116,7 @@ func (s *Store) ListDiscoveryCandidates() (events.ListDiscoveryCandidatesResult,
 		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
 			AccountID:      acc.ID,
 			AccessToken:    acc.AccessToken,
+			Proxy:          acc.Proxy,
 			Status:         acc.Status,
 			NeedsDiscovery: needs,
 			DiscoveryDue:   needs && modelDiscoveryRetryDue(acc, now),

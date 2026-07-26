@@ -58,6 +58,29 @@ func TestGetUserInfoUsesAuthenticatedWebSequence(t *testing.T) {
 	}
 }
 
+func TestResolveProxyURLPrefersAccountProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://environment-proxy.invalid:8080")
+	proxyURL, err := resolveProxyURL("http://account-proxy.invalid:8080")
+	if err != nil || proxyURL != "http://account-proxy.invalid:8080" {
+		t.Fatalf("proxy_url=%q err=%v", proxyURL, err)
+	}
+}
+
+func TestResolveProxyURLFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://environment-proxy.invalid:8080")
+	proxyURL, err := resolveProxyURL("")
+	if err != nil || proxyURL != "http://environment-proxy.invalid:8080" {
+		t.Fatalf("proxy_url=%q err=%v", proxyURL, err)
+	}
+}
+
+func TestResolveProxyURLRejectsUnsupportedScheme(t *testing.T) {
+	proxyURL, err := resolveProxyURL("socks5://127.0.0.1:1080")
+	if err == nil || proxyURL != "" {
+		t.Fatalf("proxy_url=%q err=%v", proxyURL, err)
+	}
+}
+
 func TestClassifyStatus(t *testing.T) {
 	for status, want := range map[int]ErrorClass{401: InvalidToken, 429: RateLimit, 500: Upstream} {
 		got := classifyStatus("test", status).(*Error)

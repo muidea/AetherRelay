@@ -98,7 +98,7 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid list models command"))
 		return
 	}
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -128,7 +128,7 @@ func (s *Upstream) handleGetUserInfo(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid get user info command"))
 		return
 	}
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return

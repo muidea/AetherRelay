@@ -35,6 +35,7 @@ type ModelDescriptor struct {
 
 type ListModelsCommand struct {
 	AccessToken string
+	Proxy       string
 }
 
 type ListModelsResult struct {
@@ -55,6 +56,7 @@ const (
 
 type GetUserInfoCommand struct {
 	AccessToken string
+	Proxy       string
 }
 
 type GetUserInfoResult struct {

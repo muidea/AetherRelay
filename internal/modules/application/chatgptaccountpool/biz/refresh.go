@@ -215,6 +215,7 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 	}
 	result := s.SendEvent(event.NewEvent(upevents.TopicGetUserInfo, s.ID(), upcommon.UnitID, nil, upevents.GetUserInfoCommand{
 		AccessToken: account.AccessToken,
+		Proxy:       account.Proxy,
 	}))
 	value, err := result.Get()
 	if err != nil {

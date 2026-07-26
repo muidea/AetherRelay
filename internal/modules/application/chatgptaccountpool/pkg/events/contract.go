@@ -149,6 +149,7 @@ type AccountModelSnapshot struct {
 type DiscoveryCandidate struct {
 	AccountID      string
 	AccessToken    string
+	Proxy          string
 	Status         string
 	NeedsDiscovery bool
 	DiscoveryDue   bool

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 
 	http "github.com/bogdanfinn/fhttp"
@@ -23,6 +24,7 @@ const (
 type Config struct {
 	BaseURL     string
 	AccessToken string
+	Proxy       string
 }
 
 type UserInfo struct {
@@ -59,6 +61,10 @@ func New(config Config) (*Client, error) {
 	if strings.TrimSpace(config.AccessToken) == "" {
 		return nil, fmt.Errorf("access token is required")
 	}
+	proxyURL, err := resolveProxyURL(config.Proxy)
+	if err != nil {
+		return nil, err
+	}
 	options := []tlsclient.HttpClientOption{
 		// A Web image conversation may keep its SSE response open for several
 		// minutes; shorter endpoint-specific reads are still bounded by callers.
@@ -67,11 +73,37 @@ func New(config Config) (*Client, error) {
 		tlsclient.WithRandomTLSExtensionOrder(),
 		tlsclient.WithCookieJar(tlsclient.NewCookieJar()),
 	}
+	if proxyURL != "" {
+		options = append(options, tlsclient.WithProxyUrl(proxyURL))
+	}
 	doer, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
 	if err != nil {
 		return nil, fmt.Errorf("create TLS client: %w", err)
 	}
 	return newWithDoer(config, baseURL, doer), nil
+}
+
+// resolveProxyURL makes the account-owned proxy authoritative, then falls
+// back to conventional process proxy variables. tls-client does not apply
+// those variables automatically.
+func resolveProxyURL(accountProxy string) (string, error) {
+	proxyURL := strings.TrimSpace(accountProxy)
+	if proxyURL == "" {
+		for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+			if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+				proxyURL = value
+				break
+			}
+		}
+	}
+	if proxyURL == "" {
+		return "", nil
+	}
+	parsed, err := url.ParseRequestURI(proxyURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("invalid ChatGPT Web proxy URL")
+	}
+	return proxyURL, nil
 }
 
 func newWithDoer(config Config, baseURL string, doer doer) *Client {

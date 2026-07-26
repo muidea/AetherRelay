@@ -25,10 +25,14 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 	if _, _, err := accounts.Add([]string{"account-token"}, "web"); err != nil {
 		t.Fatal(err)
 	}
+	proxyURL := "http://account-proxy.invalid:8080"
+	if _, _, err := accounts.UpdateByID(accounts.List()[0].ID, nil, nil, nil, &proxyURL); err != nil {
+		t.Fatal(err)
+	}
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	upstream.Subscribe(upevents.TopicGetUserInfo, func(ev event.Event, result event.Result) {
 		command, ok := ev.Data().(upevents.GetUserInfoCommand)
-		if !ok || command.AccessToken != "account-token" {
+		if !ok || command.AccessToken != "account-token" || command.Proxy != proxyURL {
 			t.Fatalf("unexpected upstream command: %#v", ev.Data())
 		}
 		result.Set(upevents.GetUserInfoResult{PlanType: "plus", Quota: 3}, nil)

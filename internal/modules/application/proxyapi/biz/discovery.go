@@ -150,6 +150,7 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 	defer cancel()
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicListModels, s.ID(), upcommon.UnitID, event.NewHeader(), reqCtx, upevents.ListModelsCommand{
 		AccessToken: candidate.AccessToken,
+		Proxy:       candidate.Proxy,
 	})).Get()
 	if err != nil {
 		s.recordDiscoveryFailure(ctx, candidate, "list_models", err)
