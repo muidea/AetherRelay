@@ -8,6 +8,9 @@ import (
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskcommon "ai-proxy/internal/modules/application/chatgptimagetask/pkg/common"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	imgcommon "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/common"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 	"github.com/muidea/magicCommon/event"
@@ -261,4 +264,16 @@ func (s *Admin) GetChatGPTImageThumbnail(ctx context.Context, path string) ([]by
 		return nil, fmt.Errorf("invalid chatgpt image thumbnail result")
 	}
 	return result.Bytes, nil
+}
+
+func (s *Admin) ChatGPTEffectiveCatalog(ctx context.Context) (effectivecatalog.Snapshot, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicEffectiveCatalog, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.EffectiveCatalogCommand{})).Get()
+	if err != nil {
+		return effectivecatalog.Snapshot{}, fmt.Errorf("effective catalog unavailable")
+	}
+	result, ok := value.(proxyevents.EffectiveCatalogResult)
+	if !ok {
+		return effectivecatalog.Snapshot{}, fmt.Errorf("invalid effective catalog result")
+	}
+	return result.Snapshot, nil
 }

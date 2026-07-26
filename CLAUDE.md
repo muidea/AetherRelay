@@ -64,10 +64,14 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 路由与协议合同（核心）
 
+`chatgpt_web.enabled` 时自动注入内建 Provider `chatgptweb`（不可配置、不写 YAML）。有效目录 = 静态 `model_catalog` ∪ 账号池模型发现并集；同名 exact 冲突时静态优先。`/v1/models` 与 `ResolveTransportPlan` 必须读同一 `effectivecatalog.Snapshot`。
+
+
+
 两阶段权威，不要绕过：
 
-1. **启动期** `config.Load`：每个 `model_catalog` 条目必须 **exact、大小写敏感** 地唯一匹配一个 enabled provider 的 `models` pattern，写入 `ModelInfo.RouteOwner` / `ResolvedModelRoute`。`operations` 必填且仅允许 `chat_completions` / `embeddings`。enabled provider 必须显式配置 `endpoint_capabilities`（不得从 protocol 推断）。
-2. **请求期** `ResolveTransportPlan(cfg, method, path, model)`（`internal/modules/application/proxyapi/service/proxy/route.go`）：只消费已解析 RouteOwner + 固定转发矩阵，生成 `TransportPlan`（入站协议/path、上游协议/path、mode）。**禁止**再扫 provider 选路、fallback、`default_provider`、`X-AI-Provider` / `?provider=` / `provider/model` 前缀。
+1. **启动期** `config.Load`：每个静态 `model_catalog` 条目必须 **exact、大小写敏感** 地唯一匹配一个 enabled provider 的 `models` pattern，写入 `ModelInfo.RouteOwner` / `ResolvedModelRoute`。`operations` 必填且必须与对应 Provider 的 endpoint capability 相交可服务；enabled provider 必须显式配置 `endpoint_capabilities`（不得从 protocol 推断）。ChatGPT Web 模型不写入 YAML，由运行时发现。
+2. **请求期** `ResolveTransportPlan(cfg, snap, method, path, model)`（`internal/modules/application/proxyapi/service/proxy/route.go`）：从同一 `effectivecatalog.Snapshot` 查找 exact model（静态或内建 `chatgptweb`），再套固定转发矩阵生成 `TransportPlan`。**禁止**再扫 provider 选路、fallback、`default_provider`、`X-AI-Provider` / `?provider=` / `provider/model` 前缀。禁止在 YAML 中声明 `protocol: chatgptweb`。
 
 入站白名单：
 

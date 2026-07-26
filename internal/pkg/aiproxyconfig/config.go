@@ -116,7 +116,7 @@ type UsageStoreConfig struct {
 
 // ChatGPTWebConfig 描述 ChatGPT Web 专属本地数据与账号刷新策略。
 // DataDir 为本地目录；相对路径相对于配置文件所在目录解析。
-// 该能力独立于 providers/model_catalog：模型路由仍由后两者唯一决定。
+// 启用后，ChatGPT Web 模型由内建 Provider 自动发现并与静态目录合成。
 type ChatGPTWebConfig struct {
 	Enabled                      bool
 	DataDir                      string
@@ -918,10 +918,10 @@ func validateMetricsCIDRs(cidrs []string) error {
 }
 
 func validate(cfg Config) error {
-	if len(cfg.Providers) == 0 {
+	if len(cfg.Providers) == 0 && !cfg.ChatGPTWeb.Enabled {
 		return fmt.Errorf("no providers configured; declare providers in config.yaml")
 	}
-	if !hasEnabledProvider(cfg.Providers) {
+	if !hasEnabledProvider(cfg.Providers) && !cfg.ChatGPTWeb.Enabled {
 		return fmt.Errorf("no enabled providers configured")
 	}
 	// client_api_keys 是归属机制而非强制登录;非 loopback 监听不再要求 inbound key。
@@ -996,6 +996,12 @@ func validateHTTPBaseURL(raw string) error {
 
 func validateProviders(cfg Config) error {
 	for name, provider := range cfg.Providers {
+		// chatgptweb is a reserved builtin provider when chatgpt_web.enabled is
+		// true. Explicit YAML entries are a hard configuration error — there is
+		// no compatibility bridge or silent migration.
+		if strings.EqualFold(strings.TrimSpace(name), "chatgptweb") || strings.TrimSpace(provider.Protocol) == "chatgptweb" {
+			return fmt.Errorf("provider %q: protocol chatgptweb is reserved for the builtin provider; remove providers.%s and enable chatgpt_web instead", name, name)
+		}
 		if provider.Disabled {
 			continue
 		}
@@ -1003,23 +1009,21 @@ func validateProviders(cfg Config) error {
 			return fmt.Errorf("provider %q protocol is required (explicit; not inferred from name)", name)
 		}
 		switch provider.Protocol {
-		case "openai", "anthropic", "chatgptweb":
+		case "openai", "anthropic":
 		default:
 			return fmt.Errorf("provider %q has unknown protocol %q (want openai or anthropic)", name, provider.Protocol)
 		}
-		if provider.Protocol != "chatgptweb" && strings.TrimSpace(provider.BaseURL) == "" {
+		if strings.TrimSpace(provider.BaseURL) == "" {
 			return fmt.Errorf("provider %q base_url is required (explicit; not inferred from name)", name)
 		}
-		if provider.Protocol != "chatgptweb" && validateHTTPBaseURL(provider.BaseURL) != nil {
+		if validateHTTPBaseURL(provider.BaseURL) != nil {
 			return fmt.Errorf("provider %q base_url is invalid", name)
 		}
-		if provider.Protocol != "chatgptweb" {
-			if err := validateHTTPBaseURL(provider.BaseURL); err != nil {
-				return fmt.Errorf("provider %q base_url: %w", name, err)
-			}
-			if err := validateProviderAPIKey(name, provider); err != nil {
-				return err
-			}
+		if err := validateHTTPBaseURL(provider.BaseURL); err != nil {
+			return fmt.Errorf("provider %q base_url: %w", name, err)
+		}
+		if err := validateProviderAPIKey(name, provider); err != nil {
+			return err
 		}
 		if len(provider.Models) == 0 {
 			return fmt.Errorf("provider %q models is required (explicit; not inferred from provider name or protocol)", name)

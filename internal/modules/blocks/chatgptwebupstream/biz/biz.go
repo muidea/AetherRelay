@@ -54,6 +54,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	}
 	b.topics = []string{
 		events.TopicGetUserInfo,
+		events.TopicListModels,
 		events.TopicGenerateImage,
 		events.TopicEditImage,
 		events.TopicResumeImage,
@@ -63,6 +64,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicCancelText,
 	}
 	b.SubscribeFunc(events.TopicGetUserInfo, b.handleGetUserInfo)
+	b.SubscribeFunc(events.TopicListModels, b.handleListModels)
 	b.SubscribeFunc(events.TopicGenerateImage, b.handleGenerateImage)
 	b.SubscribeFunc(events.TopicEditImage, b.handleEditImage)
 	b.SubscribeFunc(events.TopicResumeImage, b.handleResumeImage)
@@ -85,6 +87,36 @@ func (s *Upstream) Teardown(context.Context) {
 	}
 	s.streams = map[string]*textStream{}
 	s.streamMu.Unlock()
+}
+
+func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.ListModelsCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid list models command"))
+		return
+	}
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
+		return
+	}
+	models, err := client.ListModels()
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	out := make([]events.ModelDescriptor, 0, len(models))
+	for _, model := range models {
+		ops := make([]events.ModelOperation, 0, len(model.Operations))
+		for _, op := range model.Operations {
+			ops = append(ops, events.ModelOperation(op))
+		}
+		out = append(out, events.ModelDescriptor{ID: model.ID, Operations: ops, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
+	}
+	result.Set(events.ListModelsResult{Models: out}, nil)
 }
 
 func (s *Upstream) handleGetUserInfo(ev event.Event, result event.Result) {

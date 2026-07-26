@@ -52,6 +52,10 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 设计细节见 [Admin 登录安全设计](admin-login-security-design-2026-07-23.md)。
 
+## ChatGPT Web 内建 Provider
+
+启用 `chatgpt_web.enabled` 后，进程自动注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。禁止在 `providers` 中再声明 `protocol: chatgptweb`。
+
 ## ChatGPT Web 管理页运维注意
 
 Admin 管理台一级页签「ChatGPT Web」提供账号池、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin` 写保护。

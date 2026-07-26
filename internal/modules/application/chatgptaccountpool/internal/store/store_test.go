@@ -25,7 +25,7 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 	}
 
 	// no quota yet
-	if _, ok := s.AcquireImageToken("", "", nil); ok {
+	if _, ok := s.AcquireImageToken("", "", nil, "", ""); ok {
 		t.Fatal("should not acquire without quota")
 	}
 
@@ -34,16 +34,16 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 		t.Fatalf("update failed ok=%v err=%v", ok, err)
 	}
 
-	acc, ok := s.AcquireImageToken("", "", nil)
+	acc, ok := s.AcquireImageToken("", "", nil, "", "")
 	if !ok || acc.AccessToken != "token-a" {
 		t.Fatalf("acquire failed: %+v", acc)
 	}
 	// concurrency=1, same token should not acquire again
-	if _, ok := s.AcquireImageToken("", "", nil); ok {
+	if _, ok := s.AcquireImageToken("", "", nil, "", ""); ok {
 		t.Fatal("second acquire should fail due to slot")
 	}
 	s.ReleaseImageSlot("token-a")
-	acc2, ok := s.AcquireImageToken("", "", nil)
+	acc2, ok := s.AcquireImageToken("", "", nil, "", "")
 	if !ok {
 		t.Fatal("acquire after release failed")
 	}
@@ -65,7 +65,7 @@ func TestListProjectsLegacyAccountOperationsFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(path, 1)
-	if _, ok := s.AcquireImageToken("", "", nil); !ok {
+	if _, ok := s.AcquireImageToken("", "", nil, "", ""); !ok {
 		t.Fatal("acquire image token")
 	}
 	items := s.List()
@@ -219,7 +219,7 @@ func TestApplyRefreshedTokenCarriesImageSlotAndAliasesOldToken(t *testing.T) {
 	if _, ok, err := s.Update(oldToken, "plus", StatusNormal, intPointer(1), ""); err != nil || !ok {
 		t.Fatalf("prepare account: ok=%v err=%v", ok, err)
 	}
-	if _, ok := s.AcquireImageToken("", "", nil); !ok {
+	if _, ok := s.AcquireImageToken("", "", nil, "", ""); !ok {
 		t.Fatal("acquire image slot")
 	}
 	got, rotated, err := s.ApplyRefreshedToken(oldToken, newToken, "refresh-new", "id-new")
@@ -227,7 +227,7 @@ func TestApplyRefreshedTokenCarriesImageSlotAndAliasesOldToken(t *testing.T) {
 		t.Fatalf("rotate got=%q rotated=%v err=%v", got, rotated, err)
 	}
 	s.ReleaseImageSlot(oldToken)
-	if acquired, ok := s.AcquireImageToken("", "", nil); !ok || acquired.AccessToken != newToken {
+	if acquired, ok := s.AcquireImageToken("", "", nil, "", ""); !ok || acquired.AccessToken != newToken {
 		t.Fatalf("old token alias did not release slot: account=%+v ok=%v", acquired, ok)
 	}
 	s.ReleaseImageSlot(newToken)

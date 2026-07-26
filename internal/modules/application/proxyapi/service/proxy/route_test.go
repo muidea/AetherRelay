@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -149,7 +150,7 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, apiErr := ResolveTransportPlan(cfg, http.MethodPost, tc.path, tc.model)
+			plan, apiErr := ResolveTransportPlan(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, tc.path, tc.model)
 			if tc.wantCode != "" {
 				if apiErr == nil {
 					t.Fatalf("expected error %s, got plan %#v", tc.wantCode, plan)

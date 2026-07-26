@@ -43,6 +43,7 @@ func (m *Module) Setup(ctx context.Context, hub event.Hub, background task.Backg
 	proxy.ReserveMetricsModels(bizPtr.Metrics(), bizPtr.Config())
 	m.handler = proxy.NewHandler(bizPtr.Config(), bizPtr.UsageStore(), bizPtr.Recorder(), bizPtr.Metrics()).WithChatGPTTextExecutor(bizPtr).WithChatGPTImageExecutor(bizPtr)
 	bizPtr.BindConfigUpdater(m.handler)
+	bizPtr.BindCatalogPublisher(m.handler)
 	m.routes = routes
 	m.bizPtr = bizPtr
 	return nil

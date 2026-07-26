@@ -15,7 +15,7 @@ import (
 )
 
 func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
-	token, err := s.acquireChatGPTTextToken(ctx)
+	token, err := s.acquireChatGPTTextToken(ctx, request.Model)
 	if err != nil {
 		slog.Warn("chatgpt text execution failed", "stage", "acquire_account")
 		return chatgpttext.Result{}, err
@@ -42,7 +42,7 @@ func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (chat
 }
 
 func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
-	token, err := s.acquireChatGPTTextToken(ctx)
+	token, err := s.acquireChatGPTTextToken(ctx, request.Model)
 	if err != nil {
 		return chatgpttext.Result{}, err
 	}
@@ -99,8 +99,10 @@ func (s *Proxy) removeInvalidChatGPTTextToken(ctx context.Context, token string)
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRemoveInvalid, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RemoveInvalidCommand{AccessToken: token, Event: "chat_completion"})).Get()
 }
 
-func (s *Proxy) acquireChatGPTTextToken(ctx context.Context) (string, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireTextTokenCommand{})).Get()
+func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (string, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireTextTokenCommand{
+		Model: model, Operation: accevents.ModelOperationChatCompletions,
+	})).Get()
 	if err != nil {
 		return "", fmt.Errorf("chatgpt account unavailable")
 	}

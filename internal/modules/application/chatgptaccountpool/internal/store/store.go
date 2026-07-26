@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,10 @@ type Account struct {
 	Proxy        string `json:"proxy,omitempty"`
 	LastUsedAt   string `json:"last_used_at,omitempty"`
 	CreatedAt    string `json:"created_at,omitempty"`
+	// ModelSnapshot is a derived capability projection from ChatGPT Web model
+	// enumeration. It is persisted in a constrained form and never holds raw
+	// upstream payloads or tokens. Missing snapshots mean "pending discovery".
+	ModelSnapshot *events.AccountModelSnapshot `json:"-"`
 	// Extra retains Python-owned fields (OAuth id_token, refresh progress,
 	// import metadata, etc.) when Go updates its account-pool fields.
 	Extra map[string]any `json:"-"`
@@ -50,6 +55,9 @@ type Store struct {
 	index         int
 	imageInflight map[string]int
 	concurrency   int
+	// catalogVersion increments when discovery-relevant account state changes
+	// (add/delete/status/snapshot). Proxy discovery watches this value.
+	catalogVersion uint64
 }
 
 func New(path string, concurrency int) *Store {
@@ -148,6 +156,7 @@ func mapToAccount(m map[string]any) *Account {
 		CreatedAt:    asString(m["created_at"]),
 		Extra:        cloneMap(m),
 	}
+	acc.ModelSnapshot = snapshotFromExtra(acc.Extra)
 	if acc.Status == "" {
 		acc.Status = StatusNormal
 	}
@@ -199,6 +208,11 @@ func accountToMap(acc *Account) map[string]any {
 	ret["proxy"] = acc.Proxy
 	ret["last_used_at"] = acc.LastUsedAt
 	ret["created_at"] = acc.CreatedAt
+	if acc.ModelSnapshot != nil {
+		ret["model_snapshot"] = snapshotToMap(acc.ModelSnapshot)
+	} else {
+		delete(ret, "model_snapshot")
+	}
 	return ret
 }
 
@@ -494,7 +508,8 @@ func (s *Store) ApplyRefreshedToken(oldToken, newToken, refreshToken, idToken st
 	acc.Extra["last_token_refresh_at"] = now
 	delete(acc.Extra, "last_token_refresh_error")
 	delete(acc.Extra, "last_token_refresh_error_at")
-	if newToken != oldToken {
+	rotated := newToken != oldToken
+	if rotated {
 		delete(s.items, oldToken)
 		s.items[newToken] = acc
 		acc.AccessToken = newToken
@@ -509,11 +524,17 @@ func (s *Store) ApplyRefreshedToken(oldToken, newToken, refreshToken, idToken st
 			delete(s.imageInflight, oldToken)
 		}
 		s.aliases[oldToken] = newToken
+		// Model visibility is credential-scoped. Do not route a newly rotated
+		// token from a snapshot that was enumerated with its predecessor.
+		acc.ModelSnapshot = nil
 	}
 	if err := s.saveLocked(); err != nil {
 		return oldToken, false, err
 	}
-	return newToken, newToken != oldToken, nil
+	if rotated {
+		s.bumpCatalogLocked()
+	}
+	return newToken, rotated, nil
 }
 
 // ApplyPasswordLogin atomically replaces a credential set obtained through
@@ -551,6 +572,7 @@ func (s *Store) ApplyPasswordLogin(oldToken, newToken, refreshToken, idToken, em
 	}
 	acc.SourceType = "password"
 	acc.Status = StatusNormal
+	acc.ModelSnapshot = nil
 	acc.Extra["last_token_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
 	delete(acc.Extra, "last_token_refresh_error")
 	delete(acc.Extra, "last_token_refresh_error_at")
@@ -573,6 +595,7 @@ func (s *Store) ApplyPasswordLogin(oldToken, newToken, refreshToken, idToken, em
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
 	}
+	s.bumpCatalogLocked()
 	return toView(acc, true), true, nil
 }
 
@@ -584,9 +607,13 @@ func (s *Store) Disable(token string) (events.AccountView, bool, error) {
 	if !ok {
 		return events.AccountView{}, false, nil
 	}
+	changed := acc.Status != StatusDisabled || acc.Quota != 0
 	acc.Status, acc.Quota = StatusDisabled, 0
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
+	}
+	if changed {
+		s.bumpCatalogLocked()
 	}
 	return toView(acc, true), true, nil
 }
@@ -622,6 +649,7 @@ func (s *Store) ApplyUpstreamInfo(token, email, planType string, quota int, rest
 	if planType = trim(planType); planType != "" {
 		acc.Type = planType
 	}
+	previousStatus, previousQuota := acc.Status, acc.Quota
 	acc.Quota = quota
 	if quota > 0 {
 		acc.Status = StatusNormal
@@ -640,6 +668,9 @@ func (s *Store) ApplyUpstreamInfo(token, email, planType string, quota int, rest
 	delete(acc.Extra, "last_refresh_error_at")
 	if err := s.saveLocked(); err != nil {
 		return false, err
+	}
+	if acc.Status != previousStatus || acc.Quota != previousQuota {
+		s.bumpCatalogLocked()
 	}
 	return true, nil
 }
@@ -662,6 +693,11 @@ func (s *Store) RecordRefreshError(token, message string) error {
 func (s *Store) Add(tokens []string, sourceType string) (added, skipped int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if added > 0 {
+			s.bumpCatalogLocked()
+		}
+	}()
 	if sourceType == "" {
 		sourceType = "web"
 	}
@@ -719,6 +755,9 @@ func (s *Store) AddOAuth(accessToken, refreshToken, idToken string) (events.Acco
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
 	}
+	if !exists {
+		s.bumpCatalogLocked()
+	}
 	return toView(acc, true), !exists, nil
 }
 
@@ -735,6 +774,11 @@ func (s *Store) DeleteByIDs(ids []string) (deleted int, err error) {
 }
 
 func (s *Store) deleteLocked(tokens []string) (deleted int, err error) {
+	defer func() {
+		if deleted > 0 {
+			s.bumpCatalogLocked()
+		}
+	}()
 	set := map[string]struct{}{}
 	for _, t := range tokens {
 		set[trim(t)] = struct{}{}
@@ -764,14 +808,18 @@ func (s *Store) Update(token string, typ, status string, quota *int, proxy strin
 	if !ok {
 		return events.AccountView{}, false, nil
 	}
-	if typ != "" {
+	changed := false
+	if typ != "" && acc.Type != typ {
 		acc.Type = typ
+		changed = true
 	}
-	if status != "" {
+	if status != "" && acc.Status != status {
 		acc.Status = status
+		changed = true
 	}
-	if quota != nil {
+	if quota != nil && acc.Quota != *quota {
 		acc.Quota = *quota
+		changed = true
 	}
 	if proxy != "" || proxy == "" && proxy != acc.Proxy {
 		// allow explicit clear only when caller passes sentinel later; for now set if non-empty
@@ -781,6 +829,9 @@ func (s *Store) Update(token string, typ, status string, quota *int, proxy strin
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
+	}
+	if changed {
+		s.bumpCatalogLocked()
 	}
 	return toView(acc, true), true, nil
 }
@@ -798,21 +849,32 @@ func (s *Store) UpdateByID(id string, typ, status *string, quota *int, proxy *st
 	if acc == nil {
 		return events.AccountView{}, false, nil
 	}
+	changed := false
 	if typ != nil {
-		acc.Type = trim(*typ)
+		value := trim(*typ)
+		if acc.Type != value {
+			acc.Type = value
+			changed = true
+		}
 	}
 	if status != nil {
 		value := trim(*status)
 		if !validStatus(value) {
 			return events.AccountView{}, false, fmt.Errorf("invalid account status")
 		}
-		acc.Status = value
+		if acc.Status != value {
+			acc.Status = value
+			changed = true
+		}
 	}
 	if quota != nil {
 		if *quota < 0 {
 			return events.AccountView{}, false, fmt.Errorf("quota must not be negative")
 		}
-		acc.Quota = *quota
+		if acc.Quota != *quota {
+			acc.Quota = *quota
+			changed = true
+		}
 	}
 	if proxy != nil {
 		acc.Proxy = trim(*proxy)
@@ -820,10 +882,13 @@ func (s *Store) UpdateByID(id string, typ, status *string, quota *int, proxy *st
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
 	}
+	if changed {
+		s.bumpCatalogLocked()
+	}
 	return toView(acc, true), true, nil
 }
 
-func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string) (events.AccountView, bool) {
+func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string, model, operation string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ex := toSet(exclude)
@@ -854,6 +919,9 @@ func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string)
 			continue
 		}
 		if s.imageInflight[token] >= s.concurrency {
+			continue
+		}
+		if !accountSupportsModelLocked(acc, model, operation) {
 			continue
 		}
 		s.imageInflight[token]++
@@ -904,8 +972,10 @@ func (s *Store) MarkImageResult(token string, success bool) (events.AccountView,
 	if !ok {
 		return events.AccountView{}, false
 	}
+	changed := false
 	if success && acc.Quota > 0 {
 		acc.Quota--
+		changed = true
 		if acc.Quota == 0 {
 			acc.Status = StatusLimited
 		}
@@ -919,12 +989,15 @@ func (s *Store) MarkImageResult(token string, success bool) (events.AccountView,
 		acc.Extra["fail"] = extraInt(acc, "fail") + 1
 	}
 	_ = s.saveLocked()
+	if changed {
+		s.bumpCatalogLocked()
+	}
 	view := toView(acc, true)
 	view.ImageInflight = s.imageInflight[token]
 	return view, true
 }
 
-func (s *Store) AcquireTextToken(exclude []string) (events.AccountView, bool) {
+func (s *Store) AcquireTextToken(exclude []string, model, operation string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ex := toSet(exclude)
@@ -945,6 +1018,9 @@ func (s *Store) AcquireTextToken(exclude []string) (events.AccountView, bool) {
 		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
 			continue
 		}
+		if !accountSupportsModelLocked(acc, model, operation) {
+			continue
+		}
 		acc.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
 		return toView(acc, true), true
 	}
@@ -962,6 +1038,7 @@ func (s *Store) RemoveInvalid(token string) bool {
 	acc.Status = StatusAbnormal
 	acc.Quota = 0
 	_ = s.saveLocked()
+	s.bumpCatalogLocked()
 	return true
 }
 
@@ -1004,6 +1081,309 @@ func toView(acc *Account, withToken bool) events.AccountView {
 		v.AccessToken = acc.AccessToken
 	}
 	return v
+}
+
+// CatalogVersion returns the current discovery-relevant generation.
+func (s *Store) CatalogVersion() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.catalogVersion
+}
+
+func (s *Store) bumpCatalogLocked() {
+	s.catalogVersion++
+}
+
+// ListDiscoveryCandidates returns accounts that may participate in model
+// discovery. Tokens are for EventHub-internal discovery only.
+func (s *Store) ListDiscoveryCandidates() (events.ListDiscoveryCandidatesResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := events.ListDiscoveryCandidatesResult{Version: s.catalogVersion}
+	now := time.Now().UTC()
+	for _, token := range s.order {
+		acc := s.items[token]
+		if acc == nil {
+			continue
+		}
+		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+			continue
+		}
+		needs := acc.ModelSnapshot == nil || snapshotExpired(acc.ModelSnapshot, now)
+		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
+			AccountID:      acc.ID,
+			AccessToken:    acc.AccessToken,
+			Status:         acc.Status,
+			NeedsDiscovery: needs,
+		})
+	}
+	return out, nil
+}
+
+// PutModelSnapshot stores a constrained per-account model capability snapshot
+// and bumps the catalog version.
+func (s *Store) PutModelSnapshot(accountID string, snap events.AccountModelSnapshot) (uint64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accountID = trim(accountID)
+	if accountID == "" {
+		return s.catalogVersion, false, fmt.Errorf("account id is required")
+	}
+	token, ok := s.tokenForIDLocked(accountID)
+	if !ok {
+		return s.catalogVersion, false, nil
+	}
+	acc := s.items[token]
+	if acc == nil {
+		return s.catalogVersion, false, nil
+	}
+	clean := normalizeSnapshot(accountID, snap)
+	acc.ModelSnapshot = &clean
+	s.bumpCatalogLocked()
+	if err := s.saveLocked(); err != nil {
+		return s.catalogVersion, false, err
+	}
+	return s.catalogVersion, true, nil
+}
+
+// CatalogSnapshot returns the model union across healthy accounts with
+// non-expired snapshots.
+func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	byID := map[string]*events.CatalogModel{}
+	available := 0
+	var latest time.Time
+	for _, token := range s.order {
+		acc := s.items[token]
+		if acc == nil {
+			continue
+		}
+		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+			continue
+		}
+		available++
+		if acc.ModelSnapshot == nil || snapshotExpired(acc.ModelSnapshot, now) {
+			continue
+		}
+		if ts, err := time.Parse(time.RFC3339, acc.ModelSnapshot.DiscoveredAt); err == nil && ts.After(latest) {
+			latest = ts
+		}
+		for _, model := range acc.ModelSnapshot.Models {
+			id := strings.TrimSpace(model.ID)
+			if id == "" {
+				continue
+			}
+			entry, ok := byID[id]
+			if !ok {
+				entry = &events.CatalogModel{ID: id, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy}
+				byID[id] = entry
+			}
+			for _, op := range model.Operations {
+				op = strings.TrimSpace(op)
+				if op == "" {
+					continue
+				}
+				if !containsString(entry.Operations, op) {
+					entry.Operations = append(entry.Operations, op)
+				}
+			}
+			if !containsString(entry.AccountIDs, acc.ID) {
+				entry.AccountIDs = append(entry.AccountIDs, acc.ID)
+			}
+			if model.CreatedAt > entry.CreatedAt {
+				entry.CreatedAt = model.CreatedAt
+			}
+			if entry.OwnedBy == "" {
+				entry.OwnedBy = model.OwnedBy
+			}
+		}
+	}
+	out := events.CatalogSnapshotResult{Version: s.catalogVersion, AvailableAccounts: available}
+	if !latest.IsZero() {
+		out.UpdatedAt = latest.UTC().Format(time.RFC3339)
+	}
+	for _, entry := range byID {
+		out.Models = append(out.Models, *entry)
+	}
+	// stable order for deterministic Admin/tests
+	sort.Slice(out.Models, func(i, j int) bool { return out.Models[i].ID < out.Models[j].ID })
+	return out
+}
+
+func accountSupportsModelLocked(acc *Account, model, operation string) bool {
+	model = strings.TrimSpace(model)
+	operation = strings.TrimSpace(operation)
+	if model == "" && operation == "" {
+		// Pre-discovery / non-catalog callers keep legacy acquire behavior.
+		return true
+	}
+	if acc == nil || acc.ModelSnapshot == nil {
+		return false
+	}
+	if snapshotExpired(acc.ModelSnapshot, time.Now().UTC()) {
+		return false
+	}
+	for _, entry := range acc.ModelSnapshot.Models {
+		if model != "" && entry.ID != model {
+			continue
+		}
+		if operation == "" {
+			return true
+		}
+		for _, op := range entry.Operations {
+			if op == operation {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func snapshotExpired(snap *events.AccountModelSnapshot, now time.Time) bool {
+	if snap == nil {
+		return true
+	}
+	exp := strings.TrimSpace(snap.ExpiresAt)
+	if exp == "" {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, exp)
+	if err != nil {
+		return true
+	}
+	return !ts.After(now)
+}
+
+func normalizeSnapshot(accountID string, snap events.AccountModelSnapshot) events.AccountModelSnapshot {
+	out := events.AccountModelSnapshot{
+		AccountID:    accountID,
+		DiscoveredAt: strings.TrimSpace(snap.DiscoveredAt),
+		ExpiresAt:    strings.TrimSpace(snap.ExpiresAt),
+	}
+	if out.DiscoveredAt == "" {
+		out.DiscoveredAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	seen := map[string]struct{}{}
+	for _, model := range snap.Models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ops := make([]string, 0, len(model.Operations))
+		for _, op := range model.Operations {
+			op = strings.TrimSpace(op)
+			if op != events.ModelOperationChatCompletions && op != events.ModelOperationImageGenerations {
+				continue
+			}
+			if !containsString(ops, op) {
+				ops = append(ops, op)
+			}
+		}
+		if len(ops) == 0 {
+			continue
+		}
+		out.Models = append(out.Models, events.AccountModelEntry{
+			ID:         id,
+			Operations: ops,
+			CreatedAt:  model.CreatedAt,
+			OwnedBy:    strings.TrimSpace(model.OwnedBy),
+		})
+	}
+	return out
+}
+
+func snapshotFromExtra(extra map[string]any) *events.AccountModelSnapshot {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra["model_snapshot"]
+	if !ok || raw == nil {
+		return nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		// tolerate re-encoded JSON objects after nested marshal
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return nil
+		}
+		var snap events.AccountModelSnapshot
+		if json.Unmarshal(encoded, &snap) != nil || len(snap.Models) == 0 {
+			return nil
+		}
+		return &snap
+	}
+	snap := events.AccountModelSnapshot{
+		AccountID:    asString(m["account_id"]),
+		DiscoveredAt: asString(m["discovered_at"]),
+		ExpiresAt:    asString(m["expires_at"]),
+	}
+	rawModels, _ := m["models"].([]any)
+	for _, item := range rawModels {
+		mm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		entry := events.AccountModelEntry{
+			ID:        asString(mm["id"]),
+			CreatedAt: int64(asInt(mm["created_at"])),
+			OwnedBy:   asString(mm["owned_by"]),
+		}
+		switch ops := mm["operations"].(type) {
+		case []any:
+			for _, op := range ops {
+				if s := asString(op); s != "" {
+					entry.Operations = append(entry.Operations, s)
+				}
+			}
+		case []string:
+			entry.Operations = append(entry.Operations, ops...)
+		}
+		if entry.ID == "" || len(entry.Operations) == 0 {
+			continue
+		}
+		snap.Models = append(snap.Models, entry)
+	}
+	if len(snap.Models) == 0 {
+		return nil
+	}
+	return &snap
+}
+
+func snapshotToMap(snap *events.AccountModelSnapshot) map[string]any {
+	if snap == nil {
+		return nil
+	}
+	models := make([]map[string]any, 0, len(snap.Models))
+	for _, model := range snap.Models {
+		models = append(models, map[string]any{
+			"id":         model.ID,
+			"operations": append([]string(nil), model.Operations...),
+			"created_at": model.CreatedAt,
+			"owned_by":   model.OwnedBy,
+		})
+	}
+	return map[string]any{
+		"account_id":    snap.AccountID,
+		"models":        models,
+		"discovered_at": snap.DiscoveredAt,
+		"expires_at":    snap.ExpiresAt,
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func shortID(token string) string {

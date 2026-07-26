@@ -5,6 +5,7 @@ import "ai-proxy/internal/pkg/chatgpttokenusage"
 
 const (
 	TopicGetUserInfo   = "aiproxy.chatgpt.webupstream.command.get_user_info"
+	TopicListModels    = "aiproxy.chatgpt.webupstream.command.list_models"
 	TopicGenerateImage = "aiproxy.chatgpt.webupstream.command.generate_image"
 	TopicEditImage     = "aiproxy.chatgpt.webupstream.command.edit_image"
 	TopicResumeImage   = "aiproxy.chatgpt.webupstream.command.resume_image"
@@ -13,6 +14,32 @@ const (
 	TopicPullText      = "aiproxy.chatgpt.webupstream.command.pull_text"
 	TopicCancelText    = "aiproxy.chatgpt.webupstream.command.cancel_text"
 )
+
+// ModelOperation is the restricted set of operations the upstream models
+// enumeration may project into the effective catalog.
+type ModelOperation string
+
+const (
+	ModelOperationChatCompletions ModelOperation = "chat_completions"
+	ModelOperationImageGenerations ModelOperation = "image_generations"
+)
+
+// ModelDescriptor is a constrained projection of an upstream model entry.
+// Unknown upstream fields never enter this contract.
+type ModelDescriptor struct {
+	ID         string
+	Operations []ModelOperation
+	CreatedAt  int64
+	OwnedBy    string
+}
+
+type ListModelsCommand struct {
+	AccessToken string
+}
+
+type ListModelsResult struct {
+	Models []ModelDescriptor
+}
 
 type ErrorClass string
 

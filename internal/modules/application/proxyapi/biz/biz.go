@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
@@ -34,8 +35,11 @@ type Proxy struct {
 	metrics  metricsport.Port
 	recorder *archive.Recorder
 
-	mu      sync.RWMutex
-	updater ConfigUpdater
+	mu               sync.RWMutex
+	updater          ConfigUpdater
+	catalogPublisher CatalogPublisher
+	catalog          effectivecatalog.Snapshot
+	discoveryMu      sync.Mutex
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {
@@ -63,15 +67,22 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.metrics = metrics
 	biz.recorder = recorder
 	biz.SubscribeFunc(proxyevents.TopicUpdateConfig, biz.handleUpdate)
+	biz.SubscribeFunc(proxyevents.TopicEffectiveCatalog, biz.handleEffectiveCatalog)
 	return biz, nil
 }
 
-func (s *Proxy) Run(context.Context) *cd.Error { return nil }
+func (s *Proxy) Run(ctx context.Context) *cd.Error {
+	s.startModelDiscovery(ctx)
+	return nil
+}
 
 func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicUpdateConfig)
+	s.UnsubscribeFunc(proxyevents.TopicEffectiveCatalog)
 	s.mu.Lock()
 	s.updater = nil
+	s.catalogPublisher = nil
+	s.catalog = effectivecatalog.Snapshot{}
 	s.mu.Unlock()
 	s.config = config.Config{}
 	s.usage = nil
@@ -107,6 +118,21 @@ func (s *Proxy) handleUpdate(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "update proxy config: "+err.Error()))
 		return
 	}
+	previous := s.EffectiveCatalog()
 	s.config = command.Config
+	// Keep the constrained auto-discovered projection while the account-pool
+	// query runs, so a hot reload never makes ChatGPT Web models disappear.
+	s.publishCatalog(effectivecatalog.Reconfigure(command.Config, previous))
+	if command.Config.ChatGPTWeb.Enabled {
+		s.refreshEffectiveCatalog(ev.Context())
+	}
 	result.Set(struct{}{}, nil)
+}
+
+func (s *Proxy) handleEffectiveCatalog(ev event.Event, result event.Result) {
+	if _, ok := ev.Data().(proxyevents.EffectiveCatalogCommand); !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid effective catalog command"))
+		return
+	}
+	result.Set(proxyevents.EffectiveCatalogResult{Snapshot: s.EffectiveCatalog()}, nil)
 }

@@ -29,13 +29,13 @@ model_catalog:
     operations: chat_completions
 ```
 
-`model_catalog` 是客户端可用模型、容量、operation 与唯一 RouteOwner 的权威；模型 ID exact 且严格区分大小写。完整的端点矩阵、转换限制与 typed error 见 [Provider Capability Contract](provider-capability-contract-design-2026-07-15.md)。
+`model_catalog` 是静态 Provider 的模型、容量、operation 与唯一 RouteOwner 的权威；模型 ID exact 且严格区分大小写。启用 ChatGPT Web 后，运行时有效目录还会合成账号池自动发现的模型。完整的端点矩阵、转换限制与 typed error 见 [Provider Capability Contract](provider-capability-contract-design-2026-07-15.md)。
 
 ## Provider 与模型路由
 
 每个 enabled Provider 必须显式设置：
 
-- `protocol`：`openai`、`anthropic`，或 `chatgptweb`。`chatgptweb` 只支持 `chat_completions`，不配置 `base_url` 或 `api_key`；实际账号凭据只来自 ChatGPT Web 账号池。
+- `protocol`：仅 `openai` 或 `anthropic`。`chatgptweb` 是保留协议/ID，禁止写入 `providers`；启用 `chatgpt_web` 后由运行时自动注入内建 Provider。
 - `base_url`：可带或不带 `/v1`，代理会避免重复拼接。
 - `endpoint_capabilities`：上游直接支持的端点能力，不能由 protocol 自动推断。
 - `models`：用于启动期将 catalog model 解析为唯一 RouteOwner 的 pattern。
@@ -129,8 +129,9 @@ chatgpt_web:
 - 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储和异步图片任务会一并装配。
 - `data_dir` 只接受本地目录；相对路径按 `config.yaml` 所在目录解析。账号数据位于 `accounts.json`，不得写入 YAML、环境变量、日志或版本库。
 - `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
-- ChatGPT Web 账号能力不自动向 `model_catalog` 注册模型。客户端可用模型和路由仍完全以 `model_catalog` 为准。
-- 使用 ChatGPT Web 时，Provider 必须声明 `protocol: chatgptweb`，并按需声明 `chat_completions`、`images`；对应模型还须在 `model_catalog` 声明 `chat_completions`、`image_generations` operation。它支持 `/v1/chat/completions`、`/v1/images/generations` 与 `/v1/images/edits`。
+- 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。模型与模型级 operation 来自账号池对 ChatGPT Web `/backend-api/models` 的枚举并集。
+- 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。
+- 若自动模型与任一 enabled 静态 Provider 的 exact model 冲突，静态 RouteOwner 优先；Admin Provider 列表会显示冲突摘要。
 
 ## 本地管理页
 

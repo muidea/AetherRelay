@@ -21,6 +21,7 @@ import (
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyarchive"
 	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
@@ -32,6 +33,7 @@ import (
 type Handler struct {
 	cfgMu               sync.RWMutex
 	cfg                 config.Config
+	effectiveCatalog    atomic.Pointer[effectivecatalog.Snapshot]
 	clientKeyIndex      atomic.Pointer[clientauth.Index]
 	usageStore          usage.Store
 	interactionRecorder *archive.Recorder
@@ -108,6 +110,25 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	return cfg
 }
 
+// EffectiveCatalog returns the current request-time routing snapshot. When no
+// snapshot has been published yet, a static-only view is synthesized from cfg.
+func (h *Handler) EffectiveCatalog() effectivecatalog.Snapshot {
+	if snap := h.effectiveCatalog.Load(); snap != nil {
+		return *snap
+	}
+	h.cfgMu.RLock()
+	cfg := h.cfg
+	h.cfgMu.RUnlock()
+	return effectivecatalog.FromStatic(cfg)
+}
+
+// ReplaceEffectiveCatalog atomically publishes a new request-time catalog.
+// /v1/models and ResolveTransportPlan must observe the same generation.
+func (h *Handler) ReplaceEffectiveCatalog(snap effectivecatalog.Snapshot) {
+	copySnap := snap
+	h.effectiveCatalog.Store(&copySnap)
+}
+
 // UpdateConfig 在完整请求边界之间原子切换运行时配置。
 // 已进入代理处理的请求继续使用旧配置，新请求使用新配置。
 // client_api_keys 可热更新(重建身份索引);usage_store 路径不热切换。
@@ -116,9 +137,14 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 		return err
 	}
 	idx := buildClientKeyIndex(cfg)
+	previousCatalog := h.EffectiveCatalog()
 	h.cfgMu.Lock()
 	defer h.cfgMu.Unlock()
 	h.cfg = cfg
+	// Preserve constrained discovery data while proxyapi refreshes the
+	// account-pool authority. This keeps /v1/models and request routing on the
+	// same effective directory throughout a configuration hot reload.
+	h.ReplaceEffectiveCatalog(effectivecatalog.Reconfigure(cfg, previousCatalog))
 	h.clientKeyIndex.Store(idx)
 	h.client = newHTTPClient(cfg.RequestTimeout)
 	return nil
@@ -138,6 +164,7 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 		client:              newHTTPClient(cfg.RequestTimeout),
 	}
 	h.clientKeyIndex.Store(buildClientKeyIndex(cfg))
+	h.ReplaceEffectiveCatalog(effectivecatalog.FromStatic(cfg))
 	return h
 }
 
@@ -165,7 +192,9 @@ func requireResolvedConfig(cfg config.Config) error {
 			continue
 		}
 		switch provider.Protocol {
-		case "openai", "anthropic", "chatgptweb":
+		case "openai", "anthropic":
+		case "chatgptweb":
+			return fmt.Errorf("provider %q: protocol chatgptweb is reserved for the builtin provider", name)
 		case "":
 			return fmt.Errorf("provider %q: protocol unresolved", name)
 		default:
@@ -645,6 +674,13 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		h.writeArchivedAPIError(w, round, r, start, "", model, stream, statusForAPIError(apiErr), *apiErr)
 		return
 	}
+	if plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
+		// chatgptweb is an in-memory builtin provider, never a static
+		// cfg.Providers entry. Route it before looking up static providers.
+		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), stream)
+		h.handleChatGPTWebChatCompletions(w, r, start, plan.RouteOwner, model, stream, body)
+		return
+	}
 	provider, ok := h.cfg.Providers[plan.RouteOwner]
 	if !ok {
 		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusServiceUnavailable, APIError{
@@ -660,11 +696,6 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 	}
 	// model 路由仅使用 body.model + ResolvedModelRoute + TransportPlan authority。
 	h.archiveAndLogTransportPlan(round, r, plan, provider, stream)
-	if provider.Protocol == "chatgptweb" {
-		h.handleChatGPTWebChatCompletions(w, r, start, plan.RouteOwner, model, stream, body)
-		return
-	}
-
 	switch plan.Mode {
 	case TransportModeOpenAIToAnthropic:
 		if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
@@ -1552,7 +1583,7 @@ func (h *Handler) resolveTransportPlan(r *http.Request, model string) (Transport
 			path = r.URL.Path
 		}
 	}
-	return ResolveTransportPlan(h.cfg, method, path, model)
+	return ResolveTransportPlan(h.cfg, h.EffectiveCatalog(), method, path, model)
 }
 
 // resolveProviderName 保留为兼容包装:返回 RouteOwner 与 operation。

@@ -107,6 +107,24 @@ providers:
 	}
 }
 
+func TestLoadAllowsChatGPTWebAsOnlyProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+chatgpt_web:
+  enabled: true
+  data_dir: chatgpt-web-data
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load chatgpt-web-only config: %v", err)
+	}
+	if !cfg.ChatGPTWeb.Enabled || len(cfg.Providers) != 0 {
+		t.Fatalf("config=%+v", cfg)
+	}
+}
+
 func TestLoadModelCatalog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
@@ -1374,5 +1392,61 @@ providers:
 	_, err := Load(path)
 	if err == nil || !strings.Contains(err.Error(), "local directory path") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadRejectsExplicitChatGPTWebProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `server:
+  listen_addr: 127.0.0.1:18080
+usage_store:
+  path: usage.duckdb
+providers:
+  chatgptweb:
+    enabled: true
+    protocol: chatgptweb
+    endpoint_capabilities: chat_completions, images
+    models: gpt-*
+model_catalog:
+  gpt-4o:
+    context_window_tokens: 128000
+    max_output_tokens: 16384
+    operations: chat_completions
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "chatgptweb is reserved") {
+		t.Fatalf("expected reserved chatgptweb error, got %v", err)
+	}
+}
+
+func TestLoadRejectsProtocolChatGPTWebUnderOtherName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `server:
+  listen_addr: 127.0.0.1:18080
+usage_store:
+  path: usage.duckdb
+providers:
+  my-web:
+    enabled: true
+    protocol: chatgptweb
+    endpoint_capabilities: chat_completions
+    models: gpt-*
+model_catalog:
+  gpt-4o:
+    context_window_tokens: 128000
+    max_output_tokens: 16384
+    operations: chat_completions
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "chatgptweb is reserved") {
+		t.Fatalf("expected reserved chatgptweb error, got %v", err)
 	}
 }

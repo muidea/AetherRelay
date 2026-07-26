@@ -83,6 +83,9 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 		events.TopicExport,
 		events.TopicRefresh,
 		events.TopicRefreshProgress,
+		events.TopicListDiscoveryCandidates,
+		events.TopicPutModelSnapshot,
+		events.TopicCatalogSnapshot,
 	}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicAdd, b.handleAdd)
@@ -104,6 +107,9 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicExport, b.handleExport)
 	b.SubscribeFunc(events.TopicRefresh, b.handleRefresh)
 	b.SubscribeFunc(events.TopicRefreshProgress, b.handleRefreshProgress)
+	b.SubscribeFunc(events.TopicListDiscoveryCandidates, b.handleListDiscoveryCandidates)
+	b.SubscribeFunc(events.TopicPutModelSnapshot, b.handlePutModelSnapshot)
+	b.SubscribeFunc(events.TopicCatalogSnapshot, b.handleCatalogSnapshot)
 	return b
 }
 
@@ -368,7 +374,7 @@ func (s *Account) handleAcquireImage(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire image command"))
 		return
 	}
-	acc, found := s.store.AcquireImageToken(cmd.PlanType, cmd.SourceType, cmd.Exclude)
+	acc, found := s.store.AcquireImageToken(cmd.PlanType, cmd.SourceType, cmd.Exclude, cmd.Model, cmd.Operation)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "no available image quota"))
 		return
@@ -432,7 +438,7 @@ func (s *Account) handleAcquireText(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire text command"))
 		return
 	}
-	acc, found := s.store.AcquireTextToken(cmd.Exclude)
+	acc, found := s.store.AcquireTextToken(cmd.Exclude, cmd.Model, cmd.Operation)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "no available text account"))
 		return
@@ -462,4 +468,48 @@ func (s *Account) handleHealth(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(s.store.Health(), nil)
+}
+
+func (s *Account) handleListDiscoveryCandidates(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	if _, ok := ev.Data().(events.ListDiscoveryCandidatesCommand); !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid list discovery candidates command"))
+		return
+	}
+	out, err := s.store.ListDiscoveryCandidates()
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(out, nil)
+}
+
+func (s *Account) handlePutModelSnapshot(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.PutModelSnapshotCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid put model snapshot command"))
+		return
+	}
+	version, found, err := s.store.PutModelSnapshot(cmd.AccountID, cmd.Snapshot)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.PutModelSnapshotResult{Version: version, OK: found}, nil)
+}
+
+func (s *Account) handleCatalogSnapshot(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	if _, ok := ev.Data().(events.CatalogSnapshotCommand); !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid catalog snapshot command"))
+		return
+	}
+	result.Set(s.store.CatalogSnapshot(), nil)
 }

@@ -55,7 +55,7 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	if body.Model == "" {
 		body.Model = "gpt-image-2"
 	}
-	plan, apiErr := ResolveTransportPlan(cfg, r.Method, r.URL.Path, body.Model)
+	plan, apiErr := ResolveTransportPlan(cfg, h.EffectiveCatalog(), r.Method, r.URL.Path, body.Model)
 	if apiErr != nil {
 		writeAPIError(w, statusForAPIError(apiErr), *apiErr)
 		return

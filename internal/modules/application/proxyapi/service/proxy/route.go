@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -109,7 +110,10 @@ func ProviderHasDirectEndpoint(provider config.Provider, capability string) bool
 
 // ResolveTransportPlan 是请求期单一入口:在 ResolvedModelRoute 之上应用固定转发矩阵。
 // 步骤 1—6 任一失败均返回 typed APIError,调用方不得创建上游请求。
-func ResolveTransportPlan(cfg config.Config, method, path, modelID string) (TransportPlan, *APIError) {
+// ResolveTransportPlan is the request-time single entry: look up the model in
+// the effective catalog snapshot (static + builtin), then apply the fixed
+// transport matrix. snap must be the same snapshot used by /v1/models.
+func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) (TransportPlan, *APIError) {
 	clientEndpoint := NormalizeClientEndpoint(path)
 	operation := OperationForPath(clientEndpoint)
 	clientProtocol := ClientProtocolForPath(clientEndpoint)
@@ -148,22 +152,18 @@ func ResolveTransportPlan(cfg config.Config, method, path, modelID string) (Tran
 		}
 	}
 
-	route, ok := config.LookupResolvedModelRoute(cfg, modelID)
+	route, ok := snap.Lookup(modelID)
 	if !ok {
 		return TransportPlan{}, &APIError{
 			Code:           ErrorCodeModelNotFound,
-			Message:        fmt.Sprintf("model %q was not found in model_catalog", modelID),
+			Message:        fmt.Sprintf("model %q was not found in the effective model catalog", modelID),
 			Model:          modelID,
 			Operation:      operation,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
 		}
 	}
-	if !config.ModelSupportsOperation(config.ModelInfo{
-		ID:         route.ModelID,
-		Operations: route.Operations,
-		RouteOwner: route.RouteOwner,
-	}, operation) {
+	if !route.SupportsOperation(operation) {
 		return TransportPlan{}, &APIError{
 			Code:           ErrorCodeOperationUnsupported,
 			Message:        fmt.Sprintf("model %q does not support operation %q", modelID, operation),
@@ -185,15 +185,21 @@ func ResolveTransportPlan(cfg config.Config, method, path, modelID string) (Tran
 			ClientProtocol: clientProtocol,
 		}
 	}
-	provider, ok := cfg.Providers[owner]
-	if !ok || provider.Disabled {
-		return TransportPlan{}, &APIError{
-			Code:           ErrorCodeProviderUnavailable,
-			Message:        fmt.Sprintf("provider %q for model %q is unavailable", owner, modelID),
-			Model:          modelID,
-			Operation:      operation,
-			ClientEndpoint: clientEndpoint,
-			ClientProtocol: clientProtocol,
+	var provider config.Provider
+	if route.Builtin || owner == effectivecatalog.BuiltinProviderID {
+		provider = effectivecatalog.BuiltinProviderView()
+	} else {
+		var found bool
+		provider, found = cfg.Providers[owner]
+		if !found || provider.Disabled {
+			return TransportPlan{}, &APIError{
+				Code:           ErrorCodeProviderUnavailable,
+				Message:        fmt.Sprintf("provider %q for model %q is unavailable", owner, modelID),
+				Model:          modelID,
+				Operation:      operation,
+				ClientEndpoint: clientEndpoint,
+				ClientProtocol: clientProtocol,
+			}
 		}
 	}
 

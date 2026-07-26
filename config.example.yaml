@@ -105,12 +105,8 @@ providers:
     api_key: ${ANTHROPIC_API_KEY}
     endpoint_capabilities: messages
     models: claude*
-  # ChatGPT Web 路由示例。模型仍必须在 model_catalog 显式登记。
-  # chatgptweb:
-  #   enabled: true
-  #   protocol: chatgptweb
-  #   endpoint_capabilities: chat_completions, images
-  #   models: gpt-*
+  # chatgptweb 是保留的内建 Provider ID，禁止在 providers 中声明。
+  # 启用 chatgpt_web.enabled 后由运行时自动注入，模型来自账号池发现结果。
 
 # 全局模型目录(各 provider 共用)。model ID 严格区分大小写(exact match)。
 # GET /v1/models 仅返回此处登记的模型,
@@ -132,8 +128,5 @@ model_catalog:
     context_window_tokens: 8192
     max_output_tokens: 8191
     operations: embeddings
-  # ChatGPT Web 图片模型示例；须与上方 chatgptweb Provider 的 models 匹配。
-  # gpt-image-1:
-  #   context_window_tokens: 128000
-  #   max_output_tokens: 16384
-  #   operations: image_generations
+  # ChatGPT Web 自动发现的模型不写入 model_catalog。
+  # 若静态 catalog 与自动模型同名，静态 RouteOwner 优先。

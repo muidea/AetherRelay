@@ -24,6 +24,16 @@ const (
 	TopicExport              = "aiproxy.chatgpt.accountpool.command.export"
 	TopicRefresh             = "aiproxy.chatgpt.accountpool.command.refresh"
 	TopicRefreshProgress     = "aiproxy.chatgpt.accountpool.command.refresh_progress"
+	// Discovery / capability snapshot contracts owned by the account pool.
+	TopicListDiscoveryCandidates = "aiproxy.chatgpt.accountpool.command.list_discovery_candidates"
+	TopicPutModelSnapshot        = "aiproxy.chatgpt.accountpool.command.put_model_snapshot"
+	TopicCatalogSnapshot         = "aiproxy.chatgpt.accountpool.command.catalog_snapshot"
+)
+
+// Model operations mirrored from the upstream models enumeration contract.
+const (
+	ModelOperationChatCompletions  = "chat_completions"
+	ModelOperationImageGenerations = "image_generations"
 )
 
 type AccountView struct {
@@ -85,6 +95,11 @@ type AcquireImageTokenCommand struct {
 	PlanType   string
 	SourceType string
 	Exclude    []string
+	// Model and Operation filter candidates by the account's latest model
+	// snapshot. Empty values keep the pre-discovery acquire behavior so
+	// non-catalog callers (for example image task recovery) still work.
+	Model     string
+	Operation string
 }
 type AcquireImageTokenResult struct {
 	AccessToken string
@@ -98,10 +113,75 @@ type MarkImageResultCommand struct {
 	Success     bool
 }
 type MarkImageResultResult struct{ Account AccountView }
-type AcquireTextTokenCommand struct{ Exclude []string }
+type AcquireTextTokenCommand struct {
+	Exclude []string
+	// Model and Operation filter candidates by the account's latest model
+	// snapshot. Empty values keep the pre-discovery acquire behavior.
+	Model     string
+	Operation string
+}
 type AcquireTextTokenResult struct {
 	AccessToken string
 	Account     AccountView
+}
+
+// AccountModelEntry is one model+operations projection stored on an account.
+type AccountModelEntry struct {
+	ID         string   `json:"id"`
+	Operations []string `json:"operations"`
+	CreatedAt  int64    `json:"created_at,omitempty"`
+	OwnedBy    string   `json:"owned_by,omitempty"`
+}
+
+// AccountModelSnapshot is the derived capability state of one account.
+// It never carries raw upstream responses or tokens.
+type AccountModelSnapshot struct {
+	AccountID   string              `json:"account_id"`
+	Models      []AccountModelEntry `json:"models"`
+	DiscoveredAt string             `json:"discovered_at"`
+	ExpiresAt   string              `json:"expires_at,omitempty"`
+}
+
+// DiscoveryCandidate is a non-sensitive account identifier plus the access
+// credential needed by the discovery orchestrator. Credentials must stay on
+// the EventHub path and never appear in Admin HTTP responses.
+type DiscoveryCandidate struct {
+	AccountID   string
+	AccessToken string
+	Status      string
+	NeedsDiscovery bool
+}
+
+type ListDiscoveryCandidatesCommand struct{}
+type ListDiscoveryCandidatesResult struct {
+	Candidates []DiscoveryCandidate
+	Version    uint64
+}
+
+type PutModelSnapshotCommand struct {
+	AccountID string
+	Snapshot  AccountModelSnapshot
+}
+type PutModelSnapshotResult struct {
+	Version uint64
+	OK      bool
+}
+
+// CatalogModel is the pool-level union entry for one model ID.
+type CatalogModel struct {
+	ID         string   `json:"id"`
+	Operations []string `json:"operations"`
+	CreatedAt  int64    `json:"created_at,omitempty"`
+	OwnedBy    string   `json:"owned_by,omitempty"`
+	AccountIDs []string `json:"account_ids,omitempty"`
+}
+
+type CatalogSnapshotCommand struct{}
+type CatalogSnapshotResult struct {
+	Version          uint64
+	Models           []CatalogModel
+	AvailableAccounts int
+	UpdatedAt        string
 }
 type RemoveInvalidCommand struct {
 	AccessToken string

@@ -19,6 +19,7 @@ import (
 
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
@@ -58,6 +59,7 @@ type ChatGPTRuntime interface {
 	SubmitChatGPTImageEdit(context.Context, taskevents.SubmitEditCommand) (taskevents.SubmitResult, error)
 	ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error)
 	ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error)
+	ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error)
 }
 
 // chatGPTAvailability is intentionally optional to keep isolated HTTP tests
@@ -87,6 +89,15 @@ type providerView struct {
 	Enabled              bool                 `json:"enabled"`
 	APIKeyConfigured     bool                 `json:"api_key_configured"`
 	Availability         providerAvailability `json:"availability"`
+	// Builtin marks the non-persistent chatgptweb provider. Admin must not
+	// offer edit/delete/toggle/probe for builtin rows.
+	Builtin           bool     `json:"builtin,omitempty"`
+	ModelCount        int      `json:"model_count,omitempty"`
+	AvailableAccounts int      `json:"available_accounts,omitempty"`
+	ConflictCount     int      `json:"conflict_count,omitempty"`
+	ConflictModels    []string `json:"conflict_models,omitempty"`
+	UpdatedAt         string   `json:"updated_at,omitempty"`
+	UnavailableReason string   `json:"unavailable_reason,omitempty"`
 }
 
 type providerAvailability struct {
@@ -535,7 +546,7 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	}
 	sort.Strings(names)
 
-	providers := make([]providerView, 0, len(names))
+	providers := make([]providerView, 0, len(names)+1)
 	for _, name := range names {
 		provider := cfg.Providers[name]
 		providers = append(providers, providerView{
@@ -550,11 +561,68 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 			Availability:         health[name],
 		})
 	}
+	if cfg.ChatGPTWeb.Enabled {
+		providers = append(providers, h.builtinChatGPTProviderView())
+		sort.SliceStable(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers":  providers,
 		"writable":   strings.TrimSpace(h.configPath) != "",
 		"hot_reload": true,
 	})
+}
+
+func (h *Handler) builtinChatGPTProviderView() providerView {
+	view := providerView{
+		Name:                 effectivecatalog.BuiltinProviderID,
+		Protocol:             effectivecatalog.BuiltinProviderID,
+		BaseURL:              "(account pool)",
+		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityImages},
+		Enabled:              true,
+		APIKeyConfigured:     false,
+		Builtin:              true,
+		Availability:         providerAvailability{Status: "unknown"},
+	}
+	if h.chatGPT == nil || !h.chatGPTWebAvailable() {
+		view.Availability = providerAvailability{Status: "unavailable"}
+		view.UnavailableReason = "chatgpt web is not available"
+		return view
+	}
+	snap, err := h.chatGPT.ChatGPTEffectiveCatalog(context.Background())
+	if err != nil {
+		view.Availability = providerAvailability{Status: "unavailable"}
+		view.UnavailableReason = "catalog snapshot unavailable"
+		return view
+	}
+	bp := snap.BuiltinProvider
+	view.ModelCount = bp.ModelCount
+	view.AvailableAccounts = bp.AvailableAccounts
+	view.ConflictCount = bp.ConflictCount
+	view.ConflictModels = append([]string(nil), bp.ConflictModels...)
+	view.UpdatedAt = bp.UpdatedAt
+	view.UnavailableReason = bp.UnavailableReason
+	models := make([]string, 0, len(snap.BuiltinModels))
+	for id, model := range snap.BuiltinModels {
+		if model.ConflictWithStatic {
+			continue
+		}
+		models = append(models, id)
+	}
+	sort.Strings(models)
+	view.Models = models
+	switch bp.Status {
+	case effectivecatalog.StatusReady:
+		view.Availability = providerAvailability{Status: "healthy"}
+	case effectivecatalog.StatusDegraded:
+		view.Availability = providerAvailability{Status: "degraded"}
+	case effectivecatalog.StatusDiscovering:
+		view.Availability = providerAvailability{Status: "unknown"}
+	case effectivecatalog.StatusEmpty:
+		view.Availability = providerAvailability{Status: "unavailable"}
+	default:
+		view.Availability = providerAvailability{Status: "unavailable"}
+	}
+	return view
 }
 
 func (h *Handler) providerHealth(cfg config.Config) map[string]providerAvailability {
@@ -631,7 +699,13 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	if len(request.Providers) == 0 {
+	for _, item := range request.Providers {
+		if strings.EqualFold(strings.TrimSpace(item.Name), "chatgptweb") || strings.TrimSpace(item.Protocol) == "chatgptweb" {
+			writeError(w, http.StatusBadRequest, "protocol chatgptweb is reserved for the builtin provider")
+			return
+		}
+	}
+	if len(request.Providers) == 0 && !h.runtime.ConfigSnapshot().ChatGPTWeb.Enabled {
 		writeError(w, http.StatusBadRequest, "at least one provider is required")
 		return
 	}

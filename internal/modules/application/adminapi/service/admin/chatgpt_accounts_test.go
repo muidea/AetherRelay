@@ -9,6 +9,7 @@ import (
 
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 )
 
@@ -115,6 +116,9 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTImageTasks(context.Context, strin
 }
 func (s *chatGPTAccountRuntimeStub) ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error) {
 	return taskevents.ResumePollResult{}, nil
+}
+func (s *chatGPTAccountRuntimeStub) ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error) {
+	return effectivecatalog.Empty(), nil
 }
 
 func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
