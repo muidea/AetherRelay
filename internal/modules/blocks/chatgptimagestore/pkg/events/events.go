@@ -49,7 +49,9 @@ type ImageItem struct {
 	Height       int      `json:"height,omitempty"`
 	Tags         []string `json:"tags"`
 }
-type ListResult struct{ Items []ImageItem }
+type ListResult struct {
+	Items []ImageItem `json:"items"`
+}
 type EnsureThumbnailCommand struct{ RelativePath string }
 type EnsureThumbnailResult struct {
 	ThumbnailPath string

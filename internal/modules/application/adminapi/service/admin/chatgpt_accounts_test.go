@@ -215,6 +215,12 @@ func TestChatGPTImageListRewritesToAdminContentURLs(t *testing.T) {
 	if !strings.Contains(body, "/admin/api/chatgpt/images/content?path=") || !strings.Contains(body, "thumb=1") {
 		t.Fatalf("list missing admin content URLs: %s", body)
 	}
+	var response struct {
+		Items []imgevents.ImageItem `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || len(response.Items) != 1 || response.Items[0].Path != "2026-07-26/demo.png" {
+		t.Fatalf("list JSON shape is not consumable: items=%#v err=%v body=%s", response.Items, err, body)
+	}
 }
 
 func TestChatGPTImageContentEndpoint(t *testing.T) {

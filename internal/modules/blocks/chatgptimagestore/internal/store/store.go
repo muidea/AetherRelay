@@ -98,16 +98,20 @@ func (s *Store) loadIndex() error {
 	data, err := os.ReadFile(s.indexPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.index = map[string]indexEntry{}
+			s.pythonLayout = false
+			s.pythonItems = map[string]map[string]any{}
 			return nil
 		}
 		return err
 	}
+	index := map[string]indexEntry{}
+	pythonItems := map[string]map[string]any{}
 	var envelope struct {
 		Items map[string]map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Items != nil {
-		s.pythonLayout = true
-		s.pythonItems = envelope.Items
+		pythonItems = envelope.Items
 		for key, item := range envelope.Items {
 			entry := indexEntry{
 				Path:      firstString(item, "path", "rel"),
@@ -119,13 +123,28 @@ func (s *Store) loadIndex() error {
 			if entry.Path == "" {
 				entry.Path = key
 			}
-			s.index[entry.Path] = entry
+			if entry.Path = safeRel(entry.Path); entry.Path != "" {
+				index[entry.Path] = entry
+			}
 		}
+		s.index = index
+		s.pythonLayout = true
+		s.pythonItems = pythonItems
 		return nil
 	}
 	var raw map[string]indexEntry
 	if err := json.Unmarshal(data, &raw); err == nil {
-		s.index = raw
+		for path, entry := range raw {
+			if entry.Path == "" {
+				entry.Path = path
+			}
+			if entry.Path = safeRel(entry.Path); entry.Path != "" {
+				index[entry.Path] = entry
+			}
+		}
+		s.index = index
+		s.pythonLayout = false
+		s.pythonItems = pythonItems
 		return nil
 	}
 	// Older Go fixtures may use a bare list.
@@ -135,9 +154,13 @@ func (s *Store) loadIndex() error {
 	}
 	raw = map[string]indexEntry{}
 	for _, e := range list {
-		raw[e.Path] = e
+		if e.Path = safeRel(e.Path); e.Path != "" {
+			raw[e.Path] = e
+		}
 	}
 	s.index = raw
+	s.pythonLayout = false
+	s.pythonItems = pythonItems
 	return nil
 }
 
@@ -335,6 +358,10 @@ func (s *Store) Delete(paths []string) (int, error) {
 func (s *Store) List(baseURL, startDate, endDate string) []events.ImageItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Image generation may be handled by another process sharing the same data
+	// directory. Reload the durable index for every administrative listing so a
+	// manual refresh observes those images without restarting this process.
+	_ = s.loadIndex()
 	out := make([]events.ImageItem, 0, len(s.index))
 	for _, e := range s.index {
 		if startDate != "" && e.CreatedAt < startDate {

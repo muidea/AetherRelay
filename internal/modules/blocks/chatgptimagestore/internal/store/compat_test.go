@@ -49,6 +49,35 @@ func TestLoadPythonImageIndexFixture(t *testing.T) {
 	}
 }
 
+func TestListReloadsIndexChangedAfterStoreStartup(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir)
+	path := "2026/07/26/external.png"
+	data := []byte(`{"2026/07/26/external.png":{"path":"2026/07/26/external.png","size":123,"created_at":"2026-07-26T10:00:00Z"}}`)
+	if err := os.WriteFile(filepath.Join(dir, "image_index.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	items := s.List("", "", "")
+	if len(items) != 1 || items[0].Path != path || items[0].Size != 123 {
+		t.Fatalf("items=%#v", items)
+	}
+
+	data = []byte(`{"items":{"2026/07/26/external.png":{"path":"2026/07/26/external.png","size":456,"created_at":"2026-07-26T10:01:00Z"},"2026/07/26/second.png":{"path":"2026/07/26/second.png","size":789,"created_at":"2026-07-26T10:02:00Z"}}}`)
+	if err := os.WriteFile(filepath.Join(dir, "image_index.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items = s.List("", "", "")
+	if len(items) != 2 {
+		t.Fatalf("items=%#v", items)
+	}
+	for _, item := range items {
+		if item.Path == path && item.Size != 456 {
+			t.Fatalf("stale item=%#v", item)
+		}
+	}
+}
+
 func TestEnsureThumbnailScalesAndCachesImage(t *testing.T) {
 	imageBytes := bytes.NewBuffer(nil)
 	imageValue := image.NewRGBA(image.Rect(0, 0, 640, 320))
