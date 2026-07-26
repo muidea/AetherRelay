@@ -10,8 +10,9 @@
 server:
   listen_addr: 127.0.0.1:8080
 
-usage_store:
-  path: usage.duckdb
+state:
+  dir: var
+  database: state.duckdb
 
 providers:
   openai:
@@ -82,7 +83,6 @@ client_api_keys:
 | `request_timeout_seconds` | 非流式总超时及流式等待响应头超时。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
-| `interaction_dir`、`interaction_retention` | 归档目录与保留轮数。 |
 | `debug_log`、`log_format` | 调试日志和 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
 | `admin_auth_enabled` / `AI_PROXY_ADMIN_AUTH_ENABLED` | Admin 登录开关，默认 `false`（保持 loopback-only）。 |
@@ -105,29 +105,32 @@ client_api_keys:
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[统一文本流式 SSE 收口设计](unified-sse-streaming-design-2026-07-23.md)。
 
-## DuckDB 用量存储
+## 统一状态工作区
 
 ```yaml
-usage_store:
-  path: usage.duckdb
+state:
+  dir: var
+  database: state.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
+  interaction_retention: 500
 ```
 
-`usage_store.path` 是单进程本地 DuckDB 文件，也是唯一在线用量 authority；多个实例不得共享同一路径。数据库文件应由运行用户保护，且不应提交到版本库。
+`state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。
+
+工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 
 ## ChatGPT Web 本地数据
 
 ```yaml
 chatgpt_web:
   enabled: false
-  data_dir: chatgpt-web-data
   refresh_account_interval_minute: 0
 ```
 
 - 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储和异步图片任务会一并装配。
-- `data_dir` 只接受本地目录；相对路径按 `config.yaml` 所在目录解析。账号数据位于 `accounts.json`，不得写入 YAML、环境变量、日志或版本库。
+- 账号、任务、图片索引和标签保存于 `state.database`；不得写入 YAML、环境变量、日志或版本库。
 - `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
 - 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。模型与模型级 operation 来自账号池对 ChatGPT Web `/backend-api/models` 的枚举并集。
 - 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。

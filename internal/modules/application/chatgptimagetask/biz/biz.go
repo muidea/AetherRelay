@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,10 +41,10 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if !bootstrap.Config.ChatGPTWeb.Enabled {
 		return b, nil
 	}
-	if err := os.MkdirAll(bootstrap.Config.ChatGPTWeb.DataDir, 0o755); err != nil {
+	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, err.Error())
 	}
-	b.store = store.New(filepath.Join(bootstrap.Config.ChatGPTWeb.DataDir, "image_tasks.json"))
+	b.store = store.New(bootstrap.Config.State.Database)
 	b.topics = []string{
 		events.TopicSubmitGeneration,
 		events.TopicSubmitEdit,

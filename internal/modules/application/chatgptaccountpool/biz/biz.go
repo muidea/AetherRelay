@@ -14,7 +14,6 @@ import (
 	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	"ai-proxy/internal/pkg/chatgptwebpaths"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -47,10 +46,10 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if !bootstrap.Config.ChatGPTWeb.Enabled {
 		return newAccount(hub, background, nil, 0), nil
 	}
-	if err := os.MkdirAll(bootstrap.Config.ChatGPTWeb.DataDir, 0o755); err != nil {
+	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "create chatgpt web data directory: "+err.Error())
 	}
-	return newAccount(hub, background, store.New(chatgptwebpaths.AccountsFile(bootstrap.Config.ChatGPTWeb.DataDir), 3), time.Duration(bootstrap.Config.ChatGPTWeb.RefreshAccountIntervalMinute)*time.Minute), nil
+	return newAccount(hub, background, store.New(bootstrap.Config.State.Database, 3), time.Duration(bootstrap.Config.ChatGPTWeb.RefreshAccountIntervalMinute)*time.Minute), nil
 }
 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery time.Duration) *Account {

@@ -1341,14 +1341,16 @@ providers:
 	}
 }
 
-func TestLoadChatGPTWebConfigResolvesDataDirFromConfigFile(t *testing.T) {
+func TestLoadStateConfigResolvesWorkspaceFromConfigFile(t *testing.T) {
 	configDir := t.TempDir()
 	path := filepath.Join(configDir, "config.yaml")
 	if err := os.WriteFile(path, []byte(`
+state:
+  dir: runtime
+  database: proxy.duckdb
+  interaction_retention: 15
 chatgpt_web:
   enabled: true
-  data_dir: runtime/chatgpt
-  refresh_account_interval_minute: 15
 providers:
   local:
     protocol: openai
@@ -1366,19 +1368,22 @@ providers:
 	if !cfg.ChatGPTWeb.Enabled {
 		t.Fatal("chatgpt web should be enabled")
 	}
-	if got, want := cfg.ChatGPTWeb.DataDir, filepath.Join(configDir, "runtime", "chatgpt"); got != want {
-		t.Fatalf("chatgpt data dir = %q, want %q", got, want)
+	if got, want := cfg.State.Dir, filepath.Join(configDir, "runtime"); got != want {
+		t.Fatalf("state dir = %q, want %q", got, want)
 	}
-	if got := cfg.ChatGPTWeb.RefreshAccountIntervalMinute; got != 15 {
-		t.Fatalf("refresh interval = %d, want 15", got)
+	if got, want := cfg.State.Database, filepath.Join(configDir, "runtime", "proxy.duckdb"); got != want {
+		t.Fatalf("state database = %q, want %q", got, want)
+	}
+	if got := cfg.InteractionRetention; got != 15 {
+		t.Fatalf("interaction retention = %d, want 15", got)
 	}
 }
 
-func TestLoadRejectsRemoteChatGPTWebDataDir(t *testing.T) {
+func TestLoadRejectsRemoteStateDir(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
-chatgpt_web:
-  data_dir: https://storage.example/chatgpt
+state:
+  dir: https://storage.example/state
 providers:
   local:
     protocol: openai

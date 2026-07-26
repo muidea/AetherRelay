@@ -10,8 +10,6 @@ server:
   max_sse_line_bytes: 1048576
   # 是否落盘完整请求/响应正文;false 时仅保留 metadata 等元数据。
   archive_full_content: true
-  interaction_dir: interactions
-  interaction_retention: 500
   debug_log: true
   log_format: text
   request_timeout_seconds: 300
@@ -63,19 +61,19 @@ server:
 #     api_key: ${CODEX_API_KEY}
 #     enabled: true
 
-# 用量存储:进程内嵌 DuckDB。多实例不得共享同一 path。
-usage_store:
-  path: usage.duckdb
+# 单一持久化工作区：DuckDB 保存用量、账号、任务和图片元数据；
+# 原始图片、缩略图和交互归档保存在固定子目录。每个实例必须独占该目录。
+state:
+  dir: var
+  database: state.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
+  interaction_retention: 500
 
 # ChatGPT Web 账号池与图片能力。默认关闭；账号凭据不写入本配置，
-# 而是保存到 data_dir/accounts.json（该目录应设置为仅运行用户可读写）。
-# data_dir 为本地目录，相对路径相对于 config.yaml 所在目录解析。
 chatgpt_web:
   enabled: false
-  data_dir: chatgpt-web-data
   # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
   refresh_account_interval_minute: 0
 

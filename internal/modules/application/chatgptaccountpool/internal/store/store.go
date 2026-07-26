@@ -7,14 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	"ai-proxy/internal/pkg/aiproxystate"
 )
 
 const (
@@ -51,7 +50,7 @@ type Account struct {
 
 type Store struct {
 	mu            sync.Mutex
-	path          string
+	documents     *aiproxystate.Documents
 	items         map[string]*Account // access_token -> account
 	aliases       map[string]string   // retired access token -> current token
 	order         []string
@@ -63,17 +62,17 @@ type Store struct {
 	catalogVersion uint64
 }
 
-func New(path string, concurrency int) *Store {
+func New(databasePath string, concurrency int) *Store {
 	if concurrency < 1 {
 		concurrency = 3
 	}
 	s := &Store{
-		path:          path,
 		items:         map[string]*Account{},
 		aliases:       map[string]string{},
 		imageInflight: map[string]int{},
 		concurrency:   concurrency,
 	}
+	s.documents, _ = aiproxystate.Open(databasePath, "", 0)
 	_ = s.load()
 	return s
 }
@@ -101,15 +100,12 @@ type PasswordLoginSkip struct {
 }
 
 func (s *Store) load() error {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
 	}
 	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
+	found, err := s.documents.Load("chatgpt.accounts", &raw)
+	if err != nil || !found {
 		return err
 	}
 	switch v := raw.(type) {
@@ -174,8 +170,8 @@ func mapToAccount(m map[string]any) *Account {
 }
 
 func (s *Store) saveLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
 	}
 	list := make([]map[string]any, 0, len(s.order))
 	for _, token := range s.order {
@@ -183,15 +179,7 @@ func (s *Store) saveLocked() error {
 			list = append(list, accountToMap(acc))
 		}
 	}
-	data, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return s.documents.Save("chatgpt.accounts", list)
 }
 
 func accountToMap(acc *Account) map[string]any {

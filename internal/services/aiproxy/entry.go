@@ -57,8 +57,8 @@ func Run(version string) int {
 		slog.Info("ai-proxy listening",
 			slog.String("version", version),
 			slog.String("addr", cfg.ListenAddr),
-			slog.String("usage_store", cfg.UsageStore.Path),
-			slog.String("interactions", cfg.InteractionDir),
+			slog.String("state_database", cfg.State.Database),
+			slog.String("state_dir", cfg.State.Dir),
 			slog.String("metrics", MetricsAccessLabel(cfg.MetricsRemoteAccess)),
 		)
 		errCh <- runtime.Run(serviceCtx)

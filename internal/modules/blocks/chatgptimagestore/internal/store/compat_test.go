@@ -2,7 +2,6 @@ package store
 
 import (
 	"bytes"
-	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,70 +10,27 @@ import (
 	"testing"
 )
 
-func TestLoadPythonImageIndexFixture(t *testing.T) {
+func TestImageIndexPersistsInStateDatabase(t *testing.T) {
 	dir := t.TempDir()
-	data := []byte(`{"items":{"legacy.png":{"path":"legacy.png","size":1,"created_at":"2026-01-01T00:00:00Z","python_owned":{"keep":true}}}}`)
-	if err := os.WriteFile(filepath.Join(dir, "image_index.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	s := New(dir)
-	if !s.pythonLayout {
-		t.Fatal("expected Python image-index wrapper to be detected")
-	}
-	if len(s.index) == 0 {
-		t.Fatal("expected fixture images to load")
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "image_index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(after) == 0 || after[0] != '{' {
-		t.Fatal("opening Python image index must not rewrite its layout")
-	}
 	if _, err := s.Save([]byte("Go image payload"), ""); err != nil {
 		t.Fatal(err)
 	}
-	after, err = os.ReadFile(filepath.Join(dir, "image_index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var envelope struct {
-		Items map[string]json.RawMessage `json:"items"`
-	}
-	if err := json.Unmarshal(after, &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if len(envelope.Items) != len(s.index) {
-		t.Fatalf("Python wrapper lost images: got=%d want=%d", len(envelope.Items), len(s.index))
+	if got := New(dir).List("", "", ""); len(got) != 1 {
+		t.Fatalf("items=%#v", got)
 	}
 }
 
-func TestListReloadsIndexChangedAfterStoreStartup(t *testing.T) {
+func TestListReadsStateImageIndex(t *testing.T) {
 	dir := t.TempDir()
 	s := New(dir)
-	path := "2026/07/26/external.png"
-	data := []byte(`{"2026/07/26/external.png":{"path":"2026/07/26/external.png","size":123,"created_at":"2026-07-26T10:00:00Z"}}`)
-	if err := os.WriteFile(filepath.Join(dir, "image_index.json"), data, 0o600); err != nil {
+	s.index["external.png"] = indexEntry{Path: "external.png", Size: 123, CreatedAt: "2026-07-26T10:00:00Z"}
+	if err := s.saveIndexLocked(); err != nil {
 		t.Fatal(err)
 	}
-
-	items := s.List("", "", "")
-	if len(items) != 1 || items[0].Path != path || items[0].Size != 123 {
+	items := New(dir).List("", "", "")
+	if len(items) != 1 || items[0].Path != "external.png" || items[0].Size != 123 {
 		t.Fatalf("items=%#v", items)
-	}
-
-	data = []byte(`{"items":{"2026/07/26/external.png":{"path":"2026/07/26/external.png","size":456,"created_at":"2026-07-26T10:01:00Z"},"2026/07/26/second.png":{"path":"2026/07/26/second.png","size":789,"created_at":"2026-07-26T10:02:00Z"}}}`)
-	if err := os.WriteFile(filepath.Join(dir, "image_index.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	items = s.List("", "", "")
-	if len(items) != 2 {
-		t.Fatalf("items=%#v", items)
-	}
-	for _, item := range items {
-		if item.Path == path && item.Size != 456 {
-			t.Fatalf("stale item=%#v", item)
-		}
 	}
 }
 

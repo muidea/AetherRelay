@@ -20,6 +20,7 @@ import (
 	"time"
 
 	events "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
+	"ai-proxy/internal/pkg/aiproxystate"
 )
 
 type indexEntry struct {
@@ -33,38 +34,37 @@ type indexEntry struct {
 type Store struct {
 	mu           sync.Mutex
 	root         string
-	indexPath    string
-	tagsPath     string
+	documents    *aiproxystate.Documents
 	index        map[string]indexEntry
 	tags         map[string][]string
 	pythonLayout bool
 	pythonItems  map[string]map[string]any
 }
 
-func New(root string) *Store {
+func New(root string, databasePaths ...string) *Store {
+	databasePath := filepath.Join(root, "state.duckdb")
+	if len(databasePaths) > 0 && databasePaths[0] != "" {
+		databasePath = databasePaths[0]
+	}
 	s := &Store{
 		root:        root,
-		indexPath:   filepath.Join(root, "image_index.json"),
-		tagsPath:    filepath.Join(root, "image_tags.json"),
 		index:       map[string]indexEntry{},
 		tags:        map[string][]string{},
 		pythonItems: map[string]map[string]any{},
 	}
+	s.documents, _ = aiproxystate.Open(databasePath, "", 0)
 	_ = s.loadIndex()
 	_ = s.loadTags()
 	return s
 }
 
 func (s *Store) loadTags() error {
-	data, err := os.ReadFile(s.tagsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
 	}
 	var raw map[string][]string
-	if err := json.Unmarshal(data, &raw); err != nil {
+	found, err := s.documents.Load("chatgpt.image_tags", &raw)
+	if err != nil || !found {
 		return err
 	}
 	for path, tags := range raw {
@@ -80,29 +80,19 @@ func (s *Store) loadTags() error {
 }
 
 func (s *Store) saveTagsLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.tagsPath), 0o755); err != nil {
-		return err
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
 	}
-	data, err := json.MarshalIndent(s.tags, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.tagsPath + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.tagsPath)
+	return s.documents.Save("chatgpt.image_tags", s.tags)
 }
 
 func (s *Store) loadIndex() error {
-	data, err := os.ReadFile(s.indexPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			s.index = map[string]indexEntry{}
-			s.pythonLayout = false
-			s.pythonItems = map[string]map[string]any{}
-			return nil
-		}
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
+	}
+	var data json.RawMessage
+	found, err := s.documents.Load("chatgpt.image_index", &data)
+	if err != nil || !found {
 		return err
 	}
 	index := map[string]indexEntry{}
@@ -165,8 +155,8 @@ func (s *Store) loadIndex() error {
 }
 
 func (s *Store) saveIndexLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.indexPath), 0o755); err != nil {
-		return err
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
 	}
 	var value any = s.index
 	if s.pythonLayout {
@@ -188,15 +178,7 @@ func (s *Store) saveIndexLocked() error {
 			Items map[string]map[string]any `json:"items"`
 		}{Items: s.pythonItems}
 	}
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.indexPath + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.indexPath)
+	return s.documents.Save("chatgpt.image_index", value)
 }
 
 func (s *Store) Save(payload []byte, baseURL string) (events.SaveResult, error) {
@@ -358,10 +340,6 @@ func (s *Store) Delete(paths []string) (int, error) {
 func (s *Store) List(baseURL, startDate, endDate string) []events.ImageItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Image generation may be handled by another process sharing the same data
-	// directory. Reload the durable index for every administrative listing so a
-	// manual refresh observes those images without restarting this process.
-	_ = s.loadIndex()
 	out := make([]events.ImageItem, 0, len(s.index))
 	for _, e := range s.index {
 		if startDate != "" && e.CreatedAt < startDate {

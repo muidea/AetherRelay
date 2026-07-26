@@ -47,12 +47,12 @@ internal/modules/
     service/observability/       metrics、stats 与 stats SSE HTTP adapter
   application/chatgptaccountpool/ ChatGPT Web 账号资源 Application Module
     biz/                         账号状态、OAuth 刷新与 AccountPool owner 合同
-    internal/store/              accounts.json 兼容持久化（保留未知字段）
+    internal/store/              DuckDB 账号状态存储（保留 owner 私有扩展字段）
     internal/oauth/              OAuth token 刷新与操作员辅助授权码交换
     pkg/events/                  ChatGPT 账号资源的 typed EventHub 合同
   application/chatgptimagetask/  ChatGPT 图片任务 Application Module
     biz/                         账号分配、上游图片执行与本地持久化编排
-    internal/store/              image_tasks.json 兼容任务状态存储
+    internal/store/              DuckDB 图片任务状态存储
     pkg/events/                  图片任务 owner 的 typed EventHub 合同
   blocks/chatgptwebupstream/     ChatGPT Web 上游技术 Block
     biz/                         账号检查、文本流与图片 Web transport 编排
@@ -60,7 +60,7 @@ internal/modules/
     pkg/events/                  ChatGPT Web 上游 owner 的 typed EventHub 合同
   blocks/chatgptimagestore/      ChatGPT 图片本地存储 Block
     biz/                         图片、缩略图、标签与本地容量管理
-    internal/store/              image_index.json 兼容索引和本地文件操作
+    internal/store/              DuckDB 图片元数据索引和本地文件操作
     pkg/events/                  图片存储 owner 的 typed EventHub 合同
 
 internal/pkg/

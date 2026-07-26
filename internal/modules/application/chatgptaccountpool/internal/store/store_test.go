@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -61,10 +60,18 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 
 func TestListProjectsLegacyAccountOperationsFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	if err := os.WriteFile(path, []byte(`[{"access_token":"token-a","status":"正常","quota":2,"created_at":"2026-07-26T01:02:03Z","restore_at":"2026-07-26T03:04:05Z","success":4,"fail":2}]`), 0o600); err != nil {
+	s := New(path, 1)
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}
-	s := New(path, 1)
+	acc := s.items["token-a"]
+	acc.Quota = 2
+	acc.CreatedAt = "2026-07-26T01:02:03Z"
+	acc.Extra = map[string]any{"restore_at": "2026-07-26T03:04:05Z", "success": 4, "fail": 2}
+	s.items["token-a"] = acc
+	if err := s.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := s.AcquireImageToken("", "", nil, "", ""); !ok {
 		t.Fatal("acquire image token")
 	}
@@ -186,17 +193,12 @@ func TestRefreshCandidatesForDoesNotTreatUnknownSelectionAsAllAccounts(t *testin
 
 func TestRefreshCandidatesIncludeAllChatGPTWebCredentialSources(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	data := []byte(`[
-  {"access_token":"token-web","source_type":"web","status":"正常"},
-  {"access_token":"token-oauth","source_type":"oauth_login","status":"正常"},
-  {"access_token":"token-password","source_type":"password","status":"限流"},
-  {"access_token":"token-other","source_type":"api","status":"正常"}
-]`)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	accounts := New(path, 3)
+	for _, item := range []struct{ token, source string }{{"token-web", "web"}, {"token-oauth", "oauth_login"}, {"token-password", "password"}, {"token-other", "api"}} {
+		if _, _, err := accounts.Add([]string{item.token}, item.source); err != nil {
+			t.Fatal(err)
+		}
+	}
 	candidates := accounts.RefreshCandidates()
 	if len(candidates) != 3 {
 		t.Fatalf("candidate count=%d candidates=%#v", len(candidates), candidates)

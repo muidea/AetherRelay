@@ -2,14 +2,14 @@ package store
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	events "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	"ai-proxy/internal/pkg/aiproxystate"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
 
@@ -115,13 +115,14 @@ func knownTaskField(key string) bool {
 
 type Store struct {
 	mu           sync.Mutex
-	path         string
+	documents    *aiproxystate.Documents
 	items        map[string]taskRecord // key = owner:taskID
 	pythonLayout bool
 }
 
-func New(path string) *Store {
-	s := &Store{path: path, items: map[string]taskRecord{}}
+func New(databasePath string) *Store {
+	s := &Store{items: map[string]taskRecord{}}
+	s.documents, _ = aiproxystate.Open(databasePath, "", 0)
 	_ = s.load()
 	if s.recoverUnfinishedLocked() {
 		_ = s.saveLocked()
@@ -134,11 +135,12 @@ func taskKey(ownerID, taskID string) string {
 }
 
 func (s *Store) load() error {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
+	}
+	var data json.RawMessage
+	found, err := s.documents.Load("chatgpt.image_tasks", &data)
+	if err != nil || !found {
 		return err
 	}
 	var raw map[string]json.RawMessage
@@ -189,8 +191,8 @@ func (s *Store) load() error {
 }
 
 func (s *Store) saveLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
+	if s.documents == nil {
+		return fmt.Errorf("state documents are unavailable")
 	}
 	var value any = s.items
 	if s.pythonLayout {
@@ -207,15 +209,7 @@ func (s *Store) saveLocked() error {
 			Tasks []taskRecord `json:"tasks"`
 		}{Tasks: tasks}
 	}
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return s.documents.Save("chatgpt.image_tasks", value)
 }
 
 func (s *Store) recoverUnfinishedLocked() bool {

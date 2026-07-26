@@ -50,7 +50,10 @@ type Config struct {
 	// MaxSSELineBytes 限制单条 SSE 行(到 \n)最大字节;<=0 时使用默认值。
 	MaxSSELineBytes int64
 	// ArchiveFullContent 为 false 时仅写元数据,不落盘完整请求/响应正文。
-	ArchiveFullContent   bool
+	ArchiveFullContent bool
+	// State is the single persistent workspace authority. Derived legacy fields
+	// below are populated from State for runtime consumers during this cutover.
+	State                StateConfig
 	InteractionDir       string
 	InteractionRetention int
 	DebugLog             bool
@@ -68,12 +71,28 @@ type Config struct {
 	// UsageStore 描述进程内嵌 DuckDB 持久化统计存储。路径与资源参数变更需重启。
 	UsageStore UsageStoreConfig
 	// ChatGPTWeb 是 ChatGPT Web 账号池和图片能力的本地运行配置。
-	// 它不包含账号凭据；账号数据只保存在 DataDir/accounts.json 中。
+	// DataDir is derived from State.Dir and is not independently configured.
 	ChatGPTWeb ChatGPTWebConfig
 	Providers  map[string]Provider
 	// ModelCatalog 是全局模型元数据目录,供 GET /v1/models 使用;是请求路由与 /v1/models 的共同 authority。
-	ModelCatalog map[string]ModelInfo
+	ModelCatalog    map[string]ModelInfo
+	stateConfigured bool
 }
+
+// StateConfig defines the single local workspace for durable ai-proxy state.
+// Database and all managed directories are resolved beneath Dir.
+type StateConfig struct {
+	Dir                  string
+	Database             string
+	MemoryLimit          string
+	Threads              int
+	QueryCacheSeconds    int
+	InteractionRetention int
+}
+
+func (s StateConfig) ImagesDir() string       { return filepath.Join(s.Dir, "images") }
+func (s StateConfig) ThumbnailsDir() string   { return filepath.Join(s.Dir, "image_thumbnails") }
+func (s StateConfig) InteractionsDir() string { return filepath.Join(s.Dir, "interactions") }
 
 // AdminAuthConfig 描述 Admin 可选账号密码登录与 basePath。
 // 开关默认 false;开启后必须配置单管理员账号与 Argon2id PHC 密码哈希。
@@ -203,10 +222,15 @@ func Load(path string) (Config, error) {
 			Threads:           2,
 			QueryCacheSeconds: 15,
 		},
-		ChatGPTWeb: ChatGPTWebConfig{
-			Enabled: false,
-			DataDir: "chatgpt-web-data",
+		State: StateConfig{
+			Dir:                  "var",
+			Database:             "state.duckdb",
+			MemoryLimit:          "256MB",
+			Threads:              2,
+			QueryCacheSeconds:    15,
+			InteractionRetention: 500,
 		},
+		ChatGPTWeb:   ChatGPTWebConfig{Enabled: false},
 		Providers:    map[string]Provider{},
 		ModelCatalog: map[string]ModelInfo{},
 	}
@@ -273,7 +297,7 @@ func loadFile(path string, cfg *Config) error {
 		switch {
 		case indent == 0 && !hasValue:
 			switch key {
-			case "server", "providers", "model_catalog", "client_api_keys", "usage_store", "chatgpt_web":
+			case "server", "state", "providers", "model_catalog", "client_api_keys", "usage_store", "chatgpt_web":
 				section = key
 				providerName = ""
 				modelName = ""
@@ -299,6 +323,8 @@ func loadFile(path string, cfg *Config) error {
 			}
 		case section == "usage_store" && indent >= 2:
 			setErr = setUsageStore(cfg, key, expand(value))
+		case section == "state" && indent >= 2:
+			setErr = setState(cfg, key, expand(value))
 		case section == "chatgpt_web" && indent >= 2:
 			setErr = setChatGPTWeb(cfg, key, expand(value))
 		case section == "client_api_keys" && indent == 2 && !hasValue:
@@ -491,6 +517,39 @@ func setUsageStore(cfg *Config, key, value string) error {
 		cfg.UsageStore.QueryCacheSeconds = n
 	default:
 		return fmt.Errorf("usage_store: unknown key %q", key)
+	}
+	return nil
+}
+
+func setState(cfg *Config, key, value string) error {
+	cfg.stateConfigured = true
+	switch key {
+	case "dir":
+		cfg.State.Dir = strings.TrimSpace(value)
+	case "database":
+		cfg.State.Database = strings.TrimSpace(value)
+	case "memory_limit":
+		cfg.State.MemoryLimit = strings.TrimSpace(value)
+	case "threads":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("state.threads: %w", err)
+		}
+		cfg.State.Threads = n
+	case "query_cache_seconds":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("state.query_cache_seconds: %w", err)
+		}
+		cfg.State.QueryCacheSeconds = n
+	case "interaction_retention":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("state.interaction_retention: %w", err)
+		}
+		cfg.State.InteractionRetention = n
+	default:
+		return fmt.Errorf("state: unknown key %q", key)
 	}
 	return nil
 }
@@ -819,10 +878,26 @@ func normalize(cfg *Config, configPath string) error {
 	if cfg.MaxSSELineBytes <= 0 {
 		cfg.MaxSSELineBytes = DefaultMaxSSELineBytes
 	}
+	if cfg.stateConfigured {
+		if err := normalizeState(&cfg.State, configPath); err != nil {
+			return err
+		}
+		// Runtime consumers receive only values derived from the single state
+		// workspace; they no longer interpret independent relative paths.
+		cfg.UsageStore = UsageStoreConfig{
+			Path:              cfg.State.Database,
+			MemoryLimit:       cfg.State.MemoryLimit,
+			Threads:           cfg.State.Threads,
+			QueryCacheSeconds: cfg.State.QueryCacheSeconds,
+		}
+		cfg.InteractionDir = cfg.State.InteractionsDir()
+		cfg.InteractionRetention = cfg.State.InteractionRetention
+		cfg.ChatGPTWeb.DataDir = cfg.State.Dir
+	}
 	if err := normalizeUsageStore(&cfg.UsageStore); err != nil {
 		return err
 	}
-	if err := normalizeChatGPTWeb(&cfg.ChatGPTWeb, configPath); err != nil {
+	if err := normalizeChatGPTWeb(&cfg.ChatGPTWeb, ""); err != nil {
 		return err
 	}
 	if err := normalizeClientAPIKeys(cfg); err != nil {
@@ -1800,6 +1875,48 @@ func normalizeUsageStore(us *UsageStoreConfig) error {
 		us.QueryCacheSeconds = defaultUsageStoreQueryCacheSeconds
 	}
 	// QueryCacheSeconds==0 表示关闭缓存,合法。
+	return nil
+}
+
+func normalizeState(state *StateConfig, configPath string) error {
+	if state == nil {
+		return fmt.Errorf("state is nil")
+	}
+	state.Dir = strings.TrimSpace(state.Dir)
+	if state.Dir == "" {
+		return fmt.Errorf("state.dir is required")
+	}
+	if strings.Contains(strings.ToLower(state.Dir), "://") {
+		return fmt.Errorf("state.dir must be a local directory path")
+	}
+	if !filepath.IsAbs(state.Dir) && strings.TrimSpace(configPath) != "" {
+		state.Dir = filepath.Join(filepath.Dir(configPath), state.Dir)
+	}
+	state.Dir = filepath.Clean(state.Dir)
+	if err := os.MkdirAll(state.Dir, 0o700); err != nil {
+		return fmt.Errorf("create state.dir: %w", err)
+	}
+	state.Database = strings.TrimSpace(state.Database)
+	if state.Database == "" {
+		state.Database = "state.duckdb"
+	}
+	if filepath.IsAbs(state.Database) || strings.Contains(state.Database, "://") || strings.Contains(filepath.Clean(state.Database), "..") {
+		return fmt.Errorf("state.database must be a file beneath state.dir")
+	}
+	state.Database = filepath.Join(state.Dir, filepath.Clean(state.Database))
+	if strings.TrimSpace(state.MemoryLimit) == "" {
+		state.MemoryLimit = defaultUsageStoreMemoryLimit
+	}
+	state.MemoryLimit = strings.TrimSpace(state.MemoryLimit)
+	if state.Threads <= 0 {
+		state.Threads = defaultUsageStoreThreads
+	}
+	if state.QueryCacheSeconds < 0 {
+		state.QueryCacheSeconds = defaultUsageStoreQueryCacheSeconds
+	}
+	if state.InteractionRetention <= 0 {
+		state.InteractionRetention = 500
+	}
 	return nil
 }
 
