@@ -54,9 +54,9 @@ func (s *Proxy) startModelDiscovery(ctx context.Context) {
 	s.publishCatalog(effectivecatalog.Build(s.config, 0, 0, nil, time.Now().UTC().Format(time.RFC3339)))
 	// Kick an immediate discovery pass, then schedule periodic full scans and a
 	// faster watch that only rebuilds/discovers when accounts still need it.
-	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx) })
+	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })
 	s.Timer(ctx, discoveryInterval, 0, func() {
-		s.runDiscoveryRound(ctx)
+		s.runDiscoveryRound(ctx, false)
 	})
 	s.Timer(ctx, discoveryWatchInterval, discoveryWatchInterval, func() {
 		s.watchDiscovery(ctx)
@@ -75,8 +75,8 @@ func (s *Proxy) watchDiscovery(ctx context.Context) {
 		return
 	}
 	for _, candidate := range candidates.Candidates {
-		if candidate.NeedsDiscovery {
-			_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx) })
+		if candidate.DiscoveryDue {
+			_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, true) })
 			return
 		}
 	}
@@ -103,7 +103,7 @@ func (s *Proxy) EffectiveCatalog() effectivecatalog.Snapshot {
 	return effectivecatalog.FromStatic(s.config)
 }
 
-func (s *Proxy) runDiscoveryRound(ctx context.Context) {
+func (s *Proxy) runDiscoveryRound(ctx context.Context, dueOnly bool) {
 	if !s.config.ChatGPTWeb.Enabled {
 		return
 	}
@@ -122,9 +122,12 @@ func (s *Proxy) runDiscoveryRound(ctx context.Context) {
 	sem := make(chan struct{}, discoveryConcurrency)
 	var wg sync.WaitGroup
 	for _, candidate := range candidates.Candidates {
-		// Periodic discovery refreshes every healthy candidate; NeedsDiscovery is
-		// informational for Admin/status, not a hard gate on this path.
+		// The five-minute full scan refreshes every healthy account. The faster
+		// watch path retries only accounts whose persisted backoff has elapsed.
 		if strings.TrimSpace(candidate.AccessToken) == "" || strings.TrimSpace(candidate.AccountID) == "" {
+			continue
+		}
+		if dueOnly && !candidate.DiscoveryDue {
 			continue
 		}
 		wg.Add(1)
@@ -149,11 +152,12 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 		AccessToken: candidate.AccessToken,
 	})).Get()
 	if err != nil {
-		slog.Warn("chatgpt model discovery failed", "stage", "list_models", "account_id", candidate.AccountID)
+		s.recordDiscoveryFailure(ctx, candidate, "list_models", err)
 		return
 	}
 	listed, ok := value.(upevents.ListModelsResult)
 	if !ok {
+		s.recordDiscoveryFailure(ctx, candidate, "list_models", fmt.Errorf("invalid model list result"))
 		return
 	}
 	now := time.Now().UTC()
@@ -182,7 +186,23 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 		Snapshot:  snap,
 	})).Get()
 	if putErr != nil {
-		slog.Warn("chatgpt model discovery failed", "stage", "put_snapshot", "account_id", candidate.AccountID)
+		s.recordDiscoveryFailure(ctx, candidate, "put_snapshot", putErr)
+	}
+}
+
+func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, cause error) {
+	if cause == nil {
+		return
+	}
+	// Account IDs are opaque local identifiers; do not log access tokens or
+	// upstream response bodies.
+	slog.Warn("chatgpt model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error", cause.Error())
+	_, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRecordModelDiscoveryFailure, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RecordModelDiscoveryFailureCommand{
+		AccountID: candidate.AccountID,
+		Error:     cause.Error(),
+	})).Get()
+	if err != nil {
+		slog.Warn("chatgpt model discovery failure was not recorded", "account_id", candidate.AccountID, "error", err.Error())
 	}
 }
 

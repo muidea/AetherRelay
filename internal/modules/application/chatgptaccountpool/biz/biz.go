@@ -91,6 +91,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 		events.TopicRefreshProgress,
 		events.TopicListDiscoveryCandidates,
 		events.TopicPutModelSnapshot,
+		events.TopicRecordModelDiscoveryFailure,
 		events.TopicCatalogSnapshot,
 	}
 	b.SubscribeFunc(events.TopicList, b.handleList)
@@ -115,6 +116,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicRefreshProgress, b.handleRefreshProgress)
 	b.SubscribeFunc(events.TopicListDiscoveryCandidates, b.handleListDiscoveryCandidates)
 	b.SubscribeFunc(events.TopicPutModelSnapshot, b.handlePutModelSnapshot)
+	b.SubscribeFunc(events.TopicRecordModelDiscoveryFailure, b.handleRecordModelDiscoveryFailure)
 	b.SubscribeFunc(events.TopicCatalogSnapshot, b.handleCatalogSnapshot)
 	return b
 }
@@ -519,6 +521,23 @@ func (s *Account) handlePutModelSnapshot(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.PutModelSnapshotResult{Version: version, OK: found}, nil)
+}
+
+func (s *Account) handleRecordModelDiscoveryFailure(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.RecordModelDiscoveryFailureCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid record model discovery failure command"))
+		return
+	}
+	retryAt, found, err := s.store.RecordModelDiscoveryFailure(cmd.AccountID, cmd.Error)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.RecordModelDiscoveryFailureResult{RetryAt: retryAt, OK: found}, nil)
 }
 
 func (s *Account) handleCatalogSnapshot(ev event.Event, result event.Result) {

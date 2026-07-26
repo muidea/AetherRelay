@@ -160,6 +160,50 @@ func TestExpiredSnapshotExcludedFromCatalogAndAcquire(t *testing.T) {
 	}
 }
 
+func TestModelDiscoveryFailureBackoffOnlyDefersAffectedCandidate(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	if _, _, err := s.Add([]string{"token-a", "token-b"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	accounts := s.List()
+	if len(accounts) != 2 {
+		t.Fatalf("accounts=%d", len(accounts))
+	}
+	failedID := accounts[0].ID
+	retryAt, found, err := s.RecordModelDiscoveryFailure(failedID, "upstream unavailable")
+	if err != nil || !found || retryAt == "" {
+		t.Fatalf("record retry_at=%q found=%v err=%v", retryAt, found, err)
+	}
+
+	candidates, err := s.ListDiscoveryCandidates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates.Candidates {
+		if !candidate.NeedsDiscovery {
+			t.Fatalf("new account should need discovery: %+v", candidate)
+		}
+		if candidate.AccountID == failedID && candidate.DiscoveryDue {
+			t.Fatalf("failed candidate ignored retry backoff: %+v", candidate)
+		}
+		if candidate.AccountID != failedID && !candidate.DiscoveryDue {
+			t.Fatalf("unrelated candidate was throttled: %+v", candidate)
+		}
+	}
+}
+
+func TestModelDiscoveryRetryDelayIsBounded(t *testing.T) {
+	if got := modelDiscoveryRetryDelay(1); got != modelDiscoveryRetryBase {
+		t.Fatalf("first retry delay=%s", got)
+	}
+	if got := modelDiscoveryRetryDelay(2); got != 2*modelDiscoveryRetryBase {
+		t.Fatalf("second retry delay=%s", got)
+	}
+	if got := modelDiscoveryRetryDelay(99); got != modelDiscoveryRetryMax {
+		t.Fatalf("bounded retry delay=%s", got)
+	}
+}
+
 func TestCatalogVersionTracksRoutingAvailabilityChanges(t *testing.T) {
 	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {

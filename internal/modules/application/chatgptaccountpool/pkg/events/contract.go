@@ -25,9 +25,10 @@ const (
 	TopicRefresh             = "aiproxy.chatgpt.accountpool.command.refresh"
 	TopicRefreshProgress     = "aiproxy.chatgpt.accountpool.command.refresh_progress"
 	// Discovery / capability snapshot contracts owned by the account pool.
-	TopicListDiscoveryCandidates = "aiproxy.chatgpt.accountpool.command.list_discovery_candidates"
-	TopicPutModelSnapshot        = "aiproxy.chatgpt.accountpool.command.put_model_snapshot"
-	TopicCatalogSnapshot         = "aiproxy.chatgpt.accountpool.command.catalog_snapshot"
+	TopicListDiscoveryCandidates     = "aiproxy.chatgpt.accountpool.command.list_discovery_candidates"
+	TopicPutModelSnapshot            = "aiproxy.chatgpt.accountpool.command.put_model_snapshot"
+	TopicRecordModelDiscoveryFailure = "aiproxy.chatgpt.accountpool.command.record_model_discovery_failure"
+	TopicCatalogSnapshot             = "aiproxy.chatgpt.accountpool.command.catalog_snapshot"
 )
 
 // Model operations mirrored from the upstream models enumeration contract.
@@ -150,6 +151,7 @@ type DiscoveryCandidate struct {
 	AccessToken    string
 	Status         string
 	NeedsDiscovery bool
+	DiscoveryDue   bool
 }
 
 type ListDiscoveryCandidatesCommand struct{}
@@ -164,6 +166,15 @@ type PutModelSnapshotCommand struct {
 }
 type PutModelSnapshotResult struct {
 	Version uint64
+	OK      bool
+}
+
+type RecordModelDiscoveryFailureCommand struct {
+	AccountID string
+	Error     string
+}
+type RecordModelDiscoveryFailureResult struct {
+	RetryAt string
 	OK      bool
 }
 

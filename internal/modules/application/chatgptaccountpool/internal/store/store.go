@@ -22,6 +22,9 @@ const (
 	StatusLimited  = "限流"
 	StatusAbnormal = "异常"
 	StatusDisabled = "禁用"
+
+	modelDiscoveryRetryBase = 30 * time.Second
+	modelDiscoveryRetryMax  = 5 * time.Minute
 )
 
 type Account struct {
@@ -1115,6 +1118,7 @@ func (s *Store) ListDiscoveryCandidates() (events.ListDiscoveryCandidatesResult,
 			AccessToken:    acc.AccessToken,
 			Status:         acc.Status,
 			NeedsDiscovery: needs,
+			DiscoveryDue:   needs && modelDiscoveryRetryDue(acc, now),
 		})
 	}
 	return out, nil
@@ -1139,11 +1143,44 @@ func (s *Store) PutModelSnapshot(accountID string, snap events.AccountModelSnaps
 	}
 	clean := normalizeSnapshot(accountID, snap)
 	acc.ModelSnapshot = &clean
+	if acc.Extra != nil {
+		delete(acc.Extra, "model_discovery_failures")
+		delete(acc.Extra, "model_discovery_retry_at")
+		delete(acc.Extra, "model_discovery_last_error")
+	}
 	s.bumpCatalogLocked()
 	if err := s.saveLocked(); err != nil {
 		return s.catalogVersion, false, err
 	}
 	return s.catalogVersion, true, nil
+}
+
+// RecordModelDiscoveryFailure persistently throttles failed model discovery so
+// the fast watcher only retries the affected account when its backoff expires.
+func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accountID = trim(accountID)
+	if accountID == "" {
+		return "", false, fmt.Errorf("account id is required")
+	}
+	token, ok := s.tokenForIDLocked(accountID)
+	if !ok || s.items[token] == nil {
+		return "", false, nil
+	}
+	acc := s.items[token]
+	if acc.Extra == nil {
+		acc.Extra = map[string]any{}
+	}
+	failures := extraInt(acc, "model_discovery_failures") + 1
+	retryAt := time.Now().UTC().Add(modelDiscoveryRetryDelay(failures))
+	acc.Extra["model_discovery_failures"] = failures
+	acc.Extra["model_discovery_retry_at"] = retryAt.Format(time.RFC3339)
+	acc.Extra["model_discovery_last_error"] = bounded(trim(message), 512)
+	if err := s.saveLocked(); err != nil {
+		return "", false, err
+	}
+	return retryAt.Format(time.RFC3339), true, nil
 }
 
 // CatalogSnapshot returns the model union across healthy accounts with
@@ -1254,6 +1291,32 @@ func snapshotExpired(snap *events.AccountModelSnapshot, now time.Time) bool {
 		return true
 	}
 	return !ts.After(now)
+}
+
+func modelDiscoveryRetryDue(acc *Account, now time.Time) bool {
+	if acc == nil {
+		return false
+	}
+	retryAt := extraString(acc, "model_discovery_retry_at")
+	if retryAt == "" {
+		return true
+	}
+	ts, err := time.Parse(time.RFC3339, retryAt)
+	return err != nil || !ts.After(now)
+}
+
+func modelDiscoveryRetryDelay(failures int) time.Duration {
+	if failures < 1 {
+		failures = 1
+	}
+	delay := modelDiscoveryRetryBase
+	for attempt := 1; attempt < failures && delay < modelDiscoveryRetryMax; attempt++ {
+		delay *= 2
+	}
+	if delay > modelDiscoveryRetryMax {
+		return modelDiscoveryRetryMax
+	}
+	return delay
 }
 
 func normalizeSnapshot(accountID string, snap events.AccountModelSnapshot) events.AccountModelSnapshot {
