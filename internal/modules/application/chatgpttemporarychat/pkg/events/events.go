@@ -35,7 +35,11 @@ type ConversationView struct {
 	// the persistent account identifier.
 	AccountID      string `json:"-"`
 	AccountDisplay string `json:"account_display,omitempty"`
-	Model          string `json:"model"`
+	// Model is the model requested when the conversation was created.
+	Model string `json:"model"`
+	// ActualModel is supplied only when the upstream SSE explicitly reports a
+	// resolved model slug. An empty value means the upstream did not disclose it.
+	ActualModel    string `json:"actual_model,omitempty"`
 	ThinkingEffort string `json:"thinking_effort,omitempty"`
 	// SystemPrompt stays in the owner store and is submitted only on the first
 	// upstream turn; it is not part of the Admin read projection.
@@ -52,6 +56,7 @@ type MessageView struct {
 	Sequence     int64  `json:"sequence"`
 	Role         string `json:"role"`
 	Content      string `json:"content"`
+	ActualModel  string `json:"actual_model,omitempty"`
 	Status       string `json:"status"`
 	ErrorClass   string `json:"error_class,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
@@ -117,6 +122,7 @@ type PullTurnCommand struct {
 
 type PullTurnResult struct {
 	Delta        string       `json:"delta,omitempty"`
+	ActualModel  string       `json:"actual_model,omitempty"`
 	Done         bool         `json:"done"`
 	Message      *MessageView `json:"message,omitempty"`
 	ErrorClass   string       `json:"error_class,omitempty"`

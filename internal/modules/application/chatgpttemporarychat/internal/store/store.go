@@ -266,7 +266,7 @@ type TurnComplete struct {
 	Message      events.MessageView
 }
 
-func (s *Store) CompleteTurn(ownerID, conversationID string, userSequence, assistantSequence int64, content, upstreamConversationID, assistantMessageID string, cancelled, interrupted, recoveryRequired bool, errorClass, errorMessage string) (TurnComplete, error) {
+func (s *Store) CompleteTurn(ownerID, conversationID string, userSequence, assistantSequence int64, content, actualModel, upstreamConversationID, assistantMessageID string, cancelled, interrupted, recoveryRequired bool, errorClass, errorMessage string) (TurnComplete, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
@@ -325,6 +325,10 @@ func (s *Store) CompleteTurn(ownerID, conversationID string, userSequence, assis
 	assistantRow.CompletedAt = &now
 	if assistantMessageID != "" {
 		assistantRow.UpstreamMessageID = assistantMessageID
+	}
+	if actualModel = strings.TrimSpace(actualModel); actualModel != "" {
+		assistantRow.ActualModel = actualModel
+		row.ActualModel = actualModel
 	}
 	if !cancelled && errorClass == "" {
 		row.UpstreamConversationID = upstreamConversationID
@@ -416,6 +420,7 @@ func conversationView(row aiproxystate.TemporaryConversationRow) events.Conversa
 		Title:          row.Title,
 		AccountDisplay: maskAccountID(row.AccountID),
 		Model:          row.Model,
+		ActualModel:    row.ActualModel,
 		ThinkingEffort: row.ThinkingEffort,
 		SystemPrompt:   row.SystemPrompt,
 		Status:         row.Status,
@@ -439,6 +444,7 @@ func messageView(row aiproxystate.TemporaryMessageRow) events.MessageView {
 		Sequence:     row.Sequence,
 		Role:         row.Role,
 		Content:      row.Content,
+		ActualModel:  row.ActualModel,
 		Status:       row.Status,
 		ErrorClass:   row.ErrorClass,
 		ErrorMessage: row.ErrorMessage,

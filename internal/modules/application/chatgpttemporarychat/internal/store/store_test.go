@@ -72,12 +72,15 @@ func TestStartTurnAndCompleteTurnPersistAnchors(t *testing.T) {
 	if _, err := s.StartTurn("admin", created.ID, "second while streaming"); err == nil {
 		t.Fatal("concurrent start must fail while streaming")
 	}
-	completed, err := s.CompleteTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "assistant reply", "upstream-conv-1", "assistant-msg-1", false, false, false, "", "")
+	completed, err := s.CompleteTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "assistant reply", "gpt-5-5", "upstream-conv-1", "assistant-msg-1", false, false, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if completed.Conversation.Status != common.StatusIdle || completed.Message.Content != "assistant reply" {
 		t.Fatalf("completed=%+v", completed)
+	}
+	if completed.Conversation.ActualModel != "gpt-5-5" || completed.Message.ActualModel != "gpt-5-5" {
+		t.Fatalf("actual model was not projected: %+v", completed)
 	}
 	row, found, err := s.LoadConversationRow("admin", created.ID)
 	if err != nil || !found {
@@ -137,7 +140,7 @@ func TestUncertainUpstreamFailureRequiresRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := s.CompleteTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "partial", "", "", false, true, true, "timeout", "upstream request timed out")
+	completed, err := s.CompleteTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "partial", "", "", "", false, true, true, "timeout", "upstream request timed out")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,6 +38,7 @@ type textStreamUpdate struct {
 	done               bool
 	conversationID     string
 	assistantMessageID string
+	actualModel        string
 	errClass           events.ErrorClass
 	errMessage         string
 }
@@ -272,6 +273,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 	result.Set(events.CompleteTextResult{
 		ConversationID:     completed.ConversationID,
 		AssistantMessageID: completed.AssistantMessageID,
+		ActualModel:        completed.ActualModel,
 		Text:               completed.Text,
 	}, nil)
 }
@@ -335,6 +337,7 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 				delta:              delta.Text,
 				conversationID:     delta.ConversationID,
 				assistantMessageID: delta.AssistantMessageID,
+				actualModel:        delta.ActualModel,
 			})
 		})
 	}
@@ -342,6 +345,7 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 		done:               true,
 		conversationID:     final.ConversationID,
 		assistantMessageID: final.AssistantMessageID,
+		actualModel:        final.ActualModel,
 	}
 	if err != nil {
 		update.errClass, update.errMessage = classifyError(err), err.Error()
@@ -385,6 +389,7 @@ func (s *Upstream) handlePullText(ev event.Event, result event.Result) {
 			Done:               update.done,
 			ConversationID:     update.conversationID,
 			AssistantMessageID: update.assistantMessageID,
+			ActualModel:        update.actualModel,
 			ErrorClass:         update.errClass,
 			ErrorMessage:       update.errMessage,
 		}

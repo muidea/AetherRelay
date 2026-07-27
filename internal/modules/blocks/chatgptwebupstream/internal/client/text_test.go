@@ -35,7 +35,7 @@ func (d *textDoer) Do(request *http.Request) (*http.Response, error) {
 		return textResponse(`{"token":"requirements","so_token":"so"}`), nil
 	case "/backend-api/conversation":
 		d.conversationRequest, d.conversationBody = request, string(body)
-		return textResponse("data: {\"conversation_id\":\"conversation-1\",\"message\":{\"id\":\"assistant-1\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello\"]}}}\n\ndata: {\"conversation_id\":\"conversation-1\",\"message\":{\"id\":\"assistant-1\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello world\"]}}}\n\ndata: [DONE]\n\n"), nil
+		return textResponse("data: {\"conversation_id\":\"conversation-1\",\"message\":{\"id\":\"assistant-1\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello\"]},\"metadata\":{\"model_slug\":\"gpt-5-5\"}}}\n\ndata: {\"conversation_id\":\"conversation-1\",\"message\":{\"id\":\"assistant-1\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello world\"]},\"metadata\":{\"model_slug\":\"gpt-5-5\"}}}\n\ndata: [DONE]\n\n"), nil
 	default:
 		return nil, fmt.Errorf("unexpected path %s", request.URL.Path)
 	}
@@ -52,7 +52,7 @@ func TestCompleteTextUsesRequirementsAndCollectsLatestSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Done || result.ConversationID != "conversation-1" || result.AssistantMessageID != "assistant-1" || result.Text != "Hello world" {
+	if !result.Done || result.ConversationID != "conversation-1" || result.AssistantMessageID != "assistant-1" || result.ActualModel != "gpt-5-5" || result.Text != "Hello world" {
 		t.Fatalf("result=%+v", result)
 	}
 	if doer.conversationRequest == nil || doer.conversationRequest.Header.Get("Openai-Sentinel-Chat-Requirements-Token") != "requirements" || doer.conversationRequest.Header.Get("Openai-Sentinel-So-Token") != "so" || doer.conversationRequest.Header.Get("Accept") != "text/event-stream" {
@@ -78,13 +78,13 @@ func TestParseTextSSERejectsMissingContinuationAnchors(t *testing.T) {
 
 func TestParseTextSSEEmitsSnapshotDeltas(t *testing.T) {
 	var deltas []string
-	stream := "data: {\"conversation_id\":\"c1\",\"message\":{\"id\":\"assistant-9\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello\"]}}}\n\n" +
-		"data: {\"conversation_id\":\"c1\",\"message\":{\"id\":\"assistant-9\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello world\"]}}}\n\ndata: [DONE]\n\n"
+	stream := "data: {\"conversation_id\":\"c1\",\"message\":{\"id\":\"assistant-9\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello\"]},\"metadata\":{\"model_slug\":\"gpt-5-5\"}}}\n\n" +
+		"data: {\"conversation_id\":\"c1\",\"message\":{\"id\":\"assistant-9\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello world\"]},\"metadata\":{\"model_slug\":\"gpt-5-5\"}}}\n\ndata: [DONE]\n\n"
 	result, err := parseTextSSE(context.Background(), strings.NewReader(stream), func(delta TextDelta) error { deltas = append(deltas, delta.Text); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Text != "Hello world" || result.AssistantMessageID != "assistant-9" || strings.Join(deltas, "") != "Hello world" || len(deltas) != 2 {
+	if result.Text != "Hello world" || result.AssistantMessageID != "assistant-9" || result.ActualModel != "gpt-5-5" || strings.Join(deltas, "") != "Hello world" || len(deltas) != 2 {
 		t.Fatalf("result=%+v deltas=%q", result, deltas)
 	}
 }

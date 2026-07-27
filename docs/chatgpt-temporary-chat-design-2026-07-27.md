@@ -103,7 +103,8 @@ CREATE TABLE chatgpt_temporary_conversations (
   conversation_id VARCHAR NOT NULL,
   title VARCHAR NOT NULL,
   account_id VARCHAR NOT NULL,
-  model VARCHAR NOT NULL,
+  model VARCHAR NOT NULL, -- 创建时请求的模型
+  actual_model VARCHAR NOT NULL DEFAULT '', -- 上游最近一轮明确返回的实际模型
   thinking_effort VARCHAR NOT NULL DEFAULT '',
   system_prompt VARCHAR NOT NULL DEFAULT '',
   upstream_conversation_id VARCHAR NOT NULL DEFAULT '',
@@ -123,6 +124,7 @@ CREATE TABLE chatgpt_temporary_messages (
   role VARCHAR NOT NULL,
   content VARCHAR NOT NULL,
   upstream_message_id VARCHAR NOT NULL DEFAULT '',
+  actual_model VARCHAR NOT NULL DEFAULT '', -- assistant message 的上游实际模型
   status VARCHAR NOT NULL,
   error_class VARCHAR NOT NULL DEFAULT '',
   error_message VARCHAR NOT NULL DEFAULT '',
@@ -169,10 +171,10 @@ recovery_required --new conversation--> closed (旧会话仅可读)
 | 对象 | 新增字段 |
 | --- | --- |
 | `TextRequest` / `CompleteTextCommand` / `StartTextCommand` | `ConversationID`、`ParentMessageID`。 |
-| `TextResult` / `CompleteTextResult` | `ConversationID`、`AssistantMessageID`。 |
-| `TextDelta` / `PullTextResult` 的完成事件 | `ConversationID`、`AssistantMessageID`、最终错误分类。 |
+| `TextResult` / `CompleteTextResult` | `ConversationID`、`AssistantMessageID`、可选 `ActualModel`。 |
+| `TextDelta` / `PullTextResult` 的完成事件 | `ConversationID`、`AssistantMessageID`、可选 `ActualModel`、最终错误分类。 |
 
-SSE parser 必须从 assistant message patch 解析 message ID；不能猜测或用随机 ID 代替。首轮消息可带 system prompt 和 user message；续聊只提交新 user message，并把已保存的上游 `conversation_id` 与上一条 assistant `message_id` 传入 ChatGPT Web payload。
+SSE parser 必须从 assistant message patch 解析 message ID；不能猜测或用随机 ID 代替。若 patch 的 `message.metadata.model_slug` 存在，才将其投影为 `ActualModel`；模型正文中的自述不是实际模型证据，缺失该元数据时必须保持为空。首轮消息可带 system prompt 和 user message；续聊只提交新 user message，并把已保存的上游 `conversation_id` 与上一条 assistant `message_id` 传入 ChatGPT Web payload。
 
 在 fixture 中必须断言第二轮请求包含既有 `conversation_id`、既有 `parent_message_id` 和唯一的新用户消息。实现完成后还需要使用非生产账号做首轮→续聊 live 冒烟验证；只记录脱敏账号 ID、状态和结论。
 
@@ -235,7 +237,7 @@ RecordTextResultResult{Account}
 在 ChatGPT Web 下新增“临时对话”子页。布局为左侧历史会话列表、右侧消息流与输入区：
 
 1. 首次进入从 API 读取最近历史，不依赖浏览器存储；hash 仅可包含会话 ID 用于定位。
-2. 新建会话填写模型、thinking effort 和可选 system prompt。创建成功后显示固定账号的脱敏显示名、模型与过期时间。
+2. 新建会话填写模型、thinking effort 和可选 system prompt。创建成功后显示固定账号的脱敏显示名、请求模型、上游实际模型与过期时间；实际模型仅在上游 SSE 明确返回时展示，否则标记为“上游未返回”。实际模型与请求模型不一致时必须明确标记“上游路由已调整”。
 3. 发送时禁用同会话发送按钮，使用 events API 以有限退避轮询增量；完成、取消或错误后恢复输入。
 4. 页面重新加载后重新读取会话和消息。历史滚动加载使用 `before_sequence`，不能一次加载无界正文。
 5. `recovery_required` 显示最后一条 `interrupted` 消息、原因和“新建会话”操作；不显示“重试本轮”。
@@ -302,10 +304,10 @@ RecordTextResultResult{Account}
 ## 15. 实现记录（2026-07-27）
 
 - Module：`internal/modules/application/chatgpttemporarychat`（EventHub 合同 + DuckDB Store + 流运行态）。
-- 上游续聊：`TextRequest`/`CompleteText*`/`StartText*`/`PullTextResult` 携带 `ConversationID`/`ParentMessageID`/`AssistantMessageID`；SSE 解析 assistant message id。
+- 上游续聊：`TextRequest`/`CompleteText*`/`StartText*`/`PullTextResult` 携带 `ConversationID`/`ParentMessageID`/`AssistantMessageID`；SSE 解析 assistant message id 与可选 `message.metadata.model_slug`，后者作为实际模型投影。
 - 账号固定：`AcquireTextAccount` / `RecordTextResult`（不占用图片 in-flight slot；`invalid_token` 转异常）。
 - Admin HTTP：`/api/chatgpt/temporary-conversations/**`；owner 由 Admin 会话 principal 派生。
-- 管理页：ChatGPT Web →「临时对话」；hash 仅定位会话 ID；不写 Web Storage。
+- 管理页：ChatGPT Web →「临时对话」；hash 仅定位会话 ID；会话头区分请求模型与上游实际模型，后者缺失时明确显示“上游未返回”；不写 Web Storage。
 - 模型目录：research / deep_research 专用项在 upstream models 投影阶段过滤。
 - 配置：`chatgpt_web.temporary_chat.*`（默认启用、30 天保留、容量上限）。
 - 收口：每轮启动、终态消息和续聊锚点使用 DuckDB 事务提交；TLS、超时和未知上游中断统一转为 `interrupted` / `recovery_required`，取消保持 `cancelled`；`turn_timeout_seconds` 约束完整上游流。

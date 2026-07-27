@@ -58,7 +58,7 @@
     .tc-avatar{width:28px;height:28px;flex:0 0 28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0958d9;background:#e6f4ff;border:1px solid #91caff}.tc-message.user .tc-avatar{color:#fff;background:#1677ff;border-color:#1677ff}.tc-message.system .tc-avatar{display:none}
     .tc-bubble{position:relative;width:fit-content;max-width:min(780px,calc(100% - 40px));padding:7px 10px;border-radius:4px 13px 13px 13px;border:1px solid #e1e7f0;background:#fff;box-shadow:0 1px 4px rgba(20,42,80,.045);overflow-wrap:anywhere;word-break:normal}
     .tc-message.user .tc-bubble{border-color:#69b1ff;background:linear-gradient(145deg,#e6f4ff,#f3f9ff);border-radius:13px 4px 13px 13px}.tc-message.system .tc-bubble{max-width:min(680px,100%);border-radius:8px;color:#595959;background:#fafafa;font-size:12px;box-shadow:none}
-    .tc-bubble-head{display:flex;align-items:center;gap:6px;min-height:15px;margin-bottom:4px;padding-right:30px;line-height:1.25}.tc-message.user .tc-bubble-head{justify-content:flex-end}.tc-role{font-size:12px;font-weight:600;color:#52616f}.tc-time{font-size:11px;color:#8c99a6}.tc-status{margin-left:auto;padding:1px 5px;border-radius:10px;font-size:11px;line-height:1.2;color:#0958d9;background:#e6f4ff}.tc-message.user .tc-status{margin-left:0}.tc-content{font-size:14px;line-height:1.5;color:#1f2937;white-space:pre-wrap}.tc-bubble-actions{position:absolute;top:3px;right:4px;margin:0;padding:0;border:0;opacity:0;pointer-events:none;transition:opacity .15s}.tc-message:hover .tc-bubble-actions,.tc-message:focus-within .tc-bubble-actions{opacity:1;pointer-events:auto}.tc-copy{font-size:12px;padding:1px 3px}.tc-message-error{margin-top:6px;padding:6px 7px;border-radius:6px;border:1px solid #ffccc7;background:#fff2f0;color:#a8071a;font-size:12px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+    .tc-bubble-head{display:flex;align-items:center;gap:6px;min-height:15px;margin-bottom:4px;padding-right:30px;line-height:1.25}.tc-message.user .tc-bubble-head{justify-content:flex-end}.tc-role{font-size:12px;font-weight:600;color:#52616f}.tc-time,.tc-actual-model{font-size:11px;color:#8c99a6}.tc-actual-model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}.tc-status{margin-left:auto;padding:1px 5px;border-radius:10px;font-size:11px;line-height:1.2;color:#0958d9;background:#e6f4ff}.tc-message.user .tc-status{margin-left:0}.tc-content{font-size:14px;line-height:1.5;color:#1f2937;white-space:pre-wrap}.tc-bubble-actions{position:absolute;top:3px;right:4px;margin:0;padding:0;border:0;opacity:0;pointer-events:none;transition:opacity .15s}.tc-message:hover .tc-bubble-actions,.tc-message:focus-within .tc-bubble-actions{opacity:1;pointer-events:auto}.tc-copy{font-size:12px;padding:1px 3px}.tc-message-error{margin-top:6px;padding:6px 7px;border-radius:6px;border:1px solid #ffccc7;background:#fff2f0;color:#a8071a;font-size:12px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
     .tc-composer{border-top:1px solid var(--line);padding:12px 14px;background:#fff}.tc-input-wrap{position:relative}.tc-input-wrap #tcInput{display:block;padding:10px 82px 44px 11px;min-height:96px}.tc-send-inside{position:absolute;right:9px;bottom:9px;min-width:62px;box-shadow:0 2px 5px rgba(22,119,255,.24)}
     .tc-empty{padding:40px 20px;text-align:center;color:var(--muted)}
     .tc-status-idle{color:#237804}.tc-status-streaming{color:#0958d9}.tc-status-recovery_required{color:#ad6800}.tc-status-closed{color:#8c8c8c}
@@ -1532,7 +1532,8 @@ function renderTemporaryMessages(){
     return;
   }
   $("tcTitle").textContent=conv.title||"未命名会话";
-  $("tcMeta").textContent=`模型 ${conv.model||"—"} · 账号 ${conv.account_display||conv.account_id||"—"} · 状态 ${temporaryChatStatusLabel(conv.status)} · 过期 ${((conv.expires_at||"").replace("T"," ").replace("Z",""))||"—"}`;
+  const modelRerouted=conv.actual_model&&conv.actual_model!==conv.model?" · 上游路由已调整":"";
+  $("tcMeta").textContent=`请求模型 ${conv.model||"—"} · 上游实际 ${conv.actual_model||"上游未返回"}${modelRerouted} · 账号 ${conv.account_display||conv.account_id||"—"} · 状态 ${temporaryChatStatusLabel(conv.status)} · 过期 ${((conv.expires_at||"").replace("T"," ").replace("Z",""))||"—"}`;
   $("tcCopyAll").disabled=!messages.length;
   $("tcDelete").disabled=false;
   const recovery=conv.status==="recovery_required";
@@ -1553,12 +1554,13 @@ function renderTemporaryMessages(){
     const labels={user:"我",assistant:"ChatGPT",system:"系统"};
     const created=(m.created_at||"").replace("T"," ").replace("Z","");
     const content=String(m.content||"").trim();
+    const actualModel=m.actual_model?`<span class="tc-actual-model">实际 ${esc(m.actual_model)}</span>`:"";
     const status=m.status&&m.status!=="completed"?`<span class="tc-status">${esc(m.status)}</span>`:"";
     const err=m.error_message?`<div class="tc-message-error">${esc(m.error_class||"error")}：${esc(m.error_message)}</div>`:"";
     return `<div class="tc-message ${cls}" data-msg-id="${esc(m.id||"")}">
       <div class="tc-avatar" aria-hidden="true">${role==="user"?"我":(role==="system"?"": "AI")}</div>
       <div class="tc-bubble" title="${esc(`${labels[role]||role} · ${created}${m.status&&m.status!=="completed"?` · ${m.status}`:""}`)}">
-        <div class="tc-bubble-head"><span class="tc-role">${labels[role]||esc(role)}</span><span class="tc-time">${esc(created)}</span>${status}</div>
+        <div class="tc-bubble-head"><span class="tc-role">${labels[role]||esc(role)}</span><span class="tc-time">${esc(created)}</span>${actualModel}${status}</div>
         <div class="tc-content">${esc(content)}</div>${err}
         <div class="tc-bubble-actions"><button type="button" class="link-btn tc-copy" data-copy-msg="${esc(m.id||"")}">复制</button></div>
       </div>
@@ -1714,11 +1716,14 @@ function pollTemporaryTurn(){
   const tick=async()=>{
     try{
       const out=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns/${encodeURIComponent(turnId)}/events?timeout_ms=2000`));
+      if(out.actual_model&&state.cg.chat.current){
+        state.cg.chat.current={...state.cg.chat.current,actual_model:out.actual_model};
+      }
       if(out.delta){
         state.cg.chat.content=(state.cg.chat.content||"")+out.delta;
         const idx=state.cg.chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
         if(idx>=0){
-          state.cg.chat.messages[idx]={...state.cg.chat.messages[idx],content:state.cg.chat.content,status:"streaming"};
+          state.cg.chat.messages[idx]={...state.cg.chat.messages[idx],content:state.cg.chat.content,status:"streaming",actual_model:out.actual_model||state.cg.chat.messages[idx].actual_model||""};
         }
         renderTemporaryMessages();
       }

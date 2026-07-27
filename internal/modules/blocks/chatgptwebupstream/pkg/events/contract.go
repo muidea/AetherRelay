@@ -132,6 +132,7 @@ type CompleteTextCommand struct {
 type CompleteTextResult struct {
 	ConversationID     string
 	AssistantMessageID string
+	ActualModel        string
 	Text               string
 	ErrorClass         ErrorClass
 }
@@ -160,6 +161,7 @@ type PullTextResult struct {
 	Done               bool
 	ConversationID     string
 	AssistantMessageID string
+	ActualModel        string
 	ErrorClass         ErrorClass
 	ErrorMessage       string
 }

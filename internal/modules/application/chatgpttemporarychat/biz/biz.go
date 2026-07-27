@@ -46,6 +46,7 @@ type turnRuntime struct {
 	assistantSequence int64
 	streamID          string
 	content           string
+	actualModel       string
 	done              bool
 	errorClass        string
 	errorMessage      string
@@ -55,6 +56,7 @@ type turnRuntime struct {
 
 type turnUpdate struct {
 	delta        string
+	actualModel  string
 	done         bool
 	message      *events.MessageView
 	errorClass   string
@@ -265,7 +267,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	}
 	account, err := s.acquireTextAccount(started.AccountID, started.Model)
 	if err != nil {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", false, false, false, "provider_unavailable", "original account unavailable")
+		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "provider_unavailable", "original account unavailable")
 		result.Set(nil, cd.NewError(cd.Unexpected, "original account unavailable; create a new conversation"))
 		return
 	}
@@ -284,14 +286,14 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		TimeoutMillis:   int(s.turnTimeout / time.Millisecond),
 	})).Get()
 	if streamErr != nil {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", false, false, false, "upstream", "failed to start upstream stream")
+		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "upstream", "failed to start upstream stream")
 		s.recordTextResult(started.AccountID, false, "upstream")
 		result.Set(nil, cd.NewError(cd.Unexpected, "failed to start upstream stream"))
 		return
 	}
 	startedStream, ok := streamValue.(upevents.StartTextResult)
 	if !ok || startedStream.StreamID == "" {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", false, false, false, "upstream", "invalid upstream stream")
+		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "upstream", "invalid upstream stream")
 		result.Set(nil, cd.NewError(cd.Unexpected, "invalid upstream stream"))
 		return
 	}
@@ -308,7 +310,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	if s.stopping {
 		s.turnMu.Unlock()
 		s.cancelUpstream(startedStream.StreamID)
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", false, true, true, "interrupted", "stream interrupted by process shutdown")
+		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, true, true, "interrupted", "stream interrupted by process shutdown")
 		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
 		return
 	}
@@ -380,10 +382,13 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 		if update.AssistantMessageID != "" {
 			finalAssistantID = update.AssistantMessageID
 		}
+		if update.ActualModel != "" {
+			runtime.actualModel = update.ActualModel
+		}
 		if update.Delta != "" {
 			runtime.content += update.Delta
 			_ = s.store.UpdateAssistantDelta(runtime.ownerID, runtime.conversationID, runtime.assistantSequence, runtime.content)
-			s.publishTurn(runtime, turnUpdate{delta: update.Delta})
+			s.publishTurn(runtime, turnUpdate{delta: update.Delta, actualModel: runtime.actualModel})
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
@@ -408,6 +413,7 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 		runtime.userSequence,
 		runtime.assistantSequence,
 		runtime.content,
+		runtime.actualModel,
 		finalConversationID,
 		finalAssistantID,
 		cancelled,
@@ -490,7 +496,7 @@ func (s *TemporaryChat) handlePullTurn(ev event.Event, result event.Result) {
 		for i := len(detail.Messages) - 1; i >= 0; i-- {
 			message := detail.Messages[i]
 			if message.ID == cmd.TurnID || message.TurnID == cmd.TurnID {
-				result.Set(events.PullTurnResult{Done: true, Message: &message, ErrorClass: message.ErrorClass, ErrorMessage: message.ErrorMessage}, nil)
+				result.Set(events.PullTurnResult{Done: true, Message: &message, ActualModel: message.ActualModel, ErrorClass: message.ErrorClass, ErrorMessage: message.ErrorMessage}, nil)
 				return
 			}
 		}
@@ -505,6 +511,7 @@ func (s *TemporaryChat) handlePullTurn(ev event.Event, result event.Result) {
 	case update := <-runtime.updates:
 		result.Set(events.PullTurnResult{
 			Delta:        update.delta,
+			ActualModel:  update.actualModel,
 			Done:         update.done,
 			Message:      update.message,
 			ErrorClass:   update.errorClass,

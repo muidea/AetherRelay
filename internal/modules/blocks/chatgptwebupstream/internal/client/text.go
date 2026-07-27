@@ -42,6 +42,7 @@ type TextRequest struct {
 type TextResult struct {
 	ConversationID     string
 	AssistantMessageID string
+	ActualModel        string
 	Text               string
 	Done               bool
 }
@@ -51,6 +52,7 @@ type TextResult struct {
 type TextDelta struct {
 	ConversationID     string
 	AssistantMessageID string
+	ActualModel        string
 	Text               string
 }
 
@@ -321,6 +323,9 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 			if messageID := strings.TrimSpace(patch.Message.ID); messageID != "" {
 				result.AssistantMessageID = bounded(messageID, 512)
 			}
+			if model := strings.TrimSpace(patch.Message.Metadata.ModelSlug); model != "" {
+				result.ActualModel = bounded(model, 256)
+			}
 			if text := patch.Message.Content.text(); text != "" {
 				next := bounded(text, maxTextContentBytes)
 				delta := next
@@ -332,6 +337,7 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 					emitErr = emit(TextDelta{
 						ConversationID:     result.ConversationID,
 						AssistantMessageID: result.AssistantMessageID,
+						ActualModel:        result.ActualModel,
 						Text:               delta,
 					})
 				}
@@ -389,7 +395,12 @@ type textSSEMessage struct {
 	Author struct {
 		Role string `json:"role"`
 	} `json:"author"`
-	Content textSSEContent `json:"content"`
+	Content  textSSEContent  `json:"content"`
+	Metadata textSSEMetadata `json:"metadata"`
+}
+
+type textSSEMetadata struct {
+	ModelSlug string `json:"model_slug"`
 }
 
 type textSSEContent struct {
