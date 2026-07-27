@@ -52,6 +52,21 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 设计细节见 [Admin 登录安全设计](admin-login-security-design-2026-07-23.md)。
 
+## ChatGPT Web 用量统计
+
+ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`aiproxyusage` / 使用统计页）：
+
+| 路径 | `provider` | `api_key_id` | token |
+| --- | --- | --- | --- |
+| 代理 `/v1/chat/completions` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
+| 代理 `/v1/images/*` → chatgptweb | `chatgptweb` | 客户端 Key ID | 上游 Usage（有则 `estimated=false`） |
+| Admin 临时对话 | `chatgptweb` | `admin:<管理员用户名>` | 本地估计，`estimated=true` |
+
+- 筛选 `provider=chatgptweb` 可查看全部 Web 流量；`admin:*` 仅为管理台调试，不是客户端 API Key。
+- 文本 token 为稳定本地估计，不可当作上游账单。
+- 本设计落地前，部分 chatgptweb 成功请求可能被误记为 `error`/`proxy_internal_error`（`completePendingUsage` 兜底），历史行不回溯修正。
+- Admin 异步图片任务默认不进全局 usage（仍在任务详情展示任务级 Usage）。
+
 ## ChatGPT Web 内建 Provider
 
 启用 `chatgpt_web.enabled` 后，进程自动注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。禁止在 `providers` 中再声明 `protocol: chatgptweb`。

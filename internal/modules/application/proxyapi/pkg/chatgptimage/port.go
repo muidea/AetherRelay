@@ -1,7 +1,13 @@
 // Package chatgptimage defines the Proxy API-local synchronous image port.
 package chatgptimage
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"ai-proxy/internal/pkg/chatgpttokenusage"
+)
 
 // Request is normalized at the HTTP boundary before image orchestration.
 type Request struct {
@@ -21,14 +27,30 @@ type Data struct {
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
+// Result is the OpenAI-compatible image response plus owner-local Usage.
+// Usage is never serialized to clients (json:"-").
+// On error, Data/Usage may still hold already-produced partial results when
+// earlier of n upstream calls succeeded.
 type Result struct {
-	Created int64  `json:"created"`
-	Data    []Data `json:"data"`
+	Created int64             `json:"created"`
+	Data    []Data            `json:"data"`
+	Usage   *tokenusage.Usage `json:"-"`
 }
 
 // Executor is implemented by proxyapi Biz; HTTP adapters never receive an
 // EventHub, account token, upstream client or image store.
+// On error, implementations should return any already-accumulated Result and a
+// *chatgptfail.Failure when classification is known.
 type Executor interface {
 	GenerateImage(context.Context, Request) (Result, error)
 	EditImage(context.Context, Request) (Result, error)
+}
+
+// AsFailure extracts a typed Failure from err, if present.
+func AsFailure(err error) (*chatgptfail.Failure, bool) {
+	var f *chatgptfail.Failure
+	if errors.As(err, &f) {
+		return f, true
+	}
+	return nil, false
 }

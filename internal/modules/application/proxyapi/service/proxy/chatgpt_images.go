@@ -8,8 +8,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	archive "ai-proxy/internal/pkg/aiproxyarchive"
+	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/chatgptimageinput"
 )
 
@@ -26,11 +31,17 @@ type chatGPTImageBody struct {
 }
 
 func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID string) {
+	start := time.Now()
+	round := archiveRoundFromContext(r.Context())
 	h.cfgMu.RLock()
 	executor, cfg := h.chatGPTImage, h.cfg
 	h.cfgMu.RUnlock()
+	bodyLimit := cfg.MaxRequestBodyBytes
+	if bodyLimit <= 0 {
+		bodyLimit = config.DefaultMaxRequestBodyBytes
+	}
 	if executor == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt image executor is unavailable"})
+		h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusServiceUnavailable, APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt image executor is unavailable"}, streamFailFromKind(chatgptfail.KindProviderUnavailable, "provider_unavailable: chatgpt image executor is unavailable", nil), tokenUsage{})
 		return
 	}
 	var body chatGPTImageBody
@@ -38,18 +49,21 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		var err error
-		body, editImages, masks, err = parseChatGPTImageMultipart(w, r, cfg.MaxRequestBodyBytes)
+		body, editImages, masks, err = parseChatGPTImageMultipart(w, r, bodyLimit)
 		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: err.Error()})
+			fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: "+err.Error(), err, false)
+			h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: err.Error()}, fail, tokenUsage{})
 			return
 		}
 	} else if strings.HasPrefix(contentType, "application/json") {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, cfg.MaxRequestBodyBytes)).Decode(&body); err != nil {
-			writeAPIError(w, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: "invalid JSON image request"})
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, bodyLimit)).Decode(&body); err != nil {
+			fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: invalid JSON image request", err, false)
+			h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: "invalid JSON image request"}, fail, tokenUsage{})
 			return
 		}
 	} else {
-		writeAPIError(w, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: "image request must be JSON or multipart/form-data"})
+		fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: image request must be JSON or multipart/form-data", nil, false)
+		h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: "image request must be JSON or multipart/form-data"}, fail, tokenUsage{})
 		return
 	}
 	if body.Model == "" {
@@ -57,12 +71,17 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	}
 	plan, apiErr := ResolveTransportPlan(cfg, h.EffectiveCatalog(), r.Method, r.URL.Path, body.Model)
 	if apiErr != nil {
-		writeAPIError(w, statusForAPIError(apiErr), *apiErr)
+		// Route errors still need explicit Complete so completePendingUsage is not the success path.
+		h.writeArchivedAPIError(w, round, r, start, "", body.Model, false, statusForAPIError(apiErr), *apiErr)
 		return
 	}
 	if plan.UpstreamProtocol != "chatgptweb" {
-		writeAPIError(w, http.StatusBadGateway, APIError{Code: ErrorCodeEndpointUnsupported, Message: "image route owner is not ChatGPT Web", Model: body.Model})
+		fail := newStreamFailWithCode(streamKindError, ErrorCodeEndpointUnsupported, "endpoint_unsupported: image route owner is not ChatGPT Web", nil, false)
+		h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, http.StatusBadGateway, APIError{Code: ErrorCodeEndpointUnsupported, Message: "image route owner is not ChatGPT Web", Model: body.Model}, fail, tokenUsage{})
 		return
+	}
+	if round != nil {
+		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
 	}
 	if body.N == 0 {
 		body.N = 1
@@ -93,16 +112,75 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 		request.Images = editImages
 		if err == nil {
 			result, err = executor.EditImage(r.Context(), request)
+		} else {
+			fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: "+err.Error(), err, false)
+			h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: err.Error(), Model: body.Model}, fail, tokenUsage{})
+			return
 		}
 	} else {
 		result, err = executor.GenerateImage(r.Context(), request)
 	}
+	tok := tokenUsageFromImageResult(result)
 	if err != nil {
-		writeAPIError(w, http.StatusBadGateway, APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt image request failed", Model: body.Model})
+		fail := streamFailFromChatGPTImageErr(err)
+		status := statusForChatGPTFailure(fail)
+		// Partial n>1 failures still carry accumulated Usage on result.
+		h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, status, APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt image request failed", Model: body.Model}, fail, tok)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	// Encode only the public JSON fields; Usage is json:"-".
+	if encErr := json.NewEncoder(w).Encode(result); encErr != nil {
+		h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", encErr, false))
+		return
+	}
+	if round != nil {
+		if payload, mErr := json.Marshal(result); mErr == nil {
+			_ = round.WriteResponse("response.json", append(payload, '\n'))
+		}
+	}
+	h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, nil)
+}
+
+func tokenUsageFromImageResult(result chatgptimage.Result) tokenUsage {
+	if result.Usage == nil {
+		return tokenUsage{Known: false, Estimated: false}
+	}
+	u := result.Usage
+	prompt := u.PromptTokens
+	if prompt == 0 {
+		prompt = u.InputTokens
+	}
+	completion := u.CompletionTokens
+	if completion == 0 {
+		completion = u.OutputTokens
+	}
+	total := u.TotalTokens
+	if total == 0 {
+		total = prompt + completion
+	}
+	return tokenUsage{
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      total,
+		Estimated:        false,
+		Known:            true,
+	}
+}
+
+func streamFailFromChatGPTImageErr(err error) *streamFail {
+	if err == nil {
+		return nil
+	}
+	if f, ok := chatgptimage.AsFailure(err); ok && f != nil {
+		return streamFailFromKind(f.Kind, f.Error(), f)
+	}
+	return streamFailFromKind(chatgptfail.KindUpstream, err.Error(), err)
+}
+
+func (h *Handler) writeChatGPTImageAPIError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, apiErr APIError, fail *streamFail, tok tokenUsage) {
+	// Reuse the text-path API error writer + settlement for identical Complete semantics.
+	h.writeChatGPTWebAPIError(w, round, r, start, provider, model, stream, status, apiErr, fail, tok)
 }
 
 func parseChatGPTImageMultipart(w http.ResponseWriter, r *http.Request, limit int64) (chatGPTImageBody, [][]byte, [][]byte, error) {

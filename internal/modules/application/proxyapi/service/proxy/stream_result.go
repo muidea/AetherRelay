@@ -44,8 +44,11 @@ type terminalResult struct {
 }
 
 // streamFail 是带类型的流式/处理错误，避免依赖错误字符串做 outcome 分类。
+// Kind 驱动 metrics outcome；ErrorCode 可独立于 Kind（例如 outcome=upstream_failed
+// 而 ErrorCode=invalid_token）。ErrorCode 为空时回退为 string(Kind)。
 type streamFail struct {
 	Kind          streamKind
+	ErrorCode     string // usage ErrorCode；空则回退 Kind
 	Message       string // 完整可读消息，写入 metadata / 日志
 	Err           error
 	CountUpstream bool // 是否计入 provider upstream error rate
@@ -76,6 +79,12 @@ func newStreamFail(kind streamKind, message string, err error, countUpstream boo
 		message = err.Error()
 	}
 	return &streamFail{Kind: kind, Message: message, Err: err, CountUpstream: countUpstream}
+}
+
+func newStreamFailWithCode(kind streamKind, errorCode, message string, err error, countUpstream bool) *streamFail {
+	f := newStreamFail(kind, message, err, countUpstream)
+	f.ErrorCode = errorCode
+	return f
 }
 
 func streamFailFromMessage(msg string) *streamFail {

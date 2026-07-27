@@ -1,38 +1,82 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	archive "ai-proxy/internal/pkg/aiproxyarchive"
+	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
 
 func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, body map[string]any) {
+	round := archiveRoundFromContext(r.Context())
+	settleModel := strings.TrimSpace(model)
+
 	h.cfgMu.RLock()
 	executor := h.chatGPTText
 	h.cfgMu.RUnlock()
 	if executor == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt web executor is unavailable", Model: model})
+		apiErr := APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt web executor is unavailable", Model: model}
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusServiceUnavailable, apiErr, streamFailFromKind(chatgptfail.KindProviderUnavailable, apiErr.Code+": "+apiErr.Message, nil), tokenUsage{})
 		return
 	}
 	request, err := chatGPTTextRequest(model, body)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: err.Error(), Model: model})
+		apiErr := APIError{Code: ErrorCodeInvalidRequest, Message: err.Error(), Model: model}
+		// Parameter errors are local invalid_request, not proxy_internal_error.
+		fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, apiErr.Code+": "+apiErr.Message, err, false)
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, apiErr, fail, tokenUsage{})
 		return
 	}
+
 	if !stream {
-		result, err := executor.Complete(r.Context(), request)
-		if err != nil {
-			writeAPIError(w, http.StatusBadGateway, APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt web completion failed: " + chatGPTFailureClass(err), Model: model})
+		result, execErr := executor.Complete(r.Context(), request)
+		billingModel := firstNonEmpty(result.ActualModel, settleModel)
+		tok := estimateChatGPTTextUsage(request, result.Text)
+		if execErr != nil {
+			fail := streamFailFromChatGPTErr(execErr)
+			status := statusForChatGPTFailure(fail)
+			h.writeChatGPTWebAPIError(w, round, r, started, provider, billingModel, false, status, APIError{
+				Code:    ErrorCodeUpstreamUnavailable,
+				Message: "chatgpt web completion failed: " + chatGPTFailureCode(fail),
+				Model:   billingModel,
+			}, fail, tok)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(openAIChatCompletion{ID: "chatcmpl-" + result.ConversationID, Object: "chat.completion", Created: time.Now().Unix(), Model: model, Choices: []openAIChatChoice{{Index: 0, Message: openAIChatMessage{Role: "assistant", Content: result.Text}, FinishReason: "stop"}}})
+		payload := openAIChatCompletion{
+			ID:      "chatcmpl-" + firstNonEmpty(result.ConversationID, "chatgptweb"),
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   billingModel,
+			Choices: []openAIChatChoice{{Index: 0, Message: openAIChatMessage{Role: "assistant", Content: result.Text}, FinishReason: "stop"}},
+		}
+		tok = estimateChatGPTTextUsage(request, result.Text)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(payload); err != nil {
+			h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false))
+			return
+		}
+		bodyBytes, _ := json.Marshal(payload)
+		bodyBytes = append(bodyBytes, '\n')
+		if round != nil {
+			_ = round.WriteResponse("response.json", bodyBytes)
+		}
+		h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, nil)
 		return
 	}
+
+	// Streaming path.
 	streamStarted := false
+	var builder strings.Builder
+	actualModel := settleModel
 	startSSE := func() http.Flusher {
 		if !streamStarted {
 			prepareSSEHeaders(w.Header())
@@ -42,46 +86,197 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 		flusher, _ := w.(http.Flusher)
 		return flusher
 	}
-	_, err = executor.Stream(r.Context(), request, func(delta chatgpttext.Delta) error {
+	result, execErr := executor.Stream(r.Context(), request, func(delta chatgpttext.Delta) error {
+		if delta.ActualModel != "" {
+			actualModel = delta.ActualModel
+		}
 		if delta.Text == "" {
 			return nil
 		}
+		builder.WriteString(delta.Text)
 		flusher := startSSE()
-		payload, err := json.Marshal(openAIChatChunk{ID: "chatcmpl-chatgptweb", Object: "chat.completion.chunk", Created: time.Now().Unix(), Model: model, Choices: []openAIChatChunkChoice{{Index: 0, Delta: openAIChatMessage{Content: delta.Text}}}})
+		payload, err := json.Marshal(openAIChatChunk{
+			ID:      "chatcmpl-chatgptweb",
+			Object:  "chat.completion.chunk",
+			Created: time.Now().Unix(),
+			Model:   firstNonEmpty(actualModel, settleModel),
+			Choices: []openAIChatChunkChoice{{Index: 0, Delta: openAIChatMessage{Content: delta.Text}}},
+		})
 		if err != nil {
-			return err
+			return chatgptfail.New(chatgptfail.KindInternal, err)
 		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
-			return err
+			return chatgptfail.New(chatgptfail.KindClientWrite, err)
 		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 		return nil
 	})
-	if err != nil {
+	if result.ActualModel != "" {
+		actualModel = result.ActualModel
+	}
+	if result.Text != "" {
+		builder.Reset()
+		builder.WriteString(result.Text)
+	}
+	billingModel := firstNonEmpty(actualModel, settleModel)
+	tok := estimateChatGPTTextUsage(request, builder.String())
+	duration := time.Since(started)
+
+	if execErr != nil {
+		fail := streamFailFromChatGPTErr(execErr)
 		if !streamStarted {
-			writeAPIError(w, http.StatusBadGateway, APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt web stream failed: " + chatGPTFailureClass(err), Model: model})
+			status := statusForChatGPTFailure(fail)
+			h.writeChatGPTWebAPIError(w, round, r, started, provider, billingModel, true, status, APIError{
+				Code:    ErrorCodeUpstreamUnavailable,
+				Message: "chatgpt web stream failed: " + chatGPTFailureCode(fail),
+				Model:   billingModel,
+			}, fail, tok)
+			return
 		}
+		// Headers already sent: keep HTTP 200, settle real outcome.
+		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, duration, tok, fail)
 		return
 	}
+
 	flusher := startSSE()
-	if err == nil {
-		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
+	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, duration, tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false))
+		return
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, duration, tok, nil)
+}
+
+func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, apiErr APIError, fail *streamFail, tok tokenUsage) {
+	if apiErr.ClientProtocol == "" {
+		apiErr.ClientProtocol = clientProtocolFromRequest(r)
+	}
+	if apiErr.ClientEndpoint == "" && r != nil && r.URL != nil {
+		apiErr.ClientEndpoint = NormalizeClientEndpoint(r.URL.Path)
+	}
+	if apiErr.Operation == "" && apiErr.ClientEndpoint != "" {
+		apiErr.Operation = OperationForPath(apiErr.ClientEndpoint)
+	}
+	if apiErr.Model == "" {
+		apiErr.Model = model
+	}
+	writeClientProtocolError(w, status, apiErr.ClientProtocol, apiErr)
+	if apiErr.Type == "" {
+		apiErr.Type = openAIErrorType(apiErr.Code)
+	}
+	body, _ := json.Marshal(APIErrorResponse{Error: apiErr})
+	body = append(body, '\n')
+	if round != nil {
+		_ = round.WriteResponse("response.json", body)
+	}
+	if fail == nil {
+		fail = newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, nil, false)
+	}
+	h.settleChatGPTWeb(round, r, provider, model, stream, status, time.Since(start), tok, fail)
+}
+
+func (h *Handler) settleChatGPTWeb(round *archive.Round, r *http.Request, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, fail *streamFail) {
+	if provider == "" {
+		provider = effectivecatalog.BuiltinProviderID
+	}
+	if round != nil && round.UpstreamProtocol == "" {
+		path := pathOrEmpty(r)
+		round.SetTransportPlan(
+			OperationForPath(NormalizeClientEndpoint(path)),
+			NormalizeClientEndpoint(path),
+			ClientProtocolForPath(path),
+			effectivecatalog.BuiltinProviderID,
+			"chatgptweb",
+			TransportModeNative,
+		)
+	}
+	outcome := outcomeFromStreamFail(fail, status)
+	h.recordAndPrintFail(round, r, provider, model, stream, status, duration, tok, fail)
+	msg := ""
+	if fail != nil {
+		msg = fail.Error()
+	}
+	h.writeArchiveMetadata(round, provider, model, stream, status, duration, tok, "response.json", msg, "", outcome)
+}
+
+func estimateChatGPTTextUsage(request chatgpttext.Request, completion string) tokenUsage {
+	parts := make([]string, 0, len(request.Messages))
+	for _, message := range request.Messages {
+		parts = append(parts, message.Content)
+	}
+	estimated := tokenusage.EstimateChatTextUsage(parts, completion)
+	if estimated == nil {
+		return tokenUsage{Estimated: true, Known: true}
+	}
+	return tokenUsage{
+		PromptTokens:     estimated.PromptTokens,
+		CompletionTokens: estimated.CompletionTokens,
+		TotalTokens:      estimated.TotalTokens,
+		Estimated:        true,
+		Known:            true,
 	}
 }
 
-func chatGPTFailureClass(err error) string {
-	message := err.Error()
-	for _, class := range []string{"invalid_token", "rate_limit", "timeout", "tls", "upstream"} {
-		if strings.Contains(message, class) {
-			return class
-		}
+func streamFailFromChatGPTErr(err error) *streamFail {
+	if err == nil {
+		return nil
 	}
-	return "unclassified"
+	if errors.Is(err, context.Canceled) {
+		return streamFailFromKind(chatgptfail.KindClientCanceled, "client canceled", err)
+	}
+	if f, ok := chatgpttext.AsFailure(err); ok && f != nil {
+		return streamFailFromKind(f.Kind, f.Error(), f)
+	}
+	return streamFailFromKind(chatgptfail.KindUpstream, err.Error(), err)
+}
+
+func streamFailFromKind(kind chatgptfail.Kind, message string, err error) *streamFail {
+	var outcomeKind streamKind
+	switch chatgptfail.Outcome(kind) {
+	case "success":
+		return nil
+	case "client_canceled":
+		outcomeKind = streamKindClientCanceled
+	case "client_write":
+		outcomeKind = streamKindClientWrite
+	case "upstream_failed":
+		outcomeKind = streamKindUpstreamFailed
+	case "error":
+		outcomeKind = streamKindError
+	default:
+		outcomeKind = streamKindError
+	}
+	return newStreamFailWithCode(outcomeKind, chatgptfail.ErrorCode(kind), message, err, chatgptfail.CountUpstream(kind))
+}
+
+func statusForChatGPTFailure(fail *streamFail) int {
+	if fail == nil {
+		return http.StatusOK
+	}
+	switch fail.ErrorCode {
+	case chatgptfail.ErrorCode(chatgptfail.KindProviderUnavailable):
+		return http.StatusServiceUnavailable
+	case chatgptfail.ErrorCode(chatgptfail.KindClientCanceled):
+		return 499
+	case ErrorCodeInvalidRequest:
+		return http.StatusBadRequest
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+func chatGPTFailureCode(fail *streamFail) string {
+	if fail == nil {
+		return "unclassified"
+	}
+	if fail.ErrorCode != "" {
+		return fail.ErrorCode
+	}
+	return string(fail.Kind)
 }
 
 func chatGPTTextRequest(model string, body map[string]any) (chatgpttext.Request, error) {
@@ -108,6 +303,13 @@ func chatGPTTextRequest(model string, body map[string]any) (chatgpttext.Request,
 	return request, nil
 }
 
+func pathOrEmpty(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	return r.URL.Path
+}
+
 type openAIChatMessage struct {
 	Role    string `json:"role,omitempty"`
 	Content string `json:"content"`
@@ -125,8 +327,9 @@ type openAIChatCompletion struct {
 	Choices []openAIChatChoice `json:"choices"`
 }
 type openAIChatChunkChoice struct {
-	Index int               `json:"index"`
-	Delta openAIChatMessage `json:"delta"`
+	Index        int               `json:"index"`
+	Delta        openAIChatMessage `json:"delta"`
+	FinishReason *string           `json:"finish_reason"`
 }
 type openAIChatChunk struct {
 	ID      string                  `json:"id"`

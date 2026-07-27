@@ -518,6 +518,17 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		rec.ConversionMode = round.ConversionMode
 		rec.UpstreamDuration = round.UpstreamDuration
 	}
+	// When interaction archive is disabled, chatgptweb settlement still needs
+	// stable plan labels so usage dashboards can filter provider traffic.
+	if rec.UpstreamProtocol == "" && (provider == effectivecatalog.BuiltinProviderID || provider == "chatgptweb") {
+		rec.UpstreamProtocol = effectivecatalog.BuiltinProviderID
+		if rec.UpstreamEndpoint == "" {
+			rec.UpstreamEndpoint = chatGPTWebUsageEndpoint(r)
+		}
+		if rec.ConversionMode == "" {
+			rec.ConversionMode = TransportModeNative
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.usageStore.Complete(ctx, rec); err != nil {
@@ -822,14 +833,23 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 		body, _ = json.Marshal(APIErrorResponse{Error: apiErr})
 	}
 	body = append(body, '\n')
-	if err := round.WriteResponse("response.json", body); err != nil {
-		log.Printf("archive api error response: %v", err)
+	if round != nil {
+		if err := round.WriteResponse("response.json", body); err != nil {
+			log.Printf("archive api error response: %v", err)
+		}
 	}
 	duration := time.Since(start)
 	usage := tokenUsage{}
 	msg := apiErr.Code + ": " + apiErr.Message
 	h.recordAndPrint(round, r, provider, model, stream, status, duration, usage, msg)
 	h.writeArchiveMetadata(round, provider, model, stream, status, duration, usage, "response.json", msg, "", "")
+}
+
+func chatGPTWebUsageEndpoint(r *http.Request) string {
+	if r != nil && r.URL != nil && strings.HasPrefix(r.URL.Path, "/v1/images/") {
+		return "chatgptweb_images"
+	}
+	return "chatgptweb"
 }
 
 func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID string) {
@@ -1706,7 +1726,9 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 	errorCode := ""
 	if fail != nil {
 		errMessage = fail.Error()
-		if fail.Kind != "" {
+		if fail.ErrorCode != "" {
+			errorCode = fail.ErrorCode
+		} else if fail.Kind != "" {
 			errorCode = string(fail.Kind)
 		}
 	}
@@ -1726,14 +1748,19 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 		h.metricsRegistry.RecordClientUsage(clientauth.ClientIdentityFromContext(r.Context()).KeyID, tok.PromptTokens, tok.CompletionTokens)
 	}
 
-	route := RouteLabel(r)
-	h.metricsRegistry.RecordRequestPlan(provider, model, route, status, duration, outcome,
-		clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode)
-	// 仅流式 midflight 上游读失败计入 provider 错误率,避免非流式状态码/本地错误重复计数。
-	if shouldCountUpstreamError(fail, stream) {
-		h.metricsRegistry.RecordUpstreamError(provider, -2) // -2 = stream_midflight
+	if h.metricsRegistry != nil {
+		route := RouteLabel(r)
+		h.metricsRegistry.RecordRequestPlan(provider, model, route, status, duration, outcome,
+			clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode)
+		// 普通 HTTP upstream 已在转发器中计数；ChatGPT Web 的 executor
+		// 路径没有该入口，因此也要记录其尚未提交响应的上游失败。
+		if shouldCountUpstreamError(fail, stream) {
+			h.metricsRegistry.RecordUpstreamError(provider, -2) // -2 = stream_midflight
+		} else if provider == effectivecatalog.BuiltinProviderID && fail != nil && fail.CountUpstream {
+			h.metricsRegistry.RecordUpstreamError(provider, -1) // -1 = ChatGPT Web upstream failure
+		}
+		h.metricsRegistry.RecordTokens(provider, model, tok.PromptTokens, tok.CompletionTokens, tok.CachedInputTokens, tok.CacheCreationInputTokens)
 	}
-	h.metricsRegistry.RecordTokens(provider, model, tok.PromptTokens, tok.CompletionTokens, tok.CachedInputTokens, tok.CacheCreationInputTokens)
 	h.printSummary(round, provider, model, stream, status, duration, tok, errMessage)
 }
 

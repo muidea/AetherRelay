@@ -8,6 +8,7 @@ import (
 
 	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
 	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
@@ -24,21 +25,33 @@ func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (chat
 		AccessToken: token, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
 	})).Get()
 	if eventErr != nil {
-		_, isPartial := value.(upevents.CompleteTextResult)
+		partial, isPartial := value.(upevents.CompleteTextResult)
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_complete", "event_error_code", eventErr.Code, "has_partial_result", value != nil, "partial_result_type_match", isPartial)
-		if partial, ok := value.(upevents.CompleteTextResult); ok && partial.ErrorClass != "" {
-			if partial.ErrorClass == upevents.ErrClassInvalidToken {
-				s.removeInvalidChatGPTTextToken(ctx, token)
+		result := chatgpttext.Result{}
+		if isPartial {
+			result = chatgpttext.Result{
+				ConversationID: partial.ConversationID,
+				ActualModel:    partial.ActualModel,
+				Text:           partial.Text,
 			}
-			return chatgpttext.Result{}, fmt.Errorf("chatgpt text completion %s", partial.ErrorClass)
+			if partial.ErrorClass != "" {
+				if partial.ErrorClass == upevents.ErrClassInvalidToken {
+					s.removeInvalidChatGPTTextToken(ctx, token)
+				}
+				return result, mapUpstreamTextFailure(partial.ErrorClass, eventErr)
+			}
 		}
-		return chatgpttext.Result{}, fmt.Errorf("chatgpt text completion failed")
+		return result, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text completion failed"))
 	}
 	completed, ok := value.(upevents.CompleteTextResult)
 	if !ok {
-		return chatgpttext.Result{}, fmt.Errorf("invalid chatgpt text completion result")
+		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text completion result"))
 	}
-	return chatgpttext.Result{ConversationID: completed.ConversationID, Text: completed.Text}, nil
+	return chatgpttext.Result{
+		ConversationID: completed.ConversationID,
+		ActualModel:    completed.ActualModel,
+		Text:           completed.Text,
+	}, nil
 }
 
 func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
@@ -51,30 +64,41 @@ func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit fu
 	})).Get()
 	if startErr != nil {
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_start_stream", "event_error_code", startErr.Code)
-		return chatgpttext.Result{}, fmt.Errorf("chatgpt text stream failed")
+		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text stream failed"))
 	}
 	started, ok := value.(upevents.StartTextResult)
 	if !ok || started.StreamID == "" {
-		return chatgpttext.Result{}, fmt.Errorf("invalid chatgpt text stream result")
+		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream result"))
 	}
 	defer s.SendEvent(event.NewEvent(upevents.TopicCancelText, s.ID(), upcommon.UnitID, nil, upevents.CancelTextCommand{StreamID: started.StreamID}))
 	var result chatgpttext.Result
+	var builder strings.Builder
 	for {
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return result, mapContextError(err)
 		}
 		value, pullErr := s.SendEvent(event.NewEventWithContext(upevents.TopicPullText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.PullTextCommand{StreamID: started.StreamID, TimeoutMillis: 1000})).Get()
 		if pullErr != nil {
 			slog.Warn("chatgpt text execution failed", "stage", "upstream_pull_stream", "event_error_code", pullErr.Code)
-			return result, fmt.Errorf("chatgpt text stream failed")
+			return result, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text stream failed"))
 		}
 		update, ok := value.(upevents.PullTextResult)
 		if !ok {
-			return result, fmt.Errorf("invalid chatgpt text stream update")
+			return result, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream update"))
 		}
-		if update.Delta != "" && emit != nil {
-			if err := emit(chatgpttext.Delta{Text: update.Delta}); err != nil {
-				return result, err
+		if update.ConversationID != "" {
+			result.ConversationID = update.ConversationID
+		}
+		if update.ActualModel != "" {
+			result.ActualModel = update.ActualModel
+		}
+		if update.Delta != "" {
+			builder.WriteString(update.Delta)
+			result.Text = builder.String()
+			if emit != nil {
+				if err := emit(chatgpttext.Delta{Text: update.Delta, ActualModel: update.ActualModel}); err != nil {
+					return result, mapEmitError(err)
+				}
 			}
 		}
 		if update.Done {
@@ -82,8 +106,9 @@ func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit fu
 				if update.ErrorClass == upevents.ErrClassInvalidToken {
 					s.removeInvalidChatGPTTextToken(ctx, token)
 				}
-				return result, fmt.Errorf("chatgpt text stream failed")
+				return result, mapUpstreamTextFailure(update.ErrorClass, fmt.Errorf("chatgpt text stream failed"))
 			}
+			result.Text = builder.String()
 			return result, nil
 		}
 	}
@@ -104,11 +129,11 @@ func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (stri
 		Model: model, Operation: accevents.ModelOperationChatCompletions,
 	})).Get()
 	if err != nil {
-		return "", fmt.Errorf("chatgpt account unavailable")
+		return "", chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
 	}
 	account, ok := value.(accevents.AcquireTextTokenResult)
 	if !ok || strings.TrimSpace(account.AccessToken) == "" {
-		return "", fmt.Errorf("chatgpt account unavailable")
+		return "", chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
 	}
 	return account.AccessToken, nil
 }
@@ -119,4 +144,35 @@ func toUpstreamMessages(messages []chatgpttext.Message) []upevents.TextMessage {
 		result = append(result, upevents.TextMessage{Role: message.Role, Content: message.Content})
 	}
 	return result
+}
+
+func mapUpstreamTextFailure(class upevents.ErrorClass, cause error) error {
+	return chatgptfail.New(chatgptfail.FromUpstreamClass(string(class)), cause)
+}
+
+func mapContextError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if err == context.Canceled {
+		return chatgptfail.New(chatgptfail.KindClientCanceled, err)
+	}
+	if err == context.DeadlineExceeded {
+		return chatgptfail.New(chatgptfail.KindTimeout, err)
+	}
+	return chatgptfail.New(chatgptfail.KindClientCanceled, err)
+}
+
+func mapEmitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if f, ok := chatgpttext.AsFailure(err); ok {
+		return f
+	}
+	if err == context.Canceled {
+		return chatgptfail.New(chatgptfail.KindClientCanceled, err)
+	}
+	// Response writer failures surface here from the HTTP adapter emit callback.
+	return chatgptfail.New(chatgptfail.KindClientWrite, err)
 }
