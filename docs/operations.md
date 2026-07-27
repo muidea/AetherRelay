@@ -93,7 +93,7 @@ Prometheus 指标均以 `ai_proxy_` 为前缀：
 | `incomplete` | 上游未完成。 |
 | `client_write`、`protocol`、`conversion`、`error` | 客户端写入、协议、转换或其它错误。 |
 
-完整统计口径与 Admin API 见 [API Key 用量与 DuckDB 收口方案](api-key-usage-duckdb-web-closure-plan-2026-07-17.md)。
+统计查询、筛选与导出以管理页和当前实现为准；持久化工作区配置见[配置参考](configuration.md#统一状态工作区)。
 
 ## SLO webhook
 
@@ -114,15 +114,15 @@ Prometheus 指标均以 `ai_proxy_` 为前缀：
 ```bash
 go run ./cmd/ai-proxy-usage-import \
   -source usage.csv \
-  -database usage.duckdb \
+  -database var/state.duckdb \
   -api-key-id default
 ```
 
-交互归档位于 `interactions/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
+将示例中的 `var/state.duckdb` 替换为实际的 `state.database` 完整路径。交互归档位于 `state.dir/interactions/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
 
 ## 备份与维护
 
-不要直接复制正在写入的 DuckDB 文件。建议流程：停止接收新请求、等待当前写入完成、执行 checkpoint、复制数据库文件、恢复服务。数据库恢复、保留策略与历史导入边界详见 [DuckDB 收口方案](api-key-usage-duckdb-web-closure-plan-2026-07-17.md#21-数据保留备份与维护)。
+不要直接复制正在写入的 DuckDB 文件。建议流程：停止接收新请求、等待当前写入完成、执行 checkpoint、复制 `state.database`，并将需要保留的 `state.dir/interactions/`、`state.dir/images/` 与 `state.dir/image_thumbnails/` 一并复制，随后恢复服务。数据库与整个 `state.dir` 必须由同一个实例独占。
 
 ## Provider live probe
 
@@ -133,7 +133,7 @@ go run ./cmd/ai-proxy-probe -config config.yaml \
   -provider <route-owner> -capability chat_completions -model <exact-model-id>
 ```
 
-输出会脱敏，结论为 `success`、`credential_issue`、`capability_drift` 或 `environment_undetermined`。现场审计记录放在 `docs/provider-capability-audit-*.md`。
+输出会脱敏，结论为 `success`、`credential_issue`、`capability_drift` 或 `environment_undetermined`。带日期的现场审计仅保留当时证据，不能替代对当前配置的重新探测。
 
 Admin 的 Provider 页面还会显示配置启用状态之外的运行期可用性，并提供“检查”按钮。该按钮只对当前
 Provider 执行一次最小非流式探测，记录结果但不会改写配置。状态含义如下：
@@ -147,6 +147,8 @@ Provider 执行一次最小非流式探测，记录结果但不会改写配置�
 | `unavailable` | 连续失败至少三次。 |
 | `credential_error` | 最近失败为 401 或 403。 |
 | `capability_drift` | 最近探测表明端点或模型能力与上游不一致。 |
+
+Provider 表的“来源”仅为展示分类：运行时内建 Provider 显示 `builtin`，官方 Base URL 显示 `official`，其余显示 `third_party`。该值不写入 YAML，也不参与路由或安全判断。
 
 ## 构建与发布
 

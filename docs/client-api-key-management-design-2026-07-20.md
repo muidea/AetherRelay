@@ -1,6 +1,6 @@
 # 客户端 API Key 管理设计
 
-Status: proposed-for-implementation
+Status: implemented
 
 Type: design-and-closure-plan
 
@@ -222,7 +222,7 @@ Provider 管理现有的“写临时文件 -> Load 校验 -> rename -> Activate�
 
 在单进程管理 API 中 `updateMu` 防止并发写；revision 处理服务外手工编辑与已打开的浏览器之间的竞争。该机制不承诺多进程共享同一 YAML 文件，运行文档必须继续声明单实例配置写入边界。
 
-候选配置在 `config.Load` 完成前绝不激活；激活前出现的任一失败都不改变正式文件或运行时配置。`usage_store` 路径和资源参数仍不可热切换；因为 Admin Key 管理只修改 `client_api_keys`，候选配置不会触发该变更。
+候选配置在 `config.Load` 完成前绝不激活；激活前出现的任一失败都不改变正式文件或运行时配置。统一 `state` 工作区的 `database`、资源参数和目录布局仍不可热切换；因为 Admin Key 管理只修改 `client_api_keys`，候选配置不会触发该变更。
 
 ## 7. Web 管理端
 

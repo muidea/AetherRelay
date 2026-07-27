@@ -1,12 +1,14 @@
 # ai-proxy Provider Capability Contract 功能设计
 
-Status: active
+Status: implemented historical design reference
 
 Type: feature-design
 
 Last Updated: 2026-07-15
 
-Review State: ai-proxy-code-closure-verification
+Review State: archived 2026-07-15 closure record
+
+> 本文保留实现该功能时的设计与审计语境，不陈述当前 Provider 的线上状态，也不替代当前配置、运行文档和自动化测试。涉及具体 Provider 的结论必须重新执行 live probe 验证。
 
 ## 0. 2026-07-15 代码评审与收口结论
 

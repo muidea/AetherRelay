@@ -1,6 +1,6 @@
 # ai-proxy
 
-> 本文以当前代码和自动化测试为基线。更新时间：2026-07-16。
+> 历史验收记录，更新时间：2026-07-16。本文的 Goal/DoD ID 可用于追溯当时验收，不描述当前配置或运行合同；现行行为以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。
 
 ## 0. 使用约定
 

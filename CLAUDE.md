@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `ai-proxy` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 路由到唯一上游 RouteOwner，必要时做基础协议转换。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
 
-权威产品合同见 `prd.md`（Goals / DoD 稳定 ID，如 G-02、G-03）；设计细节见 `docs/` 与 `README.md`。实现与测试应能映射回这些 ID。
+当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
 
 ## 常用命令
 
@@ -99,7 +99,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 请求处理路径（proxy）
 
-`proxyapi/service/proxy.Handler.ServeHTTP`：路径白名单 → `clientauth` 身份解析（无 Key→`default`；未知/禁用/冲突→401）→ `UsageStore.Start`（失败 503，不访问上游）→ 读限大体 → 解析 model → `ResolveTransportPlan` → native 或 conversion → `doUpstream*` → 缓冲或 SSE 流式 → `UsageStore.Complete` / metrics / archive。
+`proxyapi/service/proxy.Handler.ServeHTTP`：路径白名单 → `clientauth` 身份解析（缺失、未知、禁用、格式错误或冲突 Key 均为 401，且不记账）→ `UsageStore.Start`（失败 503，不访问上游）→ 读限大体 → 解析 model → `ResolveTransportPlan` → native 或 conversion → `doUpstream*` → 缓冲或 SSE 流式 → `UsageStore.Complete` / metrics / archive。
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
@@ -107,7 +107,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 安全与资源边界
 
-- 默认 `127.0.0.1:8080`。`client_api_keys` 是归属机制而非强制登录；非 loopback 需由网络层保护。**已删除** `inbound_api_key` / `AI_PROXY_INBOUND_API_KEY` / `usage_file`。
+- 默认 `127.0.0.1:8080`。`client_api_keys` 是数据端点的必需认证；非 loopback 仍需由网络层保护。**已删除** `inbound_api_key` / `AI_PROXY_INBOUND_API_KEY` / `usage_file`。
 - 客户端 Key 不转上游；上游鉴权只来自 provider 配置。原始客户端 Key 不进日志/DuckDB/Web。
 - Admin 默认位于 `/admin` 且 loopback-only；启用 `admin_auth_enabled` 后可用 `admin_base_path` 设定入口，并以 HTTPS 登录方式远程访问。Provider API Key 只显示“已配置”，不回显明文。
 - `/metrics`、`/stats` 默认 loopback；`metrics_remote_access` 可放开。
@@ -116,14 +116,14 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 可观测与落盘
 
-- `usage.duckdb`：**单进程** DuckDB 唯一在线用量 authority；多实例不得共享。CSV 仅导出/一次性导入。
-- `interactions/{round_id}/`：request/upstream/response/metadata；默认保留最近 N 轮；`archive_full_content` 可关正文。
+- `state.database`（通常为 `state.dir/state.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
+- `state.dir/interactions/{round_id}/`：request/upstream/response/metadata；默认保留最近 N 轮；`archive_full_content` 可关正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
 - Prometheus 指标前缀 `ai_proxy_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
 
 ## 修改时注意
 
 - **model id 严格大小写敏感**；catalog 与 body 必须原文 exact 匹配。
-- 改路由/能力矩阵时同步：`internal/pkg/aiproxyconfig` 校验、`ResolveTransportPlan`、`prd.md` DoD、相关 `*_test.go`、必要时 `README.md` / `docs/`。
+- 改路由/能力矩阵时同步：`internal/pkg/aiproxyconfig` 校验、`ResolveTransportPlan`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
 - 不引入 provider fallback、default_provider，或从 protocol 推断 `endpoint_capabilities`。
 - `Makefile` 默认 `-buildvcs=false`，避免非完整 git worktree 下 build 失败。
 - 文档、管理 UI 文案以中文为主；代码标识符保持英文。

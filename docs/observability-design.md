@@ -7,8 +7,8 @@ Type: module-architecture
 Last Updated: 2026-06-11
 
 > 历史设计草案：下文的“当前状态”和阶段规划记录 2026-06-11 的改造起点，不描述当前实现，且不构成
-> provider 路由或 fallback 合同。当前运行语义以 `README.md`、`prd.md` 和
-> `workorch-model-catalog-operation-closure-plan-2026-07-15.md` 为准。
+> provider 路由或 fallback 合同。当前运行语义以 `README.md`、`docs/configuration.md`、
+> `docs/operations.md`、`docs/structure.md` 和自动化测试为准。
 
 Related:
 

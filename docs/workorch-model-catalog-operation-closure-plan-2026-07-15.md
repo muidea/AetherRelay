@@ -1,10 +1,12 @@
 # WorkOrch 模型目录与 Operation 合同收口计划
 
-Status: active
+Status: archived historical closure plan
 
 Type: closure-plan
 
 Last Updated: 2026-07-15
+
+> 本文为 2026-07-15 的跨项目收口记录，不描述当前 ai-proxy 或 WorkOrch 合同。文中的外部路径、计划状态和现场结论均不应作为现行依据；当前 ai-proxy 运行语义以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。
 
 ## 1. 文档目的
 

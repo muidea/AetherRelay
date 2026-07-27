@@ -2,9 +2,11 @@
 
 Date: 2026-07-15
 
-Status: active — 收口配置已部署并验证；`krill-ai.completions` 仍为 520，等待最终能力结论
+Status: archived historical evidence snapshot
 
 Scope: `/home/rangh/aispace/ai-proxy`。WorkOrch 后续按 ai-proxy 合同单独同步，不在本审计中伪造跨仓联调结论。
+
+> 本文只保留 2026-07-15 的现场证据，表中的实例、账号和上游结论均不代表当前运行状态。当前 Provider 配置与能力应使用当前配置重新执行 live probe；运行合同以 `README.md`、`docs/configuration.md` 与 `docs/operations.md` 为准。
 
 ## 1. 审计规则
 

@@ -30,7 +30,7 @@ model_catalog:
     operations: chat_completions
 ```
 
-`model_catalog` 是静态 Provider 的模型、容量、operation 与唯一 RouteOwner 的权威；模型 ID exact 且严格区分大小写。启用 ChatGPT Web 后，运行时有效目录还会合成账号池自动发现的模型。完整的端点矩阵、转换限制与 typed error 见 [Provider Capability Contract](provider-capability-contract-design-2026-07-15.md)。
+`model_catalog` 是静态 Provider 的模型、容量、operation 与唯一 RouteOwner 的权威；模型 ID exact 且严格区分大小写。启用 ChatGPT Web 后，运行时有效目录还会合成账号池自动发现的模型。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；[Provider Capability Contract](provider-capability-contract-design-2026-07-15.md) 保留为设计参考。
 
 ## Provider 与模型路由
 
@@ -143,6 +143,8 @@ chatgpt_web:
 
 访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量，以及在「ChatGPT Web」页签中维护账号池、图片任务与本地图片库。相关管理 API 同样位于该前缀下的 `/api/chatgpt/**`。
 
+Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。
+
 ChatGPT Web 管理页依赖对应运行时组件（账号池 / 图片任务 / 图片存储）已装配；若组件未启用，页面会显示不可用状态而不是空数据。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。账号导出、OAuth 回调与完整 token 不会写入浏览器持久化存储。
 
 `chatgpt_web.enabled` 在进程启动时决定 ChatGPT Web 的运行组件是否装配。关闭时，`/api/chatgpt/**` 返回 `503 chatgpt web is not enabled`；不能只在运行中修改 YAML 后立即使用，启用或关闭该能力后必须重启 ai-proxy。
@@ -197,4 +199,4 @@ server:
 - 认证相关配置热更新成功后清空全部会话；`admin_base_path` 变更必须重启。
 - 该模式不替代 TLS、主机账户隔离或配置文件权限保护。
 
-Admin usage API 的筛选参数、导出边界与响应格式见 [API Key 用量与 DuckDB 收口方案](api-key-usage-duckdb-web-closure-plan-2026-07-17.md#17-admin-api)。
+Admin usage API 的筛选参数、导出边界与响应格式以当前管理页、`internal/modules/application/adminapi/service/admin` 的合同测试和 DuckDB 查询实现为准。

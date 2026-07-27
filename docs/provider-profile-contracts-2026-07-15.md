@@ -2,9 +2,11 @@
 
 Contract Version: PPC-2026-07-15.1
 
-Status: active
+Status: archived historical profile snapshot
 
 Last Updated: 2026-07-15
+
+> 本文记录 2026-07-15 的 profile 与复验计划，不是当前 Provider 配置 authority；其中的复验周期和现场证据已过期。当前配置以 `config.yaml` 为准，并应通过当前 live probe 重新验证。
 
 ## 1. Purpose and authority
 

@@ -129,7 +129,7 @@ providers:
 - `AcquireTextTokenCommand`、`AcquireImageTokenCommand` 增加 `Model`、`Operation`，按能力快照筛选；
 - 账号删除、禁用、失效、刷新结果改变时递增目录版本。
 
-快照属于账号资源的派生状态，可持久化在原账号对象的受控扩展字段中；不持久化原始上游响应、token 或未约束 JSON。加载旧 `accounts.json` 时没有模型快照的账号进入“待发现”，不会被模型路由选中。
+快照属于账号资源的派生状态，持久化在统一 `state.database` 的 `chatgpt_accounts` owner 表中；不持久化原始上游响应、token 或未约束 JSON。新建或尚无快照的账号进入“待发现”，不会被模型路由选中。旧 JSON 文件布局不再支持。
 
 ### 6.3 proxyapi owner：有效目录
 

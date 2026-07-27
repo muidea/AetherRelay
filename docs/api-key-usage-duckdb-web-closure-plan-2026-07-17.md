@@ -1,12 +1,12 @@
 # API Key 用量统计、DuckDB 持久化与 Web 展示收口方案
 
-Status: superseded-in-part
+Status: archived / superseded
 
 Type: closure-plan
 
 Last Updated: 2026-07-17
 
-> 认证策略更新（2026-07-20）：本文件中任何“未携带客户端 Key 归入 `default` 并允许访问”的描述均已废止。所有数据端点现在必须携带已启用客户端 Key；缺失、空白、未知、禁用、格式错误或冲突 Key 均返回 401，且不产生 usage。既有 `default` 行仅作为历史 usage 数据保留。
+> 历史收口计划（2026-07-17），不描述当前运行合同。正文保留当时的设计和验收记录，其中 `usage_store`、`usage.duckdb`、无客户端 Key 放行及相关路径均已失效。当前行为以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。
 
 ## 1. 文档目的
 
