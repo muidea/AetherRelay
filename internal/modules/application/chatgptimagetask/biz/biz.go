@@ -163,7 +163,7 @@ func (s *ImageTask) handleResumePoll(ev event.Event, result event.Result) {
 		return
 	}
 	view := resume.Task
-	if view.Status != events.StatusError || view.ConversationID == "" || resume.AccountID == "" || !isPollTimeout(view.Error) {
+	if !isResumableConversationFailure(view) || resume.AccountID == "" {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "task is not resumable"))
 		return
 	}
@@ -217,9 +217,14 @@ func (s *ImageTask) handleRetryGeneration(ev event.Event, result event.Result) {
 	result.Set(events.RetryGenerationResult{Task: view}, nil)
 }
 
-func isPollTimeout(message string) bool {
-	message = strings.ToLower(message)
-	return strings.Contains(message, "timeout") || strings.Contains(message, "timed out") || strings.Contains(message, "超时")
+// isResumableConversationFailure accepts any terminal failure after an
+// upstream conversation was created. Resuming only polls that conversation;
+// it never submits a second image-generation request. This also recovers
+// records produced by earlier versions that mistakenly stored "<nil>" as an
+// error after a successful submission.
+func isResumableConversationFailure(task events.TaskView) bool {
+	status := strings.ToLower(strings.TrimSpace(task.Status))
+	return (status == events.StatusError || status == "failed") && strings.TrimSpace(task.ConversationID) != ""
 }
 
 func isRetryableBootstrapFailure(task events.TaskView) bool {
@@ -284,7 +289,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 // generateWithBootstrapRetry retries only the first, pre-conversation
 // bootstrap transport failure. Once a conversation may exist, a blind retry
 // could create a duplicate image and remains an explicit operator action.
-func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, prompt, model, size, quality string) (any, error) {
+func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, prompt, model, size, quality string) (any, *cd.Error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		result := s.SendEvent(event.NewEvent(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, nil, upevents.GenerateImageCommand{
 			AccessToken: token,
@@ -300,7 +305,7 @@ func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, prompt, m
 		s.store.MarkProgress(ownerID, taskID, "retrying_bootstrap")
 		time.Sleep(time.Second)
 	}
-	return nil, fmt.Errorf("image generation retry exhausted")
+	return nil, cd.NewError(cd.Unexpected, "image generation retry exhausted")
 }
 
 func isBootstrapTransportError(message string) bool {

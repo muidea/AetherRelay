@@ -851,8 +851,7 @@ function isTerminalTask(task){
 function canResumeTask(task){
   if(!task)return false;
   const status=String(task.status||"").toLowerCase();
-  const error=String(task.error||"").toLowerCase();
-  return (status==="error"||status==="failed")&&Boolean(String(task.conversation_id||"").trim())&&(error.includes("timeout")||error.includes("超时"));
+  return (status==="error"||status==="failed")&&Boolean(String(task.conversation_id||"").trim());
 }
 function canRetryGenerationTask(task){
   if(!task)return false;
