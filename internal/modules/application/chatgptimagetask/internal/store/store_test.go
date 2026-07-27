@@ -24,3 +24,24 @@ func TestImageTasksPersistInOwnerTable(t *testing.T) {
 		t.Fatalf("resume=%+v ok=%v", resume, ok)
 	}
 }
+
+func TestRetryGenerationResetsOnlyPreConversationGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.duckdb")
+	s := New(path)
+	defer s.Close()
+	if _, created, err := s.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "1024x1024", "high"); err != nil || !created {
+		t.Fatalf("create created=%v err=%v", created, err)
+	}
+	s.SetAccountID("owner", "task", "account-hash")
+	s.MarkError("owner", "task", "bootstrap: tls: EOF", "")
+
+	view, retried, err := s.RetryGeneration("owner", "task")
+	if err != nil || !retried || view.Status != events.StatusQueued || view.Progress != "retrying_submission" || view.Error != "" || view.Prompt != "prompt" || view.Model != "gpt-image-2" {
+		t.Fatalf("retry view=%+v retried=%v err=%v", view, retried, err)
+	}
+
+	s.MarkError("owner", "task", "poll timed out", "conversation-1")
+	if _, retried, err := s.RetryGeneration("owner", "task"); err != nil || retried {
+		t.Fatalf("conversation task retried=%v err=%v", retried, err)
+	}
+}

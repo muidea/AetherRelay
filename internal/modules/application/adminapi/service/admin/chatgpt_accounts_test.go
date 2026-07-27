@@ -25,6 +25,9 @@ type chatGPTAccountRuntimeStub struct {
 	imageBytesErr error
 	exportedIDs   []string
 	exportedItems []accevents.ExportItem
+	retryOwner    string
+	retryTaskID   string
+	retryBaseURL  string
 }
 
 type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
@@ -121,6 +124,10 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTImageTasks(context.Context, strin
 func (s *chatGPTAccountRuntimeStub) ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error) {
 	return taskevents.ResumePollResult{}, nil
 }
+func (s *chatGPTAccountRuntimeStub) RetryChatGPTImageGeneration(_ context.Context, ownerID, taskID, baseURL string) (taskevents.RetryGenerationResult, error) {
+	s.retryOwner, s.retryTaskID, s.retryBaseURL = ownerID, taskID, baseURL
+	return taskevents.RetryGenerationResult{Task: taskevents.TaskView{ID: taskID, Status: taskevents.StatusQueued, Mode: "generate", Progress: "retrying_submission"}}, nil
+}
 func (s *chatGPTAccountRuntimeStub) ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error) {
 	return effectivecatalog.Empty(), nil
 }
@@ -159,6 +166,19 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	handler.ServeHTTP(updateRecorder, update)
 	if updateRecorder.Code != http.StatusOK || runtime.updated.ID != "account-1" || runtime.updated.Status == nil || *runtime.updated.Status != "禁用" || runtime.updated.Proxy == nil || *runtime.updated.Proxy != "" || strings.Contains(updateRecorder.Body.String(), "very-secret") {
 		t.Fatalf("update=%d command=%+v body=%s", updateRecorder.Code, runtime.updated, updateRecorder.Body.String())
+	}
+}
+
+func TestChatGPTImageTaskRetryGeneration(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/retry-generation", strings.NewReader(`{"owner_id":"owner-1"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted || runtime.retryOwner != "owner-1" || runtime.retryTaskID != "task-1" || runtime.retryBaseURL != "http://example.com" || !strings.Contains(rec.Body.String(), `"retrying_submission"`) {
+		t.Fatalf("retry status=%d owner=%q task=%q base=%q body=%s", rec.Code, runtime.retryOwner, runtime.retryTaskID, runtime.retryBaseURL, rec.Body.String())
 	}
 }
 

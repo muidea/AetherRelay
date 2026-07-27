@@ -366,9 +366,41 @@ func (s *Store) MarkError(ownerID, taskID, errMsg, conversationID string) {
 	rec.ConversationID = conversationID
 	rec.Data = []events.ImageData{}
 	rec.dataDirty = true
+	rec.Progress = ""
 	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.items[key] = rec
 	_ = s.saveLocked()
+}
+
+// RetryGeneration resets a terminal generation task. Eligibility belongs to
+// the image-task biz, which understands the upstream failure stage.
+func (s *Store) RetryGeneration(ownerID, taskID string) (events.TaskView, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := taskKey(ownerID, taskID)
+	rec, ok := s.items[key]
+	if !ok {
+		return events.TaskView{}, false, nil
+	}
+	if rec.Status != events.StatusError || rec.Mode != "generate" || rec.ConversationID != "" {
+		return rec.TaskView, false, nil
+	}
+	rec.Status = events.StatusQueued
+	rec.Progress = "retrying_submission"
+	rec.Error = ""
+	rec.AccountID = ""
+	rec.Data = nil
+	rec.dataDirty = true
+	rec.Usage = nil
+	rec.usageDirty = true
+	rec.DurationMs = 0
+	rec.StartedTS = 0
+	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.items[key] = rec
+	if err := s.saveLocked(); err != nil {
+		return events.TaskView{}, false, err
+	}
+	return rec.TaskView, true, nil
 }
 
 func (s *Store) List(ownerID string, taskIDs []string) (items []events.TaskView, missing []string) {

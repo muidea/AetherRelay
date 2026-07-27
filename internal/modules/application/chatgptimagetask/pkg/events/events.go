@@ -8,6 +8,7 @@ const (
 	TopicSubmitEdit       = "imagetask/submit_edit"
 	TopicList             = "imagetask/list"
 	TopicResumePoll       = "imagetask/resume_poll"
+	TopicRetryGeneration  = "imagetask/retry_generation"
 )
 
 const (
@@ -82,3 +83,14 @@ type ResumePollCommand struct {
 }
 
 type ResumePollResult struct{ Task TaskView }
+
+// RetryGenerationCommand restarts a generation that failed before ChatGPT
+// created a conversation. It is distinct from ResumePollCommand: without a
+// conversation ID there is no upstream job to poll.
+type RetryGenerationCommand struct {
+	OwnerID string
+	TaskID  string
+	BaseURL string
+}
+
+type RetryGenerationResult struct{ Task TaskView }

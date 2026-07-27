@@ -53,11 +53,13 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicSubmitEdit,
 		events.TopicList,
 		events.TopicResumePoll,
+		events.TopicRetryGeneration,
 	}
 	b.SubscribeFunc(events.TopicSubmitGeneration, b.handleSubmitGeneration)
 	b.SubscribeFunc(events.TopicSubmitEdit, b.handleSubmitEdit)
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicResumePoll, b.handleResumePoll)
+	b.SubscribeFunc(events.TopicRetryGeneration, b.handleRetryGeneration)
 	return b, nil
 }
 
@@ -181,9 +183,50 @@ func (s *ImageTask) handleResumePoll(ev event.Event, result event.Result) {
 	result.Set(events.ResumePollResult{Task: view}, nil)
 }
 
+func (s *ImageTask) handleRetryGeneration(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.RetryGenerationCommand)
+	if !ok || strings.TrimSpace(cmd.OwnerID) == "" || strings.TrimSpace(cmd.TaskID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid retry generation command"))
+		return
+	}
+	view, found := s.store.Get(cmd.OwnerID, cmd.TaskID)
+	if !found {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "task not found"))
+		return
+	}
+	if !isRetryableBootstrapFailure(view) {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "task is not safe to retry"))
+		return
+	}
+	view, retried, err := s.store.RetryGeneration(cmd.OwnerID, cmd.TaskID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	if !retried {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "task is not safe to retry"))
+		return
+	}
+	ownerID, taskID, prompt, model, size, quality, baseURL := cmd.OwnerID, cmd.TaskID, view.Prompt, view.Model, view.Size, view.Quality, cmd.BaseURL
+	s.AsyncTask(func() {
+		s.runGeneration(ownerID, taskID, prompt, model, size, quality, baseURL)
+	})
+	result.Set(events.RetryGenerationResult{Task: view}, nil)
+}
+
 func isPollTimeout(message string) bool {
 	message = strings.ToLower(message)
 	return strings.Contains(message, "timeout") || strings.Contains(message, "timed out") || strings.Contains(message, "超时")
+}
+
+func isRetryableBootstrapFailure(task events.TaskView) bool {
+	if task.Status != events.StatusError || task.Mode != "generate" || task.ConversationID != "" {
+		return false
+	}
+	return isBootstrapTransportError(task.Error)
 }
 
 func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality, baseURL string) {
@@ -210,16 +253,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 	}()
 
 	s.store.MarkProgress(ownerID, taskID, "starting_generation")
-	genEv := event.NewEvent(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, nil, upevents.GenerateImageCommand{
-		AccessToken: token,
-
-		Prompt:  prompt,
-		Model:   model,
-		Size:    size,
-		Quality: quality,
-	})
-	genRes := s.SendEvent(genEv)
-	genVal, genErr := genRes.Get()
+	genVal, genErr := s.generateWithBootstrapRetry(ownerID, taskID, token, prompt, model, size, quality)
 	if genErr != nil {
 		conversationID := ""
 		if partial, ok := genVal.(upevents.GenerateImageResult); ok {
@@ -245,6 +279,33 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 
 	s.markImageResult(token, true)
 	s.store.MarkSuccess(ownerID, taskID, data, genOut.ConversationID, genOut.Usage, time.Since(start).Milliseconds())
+}
+
+// generateWithBootstrapRetry retries only the first, pre-conversation
+// bootstrap transport failure. Once a conversation may exist, a blind retry
+// could create a duplicate image and remains an explicit operator action.
+func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, prompt, model, size, quality string) (any, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		result := s.SendEvent(event.NewEvent(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, nil, upevents.GenerateImageCommand{
+			AccessToken: token,
+			Prompt:      prompt,
+			Model:       model,
+			Size:        size,
+			Quality:     quality,
+		}))
+		value, err := result.Get()
+		if err == nil || attempt == 1 || !isBootstrapTransportError(err.Error()) {
+			return value, err
+		}
+		s.store.MarkProgress(ownerID, taskID, "retrying_bootstrap")
+		time.Sleep(time.Second)
+	}
+	return nil, fmt.Errorf("image generation retry exhausted")
+}
+
+func isBootstrapTransportError(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "bootstrap: tls:") || strings.Contains(message, "bootstrap: timeout:")
 }
 
 func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseURL string, encodedImages []string) {

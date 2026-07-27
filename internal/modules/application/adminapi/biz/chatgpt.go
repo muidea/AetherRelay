@@ -179,6 +179,18 @@ func (s *Admin) ResumeChatGPTImageTask(ctx context.Context, ownerID, taskID stri
 	return result, nil
 }
 
+func (s *Admin) RetryChatGPTImageGeneration(ctx context.Context, ownerID, taskID, baseURL string) (taskevents.RetryGenerationResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(taskevents.TopicRetryGeneration, s.ID(), taskcommon.UnitID, event.NewHeader(), ctx, taskevents.RetryGenerationCommand{OwnerID: ownerID, TaskID: taskID, BaseURL: baseURL})).Get()
+	if err != nil {
+		return taskevents.RetryGenerationResult{}, fmt.Errorf("chatgpt image task retry rejected: %w", err)
+	}
+	result, ok := value.(taskevents.RetryGenerationResult)
+	if !ok {
+		return taskevents.RetryGenerationResult{}, fmt.Errorf("invalid chatgpt image task retry result")
+	}
+	return result, nil
+}
+
 func (s *Admin) ListChatGPTImages(ctx context.Context, baseURL, startDate, endDate string) (imgevents.ListResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicList, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.ListCommand{BaseURL: baseURL, StartDate: startDate, EndDate: endDate})).Get()
 	if err != nil {

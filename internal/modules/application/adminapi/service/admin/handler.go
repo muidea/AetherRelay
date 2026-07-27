@@ -59,6 +59,7 @@ type ChatGPTRuntime interface {
 	SubmitChatGPTImageEdit(context.Context, taskevents.SubmitEditCommand) (taskevents.SubmitResult, error)
 	ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error)
 	ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error)
+	RetryChatGPTImageGeneration(context.Context, string, string, string) (taskevents.RetryGenerationResult, error)
 	ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error)
 }
 
@@ -296,6 +297,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && strings.HasSuffix(rel, "/resume-poll") && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.resumeChatGPTImageTask(w, r, rel)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && strings.HasSuffix(rel, "/retry-generation") && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.retryChatGPTImageGeneration(w, r, rel)
 		}
 	default:
 		http.NotFound(w, r)

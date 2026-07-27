@@ -520,7 +520,7 @@ function taskStatusTag(status){
 }
 function taskProgressLabel(progress){
   const value=String(progress||"").trim();
-  const labels={queued:"等待调度",getting_account:"正在获取账号",starting_generation:"正在提交生成",starting_edit:"正在提交编辑",resuming_poll:"正在恢复轮询",receiving_image:"正在接收结果"};
+  const labels={queued:"等待调度",retrying_submission:"正在重新提交",retrying_bootstrap:"网络重试中",getting_account:"正在获取账号",starting_generation:"正在提交生成",starting_edit:"正在提交编辑",resuming_poll:"正在恢复轮询",receiving_image:"正在接收结果"};
   return labels[value]||value||"—";
 }
 
@@ -850,9 +850,15 @@ function isTerminalTask(task){
 }
 function canResumeTask(task){
   if(!task)return false;
-  if(!isTerminalTask(task))return true;
-  const s=String(task.status||"").toLowerCase();
-  return s==="error"||s==="failed";
+  const status=String(task.status||"").toLowerCase();
+  const error=String(task.error||"").toLowerCase();
+  return (status==="error"||status==="failed")&&Boolean(String(task.conversation_id||"").trim())&&(error.includes("timeout")||error.includes("超时"));
+}
+function canRetryGenerationTask(task){
+  if(!task)return false;
+  const status=String(task.status||"").toLowerCase();
+  const error=String(task.error||"").toLowerCase();
+  return (status==="error"||status==="failed")&&String(task.mode||"")==="generate"&&!String(task.conversation_id||"").trim()&&(error.includes("bootstrap: tls:")||error.includes("bootstrap: timeout:"));
 }
 function taskImageSrc(item){
   if(!item)return "";
@@ -897,7 +903,12 @@ function renderChatGPTTasks(){
       return `<img class="thumb-inline" src="${esc(src)}" data-preview-src="${esc(src)}" data-preview-title="${esc(t.id)}" alt="任务结果 ${i+1}" loading="lazy">`;
     }).join("");
     const elapsed=t.elapsed_secs!=null?`${Number(t.elapsed_secs).toFixed(1)}s`:(t.duration_ms!=null?`${t.duration_ms}ms`:"—");
-    const resumeDisabled=canResumeTask(t)&&!state.cg.tasks.resumeBusy.has(t.id)?"":"disabled";
+    const actionBusy=state.cg.tasks.resumeBusy.has(t.id);
+    const action=canResumeTask(t)
+      ?`<button class="link-btn" data-task-resume="${esc(t.id)}" ${actionBusy?"disabled":""}>恢复轮询</button>`
+      :canRetryGenerationTask(t)
+        ?`<button class="link-btn" data-task-retry="${esc(t.id)}" ${actionBusy?"disabled":""}>重新提交</button>`
+        :"—";
     const error=String(t.error||"").trim();
     return `<tr>
       <td class="mono" title="${esc(t.id)}">${esc((t.id||"").slice(0,12))}${(t.id||"").length>12?"…":""}</td>
@@ -911,7 +922,7 @@ function renderChatGPTTasks(){
       <td><div class="task-results">${thumbs||'<span class="task-results-empty">暂无结果</span>'}</div></td>
       <td class="subtle task-date">${esc(formatAccountDate(t.created_at))}</td>
       <td class="subtle task-date">${esc(formatAccountDate(t.updated_at))}</td>
-      <td class="task-actions"><button class="link-btn" data-task-resume="${esc(t.id)}" ${resumeDisabled}>恢复轮询</button></td>
+      <td class="task-actions">${action}</td>
     </tr>`;
   }).join("");
   $("cgTaskTable").className="";
@@ -919,6 +930,7 @@ function renderChatGPTTasks(){
     <th>任务 ID</th><th>会话</th><th>模式</th><th>模型</th><th>状态</th><th>进度</th><th>耗时</th><th>错误</th><th>结果</th><th>提交</th><th>更新</th><th>操作</th>
   </tr></thead><tbody>${rows}</tbody></table></div>`;
   document.querySelectorAll("[data-task-resume]").forEach(btn=>btn.onclick=()=>resumeTask(btn.dataset.taskResume));
+  document.querySelectorAll("[data-task-retry]").forEach(btn=>btn.onclick=()=>retryGenerationTask(btn.dataset.taskRetry));
   document.querySelectorAll("[data-preview-src]").forEach(img=>img.onclick=()=>openLightbox(img.dataset.previewSrc,img.dataset.previewTitle||"预览"));
 }
 function startTaskPolling(taskId){
@@ -1011,6 +1023,25 @@ async function resumeTask(taskId){
       startTaskPolling(taskId);
     }
     toast("已恢复轮询");
+  }catch(err){toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+}
+async function retryGenerationTask(taskId){
+  const owner=state.cg.tasks.owner;
+  if(!owner||!taskId)return;
+  if(!confirm("将重新提交尚未创建上游会话的图片任务。是否继续？"))return;
+  if(state.cg.tasks.resumeBusy.has(taskId)){toast("该任务正在处理中","error");return}
+  state.cg.tasks.resumeBusy.add(taskId);
+  renderChatGPTTasks();
+  try{
+    const task=await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}/retry-generation`),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({owner_id:owner})});
+    upsertTask(task);
+    renderChatGPTTasks();
+    if(!isTerminalTask(task)){
+      if(state.cg.tasks.poll.timers.has(taskId)){clearTimeout(state.cg.tasks.poll.timers.get(taskId));state.cg.tasks.poll.timers.delete(taskId)}
+      startTaskPolling(taskId);
+    }
+    toast("任务已重新提交");
   }catch(err){toast(err.message,"error")}
   finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
 }
