@@ -58,7 +58,16 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 ## ChatGPT Web 管理页运维注意
 
-Admin 管理台一级页签「ChatGPT Web」提供账号池、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin` 写保护。
+Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin` 写保护。
+
+### 临时对话正文保留与删除
+
+- 临时对话的会话、消息与上游续聊锚点持久化在 `state.database`（DuckDB）专用表中，不进入 interaction archive，也不写入浏览器 localStorage/sessionStorage。
+- 保留期由 `chatgpt_web.temporary_chat.retention_days` 控制（默认 30 天）。清理任务只删除已到期且没有活跃流的会话；管理员在页面删除为永久删除，不进回收站。
+- 达到 `max_conversations` 时拒绝新建，需要先删除旧记录，系统不会为腾地方静默删历史。
+- 服务重启时，任何 `streaming` 消息会被标记为 `interrupted`，会话进入 `recovery_required`：历史仍可读，但不得在原上游分支继续发送；需新建会话。
+- 备份/恢复 `state.database` 即包含临时对话正文；共享或外发该文件等同于泄露管理员调试输入输出，需按主机权限与备份策略保护。
+- research / deep_research 专用模型不会进入临时对话模型选择器或公开 `/v1/models`。
 
 - **账号导出**：`POST .../api/chatgpt/accounts/export` 是唯一有意返回明文 token 的接口。必须二次确认；响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图。下载后立即销毁本地副本。
 - **OAuth 导入**：授权 URL、callback 与 session id 只应停留在管理员当前浏览器会话的内存中；不要把它们写进 URL 书签、共享剪贴板记录或监控日志。

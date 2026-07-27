@@ -326,3 +326,41 @@ func testJWTWithClaims(claims map[string]any) string {
 	}
 	return "header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
 }
+
+func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	s := New(path, 1)
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	quota := 3
+	account, found, err := s.Update("token-a", "plus", StatusNormal, &quota, "")
+	if err != nil || !found {
+		t.Fatalf("update found=%v err=%v", found, err)
+	}
+	// Text acquire must not consume image slots.
+	acquired, ok := s.AcquireTextAccount(account.ID, "", "")
+	if !ok || acquired.AccessToken != "token-a" {
+		t.Fatalf("acquire text account=%+v ok=%v", acquired, ok)
+	}
+	if _, ok := s.AcquireImageToken("", "", nil, "", ""); !ok {
+		t.Fatal("text acquisition must not occupy image inflight slot")
+	}
+	s.ReleaseImageSlot("token-a")
+
+	result, marked := s.RecordTextResult(account.ID, true, "")
+	if !marked || result.Success != 1 || result.Fail != 0 || result.Status != StatusNormal {
+		t.Fatalf("success result=%+v marked=%v", result, marked)
+	}
+	result, marked = s.RecordTextResult(account.ID, false, "timeout")
+	if !marked || result.Fail != 1 || result.Status != StatusNormal {
+		t.Fatalf("timeout must only count fail: %+v", result)
+	}
+	result, marked = s.RecordTextResult(account.ID, false, "invalid_token")
+	if !marked || result.Status != StatusAbnormal {
+		t.Fatalf("invalid_token must mark abnormal: %+v", result)
+	}
+	if _, ok := s.AcquireTextAccount(account.ID, "", ""); ok {
+		t.Fatal("abnormal account must not be reacquired")
+	}
+}

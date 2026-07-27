@@ -3,11 +3,14 @@ package biz
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskcommon "ai-proxy/internal/modules/application/chatgptimagetask/pkg/common"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	tempcommon "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
+	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
@@ -288,4 +291,109 @@ func (s *Admin) ChatGPTEffectiveCatalog(ctx context.Context) (effectivecatalog.S
 		return effectivecatalog.Snapshot{}, fmt.Errorf("invalid effective catalog result")
 	}
 	return result.Snapshot, nil
+}
+
+func (s *Admin) CreateTemporaryConversation(ctx context.Context, cmd tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicCreate, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.ConversationResult{}, fmt.Errorf("%s", errMessage(err, "temporary chat unavailable"))
+	}
+	result, ok := value.(tempevents.ConversationResult)
+	if !ok {
+		return tempevents.ConversationResult{}, fmt.Errorf("invalid temporary conversation result")
+	}
+	return result, nil
+}
+
+func (s *Admin) ListTemporaryConversations(ctx context.Context, cmd tempevents.ListConversationsCommand) (tempevents.ListConversationsResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicList, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.ListConversationsResult{}, fmt.Errorf("%s", errMessage(err, "temporary chat unavailable"))
+	}
+	result, ok := value.(tempevents.ListConversationsResult)
+	if !ok {
+		return tempevents.ListConversationsResult{}, fmt.Errorf("invalid temporary conversation list result")
+	}
+	return result, nil
+}
+
+func (s *Admin) GetTemporaryConversation(ctx context.Context, cmd tempevents.GetConversationCommand) (tempevents.ConversationDetailResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicGet, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.ConversationDetailResult{}, fmt.Errorf("%s", errMessage(err, "temporary conversation not found"))
+	}
+	result, ok := value.(tempevents.ConversationDetailResult)
+	if !ok {
+		return tempevents.ConversationDetailResult{}, fmt.Errorf("invalid temporary conversation detail result")
+	}
+	return result, nil
+}
+
+func (s *Admin) StartTemporaryTurn(ctx context.Context, cmd tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicStartTurn, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.StartTurnResult{}, fmt.Errorf("%s", errMessage(err, "temporary turn start failed"))
+	}
+	result, ok := value.(tempevents.StartTurnResult)
+	if !ok {
+		return tempevents.StartTurnResult{}, fmt.Errorf("invalid temporary turn start result")
+	}
+	return result, nil
+}
+
+func (s *Admin) PullTemporaryTurn(ctx context.Context, cmd tempevents.PullTurnCommand) (tempevents.PullTurnResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicPullTurn, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.PullTurnResult{}, fmt.Errorf("%s", errMessage(err, "temporary turn pull failed"))
+	}
+	result, ok := value.(tempevents.PullTurnResult)
+	if !ok {
+		return tempevents.PullTurnResult{}, fmt.Errorf("invalid temporary turn pull result")
+	}
+	return result, nil
+}
+
+func (s *Admin) CancelTemporaryTurn(ctx context.Context, cmd tempevents.CancelTurnCommand) (tempevents.CancelTurnResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicCancelTurn, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.CancelTurnResult{}, fmt.Errorf("%s", errMessage(err, "temporary turn cancel failed"))
+	}
+	result, ok := value.(tempevents.CancelTurnResult)
+	if !ok {
+		return tempevents.CancelTurnResult{}, fmt.Errorf("invalid temporary turn cancel result")
+	}
+	return result, nil
+}
+
+func (s *Admin) DeleteTemporaryConversation(ctx context.Context, cmd tempevents.DeleteConversationCommand) (tempevents.DeleteConversationResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicDelete, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.DeleteConversationResult{}, fmt.Errorf("%s", errMessage(err, "temporary conversation delete failed"))
+	}
+	result, ok := value.(tempevents.DeleteConversationResult)
+	if !ok {
+		return tempevents.DeleteConversationResult{}, fmt.Errorf("invalid temporary conversation delete result")
+	}
+	return result, nil
+}
+
+func errMessage(err error, fallback string) string {
+	if err == nil {
+		return fallback
+	}
+	// magicCommon *def.Error formats as "code:N, message:TEXT".
+	msg := strings.TrimSpace(err.Error())
+	if i := strings.Index(msg, "message:"); i >= 0 {
+		part := strings.TrimSpace(msg[i+len("message:"):])
+		if j := strings.Index(part, ","); j >= 0 {
+			part = strings.TrimSpace(part[:j])
+		}
+		if part != "" {
+			return part
+		}
+	}
+	if msg != "" {
+		return msg
+	}
+	return fallback
 }

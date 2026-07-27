@@ -19,6 +19,7 @@ import (
 
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
@@ -61,6 +62,13 @@ type ChatGPTRuntime interface {
 	ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error)
 	RetryChatGPTImageGeneration(context.Context, string, string, string) (taskevents.RetryGenerationResult, error)
 	ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error)
+	CreateTemporaryConversation(context.Context, tempevents.CreateConversationCommand) (tempevents.ConversationResult, error)
+	ListTemporaryConversations(context.Context, tempevents.ListConversationsCommand) (tempevents.ListConversationsResult, error)
+	GetTemporaryConversation(context.Context, tempevents.GetConversationCommand) (tempevents.ConversationDetailResult, error)
+	StartTemporaryTurn(context.Context, tempevents.StartTurnCommand) (tempevents.StartTurnResult, error)
+	PullTemporaryTurn(context.Context, tempevents.PullTurnCommand) (tempevents.PullTurnResult, error)
+	CancelTemporaryTurn(context.Context, tempevents.CancelTurnCommand) (tempevents.CancelTurnResult, error)
+	DeleteTemporaryConversation(context.Context, tempevents.DeleteConversationCommand) (tempevents.DeleteConversationResult, error)
 }
 
 // chatGPTAvailability is intentionally optional to keep isolated HTTP tests
@@ -301,6 +309,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && strings.HasSuffix(rel, "/retry-generation") && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.retryChatGPTImageGeneration(w, r, rel)
+		}
+	case rel == "/api/chatgpt/temporary-conversations" && r.Method == http.MethodGet:
+		h.listTemporaryConversations(w, r)
+	case rel == "/api/chatgpt/temporary-conversations" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.createTemporaryConversation(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && strings.HasSuffix(rel, "/cancel") && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.cancelTemporaryTurn(w, r, rel)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && strings.Contains(rel, "/turns/") && strings.HasSuffix(rel, "/events") && r.Method == http.MethodGet:
+		h.pullTemporaryTurn(w, r, rel)
+	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && strings.HasSuffix(rel, "/turns") && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.startTemporaryTurn(w, r, rel)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && r.Method == http.MethodGet:
+		h.getTemporaryConversation(w, r, rel)
+	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && r.Method == http.MethodDelete:
+		if h.requireAdminMutation(w, r) {
+			h.deleteTemporaryConversation(w, r, rel)
 		}
 	default:
 		http.NotFound(w, r)

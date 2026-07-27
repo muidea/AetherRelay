@@ -17,6 +17,8 @@ const (
 	TopicReleaseImageSlot    = "aiproxy.chatgpt.accountpool.command.release_image_slot"
 	TopicMarkImageResult     = "aiproxy.chatgpt.accountpool.command.mark_image_result"
 	TopicAcquireTextToken    = "aiproxy.chatgpt.accountpool.command.acquire_text_token"
+	TopicAcquireTextAccount  = "aiproxy.chatgpt.accountpool.command.acquire_text_account"
+	TopicRecordTextResult    = "aiproxy.chatgpt.accountpool.command.record_text_result"
 	TopicRemoveInvalid       = "aiproxy.chatgpt.accountpool.command.remove_invalid"
 	TopicHealth              = "aiproxy.chatgpt.accountpool.command.health"
 	TopicOAuthStart          = "aiproxy.chatgpt.accountpool.command.oauth_start"
@@ -124,6 +126,30 @@ type AcquireTextTokenCommand struct {
 type AcquireTextTokenResult struct {
 	AccessToken string
 	Account     AccountView
+}
+
+// AcquireTextAccountCommand acquires a specific account for text turns. It does
+// not reuse image in-flight slots and requires the account to support the model
+// for chat_completions when Model/Operation are provided.
+type AcquireTextAccountCommand struct {
+	AccountID string
+	Model     string
+	Operation string
+}
+type AcquireTextAccountResult struct {
+	AccessToken string
+	Account     AccountView
+}
+
+// RecordTextResultCommand reports a text turn outcome by account ID. invalid_token
+// transitions the account to abnormal; transient upstream failures only record fail.
+type RecordTextResultCommand struct {
+	AccountID  string
+	Success    bool
+	ErrorClass string
+}
+type RecordTextResultResult struct {
+	Account AccountView
 }
 
 // AccountModelEntry is one model+operations projection stored on an account.

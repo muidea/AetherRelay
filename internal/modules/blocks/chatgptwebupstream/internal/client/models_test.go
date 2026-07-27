@@ -1,6 +1,7 @@
 package client
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -98,4 +99,28 @@ func hasOp(model ModelDescriptor, op ModelOperation) bool {
 		}
 	}
 	return false
+}
+
+func TestParseModelsResponseFiltersResearchModels(t *testing.T) {
+	body := []byte(`{"models":[
+		{"slug":"gpt-5","tags":[]},
+		{"slug":"o3-deep-research","tags":["deep_research"]},
+		{"slug":"deep_research","enabled_tools":["deep_research"],"tags":["research"]},
+		{"slug":"gpt-image-2","tags":["image_generation"]}
+	]}`)
+	models, err := ParseModelsResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	joined := strings.Join(ids, ",")
+	if strings.Contains(joined, "research") {
+		t.Fatalf("research models leaked: %v", ids)
+	}
+	if !strings.Contains(joined, "gpt-5") {
+		t.Fatalf("ordinary chat model missing: %v", ids)
+	}
 }

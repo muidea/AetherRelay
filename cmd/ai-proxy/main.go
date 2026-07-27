@@ -7,6 +7,7 @@ import (
 	_ "ai-proxy/internal/modules/application/adminapi"
 	_ "ai-proxy/internal/modules/application/chatgptaccountpool"
 	_ "ai-proxy/internal/modules/application/chatgptimagetask"
+	_ "ai-proxy/internal/modules/application/chatgpttemporarychat"
 	_ "ai-proxy/internal/modules/application/proxyapi"
 	_ "ai-proxy/internal/modules/blocks/chatgptimagestore"
 	_ "ai-proxy/internal/modules/blocks/chatgptwebupstream"

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,24 +11,29 @@ import (
 
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 )
 
 type chatGPTAccountRuntimeStub struct {
-	addedTokens   []string
-	deletedIDs    []string
-	updated       accevents.UpdateByIDCommand
-	imageBytes    []string
-	imageThumbs   []string
-	imageList     imgevents.ListResult
-	imageListErr  error
-	imageBytesErr error
-	exportedIDs   []string
-	exportedItems []accevents.ExportItem
-	retryOwner    string
-	retryTaskID   string
-	retryBaseURL  string
+	addedTokens        []string
+	deletedIDs         []string
+	updated            accevents.UpdateByIDCommand
+	imageBytes         []string
+	imageThumbs        []string
+	imageList          imgevents.ListResult
+	imageListErr       error
+	imageBytesErr      error
+	exportedIDs        []string
+	exportedItems      []accevents.ExportItem
+	retryOwner         string
+	retryTaskID        string
+	retryBaseURL       string
+	temporaryCreate    tempevents.CreateConversationCommand
+	temporaryGet       tempevents.GetConversationCommand
+	temporaryCreateErr error
+	temporaryGetErr    error
 }
 
 type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
@@ -130,6 +136,36 @@ func (s *chatGPTAccountRuntimeStub) RetryChatGPTImageGeneration(_ context.Contex
 }
 func (s *chatGPTAccountRuntimeStub) ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error) {
 	return effectivecatalog.Empty(), nil
+}
+
+func (s *chatGPTAccountRuntimeStub) CreateTemporaryConversation(_ context.Context, command tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
+	s.temporaryCreate = command
+	if s.temporaryCreateErr != nil {
+		return tempevents.ConversationResult{}, s.temporaryCreateErr
+	}
+	return tempevents.ConversationResult{Conversation: tempevents.ConversationView{ID: "conversation-1", Model: command.Model, Status: tempevents.StatusIdle}}, nil
+}
+func (s *chatGPTAccountRuntimeStub) ListTemporaryConversations(context.Context, tempevents.ListConversationsCommand) (tempevents.ListConversationsResult, error) {
+	return tempevents.ListConversationsResult{}, nil
+}
+func (s *chatGPTAccountRuntimeStub) GetTemporaryConversation(_ context.Context, command tempevents.GetConversationCommand) (tempevents.ConversationDetailResult, error) {
+	s.temporaryGet = command
+	if s.temporaryGetErr != nil {
+		return tempevents.ConversationDetailResult{}, s.temporaryGetErr
+	}
+	return tempevents.ConversationDetailResult{Conversation: tempevents.ConversationView{ID: command.ConversationID, Status: tempevents.StatusIdle}}, nil
+}
+func (s *chatGPTAccountRuntimeStub) StartTemporaryTurn(context.Context, tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
+	return tempevents.StartTurnResult{}, nil
+}
+func (s *chatGPTAccountRuntimeStub) PullTemporaryTurn(context.Context, tempevents.PullTurnCommand) (tempevents.PullTurnResult, error) {
+	return tempevents.PullTurnResult{}, nil
+}
+func (s *chatGPTAccountRuntimeStub) CancelTemporaryTurn(context.Context, tempevents.CancelTurnCommand) (tempevents.CancelTurnResult, error) {
+	return tempevents.CancelTurnResult{}, nil
+}
+func (s *chatGPTAccountRuntimeStub) DeleteTemporaryConversation(context.Context, tempevents.DeleteConversationCommand) (tempevents.DeleteConversationResult, error) {
+	return tempevents.DeleteConversationResult{}, nil
 }
 
 func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
@@ -290,5 +326,30 @@ func TestChatGPTAdminReturnsUnavailableWhenFeatureDisabled(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "chatgpt web is not enabled") {
 		t.Fatalf("disabled feature should return 503, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTemporaryChatAdminUsesServerOwnerAndNoStore(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/temporary-conversations", strings.NewReader(`{"model":"gpt-5","owner_id":"forged-owner"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated || rec.Header().Get("Cache-Control") != "no-store" || runtime.temporaryCreate.OwnerID != "admin" || runtime.temporaryCreate.Model != "gpt-5" {
+		t.Fatalf("status=%d cache=%q command=%+v body=%s", rec.Code, rec.Header().Get("Cache-Control"), runtime.temporaryCreate, rec.Body.String())
+	}
+}
+
+func TestTemporaryChatExpiredConversationMapsToGone(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{temporaryGetErr: fmt.Errorf("conversation expired")}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/temporary-conversations/conversation-1", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusGone || rec.Header().Get("Cache-Control") != "no-store" || runtime.temporaryGet.OwnerID != "admin" {
+		t.Fatalf("status=%d cache=%q command=%+v body=%s", rec.Code, rec.Header().Get("Cache-Control"), runtime.temporaryGet, rec.Body.String())
 	}
 }

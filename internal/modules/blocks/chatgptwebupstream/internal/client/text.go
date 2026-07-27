@@ -30,24 +30,28 @@ type TextMessage struct {
 }
 
 type TextRequest struct {
-	Model          string
-	Messages       []TextMessage
-	ThinkingEffort string
+	Model           string
+	Messages        []TextMessage
+	ThinkingEffort  string
+	ConversationID  string
+	ParentMessageID string
 }
 
 // TextResult is the bounded final state collected from an upstream SSE
 // conversation. The response body never escapes the upstream owner.
 type TextResult struct {
-	ConversationID string
-	Text           string
-	Done           bool
+	ConversationID     string
+	AssistantMessageID string
+	Text               string
+	Done               bool
 }
 
 // TextDelta is an incremental assistant update derived from the Web SSE
 // message snapshots.
 type TextDelta struct {
-	ConversationID string
-	Text           string
+	ConversationID     string
+	AssistantMessageID string
+	Text               string
 }
 
 // CompleteText runs the authenticated Web conversation lifecycle and collects
@@ -79,6 +83,10 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 	if err != nil {
 		return TextResult{}, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req = req.WithContext(ctx)
 	response, err := c.doer.Do(req)
 	if err != nil {
 		return TextResult{}, classifyTransport("text_conversation", err)
@@ -86,9 +94,6 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return TextResult{}, classifyStatus("text_conversation", response.StatusCode)
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	return parseTextSSE(ctx, io.LimitReader(response.Body, maxTextSSEBytes), emit)
 }
@@ -170,11 +175,15 @@ func textConversationPayload(request TextRequest, inputs []preparedTextMessage) 
 		}
 		messages = append(messages, message)
 	}
+	parentMessageID := strings.TrimSpace(request.ParentMessageID)
+	if parentMessageID == "" {
+		parentMessageID = uuid.NewString()
+	}
 	payload := textPayload{
 		Action:                     "next",
 		Messages:                   messages,
 		Model:                      textModelSlug(request.Model),
-		ParentMessageID:            uuid.NewString(),
+		ParentMessageID:            parentMessageID,
 		ForceUseSSE:                true,
 		HistoryAndTrainingDisabled: true,
 		Timezone:                   "Asia/Shanghai",
@@ -184,6 +193,9 @@ func textConversationPayload(request TextRequest, inputs []preparedTextMessage) 
 		Suggestions:                []string{},
 		SupportedEncodings:         []string{},
 		SystemHints:                []string{},
+	}
+	if conversationID := strings.TrimSpace(request.ConversationID); conversationID != "" {
+		payload.ConversationID = conversationID
 	}
 	payload.ConversationMode.Kind = "primary_assistant"
 	payload.ClientContextualInfo = textClientContext{PageHeight: 900, PageWidth: 1400, PixelRatio: 2, ScreenHeight: 1440, ScreenWidth: 2560, TimeSinceLoaded: 120}
@@ -240,6 +252,7 @@ type textPayload struct {
 	Messages         []textConversationMessage `json:"messages"`
 	Model            string                    `json:"model"`
 	ParentMessageID  string                    `json:"parent_message_id"`
+	ConversationID   string                    `json:"conversation_id,omitempty"`
 	ConversationMode struct {
 		Kind string `json:"kind"`
 	} `json:"conversation_mode"`
@@ -305,6 +318,9 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 			result.ConversationID = bounded(patch.ConversationID, 512)
 		}
 		if patch.Message != nil && patch.Message.Author.Role == "assistant" {
+			if messageID := strings.TrimSpace(patch.Message.ID); messageID != "" {
+				result.AssistantMessageID = bounded(messageID, 512)
+			}
 			if text := patch.Message.Content.text(); text != "" {
 				next := bounded(text, maxTextContentBytes)
 				delta := next
@@ -313,7 +329,11 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 				}
 				result.Text = next
 				if delta != "" && emit != nil {
-					emitErr = emit(TextDelta{ConversationID: result.ConversationID, Text: delta})
+					emitErr = emit(TextDelta{
+						ConversationID:     result.ConversationID,
+						AssistantMessageID: result.AssistantMessageID,
+						Text:               delta,
+					})
 				}
 			}
 		}
@@ -353,6 +373,9 @@ func finishTextResult(result TextResult) (TextResult, error) {
 	if strings.TrimSpace(result.Text) == "" {
 		return TextResult{}, fmt.Errorf("text conversation: assistant response not found in SSE")
 	}
+	if strings.TrimSpace(result.ConversationID) == "" || strings.TrimSpace(result.AssistantMessageID) == "" {
+		return TextResult{}, fmt.Errorf("text conversation: continuation anchors not found in SSE")
+	}
 	return result, nil
 }
 
@@ -362,6 +385,7 @@ type textSSEPatch struct {
 }
 
 type textSSEMessage struct {
+	ID     string `json:"id"`
 	Author struct {
 		Role string `json:"role"`
 	} `json:"author"`

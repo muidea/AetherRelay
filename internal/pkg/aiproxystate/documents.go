@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
@@ -38,6 +39,39 @@ type ImageRow struct {
 	Height    int
 	CreatedAt string
 	Payload   json.RawMessage
+}
+
+// TemporaryConversationRow is one Admin temporary text conversation.
+type TemporaryConversationRow struct {
+	OwnerID                string
+	ConversationID         string
+	Title                  string
+	AccountID              string
+	Model                  string
+	ThinkingEffort         string
+	SystemPrompt           string
+	UpstreamConversationID string
+	ParentMessageID        string
+	Status                 string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	ExpiresAt              time.Time
+}
+
+// TemporaryMessageRow is one bounded message inside a temporary conversation.
+type TemporaryMessageRow struct {
+	OwnerID           string
+	ConversationID    string
+	Sequence          int64
+	MessageID         string
+	Role              string
+	Content           string
+	UpstreamMessageID string
+	Status            string
+	ErrorClass        string
+	ErrorMessage      string
+	CreatedAt         time.Time
+	CompletedAt       *time.Time
 }
 
 // Documents is a narrow state database handle. It intentionally exposes no
@@ -151,6 +185,41 @@ func migrate(db *sql.DB) error {
             tags JSON NOT NULL,
             updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
         )`,
+		`CREATE TABLE IF NOT EXISTS chatgpt_temporary_conversations (
+            owner_id VARCHAR NOT NULL,
+            conversation_id VARCHAR NOT NULL,
+            title VARCHAR NOT NULL,
+            account_id VARCHAR NOT NULL,
+            model VARCHAR NOT NULL,
+            thinking_effort VARCHAR NOT NULL DEFAULT '',
+            system_prompt VARCHAR NOT NULL DEFAULT '',
+            upstream_conversation_id VARCHAR NOT NULL DEFAULT '',
+            parent_message_id VARCHAR NOT NULL DEFAULT '',
+            status VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (owner_id, conversation_id)
+        )`,
+		`CREATE TABLE IF NOT EXISTS chatgpt_temporary_messages (
+            owner_id VARCHAR NOT NULL,
+            conversation_id VARCHAR NOT NULL,
+            sequence BIGINT NOT NULL,
+            message_id VARCHAR NOT NULL,
+            role VARCHAR NOT NULL,
+            content VARCHAR NOT NULL,
+            upstream_message_id VARCHAR NOT NULL DEFAULT '',
+            status VARCHAR NOT NULL,
+            error_class VARCHAR NOT NULL DEFAULT '',
+            error_message VARCHAR NOT NULL DEFAULT '',
+            created_at TIMESTAMP NOT NULL,
+            completed_at TIMESTAMP,
+            PRIMARY KEY (owner_id, conversation_id, sequence)
+        )`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_conversations_owner_updated
+            ON chatgpt_temporary_conversations(owner_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_messages_owner_conversation_sequence
+            ON chatgpt_temporary_messages(owner_id, conversation_id, sequence)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -334,4 +403,507 @@ func (s *Documents) replace(deleteStatement string, insert func(*sql.Tx) error) 
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Documents) CreateTemporaryConversation(row TemporaryConversationRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.shared.db.Exec(`INSERT INTO chatgpt_temporary_conversations(
+		owner_id, conversation_id, title, account_id, model, thinking_effort, system_prompt,
+		upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.OwnerID, row.ConversationID, row.Title, row.AccountID, row.Model, row.ThinkingEffort, row.SystemPrompt,
+		row.UpstreamConversationID, row.ParentMessageID, row.Status, row.CreatedAt, row.UpdatedAt, row.ExpiresAt,
+	)
+	return err
+}
+
+func (s *Documents) ListTemporaryConversations(ownerID string, limit int, updatedBefore *time.Time) ([]TemporaryConversationRow, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return nil, fmt.Errorf("state database is unavailable")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if updatedBefore == nil {
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, model, thinking_effort, system_prompt,
+			upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
+			FROM chatgpt_temporary_conversations
+			WHERE owner_id = ? AND status != 'closed' AND expires_at > NOW()
+			ORDER BY updated_at DESC
+			LIMIT ?`, ownerID, limit)
+	} else {
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, model, thinking_effort, system_prompt,
+			upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
+			FROM chatgpt_temporary_conversations
+			WHERE owner_id = ? AND status != 'closed' AND expires_at > NOW() AND updated_at < ?
+			ORDER BY updated_at DESC
+			LIMIT ?`, ownerID, *updatedBefore, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTemporaryConversations(rows)
+}
+
+func (s *Documents) LoadTemporaryConversation(ownerID, conversationID string) (TemporaryConversationRow, bool, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return TemporaryConversationRow{}, false, fmt.Errorf("state database is unavailable")
+	}
+	row := s.shared.db.QueryRow(`SELECT owner_id, conversation_id, title, account_id, model, thinking_effort, system_prompt,
+		upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
+		FROM chatgpt_temporary_conversations
+		WHERE owner_id = ? AND conversation_id = ? AND status != 'closed'`, ownerID, conversationID)
+	item, err := scanTemporaryConversation(row)
+	if err == sql.ErrNoRows {
+		return TemporaryConversationRow{}, false, nil
+	}
+	if err != nil {
+		return TemporaryConversationRow{}, false, err
+	}
+	return item, true, nil
+}
+
+func (s *Documents) CountTemporaryConversations(ownerID string) (int, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return 0, fmt.Errorf("state database is unavailable")
+	}
+	var count int
+	err := s.shared.db.QueryRow(`SELECT COUNT(*) FROM chatgpt_temporary_conversations WHERE owner_id = ? AND status != 'closed'`, ownerID).Scan(&count)
+	return count, err
+}
+
+func (s *Documents) UpdateTemporaryConversation(row TemporaryConversationRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.shared.db.Exec(`UPDATE chatgpt_temporary_conversations SET
+		title = ?, account_id = ?, model = ?, thinking_effort = ?, system_prompt = ?,
+		upstream_conversation_id = ?, parent_message_id = ?, status = ?, updated_at = ?, expires_at = ?
+		WHERE owner_id = ? AND conversation_id = ?`,
+		row.Title, row.AccountID, row.Model, row.ThinkingEffort, row.SystemPrompt,
+		row.UpstreamConversationID, row.ParentMessageID, row.Status, row.UpdatedAt, row.ExpiresAt,
+		row.OwnerID, row.ConversationID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("temporary conversation not found")
+	}
+	return nil
+}
+
+// StartTemporaryTurn persists the two local messages and the streaming
+// conversation state as one transaction. A process crash must never expose a
+// half-created turn as an apparently usable conversation.
+func (s *Documents) StartTemporaryTurn(conversation TemporaryConversationRow, user, assistant TemporaryMessageRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, message := range []TemporaryMessageRow{user, assistant} {
+		if _, err := tx.Exec(`INSERT INTO chatgpt_temporary_messages(
+			owner_id, conversation_id, sequence, message_id, role, content, upstream_message_id,
+			status, error_class, error_message, created_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			message.OwnerID, message.ConversationID, message.Sequence, message.MessageID, message.Role, message.Content, message.UpstreamMessageID,
+			message.Status, message.ErrorClass, message.ErrorMessage, message.CreatedAt, message.CompletedAt,
+		); err != nil {
+			return err
+		}
+	}
+	res, err := tx.Exec(`UPDATE chatgpt_temporary_conversations SET
+		title = ?, account_id = ?, model = ?, thinking_effort = ?, system_prompt = ?,
+		upstream_conversation_id = ?, parent_message_id = ?, status = ?, updated_at = ?, expires_at = ?
+		WHERE owner_id = ? AND conversation_id = ?`,
+		conversation.Title, conversation.AccountID, conversation.Model, conversation.ThinkingEffort, conversation.SystemPrompt,
+		conversation.UpstreamConversationID, conversation.ParentMessageID, conversation.Status, conversation.UpdatedAt, conversation.ExpiresAt,
+		conversation.OwnerID, conversation.ConversationID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("temporary conversation not found")
+	}
+	return tx.Commit()
+}
+
+// CompleteTemporaryTurn commits both message terminal states and the
+// continuation anchors atomically. The assistant anchor is authoritative for
+// the next Web turn, so it cannot be persisted separately from its message.
+func (s *Documents) CompleteTemporaryTurn(conversation TemporaryConversationRow, user, assistant TemporaryMessageRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, message := range []TemporaryMessageRow{user, assistant} {
+		res, err := tx.Exec(`UPDATE chatgpt_temporary_messages SET
+			content = ?, upstream_message_id = ?, status = ?, error_class = ?, error_message = ?, completed_at = ?
+			WHERE owner_id = ? AND conversation_id = ? AND sequence = ?`,
+			message.Content, message.UpstreamMessageID, message.Status, message.ErrorClass, message.ErrorMessage, message.CompletedAt,
+			message.OwnerID, message.ConversationID, message.Sequence,
+		)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("temporary message not found")
+		}
+	}
+	res, err := tx.Exec(`UPDATE chatgpt_temporary_conversations SET
+		title = ?, account_id = ?, model = ?, thinking_effort = ?, system_prompt = ?,
+		upstream_conversation_id = ?, parent_message_id = ?, status = ?, updated_at = ?, expires_at = ?
+		WHERE owner_id = ? AND conversation_id = ?`,
+		conversation.Title, conversation.AccountID, conversation.Model, conversation.ThinkingEffort, conversation.SystemPrompt,
+		conversation.UpstreamConversationID, conversation.ParentMessageID, conversation.Status, conversation.UpdatedAt, conversation.ExpiresAt,
+		conversation.OwnerID, conversation.ConversationID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("temporary conversation not found")
+	}
+	return tx.Commit()
+}
+
+// InterruptTemporaryConversation atomically records recovery state for every
+// unfinished message in one conversation. It is used after process restart
+// and after teardown if a worker could not report its own terminal state.
+func (s *Documents) InterruptTemporaryConversation(conversation TemporaryConversationRow, messages []TemporaryMessageRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, message := range messages {
+		res, err := tx.Exec(`UPDATE chatgpt_temporary_messages SET
+			content = ?, upstream_message_id = ?, status = ?, error_class = ?, error_message = ?, completed_at = ?
+			WHERE owner_id = ? AND conversation_id = ? AND sequence = ?`,
+			message.Content, message.UpstreamMessageID, message.Status, message.ErrorClass, message.ErrorMessage, message.CompletedAt,
+			message.OwnerID, message.ConversationID, message.Sequence,
+		)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("temporary message not found")
+		}
+	}
+	res, err := tx.Exec(`UPDATE chatgpt_temporary_conversations SET
+		title = ?, account_id = ?, model = ?, thinking_effort = ?, system_prompt = ?,
+		upstream_conversation_id = ?, parent_message_id = ?, status = ?, updated_at = ?, expires_at = ?
+		WHERE owner_id = ? AND conversation_id = ?`,
+		conversation.Title, conversation.AccountID, conversation.Model, conversation.ThinkingEffort, conversation.SystemPrompt,
+		conversation.UpstreamConversationID, conversation.ParentMessageID, conversation.Status, conversation.UpdatedAt, conversation.ExpiresAt,
+		conversation.OwnerID, conversation.ConversationID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("temporary conversation not found")
+	}
+	return tx.Commit()
+}
+
+func (s *Documents) DeleteTemporaryConversation(ownerID, conversationID string) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_messages WHERE owner_id = ? AND conversation_id = ?`, ownerID, conversationID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_conversations WHERE owner_id = ? AND conversation_id = ?`, ownerID, conversationID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Documents) AppendTemporaryMessage(row TemporaryMessageRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.shared.db.Exec(`INSERT INTO chatgpt_temporary_messages(
+		owner_id, conversation_id, sequence, message_id, role, content, upstream_message_id,
+		status, error_class, error_message, created_at, completed_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.OwnerID, row.ConversationID, row.Sequence, row.MessageID, row.Role, row.Content, row.UpstreamMessageID,
+		row.Status, row.ErrorClass, row.ErrorMessage, row.CreatedAt, row.CompletedAt,
+	)
+	return err
+}
+
+func (s *Documents) UpdateTemporaryMessage(row TemporaryMessageRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.shared.db.Exec(`UPDATE chatgpt_temporary_messages SET
+		content = ?, upstream_message_id = ?, status = ?, error_class = ?, error_message = ?, completed_at = ?
+		WHERE owner_id = ? AND conversation_id = ? AND sequence = ?`,
+		row.Content, row.UpstreamMessageID, row.Status, row.ErrorClass, row.ErrorMessage, row.CompletedAt,
+		row.OwnerID, row.ConversationID, row.Sequence,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("temporary message not found")
+	}
+	return nil
+}
+
+func (s *Documents) ListTemporaryMessages(ownerID, conversationID string, beforeSequence *int64, limit int) ([]TemporaryMessageRow, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return nil, fmt.Errorf("state database is unavailable")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if beforeSequence == nil {
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, upstream_message_id,
+			status, error_class, error_message, created_at, completed_at
+			FROM chatgpt_temporary_messages
+			WHERE owner_id = ? AND conversation_id = ?
+			ORDER BY sequence ASC
+			LIMIT ?`, ownerID, conversationID, limit)
+	} else {
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, upstream_message_id,
+			status, error_class, error_message, created_at, completed_at
+			FROM chatgpt_temporary_messages
+			WHERE owner_id = ? AND conversation_id = ? AND sequence < ?
+			ORDER BY sequence DESC
+			LIMIT ?`, ownerID, conversationID, *beforeSequence, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items, err := scanTemporaryMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if beforeSequence != nil {
+		// reverse to ascending order for callers
+		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+			items[i], items[j] = items[j], items[i]
+		}
+	}
+	return items, nil
+}
+
+func (s *Documents) NextTemporaryMessageSequence(ownerID, conversationID string) (int64, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return 0, fmt.Errorf("state database is unavailable")
+	}
+	var max sql.NullInt64
+	if err := s.shared.db.QueryRow(`SELECT MAX(sequence) FROM chatgpt_temporary_messages WHERE owner_id = ? AND conversation_id = ?`, ownerID, conversationID).Scan(&max); err != nil {
+		return 0, err
+	}
+	if !max.Valid {
+		return 1, nil
+	}
+	return max.Int64 + 1, nil
+}
+
+func (s *Documents) ListStreamingTemporaryConversations() ([]TemporaryConversationRow, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return nil, fmt.Errorf("state database is unavailable")
+	}
+	rows, err := s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, model, thinking_effort, system_prompt,
+		upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
+		FROM chatgpt_temporary_conversations
+		WHERE status = 'streaming'
+		ORDER BY updated_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTemporaryConversations(rows)
+}
+
+func (s *Documents) ListStreamingTemporaryMessages(ownerID, conversationID string) ([]TemporaryMessageRow, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return nil, fmt.Errorf("state database is unavailable")
+	}
+	rows, err := s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, upstream_message_id,
+		status, error_class, error_message, created_at, completed_at
+		FROM chatgpt_temporary_messages
+		WHERE owner_id = ? AND conversation_id = ? AND status = 'streaming'
+		ORDER BY sequence ASC`, ownerID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTemporaryMessages(rows)
+}
+
+func (s *Documents) PurgeExpiredTemporaryConversations(now time.Time) (int, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return 0, fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.Query(`SELECT owner_id, conversation_id FROM chatgpt_temporary_conversations
+		WHERE expires_at <= ? AND status != 'streaming'`, now)
+	if err != nil {
+		return 0, err
+	}
+	type key struct{ ownerID, conversationID string }
+	var keys []key
+	for rows.Next() {
+		var item key
+		if err := rows.Scan(&item.ownerID, &item.conversationID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		keys = append(keys, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, item := range keys {
+		if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_messages WHERE owner_id = ? AND conversation_id = ?`, item.ownerID, item.conversationID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_conversations WHERE owner_id = ? AND conversation_id = ?`, item.ownerID, item.conversationID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(keys), nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTemporaryConversation(scanner rowScanner) (TemporaryConversationRow, error) {
+	var row TemporaryConversationRow
+	err := scanner.Scan(
+		&row.OwnerID, &row.ConversationID, &row.Title, &row.AccountID, &row.Model, &row.ThinkingEffort, &row.SystemPrompt,
+		&row.UpstreamConversationID, &row.ParentMessageID, &row.Status, &row.CreatedAt, &row.UpdatedAt, &row.ExpiresAt,
+	)
+	return row, err
+}
+
+func scanTemporaryConversations(rows *sql.Rows) ([]TemporaryConversationRow, error) {
+	var result []TemporaryConversationRow
+	for rows.Next() {
+		row, err := scanTemporaryConversation(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func scanTemporaryMessage(scanner rowScanner) (TemporaryMessageRow, error) {
+	var row TemporaryMessageRow
+	var completedAt sql.NullTime
+	err := scanner.Scan(
+		&row.OwnerID, &row.ConversationID, &row.Sequence, &row.MessageID, &row.Role, &row.Content, &row.UpstreamMessageID,
+		&row.Status, &row.ErrorClass, &row.ErrorMessage, &row.CreatedAt, &completedAt,
+	)
+	if err != nil {
+		return TemporaryMessageRow{}, err
+	}
+	if completedAt.Valid {
+		ts := completedAt.Time
+		row.CompletedAt = &ts
+	}
+	return row, nil
+}
+
+func scanTemporaryMessages(rows *sql.Rows) ([]TemporaryMessageRow, error) {
+	var result []TemporaryMessageRow
+	for rows.Next() {
+		row, err := scanTemporaryMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }

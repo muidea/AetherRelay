@@ -121,23 +121,31 @@ type TextMessage struct {
 }
 
 type CompleteTextCommand struct {
-	AccessToken    string
-	Model          string
-	Messages       []TextMessage
-	ThinkingEffort string
+	AccessToken     string
+	Model           string
+	Messages        []TextMessage
+	ThinkingEffort  string
+	ConversationID  string
+	ParentMessageID string
 }
 
 type CompleteTextResult struct {
-	ConversationID string
-	Text           string
-	ErrorClass     ErrorClass
+	ConversationID     string
+	AssistantMessageID string
+	Text               string
+	ErrorClass         ErrorClass
 }
 
 type StartTextCommand struct {
-	AccessToken    string
-	Model          string
-	Messages       []TextMessage
-	ThinkingEffort string
+	AccessToken     string
+	Model           string
+	Messages        []TextMessage
+	ThinkingEffort  string
+	ConversationID  string
+	ParentMessageID string
+	// TimeoutMillis bounds the full upstream request. It is supplied by the
+	// temporary-chat owner and is not a client-controlled HTTP value.
+	TimeoutMillis int
 }
 
 type StartTextResult struct{ StreamID string }
@@ -148,10 +156,12 @@ type PullTextCommand struct {
 }
 
 type PullTextResult struct {
-	Delta        string
-	Done         bool
-	ErrorClass   ErrorClass
-	ErrorMessage string
+	Delta              string
+	Done               bool
+	ConversationID     string
+	AssistantMessageID string
+	ErrorClass         ErrorClass
+	ErrorMessage       string
 }
 
 type CancelTextCommand struct{ StreamID string }

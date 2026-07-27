@@ -85,6 +85,9 @@ func projectModel(raw json.RawMessage) (ModelDescriptor, bool) {
 	if id == "" {
 		return ModelDescriptor{}, false
 	}
+	if isResearchOnlyModel(id, item.Tags, item.EnabledTools) {
+		return ModelDescriptor{}, false
+	}
 	ops := detectOperations(item.Tags, item.EnabledTools, item.ProductFeatures, item.Capabilities)
 	if len(ops) == 0 {
 		return ModelDescriptor{}, false
@@ -99,6 +102,33 @@ func projectModel(raw json.RawMessage) (ModelDescriptor, bool) {
 		CreatedAt:  item.Created,
 		OwnedBy:    ownedBy,
 	}, true
+}
+
+// isResearchOnlyModel rejects research / deep-research / search-tool dedicated
+// entries so they never enter the temporary-chat picker or /v1/models as ordinary
+// chat_completions models.
+func isResearchOnlyModel(id string, tags, enabledTools []string) bool {
+	lowerID := strings.ToLower(strings.TrimSpace(id))
+	if strings.Contains(lowerID, "deep_research") || strings.Contains(lowerID, "deep-research") ||
+		strings.Contains(lowerID, "research") && !strings.Contains(lowerID, "o1") && !strings.Contains(lowerID, "o3") && !strings.Contains(lowerID, "o4") {
+		// Explicit research product IDs only; avoid dropping general models whose
+		// marketing names merely mention "research".
+		if strings.Contains(lowerID, "deep_research") || strings.Contains(lowerID, "deep-research") ||
+			strings.HasPrefix(lowerID, "research") || strings.Contains(lowerID, "-research") || strings.Contains(lowerID, "_research") {
+			return true
+		}
+	}
+	if hasAnySignal(tags, "deep_research", "deep-research", "research_only", "research_mode", "search_tool_only") {
+		return true
+	}
+	if hasAnySignal(enabledTools, "deep_research", "deep-research", "research", "web_search_research") {
+		// Tool presence alone is not enough for ordinary models; require research tag/id.
+		if hasAnySignal(tags, "research", "deep_research", "deep-research") ||
+			strings.Contains(lowerID, "research") {
+			return true
+		}
+	}
+	return false
 }
 
 // detectOperations projects only operations backed by verified signals.

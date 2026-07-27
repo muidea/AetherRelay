@@ -1033,6 +1033,70 @@ func (s *Store) AcquireTextToken(exclude []string, model, operation string) (eve
 	return events.AccountView{}, false
 }
 
+// AcquireTextAccount reacquires a specific account ID for text turns. It does
+// not touch image in-flight slots and only requires the account to remain usable
+// for the requested model/operation.
+func (s *Store) AcquireTextAccount(accountID, model, operation string) (events.AccountView, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accountID = trim(accountID)
+	if accountID == "" {
+		return events.AccountView{}, false
+	}
+	for _, token := range s.order {
+		acc := s.items[token]
+		if acc == nil || acc.ID != accountID {
+			continue
+		}
+		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+			return events.AccountView{}, false
+		}
+		if !accountSupportsModelLocked(acc, model, operation) {
+			return events.AccountView{}, false
+		}
+		acc.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
+		return toView(acc, true), true
+	}
+	return events.AccountView{}, false
+}
+
+// RecordTextResult updates success/fail counters for a text turn by account ID.
+// invalid_token transitions the account to abnormal; other failures only count fail.
+func (s *Store) RecordTextResult(accountID string, success bool, errorClass string) (events.AccountView, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accountID = trim(accountID)
+	if accountID == "" {
+		return events.AccountView{}, false
+	}
+	var acc *Account
+	for _, token := range s.order {
+		candidate := s.items[token]
+		if candidate != nil && candidate.ID == accountID {
+			acc = candidate
+			break
+		}
+	}
+	if acc == nil {
+		return events.AccountView{}, false
+	}
+	if acc.Extra == nil {
+		acc.Extra = map[string]any{}
+	}
+	if success {
+		acc.Extra["success"] = extraInt(acc, "success") + 1
+	} else {
+		acc.Extra["fail"] = extraInt(acc, "fail") + 1
+		if strings.EqualFold(strings.TrimSpace(errorClass), "invalid_token") {
+			acc.Status = StatusAbnormal
+			acc.Quota = 0
+			s.bumpCatalogLocked()
+		}
+	}
+	_ = s.saveLocked()
+	return toView(acc, true), true
+}
+
 func (s *Store) RemoveInvalid(token string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

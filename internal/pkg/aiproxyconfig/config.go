@@ -140,6 +140,19 @@ type ChatGPTWebConfig struct {
 	Enabled                      bool
 	DataDir                      string
 	RefreshAccountIntervalMinute int
+	TemporaryChat                TemporaryChatConfig
+}
+
+// TemporaryChatConfig controls Admin temporary multi-turn text conversations.
+// Retention and capacity limits are positive; cleanup never silently deletes
+// history just to make room for a new conversation.
+type TemporaryChatConfig struct {
+	Enabled                    bool
+	RetentionDays              int
+	MaxConversations           int
+	MaxMessagesPerConversation int
+	MaxMessageBytes            int
+	TurnTimeoutSeconds         int
 }
 
 // ModelInfo 描述客户端可查询的模型能力与确定路由(各 provider 共用同一目录)。
@@ -224,7 +237,17 @@ func Load(path string) (Config, error) {
 			QueryCacheSeconds:    15,
 			InteractionRetention: 500,
 		},
-		ChatGPTWeb:   ChatGPTWebConfig{Enabled: false},
+		ChatGPTWeb: ChatGPTWebConfig{
+			Enabled: false,
+			TemporaryChat: TemporaryChatConfig{
+				Enabled:                    true,
+				RetentionDays:              30,
+				MaxConversations:           2000,
+				MaxMessagesPerConversation: 200,
+				MaxMessageBytes:            262144,
+				TurnTimeoutSeconds:         300,
+			},
+		},
 		Providers:    map[string]Provider{},
 		ModelCatalog: map[string]ModelInfo{},
 	}
@@ -273,6 +296,7 @@ func loadFile(path string, cfg *Config) error {
 	providerName := ""
 	modelName := ""
 	clientKeyID := ""
+	chatgptWebSub := ""
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
@@ -296,6 +320,7 @@ func loadFile(path string, cfg *Config) error {
 				providerName = ""
 				modelName = ""
 				clientKeyID = ""
+				chatgptWebSub = ""
 			default:
 				return fmt.Errorf("%s:%d: unknown section %q", path, lineNo, key)
 			}
@@ -317,7 +342,12 @@ func loadFile(path string, cfg *Config) error {
 			}
 		case section == "state" && indent >= 2:
 			setErr = setState(cfg, key, expand(value))
+		case section == "chatgpt_web" && indent == 2 && !hasValue && key == "temporary_chat":
+			chatgptWebSub = "temporary_chat"
+		case section == "chatgpt_web" && indent >= 4 && chatgptWebSub == "temporary_chat":
+			setErr = setChatGPTTemporaryChat(cfg, key, expand(value))
 		case section == "chatgpt_web" && indent >= 2:
+			chatgptWebSub = ""
 			setErr = setChatGPTWeb(cfg, key, expand(value))
 		case section == "client_api_keys" && indent == 2 && !hasValue:
 			clientKeyID = key
@@ -529,6 +559,50 @@ func setChatGPTWeb(cfg *Config, key, value string) error {
 		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
 	default:
 		return fmt.Errorf("chatgpt_web: unknown key %q", key)
+	}
+	return nil
+}
+
+func setChatGPTTemporaryChat(cfg *Config, key, value string) error {
+	switch key {
+	case "enabled":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.temporary_chat.enabled: %w", err)
+		}
+		cfg.ChatGPTWeb.TemporaryChat.Enabled = b
+	case "retention_days":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.temporary_chat.retention_days: %w", err)
+		}
+		cfg.ChatGPTWeb.TemporaryChat.RetentionDays = n
+	case "max_conversations":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.temporary_chat.max_conversations: %w", err)
+		}
+		cfg.ChatGPTWeb.TemporaryChat.MaxConversations = n
+	case "max_messages_per_conversation":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.temporary_chat.max_messages_per_conversation: %w", err)
+		}
+		cfg.ChatGPTWeb.TemporaryChat.MaxMessagesPerConversation = n
+	case "max_message_bytes":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.temporary_chat.max_message_bytes: %w", err)
+		}
+		cfg.ChatGPTWeb.TemporaryChat.MaxMessageBytes = n
+	case "turn_timeout_seconds":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.temporary_chat.turn_timeout_seconds: %w", err)
+		}
+		cfg.ChatGPTWeb.TemporaryChat.TurnTimeoutSeconds = n
+	default:
+		return fmt.Errorf("chatgpt_web.temporary_chat: unknown key %q", key)
 	}
 	return nil
 }
@@ -833,6 +907,7 @@ func normalize(cfg *Config, configPath string) error {
 	cfg.InteractionDir = cfg.State.InteractionsDir()
 	cfg.InteractionRetention = cfg.State.InteractionRetention
 	cfg.ChatGPTWeb.DataDir = cfg.State.Dir
+	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
 	if err := normalizeClientAPIKeys(cfg); err != nil {
 		return err
 	}
@@ -1917,9 +1992,52 @@ func validateState(state StateConfig) error {
 	return nil
 }
 
+func normalizeTemporaryChat(tc *TemporaryChatConfig) {
+	if tc == nil {
+		return
+	}
+	unset := !tc.Enabled && tc.RetentionDays == 0 && tc.MaxConversations == 0 &&
+		tc.MaxMessagesPerConversation == 0 && tc.MaxMessageBytes == 0 && tc.TurnTimeoutSeconds == 0
+	if tc.RetentionDays == 0 {
+		tc.RetentionDays = 30
+	}
+	if tc.MaxConversations == 0 {
+		tc.MaxConversations = 2000
+	}
+	if tc.MaxMessagesPerConversation == 0 {
+		tc.MaxMessagesPerConversation = 200
+	}
+	if tc.MaxMessageBytes == 0 {
+		tc.MaxMessageBytes = 262144
+	}
+	if tc.TurnTimeoutSeconds == 0 {
+		tc.TurnTimeoutSeconds = 300
+	}
+	// Design default is enabled:true when the nested block is omitted entirely.
+	if unset {
+		tc.Enabled = true
+	}
+}
+
 func validateChatGPTWeb(web ChatGPTWebConfig) error {
 	if web.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("chatgpt_web.refresh_account_interval_minute must be >= 0")
+	}
+	tc := web.TemporaryChat
+	if tc.RetentionDays <= 0 {
+		return fmt.Errorf("chatgpt_web.temporary_chat.retention_days must be > 0")
+	}
+	if tc.MaxConversations <= 0 {
+		return fmt.Errorf("chatgpt_web.temporary_chat.max_conversations must be > 0")
+	}
+	if tc.MaxMessagesPerConversation <= 0 {
+		return fmt.Errorf("chatgpt_web.temporary_chat.max_messages_per_conversation must be > 0")
+	}
+	if tc.MaxMessageBytes <= 0 {
+		return fmt.Errorf("chatgpt_web.temporary_chat.max_message_bytes must be > 0")
+	}
+	if tc.TurnTimeoutSeconds <= 0 {
+		return fmt.Errorf("chatgpt_web.temporary_chat.turn_timeout_seconds must be > 0")
 	}
 	return nil
 }

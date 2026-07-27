@@ -76,6 +76,14 @@ chatgpt_web:
   enabled: false
   # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
   refresh_account_interval_minute: 0
+  # Admin 临时文本多轮对话（服务端 DuckDB 持久化；浏览器不落会话正文）
+  temporary_chat:
+    enabled: true
+    retention_days: 30
+    max_conversations: 2000
+    max_messages_per_conversation: 200
+    max_message_bytes: 262144
+    turn_timeout_seconds: 300
 
 providers:
   # 每个 enabled provider 必须显式声明 protocol、base_url、endpoint_capabilities。

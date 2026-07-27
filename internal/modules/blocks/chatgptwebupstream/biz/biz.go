@@ -34,10 +34,12 @@ type textStream struct {
 }
 
 type textStreamUpdate struct {
-	delta      string
-	done       bool
-	errClass   events.ErrorClass
-	errMessage string
+	delta              string
+	done               bool
+	conversationID     string
+	assistantMessageID string
+	errClass           events.ErrorClass
+	errMessage         string
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Upstream, *cd.Error) {
@@ -250,14 +252,28 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 	for _, message := range cmd.Messages {
 		messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images})
 	}
-	completed, err := s.completeText(client, upclient.TextRequest{Model: cmd.Model, Messages: messages, ThinkingEffort: cmd.ThinkingEffort})
+	completed, err := s.completeText(client, upclient.TextRequest{
+		Model:           cmd.Model,
+		Messages:        messages,
+		ThinkingEffort:  cmd.ThinkingEffort,
+		ConversationID:  cmd.ConversationID,
+		ParentMessageID: cmd.ParentMessageID,
+	})
 	if err != nil {
 		class := classifyError(err)
 		slog.Warn("chatgpt web text completion failed", "error_class", class)
-		result.Set(events.CompleteTextResult{ConversationID: completed.ConversationID, ErrorClass: class}, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.CompleteTextResult{
+			ConversationID:     completed.ConversationID,
+			AssistantMessageID: completed.AssistantMessageID,
+			ErrorClass:         class,
+		}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
-	result.Set(events.CompleteTextResult{ConversationID: completed.ConversationID, Text: completed.Text}, nil)
+	result.Set(events.CompleteTextResult{
+		ConversationID:     completed.ConversationID,
+		AssistantMessageID: completed.AssistantMessageID,
+		Text:               completed.Text,
+	}, nil)
 }
 
 // completeText converts an unexpected transport-library panic into the same
@@ -286,6 +302,12 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 	}
 	streamID := uuid.NewString()
 	ctx, cancel := context.WithCancel(context.Background())
+	if cmd.TimeoutMillis > 0 {
+		if cmd.TimeoutMillis > 15*60*1000 {
+			cmd.TimeoutMillis = 15 * 60 * 1000
+		}
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(cmd.TimeoutMillis)*time.Millisecond)
+	}
 	stream := &textStream{cancel: cancel, updates: make(chan textStreamUpdate, 64)}
 	s.streamMu.Lock()
 	s.streams[streamID] = stream
@@ -295,17 +317,32 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 }
 
 func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *textStream, cmd events.StartTextCommand) {
+	var final upclient.TextResult
 	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
 	if err == nil {
 		messages := make([]upclient.TextMessage, 0, len(cmd.Messages))
 		for _, message := range cmd.Messages {
 			messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images})
 		}
-		_, err = client.StreamText(ctx, upclient.TextRequest{Model: cmd.Model, Messages: messages, ThinkingEffort: cmd.ThinkingEffort}, func(delta upclient.TextDelta) error {
-			return s.publishTextUpdate(ctx, stream, textStreamUpdate{delta: delta.Text})
+		final, err = client.StreamText(ctx, upclient.TextRequest{
+			Model:           cmd.Model,
+			Messages:        messages,
+			ThinkingEffort:  cmd.ThinkingEffort,
+			ConversationID:  cmd.ConversationID,
+			ParentMessageID: cmd.ParentMessageID,
+		}, func(delta upclient.TextDelta) error {
+			return s.publishTextUpdate(ctx, stream, textStreamUpdate{
+				delta:              delta.Text,
+				conversationID:     delta.ConversationID,
+				assistantMessageID: delta.AssistantMessageID,
+			})
 		})
 	}
-	update := textStreamUpdate{done: true}
+	update := textStreamUpdate{
+		done:               true,
+		conversationID:     final.ConversationID,
+		assistantMessageID: final.AssistantMessageID,
+	}
 	if err != nil {
 		update.errClass, update.errMessage = classifyError(err), err.Error()
 	}
@@ -343,7 +380,14 @@ func (s *Upstream) handlePullText(ev event.Event, result event.Result) {
 	}
 	select {
 	case update := <-stream.updates:
-		out := events.PullTextResult{Delta: update.delta, Done: update.done, ErrorClass: update.errClass, ErrorMessage: update.errMessage}
+		out := events.PullTextResult{
+			Delta:              update.delta,
+			Done:               update.done,
+			ConversationID:     update.conversationID,
+			AssistantMessageID: update.assistantMessageID,
+			ErrorClass:         update.errClass,
+			ErrorMessage:       update.errMessage,
+		}
 		if update.done {
 			s.removeTextStream(cmd.StreamID, false)
 		}

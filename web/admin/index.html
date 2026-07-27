@@ -44,6 +44,25 @@
       .owner-bar{padding:12px}.owner-bar .field{min-width:0;flex-basis:100%}.task-owner-controls{flex-direction:column}.task-owner-controls #cgTaskReload{width:100%}.task-id-row .btn{min-width:88px}.task-submit-card{padding:12px}.task-submit-toolbar{gap:8px}.task-submit-toolbar .toolbar-title{width:100%}.task-mode-switch{width:100%}.task-mode-switch .btn{flex:1}.task-submit-actions .btn{width:100%}.cg-progress{overflow-wrap:anywhere}.image-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px}#cgImgDisk,#cgImgFree{font-size:clamp(21px,6vw,26px);line-height:1.3;overflow-wrap:anywhere}
       .modal-head{height:52px;padding:0 16px}.modal-body{padding:18px 16px 6px}.modal-foot{padding:12px 16px}.modal-foot .btn{flex:1}.toast-wrap{right:12px;left:12px;top:auto;bottom:12px}.toast{min-width:0;max-width:none}
     }
+
+    .tc-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px;min-height:560px}
+    .tc-list,.tc-main{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;min-height:560px}
+    .tc-list-head,.tc-main-head{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .tc-list-body{flex:1;overflow:auto}
+    .tc-item{width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:#fff;padding:12px 14px;cursor:pointer}
+    .tc-item:hover{background:#fafcff}.tc-item.active{background:#e6f4ff}
+    .tc-item .title{font-weight:600;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .tc-item .meta{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+    .tc-messages{flex:1;overflow:auto;padding:16px clamp(14px,3vw,32px);display:flex;flex-direction:column;gap:11px;background:linear-gradient(180deg,#fafcff 0%,#f6f8fc 100%)}
+    .tc-message{display:flex;align-items:flex-start;gap:9px;max-width:100%}.tc-message.user{flex-direction:row-reverse}.tc-message.system{justify-content:center}
+    .tc-avatar{width:28px;height:28px;flex:0 0 28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0958d9;background:#e6f4ff;border:1px solid #91caff}.tc-message.user .tc-avatar{color:#fff;background:#1677ff;border-color:#1677ff}.tc-message.system .tc-avatar{display:none}
+    .tc-bubble{position:relative;width:fit-content;max-width:min(780px,calc(100% - 40px));padding:7px 10px;border-radius:4px 13px 13px 13px;border:1px solid #e1e7f0;background:#fff;box-shadow:0 1px 4px rgba(20,42,80,.045);overflow-wrap:anywhere;word-break:normal}
+    .tc-message.user .tc-bubble{border-color:#69b1ff;background:linear-gradient(145deg,#e6f4ff,#f3f9ff);border-radius:13px 4px 13px 13px}.tc-message.system .tc-bubble{max-width:min(680px,100%);border-radius:8px;color:#595959;background:#fafafa;font-size:12px;box-shadow:none}
+    .tc-bubble-head{display:flex;align-items:center;gap:6px;min-height:15px;margin-bottom:4px;padding-right:30px;line-height:1.25}.tc-message.user .tc-bubble-head{justify-content:flex-end}.tc-role{font-size:12px;font-weight:600;color:#52616f}.tc-time{font-size:11px;color:#8c99a6}.tc-status{margin-left:auto;padding:1px 5px;border-radius:10px;font-size:11px;line-height:1.2;color:#0958d9;background:#e6f4ff}.tc-message.user .tc-status{margin-left:0}.tc-content{font-size:14px;line-height:1.5;color:#1f2937;white-space:pre-wrap}.tc-bubble-actions{position:absolute;top:3px;right:4px;margin:0;padding:0;border:0;opacity:0;pointer-events:none;transition:opacity .15s}.tc-message:hover .tc-bubble-actions,.tc-message:focus-within .tc-bubble-actions{opacity:1;pointer-events:auto}.tc-copy{font-size:12px;padding:1px 3px}.tc-message-error{margin-top:6px;padding:6px 7px;border-radius:6px;border:1px solid #ffccc7;background:#fff2f0;color:#a8071a;font-size:12px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+    .tc-composer{border-top:1px solid var(--line);padding:12px 14px;background:#fff}.tc-input-wrap{position:relative}.tc-input-wrap #tcInput{display:block;padding:10px 82px 44px 11px;min-height:96px}.tc-send-inside{position:absolute;right:9px;bottom:9px;min-width:62px;box-shadow:0 2px 5px rgba(22,119,255,.24)}
+    .tc-empty{padding:40px 20px;text-align:center;color:var(--muted)}
+    .tc-status-idle{color:#237804}.tc-status-streaming{color:#0958d9}.tc-status-recovery_required{color:#ad6800}.tc-status-closed{color:#8c8c8c}
+    @media(max-width:900px){.tc-layout{grid-template-columns:1fr}.tc-list{min-height:220px}.tc-main{min-height:420px}.tc-messages{padding:14px}.tc-bubble{max-width:calc(100% - 37px)}}
   </style>
 </head>
 <body>
@@ -133,13 +152,14 @@
       <section class="hero">
         <div>
           <h2>ChatGPT Web</h2>
-          <p>管理 ChatGPT Web 账号池、图片任务与本地图片库。本页仅面向管理员，敏感字段不会展示或持久化。</p>
+          <p>管理 ChatGPT Web 账号池、临时文本对话、图片任务与本地图片库。本页仅面向管理员，敏感字段不会展示或持久化。</p>
         </div>
       </section>
       <div class="subnav" role="tablist" aria-label="ChatGPT Web 子页签">
         <button type="button" id="cgSubAccounts" class="active" data-cg-sub="accounts">账号池</button>
         <button type="button" id="cgSubTasks" data-cg-sub="tasks">图片任务</button>
         <button type="button" id="cgSubImages" data-cg-sub="images">图片库</button>
+        <button type="button" id="cgSubChat" data-cg-sub="chat">临时对话</button>
       </div>
       <div id="cgUnavailable" class="notice" style="display:none">ChatGPT Web 组件未启用或不可用。<button type="button" class="btn" id="cgRetry" style="margin-left:10px">重试</button></div>
 
@@ -235,6 +255,51 @@
           <div id="cgImgGrid" class="loading"><div class="spin"></div><div>正在读取图片…</div></div>
         </section>
       </div>
+
+      <div id="cgPanelChat" class="hidden">
+        <div class="tc-layout">
+          <section class="tc-list">
+            <div class="tc-list-head">
+              <strong>历史会话</strong>
+              <button type="button" class="btn btn-primary" id="tcNew" style="margin-left:auto">新建</button>
+              <button type="button" class="btn" id="tcReload">刷新</button>
+            </div>
+            <div id="tcList" class="tc-list-body"><div class="tc-empty">尚未加载会话</div></div>
+          </section>
+          <section class="tc-main">
+            <div class="tc-main-head">
+              <div>
+                <div id="tcTitle" style="font-weight:600">选择或新建会话</div>
+                <div class="subtle" id="tcMeta">会话由服务端持久化；刷新后可恢复。不会写入浏览器存储。</div>
+              </div>
+              <div class="cg-toolbar-actions">
+                <button type="button" class="btn" id="tcCopyAll" disabled>复制全部</button>
+                <button type="button" class="btn link-danger" id="tcDelete" disabled>删除</button>
+              </div>
+            </div>
+            <div id="tcMessages" class="tc-messages"><div class="tc-empty">左侧选择历史会话，或新建后开始对话</div></div>
+            <div class="tc-composer">
+              <div id="tcRecovery" class="notice" style="display:none;margin:0">会话需要恢复处理：最后一轮已中断，不能在原分支继续。请新建会话。</div>
+              <div class="tc-input-wrap"><textarea id="tcInput" class="control" rows="3" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）" autocomplete="off" disabled></textarea><button type="button" class="btn btn-primary tc-send-inside" id="tcSend" disabled>发送</button><button type="button" class="btn tc-send-inside hidden" id="tcCancel" disabled>取消生成</button></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <dialog id="tcCreateDialog">
+        <form id="tcCreateForm" autocomplete="off">
+          <div class="modal-head"><span class="modal-title">新建临时对话</span><button class="close" type="button" id="tcCreateClose">×</button></div>
+          <div class="modal-body">
+            <div class="field"><label class="label required" for="tcModel">模型</label><select id="tcModel" class="control" required><option value="">加载中…</option></select><div class="help">仅展示已验证的普通 chat_completions 模型；research 专用模型不会出现。</div></div>
+            <div class="field"><label class="label" for="tcEffort">thinking effort</label>
+              <select id="tcEffort" class="control"><option value="">默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select>
+            </div>
+            <div class="field"><label class="label" for="tcSystem">system prompt（可选）</label><textarea id="tcSystem" class="control" rows="3" autocomplete="off" placeholder="仅首轮提交给上游"></textarea></div>
+          </div>
+          <div class="modal-foot"><button class="btn" type="button" id="tcCreateCancel">取消</button><button class="btn btn-primary" type="submit">创建</button></div>
+        </form>
+      </dialog>
+
     </section>
   </main>
 </div>
@@ -356,7 +421,8 @@ const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",ran
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
-    images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false}}};
+    images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
+    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
@@ -440,9 +506,9 @@ function parseHash(){
   else if(path.startsWith("chatgpt")){
     tab="chatgpt";
     const parts=path.split("/");
-    if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts")cgSub=parts[1];
+    if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts"||parts[1]==="chat")cgSub=parts[1];
   }
-  return {tab,cgSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||""};
+  return {tab,cgSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||"",conversationId:p.get("id")||""};
 }
 function setHash(){
   if(state.tab==="usage"){
@@ -456,13 +522,14 @@ function setHash(){
     const sub=state.cg.sub||"accounts";
     const q=new URLSearchParams();
     if(sub==="tasks"&&state.cg.tasks.owner)q.set("owner_id",state.cg.tasks.owner);
+    if(sub==="chat"&&state.cg.chat.current&&state.cg.chat.current.id)q.set("id",state.cg.chat.current.id);
     location.hash="#/chatgpt/"+sub+(q.toString()?"?"+q.toString():"");
     return;
   }
   location.hash="#/"+state.tab;
 }
 function showTab(tab){
-  if(state.tab==="chatgpt"&&tab!=="chatgpt")stopAllTaskPolling();
+  if(state.tab==="chatgpt"&&tab!=="chatgpt"){stopAllTaskPolling();stopTemporaryChatPolling();}
   state.tab=tab;
   $("panelProviders").classList.toggle("active",tab==="providers");
   $("panelClientKeys").classList.toggle("active",tab==="client-keys");
@@ -479,13 +546,16 @@ function showTab(tab){
 }
 function showChatGPTSub(sub){
   if(state.cg.sub==="tasks"&&sub!=="tasks")stopAllTaskPolling();
+  if(state.cg.sub==="chat"&&sub!=="chat")stopTemporaryChatPolling();
   state.cg.sub=sub||"accounts";
   $("cgPanelAccounts").classList.toggle("hidden",state.cg.sub!=="accounts");
   $("cgPanelTasks").classList.toggle("hidden",state.cg.sub!=="tasks");
   $("cgPanelImages").classList.toggle("hidden",state.cg.sub!=="images");
+  $("cgPanelChat").classList.toggle("hidden",state.cg.sub!=="chat");
   $("cgSubAccounts").classList.toggle("active",state.cg.sub==="accounts");
   $("cgSubTasks").classList.toggle("active",state.cg.sub==="tasks");
   $("cgSubImages").classList.toggle("active",state.cg.sub==="images");
+  $("cgSubChat").classList.toggle("active",state.cg.sub==="chat");
   if(state.tab==="chatgpt")setHash();
   if(state.cg.sub==="accounts")loadChatGPTAccounts();
   else if(state.cg.sub==="tasks"){
@@ -493,6 +563,9 @@ function showChatGPTSub(sub){
     if(!($("cgTaskClientId").value||"").trim())$("cgTaskClientId").value=newUUID();
     ensureTaskOwner();
     loadChatGPTTasks(false);
+  }else if(state.cg.sub==="chat"){
+    loadTemporaryChatModels();
+    loadTemporaryConversations(true);
   }else loadChatGPTImages();
 }
 function setChatGPTUnavailable(msg){
@@ -1373,6 +1446,9 @@ function applyChatGPTState(p){
     state.cg.tasks.owner=p.owner;
     if($("cgTaskOwner"))$("cgTaskOwner").value=p.owner;
   }
+  if(typeof p.conversationId==="string" && p.conversationId){
+    state.cg.chat.pendingId=p.conversationId;
+  }
 }
 window.addEventListener("hashchange",()=>{
   const p=parseHash();
@@ -1380,7 +1456,348 @@ window.addEventListener("hashchange",()=>{
   applyChatGPTState(p);
   showTab(p.tab);
 });
-window.addEventListener("pagehide",()=>{stopAllTaskPolling();clearOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+window.addEventListener("pagehide",()=>{stopAllTaskPolling();stopTemporaryChatPolling();clearOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+
+
+// Temporary chat (server-persisted; no Web Storage)
+function stopTemporaryChatPolling(){
+  if(state.cg.chat.pollTimer){clearTimeout(state.cg.chat.pollTimer);state.cg.chat.pollTimer=null}
+  state.cg.chat.polling=false;
+}
+function temporaryChatStatusLabel(status){
+  const map={idle:"空闲",streaming:"生成中",recovery_required:"需恢复",closed:"已关闭"};
+  return map[status]||status||"—";
+}
+async function loadTemporaryChatModels(){
+  const sel=$("tcModel");
+  if(!sel)return;
+  try{
+    const data=await request(apiURL("/api/providers"));
+    setChatGPTAvailable();
+    const items=Array.isArray(data.providers)?data.providers:(Array.isArray(data)?data:[]);
+    const models=[];
+    items.forEach(p=>{
+      // Temporary chat is pinned to ChatGPT Web accounts; do not offer
+      // similarly named models from unrelated Providers.
+      if(!p||!p.enabled||!p.builtin)return;
+      const ops=p.endpoint_capabilities||[];
+      const isChat=ops.includes("chat_completions")||ops.includes("messages")||(p.models||[]).length;
+      if(!isChat)return;
+      (p.models||[]).forEach(m=>{
+        const id=String(m||"").trim();
+        if(!id)return;
+        if(/research|deep[_-]research/i.test(id))return;
+        if(!models.includes(id))models.push(id);
+      });
+    });
+    // Prefer builtin chatgpt models when present.
+    state.cg.chat.models=models.sort();
+    if(!state.cg.chat.models.length){
+      sel.innerHTML=`<option value="">暂无可用模型</option>`;
+      return;
+    }
+    sel.innerHTML=state.cg.chat.models.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  }catch(e){
+    if(e.status===503)setChatGPTUnavailable(e.message);
+    sel.innerHTML=`<option value="">模型加载失败</option>`;
+  }
+}
+function renderTemporaryConversationList(){
+  const box=$("tcList");
+  const items=state.cg.chat.items||[];
+  if(!items.length){box.innerHTML=`<div class="tc-empty">暂无历史会话</div>`;return}
+  const currentId=state.cg.chat.current&&state.cg.chat.current.id;
+  box.innerHTML=items.map(item=>{
+    const active=item.id===currentId?"active":"";
+    return `<button type="button" class="tc-item ${active}" data-tc-id="${esc(item.id)}">
+      <div class="title">${esc(item.title||"未命名会话")}</div>
+      <div class="meta"><span class="tc-status-${esc(item.status)}">${esc(temporaryChatStatusLabel(item.status))}</span><span>${esc((item.updated_at||"").replace("T"," ").replace("Z",""))}</span></div>
+      <div class="meta"><span>${esc(item.model||"")}</span><span>${esc(item.account_display||item.account_id||"")}</span></div>
+    </button>`;
+  }).join("");
+  box.querySelectorAll("[data-tc-id]").forEach(btn=>btn.onclick=()=>openTemporaryConversation(btn.dataset.tcId));
+}
+function renderTemporaryMessages(){
+  const box=$("tcMessages");
+  const conv=state.cg.chat.current;
+  const messages=state.cg.chat.messages||[];
+  if(!conv){
+    $("tcTitle").textContent="选择或新建会话";
+    $("tcMeta").textContent="会话由服务端持久化；刷新后可恢复。不会写入浏览器存储。";
+    $("tcCopyAll").disabled=true;$("tcDelete").disabled=true;
+    $("tcInput").disabled=true;$("tcSend").disabled=true;$("tcCancel").disabled=true;
+    $("tcSend").classList.remove("hidden");$("tcCancel").classList.add("hidden");
+    $("tcRecovery").style.display="none";
+    box.innerHTML=`<div class="tc-empty">左侧选择历史会话，或新建后开始对话</div>`;
+    return;
+  }
+  $("tcTitle").textContent=conv.title||"未命名会话";
+  $("tcMeta").textContent=`模型 ${conv.model||"—"} · 账号 ${conv.account_display||conv.account_id||"—"} · 状态 ${temporaryChatStatusLabel(conv.status)} · 过期 ${((conv.expires_at||"").replace("T"," ").replace("Z",""))||"—"}`;
+  $("tcCopyAll").disabled=!messages.length;
+  $("tcDelete").disabled=false;
+  const recovery=conv.status==="recovery_required";
+  $("tcRecovery").style.display=recovery?"block":"none";
+  const streaming=conv.status==="streaming"||state.cg.chat.polling||state.cg.chat.sending;
+  $("tcInput").disabled=recovery||streaming;
+  $("tcSend").disabled=recovery||streaming;
+  $("tcCancel").disabled=!streaming||!state.cg.chat.turnId;
+  $("tcSend").classList.toggle("hidden",streaming);
+  $("tcCancel").classList.toggle("hidden",!streaming);
+  if(!messages.length){
+    box.innerHTML=`<div class="tc-empty">还没有消息，发送第一条开始对话</div>`;
+    return;
+  }
+  box.innerHTML=messages.map(m=>{
+    const role=m.role||"assistant";
+    const cls=role==="user"?"user":(role==="system"?"system":"assistant");
+    const labels={user:"我",assistant:"ChatGPT",system:"系统"};
+    const created=(m.created_at||"").replace("T"," ").replace("Z","");
+    const content=String(m.content||"").trim();
+    const status=m.status&&m.status!=="completed"?`<span class="tc-status">${esc(m.status)}</span>`:"";
+    const err=m.error_message?`<div class="tc-message-error">${esc(m.error_class||"error")}：${esc(m.error_message)}</div>`:"";
+    return `<div class="tc-message ${cls}" data-msg-id="${esc(m.id||"")}">
+      <div class="tc-avatar" aria-hidden="true">${role==="user"?"我":(role==="system"?"": "AI")}</div>
+      <div class="tc-bubble" title="${esc(`${labels[role]||role} · ${created}${m.status&&m.status!=="completed"?` · ${m.status}`:""}`)}">
+        <div class="tc-bubble-head"><span class="tc-role">${labels[role]||esc(role)}</span><span class="tc-time">${esc(created)}</span>${status}</div>
+        <div class="tc-content">${esc(content)}</div>${err}
+        <div class="tc-bubble-actions"><button type="button" class="link-btn tc-copy" data-copy-msg="${esc(m.id||"")}">复制</button></div>
+      </div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll("[data-copy-msg]").forEach(btn=>btn.onclick=()=>{
+    const msg=messages.find(x=>x.id===btn.dataset.copyMsg);
+    if(msg)copyText(msg.content||"");
+  });
+  if(!state.cg.chat.loadingOlder)box.scrollTop=box.scrollHeight;
+}
+async function loadTemporaryConversations(selectFromHash){
+  const box=$("tcList");
+  box.innerHTML=`<div class="loading"><div class="spin"></div><div>正在读取会话…</div></div>`;
+  try{
+    const data=await request(apiURL("/api/chatgpt/temporary-conversations?limit=50"));
+    setChatGPTAvailable();
+    state.cg.chat.items=Array.isArray(data.items)?data.items:[];
+    renderTemporaryConversationList();
+    let target=state.cg.chat.current&&state.cg.chat.current.id;
+    if(selectFromHash){
+      const boot=parseHash();
+      if(boot.conversationId)target=boot.conversationId;
+      else if(state.cg.chat.pendingId)target=state.cg.chat.pendingId;
+    }
+    state.cg.chat.pendingId="";
+    if(target&&state.cg.chat.items.some(x=>x.id===target))await openTemporaryConversation(target);
+    else if(!state.cg.chat.current&&state.cg.chat.items[0])await openTemporaryConversation(state.cg.chat.items[0].id);
+    else renderTemporaryMessages();
+  }catch(e){
+    if(e.status===503){setChatGPTUnavailable(e.message);box.innerHTML=`<div class="empty">${esc(e.message||"临时对话不可用")}</div>`;return}
+    box.innerHTML=`<div class="empty">${esc(e.message||"加载失败")}</div>`;
+  }
+}
+async function openTemporaryConversation(id){
+  if(!id)return;
+  stopTemporaryChatPolling();
+  try{
+    const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(id)}?limit=100`));
+    setChatGPTAvailable();
+    state.cg.chat.current=data.conversation||null;
+    state.cg.chat.messages=Array.isArray(data.messages)?data.messages:[];
+    state.cg.chat.hasMore=Boolean(data.has_more);
+    state.cg.chat.turnId="";
+    state.cg.chat.content="";
+    // refresh list item snapshot
+    if(state.cg.chat.current){
+      const idx=state.cg.chat.items.findIndex(x=>x.id===state.cg.chat.current.id);
+      if(idx>=0)state.cg.chat.items[idx]=state.cg.chat.current;
+    }
+    renderTemporaryConversationList();
+    renderTemporaryMessages();
+    setHash();
+    if(state.cg.chat.current&&state.cg.chat.current.status==="streaming"){
+      const last= [...state.cg.chat.messages].reverse().find(m=>m.role==="assistant"&&m.status==="streaming");
+      if(last){state.cg.chat.turnId=last.turn_id||last.id;pollTemporaryTurn()}
+    }
+  }catch(e){
+    toast(e.message||"读取会话失败","error");
+  }
+}
+async function loadOlderTemporaryMessages(){
+  const conv=state.cg.chat.current;
+  const messages=state.cg.chat.messages||[];
+  if(!conv||!state.cg.chat.hasMore||state.cg.chat.loadingOlder||!messages.length)return;
+  const oldest=messages[0];
+  if(!oldest||!oldest.sequence)return;
+  const box=$("tcMessages");
+  const previousHeight=box.scrollHeight;
+  state.cg.chat.loadingOlder=true;
+  try{
+    const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}?before_sequence=${encodeURIComponent(oldest.sequence)}&limit=100`));
+    const older=Array.isArray(data.messages)?data.messages:[];
+    state.cg.chat.messages=[...older,...messages];
+    state.cg.chat.hasMore=Boolean(data.has_more);
+    renderTemporaryMessages();
+    box.scrollTop=Math.max(0,box.scrollHeight-previousHeight);
+  }catch(e){
+    toast(e.message||"加载更早消息失败","error");
+  }finally{
+    state.cg.chat.loadingOlder=false;
+  }
+}
+function openTemporaryCreateDialog(){
+  loadTemporaryChatModels().finally(()=>$("tcCreateDialog").showModal());
+}
+async function createTemporaryConversation(event){
+  event.preventDefault();
+  const model=($("tcModel").value||"").trim();
+  if(!model){toast("请选择模型","error");return}
+  try{
+    const conv=await request(apiURL("/api/chatgpt/temporary-conversations"),{
+      method:"POST",
+      headers:authHeaders({"Content-Type":"application/json"}),
+      body:JSON.stringify({
+        model,
+        thinking_effort:($("tcEffort").value||"").trim(),
+        system_prompt:($("tcSystem").value||"").trim()
+      })
+    });
+    $("tcCreateDialog").close();
+    $("tcSystem").value="";
+    toast("会话已创建");
+    state.cg.chat.items=[conv,...state.cg.chat.items.filter(x=>x.id!==conv.id)];
+    state.cg.chat.current=conv;
+    state.cg.chat.messages=[];
+    renderTemporaryConversationList();
+    renderTemporaryMessages();
+    setHash();
+    $("tcInput").focus();
+  }catch(e){
+    toast(e.message||"创建失败","error");
+  }
+}
+async function sendTemporaryTurn(){
+  const conv=state.cg.chat.current;
+  if(!conv)return;
+  const content=($("tcInput").value||"").trim();
+  if(!content){toast("请输入消息","error");return}
+  if(state.cg.chat.sending||state.cg.chat.polling)return;
+  state.cg.chat.sending=true;
+  renderTemporaryMessages();
+  try{
+    const out=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns`),{
+      method:"POST",
+      headers:authHeaders({"Content-Type":"application/json"}),
+      body:JSON.stringify({content})
+    });
+    $("tcInput").value="";
+    state.cg.chat.current=out.conversation||state.cg.chat.current;
+    if(out.user_message)state.cg.chat.messages=[...state.cg.chat.messages,out.user_message];
+    if(out.assistant_message)state.cg.chat.messages=[...state.cg.chat.messages,out.assistant_message];
+    state.cg.chat.turnId=out.turn_id||(out.assistant_message&&out.assistant_message.id)||"";
+    state.cg.chat.content=(out.assistant_message&&out.assistant_message.content)||"";
+    renderTemporaryConversationList();
+    renderTemporaryMessages();
+    pollTemporaryTurn();
+  }catch(e){
+    toast(e.message||"发送失败","error");
+    if(e.status===409)await openTemporaryConversation(conv.id);
+  }finally{
+    state.cg.chat.sending=false;
+    renderTemporaryMessages();
+  }
+}
+function pollTemporaryTurn(){
+  stopTemporaryChatPolling();
+  const conv=state.cg.chat.current;
+  const turnId=state.cg.chat.turnId;
+  if(!conv||!turnId)return;
+  state.cg.chat.polling=true;
+  renderTemporaryMessages();
+  const tick=async()=>{
+    try{
+      const out=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns/${encodeURIComponent(turnId)}/events?timeout_ms=2000`));
+      if(out.delta){
+        state.cg.chat.content=(state.cg.chat.content||"")+out.delta;
+        const idx=state.cg.chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
+        if(idx>=0){
+          state.cg.chat.messages[idx]={...state.cg.chat.messages[idx],content:state.cg.chat.content,status:"streaming"};
+        }
+        renderTemporaryMessages();
+      }
+      if(out.done){
+        if(out.message){
+          const idx=state.cg.chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
+          if(idx>=0)state.cg.chat.messages[idx]=out.message;
+          else state.cg.chat.messages.push(out.message);
+        }
+        state.cg.chat.polling=false;
+        state.cg.chat.turnId="";
+        await openTemporaryConversation(conv.id);
+        if(out.error_class&&out.error_class!=="cancelled")toast(out.error_message||out.error_class,"error");
+        return;
+      }
+      state.cg.chat.pollTimer=setTimeout(tick,300);
+    }catch(e){
+      state.cg.chat.polling=false;
+      toast(e.message||"拉取增量失败","error");
+      await openTemporaryConversation(conv.id);
+    }
+  };
+  state.cg.chat.pollTimer=setTimeout(tick,50);
+}
+async function cancelTemporaryTurn(){
+  const conv=state.cg.chat.current;
+  const turnId=state.cg.chat.turnId;
+  if(!conv||!turnId)return;
+  try{
+    await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns/${encodeURIComponent(turnId)}/cancel`),{
+      method:"POST",
+      headers:authHeaders({"Content-Type":"application/json"}),
+      body:"{}"
+    });
+    toast("已请求取消");
+    stopTemporaryChatPolling();
+    await openTemporaryConversation(conv.id);
+  }catch(e){
+    toast(e.message||"取消失败","error");
+  }
+}
+async function deleteTemporaryConversation(){
+  const conv=state.cg.chat.current;
+  if(!conv)return;
+  if(!confirm(`确认删除会话「${conv.title||conv.id}」？此操作不可恢复。`))return;
+  try{
+    stopTemporaryChatPolling();
+    await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}`),{
+      method:"DELETE",
+      headers:authHeaders()
+    });
+    toast("会话已删除");
+    state.cg.chat.items=state.cg.chat.items.filter(x=>x.id!==conv.id);
+    state.cg.chat.current=null;
+    state.cg.chat.messages=[];
+    renderTemporaryConversationList();
+    renderTemporaryMessages();
+    setHash();
+  }catch(e){
+    toast(e.message||"删除失败","error");
+  }
+}
+function copyText(value){
+  const text=String(value||"");
+  if(!text){toast("无可复制内容","error");return}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>toast("已复制")).catch(()=>fallbackCopy(text));
+  }else fallbackCopy(text);
+}
+function fallbackCopy(text){
+  const ta=document.createElement("textarea");
+  ta.value=text;document.body.appendChild(ta);ta.select();
+  try{document.execCommand("copy");toast("已复制")}catch(e){toast("复制失败","error")}
+  document.body.removeChild(ta);
+}
+function copyAllTemporaryMessages(){
+  const text=(state.cg.chat.messages||[]).map(m=>`${m.role||""}: ${m.content||""}`).join("\n\n");
+  copyText(text);
+}
 
 // ChatGPT Web events
 document.querySelectorAll("[data-cg-sub]").forEach(btn=>btn.onclick=()=>{state.cg.sub=btn.dataset.cgSub;setHash();showChatGPTSub(state.cg.sub)});
@@ -1426,6 +1843,23 @@ $("cgImgEnd").onchange=e=>{state.cg.images.end=e.target.value||"";loadChatGPTIma
 $("cgImgTagFilter").onchange=e=>{state.cg.images.tag=e.target.value||"";renderChatGPTImages()};
 $("cgImgReload").onclick=()=>loadChatGPTImages();
 $("cgImgDeleteSelected").onclick=deleteSelectedImages;
+
+$("tcNew").onclick=openTemporaryCreateDialog;
+$("tcReload").onclick=()=>loadTemporaryConversations(false);
+$("tcSend").onclick=sendTemporaryTurn;
+$("tcCancel").onclick=cancelTemporaryTurn;
+$("tcDelete").onclick=deleteTemporaryConversation;
+$("tcCopyAll").onclick=copyAllTemporaryMessages;
+$("tcCreateClose").onclick=$("tcCreateCancel").onclick=()=>$("tcCreateDialog").close();
+$("tcCreateForm").onsubmit=createTemporaryConversation;
+$("tcMessages").addEventListener("scroll",e=>{
+  if(e.currentTarget.scrollTop<48)loadOlderTemporaryMessages();
+});
+$("tcInput").addEventListener("keydown",e=>{
+  if(e.key!=="Enter"||e.shiftKey||e.isComposing)return;
+  e.preventDefault();sendTemporaryTurn();
+});
+
 $("cgTagsClose").onclick=$("cgTagsCancel").onclick=()=>$("cgTagsDialog").close();
 $("cgTagsForm").onsubmit=submitTags;
 $("cgLightboxClose").onclick=closeLightbox;

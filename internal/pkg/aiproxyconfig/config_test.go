@@ -1474,3 +1474,59 @@ model_catalog:
 		t.Fatalf("expected reserved chatgptweb error, got %v", err)
 	}
 }
+
+func TestLoadTemporaryChatDefaultsAndOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// chatgpt_web without temporary_chat block still gets design defaults.
+	if err := os.WriteFile(path, []byte("chatgpt_web:\n  enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := cfg.ChatGPTWeb.TemporaryChat
+	if !tc.Enabled || tc.RetentionDays != 30 || tc.MaxConversations != 2000 || tc.MaxMessagesPerConversation != 200 || tc.MaxMessageBytes != 262144 || tc.TurnTimeoutSeconds != 300 {
+		t.Fatalf("defaults=%+v", tc)
+	}
+
+	path2 := filepath.Join(dir, "config2.yaml")
+	body := `chatgpt_web:
+  enabled: true
+  temporary_chat:
+    enabled: false
+    retention_days: 7
+    max_conversations: 10
+    max_messages_per_conversation: 20
+    max_message_bytes: 4096
+    turn_timeout_seconds: 60
+`
+	if err := os.WriteFile(path2, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc2 := cfg2.ChatGPTWeb.TemporaryChat
+	if tc2.Enabled || tc2.RetentionDays != 7 || tc2.MaxConversations != 10 || tc2.MaxMessagesPerConversation != 20 || tc2.MaxMessageBytes != 4096 || tc2.TurnTimeoutSeconds != 60 {
+		t.Fatalf("overrides=%+v", tc2)
+	}
+}
+
+func TestLoadRejectsInvalidTemporaryChatRetention(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `chatgpt_web:
+  enabled: true
+  temporary_chat:
+    retention_days: 0
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected retention_days validation failure")
+	}
+}

@@ -51,6 +51,7 @@ internal/modules/
     internal/oauth/              OAuth token 刷新与操作员辅助授权码交换
     pkg/events/                  ChatGPT 账号资源的 typed EventHub 合同
   application/chatgptimagetask/  ChatGPT 图片任务 Application Module
+  application/chatgpttemporarychat/ ChatGPT Admin 临时文本多轮对话 Application Module
     biz/                         账号分配、上游图片执行与本地持久化编排
     internal/store/              DuckDB 图片任务状态存储
     pkg/events/                  图片任务 owner 的 typed EventHub 合同

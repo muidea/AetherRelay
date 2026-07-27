@@ -263,3 +263,19 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 - Admin 包合同测试（含 `TestChatGPT*`）：通过
   `LIBRARY_PATH=/usr/lib/gcc/x86_64-linux-gnu/14 go test ./internal/modules/application/adminapi/service/admin/ -count=1 -run 'TestChatGPT'`
 - 浏览器冒烟与受控 live 上游验收：待在启用 ChatGPT Web 组件的本地实例上由运维执行；实现侧已覆盖 503 空状态、缺失 owner 不发请求、导出 Blob 即用即销与 OAuth 内存态清理
+
+## 临时对话页与 API（2026-07-27 增补）
+
+在 ChatGPT Web 管理页增加「临时对话」子页：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/chatgpt/temporary-conversations` | 创建会话并固定账号 |
+| `GET` | `/api/chatgpt/temporary-conversations` | 历史摘要分页 |
+| `GET` | `/api/chatgpt/temporary-conversations/{id}` | 会话详情与消息页 |
+| `POST` | `/api/chatgpt/temporary-conversations/{id}/turns` | 启动一轮 |
+| `GET` | `/api/chatgpt/temporary-conversations/{id}/turns/{turn_id}/events` | 长轮询增量 |
+| `POST` | `/api/chatgpt/temporary-conversations/{id}/turns/{turn_id}/cancel` | 取消本轮 |
+| `DELETE` | `/api/chatgpt/temporary-conversations/{id}` | 永久删除 |
+
+安全不变量：owner 仅来自已认证 Admin principal；响应 `Cache-Control: no-store`；页面不将消息正文/上游 conversation id/token 写入 localStorage 或 sessionStorage；错误 envelope 不回传 prompt 或原始 SSE。详见 `docs/chatgpt-temporary-chat-design-2026-07-27.md`。

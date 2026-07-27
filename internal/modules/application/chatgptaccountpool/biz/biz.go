@@ -85,6 +85,8 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 		events.TopicReleaseImageSlot,
 		events.TopicMarkImageResult,
 		events.TopicAcquireTextToken,
+		events.TopicAcquireTextAccount,
+		events.TopicRecordTextResult,
 		events.TopicRemoveInvalid,
 		events.TopicHealth,
 		events.TopicOAuthStart,
@@ -110,6 +112,8 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicReleaseImageSlot, b.handleReleaseSlot)
 	b.SubscribeFunc(events.TopicMarkImageResult, b.handleMarkImage)
 	b.SubscribeFunc(events.TopicAcquireTextToken, b.handleAcquireText)
+	b.SubscribeFunc(events.TopicAcquireTextAccount, b.handleAcquireTextAccount)
+	b.SubscribeFunc(events.TopicRecordTextResult, b.handleRecordTextResult)
 	b.SubscribeFunc(events.TopicRemoveInvalid, b.handleRemoveInvalid)
 	b.SubscribeFunc(events.TopicHealth, b.handleHealth)
 	b.SubscribeFunc(events.TopicOAuthStart, b.handleOAuthStart)
@@ -453,6 +457,40 @@ func (s *Account) handleMarkImage(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.MarkImageResultResult{Account: acc}, nil)
+}
+
+func (s *Account) handleAcquireTextAccount(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.AcquireTextAccountCommand)
+	if !ok || cmd.AccountID == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire text account command"))
+		return
+	}
+	acc, found := s.store.AcquireTextAccount(cmd.AccountID, cmd.Model, cmd.Operation)
+	if !found {
+		result.Set(nil, cd.NewError(cd.Unexpected, "saved text account is unavailable"))
+		return
+	}
+	result.Set(events.AcquireTextAccountResult{AccessToken: acc.AccessToken, Account: acc}, nil)
+}
+
+func (s *Account) handleRecordTextResult(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.RecordTextResultCommand)
+	if !ok || cmd.AccountID == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid record text result command"))
+		return
+	}
+	acc, found := s.store.RecordTextResult(cmd.AccountID, cmd.Success, cmd.ErrorClass)
+	if !found {
+		result.Set(nil, cd.NewError(cd.Unexpected, "account not found"))
+		return
+	}
+	result.Set(events.RecordTextResultResult{Account: acc}, nil)
 }
 
 func (s *Account) handleAcquireText(ev event.Event, result event.Result) {

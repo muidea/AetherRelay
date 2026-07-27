@@ -129,12 +129,25 @@ state:
 chatgpt_web:
   enabled: false
   refresh_account_interval_minute: 0
+  temporary_chat:
+    enabled: true
+    retention_days: 30
+    max_conversations: 2000
+    max_messages_per_conversation: 200
+    max_message_bytes: 262144
+    turn_timeout_seconds: 300
 ```
 
-- 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储和异步图片任务会一并装配。
+- 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储、异步图片任务与 Admin 临时文本对话会一并装配。
 - 账号、任务、图片索引和标签保存于 `state.database`；不得写入 YAML、环境变量、日志或版本库。
 - 旧的 `usage_store`、`chatgpt_web.data_dir`、`interaction_dir` 及相应环境变量均不再支持；所有本地路径和 DuckDB 资源参数只能在 `state` 中声明。
 - `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
+- `temporary_chat` 控制 Admin「临时对话」：
+  - `enabled` 默认 `true`（在 `chatgpt_web.enabled` 为真时生效）；显式 `false` 可关闭。
+  - `retention_days` 必须为正；过期且无活跃流的会话会被清理。管理员删除不进入回收站。
+  - `max_conversations` 达到上限时拒绝新建并提示先删旧记录，不会静默删除历史。
+  - `max_messages_per_conversation` / `max_message_bytes` / `turn_timeout_seconds` 均为正数上限。
+  - 会话正文只写入 `state.database` 的专用表；浏览器不得使用 localStorage/sessionStorage 保存消息或上游锚点。
 - 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。模型与模型级 operation 来自账号池对 ChatGPT Web `/backend-api/models` 的枚举并集。
 - 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。
 - 若自动模型与任一 enabled 静态 Provider 的 exact model 冲突，静态 RouteOwner 优先；Admin Provider 列表会显示冲突摘要。
