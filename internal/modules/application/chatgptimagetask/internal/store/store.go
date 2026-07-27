@@ -114,18 +114,37 @@ func knownTaskField(key string) bool {
 }
 
 type Store struct {
-	mu           sync.Mutex
-	documents    *aiproxystate.Documents
-	items        map[string]taskRecord // key = owner:taskID
-	pythonLayout bool
+	mu        sync.Mutex
+	documents *aiproxystate.Documents
+	items     map[string]taskRecord // key = owner:taskID
 }
 
-func New(databasePath string) *Store {
+// Open creates the image-task owner's state store and reports startup errors.
+func Open(databasePath, memoryLimit string, threads int) (*Store, error) {
 	s := &Store{items: map[string]taskRecord{}}
-	s.documents, _ = aiproxystate.Open(databasePath, "", 0)
-	_ = s.load()
+	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	if err != nil {
+		return nil, err
+	}
+	s.documents = documents
+	if err := s.load(); err != nil {
+		_ = documents.Close()
+		return nil, fmt.Errorf("load image task state: %w", err)
+	}
 	if s.recoverUnfinishedLocked() {
-		_ = s.saveLocked()
+		if err := s.saveLocked(); err != nil {
+			_ = documents.Close()
+			return nil, fmt.Errorf("recover image task state: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// New is retained for direct package tests. Production startup must call Open.
+func New(databasePath string) *Store {
+	s, err := Open(databasePath, "128MB", 1)
+	if err != nil {
+		panic(err)
 	}
 	return s
 }
@@ -138,55 +157,20 @@ func (s *Store) load() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	var data json.RawMessage
-	found, err := s.documents.Load("chatgpt.image_tasks", &data)
-	if err != nil || !found {
+	rows, err := s.documents.LoadImageTasks()
+	if err != nil {
 		return err
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	if tasksRaw, ok := raw["tasks"]; ok {
-		var tasks []taskRecord
-		if err := json.Unmarshal(tasksRaw, &tasks); err != nil {
-			return err
+	for _, row := range rows {
+		var task taskRecord
+		if err := json.Unmarshal(row.Payload, &task); err != nil {
+			return fmt.Errorf("decode image task %s:%s: %w", row.OwnerID, row.TaskID, err)
 		}
-		s.pythonLayout = true
-		s.items = map[string]taskRecord{}
-		for _, task := range tasks {
-			if task.OwnerID == "" || task.ID == "" {
-				continue
-			}
-			task.Key = taskKey(task.OwnerID, task.ID)
-			s.items[task.Key] = task
-		}
-		return nil
+		task.OwnerID = row.OwnerID
+		task.ID = row.TaskID
+		task.Key = taskKey(row.OwnerID, row.TaskID)
+		s.items[task.Key] = task
 	}
-
-	var items map[string]taskRecord
-	if err := json.Unmarshal(data, &items); err != nil {
-		return err
-	}
-	if items == nil {
-		items = map[string]taskRecord{}
-	}
-	for key, task := range items {
-		task.Key = key
-		if task.OwnerID == "" || task.ID == "" {
-			ownerID, taskID, ok := strings.Cut(key, ":")
-			if ok {
-				if task.OwnerID == "" {
-					task.OwnerID = ownerID
-				}
-				if task.ID == "" {
-					task.ID = taskID
-				}
-			}
-		}
-		items[key] = task
-	}
-	s.items = items
 	return nil
 }
 
@@ -194,22 +178,28 @@ func (s *Store) saveLocked() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	var value any = s.items
-	if s.pythonLayout {
-		keys := make([]string, 0, len(s.items))
-		for key := range s.items {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		tasks := make([]taskRecord, 0, len(keys))
-		for _, key := range keys {
-			tasks = append(tasks, s.items[key])
-		}
-		value = struct {
-			Tasks []taskRecord `json:"tasks"`
-		}{Tasks: tasks}
+	keys := make([]string, 0, len(s.items))
+	for key := range s.items {
+		keys = append(keys, key)
 	}
-	return s.documents.Save("chatgpt.image_tasks", value)
+	sort.Strings(keys)
+	rows := make([]aiproxystate.ImageTaskRow, 0, len(keys))
+	for _, key := range keys {
+		task := s.items[key]
+		payload, err := json.Marshal(task)
+		if err != nil {
+			return err
+		}
+		rows = append(rows, aiproxystate.ImageTaskRow{OwnerID: task.OwnerID, TaskID: task.ID, Payload: payload})
+	}
+	return s.documents.ReplaceImageTasks(rows)
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.documents == nil {
+		return nil
+	}
+	return s.documents.Close()
 }
 
 func (s *Store) recoverUnfinishedLocked() bool {

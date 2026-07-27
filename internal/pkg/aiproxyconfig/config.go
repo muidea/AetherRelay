@@ -51,8 +51,8 @@ type Config struct {
 	MaxSSELineBytes int64
 	// ArchiveFullContent 为 false 时仅写元数据,不落盘完整请求/响应正文。
 	ArchiveFullContent bool
-	// State is the single persistent workspace authority. Derived legacy fields
-	// below are populated from State for runtime consumers during this cutover.
+	// State is the single persistent workspace authority. The fields below are
+	// runtime projections and are never independently configured.
 	State                StateConfig
 	InteractionDir       string
 	InteractionRetention int
@@ -75,8 +75,7 @@ type Config struct {
 	ChatGPTWeb ChatGPTWebConfig
 	Providers  map[string]Provider
 	// ModelCatalog 是全局模型元数据目录,供 GET /v1/models 使用;是请求路由与 /v1/models 的共同 authority。
-	ModelCatalog    map[string]ModelInfo
-	stateConfigured bool
+	ModelCatalog map[string]ModelInfo
 }
 
 // StateConfig defines the single local workspace for durable ai-proxy state.
@@ -121,9 +120,10 @@ type ClientAPIKey struct {
 	Enabled    bool
 }
 
-// UsageStoreConfig 是 DuckDB usage 持久化配置。
+// UsageStoreConfig is the runtime projection consumed by the usage owner. It
+// is always derived from State and has no independent YAML or environment key.
 type UsageStoreConfig struct {
-	// Path 默认 usage.duckdb;必须为本地普通文件路径。
+	// Path is state.database.
 	Path string
 	// MemoryLimit 默认 256MB;应用层解析后下发 SET memory_limit,禁止透传任意 SQL。
 	MemoryLimit string
@@ -134,7 +134,7 @@ type UsageStoreConfig struct {
 }
 
 // ChatGPTWebConfig 描述 ChatGPT Web 专属本地数据与账号刷新策略。
-// DataDir 为本地目录；相对路径相对于配置文件所在目录解析。
+// DataDir is derived from state.dir and cannot be configured separately.
 // 启用后，ChatGPT Web 模型由内建 Provider 自动发现并与静态目录合成。
 type ChatGPTWebConfig struct {
 	Enabled                      bool
@@ -216,12 +216,6 @@ func Load(path string) (Config, error) {
 			SessionTTLSeconds:   DefaultAdminSessionTTLSeconds,
 		},
 		ClientAPIKeys: map[string]ClientAPIKey{},
-		UsageStore: UsageStoreConfig{
-			Path:              "usage.duckdb",
-			MemoryLimit:       "256MB",
-			Threads:           2,
-			QueryCacheSeconds: 15,
-		},
 		State: StateConfig{
 			Dir:                  "var",
 			Database:             "state.duckdb",
@@ -297,7 +291,7 @@ func loadFile(path string, cfg *Config) error {
 		switch {
 		case indent == 0 && !hasValue:
 			switch key {
-			case "server", "state", "providers", "model_catalog", "client_api_keys", "usage_store", "chatgpt_web":
+			case "server", "state", "providers", "model_catalog", "client_api_keys", "chatgpt_web":
 				section = key
 				providerName = ""
 				modelName = ""
@@ -321,8 +315,6 @@ func loadFile(path string, cfg *Config) error {
 			} else {
 				setErr = setServer(cfg, key, expand(value))
 			}
-		case section == "usage_store" && indent >= 2:
-			setErr = setUsageStore(cfg, key, expand(value))
 		case section == "state" && indent >= 2:
 			setErr = setState(cfg, key, expand(value))
 		case section == "chatgpt_web" && indent >= 2:
@@ -363,18 +355,10 @@ func loadFile(path string, cfg *Config) error {
 
 func setTopLevel(cfg *Config, key, value string) error {
 	switch key {
-	case "usage_file", "AI_PROXY_USAGE_FILE":
-		return fmt.Errorf("%s is not supported; use usage_store.path (DuckDB) as the only online usage authority", key)
+	case "usage_file", "AI_PROXY_USAGE_FILE", "usage_store", "interaction_dir", "interaction_retention":
+		return fmt.Errorf("%s is not supported; configure the state workspace instead", key)
 	case "inbound_api_key":
 		return fmt.Errorf("inbound_api_key is not supported; use client_api_keys for caller identity and usage attribution")
-	case "interaction_dir":
-		cfg.InteractionDir = value
-	case "interaction_retention":
-		n, err := parseStrictPositiveInt(value)
-		if err != nil {
-			return fmt.Errorf("interaction_retention: %w", err)
-		}
-		cfg.InteractionRetention = n
 	case "debug_log":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -497,32 +481,7 @@ func setTopLevel(cfg *Config, key, value string) error {
 	return nil
 }
 
-func setUsageStore(cfg *Config, key, value string) error {
-	switch key {
-	case "path":
-		cfg.UsageStore.Path = strings.TrimSpace(value)
-	case "memory_limit":
-		cfg.UsageStore.MemoryLimit = strings.TrimSpace(value)
-	case "threads":
-		n, err := parseStrictPositiveInt(value)
-		if err != nil {
-			return fmt.Errorf("usage_store.threads: %w", err)
-		}
-		cfg.UsageStore.Threads = n
-	case "query_cache_seconds":
-		n, err := parseStrictNonNegativeInt(value)
-		if err != nil {
-			return fmt.Errorf("usage_store.query_cache_seconds: %w", err)
-		}
-		cfg.UsageStore.QueryCacheSeconds = n
-	default:
-		return fmt.Errorf("usage_store: unknown key %q", key)
-	}
-	return nil
-}
-
 func setState(cfg *Config, key, value string) error {
-	cfg.stateConfigured = true
 	switch key {
 	case "dir":
 		cfg.State.Dir = strings.TrimSpace(value)
@@ -562,8 +521,6 @@ func setChatGPTWeb(cfg *Config, key, value string) error {
 			return fmt.Errorf("chatgpt_web.enabled: %w", err)
 		}
 		cfg.ChatGPTWeb.Enabled = b
-	case "data_dir":
-		cfg.ChatGPTWeb.DataDir = strings.TrimSpace(value)
 	case "refresh_account_interval_minute":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -715,8 +672,8 @@ func applyEnv(cfg *Config) error {
 	if os.Getenv("AI_PROXY_INBOUND_API_KEY") != "" {
 		return fmt.Errorf("AI_PROXY_INBOUND_API_KEY is not supported; configure client_api_keys instead")
 	}
-	if os.Getenv("AI_PROXY_USAGE_FILE") != "" {
-		return fmt.Errorf("AI_PROXY_USAGE_FILE is not supported; configure usage_store.path (DuckDB) instead")
+	if os.Getenv("AI_PROXY_USAGE_FILE") != "" || os.Getenv("AI_PROXY_USAGE_STORE_PATH") != "" || os.Getenv("AI_PROXY_CHATGPT_WEB_DATA_DIR") != "" || os.Getenv("AI_PROXY_INTERACTION_DIR") != "" || os.Getenv("AI_PROXY_INTERACTION_RETENTION") != "" {
+		return fmt.Errorf("legacy state environment variables are not supported; configure the state workspace instead")
 	}
 	if value := os.Getenv("AI_PROXY_MAX_REQUEST_BODY_BYTES"); value != "" {
 		n, err := parseStrictPositiveInt64(value)
@@ -753,9 +710,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.ArchiveFullContent = b
 	}
-	if value := os.Getenv("AI_PROXY_USAGE_STORE_PATH"); value != "" {
-		cfg.UsageStore.Path = value
-	}
 	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_ENABLED"); value != "" {
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -763,25 +717,12 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.ChatGPTWeb.Enabled = b
 	}
-	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_DATA_DIR"); value != "" {
-		cfg.ChatGPTWeb.DataDir = value
-	}
 	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_REFRESH_ACCOUNT_INTERVAL_MINUTE"); value != "" {
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
 			return fmt.Errorf("AI_PROXY_CHATGPT_WEB_REFRESH_ACCOUNT_INTERVAL_MINUTE: %w", err)
 		}
 		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
-	}
-	if value := os.Getenv("AI_PROXY_INTERACTION_DIR"); value != "" {
-		cfg.InteractionDir = value
-	}
-	if value := os.Getenv("AI_PROXY_INTERACTION_RETENTION"); value != "" {
-		n, err := parseStrictPositiveInt(value)
-		if err != nil {
-			return fmt.Errorf("AI_PROXY_INTERACTION_RETENTION: %w", err)
-		}
-		cfg.InteractionRetention = n
 	}
 	if value := os.Getenv("AI_PROXY_DEBUG_LOG"); value != "" {
 		b, err := parseStrictBool(value)
@@ -878,28 +819,20 @@ func normalize(cfg *Config, configPath string) error {
 	if cfg.MaxSSELineBytes <= 0 {
 		cfg.MaxSSELineBytes = DefaultMaxSSELineBytes
 	}
-	if cfg.stateConfigured {
-		if err := normalizeState(&cfg.State, configPath); err != nil {
-			return err
-		}
-		// Runtime consumers receive only values derived from the single state
-		// workspace; they no longer interpret independent relative paths.
-		cfg.UsageStore = UsageStoreConfig{
-			Path:              cfg.State.Database,
-			MemoryLimit:       cfg.State.MemoryLimit,
-			Threads:           cfg.State.Threads,
-			QueryCacheSeconds: cfg.State.QueryCacheSeconds,
-		}
-		cfg.InteractionDir = cfg.State.InteractionsDir()
-		cfg.InteractionRetention = cfg.State.InteractionRetention
-		cfg.ChatGPTWeb.DataDir = cfg.State.Dir
-	}
-	if err := normalizeUsageStore(&cfg.UsageStore); err != nil {
+	if err := normalizeState(&cfg.State, configPath); err != nil {
 		return err
 	}
-	if err := normalizeChatGPTWeb(&cfg.ChatGPTWeb, ""); err != nil {
-		return err
+	// Runtime consumers receive only values derived from the single state
+	// workspace; they never interpret independent persistent paths.
+	cfg.UsageStore = UsageStoreConfig{
+		Path:              cfg.State.Database,
+		MemoryLimit:       cfg.State.MemoryLimit,
+		Threads:           cfg.State.Threads,
+		QueryCacheSeconds: cfg.State.QueryCacheSeconds,
 	}
+	cfg.InteractionDir = cfg.State.InteractionsDir()
+	cfg.InteractionRetention = cfg.State.InteractionRetention
+	cfg.ChatGPTWeb.DataDir = cfg.State.Dir
 	if err := normalizeClientAPIKeys(cfg); err != nil {
 		return err
 	}
@@ -1004,7 +937,7 @@ func validate(cfg Config) error {
 	if err := validateClientAPIKeys(cfg); err != nil {
 		return err
 	}
-	if err := validateUsageStore(cfg.UsageStore); err != nil {
+	if err := validateState(cfg.State); err != nil {
 		return err
 	}
 	if err := validateChatGPTWeb(cfg.ChatGPTWeb); err != nil {
@@ -1836,7 +1769,6 @@ var clientAPIKeyIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 const ReservedClientAPIKeyID = "default"
 
 const (
-	defaultUsageStorePath              = "usage.duckdb"
 	defaultUsageStoreMemoryLimit       = "256MB"
 	defaultUsageStoreThreads           = 2
 	defaultUsageStoreQueryCacheSeconds = 15
@@ -1846,45 +1778,13 @@ const (
 	minUsageStoreMemoryBytes           = 32 << 20 // 32MiB 下限
 )
 
-func normalizeUsageStore(us *UsageStoreConfig) error {
-	if us == nil {
-		return fmt.Errorf("usage_store is nil")
-	}
-	if strings.TrimSpace(us.Path) == "" {
-		us.Path = defaultUsageStorePath
-	}
-	us.Path = strings.TrimSpace(us.Path)
-	if strings.TrimSpace(us.MemoryLimit) == "" {
-		us.MemoryLimit = defaultUsageStoreMemoryLimit
-	}
-	us.MemoryLimit = strings.TrimSpace(us.MemoryLimit)
-	if us.Threads <= 0 {
-		us.Threads = defaultUsageStoreThreads
-	}
-	maxThreads := runtime.NumCPU()
-	if maxThreads < 1 {
-		maxThreads = 1
-	}
-	if maxThreads > maxUsageStoreThreads {
-		maxThreads = maxUsageStoreThreads
-	}
-	if us.Threads > maxThreads {
-		us.Threads = maxThreads
-	}
-	if us.QueryCacheSeconds < 0 {
-		us.QueryCacheSeconds = defaultUsageStoreQueryCacheSeconds
-	}
-	// QueryCacheSeconds==0 表示关闭缓存,合法。
-	return nil
-}
-
 func normalizeState(state *StateConfig, configPath string) error {
 	if state == nil {
 		return fmt.Errorf("state is nil")
 	}
 	state.Dir = strings.TrimSpace(state.Dir)
 	if state.Dir == "" {
-		return fmt.Errorf("state.dir is required")
+		state.Dir = "var"
 	}
 	if strings.Contains(strings.ToLower(state.Dir), "://") {
 		return fmt.Errorf("state.dir must be a local directory path")
@@ -1893,9 +1793,6 @@ func normalizeState(state *StateConfig, configPath string) error {
 		state.Dir = filepath.Join(filepath.Dir(configPath), state.Dir)
 	}
 	state.Dir = filepath.Clean(state.Dir)
-	if err := os.MkdirAll(state.Dir, 0o700); err != nil {
-		return fmt.Errorf("create state.dir: %w", err)
-	}
 	state.Database = strings.TrimSpace(state.Database)
 	if state.Database == "" {
 		state.Database = "state.duckdb"
@@ -1997,31 +1894,12 @@ func isClientAPIKeyHash(value string) bool {
 	return err == nil
 }
 
-func validateUsageStore(us UsageStoreConfig) error {
-	path := strings.TrimSpace(us.Path)
-	if path == "" {
-		return fmt.Errorf("usage_store.path is required")
+func validateState(state StateConfig) error {
+	if _, err := parseMemoryLimitBytes(state.MemoryLimit); err != nil {
+		return fmt.Errorf("state.memory_limit: %w", err)
 	}
-	if filepath.IsAbs(path) {
-		// ok
-	}
-	// 禁止明显的非本地路径语义(http/sql 等)。
-	lower := strings.ToLower(path)
-	if strings.Contains(lower, "://") {
-		return fmt.Errorf("usage_store.path must be a local file path")
-	}
-	parent := filepath.Dir(path)
-	if parent != "" && parent != "." {
-		// 父目录在启动时创建;此处仅校验不指向明显错误。
-		if info, err := os.Stat(parent); err == nil && !info.IsDir() {
-			return fmt.Errorf("usage_store.path parent %q is not a directory", parent)
-		}
-	}
-	if _, err := parseMemoryLimitBytes(us.MemoryLimit); err != nil {
-		return fmt.Errorf("usage_store.memory_limit: %w", err)
-	}
-	if us.Threads < 1 {
-		return fmt.Errorf("usage_store.threads must be >= 1")
+	if state.Threads < 1 {
+		return fmt.Errorf("state.threads must be >= 1")
 	}
 	maxThreads := runtime.NumCPU()
 	if maxThreads < 1 {
@@ -2030,46 +1908,18 @@ func validateUsageStore(us UsageStoreConfig) error {
 	if maxThreads > maxUsageStoreThreads {
 		maxThreads = maxUsageStoreThreads
 	}
-	if us.Threads > maxThreads {
-		return fmt.Errorf("usage_store.threads %d exceeds limit %d", us.Threads, maxThreads)
+	if state.Threads > maxThreads {
+		return fmt.Errorf("state.threads %d exceeds limit %d", state.Threads, maxThreads)
 	}
-	if us.QueryCacheSeconds < 0 || us.QueryCacheSeconds > maxUsageStoreQueryCacheSeconds {
-		return fmt.Errorf("usage_store.query_cache_seconds must be between 0 and %d", maxUsageStoreQueryCacheSeconds)
+	if state.QueryCacheSeconds < 0 || state.QueryCacheSeconds > maxUsageStoreQueryCacheSeconds {
+		return fmt.Errorf("state.query_cache_seconds must be between 0 and %d", maxUsageStoreQueryCacheSeconds)
 	}
-	return nil
-}
-
-func normalizeChatGPTWeb(web *ChatGPTWebConfig, configPath string) error {
-	if web == nil {
-		return fmt.Errorf("chatgpt_web is nil")
-	}
-	web.DataDir = strings.TrimSpace(web.DataDir)
-	if web.DataDir == "" {
-		web.DataDir = "chatgpt-web-data"
-	}
-	if strings.Contains(strings.ToLower(web.DataDir), "://") {
-		return fmt.Errorf("chatgpt_web.data_dir must be a local directory path")
-	}
-	if !filepath.IsAbs(web.DataDir) && strings.TrimSpace(configPath) != "" {
-		web.DataDir = filepath.Join(filepath.Dir(configPath), web.DataDir)
-	}
-	web.DataDir = filepath.Clean(web.DataDir)
 	return nil
 }
 
 func validateChatGPTWeb(web ChatGPTWebConfig) error {
-	path := strings.TrimSpace(web.DataDir)
-	if path == "" {
-		return fmt.Errorf("chatgpt_web.data_dir is required")
-	}
-	if strings.Contains(strings.ToLower(path), "://") {
-		return fmt.Errorf("chatgpt_web.data_dir must be a local directory path")
-	}
 	if web.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("chatgpt_web.refresh_account_interval_minute must be >= 0")
-	}
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		return fmt.Errorf("chatgpt_web.data_dir %q is not a directory", path)
 	}
 	return nil
 }

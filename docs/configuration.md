@@ -117,7 +117,9 @@ state:
   interaction_retention: 500
 ```
 
-`state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。
+`state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、不可迁移或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
+
+`state.database` 的业务表按 owner 划分：用量 owner 管理其用量表；账号池管理 `chatgpt_accounts`；图片任务管理 `chatgpt_image_tasks`；图片库管理 `chatgpt_images` 与 `chatgpt_image_tags`。不使用通用 JSON 文档表。图片元数据保留 JSON 扩展列，但账号、任务和图片的归属主键及图片查询字段均为独立列。
 
 工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 
@@ -131,6 +133,7 @@ chatgpt_web:
 
 - 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储和异步图片任务会一并装配。
 - 账号、任务、图片索引和标签保存于 `state.database`；不得写入 YAML、环境变量、日志或版本库。
+- 旧的 `usage_store`、`chatgpt_web.data_dir`、`interaction_dir` 及相应环境变量均不再支持；所有本地路径和 DuckDB 资源参数只能在 `state` 中声明。
 - `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
 - 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。模型与模型级 operation 来自账号池对 ChatGPT Web `/backend-api/models` 的枚举并集。
 - 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。

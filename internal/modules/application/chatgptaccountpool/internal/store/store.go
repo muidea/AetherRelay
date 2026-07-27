@@ -62,7 +62,9 @@ type Store struct {
 	catalogVersion uint64
 }
 
-func New(databasePath string, concurrency int) *Store {
+// Open creates the account owner's state store and reports every DuckDB
+// failure to the module startup path.
+func Open(databasePath, memoryLimit string, threads, concurrency int) (*Store, error) {
 	if concurrency < 1 {
 		concurrency = 3
 	}
@@ -72,8 +74,25 @@ func New(databasePath string, concurrency int) *Store {
 		imageInflight: map[string]int{},
 		concurrency:   concurrency,
 	}
-	s.documents, _ = aiproxystate.Open(databasePath, "", 0)
-	_ = s.load()
+	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	if err != nil {
+		return nil, err
+	}
+	s.documents = documents
+	if err := s.load(); err != nil {
+		_ = documents.Close()
+		return nil, fmt.Errorf("load account state: %w", err)
+	}
+	return s, nil
+}
+
+// New is retained for direct package tests. Production startup must call Open
+// so a state failure is returned to the module lifecycle instead of hidden.
+func New(databasePath string, concurrency int) *Store {
+	s, err := Open(databasePath, "128MB", 1, concurrency)
+	if err != nil {
+		panic(err)
+	}
 	return s
 }
 
@@ -103,39 +122,24 @@ func (s *Store) load() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	var raw any
-	found, err := s.documents.Load("chatgpt.accounts", &raw)
-	if err != nil || !found {
+	rows, err := s.documents.LoadAccounts()
+	if err != nil {
 		return err
 	}
-	switch v := raw.(type) {
-	case []any:
-		for _, item := range v {
-			m, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			acc := mapToAccount(m)
-			if acc.AccessToken == "" {
-				continue
-			}
-			s.items[acc.AccessToken] = acc
-			s.order = append(s.order, acc.AccessToken)
+	for _, row := range rows {
+		var item map[string]any
+		if err := json.Unmarshal(row.Payload, &item); err != nil {
+			return fmt.Errorf("decode account %q: %w", row.AccessToken, err)
 		}
-	case map[string]any:
-		// dict form token -> account
-		for token, item := range v {
-			m, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			acc := mapToAccount(m)
-			if acc.AccessToken == "" {
-				acc.AccessToken = token
-			}
-			s.items[acc.AccessToken] = acc
-			s.order = append(s.order, acc.AccessToken)
+		acc := mapToAccount(item)
+		if acc.AccessToken == "" {
+			acc.AccessToken = row.AccessToken
 		}
+		if acc.AccessToken == "" {
+			continue
+		}
+		s.items[acc.AccessToken] = acc
+		s.order = append(s.order, acc.AccessToken)
 	}
 	return nil
 }
@@ -173,13 +177,24 @@ func (s *Store) saveLocked() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	list := make([]map[string]any, 0, len(s.order))
-	for _, token := range s.order {
+	rows := make([]aiproxystate.AccountRow, 0, len(s.order))
+	for position, token := range s.order {
 		if acc, ok := s.items[token]; ok {
-			list = append(list, accountToMap(acc))
+			payload, err := json.Marshal(accountToMap(acc))
+			if err != nil {
+				return err
+			}
+			rows = append(rows, aiproxystate.AccountRow{AccessToken: token, Position: position, Payload: payload})
 		}
 	}
-	return s.documents.Save("chatgpt.accounts", list)
+	return s.documents.ReplaceAccounts(rows)
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.documents == nil {
+		return nil
+	}
+	return s.documents.Close()
 }
 
 func accountToMap(acc *Account) map[string]any {

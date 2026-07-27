@@ -44,7 +44,10 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, err.Error())
 	}
-	b.store = store.New(bootstrap.Config.State.Database)
+	b.store, err = store.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads)
+	if err != nil {
+		return nil, cd.NewError(cd.Unexpected, "open chatgpt image task state: "+err.Error())
+	}
 	b.topics = []string{
 		events.TopicSubmitGeneration,
 		events.TopicSubmitEdit,
@@ -63,6 +66,9 @@ func (s *ImageTask) Run(context.Context) *cd.Error { return nil }
 func (s *ImageTask) Teardown(context.Context) {
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
+	}
+	if s.store != nil {
+		_ = s.store.Close()
 	}
 	s.store = nil
 }

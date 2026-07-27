@@ -32,29 +32,42 @@ type indexEntry struct {
 }
 
 type Store struct {
-	mu           sync.Mutex
-	root         string
-	documents    *aiproxystate.Documents
-	index        map[string]indexEntry
-	tags         map[string][]string
-	pythonLayout bool
-	pythonItems  map[string]map[string]any
+	mu        sync.Mutex
+	root      string
+	documents *aiproxystate.Documents
+	index     map[string]indexEntry
+	tags      map[string][]string
 }
 
-func New(root string, databasePaths ...string) *Store {
-	databasePath := filepath.Join(root, "state.duckdb")
-	if len(databasePaths) > 0 && databasePaths[0] != "" {
-		databasePath = databasePaths[0]
-	}
+// Open creates the image-store owner's state store and reports startup errors.
+func Open(root, databasePath, memoryLimit string, threads int) (*Store, error) {
 	s := &Store{
-		root:        root,
-		index:       map[string]indexEntry{},
-		tags:        map[string][]string{},
-		pythonItems: map[string]map[string]any{},
+		root:  root,
+		index: map[string]indexEntry{},
+		tags:  map[string][]string{},
 	}
-	s.documents, _ = aiproxystate.Open(databasePath, "", 0)
-	_ = s.loadIndex()
-	_ = s.loadTags()
+	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	if err != nil {
+		return nil, err
+	}
+	s.documents = documents
+	if err := s.loadIndex(); err != nil {
+		_ = documents.Close()
+		return nil, fmt.Errorf("load image index: %w", err)
+	}
+	if err := s.loadTags(); err != nil {
+		_ = documents.Close()
+		return nil, fmt.Errorf("load image tags: %w", err)
+	}
+	return s, nil
+}
+
+// New is retained for direct package tests. Production startup must call Open.
+func New(root string) *Store {
+	s, err := Open(root, filepath.Join(root, "state.duckdb"), "128MB", 1)
+	if err != nil {
+		panic(err)
+	}
 	return s
 }
 
@@ -62,9 +75,8 @@ func (s *Store) loadTags() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	var raw map[string][]string
-	found, err := s.documents.Load("chatgpt.image_tags", &raw)
-	if err != nil || !found {
+	raw, err := s.documents.LoadImageTags()
+	if err != nil {
 		return err
 	}
 	for path, tags := range raw {
@@ -83,74 +95,24 @@ func (s *Store) saveTagsLocked() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	return s.documents.Save("chatgpt.image_tags", s.tags)
+	return s.documents.ReplaceImageTags(s.tags)
 }
 
 func (s *Store) loadIndex() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	var data json.RawMessage
-	found, err := s.documents.Load("chatgpt.image_index", &data)
-	if err != nil || !found {
+	rows, err := s.documents.LoadImages()
+	if err != nil {
 		return err
 	}
-	index := map[string]indexEntry{}
-	pythonItems := map[string]map[string]any{}
-	var envelope struct {
-		Items map[string]map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Items != nil {
-		pythonItems = envelope.Items
-		for key, item := range envelope.Items {
-			entry := indexEntry{
-				Path:      firstString(item, "path", "rel"),
-				Size:      asInt64(item["size"]),
-				Width:     int(asInt64(item["width"])),
-				Height:    int(asInt64(item["height"])),
-				CreatedAt: firstString(item, "created_at"),
-			}
-			if entry.Path == "" {
-				entry.Path = key
-			}
-			if entry.Path = safeRel(entry.Path); entry.Path != "" {
-				index[entry.Path] = entry
-			}
+	for _, row := range rows {
+		path := safeRel(row.Path)
+		if path == "" {
+			continue
 		}
-		s.index = index
-		s.pythonLayout = true
-		s.pythonItems = pythonItems
-		return nil
+		s.index[path] = indexEntry{Path: path, Size: row.Size, Width: row.Width, Height: row.Height, CreatedAt: row.CreatedAt}
 	}
-	var raw map[string]indexEntry
-	if err := json.Unmarshal(data, &raw); err == nil {
-		for path, entry := range raw {
-			if entry.Path == "" {
-				entry.Path = path
-			}
-			if entry.Path = safeRel(entry.Path); entry.Path != "" {
-				index[entry.Path] = entry
-			}
-		}
-		s.index = index
-		s.pythonLayout = false
-		s.pythonItems = pythonItems
-		return nil
-	}
-	// Older Go fixtures may use a bare list.
-	var list []indexEntry
-	if err := json.Unmarshal(data, &list); err != nil {
-		return err
-	}
-	raw = map[string]indexEntry{}
-	for _, e := range list {
-		if e.Path = safeRel(e.Path); e.Path != "" {
-			raw[e.Path] = e
-		}
-	}
-	s.index = raw
-	s.pythonLayout = false
-	s.pythonItems = pythonItems
 	return nil
 }
 
@@ -158,27 +120,22 @@ func (s *Store) saveIndexLocked() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	var value any = s.index
-	if s.pythonLayout {
-		for path, entry := range s.index {
-			item := s.pythonItems[path]
-			if item == nil {
-				item = map[string]any{}
-				s.pythonItems[path] = item
-			}
-			item["path"] = path
-			item["rel"] = path
-			item["name"] = filepath.Base(path)
-			item["size"] = entry.Size
-			item["width"] = entry.Width
-			item["height"] = entry.Height
-			item["created_at"] = entry.CreatedAt
+	rows := make([]aiproxystate.ImageRow, 0, len(s.index))
+	for path, entry := range s.index {
+		payload, err := json.Marshal(entry)
+		if err != nil {
+			return err
 		}
-		value = struct {
-			Items map[string]map[string]any `json:"items"`
-		}{Items: s.pythonItems}
+		rows = append(rows, aiproxystate.ImageRow{Path: path, Size: entry.Size, Width: entry.Width, Height: entry.Height, CreatedAt: entry.CreatedAt, Payload: payload})
 	}
-	return s.documents.Save("chatgpt.image_index", value)
+	return s.documents.ReplaceImages(rows)
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.documents == nil {
+		return nil
+	}
+	return s.documents.Close()
 }
 
 func (s *Store) Save(payload []byte, baseURL string) (events.SaveResult, error) {
@@ -209,17 +166,6 @@ func (s *Store) Save(payload []byte, baseURL string) (events.SaveResult, error) 
 		CreatedAt: now.Format(time.RFC3339),
 	}
 	s.index[rel] = entry
-	if s.pythonLayout {
-		s.pythonItems[rel] = map[string]any{
-			"path":       rel,
-			"rel":        rel,
-			"name":       filepath.Base(rel),
-			"size":       entry.Size,
-			"width":      entry.Width,
-			"height":     entry.Height,
-			"created_at": entry.CreatedAt,
-		}
-	}
 	if err := s.saveIndexLocked(); err != nil {
 		return events.SaveResult{}, err
 	}
@@ -322,7 +268,6 @@ func (s *Store) Delete(paths []string) (int, error) {
 				deleted++
 			}
 			delete(s.index, rel)
-			delete(s.pythonItems, rel)
 			delete(s.tags, rel)
 			// thumbnail
 			_ = os.Remove(filepath.Join(s.root, "image_thumbnails", filepath.FromSlash(rel)+".png"))
@@ -525,9 +470,6 @@ func (s *Store) CompressImages() (events.CompressResult, error) {
 			if item, exists := s.index[rel]; exists {
 				item.Size = int64(compressed.Len())
 				s.index[rel] = item
-				if s.pythonLayout && s.pythonItems[rel] != nil {
-					s.pythonItems[rel]["size"] = item.Size
-				}
 				changedIndex = true
 			}
 		}
@@ -610,7 +552,6 @@ func (s *Store) CleanupToTarget(targetFreeMB int64, dryRun bool) (events.Cleanup
 		}
 		_ = os.Remove(filepath.Join(s.root, "image_thumbnails", filepath.FromSlash(file.rel)+".png"))
 		delete(s.index, file.rel)
-		delete(s.pythonItems, file.rel)
 		delete(s.tags, file.rel)
 		changed = true
 	}

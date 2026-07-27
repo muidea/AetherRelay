@@ -65,7 +65,8 @@ internal/modules/
 
 internal/pkg/
   aiproxybootstrap/       process service → framework 启动基础设施的单次启动快照桥接
-  aiproxyconfig/          YAML 配置、环境变量展开与启动期 route 校验
+  aiproxyconfig/          YAML 配置、统一 state 工作区派生与启动期 route 校验
+  aiproxystate/           共享 DuckDB 连接、owner 表迁移与引用计数关闭
   aiproxyarchive/         interaction round 归档
   aiproxyclientauth/      客户端 API Key 身份索引与解析（由 Proxy Module 持有）
   aiproxyusage/           DuckDB usage store、查询、导出与迁移
@@ -85,7 +86,7 @@ web/admin/                嵌入二进制的管理页
 - Config Block 是启动配置与 Provider 热更新后的当前配置 owner。`routeregistry` Initiator 是 magicEngine RouteRegistry 与 listener 的进程级基础设施 owner；它只暴露窄的 `RouteRegistryHelper`，不承载任何业务状态。listener 由 process service 在所有 Module 路由注册后启动，避免启动窗口 404。
 - Usage 与 Metrics/SLO 是独立技术 Block，不暴露 HTTP route 或可变资源对象。Metrics Block 经 `MetricsPort` 接收记录事件和返回只读投影；Proxy 直接持有其唯一使用的 Client API Key 索引与 interaction archive。
 - Proxy API 与 Provider Admin 是有状态业务聚合 Module：它们通过 EventHub 获取 Block 依赖，并在 `Setup` 中注入 `RouteRegistryHelper`、在 `Run` 中注册各自路由。Admin 请求 Config Block 激活新配置，Config Block 同步命令 Proxy 应用新快照。Proxy 仅注册协议白名单路径，不依赖 Module Weight 确保路由优先级。
-- `internal/pkg/aiproxyarchive`、`internal/pkg/aiproxyclientauth`、`internal/pkg/aiproxyconfig`、`internal/pkg/aiproxyusage`、`internal/pkg/aiproxymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。
+- `internal/pkg/aiproxyarchive`、`internal/pkg/aiproxyclientauth`、`internal/pkg/aiproxyconfig`、`internal/pkg/aiproxystate`、`internal/pkg/aiproxyusage`、`internal/pkg/aiproxymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。`aiproxystate` 只提供同一 `state.database` 的受限连接与 owner 表，不承载跨 owner 的业务读写。
 - EventHub topic、Command、Data、Result 与 handler 由维护资源、状态或能力的 owner 在其 `pkg/events` 定义：调用方只导入并使用 owner 合同，不得按投递方复制 DTO 或 topic；`aiproxymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。
 - 新增 magicCommon plugin module 的前提是：具备独立 Setup/Run/Teardown、正式状态 owner、route/listener 或 EventHub 订阅，并由 `cmd` 显式加载；不得仅为缩短文件而创建 module。
 

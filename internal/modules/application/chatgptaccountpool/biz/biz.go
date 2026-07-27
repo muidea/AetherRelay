@@ -49,7 +49,11 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "create chatgpt web data directory: "+err.Error())
 	}
-	return newAccount(hub, background, store.New(bootstrap.Config.State.Database, 3), time.Duration(bootstrap.Config.ChatGPTWeb.RefreshAccountIntervalMinute)*time.Minute), nil
+	state, err := store.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, 3)
+	if err != nil {
+		return nil, cd.NewError(cd.Unexpected, "open chatgpt account state: "+err.Error())
+	}
+	return newAccount(hub, background, state, time.Duration(bootstrap.Config.ChatGPTWeb.RefreshAccountIntervalMinute)*time.Minute), nil
 }
 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery time.Duration) *Account {
@@ -277,6 +281,9 @@ func (s *Account) Teardown(context.Context) {
 	s.shutdown()
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
+	}
+	if s.store != nil {
+		_ = s.store.Close()
 	}
 }
 

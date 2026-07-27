@@ -89,6 +89,9 @@ type providerView struct {
 	Enabled              bool                 `json:"enabled"`
 	APIKeyConfigured     bool                 `json:"api_key_configured"`
 	Availability         providerAvailability `json:"availability"`
+	// Source is a display-only classification derived from builtin + base_url
+	// (builtin / official / third_party). It is never read from or written to YAML.
+	Source string `json:"source"`
 	// Builtin marks the non-persistent chatgptweb provider. Admin must not
 	// offer edit/delete/toggle/probe for builtin rows.
 	Builtin           bool     `json:"builtin,omitempty"`
@@ -559,6 +562,7 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 			Enabled:              !provider.Disabled,
 			APIKeyConfigured:     strings.TrimSpace(provider.APIKey) != "",
 			Availability:         health[name],
+			Source:               classifyProviderSource(false, provider.BaseURL),
 		})
 	}
 	if cfg.ChatGPTWeb.Enabled {
@@ -580,6 +584,7 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityImages},
 		Enabled:              true,
 		APIKeyConfigured:     false,
+		Source:               ProviderSourceBuiltin,
 		Builtin:              true,
 		Availability:         providerAvailability{Status: "unknown"},
 	}

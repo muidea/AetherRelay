@@ -11,19 +11,19 @@ import (
 func TestLoadConfigFileAndEnv(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "env-openai-key")
 	t.Setenv("AI_PROXY_LISTEN_ADDR", "127.0.0.1:18080")
-	t.Setenv("AI_PROXY_INTERACTION_RETENTION", "")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 server:
   port: 9090
-  interaction_dir: test-interactions
   debug_log: false
   stream_idle_timeout_seconds: 900
-usage_store:
-  path: test-usage.duckdb
+state:
+  dir: test-state
+  database: state.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
+  interaction_retention: 500
 providers:
   deepseek:
     protocol: openai
@@ -61,7 +61,7 @@ providers:
 		t.Fatalf("models = %#v", cfg.Providers["deepseek"].Models)
 	}
 	// fallbacks 已移除:配置中不得声明 fallbacks。
-	if cfg.InteractionDir != "test-interactions" {
+	if cfg.InteractionDir != filepath.Join(filepath.Dir(path), "test-state", "interactions") {
 		t.Fatalf("interaction dir = %s", cfg.InteractionDir)
 	}
 	if cfg.InteractionRetention != 500 {
@@ -112,7 +112,6 @@ func TestLoadAllowsChatGPTWebAsOnlyProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 chatgpt_web:
   enabled: true
-  data_dir: chatgpt-web-data
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -184,12 +183,11 @@ model_catalog:
 	}
 }
 
-func TestLoadInteractionRetentionFromConfigAndEnv(t *testing.T) {
-	t.Setenv("AI_PROXY_INTERACTION_RETENTION", "321")
+func TestLoadInteractionRetentionFromState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
-server:
-  interaction_retention: 123
+state:
+  interaction_retention: 321
 providers:
   openai:
     protocol: openai
@@ -207,6 +205,31 @@ providers:
 	}
 	if cfg.InteractionRetention != 321 {
 		t.Fatalf("interaction retention = %d", cfg.InteractionRetention)
+	}
+}
+
+func TestLoadRejectsLegacyStateConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+usage_store:
+  path: usage.duckdb
+providers:
+  local:
+    protocol: openai
+    base_url: http://127.0.0.1:9000/v1
+    allow_unauthenticated: true
+    endpoint_capabilities: chat_completions
+    models: local-*
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown section") {
+		t.Fatalf("legacy usage_store error = %v", err)
+	}
+
+	t.Setenv("AI_PROXY_USAGE_STORE_PATH", "usage.duckdb")
+	if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "legacy state environment variables") {
+		t.Fatalf("legacy environment error = %v", err)
 	}
 }
 
@@ -1405,8 +1428,6 @@ func TestLoadRejectsExplicitChatGPTWebProvider(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	body := `server:
   listen_addr: 127.0.0.1:18080
-usage_store:
-  path: usage.duckdb
 providers:
   chatgptweb:
     enabled: true
@@ -1433,8 +1454,6 @@ func TestLoadRejectsProtocolChatGPTWebUnderOtherName(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	body := `server:
   listen_addr: 127.0.0.1:18080
-usage_store:
-  path: usage.duckdb
 providers:
   my-web:
     enabled: true

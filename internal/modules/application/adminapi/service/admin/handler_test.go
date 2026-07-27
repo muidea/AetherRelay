@@ -78,6 +78,13 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Provider 管理") {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
+	for _, marker := range []string{
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "<th>来源</th>",
+	} {
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("admin page missing provider source marker %q", marker)
+		}
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/admin/api/providers", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
@@ -91,6 +98,67 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"api_key_configured":true`) {
 		t.Fatalf("provider response missing configured marker: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"source":"official"`) {
+		t.Fatalf("provider response missing official source from base_url: %s", rec.Body.String())
+	}
+}
+
+func TestHandlerClassifiesProviderSources(t *testing.T) {
+	cfg := config.Config{
+		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
+		Providers: map[string]config.Provider{
+			"deepseek": {
+				Name:                 "deepseek",
+				Protocol:             "openai",
+				BaseURL:              "https://api.deepseek.com",
+				APIKey:               "sk-test",
+				Models:               []string{"deepseek-chat"},
+				EndpointCapabilities: []string{"chat_completions"},
+			},
+			"relay": {
+				Name:                 "relay",
+				Protocol:             "openai",
+				BaseURL:              "https://aiapi.bluetron.cn",
+				APIKey:               "sk-test",
+				Models:               []string{"MiniMax*"},
+				EndpointCapabilities: []string{"chat_completions"},
+			},
+		},
+	}
+	handler := NewHandler("", &testRuntime{cfg: cfg})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/providers", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Providers []struct {
+			Name    string `json:"name"`
+			Source  string `json:"source"`
+			Builtin bool   `json:"builtin"`
+		} `json:"providers"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range payload.Providers {
+		got[p.Name] = p.Source
+		if p.Name == "chatgptweb" && (!p.Builtin || p.Source != ProviderSourceBuiltin) {
+			t.Fatalf("chatgptweb = %+v", p)
+		}
+	}
+	if got["deepseek"] != ProviderSourceOfficial {
+		t.Fatalf("deepseek source = %q, want official", got["deepseek"])
+	}
+	if got["relay"] != ProviderSourceThirdParty {
+		t.Fatalf("relay source = %q, want third_party", got["relay"])
+	}
+	if got["chatgptweb"] != ProviderSourceBuiltin {
+		t.Fatalf("chatgptweb source = %q, want builtin", got["chatgptweb"])
 	}
 }
 

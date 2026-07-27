@@ -103,7 +103,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
-热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`usage_store` 路径不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 的唯一 RouteOwner 合同。
+热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 的唯一 RouteOwner 合同。
 
 ## 安全与资源边界
 
