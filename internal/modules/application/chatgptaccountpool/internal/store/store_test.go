@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,6 +240,41 @@ func TestApplyRefreshedTokenCarriesImageSlotAndAliasesOldToken(t *testing.T) {
 	account := reloaded.items[newToken]
 	if account == nil || account.RefreshToken != "refresh-new" || account.Extra["id_token"] != "id-new" || account.Extra["last_token_refresh_at"] == nil {
 		t.Fatalf("refreshed account=%+v", account)
+	}
+}
+
+func TestTokenRefreshFailureProjectionIsSafeAndClearedOnSuccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	s := New(path, 1)
+	if _, _, err := s.AddOAuth("access-old", "refresh-old", "id-old"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a legacy persisted raw error. The public view must never expose
+	// it, and a new failure must erase it rather than extending its lifetime.
+	s.items["access-old"].Extra["last_token_refresh_error"] = "proxy password=secret"
+	if err := s.RecordTokenRefreshFailure("access-old", "transport"); err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := s.items["access-old"].Extra["last_token_refresh_error"]; leaked {
+		t.Fatal("refresh failure retained raw error text")
+	}
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("items=%d", len(items))
+	}
+	item := items[0]
+	if item.LastTokenRefreshErrorClass != "transport" || item.LastTokenRefreshErrorAt == "" {
+		t.Fatalf("failure projection=%+v", item)
+	}
+	if encoded, err := json.Marshal(item); err != nil || strings.Contains(string(encoded), "proxy password=secret") {
+		t.Fatalf("unsafe failure projection json=%q err=%v", encoded, err)
+	}
+	if _, _, err := s.ApplyRefreshedToken("access-old", "access-new", "refresh-new", "id-new"); err != nil {
+		t.Fatal(err)
+	}
+	item, ok := s.ViewForAccessToken("access-new")
+	if !ok || item.LastTokenRefreshAt == "" || item.LastTokenRefreshErrorClass != "" || item.LastTokenRefreshErrorAt != "" {
+		t.Fatalf("success did not clear failure projection=%+v ok=%v", item, ok)
 	}
 }
 

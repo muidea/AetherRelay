@@ -24,21 +24,28 @@ func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (out 
 	}
 	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
 
-	out, err = s.completeChatGPTTextOnce(ctx, account.AccessToken, request)
+	out, err = s.completeChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request)
 	if !isInvalidChatGPTTextFailure(err) {
 		return out, err
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return out, mapContextError(contextErr)
 	}
-	refreshedToken, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
+	refreshed, permanentFailure, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
 	if refreshErr != nil {
+		// The original 401 is not sufficient evidence to retire an account if
+		// its OAuth refresh endpoint is temporarily unavailable. Return the
+		// refresh failure instead so the final result records a transient model
+		// cooldown rather than invalidating the credential.
+		return out, refreshErr
+	}
+	if permanentFailure {
 		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
 		return out, err
 	}
-	out, err = s.completeChatGPTTextOnce(ctx, refreshedToken, request)
+	out, err = s.completeChatGPTTextOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request)
 	if isInvalidChatGPTTextFailure(err) {
-		s.removeInvalidChatGPTTextToken(ctx, refreshedToken)
+		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)
 	}
 	return out, err
 }
@@ -50,28 +57,31 @@ func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit fu
 	}
 	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
 
-	out, emitted, err := s.streamChatGPTTextOnce(ctx, account.AccessToken, request, emit)
+	out, emitted, err := s.streamChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request, emit)
 	if !isInvalidChatGPTTextFailure(err) || emitted {
 		return out, err
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return out, mapContextError(contextErr)
 	}
-	refreshedToken, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
+	refreshed, permanentFailure, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
 	if refreshErr != nil {
+		return out, refreshErr
+	}
+	if permanentFailure {
 		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
 		return out, err
 	}
-	out, _, err = s.streamChatGPTTextOnce(ctx, refreshedToken, request, emit)
+	out, _, err = s.streamChatGPTTextOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request, emit)
 	if isInvalidChatGPTTextFailure(err) {
-		s.removeInvalidChatGPTTextToken(ctx, refreshedToken)
+		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)
 	}
 	return out, err
 }
 
-func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token string, request chatgpttext.Request) (chatgpttext.Result, error) {
+func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy string, request chatgpttext.Request) (chatgpttext.Result, error) {
 	value, eventErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompleteText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteTextCommand{
-		AccessToken: token, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
+		AccessToken: token, Proxy: proxy, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
 	})).Get()
 	if eventErr != nil {
 		partial, isPartial := value.(upevents.CompleteTextResult)
@@ -96,9 +106,9 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token string, reque
 	return out, nil
 }
 
-func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token string, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, bool, error) {
+func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, bool, error) {
 	value, startErr := s.SendEvent(event.NewEventWithContext(upevents.TopicStartText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartTextCommand{
-		AccessToken: token, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
+		AccessToken: token, Proxy: proxy, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
 	})).Get()
 	if startErr != nil {
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_start_stream", "event_error_code", startErr.Code)
@@ -161,19 +171,25 @@ func (s *Proxy) removeInvalidChatGPTTextToken(ctx context.Context, token string)
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRemoveInvalid, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RemoveInvalidCommand{AccessToken: token, Event: "chat_completion"})).Get()
 }
 
-func (s *Proxy) refreshChatGPTTextToken(ctx context.Context, token string) (string, error) {
+func (s *Proxy) refreshChatGPTTextToken(ctx context.Context, token string) (accevents.RefreshTextTokenResult, bool, error) {
 	if strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("chatgpt access token is unavailable")
+		return accevents.RefreshTextTokenResult{}, false, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt access token is unavailable"))
 	}
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RefreshTextTokenCommand{AccessToken: token})).Get()
 	if err != nil {
-		return "", fmt.Errorf("refresh chatgpt text token: %w", err)
+		return accevents.RefreshTextTokenResult{}, false, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("refresh chatgpt text token: %w", err))
 	}
 	refreshed, ok := value.(accevents.RefreshTextTokenResult)
-	if !ok || strings.TrimSpace(refreshed.AccessToken) == "" {
-		return "", fmt.Errorf("invalid refreshed chatgpt text token result")
+	if !ok {
+		return accevents.RefreshTextTokenResult{}, false, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("invalid refreshed chatgpt text token result"))
 	}
-	return refreshed.AccessToken, nil
+	if refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "" {
+		return refreshed, false, nil
+	}
+	if refreshed.PermanentFailure {
+		return refreshed, true, nil
+	}
+	return refreshed, false, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt oauth refresh temporarily unavailable"))
 }
 
 func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (accevents.AcquireTextTokenResult, error) {

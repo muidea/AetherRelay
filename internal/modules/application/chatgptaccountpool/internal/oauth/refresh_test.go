@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,47 @@ func TestRefreshPostsFormAndKeepsExistingRefreshToken(t *testing.T) {
 	}
 	if result.AccessToken != "access-new" || result.RefreshToken != "refresh-old" || result.IDToken != "id-new" {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestRefreshClassifiesTransientAndCredentialFailures(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status    int
+		body      string
+		retryable bool
+		class     string
+	}{
+		"rate_limit":    {status: http.StatusTooManyRequests, retryable: true, class: "rate_limit"},
+		"invalid_grant": {status: http.StatusBadRequest, body: `{"error":"invalid_grant"}`, retryable: false, class: "invalid_grant"},
+		"forbidden":     {status: http.StatusForbidden, retryable: false, class: "unauthorized"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, _ *http.Request) {
+				res.WriteHeader(tc.status)
+				_, _ = res.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			_, err := (&Client{endpoint: server.URL}).Refresh(context.Background(), Request{RefreshToken: "refresh"})
+			if err == nil || IsRetryable(err) != tc.retryable || FailureClass(err) != tc.class {
+				t.Fatalf("err=%v retryable=%v class=%s", err, IsRetryable(err), FailureClass(err))
+			}
+		})
+	}
+}
+
+func TestNewHTTPClientUsesAccountProxy(t *testing.T) {
+	client, err := newHTTPClient("http://account-proxy.invalid:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy == nil {
+		t.Fatalf("transport=%T has_proxy=%t", client.Transport, ok && transport.Proxy != nil)
+	}
+	target, _ := url.Parse("https://auth.openai.com/oauth/token")
+	proxyURL, err := transport.Proxy(&http.Request{URL: target})
+	if err != nil || proxyURL.String() != "http://account-proxy.invalid:8080" {
+		t.Fatalf("proxy=%v err=%v", proxyURL, err)
 	}
 }
 

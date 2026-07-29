@@ -27,7 +27,7 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 
 	accountObs := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accountObs.Subscribe(accevents.TopicAcquireImageToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token"}, nil)
+		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{Proxy: "http://image-proxy.invalid:8080"}}, nil)
 	})
 	accountObs.Subscribe(accevents.TopicReleaseImageSlot, func(_ event.Event, result event.Result) {
 		result.Set(accevents.ReleaseImageSlotResult{OK: true}, nil)
@@ -38,7 +38,10 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 
 	calls := 0
 	upstreamObs := event.NewSimpleObserver(upcommon.UnitID, hub)
-	upstreamObs.Subscribe(upevents.TopicGenerateImage, func(_ event.Event, result event.Result) {
+	upstreamObs.Subscribe(upevents.TopicGenerateImage, func(ev event.Event, result event.Result) {
+		if command := ev.Data().(upevents.GenerateImageCommand); command.Proxy != "http://image-proxy.invalid:8080" {
+			t.Fatalf("image proxy=%q", command.Proxy)
+		}
 		calls++
 		if calls == 1 {
 			result.Set(upevents.GenerateImageResult{

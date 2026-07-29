@@ -82,7 +82,7 @@ func TestResolveProxyURLRejectsUnsupportedScheme(t *testing.T) {
 }
 
 func TestClassifyStatus(t *testing.T) {
-	for status, want := range map[int]ErrorClass{401: InvalidToken, 429: RateLimit, 500: Upstream} {
+	for status, want := range map[int]ErrorClass{401: InvalidToken, 403: Upstream, 429: RateLimit, 500: Upstream} {
 		got := classifyStatus("test", status).(*Error)
 		if got.Class != want {
 			t.Fatalf("status=%d class=%s", status, got.Class)

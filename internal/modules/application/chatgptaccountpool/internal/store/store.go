@@ -115,6 +115,7 @@ type TokenRefreshCandidate struct {
 type OAuthRefreshCredential struct {
 	AccessToken  string
 	RefreshToken string
+	Proxy        string
 }
 
 // PasswordLoginCandidate is an account-owner-only credential projection. It
@@ -477,7 +478,7 @@ func (s *Store) OAuthRefreshCredentialFor(token string) (OAuthRefreshCredential,
 	if acc == nil || trim(acc.RefreshToken) == "" {
 		return OAuthRefreshCredential{}, false
 	}
-	return OAuthRefreshCredential{AccessToken: token, RefreshToken: acc.RefreshToken}, true
+	return OAuthRefreshCredential{AccessToken: token, RefreshToken: acc.RefreshToken, Proxy: acc.Proxy}, true
 }
 
 // ViewForAccessToken returns the current account view for an access-token
@@ -556,6 +557,7 @@ func (s *Store) ApplyRefreshedToken(oldToken, newToken, refreshToken, idToken st
 	acc.Extra["last_token_refresh_at"] = now
 	delete(acc.Extra, "last_token_refresh_error")
 	delete(acc.Extra, "last_token_refresh_error_at")
+	delete(acc.Extra, "last_token_refresh_error_class")
 	rotated := newToken != oldToken
 	if rotated {
 		delete(s.items, oldToken)
@@ -624,6 +626,7 @@ func (s *Store) ApplyPasswordLogin(oldToken, newToken, refreshToken, idToken, em
 	acc.Extra["last_token_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
 	delete(acc.Extra, "last_token_refresh_error")
 	delete(acc.Extra, "last_token_refresh_error_at")
+	delete(acc.Extra, "last_token_refresh_error_class")
 	if newToken != oldToken {
 		delete(s.items, oldToken)
 		s.items[newToken] = acc
@@ -666,7 +669,10 @@ func (s *Store) Disable(token string) (events.AccountView, bool, error) {
 	return toView(acc, true), true, nil
 }
 
-func (s *Store) RecordTokenRefreshError(token, message string) error {
+// RecordTokenRefreshFailure saves only a bounded failure category and its
+// timestamp. Raw OAuth error text can contain upstream or proxy diagnostics,
+// so it must not become account state or a management read-model field.
+func (s *Store) RecordTokenRefreshFailure(token, class string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	token = s.resolveTokenLocked(token)
@@ -677,7 +683,12 @@ func (s *Store) RecordTokenRefreshError(token, message string) error {
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
 	}
-	acc.Extra["last_token_refresh_error"] = bounded(trim(message), 512)
+	class = bounded(trim(class), 64)
+	if class == "" {
+		class = "unavailable"
+	}
+	delete(acc.Extra, "last_token_refresh_error")
+	acc.Extra["last_token_refresh_error_class"] = class
 	acc.Extra["last_token_refresh_error_at"] = time.Now().UTC().Format(time.RFC3339)
 	return s.saveLocked()
 }
@@ -1262,19 +1273,22 @@ func (s *Store) Health() events.HealthResult {
 
 func toView(acc *Account, withToken bool) events.AccountView {
 	v := events.AccountView{
-		ID:            acc.ID,
-		Email:         acc.Email,
-		Type:          acc.Type,
-		SourceType:    acc.SourceType,
-		Status:        acc.Status,
-		Quota:         acc.Quota,
-		RestoreAt:     extraString(acc, "restore_at"),
-		Success:       extraInt(acc, "success"),
-		Fail:          extraInt(acc, "fail"),
-		CreatedAt:     acc.CreatedAt,
-		Proxy:         acc.Proxy,
-		LastUsedAt:    acc.LastUsedAt,
-		TextCooldowns: activeTextCooldowns(acc, time.Now().UTC()),
+		ID:                         acc.ID,
+		Email:                      acc.Email,
+		Type:                       acc.Type,
+		SourceType:                 acc.SourceType,
+		Status:                     acc.Status,
+		Quota:                      acc.Quota,
+		RestoreAt:                  extraString(acc, "restore_at"),
+		Success:                    extraInt(acc, "success"),
+		Fail:                       extraInt(acc, "fail"),
+		CreatedAt:                  acc.CreatedAt,
+		Proxy:                      acc.Proxy,
+		LastUsedAt:                 acc.LastUsedAt,
+		LastTokenRefreshAt:         extraString(acc, "last_token_refresh_at"),
+		LastTokenRefreshErrorAt:    extraString(acc, "last_token_refresh_error_at"),
+		LastTokenRefreshErrorClass: extraString(acc, "last_token_refresh_error_class"),
+		TextCooldowns:              activeTextCooldowns(acc, time.Now().UTC()),
 	}
 	if withToken {
 		v.AccessToken = acc.AccessToken

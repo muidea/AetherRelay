@@ -526,7 +526,17 @@ func (s *Account) handleRefreshTextToken(ev event.Event, result event.Result) {
 	}
 	refreshed, err := s.refreshTextToken(cmd.AccessToken)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		// Refresh rejection and a transient OAuth outage are normal account
+		// lifecycle outcomes, not EventHub transport failures. Returning a
+		// bounded result lets callers retain accounts on transient failures while
+		// still retiring a demonstrably revoked credential.
+		current, _ := s.store.ViewForAccessToken(cmd.AccessToken)
+		result.Set(events.RefreshTextTokenResult{
+			AccessToken:      current.AccessToken,
+			Account:          current,
+			PermanentFailure: !oauth.IsRetryable(err),
+			ErrorClass:       oauth.FailureClass(err),
+		}, nil)
 		return
 	}
 	result.Set(refreshed, nil)

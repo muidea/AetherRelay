@@ -78,9 +78,9 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 	var value any
 	var upstreamErr *cd.Error
 	if edit {
-		value, upstreamErr = s.SendEvent(event.NewEventWithContext(upevents.TopicEditImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.EditImageCommand{AccessToken: account.AccessToken, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality, Images: request.Images})).Get()
+		value, upstreamErr = s.SendEvent(event.NewEventWithContext(upevents.TopicEditImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.EditImageCommand{AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality, Images: request.Images})).Get()
 	} else {
-		value, upstreamErr = s.SendEvent(event.NewEventWithContext(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.GenerateImageCommand{AccessToken: account.AccessToken, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality})).Get()
+		value, upstreamErr = s.SendEvent(event.NewEventWithContext(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.GenerateImageCommand{AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality})).Get()
 	}
 	if upstreamErr != nil {
 		partialUsage := imageUsageFromUpstream(value, edit)

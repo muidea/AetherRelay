@@ -258,7 +258,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 	}()
 
 	s.store.MarkProgress(ownerID, taskID, "starting_generation")
-	genVal, genErr := s.generateWithBootstrapRetry(ownerID, taskID, token, prompt, model, size, quality)
+	genVal, genErr := s.generateWithBootstrapRetry(ownerID, taskID, token, accOut.Account.Proxy, prompt, model, size, quality)
 	if genErr != nil {
 		conversationID := ""
 		if partial, ok := genVal.(upevents.GenerateImageResult); ok {
@@ -289,10 +289,11 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 // generateWithBootstrapRetry retries only the first, pre-conversation
 // bootstrap transport failure. Once a conversation may exist, a blind retry
 // could create a duplicate image and remains an explicit operator action.
-func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, prompt, model, size, quality string) (any, *cd.Error) {
+func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, proxy, prompt, model, size, quality string) (any, *cd.Error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		result := s.SendEvent(event.NewEvent(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, nil, upevents.GenerateImageCommand{
 			AccessToken: token,
+			Proxy:       proxy,
 			Prompt:      prompt,
 			Model:       model,
 			Size:        size,
@@ -344,6 +345,7 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 	s.store.MarkProgress(ownerID, taskID, "starting_edit")
 	editEv := event.NewEvent(upevents.TopicEditImage, s.ID(), upcommon.UnitID, nil, upevents.EditImageCommand{
 		AccessToken: token,
+		Proxy:       accOut.Account.Proxy,
 
 		Prompt:  prompt,
 		Model:   model,
@@ -397,7 +399,7 @@ func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID str
 	}()
 
 	s.store.MarkProgress(ownerID, taskID, "resuming_poll")
-	resumeRes := s.SendEvent(event.NewEvent(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, nil, upevents.ResumeImageCommand{AccessToken: token, ConversationID: conversationID, ExtraTimeoutSecs: extraTimeoutSecs}))
+	resumeRes := s.SendEvent(event.NewEvent(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, nil, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, ConversationID: conversationID, ExtraTimeoutSecs: extraTimeoutSecs}))
 	resumeVal, resumeErr := resumeRes.Get()
 	if resumeErr != nil {
 		if partial, ok := resumeVal.(upevents.ResumeImageResult); ok && partial.ConversationID != "" {

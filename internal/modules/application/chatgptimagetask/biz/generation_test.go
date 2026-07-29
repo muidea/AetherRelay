@@ -31,7 +31,7 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquireImageToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account-1"}}, nil)
+		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://task-proxy.invalid:8080"}}, nil)
 	})
 	accounts.Subscribe(accevents.TopicReleaseImageSlot, func(_ event.Event, result event.Result) {
 		result.Set(accevents.ReleaseImageSlotResult{OK: true}, nil)
@@ -41,7 +41,10 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 	})
 
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
-	upstream.Subscribe(upevents.TopicGenerateImage, func(_ event.Event, result event.Result) {
+	upstream.Subscribe(upevents.TopicGenerateImage, func(ev event.Event, result event.Result) {
+		if command := ev.Data().(upevents.GenerateImageCommand); command.Proxy != "http://task-proxy.invalid:8080" {
+			t.Fatalf("task image proxy=%q", command.Proxy)
+		}
 		// This successful EventHub result has a nil *cd.Error. The retry helper
 		// must preserve that typed nil rather than converting it to a non-nil
 		// error interface and recording "<nil>" as a task failure.

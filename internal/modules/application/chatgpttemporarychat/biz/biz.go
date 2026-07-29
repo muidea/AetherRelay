@@ -50,6 +50,8 @@ type turnRuntime struct {
 	userSequence      int64
 	assistantSequence int64
 	streamID          string
+	startCommand      upevents.StartTextCommand
+	refreshRetried    bool
 	content           string
 	actualModel       string
 	usageEventID      string
@@ -305,27 +307,22 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		messages = append(messages, upevents.TextMessage{Role: "system", Content: started.SystemPrompt})
 	}
 	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content})
-	streamValue, streamErr := s.SendEvent(event.NewEvent(upevents.TopicStartText, s.ID(), upcommon.UnitID, nil, upevents.StartTextCommand{
+	startCommand := upevents.StartTextCommand{
 		AccessToken:     account.AccessToken,
+		Proxy:           account.Account.Proxy,
 		Model:           started.Model,
 		Messages:        messages,
 		ThinkingEffort:  started.ThinkingEffort,
 		ConversationID:  started.UpstreamConversationID,
 		ParentMessageID: started.ParentMessageID,
 		TimeoutMillis:   int(s.turnTimeout / time.Millisecond),
-	})).Get()
+	}
+	streamID, streamErr := s.startTextStream(startCommand)
 	if streamErr != nil {
 		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "upstream", "failed to start upstream stream")
 		s.recordTextResult(started.AccountID, false, "upstream")
 		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusBadGateway, "upstream_failed", "upstream", startedAt, true)
 		result.Set(nil, cd.NewError(cd.Unexpected, "failed to start upstream stream"))
-		return
-	}
-	startedStream, ok := streamValue.(upevents.StartTextResult)
-	if !ok || startedStream.StreamID == "" {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "upstream", "invalid upstream stream")
-		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusBadGateway, "upstream_failed", "upstream", startedAt, true)
-		result.Set(nil, cd.NewError(cd.Unexpected, "invalid upstream stream"))
 		return
 	}
 	runtime := &turnRuntime{
@@ -334,7 +331,8 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		turnID:            started.TurnID,
 		userSequence:      started.UserSequence,
 		assistantSequence: started.AssistantSequence,
-		streamID:          startedStream.StreamID,
+		streamID:          streamID,
+		startCommand:      startCommand,
 		usageEventID:      eventID,
 		model:             started.Model,
 		systemPrompt:      started.SystemPrompt,
@@ -346,7 +344,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	s.turnMu.Lock()
 	if s.stopping {
 		s.turnMu.Unlock()
-		s.cancelUpstream(startedStream.StreamID)
+		s.cancelUpstream(streamID)
 		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, true, true, "interrupted", "stream interrupted by process shutdown")
 		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusServiceUnavailable, "process_interrupted", "process_interrupted", startedAt, true)
 		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
@@ -366,6 +364,18 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		UserMessage:      started.UserMessage,
 		AssistantMessage: started.AssistantMessage,
 	}, nil)
+}
+
+func (s *TemporaryChat) startTextStream(command upevents.StartTextCommand) (string, error) {
+	value, err := s.SendEvent(event.NewEvent(upevents.TopicStartText, s.ID(), upcommon.UnitID, nil, command)).Get()
+	if err != nil {
+		return "", fmt.Errorf("start upstream text stream: %w", err)
+	}
+	started, ok := value.(upevents.StartTextResult)
+	if !ok || strings.TrimSpace(started.StreamID) == "" {
+		return "", fmt.Errorf("invalid upstream stream")
+	}
+	return started.StreamID, nil
 }
 
 func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
@@ -430,6 +440,19 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
+				if update.ErrorClass == upevents.ErrClassInvalidToken && runtime.content == "" && !runtime.refreshRetried {
+					if restarted, retryFailure := s.retryTurnAfterInvalidToken(runtime); restarted {
+						// No assistant delta was exposed, so the caller can safely
+						// resume this same turn with the rotated access token.
+						continue
+					} else if retryFailure != "" {
+						finalErrClass = string(retryFailure)
+						finalErrMessage = safeTurnError(finalErrClass)
+						recoveryRequired = requiresRecovery(finalErrClass)
+						interrupted = recoveryRequired
+						break
+					}
+				}
 				finalErrClass = string(update.ErrorClass)
 				finalErrMessage = safeTurnError(finalErrClass)
 				recoveryRequired = requiresRecovery(finalErrClass)
@@ -484,6 +507,49 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 	s.turnMu.Lock()
 	delete(s.turns, turnKey(runtime.ownerID, runtime.conversationID, runtime.turnID))
 	s.turnMu.Unlock()
+}
+
+// retryTurnAfterInvalidToken refreshes once before the first assistant delta.
+// Reusing the persisted conversation/parent IDs preserves temporary-chat
+// continuity while avoiding a duplicate visible assistant response.
+func (s *TemporaryChat) retryTurnAfterInvalidToken(runtime *turnRuntime) (bool, upevents.ErrorClass) {
+	runtime.refreshRetried = true
+	previousStreamID := runtime.streamID
+	s.cancelUpstream(previousStreamID)
+
+	value, err := s.SendEvent(event.NewEvent(accevents.TopicRefreshTextToken, s.ID(), acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{
+		AccessToken: runtime.startCommand.AccessToken,
+	})).Get()
+	if err != nil {
+		return false, upevents.ErrClassUpstream
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok {
+		return false, upevents.ErrClassUpstream
+	}
+	if !refreshed.Refreshed || strings.TrimSpace(refreshed.AccessToken) == "" {
+		if refreshed.PermanentFailure {
+			return false, upevents.ErrClassInvalidToken
+		}
+		return false, upevents.ErrClassUpstream
+	}
+	command := runtime.startCommand
+	command.AccessToken = refreshed.AccessToken
+	command.Proxy = refreshed.Account.Proxy
+	streamID, startErr := s.startTextStream(command)
+	if startErr != nil {
+		return false, upevents.ErrClassUpstream
+	}
+	s.turnMu.Lock()
+	if runtime.cancelRequested || s.stopping {
+		s.turnMu.Unlock()
+		s.cancelUpstream(streamID)
+		return false, upevents.ErrClassUpstream
+	}
+	runtime.streamID = streamID
+	runtime.startCommand = command
+	s.turnMu.Unlock()
+	return true, ""
 }
 
 func (s *TemporaryChat) turnFlags(runtime *turnRuntime) (cancelled, stopping bool) {

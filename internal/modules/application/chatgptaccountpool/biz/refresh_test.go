@@ -21,6 +21,7 @@ import (
 
 type refreshTestOAuthClient struct {
 	calls atomic.Int32
+	proxy string
 }
 
 func (c *refreshTestOAuthClient) Refresh(_ context.Context, request oauth.Request) (oauth.Result, error) {
@@ -28,7 +29,20 @@ func (c *refreshTestOAuthClient) Refresh(_ context.Context, request oauth.Reques
 	if request.RefreshToken != "refresh-old" {
 		return oauth.Result{}, errors.New("unexpected refresh token")
 	}
+	if request.Proxy != c.proxy {
+		return oauth.Result{}, errors.New("unexpected account proxy")
+	}
 	return oauth.Result{AccessToken: "new-token", RefreshToken: "refresh-new", IDToken: "id-new"}, nil
+}
+
+type failedRefreshOAuthClient struct{ err error }
+
+func (c failedRefreshOAuthClient) Refresh(context.Context, oauth.Request) (oauth.Result, error) {
+	return oauth.Result{}, c.err
+}
+
+func (failedRefreshOAuthClient) ExchangeAuthorizationCode(context.Context, oauth.AuthorizationCodeRequest) (oauth.Result, error) {
+	return oauth.Result{}, errors.New("not implemented")
 }
 
 func (*refreshTestOAuthClient) ExchangeAuthorizationCode(context.Context, oauth.AuthorizationCodeRequest) (oauth.Result, error) {
@@ -185,5 +199,60 @@ func TestRequestTextTokenRefreshCoalescesAndRotates(t *testing.T) {
 	}
 	if view, ok := accounts.ViewForAccessToken("old-token"); !ok || view.AccessToken != "new-token" {
 		t.Fatalf("rotated account=%+v ok=%v", view, ok)
+	}
+}
+
+func TestRequestTextTokenRefreshUsesAccountProxy(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
+		t.Fatal(err)
+	}
+	proxyURL := "http://account-proxy.invalid:8080"
+	if _, _, err := accounts.UpdateByID(accounts.List()[0].ID, nil, nil, nil, &proxyURL); err != nil {
+		t.Fatal(err)
+	}
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+	account.oauth = &refreshTestOAuthClient{proxy: proxyURL}
+
+	value, err := hub.Send(event.NewEvent(accevents.TopicRefreshTextToken, "test", acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{AccessToken: "old-token"})).Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok || !refreshed.Refreshed || refreshed.AccessToken != "new-token" {
+		t.Fatalf("refresh result=%+v", value)
+	}
+}
+
+func TestTransientOAuthRefreshFailureRetainsAccount(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
+		t.Fatal(err)
+	}
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+	account.oauth = failedRefreshOAuthClient{err: &oauth.Error{Class: "transport", Retryable: true}}
+
+	value, err := hub.Send(event.NewEvent(accevents.TopicRefreshTextToken, "test", acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{AccessToken: "old-token"})).Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok || refreshed.Refreshed || refreshed.PermanentFailure || refreshed.ErrorClass != "transport" {
+		t.Fatalf("refresh result=%+v", value)
+	}
+	if view, ok := accounts.ViewForAccessToken("old-token"); !ok || view.Status != store.StatusNormal {
+		t.Fatalf("account should remain usable: view=%+v found=%v", view, ok)
 	}
 }

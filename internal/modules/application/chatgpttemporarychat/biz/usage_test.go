@@ -373,3 +373,131 @@ func TestStartTurnSuccessStartsUsageThenWorkerCompletes(t *testing.T) {
 		t.Fatalf("tokens=%+v", completed)
 	}
 }
+
+func TestTemporaryTurnRefreshesInvalidTokenBeforeFirstDelta(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+	_ = wireBootstrap(hub, t)
+
+	usageObs := event.NewSimpleObserver(usagecommon.UnitID, hub)
+	usageObs.Subscribe(usageevents.TopicAcquire, func(_ event.Event, result event.Result) { result.Set(usageevents.AcquireResult{}, nil) })
+	usageObs.Subscribe(usageevents.TopicStart, func(_ event.Event, result event.Result) { result.Set(nil, nil) })
+	usageObs.Subscribe(usageevents.TopicComplete, func(_ event.Event, result event.Result) { result.Set(nil, nil) })
+
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquireTextAccount, func(_ event.Event, result event.Result) {
+		result.Set(accevents.AcquireTextAccountResult{
+			AccessToken: "old-token",
+			Account:     accevents.AccountView{ID: "account-1", Proxy: "http://old-proxy.invalid:8080"},
+		}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRefreshTextToken, func(ev event.Event, result event.Result) {
+		if command := ev.Data().(accevents.RefreshTextTokenCommand); command.AccessToken != "old-token" {
+			t.Fatalf("refresh command=%+v", command)
+		}
+		result.Set(accevents.RefreshTextTokenResult{
+			AccessToken: "new-token",
+			Account:     accevents.AccountView{ID: "account-1", Proxy: "http://new-proxy.invalid:8080"},
+			Refreshed:   true,
+		}, nil)
+	})
+	recorded := make(chan accevents.RecordTextResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordTextResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordTextResultCommand)
+		result.Set(accevents.RecordTextResultResult{}, nil)
+	})
+
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	starts := 0
+	upstream.Subscribe(upevents.TopicStartText, func(ev event.Event, result event.Result) {
+		starts++
+		command := ev.Data().(upevents.StartTextCommand)
+		switch starts {
+		case 1:
+			if command.AccessToken != "old-token" || command.Proxy != "http://old-proxy.invalid:8080" {
+				t.Fatalf("first start=%+v", command)
+			}
+			result.Set(upevents.StartTextResult{StreamID: "stream-old"}, nil)
+		case 2:
+			if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
+				t.Fatalf("retry start=%+v", command)
+			}
+			result.Set(upevents.StartTextResult{StreamID: "stream-new"}, nil)
+		default:
+			t.Fatalf("unexpected start count=%d", starts)
+		}
+	})
+	newPulls := 0
+	upstream.Subscribe(upevents.TopicPullText, func(ev event.Event, result event.Result) {
+		command := ev.Data().(upevents.PullTextCommand)
+		switch command.StreamID {
+		case "stream-old":
+			result.Set(upevents.PullTextResult{Done: true, ErrorClass: upevents.ErrClassInvalidToken}, nil)
+		case "stream-new":
+			newPulls++
+			if newPulls == 1 {
+				result.Set(upevents.PullTextResult{Delta: "recovered"}, nil)
+				return
+			}
+			result.Set(upevents.PullTextResult{Done: true, ConversationID: "up-1", AssistantMessageID: "message-1"}, nil)
+		default:
+			t.Fatalf("unexpected stream=%q", command.StreamID)
+		}
+	})
+	upstream.Subscribe(upevents.TopicCancelText, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CancelTextResult{Cancelled: true}, nil)
+	})
+
+	tc, err := New(context.Background(), hub, background)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Teardown(context.Background())
+	conversation, createErr := tc.store.CreateConversation("ops", "gpt-5", "", "", "account-1")
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	value, err := tc.SendEvent(event.NewEvent(events.TopicStartTurn, "test", tempcommon.UnitID, nil, events.StartTurnCommand{
+		OwnerID: "ops", ConversationID: conversation.ID, Content: "hello",
+	})).Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, ok := value.(events.StartTurnResult)
+	if !ok || started.TurnID == "" {
+		t.Fatalf("start result=%+v", value)
+	}
+
+	var output string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		value, err = tc.SendEvent(event.NewEvent(events.TopicPullTurn, "test", tempcommon.UnitID, nil, events.PullTurnCommand{
+			OwnerID: "ops", ConversationID: conversation.ID, TurnID: started.TurnID, TimeoutMillis: 100,
+		})).Get()
+		if err != nil {
+			t.Fatal(err)
+		}
+		update, ok := value.(events.PullTurnResult)
+		if !ok {
+			t.Fatalf("pull result=%+v", value)
+		}
+		output += update.Delta
+		if update.Done {
+			if update.ErrorClass != "" || output != "recovered" || starts != 2 {
+				t.Fatalf("update=%+v output=%q starts=%d", update, output, starts)
+			}
+			select {
+			case command := <-recorded:
+				if !command.Success || command.ErrorClass != "" {
+					t.Fatalf("record command=%+v", command)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing successful account result")
+			}
+			return
+		}
+	}
+	t.Fatal("temporary turn did not complete")
+}

@@ -27,6 +27,9 @@ func TestCompleteMarksOnlyClassifiedInvalidAccount(t *testing.T) {
 	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
 		result.Set(accevents.AcquireTextTokenResult{AccessToken: "test-token"}, nil)
 	})
+	accounts.Subscribe(accevents.TopicRefreshTextToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.RefreshTextTokenResult{PermanentFailure: true, ErrorClass: "invalid_grant"}, nil)
+	})
 	removed := make(chan accevents.RemoveInvalidCommand, 1)
 	accounts.Subscribe(accevents.TopicRemoveInvalid, func(ev event.Event, result event.Result) {
 		removed <- ev.Data().(accevents.RemoveInvalidCommand)
@@ -94,7 +97,7 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old-token", Account: accevents.AccountView{ID: "account-1"}}, nil)
+		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old-token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://old-proxy.invalid:8080"}}, nil)
 	})
 	var refreshes atomic.Int32
 	accounts.Subscribe(accevents.TopicRefreshTextToken, func(ev event.Event, result event.Result) {
@@ -102,7 +105,7 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 		if command := ev.Data().(accevents.RefreshTextTokenCommand); command.AccessToken != "old-token" {
 			t.Fatalf("refresh command=%+v", command)
 		}
-		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new-token", Account: accevents.AccountView{ID: "account-1"}, Refreshed: true}, nil)
+		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new-token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://new-proxy.invalid:8080"}, Refreshed: true}, nil)
 	})
 	recorded := make(chan accevents.RecordTextResultCommand, 1)
 	accounts.Subscribe(accevents.TopicRecordTextResult, func(ev event.Event, result event.Result) {
@@ -120,14 +123,14 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 		attempt := attempts.Add(1)
 		command := ev.Data().(upevents.CompleteTextCommand)
 		if attempt == 1 {
-			if command.AccessToken != "old-token" {
-				t.Fatalf("first token=%q", command.AccessToken)
+			if command.AccessToken != "old-token" || command.Proxy != "http://old-proxy.invalid:8080" {
+				t.Fatalf("first command=%+v", command)
 			}
 			result.Set(upevents.CompleteTextResult{ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired credential"))
 			return
 		}
-		if command.AccessToken != "new-token" {
-			t.Fatalf("retry token=%q", command.AccessToken)
+		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
+			t.Fatalf("retry command=%+v", command)
 		}
 		result.Set(upevents.CompleteTextResult{Text: "recovered"}, nil)
 	})
@@ -152,6 +155,53 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 	}
 }
 
+func TestCompleteKeepsAccountOnTransientOAuthRefreshFailure(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old-token", Account: accevents.AccountView{ID: "account-1"}}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRefreshTextToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.RefreshTextTokenResult{ErrorClass: "transport"}, nil)
+	})
+	removed := make(chan accevents.RemoveInvalidCommand, 1)
+	accounts.Subscribe(accevents.TopicRemoveInvalid, func(ev event.Event, result event.Result) {
+		removed <- ev.Data().(accevents.RemoveInvalidCommand)
+		result.Set(accevents.RemoveInvalidResult{Removed: true}, nil)
+	})
+	recorded := make(chan accevents.RecordTextResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordTextResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordTextResultCommand)
+		result.Set(accevents.RecordTextResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicCompleteText, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CompleteTextResult{ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired credential"))
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	if _, err := proxy.Complete(context.Background(), chatgpttext.Request{Model: "gpt", Messages: []chatgpttext.Message{{Role: "user", Content: "test"}}}); err == nil {
+		t.Fatal("transient refresh failure unexpectedly completed")
+	}
+	select {
+	case command := <-recorded:
+		if command.Success || command.ErrorClass != "upstream" {
+			t.Fatalf("record command=%+v", command)
+		}
+	default:
+		t.Fatal("transient refresh outcome was not recorded")
+	}
+	select {
+	case command := <-removed:
+		t.Fatalf("transient refresh failure must not remove account: %+v", command)
+	default:
+	}
+}
+
 func TestStreamDoesNotRefreshAfterOutput(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)
@@ -165,7 +215,7 @@ func TestStreamDoesNotRefreshAfterOutput(t *testing.T) {
 	var refreshes atomic.Int32
 	accounts.Subscribe(accevents.TopicRefreshTextToken, func(_ event.Event, result event.Result) {
 		refreshes.Add(1)
-		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new-token"}, nil)
+		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new-token", Refreshed: true}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRecordTextResult, func(_ event.Event, result event.Result) {
 		result.Set(accevents.RecordTextResultResult{}, nil)

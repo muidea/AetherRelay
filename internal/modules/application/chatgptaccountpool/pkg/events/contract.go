@@ -58,6 +58,12 @@ type AccountView struct {
 	AccessToken   string `json:"access_token,omitempty"`
 	Proxy         string `json:"proxy,omitempty"`
 	LastUsedAt    string `json:"last_used_at,omitempty"`
+	// Token refresh fields are safe, read-only account-health projections for
+	// operators. They never include a refresh token, account proxy, or raw
+	// upstream error text.
+	LastTokenRefreshAt         string `json:"last_token_refresh_at,omitempty"`
+	LastTokenRefreshErrorAt    string `json:"last_token_refresh_error_at,omitempty"`
+	LastTokenRefreshErrorClass string `json:"last_token_refresh_error_class,omitempty"`
 	// TextCooldowns is a read-only projection of active model-scoped account
 	// cooldowns. It intentionally contains no credential or persistence data.
 	TextCooldowns []TextCooldownView `json:"text_cooldowns,omitempty"`
@@ -176,9 +182,13 @@ type RefreshTextTokenCommand struct {
 	AccessToken string
 }
 type RefreshTextTokenResult struct {
-	AccessToken string
-	Account     AccountView
-	Refreshed   bool
+	AccessToken      string
+	Account          AccountView
+	Refreshed        bool
+	PermanentFailure bool
+	// ErrorClass is a bounded refresh failure category. It is only populated
+	// when Refreshed is false and must never carry an upstream response body.
+	ErrorClass string
 }
 
 // AccountModelEntry is one model+operations projection stored on an account.

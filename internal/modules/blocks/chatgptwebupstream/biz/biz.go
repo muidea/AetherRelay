@@ -154,7 +154,7 @@ func (s *Upstream) handleGenerateImage(ev event.Event, result event.Result) {
 		return
 	}
 	slog.Debug("chatgpt web image generation received")
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		slog.Warn("chatgpt web image generation failed", "stage", "create_client")
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
@@ -183,7 +183,7 @@ func (s *Upstream) handleEditImage(ev event.Event, result event.Result) {
 		return
 	}
 	slog.Debug("chatgpt web image edit received")
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -215,7 +215,7 @@ func (s *Upstream) handleResumeImage(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid resume image command"))
 		return
 	}
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -243,7 +243,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid complete text command"))
 		return
 	}
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		slog.Warn("chatgpt web text completion failed", "stage", "create_client")
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
@@ -320,7 +320,7 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 
 func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *textStream, cmd events.StartTextCommand) {
 	var final upclient.TextResult
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken})
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err == nil {
 		messages := make([]upclient.TextMessage, 0, len(cmd.Messages))
 		for _, message := range cmd.Messages {

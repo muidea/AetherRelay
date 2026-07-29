@@ -303,10 +303,10 @@ func (s *Account) refreshTextTokenOnce(credential store.OAuthRefreshCredential) 
 	if s.oauth == nil || s.stopping.Load() {
 		return events.RefreshTextTokenResult{}, fmt.Errorf("oauth refresh is unavailable")
 	}
-	refreshed, err := s.oauth.Refresh(s.shutdownCtx, oauth.Request{RefreshToken: credential.RefreshToken})
+	refreshed, err := s.oauth.Refresh(s.shutdownCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy})
 	if err != nil {
 		if !s.stopping.Load() {
-			_ = s.store.RecordTokenRefreshError(credential.AccessToken, err.Error())
+			_ = s.store.RecordTokenRefreshFailure(credential.AccessToken, oauth.FailureClass(err))
 		}
 		return events.RefreshTextTokenResult{}, fmt.Errorf("refresh oauth access token: %w", err)
 	}
@@ -316,7 +316,7 @@ func (s *Account) refreshTextTokenOnce(credential store.OAuthRefreshCredential) 
 	accessToken, _, err := s.store.ApplyRefreshedToken(credential.AccessToken, refreshed.AccessToken, refreshed.RefreshToken, refreshed.IDToken)
 	if err != nil {
 		if !s.stopping.Load() {
-			_ = s.store.RecordTokenRefreshError(credential.AccessToken, err.Error())
+			_ = s.store.RecordTokenRefreshFailure(credential.AccessToken, "unavailable")
 		}
 		return events.RefreshTextTokenResult{}, fmt.Errorf("apply refreshed oauth access token: %w", err)
 	}

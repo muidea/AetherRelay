@@ -33,7 +33,11 @@ func (e *Error) Unwrap() error { return e.Cause }
 
 func classifyStatus(operation string, status int) error {
 	class := Upstream
-	if status == 401 || status == 403 {
+	// A 401 is an authentication challenge. A 403 is deliberately not treated
+	// as an invalid token: ChatGPT Web also uses it for policy, anti-abuse and
+	// account-entitlement failures, none of which should permanently evict an
+	// otherwise healthy credential.
+	if status == 401 {
 		class = InvalidToken
 	}
 	if status == 429 {

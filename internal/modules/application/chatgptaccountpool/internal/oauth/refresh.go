@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,7 @@ const (
 
 type Request struct {
 	RefreshToken string
+	Proxy        string
 }
 
 type Result struct {
@@ -41,6 +43,52 @@ type AuthorizationCodeRequest struct {
 
 type Client struct {
 	endpoint string
+}
+
+// Error is a bounded OAuth refresh failure. Response bodies are intentionally
+// excluded so callers can make state decisions without leaking credentials or
+// upstream diagnostics.
+type Error struct {
+	Class      string
+	StatusCode int
+	Retryable  bool
+	Cause      error
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.StatusCode != 0 {
+		return fmt.Sprintf("oauth refresh: HTTP %d", e.StatusCode)
+	}
+	if e.Cause != nil {
+		return fmt.Sprintf("oauth refresh: %s: %v", e.Class, e.Cause)
+	}
+	return "oauth refresh: " + e.Class
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// IsRetryable reports whether a failed refresh should preserve the account for
+// a later retry instead of treating the refresh credential as revoked.
+func IsRetryable(err error) bool {
+	var oauthErr *Error
+	return errors.As(err, &oauthErr) && oauthErr.Retryable
+}
+
+// FailureClass returns a bounded string suitable for account state projection.
+func FailureClass(err error) string {
+	var oauthErr *Error
+	if errors.As(err, &oauthErr) && oauthErr.Class != "" {
+		return oauthErr.Class
+	}
+	return "unavailable"
 }
 
 func NewClient() *Client { return &Client{endpoint: defaultTokenEndpoint} }
@@ -61,17 +109,21 @@ func (c *Client) Refresh(ctx context.Context, request Request) (Result, error) {
 	httpRequest.Header.Set("accept", "application/json")
 	httpRequest.Header.Set("content-type", "application/x-www-form-urlencoded")
 	httpRequest.Header.Set("user-agent", oauthUserAgent)
-	response, err := newHTTPClient().Do(httpRequest)
+	httpClient, err := newHTTPClient(request.Proxy)
 	if err != nil {
-		return Result{}, fmt.Errorf("oauth refresh request: %w", err)
+		return Result{}, err
+	}
+	response, err := httpClient.Do(httpRequest)
+	if err != nil {
+		return Result{}, &Error{Class: "transport", Retryable: true, Cause: err}
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return Result{}, fmt.Errorf("read oauth refresh response: %w", err)
+		return Result{}, &Error{Class: "transport", Retryable: true, Cause: err}
 	}
 	if response.StatusCode != http.StatusOK {
-		return Result{}, fmt.Errorf("oauth refresh: HTTP %d", response.StatusCode)
+		return Result{}, refreshHTTPError(response.StatusCode, body)
 	}
 	var payload struct {
 		AccessToken  string `json:"access_token"`
@@ -79,10 +131,10 @@ func (c *Client) Refresh(ctx context.Context, request Request) (Result, error) {
 		IDToken      string `json:"id_token"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return Result{}, fmt.Errorf("decode oauth refresh response: %w", err)
+		return Result{}, &Error{Class: "decode", Retryable: true, Cause: err}
 	}
 	if strings.TrimSpace(payload.AccessToken) == "" {
-		return Result{}, fmt.Errorf("oauth refresh response missing access_token")
+		return Result{}, &Error{Class: "missing_access_token", Retryable: true}
 	}
 	if strings.TrimSpace(payload.RefreshToken) == "" {
 		payload.RefreshToken = request.RefreshToken
@@ -116,7 +168,11 @@ func (c *Client) ExchangeAuthorizationCode(ctx context.Context, request Authoriz
 	httpRequest.Header.Set("referer", "https://platform.openai.com/")
 	httpRequest.Header.Set("auth0-client", oauthAuth0Client)
 	httpRequest.Header.Set("user-agent", oauthUserAgent)
-	response, err := newHTTPClient().Do(httpRequest)
+	httpClient, err := newHTTPClient("")
+	if err != nil {
+		return Result{}, err
+	}
+	response, err := httpClient.Do(httpRequest)
 	if err != nil {
 		return Result{}, fmt.Errorf("oauth authorization exchange: %w", err)
 	}
@@ -142,6 +198,42 @@ func (c *Client) ExchangeAuthorizationCode(ctx context.Context, request Authoriz
 	return Result{AccessToken: out.AccessToken, RefreshToken: out.RefreshToken, IDToken: out.IDToken}, nil
 }
 
-func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: 60 * time.Second}
+func refreshHTTPError(status int, body []byte) error {
+	class := "rejected"
+	retryable := status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) == nil && strings.EqualFold(strings.TrimSpace(payload.Error), "invalid_grant") {
+		class = "invalid_grant"
+		retryable = false
+	} else if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		class = "unauthorized"
+		retryable = false
+	} else if status == http.StatusRequestTimeout {
+		class = "timeout"
+	} else if status == http.StatusTooManyRequests {
+		class = "rate_limit"
+	} else if status >= http.StatusInternalServerError {
+		class = "upstream"
+	}
+	return &Error{Class: class, StatusCode: status, Retryable: retryable}
+}
+
+func newHTTPClient(accountProxy string) (*http.Client, error) {
+	client := &http.Client{Timeout: 60 * time.Second}
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return client, nil
+	}
+	cloned := transport.Clone()
+	if proxy := strings.TrimSpace(accountProxy); proxy != "" {
+		parsed, err := url.ParseRequestURI(proxy)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return nil, fmt.Errorf("invalid ChatGPT OAuth proxy URL")
+		}
+		cloned.Proxy = http.ProxyURL(parsed)
+	}
+	client.Transport = cloned
+	return client, nil
 }

@@ -68,6 +68,7 @@ type GetUserInfoResult struct {
 
 type GenerateImageCommand struct {
 	AccessToken string
+	Proxy       string
 	Prompt      string
 	Model       string
 	Size        string
@@ -90,6 +91,7 @@ type GenerateImageResult struct {
 
 type EditImageCommand struct {
 	AccessToken string
+	Proxy       string
 	Prompt      string
 	Model       string
 	Size        string
@@ -105,6 +107,7 @@ type EditImageResult struct {
 
 type ResumeImageCommand struct {
 	AccessToken      string
+	Proxy            string
 	ConversationID   string
 	ExtraTimeoutSecs int
 }
@@ -122,6 +125,7 @@ type TextMessage struct {
 
 type CompleteTextCommand struct {
 	AccessToken     string
+	Proxy           string
 	Model           string
 	Messages        []TextMessage
 	ThinkingEffort  string
@@ -139,6 +143,7 @@ type CompleteTextResult struct {
 
 type StartTextCommand struct {
 	AccessToken     string
+	Proxy           string
 	Model           string
 	Messages        []TextMessage
 	ThinkingEffort  string

@@ -42,18 +42,21 @@ func (unavailableChatGPTRuntimeStub) ChatGPTWebEnabled() bool { return false }
 
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
 	return []accevents.AccountView{{
-		ID:            "account-1",
-		Email:         "operator@example.invalid",
-		Status:        "正常",
-		Quota:         7,
-		RestoreAt:     "2026-07-27T01:02:03Z",
-		ImageInflight: 1,
-		Success:       9,
-		Fail:          2,
-		CreatedAt:     "2026-07-26T01:02:03Z",
-		TextCooldowns: []accevents.TextCooldownView{{Model: "gpt-5", Until: "2026-07-27T01:03:03Z", ErrorClass: "rate_limit"}},
-		AccessToken:   "token-very-secret",
-		Proxy:         "http://private.invalid",
+		ID:                         "account-1",
+		Email:                      "operator@example.invalid",
+		Status:                     "正常",
+		Quota:                      7,
+		RestoreAt:                  "2026-07-27T01:02:03Z",
+		ImageInflight:              1,
+		Success:                    9,
+		Fail:                       2,
+		CreatedAt:                  "2026-07-26T01:02:03Z",
+		LastTokenRefreshAt:         "2026-07-27T00:30:00Z",
+		LastTokenRefreshErrorAt:    "2026-07-27T01:00:00Z",
+		LastTokenRefreshErrorClass: "rate_limit",
+		TextCooldowns:              []accevents.TextCooldownView{{Model: "gpt-5", Until: "2026-07-27T01:03:03Z", ErrorClass: "rate_limit"}},
+		AccessToken:                "token-very-secret",
+		Proxy:                      "http://private.invalid",
 	}}, nil
 }
 func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, _ string) (accevents.AddResult, error) {
@@ -181,7 +184,7 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	if listRecorder.Code != http.StatusOK || strings.Contains(body, "very-secret") || strings.Contains(body, "private.invalid") {
 		t.Fatalf("list=%d %s", listRecorder.Code, listRecorder.Body.String())
 	}
-	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`, `"text_cooldowns":[{"model":"gpt-5","until":"2026-07-27T01:03:03Z","error_class":"rate_limit"}]`} {
+	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`, `"last_token_refresh_at":"2026-07-27T00:30:00Z"`, `"last_token_refresh_error_at":"2026-07-27T01:00:00Z"`, `"last_token_refresh_error_class":"rate_limit"`, `"text_cooldowns":[{"model":"gpt-5","until":"2026-07-27T01:03:03Z","error_class":"rate_limit"}]`} {
 		if !strings.Contains(body, field) {
 			t.Fatalf("list response missing account operations field %q: %s", field, body)
 		}
