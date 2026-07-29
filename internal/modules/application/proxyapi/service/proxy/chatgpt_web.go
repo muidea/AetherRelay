@@ -13,6 +13,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	archive "ai-proxy/internal/pkg/aiproxyarchive"
+	"ai-proxy/internal/pkg/chatgptimageinput"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
 
@@ -288,19 +289,88 @@ func chatGPTTextRequest(model string, body map[string]any) (chatgpttext.Request,
 	if effort, ok := body["reasoning_effort"].(string); ok {
 		request.ThinkingEffort = effort
 	}
+	imageCount, imageBytes := 0, 0
 	for index, item := range raw {
 		message, ok := item.(map[string]any)
 		if !ok {
 			return chatgpttext.Request{}, fmt.Errorf("messages[%d] is invalid", index)
 		}
 		role, _ := message["role"].(string)
-		content, _ := message["content"].(string)
-		if role = strings.TrimSpace(role); role == "" || strings.TrimSpace(content) == "" {
-			return chatgpttext.Request{}, fmt.Errorf("messages[%d] requires text role and content", index)
+		role = strings.ToLower(strings.TrimSpace(role))
+		if role != "system" && role != "user" && role != "assistant" {
+			return chatgpttext.Request{}, fmt.Errorf("messages[%d].role is unsupported", index)
 		}
-		request.Messages = append(request.Messages, chatgpttext.Message{Role: role, Content: content})
+		content, images, err := chatGPTTextContent(index, message["content"])
+		if err != nil {
+			return chatgpttext.Request{}, err
+		}
+		if len(images) > 0 && role != "user" {
+			return chatgpttext.Request{}, fmt.Errorf("messages[%d] image_url content is only supported for user messages", index)
+		}
+		for _, image := range images {
+			imageCount++
+			imageBytes += len(image)
+			if imageCount > imageinput.MaxChatImageCount {
+				return chatgpttext.Request{}, fmt.Errorf("at most %d images are supported per request", imageinput.MaxChatImageCount)
+			}
+			if imageBytes > imageinput.MaxChatImageBytes {
+				return chatgpttext.Request{}, fmt.Errorf("images exceed %d MiB per request", imageinput.MaxChatImageBytes>>20)
+			}
+		}
+		if strings.TrimSpace(content) == "" && len(images) == 0 {
+			return chatgpttext.Request{}, fmt.Errorf("messages[%d] requires content", index)
+		}
+		request.Messages = append(request.Messages, chatgpttext.Message{Role: role, Content: content, Images: images})
 	}
 	return request, nil
+}
+
+// chatGPTTextContent accepts the bounded OpenAI Chat Completions content
+// subset implemented by ChatGPT Web: legacy text strings and text/image_url
+// content parts. Remote image URLs are intentionally rejected rather than
+// fetched by the proxy, so this adapter has no SSRF behavior.
+func chatGPTTextContent(messageIndex int, raw any) (string, [][]byte, error) {
+	if content, ok := raw.(string); ok {
+		return content, nil, nil
+	}
+	parts, ok := raw.([]any)
+	if !ok {
+		return "", nil, fmt.Errorf("messages[%d].content must be a string or content-part array", messageIndex)
+	}
+	var text strings.Builder
+	images := make([][]byte, 0)
+	for partIndex, rawPart := range parts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			return "", nil, fmt.Errorf("messages[%d].content[%d] is invalid", messageIndex, partIndex)
+		}
+		typ, _ := part["type"].(string)
+		switch strings.TrimSpace(typ) {
+		case "text":
+			value, ok := part["text"].(string)
+			if !ok {
+				return "", nil, fmt.Errorf("messages[%d].content[%d].text is required", messageIndex, partIndex)
+			}
+			text.WriteString(value)
+		case "image_url":
+			imageURL, ok := part["image_url"].(map[string]any)
+			if !ok {
+				return "", nil, fmt.Errorf("messages[%d].content[%d].image_url is required", messageIndex, partIndex)
+			}
+			url, ok := imageURL["url"].(string)
+			if !ok {
+				return "", nil, fmt.Errorf("messages[%d].content[%d].image_url.url is required", messageIndex, partIndex)
+			}
+			image, err := imageinput.DecodeDataURLImage(url)
+			if err != nil {
+				return "", nil, fmt.Errorf("messages[%d].content[%d]: %w", messageIndex, partIndex, err)
+			}
+			images = append(images, image.Bytes)
+		default:
+			return "", nil, fmt.Errorf("messages[%d].content[%d].type %q is not supported", messageIndex, partIndex, strings.TrimSpace(typ))
+		}
+	}
+	return text.String(), images, nil
 }
 
 func pathOrEmpty(r *http.Request) string {

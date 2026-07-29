@@ -11,6 +11,7 @@ const (
 	TopicPullTurn   = "aiproxy.chatgpt.temporarychat.command.pull_turn"
 	TopicCancelTurn = "aiproxy.chatgpt.temporarychat.command.cancel_turn"
 	TopicDelete     = "aiproxy.chatgpt.temporarychat.command.delete"
+	TopicGetImage   = "aiproxy.chatgpt.temporarychat.command.get_image"
 )
 
 const (
@@ -52,17 +53,35 @@ type ConversationView struct {
 
 // MessageView is one bounded message projection for Admin clients.
 type MessageView struct {
-	ID           string `json:"id"`
-	Sequence     int64  `json:"sequence"`
-	Role         string `json:"role"`
-	Content      string `json:"content"`
-	ActualModel  string `json:"actual_model,omitempty"`
-	Status       string `json:"status"`
-	ErrorClass   string `json:"error_class,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	CompletedAt  string `json:"completed_at,omitempty"`
-	TurnID       string `json:"turn_id,omitempty"`
+	ID           string             `json:"id"`
+	Sequence     int64              `json:"sequence"`
+	Role         string             `json:"role"`
+	Content      string             `json:"content"`
+	Images       []MessageImageView `json:"images,omitempty"`
+	ActualModel  string             `json:"actual_model,omitempty"`
+	Status       string             `json:"status"`
+	ErrorClass   string             `json:"error_class,omitempty"`
+	ErrorMessage string             `json:"error_message,omitempty"`
+	CreatedAt    string             `json:"created_at"`
+	CompletedAt  string             `json:"completed_at,omitempty"`
+	TurnID       string             `json:"turn_id,omitempty"`
+}
+
+// MessageImageView deliberately contains only display metadata. Image bytes
+// are served through an owner-scoped Admin endpoint, never embedded in a
+// conversation JSON response or browser storage.
+type MessageImageView struct {
+	ID          string `json:"id"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
+// ImageInput carries an already validated attachment through the typed
+// temporary-chat boundary. It has no JSON tag because HTTP adapters decode
+// data URIs or multipart uploads before invoking this contract.
+type ImageInput struct {
+	Bytes       []byte
+	ContentType string
 }
 
 type CreateConversationCommand struct {
@@ -104,6 +123,7 @@ type StartTurnCommand struct {
 	OwnerID        string
 	ConversationID string
 	Content        string
+	Images         []ImageInput
 }
 
 type StartTurnResult struct {
@@ -146,4 +166,16 @@ type DeleteConversationCommand struct {
 
 type DeleteConversationResult struct {
 	Deleted bool `json:"deleted"`
+}
+
+type GetMessageImageCommand struct {
+	OwnerID        string
+	ConversationID string
+	MessageID      string
+	ImageID        string
+}
+
+type GetMessageImageResult struct {
+	Bytes       []byte
+	ContentType string
 }

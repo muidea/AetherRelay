@@ -65,6 +65,7 @@ type ChatGPTRuntime interface {
 	CreateTemporaryConversation(context.Context, tempevents.CreateConversationCommand) (tempevents.ConversationResult, error)
 	ListTemporaryConversations(context.Context, tempevents.ListConversationsCommand) (tempevents.ListConversationsResult, error)
 	GetTemporaryConversation(context.Context, tempevents.GetConversationCommand) (tempevents.ConversationDetailResult, error)
+	GetTemporaryMessageImage(context.Context, tempevents.GetMessageImageCommand) (tempevents.GetMessageImageResult, error)
 	StartTemporaryTurn(context.Context, tempevents.StartTurnCommand) (tempevents.StartTurnResult, error)
 	PullTemporaryTurn(context.Context, tempevents.PullTurnCommand) (tempevents.PullTurnResult, error)
 	CancelTemporaryTurn(context.Context, tempevents.CancelTurnCommand) (tempevents.CancelTurnResult, error)
@@ -326,6 +327,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.requireAdminMutation(w, r) {
 			h.startTemporaryTurn(w, r, rel)
 		}
+	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && strings.Contains(rel, "/messages/") && strings.Contains(rel, "/images/") && r.Method == http.MethodGet:
+		h.getTemporaryMessageImage(w, r, rel)
 	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && r.Method == http.MethodGet:
 		h.getTemporaryConversation(w, r, rel)
 	case strings.HasPrefix(rel, "/api/chatgpt/temporary-conversations/") && r.Method == http.MethodDelete:

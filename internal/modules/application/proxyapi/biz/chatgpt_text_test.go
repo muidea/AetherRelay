@@ -89,6 +89,34 @@ func TestCompleteRecordsFinalSuccessfulAccountResult(t *testing.T) {
 	}
 }
 
+func TestCompletePropagatesValidatedImagesToUpstream(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.AcquireTextTokenResult{AccessToken: "test-token", Account: accevents.AccountView{ID: "account-1"}}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRecordTextResult, func(_ event.Event, result event.Result) {
+		result.Set(accevents.RecordTextResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicCompleteText, func(ev event.Event, result event.Result) {
+		command := ev.Data().(upevents.CompleteTextCommand)
+		if len(command.Messages) != 1 || len(command.Messages[0].Images) != 1 || string(command.Messages[0].Images[0]) != "image-bytes" {
+			t.Fatalf("command=%+v", command)
+		}
+		result.Set(upevents.CompleteTextResult{Text: "ok"}, nil)
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	if _, err := proxy.Complete(context.Background(), chatgpttext.Request{Model: "gpt", Messages: []chatgpttext.Message{{Role: "user", Content: "inspect", Images: [][]byte{[]byte("image-bytes")}}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)

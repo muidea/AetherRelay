@@ -71,14 +71,17 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 
 启用 `chatgpt_web.enabled` 后，进程自动注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。禁止在 `providers` 中再声明 `protocol: chatgptweb`。
 
+`chatgptweb` 的公开 `POST /v1/chat/completions` 支持纯文本 `messages[].content`，以及 OpenAI content-part 数组中的 `text` 与 `image_url`。`image_url.url` 仅接受 PNG、JPEG、GIF、WebP 的 Base64 data URI；每个请求最多 4 张、合计不超过 20 MiB。代理不会下载远程 URL，因此不会为该字段打开 SSRF 通道。图片仅可用于 `user` 消息；`input_audio`、`file`、工具调用和其他未列出的 content part 会返回 `invalid_request`。这不是 Responses API 或完整 ChatGPT 网页能力的兼容承诺。
+
 ## ChatGPT Web 管理页运维注意
 
 Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin` 写保护。
 
 ### 临时对话正文保留与删除
 
-- 临时对话的会话、消息与上游续聊锚点持久化在 `state.database`（DuckDB）专用表中，不进入 interaction archive，也不写入浏览器 localStorage/sessionStorage。
+- 临时对话的会话、消息、图片附件与上游续聊锚点持久化在 `state.database`（DuckDB）专用表中，不进入 interaction archive，也不写入浏览器 localStorage/sessionStorage。图片正文不会嵌入会话 JSON；页面经同源、管理员鉴权且 `Cache-Control: no-store` 的附件端点预览。
 - 保留期由 `chatgpt_web.temporary_chat.retention_days` 控制（默认 30 天）。清理任务只删除已到期且没有活跃流的会话；管理员在页面删除为永久删除，不进回收站。
+- 临时对话编辑器可在一轮中附加 PNG、JPEG、GIF、WebP 图片（最多 4 张、合计 20 MiB），可发送纯图片消息；附件会随会话删除或到期清理。图片字节按现有文本估算策略不单独计入本地 token 估算。
 - 达到 `max_conversations` 时拒绝新建，需要先删除旧记录，系统不会为腾地方静默删历史。
 - 服务重启时，任何 `streaming` 消息会被标记为 `interrupted`，会话进入 `recovery_required`：历史仍可读，但不得在原上游分支继续发送；需新建会话。
 - 备份/恢复 `state.database` 即包含临时对话正文；共享或外发该文件等同于泄露管理员调试输入输出，需按主机权限与备份策略保护。

@@ -243,7 +243,7 @@ func isInvalidChatGPTTextFailure(err error) bool {
 func toUpstreamMessages(messages []chatgpttext.Message) []upevents.TextMessage {
 	result := make([]upevents.TextMessage, 0, len(messages))
 	for _, message := range messages {
-		result = append(result, upevents.TextMessage{Role: message.Role, Content: message.Content})
+		result = append(result, upevents.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images})
 	}
 	return result
 }

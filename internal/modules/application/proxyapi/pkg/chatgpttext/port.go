@@ -13,6 +13,9 @@ import (
 type Message struct {
 	Role    string
 	Content string
+	// Images contains validated, decoded image bytes from OpenAI-compatible
+	// image_url data-URI parts. The HTTP boundary never fetches remote URLs.
+	Images [][]byte
 }
 
 type Request struct {

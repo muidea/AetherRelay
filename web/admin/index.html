@@ -58,8 +58,8 @@
     .tc-avatar{width:28px;height:28px;flex:0 0 28px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0958d9;background:#e6f4ff;border:1px solid #91caff}.tc-message.user .tc-avatar{color:#fff;background:#1677ff;border-color:#1677ff}.tc-message.system .tc-avatar{display:none}
     .tc-bubble{position:relative;width:fit-content;max-width:min(780px,calc(100% - 40px));padding:7px 10px;border-radius:4px 13px 13px 13px;border:1px solid #e1e7f0;background:#fff;box-shadow:0 1px 4px rgba(20,42,80,.045);overflow-wrap:anywhere;word-break:normal}
     .tc-message.user .tc-bubble{border-color:#69b1ff;background:linear-gradient(145deg,#e6f4ff,#f3f9ff);border-radius:13px 4px 13px 13px}.tc-message.system .tc-bubble{max-width:min(680px,100%);border-radius:8px;color:#595959;background:#fafafa;font-size:12px;box-shadow:none}
-    .tc-bubble-head{display:flex;align-items:center;gap:6px;min-height:15px;margin-bottom:4px;padding-right:30px;line-height:1.25}.tc-message.user .tc-bubble-head{justify-content:flex-end}.tc-role{font-size:12px;font-weight:600;color:#52616f}.tc-time,.tc-actual-model{font-size:11px;color:#8c99a6}.tc-actual-model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}.tc-status{margin-left:auto;padding:1px 5px;border-radius:10px;font-size:11px;line-height:1.2;color:#0958d9;background:#e6f4ff}.tc-message.user .tc-status{margin-left:0}.tc-content{font-size:14px;line-height:1.5;color:#1f2937;white-space:pre-wrap}.tc-bubble-actions{position:absolute;top:3px;right:4px;margin:0;padding:0;border:0;opacity:0;pointer-events:none;transition:opacity .15s}.tc-message:hover .tc-bubble-actions,.tc-message:focus-within .tc-bubble-actions{opacity:1;pointer-events:auto}.tc-copy{font-size:12px;padding:1px 3px}.tc-message-error{margin-top:6px;padding:6px 7px;border-radius:6px;border:1px solid #ffccc7;background:#fff2f0;color:#a8071a;font-size:12px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
-    .tc-composer{border-top:1px solid var(--line);padding:12px 14px;background:#fff}.tc-input-wrap{position:relative}.tc-input-wrap #tcInput{display:block;padding:10px 82px 44px 11px;min-height:96px}.tc-send-inside{position:absolute;right:9px;bottom:9px;min-width:62px;box-shadow:0 2px 5px rgba(22,119,255,.24)}
+    .tc-bubble-head{display:flex;align-items:center;gap:6px;min-height:15px;margin-bottom:4px;padding-right:30px;line-height:1.25}.tc-message.user .tc-bubble-head{justify-content:flex-end}.tc-role{font-size:12px;font-weight:600;color:#52616f}.tc-time,.tc-actual-model{font-size:11px;color:#8c99a6}.tc-actual-model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}.tc-status{margin-left:auto;padding:1px 5px;border-radius:10px;font-size:11px;line-height:1.2;color:#0958d9;background:#e6f4ff}.tc-message.user .tc-status{margin-left:0}.tc-content{font-size:14px;line-height:1.5;color:#1f2937;white-space:pre-wrap}.tc-message-images{display:flex;flex-wrap:wrap;gap:7px;margin:7px 0 2px}.tc-message-image{border:0;padding:0;width:116px;height:92px;overflow:hidden;border-radius:7px;background:#f5f7fa;cursor:zoom-in}.tc-message-image img{display:block;width:100%;height:100%;object-fit:cover}.tc-bubble-actions{position:absolute;top:3px;right:4px;margin:0;padding:0;border:0;opacity:0;pointer-events:none;transition:opacity .15s}.tc-message:hover .tc-bubble-actions,.tc-message:focus-within .tc-bubble-actions{opacity:1;pointer-events:auto}.tc-copy{font-size:12px;padding:1px 3px}.tc-message-error{margin-top:6px;padding:6px 7px;border-radius:6px;border:1px solid #ffccc7;background:#fff2f0;color:#a8071a;font-size:12px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+    .tc-composer{border-top:1px solid var(--line);padding:12px 14px;background:#fff}.tc-input-wrap{position:relative}.tc-input-wrap #tcInput{display:block;padding:10px 82px 44px 82px;min-height:96px}.tc-send-inside{position:absolute;right:9px;bottom:9px;min-width:62px;box-shadow:0 2px 5px rgba(22,119,255,.24)}.tc-attach-inside{position:absolute;left:9px;bottom:9px}.tc-file-input{display:none}.tc-composer-images{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 9px}.tc-pending-image{position:relative;width:74px;height:62px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#f5f7fa}.tc-pending-image img{display:block;width:100%;height:100%;object-fit:cover}.tc-pending-image button{position:absolute;right:2px;top:2px;width:19px;height:19px;padding:0;border:0;border-radius:50%;background:rgba(0,0,0,.64);color:#fff;cursor:pointer;line-height:18px}
     .tc-empty{padding:40px 20px;text-align:center;color:var(--muted)}
     .tc-status-idle{color:#237804}.tc-status-streaming{color:#0958d9}.tc-status-recovery_required{color:#ad6800}.tc-status-closed{color:#8c8c8c}
     @media(max-width:900px){.tc-layout{grid-template-columns:1fr}.tc-list{min-height:220px}.tc-main{min-height:420px}.tc-messages{padding:14px}.tc-bubble{max-width:calc(100% - 37px)}}
@@ -280,7 +280,8 @@
             <div id="tcMessages" class="tc-messages"><div class="tc-empty">左侧选择历史会话，或新建后开始对话</div></div>
             <div class="tc-composer">
               <div id="tcRecovery" class="notice" style="display:none;margin:0">会话需要恢复处理：最后一轮已中断，不能在原分支继续。请新建会话。</div>
-              <div class="tc-input-wrap"><textarea id="tcInput" class="control" rows="3" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）" autocomplete="off" disabled></textarea><button type="button" class="btn btn-primary tc-send-inside" id="tcSend" disabled>发送</button><button type="button" class="btn tc-send-inside hidden" id="tcCancel" disabled>取消生成</button></div>
+              <div id="tcImagePreview" class="tc-composer-images" aria-live="polite"></div>
+              <div class="tc-input-wrap"><textarea id="tcInput" class="control" rows="3" placeholder="输入消息或添加图片…（Enter 发送，Shift+Enter 换行）" autocomplete="off" disabled></textarea><input id="tcImages" class="tc-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple disabled><button type="button" class="btn tc-attach-inside" id="tcAttach" disabled>图片</button><button type="button" class="btn btn-primary tc-send-inside" id="tcSend" disabled>发送</button><button type="button" class="btn tc-send-inside hidden" id="tcCancel" disabled>取消生成</button></div>
             </div>
           </section>
         </div>
@@ -422,7 +423,7 @@ const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",ran
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
-    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false}}};
+    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
@@ -1508,7 +1509,7 @@ window.addEventListener("hashchange",()=>{
   applyChatGPTState(p);
   showTab(p.tab);
 });
-window.addEventListener("pagehide",()=>{stopAllTaskPolling();stopTemporaryChatPolling();clearOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+window.addEventListener("pagehide",()=>{stopAllTaskPolling();stopTemporaryChatPolling();clearTemporaryPendingImages();clearOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
 
 
 // Temporary chat (server-persisted; no Web Storage)
@@ -1519,6 +1520,46 @@ function stopTemporaryChatPolling(){
 function temporaryChatStatusLabel(status){
   const map={idle:"空闲",streaming:"生成中",recovery_required:"需恢复",closed:"已关闭"};
   return map[status]||status||"—";
+}
+function temporaryMessageImageURL(conversationID,messageID,imageID){
+  return apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conversationID)}/messages/${encodeURIComponent(messageID)}/images/${encodeURIComponent(imageID)}`);
+}
+function clearTemporaryPendingImages(){
+  (state.cg.chat.pendingImages||[]).forEach(item=>{if(item.url)URL.revokeObjectURL(item.url)});
+  state.cg.chat.pendingImages=[];
+  const input=$("tcImages");
+  if(input)input.value="";
+  renderTemporaryPendingImages();
+}
+function renderTemporaryPendingImages(){
+  const box=$("tcImagePreview");
+  if(!box)return;
+  const images=state.cg.chat.pendingImages||[];
+  box.innerHTML=images.map((item,index)=>`<div class="tc-pending-image" title="${esc(`${item.file.name||"图片"} · ${compact(item.file.size)}B`)}"><img src="${esc(item.url)}" alt="待发送图片 ${index+1}"><button type="button" data-tc-remove-image="${index}" aria-label="移除图片">×</button></div>`).join("");
+  box.querySelectorAll("[data-tc-remove-image]").forEach(btn=>btn.onclick=()=>{
+    const index=Number(btn.dataset.tcRemoveImage);
+    const item=state.cg.chat.pendingImages[index];
+    if(item&&item.url)URL.revokeObjectURL(item.url);
+    state.cg.chat.pendingImages.splice(index,1);
+    renderTemporaryPendingImages();
+  });
+}
+function addTemporaryPendingImages(files){
+  const pending=state.cg.chat.pendingImages||[];
+  const added=Array.from(files||[]);
+  if(!added.length)return;
+  if(pending.length+added.length>4){toast("每轮最多添加 4 张图片","error");return}
+  const allowed=new Set(["image/png","image/jpeg","image/gif","image/webp"]);
+  let total=pending.reduce((sum,item)=>sum+(Number(item.file.size)||0),0);
+  for(const file of added){
+    if(!allowed.has(String(file.type||"").toLowerCase())){toast("仅支持 PNG、JPEG、GIF、WebP 图片","error");return}
+    total+=Number(file.size)||0;
+    if(total>20*1024*1024){toast("单轮图片总大小不能超过 20 MiB","error");return}
+  }
+  added.forEach(file=>pending.push({file,url:URL.createObjectURL(file)}));
+  state.cg.chat.pendingImages=pending;
+  $("tcImages").value="";
+  renderTemporaryPendingImages();
 }
 async function loadTemporaryChatModels(){
   const sel=$("tcModel");
@@ -1577,7 +1618,7 @@ function renderTemporaryMessages(){
     $("tcTitle").textContent="选择或新建会话";
     $("tcMeta").textContent="会话由服务端持久化；刷新后可恢复。不会写入浏览器存储。";
     $("tcCopyAll").disabled=true;$("tcDelete").disabled=true;
-    $("tcInput").disabled=true;$("tcSend").disabled=true;$("tcCancel").disabled=true;
+    $("tcInput").disabled=true;$("tcImages").disabled=true;$("tcAttach").disabled=true;$("tcSend").disabled=true;$("tcCancel").disabled=true;
     $("tcSend").classList.remove("hidden");$("tcCancel").classList.add("hidden");
     $("tcRecovery").style.display="none";
     box.innerHTML=`<div class="tc-empty">左侧选择历史会话，或新建后开始对话</div>`;
@@ -1592,6 +1633,8 @@ function renderTemporaryMessages(){
   $("tcRecovery").style.display=recovery?"block":"none";
   const streaming=conv.status==="streaming"||state.cg.chat.polling||state.cg.chat.sending;
   $("tcInput").disabled=recovery||streaming;
+  $("tcImages").disabled=recovery||streaming;
+  $("tcAttach").disabled=recovery||streaming;
   $("tcSend").disabled=recovery||streaming;
   $("tcCancel").disabled=!streaming||!state.cg.chat.turnId;
   $("tcSend").classList.toggle("hidden",streaming);
@@ -1609,11 +1652,15 @@ function renderTemporaryMessages(){
     const actualModel=m.actual_model?`<span class="tc-actual-model">实际 ${esc(m.actual_model)}</span>`:"";
     const status=m.status&&m.status!=="completed"?`<span class="tc-status">${esc(m.status)}</span>`:"";
     const err=m.error_message?`<div class="tc-message-error">${esc(m.error_class||"error")}：${esc(m.error_message)}</div>`:"";
+    const images=(Array.isArray(m.images)?m.images:[]).filter(image=>image&&image.id).map((image,index)=>{
+      const url=temporaryMessageImageURL(conv.id,m.id||"",image.id);
+      return `<button type="button" class="tc-message-image" data-tc-image-url="${esc(url)}" data-tc-image-title="${esc(`${labels[role]||role} 的图片 ${index+1}`)}"><img src="${esc(url)}" alt="${esc(`${labels[role]||role} 的图片 ${index+1}`)}" loading="lazy"></button>`;
+    }).join("");
     return `<div class="tc-message ${cls}" data-msg-id="${esc(m.id||"")}">
       <div class="tc-avatar" aria-hidden="true">${role==="user"?"我":(role==="system"?"": "AI")}</div>
       <div class="tc-bubble" title="${esc(`${labels[role]||role} · ${created}${m.status&&m.status!=="completed"?` · ${m.status}`:""}`)}">
         <div class="tc-bubble-head"><span class="tc-role">${labels[role]||esc(role)}</span><span class="tc-time">${esc(created)}</span>${actualModel}${status}</div>
-        <div class="tc-content">${esc(content)}</div>${err}
+        <div class="tc-content">${esc(content)}</div>${images?`<div class="tc-message-images">${images}</div>`:""}${err}
         <div class="tc-bubble-actions"><button type="button" class="link-btn tc-copy" data-copy-msg="${esc(m.id||"")}">复制</button></div>
       </div>
     </div>`;
@@ -1622,6 +1669,7 @@ function renderTemporaryMessages(){
     const msg=messages.find(x=>x.id===btn.dataset.copyMsg);
     if(msg)copyText(msg.content||"");
   });
+  box.querySelectorAll("[data-tc-image-url]").forEach(btn=>btn.onclick=()=>openLightbox(btn.dataset.tcImageUrl,btn.dataset.tcImageTitle));
   if(!state.cg.chat.loadingOlder)box.scrollTop=box.scrollHeight;
 }
 async function loadTemporaryConversations(selectFromHash){
@@ -1650,6 +1698,7 @@ async function loadTemporaryConversations(selectFromHash){
 async function openTemporaryConversation(id){
   if(!id)return;
   stopTemporaryChatPolling();
+  if(!state.cg.chat.current||state.cg.chat.current.id!==id)clearTemporaryPendingImages();
   try{
     const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(id)}?limit=100`));
     setChatGPTAvailable();
@@ -1719,6 +1768,7 @@ async function createTemporaryConversation(event){
     state.cg.chat.items=[conv,...state.cg.chat.items.filter(x=>x.id!==conv.id)];
     state.cg.chat.current=conv;
     state.cg.chat.messages=[];
+    clearTemporaryPendingImages();
     renderTemporaryConversationList();
     renderTemporaryMessages();
     setHash();
@@ -1731,17 +1781,23 @@ async function sendTemporaryTurn(){
   const conv=state.cg.chat.current;
   if(!conv)return;
   const content=($("tcInput").value||"").trim();
-  if(!content){toast("请输入消息","error");return}
+  const images=state.cg.chat.pendingImages||[];
+  if(!content&&!images.length){toast("请输入消息或添加图片","error");return}
   if(state.cg.chat.sending||state.cg.chat.polling)return;
   state.cg.chat.sending=true;
   renderTemporaryMessages();
   try{
-    const out=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns`),{
-      method:"POST",
-      headers:authHeaders({"Content-Type":"application/json"}),
-      body:JSON.stringify({content})
-    });
+    const endpoint=apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns`);
+    let options;
+    if(images.length){
+      const body=new FormData();
+      body.append("content",content);
+      images.forEach(item=>body.append("images",item.file,item.file.name));
+      options={method:"POST",headers:authHeaders(),body};
+    }else options={method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({content})};
+    const out=await request(endpoint,options);
     $("tcInput").value="";
+    clearTemporaryPendingImages();
     state.cg.chat.current=out.conversation||state.cg.chat.current;
     if(out.user_message)state.cg.chat.messages=[...state.cg.chat.messages,out.user_message];
     if(out.assistant_message)state.cg.chat.messages=[...state.cg.chat.messages,out.assistant_message];
@@ -1831,6 +1887,7 @@ async function deleteTemporaryConversation(){
     state.cg.chat.items=state.cg.chat.items.filter(x=>x.id!==conv.id);
     state.cg.chat.current=null;
     state.cg.chat.messages=[];
+    clearTemporaryPendingImages();
     renderTemporaryConversationList();
     renderTemporaryMessages();
     setHash();
@@ -1904,6 +1961,8 @@ $("cgImgDeleteSelected").onclick=deleteSelectedImages;
 $("tcNew").onclick=openTemporaryCreateDialog;
 $("tcReload").onclick=()=>loadTemporaryConversations(false);
 $("tcSend").onclick=sendTemporaryTurn;
+$("tcAttach").onclick=()=>$("tcImages").click();
+$("tcImages").onchange=e=>addTemporaryPendingImages(e.currentTarget.files);
 $("tcCancel").onclick=cancelTemporaryTurn;
 $("tcDelete").onclick=deleteTemporaryConversation;
 $("tcCopyAll").onclick=copyAllTemporaryMessages;

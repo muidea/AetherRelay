@@ -118,6 +118,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicPullTurn,
 		events.TopicCancelTurn,
 		events.TopicDelete,
+		events.TopicGetImage,
 	}
 	b.SubscribeFunc(events.TopicCreate, b.handleCreate)
 	b.SubscribeFunc(events.TopicList, b.handleList)
@@ -126,6 +127,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b.SubscribeFunc(events.TopicPullTurn, b.handlePullTurn)
 	b.SubscribeFunc(events.TopicCancelTurn, b.handleCancelTurn)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
+	b.SubscribeFunc(events.TopicGetImage, b.handleGetImage)
 	b.purgeWG.Add(1)
 	b.AsyncTask(func() {
 		defer b.purgeWG.Done()
@@ -276,7 +278,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
 		return
 	}
-	started, err := s.store.StartTurn(cmd.OwnerID, cmd.ConversationID, cmd.Content)
+	started, err := s.store.StartTurn(cmd.OwnerID, cmd.ConversationID, cmd.Content, cmd.Images)
 	if err != nil {
 		if strings.Contains(err.Error(), "streaming") || strings.Contains(err.Error(), "recovery") {
 			result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
@@ -306,7 +308,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	if firstTurn && strings.TrimSpace(started.SystemPrompt) != "" {
 		messages = append(messages, upevents.TextMessage{Role: "system", Content: started.SystemPrompt})
 	}
-	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content})
+	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content, Images: started.Images})
 	startCommand := upevents.StartTextCommand{
 		AccessToken:     account.AccessToken,
 		Proxy:           account.Account.Proxy,
@@ -704,6 +706,31 @@ func (s *TemporaryChat) handleDelete(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.DeleteConversationResult{Deleted: true}, nil)
+}
+
+func (s *TemporaryChat) handleGetImage(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	if s.store == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
+		return
+	}
+	cmd, ok := ev.Data().(events.GetMessageImageCommand)
+	if !ok || strings.TrimSpace(cmd.OwnerID) == "" || strings.TrimSpace(cmd.ConversationID) == "" || strings.TrimSpace(cmd.MessageID) == "" || strings.TrimSpace(cmd.ImageID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid temporary message image command"))
+		return
+	}
+	image, found, err := s.store.GetMessageImage(cmd.OwnerID, cmd.ConversationID, cmd.MessageID, cmd.ImageID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	if !found {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "temporary message image not found"))
+		return
+	}
+	result.Set(events.GetMessageImageResult{Bytes: image.Bytes, ContentType: image.ContentType}, nil)
 }
 
 func (s *TemporaryChat) acquireTextAccount(accountID, model string) (accevents.AcquireTextAccountResult, error) {

@@ -329,6 +329,18 @@ func (s *Admin) GetTemporaryConversation(ctx context.Context, cmd tempevents.Get
 	return result, nil
 }
 
+func (s *Admin) GetTemporaryMessageImage(ctx context.Context, cmd tempevents.GetMessageImageCommand) (tempevents.GetMessageImageResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicGetImage, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.GetMessageImageResult{}, fmt.Errorf("%s", errMessage(err, "temporary message image not found"))
+	}
+	result, ok := value.(tempevents.GetMessageImageResult)
+	if !ok {
+		return tempevents.GetMessageImageResult{}, fmt.Errorf("invalid temporary message image result")
+	}
+	return result, nil
+}
+
 func (s *Admin) StartTemporaryTurn(ctx context.Context, cmd tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicStartTurn, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
 	if err != nil {

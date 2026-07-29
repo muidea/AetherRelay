@@ -1,11 +1,15 @@
 package admin
 
 import (
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
 
 	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"ai-proxy/internal/pkg/chatgptimageinput"
 )
 
 type temporaryConversationBody struct {
@@ -17,6 +21,8 @@ type temporaryConversationBody struct {
 type temporaryTurnBody struct {
 	Content string `json:"content"`
 }
+
+const temporaryChatMultipartLimit = imageinput.MaxChatImageBytes + (1 << 20)
 
 func (h *Handler) adminOwnerID(r *http.Request) string {
 	if sess := h.sessionFromRequest(r); sess != nil && strings.TrimSpace(sess.Username) != "" {
@@ -140,24 +146,89 @@ func (h *Handler) startTemporaryTurn(w http.ResponseWriter, r *http.Request, rel
 		writeError(w, http.StatusBadRequest, "conversation id is required")
 		return
 	}
-	var body temporaryTurnBody
-	if !decodeAdminBody(w, r, &body) {
+	body, images, err := decodeTemporaryTurnBody(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strings.TrimSpace(body.Content) == "" {
-		writeError(w, http.StatusBadRequest, "content is required")
+	if strings.TrimSpace(body.Content) == "" && len(images) == 0 {
+		writeError(w, http.StatusBadRequest, "content or image is required")
 		return
 	}
 	out, err := h.chatGPT.StartTemporaryTurn(r.Context(), tempevents.StartTurnCommand{
 		OwnerID:        ownerID,
 		ConversationID: id,
 		Content:        body.Content,
+		Images:         images,
 	})
 	if err != nil {
 		writeTemporaryChatError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, out)
+}
+
+func decodeTemporaryTurnBody(w http.ResponseWriter, r *http.Request) (temporaryTurnBody, []tempevents.ImageInput, error) {
+	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data") {
+		var body temporaryTurnBody
+		if !decodeAdminBody(w, r, &body) {
+			return temporaryTurnBody{}, nil, fmt.Errorf("invalid temporary chat request")
+		}
+		return body, nil, nil
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, temporaryChatMultipartLimit)
+	if err := r.ParseMultipartForm(temporaryChatMultipartLimit); err != nil || r.MultipartForm == nil {
+		return temporaryTurnBody{}, nil, fmt.Errorf("invalid multipart temporary chat request")
+	}
+	body := temporaryTurnBody{Content: firstTemporaryFormValue(r.MultipartForm, "content")}
+	images, err := temporaryTurnImages(r.MultipartForm)
+	if err != nil {
+		return temporaryTurnBody{}, nil, err
+	}
+	return body, images, nil
+}
+
+func firstTemporaryFormValue(form *multipart.Form, key string) string {
+	if form == nil || len(form.Value[key]) == 0 {
+		return ""
+	}
+	return form.Value[key][0]
+}
+
+func temporaryTurnImages(form *multipart.Form) ([]tempevents.ImageInput, error) {
+	if form == nil {
+		return nil, nil
+	}
+	files := make([]*multipart.FileHeader, 0)
+	for _, key := range []string{"images", "images[]", "image"} {
+		files = append(files, form.File[key]...)
+	}
+	if len(files) > imageinput.MaxChatImageCount {
+		return nil, fmt.Errorf("at most %d images are supported per turn", imageinput.MaxChatImageCount)
+	}
+	images := make([]tempevents.ImageInput, 0, len(files))
+	totalBytes := 0
+	for index, header := range files {
+		file, err := header.Open()
+		if err != nil {
+			return nil, fmt.Errorf("cannot read image %d", index+1)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, imageinput.MaxChatImageBytes+1))
+		closeErr := file.Close()
+		if readErr != nil || closeErr != nil {
+			return nil, fmt.Errorf("cannot read image %d", index+1)
+		}
+		image, err := imageinput.ValidateImage(data)
+		if err != nil {
+			return nil, fmt.Errorf("image %d: %w", index+1, err)
+		}
+		totalBytes += len(image.Bytes)
+		if totalBytes > imageinput.MaxChatImageBytes {
+			return nil, fmt.Errorf("images exceed %d MiB per turn", imageinput.MaxChatImageBytes>>20)
+		}
+		images = append(images, tempevents.ImageInput{Bytes: image.Bytes, ContentType: image.MIMEType})
+	}
+	return images, nil
 }
 
 func (h *Handler) pullTemporaryTurn(w http.ResponseWriter, r *http.Request, rel string) {
@@ -242,6 +313,35 @@ func (h *Handler) deleteTemporaryConversation(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) getTemporaryMessageImage(w http.ResponseWriter, r *http.Request, rel string) {
+	if h.chatGPT == nil {
+		writeError(w, http.StatusServiceUnavailable, "temporary chat unavailable")
+		return
+	}
+	ownerID := h.adminOwnerID(r)
+	if ownerID == "" {
+		writeError(w, http.StatusUnauthorized, "admin login is required")
+		return
+	}
+	conversationID, messageID, imageID := temporaryMessageImageIDs(rel)
+	if conversationID == "" || messageID == "" || imageID == "" {
+		writeError(w, http.StatusBadRequest, "invalid temporary message image")
+		return
+	}
+	image, err := h.chatGPT.GetTemporaryMessageImage(r.Context(), tempevents.GetMessageImageCommand{
+		OwnerID: ownerID, ConversationID: conversationID, MessageID: messageID, ImageID: imageID,
+	})
+	if err != nil || len(image.Bytes) == 0 {
+		writeError(w, http.StatusNotFound, "temporary message image not found")
+		return
+	}
+	w.Header().Set("Content-Type", image.ContentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "inline")
+	_, _ = w.Write(image.Bytes)
+}
+
 func temporaryConversationID(rel string) string {
 	// /api/chatgpt/temporary-conversations/{id}[/*]
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
@@ -264,6 +364,15 @@ func temporaryTurnIDs(rel string) (conversationID, turnID string) {
 		return "", ""
 	}
 	return strings.TrimSpace(parts[3]), strings.TrimSpace(parts[5])
+}
+
+func temporaryMessageImageIDs(rel string) (conversationID, messageID, imageID string) {
+	// /api/chatgpt/temporary-conversations/{id}/messages/{message_id}/images/{image_id}
+	parts := strings.Split(strings.Trim(rel, "/"), "/")
+	if len(parts) != 8 || parts[0] != "api" || parts[1] != "chatgpt" || parts[2] != "temporary-conversations" || parts[4] != "messages" || parts[6] != "images" {
+		return "", "", ""
+	}
+	return strings.TrimSpace(parts[3]), strings.TrimSpace(parts[5]), strings.TrimSpace(parts[7])
 }
 
 func writeTemporaryChatError(w http.ResponseWriter, err error) {
@@ -291,7 +400,7 @@ func writeTemporaryChatError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, msg)
 	case strings.Contains(lower, "upstream") || strings.Contains(lower, "failed to start"):
 		writeError(w, http.StatusBadGateway, "upstream request failed")
-	case strings.Contains(lower, "required") || strings.Contains(lower, "invalid") || strings.Contains(lower, "limit") || strings.Contains(lower, "exceeds"):
+	case strings.Contains(lower, "required") || strings.Contains(lower, "invalid") || strings.Contains(lower, "limit") || strings.Contains(lower, "exceeds") || strings.Contains(lower, "image"):
 		writeError(w, http.StatusBadRequest, msg)
 	default:
 		writeError(w, http.StatusBadGateway, "temporary chat failed")

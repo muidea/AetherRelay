@@ -2,6 +2,7 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
 	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/pkg/aiproxystate"
+	"ai-proxy/internal/pkg/chatgptimageinput"
 
 	"github.com/google/uuid"
 )
@@ -177,17 +179,26 @@ type TurnStart struct {
 	Model                  string
 	ThinkingEffort         string
 	SystemPrompt           string
+	Images                 [][]byte
 }
 
-func (s *Store) StartTurn(ownerID, conversationID, content string) (TurnStart, error) {
+func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs ...[]events.ImageInput) (TurnStart, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return TurnStart{}, fmt.Errorf("content is required")
+	var inputs []events.ImageInput
+	if len(imageInputs) > 0 {
+		inputs = imageInputs[0]
 	}
+	content = strings.TrimSpace(content)
 	if len(content) > s.cfg.MaxMessageBytes {
 		return TurnStart{}, fmt.Errorf("message exceeds max size")
+	}
+	images, err := validateImages(inputs)
+	if err != nil {
+		return TurnStart{}, err
+	}
+	if content == "" && len(images) == 0 {
+		return TurnStart{}, fmt.Errorf("content or image is required")
 	}
 	row, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
 	if err != nil {
@@ -217,6 +228,19 @@ func (s *Store) StartTurn(ownerID, conversationID, content string) (TurnStart, e
 	now := time.Now().UTC()
 	userID := uuid.NewString()
 	assistantID := uuid.NewString()
+	metadata := make([]temporaryImageMetadata, 0, len(images))
+	imageRows := make([]aiproxystate.TemporaryMessageImageRow, 0, len(images))
+	for _, image := range images {
+		imageID := uuid.NewString()
+		metadata = append(metadata, temporaryImageMetadata{ID: imageID, ContentType: image.ContentType, SizeBytes: int64(len(image.Bytes))})
+		imageRows = append(imageRows, aiproxystate.TemporaryMessageImageRow{
+			OwnerID: ownerID, ConversationID: conversationID, MessageID: userID, ImageID: imageID, ContentType: image.ContentType, Bytes: image.Bytes,
+		})
+	}
+	imageMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		return TurnStart{}, fmt.Errorf("encode image metadata: %w", err)
+	}
 	user := aiproxystate.TemporaryMessageRow{
 		OwnerID:        ownerID,
 		ConversationID: conversationID,
@@ -224,6 +248,7 @@ func (s *Store) StartTurn(ownerID, conversationID, content string) (TurnStart, e
 		MessageID:      userID,
 		Role:           common.RoleUser,
 		Content:        content,
+		ImageMetadata:  imageMetadata,
 		Status:         common.MessageStatusStreaming,
 		CreatedAt:      now,
 	}
@@ -238,11 +263,15 @@ func (s *Store) StartTurn(ownerID, conversationID, content string) (TurnStart, e
 		CreatedAt:      now,
 	}
 	if row.Title == "新对话" || strings.TrimSpace(row.Title) == "" {
-		row.Title = truncateTitle(content)
+		if content != "" {
+			row.Title = truncateTitle(content)
+		} else {
+			row.Title = "图片对话"
+		}
 	}
 	row.Status = common.StatusStreaming
 	row.UpdatedAt = now
-	if err := s.docs.StartTemporaryTurn(row, user, assistant); err != nil {
+	if err := s.docs.StartTemporaryTurn(row, user, assistant, imageRows); err != nil {
 		return TurnStart{}, err
 	}
 	return TurnStart{
@@ -258,7 +287,42 @@ func (s *Store) StartTurn(ownerID, conversationID, content string) (TurnStart, e
 		Model:                  row.Model,
 		ThinkingEffort:         row.ThinkingEffort,
 		SystemPrompt:           row.SystemPrompt,
+		Images:                 imageBytes(images),
 	}, nil
+}
+
+type temporaryImageMetadata struct {
+	ID          string `json:"id"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
+func validateImages(inputs []events.ImageInput) ([]events.ImageInput, error) {
+	if len(inputs) > imageinput.MaxChatImageCount {
+		return nil, fmt.Errorf("at most %d images are supported per turn", imageinput.MaxChatImageCount)
+	}
+	images := make([]events.ImageInput, 0, len(inputs))
+	totalBytes := 0
+	for index, input := range inputs {
+		image, err := imageinput.ValidateImage(input.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("image %d: %w", index+1, err)
+		}
+		totalBytes += len(image.Bytes)
+		if totalBytes > imageinput.MaxChatImageBytes {
+			return nil, fmt.Errorf("images exceed %d MiB per turn", imageinput.MaxChatImageBytes>>20)
+		}
+		images = append(images, events.ImageInput{Bytes: image.Bytes, ContentType: image.MIMEType})
+	}
+	return images, nil
+}
+
+func imageBytes(images []events.ImageInput) [][]byte {
+	result := make([][]byte, 0, len(images))
+	for _, image := range images {
+		result = append(result, image.Bytes)
+	}
+	return result
 }
 
 type TurnComplete struct {
@@ -408,6 +472,22 @@ func (s *Store) DeleteConversation(ownerID, conversationID string) error {
 	return s.docs.DeleteTemporaryConversation(ownerID, conversationID)
 }
 
+func (s *Store) GetMessageImage(ownerID, conversationID, messageID, imageID string) (aiproxystate.TemporaryMessageImageRow, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(messageID) == "" || strings.TrimSpace(imageID) == "" {
+		return aiproxystate.TemporaryMessageImageRow{}, false, fmt.Errorf("invalid image reference")
+	}
+	conversation, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
+	if err != nil {
+		return aiproxystate.TemporaryMessageImageRow{}, false, err
+	}
+	if !found || !time.Now().UTC().Before(conversation.ExpiresAt) {
+		return aiproxystate.TemporaryMessageImageRow{}, false, nil
+	}
+	return s.docs.GetTemporaryMessageImage(ownerID, conversationID, messageID, imageID)
+}
+
 func (s *Store) PurgeExpired(now time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -449,6 +529,16 @@ func messageView(row aiproxystate.TemporaryMessageRow) events.MessageView {
 		ErrorClass:   row.ErrorClass,
 		ErrorMessage: row.ErrorMessage,
 		CreatedAt:    row.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	var images []temporaryImageMetadata
+	if len(row.ImageMetadata) > 0 && json.Unmarshal(row.ImageMetadata, &images) == nil {
+		view.Images = make([]events.MessageImageView, 0, len(images))
+		for _, image := range images {
+			if image.ID == "" || image.ContentType == "" || image.SizeBytes <= 0 {
+				continue
+			}
+			view.Images = append(view.Images, events.MessageImageView{ID: image.ID, ContentType: image.ContentType, SizeBytes: image.SizeBytes})
+		}
 	}
 	if row.CompletedAt != nil {
 		view.CompletedAt = row.CompletedAt.UTC().Format(time.RFC3339)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
+	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -95,6 +96,36 @@ func TestStartTurnAndCompleteTurnPersistAnchors(t *testing.T) {
 	}
 	if second.UpstreamConversationID != "upstream-conv-1" || second.ParentMessageID != "assistant-msg-1" {
 		t.Fatalf("second turn anchors=%+v", second)
+	}
+}
+
+func TestStartTurnPersistsAndOwnerScopesImageAttachments(t *testing.T) {
+	s := openTestStore(t)
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	started, err := s.StartTurn("admin", created.ID, "", []events.ImageInput{{Bytes: pngBytes, ContentType: "image/png"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Conversation.Title != "图片对话" || len(started.Images) != 1 || len(started.UserMessage.Images) != 1 {
+		t.Fatalf("started=%+v", started)
+	}
+	imageID := started.UserMessage.Images[0].ID
+	stored, found, err := s.GetMessageImage("admin", created.ID, started.UserMessage.ID, imageID)
+	if err != nil || !found || stored.ContentType != "image/png" || string(stored.Bytes) != string(pngBytes) {
+		t.Fatalf("image=%+v found=%v err=%v", stored, found, err)
+	}
+	if _, found, err := s.GetMessageImage("other-admin", created.ID, started.UserMessage.ID, imageID); err != nil || found {
+		t.Fatalf("cross-owner image access found=%v err=%v", found, err)
+	}
+	if err := s.DeleteConversation("admin", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := s.GetMessageImage("admin", created.ID, started.UserMessage.ID, imageID); err != nil || found {
+		t.Fatalf("deleted image found=%v err=%v", found, err)
 	}
 }
 

@@ -6,9 +6,28 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+
+	"github.com/gabriel-vasile/mimetype"
 )
 
-const maxDecodedImageBytes = 20 << 20
+const (
+	maxDecodedImageBytes = 20 << 20
+
+	// MaxChatImageCount and MaxChatImageBytes bound an image-bearing chat
+	// turn before it can consume upload capacity on a ChatGPT Web account.
+	// They are intentionally fixed protocol limits rather than user-facing
+	// runtime knobs.
+	MaxChatImageCount = 4
+	MaxChatImageBytes = 20 << 20
+)
+
+// Image is a validated image payload suitable for a ChatGPT Web attachment.
+// MIMEType is detected from the decoded bytes; callers must not trust the
+// media type claimed by a user-provided data URI or multipart upload.
+type Image struct {
+	Bytes    []byte
+	MIMEType string
+}
 
 // DecodeBase64Images accepts standard base64 or a base64 data URI. It rejects
 // empty and oversized values before an image task consumes account capacity.
@@ -35,6 +54,56 @@ func DecodeBase64Images(values []string) ([][]byte, error) {
 		images = append(images, image)
 	}
 	return images, nil
+}
+
+// DecodeDataURLImage accepts the OpenAI Chat Completions image_url subset
+// supported by the ChatGPT Web adapter: a base64-encoded image data URI. It
+// intentionally does not fetch remote URLs, avoiding an SSRF surface on the
+// proxy. The declared MIME type and decoded bytes must both be supported.
+func DecodeDataURLImage(value string) (Image, error) {
+	value = strings.TrimSpace(value)
+	header, encoded, ok := strings.Cut(value, ",")
+	if !ok || !strings.HasPrefix(strings.ToLower(header), "data:") {
+		return Image{}, fmt.Errorf("image_url.url must be a base64 image data URI")
+	}
+	meta := strings.TrimSpace(header[len("data:"):])
+	parts := strings.Split(meta, ";")
+	if len(parts) < 2 || !strings.EqualFold(strings.TrimSpace(parts[0]), "image/png") && !strings.EqualFold(strings.TrimSpace(parts[0]), "image/jpeg") && !strings.EqualFold(strings.TrimSpace(parts[0]), "image/gif") && !strings.EqualFold(strings.TrimSpace(parts[0]), "image/webp") {
+		return Image{}, fmt.Errorf("image_url.url has unsupported image MIME type")
+	}
+	base64Encoded := false
+	for _, part := range parts[1:] {
+		if strings.EqualFold(strings.TrimSpace(part), "base64") {
+			base64Encoded = true
+			break
+		}
+	}
+	if !base64Encoded {
+		return Image{}, fmt.Errorf("image_url.url must be base64 encoded")
+	}
+	decoded, err := decode(encoded)
+	if err != nil {
+		return Image{}, fmt.Errorf("image_url.url has invalid base64")
+	}
+	return ValidateImage(decoded)
+}
+
+// ValidateImage verifies a raw uploaded image and returns the detected MIME
+// type. It is used for multipart Admin uploads as well as decoded data URIs.
+func ValidateImage(value []byte) (Image, error) {
+	if len(value) == 0 {
+		return Image{}, fmt.Errorf("empty image")
+	}
+	if len(value) > maxDecodedImageBytes {
+		return Image{}, fmt.Errorf("image exceeds %d MiB", maxDecodedImageBytes>>20)
+	}
+	mimeType := strings.ToLower(mimetype.Detect(value).String())
+	switch mimeType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return Image{Bytes: value, MIMEType: mimeType}, nil
+	default:
+		return Image{}, fmt.Errorf("unsupported image MIME type %q", mimeType)
+	}
 }
 
 func base64Part(value string) (string, error) {

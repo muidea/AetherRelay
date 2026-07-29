@@ -1,9 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +34,7 @@ type chatGPTAccountRuntimeStub struct {
 	retryBaseURL       string
 	temporaryCreate    tempevents.CreateConversationCommand
 	temporaryGet       tempevents.GetConversationCommand
+	temporaryTurn      tempevents.StartTurnCommand
 	temporaryCreateErr error
 	temporaryGetErr    error
 }
@@ -159,8 +162,12 @@ func (s *chatGPTAccountRuntimeStub) GetTemporaryConversation(_ context.Context, 
 	}
 	return tempevents.ConversationDetailResult{Conversation: tempevents.ConversationView{ID: command.ConversationID, Status: tempevents.StatusIdle}}, nil
 }
-func (s *chatGPTAccountRuntimeStub) StartTemporaryTurn(context.Context, tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
-	return tempevents.StartTurnResult{}, nil
+func (s *chatGPTAccountRuntimeStub) GetTemporaryMessageImage(context.Context, tempevents.GetMessageImageCommand) (tempevents.GetMessageImageResult, error) {
+	return tempevents.GetMessageImageResult{Bytes: []byte{0x89, 0x50, 0x4e, 0x47}, ContentType: "image/png"}, nil
+}
+func (s *chatGPTAccountRuntimeStub) StartTemporaryTurn(_ context.Context, command tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
+	s.temporaryTurn = command
+	return tempevents.StartTurnResult{Conversation: tempevents.ConversationView{ID: command.ConversationID}, UserMessage: tempevents.MessageView{ID: "message-1", Content: command.Content}, AssistantMessage: tempevents.MessageView{ID: "turn-1"}, TurnID: "turn-1"}, nil
 }
 func (s *chatGPTAccountRuntimeStub) PullTemporaryTurn(context.Context, tempevents.PullTurnCommand) (tempevents.PullTurnResult, error) {
 	return tempevents.PullTurnResult{}, nil
@@ -355,5 +362,42 @@ func TestTemporaryChatExpiredConversationMapsToGone(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusGone || rec.Header().Get("Cache-Control") != "no-store" || runtime.temporaryGet.OwnerID != "admin" {
 		t.Fatalf("status=%d cache=%q command=%+v body=%s", rec.Code, rec.Header().Get("Cache-Control"), runtime.temporaryGet, rec.Body.String())
+	}
+}
+
+func TestTemporaryChatTurnAcceptsMultipartImagesAndServesOwnerScopedContent(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("content", "inspect this"); err != nil {
+		t.Fatal(err)
+	}
+	part, err := writer.CreateFormFile("images", "sample.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/temporary-conversations/conversation-1/turns", &body)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted || runtime.temporaryTurn.OwnerID != "admin" || runtime.temporaryTurn.Content != "inspect this" || len(runtime.temporaryTurn.Images) != 1 || runtime.temporaryTurn.Images[0].ContentType != "image/png" {
+		t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.temporaryTurn, rec.Body.String())
+	}
+
+	imageReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/temporary-conversations/conversation-1/messages/message-1/images/image-1", nil)
+	imageReq.RemoteAddr = "127.0.0.1:1234"
+	imageRec := httptest.NewRecorder()
+	handler.ServeHTTP(imageRec, imageReq)
+	if imageRec.Code != http.StatusOK || imageRec.Header().Get("Content-Type") != "image/png" || imageRec.Header().Get("Cache-Control") != "no-store" || imageRec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("image status=%d headers=%v body=%x", imageRec.Code, imageRec.Header(), imageRec.Body.Bytes())
 	}
 }
