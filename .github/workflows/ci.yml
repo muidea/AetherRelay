@@ -28,7 +28,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test ./... -count=1
+        run: scripts/run-tests.sh
 
   build:
     name: linux/amd64 build

@@ -36,7 +36,7 @@ jobs:
         run: |
           scripts/check-format.sh
           go vet ./...
-          go test ./... -count=1
+          scripts/run-tests.sh
 
   package:
     name: Package ${{ matrix.goos }}/${{ matrix.goarch }}
