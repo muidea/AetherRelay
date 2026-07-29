@@ -2,10 +2,14 @@ package biz
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/oauth"
 	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/store"
 	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
@@ -14,6 +18,22 @@ import (
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
+
+type refreshTestOAuthClient struct {
+	calls atomic.Int32
+}
+
+func (c *refreshTestOAuthClient) Refresh(_ context.Context, request oauth.Request) (oauth.Result, error) {
+	c.calls.Add(1)
+	if request.RefreshToken != "refresh-old" {
+		return oauth.Result{}, errors.New("unexpected refresh token")
+	}
+	return oauth.Result{AccessToken: "new-token", RefreshToken: "refresh-new", IDToken: "id-new"}, nil
+}
+
+func (*refreshTestOAuthClient) ExchangeAuthorizationCode(context.Context, oauth.AuthorizationCodeRequest) (oauth.Result, error) {
+	return oauth.Result{}, errors.New("not implemented")
+}
 
 func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 	hub := event.NewHub(8)
@@ -111,5 +131,59 @@ func TestManualRefreshInFlightDuringTeardownExitsSafely(t *testing.T) {
 	progress, found := account.getProgress("refresh")
 	if !found || !progress.Done || progress.Error != "account pool is shutting down" {
 		t.Fatalf("progress=%#v, found=%v", progress, found)
+	}
+}
+
+func TestRequestTextTokenRefreshCoalescesAndRotates(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
+		t.Fatal(err)
+	}
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+	fakeOAuth := &refreshTestOAuthClient{}
+	account.oauth = fakeOAuth
+
+	var wg sync.WaitGroup
+	results := make(chan accevents.RefreshTextTokenResult, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			value, err := hub.Send(event.NewEvent(accevents.TopicRefreshTextToken, "test", acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{AccessToken: "old-token"})).Get()
+			if err != nil {
+				errs <- err
+				return
+			}
+			refreshed, ok := value.(accevents.RefreshTextTokenResult)
+			if !ok {
+				errs <- errors.New("invalid refresh text token result")
+				return
+			}
+			results <- refreshed
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if fakeOAuth.calls.Load() != 1 {
+		t.Fatalf("oauth refresh calls=%d, want 1", fakeOAuth.calls.Load())
+	}
+	for refreshed := range results {
+		if refreshed.AccessToken != "new-token" || !refreshed.Refreshed || refreshed.Account.AccessToken != "new-token" {
+			t.Fatalf("refresh result=%+v", refreshed)
+		}
+	}
+	if view, ok := accounts.ViewForAccessToken("old-token"); !ok || view.AccessToken != "new-token" {
+		t.Fatalf("rotated account=%+v ok=%v", view, ok)
 	}
 }

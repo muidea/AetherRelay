@@ -24,6 +24,13 @@ const (
 
 	modelDiscoveryRetryBase = 30 * time.Second
 	modelDiscoveryRetryMax  = 5 * time.Minute
+
+	// Keep the account/model scheduling behavior compatible with the source
+	// gateway's legacy transient cooldown. A 429 is intentionally treated as
+	// the same short, persisted recovery window here: ChatGPT Web does not
+	// expose a reliable retry-after value on every text transport.
+	textRateLimitCooldown = time.Minute
+	textTransientCooldown = time.Minute
 )
 
 type Account struct {
@@ -101,6 +108,13 @@ type TokenRefreshCandidate struct {
 	RefreshToken string
 	Proxy        string
 	Reason       string // expiring | keepalive
+}
+
+// OAuthRefreshCredential is an owner-internal projection used by account biz
+// to renew a token. It is never sent through the public EventHub contract.
+type OAuthRefreshCredential struct {
+	AccessToken  string
+	RefreshToken string
 }
 
 // PasswordLoginCandidate is an account-owner-only credential projection. It
@@ -449,6 +463,34 @@ func (s *Store) TokenRefreshCandidates(now time.Time, refreshSkew, keepaliveAfte
 		}
 	}
 	return append(expiring, keepalive...)
+}
+
+// OAuthRefreshCredentialFor resolves a potentially retired access token and
+// returns its current refresh credential to account biz. Callers must keep the
+// returned value inside the account-pool process; it is deliberately not an
+// EventHub or HTTP projection.
+func (s *Store) OAuthRefreshCredentialFor(token string) (OAuthRefreshCredential, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token = s.resolveTokenLocked(trim(token))
+	acc := s.items[token]
+	if acc == nil || trim(acc.RefreshToken) == "" {
+		return OAuthRefreshCredential{}, false
+	}
+	return OAuthRefreshCredential{AccessToken: token, RefreshToken: acc.RefreshToken}, true
+}
+
+// ViewForAccessToken returns the current account view for an access-token
+// alias. It is used only by account biz after a refresh-token rotation.
+func (s *Store) ViewForAccessToken(token string) (events.AccountView, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token = s.resolveTokenLocked(trim(token))
+	acc := s.items[token]
+	if acc == nil {
+		return events.AccountView{}, false
+	}
+	return toView(acc, true), true
 }
 
 // PasswordLoginCandidates resolves requested accounts inside the owner and
@@ -1024,6 +1066,9 @@ func (s *Store) AcquireTextToken(exclude []string, model, operation string) (eve
 		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
 			continue
 		}
+		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
+			continue
+		}
 		if !accountSupportsModelLocked(acc, model, operation) {
 			continue
 		}
@@ -1051,6 +1096,9 @@ func (s *Store) AcquireTextAccount(accountID, model, operation string) (events.A
 		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
 			return events.AccountView{}, false
 		}
+		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
+			return events.AccountView{}, false
+		}
 		if !accountSupportsModelLocked(acc, model, operation) {
 			return events.AccountView{}, false
 		}
@@ -1060,9 +1108,12 @@ func (s *Store) AcquireTextAccount(accountID, model, operation string) (events.A
 	return events.AccountView{}, false
 }
 
-// RecordTextResult updates success/fail counters for a text turn by account ID.
-// invalid_token transitions the account to abnormal; other failures only count fail.
-func (s *Store) RecordTextResult(accountID string, success bool, errorClass string) (events.AccountView, bool) {
+// RecordTextResult updates success/fail counters and account/model recovery
+// windows for one final text turn. invalid_token transitions the account to
+// abnormal. rate_limit, tls, timeout and generic upstream failures apply a
+// short model-scoped cooldown; content-policy and client-side outcomes are
+// intentionally not scheduled by this owner method.
+func (s *Store) RecordTextResult(accountID, model string, success bool, errorClass string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	accountID = trim(accountID)
@@ -1083,18 +1134,95 @@ func (s *Store) RecordTextResult(accountID string, success bool, errorClass stri
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
 	}
+	now := time.Now().UTC()
 	if success {
 		acc.Extra["success"] = extraInt(acc, "success") + 1
+		clearTextCooldownLocked(acc, model)
 	} else {
 		acc.Extra["fail"] = extraInt(acc, "fail") + 1
-		if strings.EqualFold(strings.TrimSpace(errorClass), "invalid_token") {
+		switch strings.ToLower(strings.TrimSpace(errorClass)) {
+		case "invalid_token":
 			acc.Status = StatusAbnormal
 			acc.Quota = 0
 			s.bumpCatalogLocked()
+		case "rate_limit":
+			setTextCooldownLocked(acc, model, now.Add(textRateLimitCooldown), "rate_limit")
+		case "tls", "timeout", "upstream":
+			setTextCooldownLocked(acc, model, now.Add(textTransientCooldown), strings.ToLower(strings.TrimSpace(errorClass)))
 		}
 	}
 	_ = s.saveLocked()
 	return toView(acc, true), true
+}
+
+const textCooldownExtraKey = "text_cooldowns"
+
+func textCooldownKey(model string) string {
+	if model = strings.ToLower(trim(model)); model != "" {
+		return model
+	}
+	return "*"
+}
+
+func textCooldownActiveLocked(acc *Account, model string, now time.Time) bool {
+	if acc == nil || acc.Extra == nil {
+		return false
+	}
+	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range []string{textCooldownKey(model), "*"} {
+		entry, ok := cooldowns[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		until, ok := parseTime(asString(entry["until"]))
+		if ok && until.After(now) {
+			return true
+		}
+	}
+	return false
+}
+
+func setTextCooldownLocked(acc *Account, model string, until time.Time, errorClass string) {
+	if acc == nil {
+		return
+	}
+	if acc.Extra == nil {
+		acc.Extra = map[string]any{}
+	}
+	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	if !ok {
+		cooldowns = map[string]any{}
+		acc.Extra[textCooldownExtraKey] = cooldowns
+	}
+	key := textCooldownKey(model)
+	if existing, ok := cooldowns[key].(map[string]any); ok {
+		if current, valid := parseTime(asString(existing["until"])); valid && current.After(time.Now().UTC()) {
+			// Concurrent requests that fail during an already-open window must
+			// not continually extend it and black out a healthy recovery.
+			return
+		}
+	}
+	cooldowns[key] = map[string]any{
+		"until":       until.UTC().Format(time.RFC3339),
+		"error_class": errorClass,
+	}
+}
+
+func clearTextCooldownLocked(acc *Account, model string) {
+	if acc == nil || acc.Extra == nil {
+		return
+	}
+	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(cooldowns, textCooldownKey(model))
+	if len(cooldowns) == 0 {
+		delete(acc.Extra, textCooldownExtraKey)
+	}
 }
 
 func (s *Store) RemoveInvalid(token string) bool {
@@ -1134,23 +1262,64 @@ func (s *Store) Health() events.HealthResult {
 
 func toView(acc *Account, withToken bool) events.AccountView {
 	v := events.AccountView{
-		ID:         acc.ID,
-		Email:      acc.Email,
-		Type:       acc.Type,
-		SourceType: acc.SourceType,
-		Status:     acc.Status,
-		Quota:      acc.Quota,
-		RestoreAt:  extraString(acc, "restore_at"),
-		Success:    extraInt(acc, "success"),
-		Fail:       extraInt(acc, "fail"),
-		CreatedAt:  acc.CreatedAt,
-		Proxy:      acc.Proxy,
-		LastUsedAt: acc.LastUsedAt,
+		ID:            acc.ID,
+		Email:         acc.Email,
+		Type:          acc.Type,
+		SourceType:    acc.SourceType,
+		Status:        acc.Status,
+		Quota:         acc.Quota,
+		RestoreAt:     extraString(acc, "restore_at"),
+		Success:       extraInt(acc, "success"),
+		Fail:          extraInt(acc, "fail"),
+		CreatedAt:     acc.CreatedAt,
+		Proxy:         acc.Proxy,
+		LastUsedAt:    acc.LastUsedAt,
+		TextCooldowns: activeTextCooldowns(acc, time.Now().UTC()),
 	}
 	if withToken {
 		v.AccessToken = acc.AccessToken
 	}
 	return v
+}
+
+// activeTextCooldowns projects only currently-active, non-sensitive recovery
+// windows for the admin read model. Expired records may remain in Extra until
+// the next account mutation, but they must never be rendered as live state.
+func activeTextCooldowns(acc *Account, now time.Time) []events.TextCooldownView {
+	if acc == nil || acc.Extra == nil {
+		return nil
+	}
+	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	if !ok {
+		return nil
+	}
+	items := make([]events.TextCooldownView, 0, len(cooldowns))
+	for key, raw := range cooldowns {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		until, valid := parseTime(asString(entry["until"]))
+		if !valid || !until.After(now) {
+			continue
+		}
+		model := key
+		if model == "*" {
+			model = ""
+		}
+		items = append(items, events.TextCooldownView{
+			Model:      model,
+			Until:      until.Format(time.RFC3339),
+			ErrorClass: asString(entry["error_class"]),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Until != items[j].Until {
+			return items[i].Until < items[j].Until
+		}
+		return items[i].Model < items[j].Model
+	})
+	return items
 }
 
 // CatalogVersion returns the current discovery-relevant generation.

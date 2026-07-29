@@ -19,13 +19,17 @@ const (
 	TopicAcquireTextToken    = "aiproxy.chatgpt.accountpool.command.acquire_text_token"
 	TopicAcquireTextAccount  = "aiproxy.chatgpt.accountpool.command.acquire_text_account"
 	TopicRecordTextResult    = "aiproxy.chatgpt.accountpool.command.record_text_result"
-	TopicRemoveInvalid       = "aiproxy.chatgpt.accountpool.command.remove_invalid"
-	TopicHealth              = "aiproxy.chatgpt.accountpool.command.health"
-	TopicOAuthStart          = "aiproxy.chatgpt.accountpool.command.oauth_start"
-	TopicOAuthFinish         = "aiproxy.chatgpt.accountpool.command.oauth_finish"
-	TopicExport              = "aiproxy.chatgpt.accountpool.command.export"
-	TopicRefresh             = "aiproxy.chatgpt.accountpool.command.refresh"
-	TopicRefreshProgress     = "aiproxy.chatgpt.accountpool.command.refresh_progress"
+	// TopicRefreshTextToken renews an OAuth-backed text credential after the
+	// upstream has classified it as invalid. The account pool keeps refresh
+	// credentials private and coalesces concurrent refreshes for one account.
+	TopicRefreshTextToken = "aiproxy.chatgpt.accountpool.command.refresh_text_token"
+	TopicRemoveInvalid    = "aiproxy.chatgpt.accountpool.command.remove_invalid"
+	TopicHealth           = "aiproxy.chatgpt.accountpool.command.health"
+	TopicOAuthStart       = "aiproxy.chatgpt.accountpool.command.oauth_start"
+	TopicOAuthFinish      = "aiproxy.chatgpt.accountpool.command.oauth_finish"
+	TopicExport           = "aiproxy.chatgpt.accountpool.command.export"
+	TopicRefresh          = "aiproxy.chatgpt.accountpool.command.refresh"
+	TopicRefreshProgress  = "aiproxy.chatgpt.accountpool.command.refresh_progress"
 	// Discovery / capability snapshot contracts owned by the account pool.
 	TopicListDiscoveryCandidates     = "aiproxy.chatgpt.accountpool.command.list_discovery_candidates"
 	TopicPutModelSnapshot            = "aiproxy.chatgpt.accountpool.command.put_model_snapshot"
@@ -54,6 +58,17 @@ type AccountView struct {
 	AccessToken   string `json:"access_token,omitempty"`
 	Proxy         string `json:"proxy,omitempty"`
 	LastUsedAt    string `json:"last_used_at,omitempty"`
+	// TextCooldowns is a read-only projection of active model-scoped account
+	// cooldowns. It intentionally contains no credential or persistence data.
+	TextCooldowns []TextCooldownView `json:"text_cooldowns,omitempty"`
+}
+
+// TextCooldownView is an active account/model recovery window exposed to the
+// management UI. Empty Model means an account-wide cooldown.
+type TextCooldownView struct {
+	Model      string `json:"model,omitempty"`
+	Until      string `json:"until"`
+	ErrorClass string `json:"error_class"`
 }
 
 type ListCommand struct{}
@@ -141,15 +156,29 @@ type AcquireTextAccountResult struct {
 	Account     AccountView
 }
 
-// RecordTextResultCommand reports a text turn outcome by account ID. invalid_token
-// transitions the account to abnormal; transient upstream failures only record fail.
+// RecordTextResultCommand reports one final text-turn outcome by account ID.
+// Model scopes transient cooldown scheduling to the affected account/model
+// pair. invalid_token transitions the account to abnormal.
 type RecordTextResultCommand struct {
 	AccountID  string
+	Model      string
 	Success    bool
 	ErrorClass string
 }
 type RecordTextResultResult struct {
 	Account AccountView
+}
+
+// RefreshTextTokenCommand carries only the access credential that failed.
+// Refresh tokens stay inside the account-pool owner and are never exposed to
+// proxy callers or management HTTP APIs.
+type RefreshTextTokenCommand struct {
+	AccessToken string
+}
+type RefreshTextTokenResult struct {
+	AccessToken string
+	Account     AccountView
+	Refreshed   bool
 }
 
 // AccountModelEntry is one model+operations projection stored on an account.

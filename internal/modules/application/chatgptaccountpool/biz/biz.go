@@ -22,18 +22,33 @@ import (
 
 type Account struct {
 	basebiz.Base
-	store        *store.Store
-	topics       []string
-	refreshing   atomic.Bool
-	stopping     atomic.Bool
-	shutdownCtx  context.Context
-	shutdown     context.CancelFunc
-	refreshEvery time.Duration
-	oauth        *oauth.Client
-	bridge       oauthBridge
-	progressMu   sync.Mutex
-	progress     map[string]events.RefreshProgress
-	progressAt   map[string]time.Time
+	store         *store.Store
+	topics        []string
+	refreshing    atomic.Bool
+	stopping      atomic.Bool
+	shutdownCtx   context.Context
+	shutdown      context.CancelFunc
+	refreshEvery  time.Duration
+	oauth         oauthClient
+	textRefreshMu sync.Mutex
+	textRefreshes map[string]*textRefreshFlight
+	bridge        oauthBridge
+	progressMu    sync.Mutex
+	progress      map[string]events.RefreshProgress
+	progressAt    map[string]time.Time
+}
+
+// oauthClient keeps the request-time refresh path testable while retaining a
+// single narrow OAuth implementation in production.
+type oauthClient interface {
+	Refresh(context.Context, oauth.Request) (oauth.Result, error)
+	ExchangeAuthorizationCode(context.Context, oauth.AuthorizationCodeRequest) (oauth.Result, error)
+}
+
+type textRefreshFlight struct {
+	done   chan struct{}
+	result events.RefreshTextTokenResult
+	err    error
 }
 
 // New obtains the ChatGPT Web runtime configuration through its owner and
@@ -59,14 +74,15 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery time.Duration) *Account {
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
 	b := &Account{
-		Base:         basebiz.New(common.UnitID, hub, background),
-		store:        st,
-		shutdownCtx:  shutdownCtx,
-		shutdown:     shutdown,
-		refreshEvery: refreshEvery,
-		oauth:        oauth.NewClient(),
-		progress:     map[string]events.RefreshProgress{},
-		progressAt:   map[string]time.Time{},
+		Base:          basebiz.New(common.UnitID, hub, background),
+		store:         st,
+		shutdownCtx:   shutdownCtx,
+		shutdown:      shutdown,
+		refreshEvery:  refreshEvery,
+		oauth:         oauth.NewClient(),
+		textRefreshes: map[string]*textRefreshFlight{},
+		progress:      map[string]events.RefreshProgress{},
+		progressAt:    map[string]time.Time{},
 	}
 	if st == nil {
 		return b
@@ -87,6 +103,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 		events.TopicAcquireTextToken,
 		events.TopicAcquireTextAccount,
 		events.TopicRecordTextResult,
+		events.TopicRefreshTextToken,
 		events.TopicRemoveInvalid,
 		events.TopicHealth,
 		events.TopicOAuthStart,
@@ -114,6 +131,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicAcquireTextToken, b.handleAcquireText)
 	b.SubscribeFunc(events.TopicAcquireTextAccount, b.handleAcquireTextAccount)
 	b.SubscribeFunc(events.TopicRecordTextResult, b.handleRecordTextResult)
+	b.SubscribeFunc(events.TopicRefreshTextToken, b.handleRefreshTextToken)
 	b.SubscribeFunc(events.TopicRemoveInvalid, b.handleRemoveInvalid)
 	b.SubscribeFunc(events.TopicHealth, b.handleHealth)
 	b.SubscribeFunc(events.TopicOAuthStart, b.handleOAuthStart)
@@ -485,12 +503,33 @@ func (s *Account) handleRecordTextResult(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid record text result command"))
 		return
 	}
-	acc, found := s.store.RecordTextResult(cmd.AccountID, cmd.Success, cmd.ErrorClass)
+	acc, found := s.store.RecordTextResult(cmd.AccountID, cmd.Model, cmd.Success, cmd.ErrorClass)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "account not found"))
 		return
 	}
 	result.Set(events.RecordTextResultResult{Account: acc}, nil)
+}
+
+func (s *Account) handleRefreshTextToken(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	if s.stopping.Load() {
+		result.Set(nil, cd.NewError(cd.Unexpected, "account pool is shutting down"))
+		return
+	}
+	cmd, ok := ev.Data().(events.RefreshTextTokenCommand)
+	if !ok || cmd.AccessToken == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid refresh text token command"))
+		return
+	}
+	refreshed, err := s.refreshTextToken(cmd.AccessToken)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(refreshed, nil)
 }
 
 func (s *Account) handleAcquireText(ev event.Event, result event.Result) {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 )
 
 func TestAccountPoolAcquireAndMark(t *testing.T) {
@@ -348,19 +350,75 @@ func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
 	}
 	s.ReleaseImageSlot("token-a")
 
-	result, marked := s.RecordTextResult(account.ID, true, "")
+	result, marked := s.RecordTextResult(account.ID, "gpt-test", true, "")
 	if !marked || result.Success != 1 || result.Fail != 0 || result.Status != StatusNormal {
 		t.Fatalf("success result=%+v marked=%v", result, marked)
 	}
-	result, marked = s.RecordTextResult(account.ID, false, "timeout")
+	result, marked = s.RecordTextResult(account.ID, "gpt-test", false, "timeout")
 	if !marked || result.Fail != 1 || result.Status != StatusNormal {
 		t.Fatalf("timeout must only count fail: %+v", result)
 	}
-	result, marked = s.RecordTextResult(account.ID, false, "invalid_token")
+	result, marked = s.RecordTextResult(account.ID, "gpt-test", false, "invalid_token")
 	if !marked || result.Status != StatusAbnormal {
 		t.Fatalf("invalid_token must mark abnormal: %+v", result)
 	}
 	if _, ok := s.AcquireTextAccount(account.ID, "", ""); ok {
 		t.Fatal("abnormal account must not be reacquired")
+	}
+}
+
+func TestTextCooldownIsModelScopedAndExpires(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	s := New(path, 1)
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	quota := 3
+	account, found, err := s.Update("token-a", "plus", StatusNormal, &quota, "")
+	if err != nil || !found {
+		t.Fatalf("update found=%v err=%v", found, err)
+	}
+	if _, ok, err := s.PutModelSnapshot(account.ID, events.AccountModelSnapshot{AccountID: account.ID, Models: []events.AccountModelEntry{
+		{ID: "gpt-5", Operations: []string{events.ModelOperationChatCompletions}},
+		{ID: "gpt-4.1", Operations: []string{events.ModelOperationChatCompletions}},
+	}}); err != nil || !ok {
+		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
+	}
+	if _, ok := s.RecordTextResult(account.ID, "gpt-5", false, "rate_limit"); !ok {
+		t.Fatal("record rate-limit result")
+	}
+	items := s.List()
+	if len(items) != 1 || len(items[0].TextCooldowns) != 1 {
+		t.Fatalf("active cooldown view=%+v", items)
+	}
+	cooldown := items[0].TextCooldowns[0]
+	if cooldown.Model != "gpt-5" || cooldown.ErrorClass != "rate_limit" || cooldown.Until == "" {
+		t.Fatalf("cooldown=%+v", cooldown)
+	}
+	if _, ok := s.AcquireTextToken(nil, "gpt-5", ""); ok {
+		t.Fatal("rate-limited model must be in cooldown")
+	}
+	if acquired, ok := s.AcquireTextToken(nil, "gpt-4.1", ""); !ok || acquired.ID != account.ID {
+		t.Fatalf("unaffected model acquire=%+v ok=%v", acquired, ok)
+	}
+	cooldowns, ok := s.items["token-a"].Extra[textCooldownExtraKey].(map[string]any)
+	if !ok {
+		t.Fatal("text cooldown was not persisted in account extra")
+	}
+	cooldowns[textCooldownKey("gpt-5")].(map[string]any)["until"] = time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
+	if items := s.List(); len(items) != 1 || len(items[0].TextCooldowns) != 0 {
+		t.Fatalf("expired cooldown must not be projected: %+v", items)
+	}
+	if acquired, ok := s.AcquireTextToken(nil, "gpt-5", ""); !ok || acquired.ID != account.ID {
+		t.Fatalf("expired cooldown acquire=%+v ok=%v", acquired, ok)
+	}
+	if _, ok := s.RecordTextResult(account.ID, "gpt-5", false, "timeout"); !ok {
+		t.Fatal("record timeout result")
+	}
+	if _, ok := s.RecordTextResult(account.ID, "gpt-5", true, ""); !ok {
+		t.Fatal("record success result")
+	}
+	if _, exists := s.items["token-a"].Extra[textCooldownExtraKey]; exists {
+		t.Fatal("successful text result must clear its model cooldown")
 	}
 }

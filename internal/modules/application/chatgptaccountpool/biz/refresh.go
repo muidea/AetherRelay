@@ -256,24 +256,73 @@ func (s *Account) refreshOAuthTokens() {
 		if s.stopping.Load() {
 			return
 		}
-		refreshed, refreshErr := s.oauth.Refresh(s.shutdownCtx, oauth.Request{
-			RefreshToken: candidate.RefreshToken,
-		})
-		if refreshErr != nil {
-			if s.stopping.Load() {
-				return
-			}
-			_ = s.store.RecordTokenRefreshError(candidate.AccessToken, refreshErr.Error())
-			continue
-		}
-		if s.stopping.Load() {
-			return
-		}
-		if _, _, err := s.store.ApplyRefreshedToken(candidate.AccessToken, refreshed.AccessToken, refreshed.RefreshToken, refreshed.IDToken); err != nil {
-			if s.stopping.Load() {
-				return
-			}
-			_ = s.store.RecordTokenRefreshError(candidate.AccessToken, err.Error())
-		}
+		// Scheduled and request-driven renewal must share the same per-account
+		// flight. Otherwise an expired token under traffic can consume a
+		// rotating refresh token twice concurrently.
+		_, _ = s.refreshTextToken(candidate.AccessToken)
 	}
+}
+
+// refreshTextToken is the request-driven counterpart of the scheduled OAuth
+// renewal loop. A single invalid-token result may be an expired access token,
+// so the caller gets one safe refresh-and-retry opportunity before the account
+// is marked abnormal. Refresh credentials remain in Store and never cross the
+// account-pool EventHub boundary.
+func (s *Account) refreshTextToken(accessToken string) (events.RefreshTextTokenResult, error) {
+	credential, found := s.store.OAuthRefreshCredentialFor(accessToken)
+	if !found {
+		return events.RefreshTextTokenResult{}, fmt.Errorf("oauth refresh credential is unavailable")
+	}
+	if current, ok := s.store.ViewForAccessToken(accessToken); ok && credential.AccessToken != strings.TrimSpace(accessToken) {
+		// Another in-flight request already rotated this credential. Reuse the
+		// successor rather than spending the newly rotated refresh token again.
+		return events.RefreshTextTokenResult{AccessToken: current.AccessToken, Account: current, Refreshed: true}, nil
+	}
+
+	s.textRefreshMu.Lock()
+	if flight := s.textRefreshes[credential.AccessToken]; flight != nil {
+		s.textRefreshMu.Unlock()
+		<-flight.done
+		return flight.result, flight.err
+	}
+	flight := &textRefreshFlight{done: make(chan struct{})}
+	s.textRefreshes[credential.AccessToken] = flight
+	s.textRefreshMu.Unlock()
+
+	result, err := s.refreshTextTokenOnce(credential)
+
+	s.textRefreshMu.Lock()
+	flight.result, flight.err = result, err
+	delete(s.textRefreshes, credential.AccessToken)
+	close(flight.done)
+	s.textRefreshMu.Unlock()
+	return result, err
+}
+
+func (s *Account) refreshTextTokenOnce(credential store.OAuthRefreshCredential) (events.RefreshTextTokenResult, error) {
+	if s.oauth == nil || s.stopping.Load() {
+		return events.RefreshTextTokenResult{}, fmt.Errorf("oauth refresh is unavailable")
+	}
+	refreshed, err := s.oauth.Refresh(s.shutdownCtx, oauth.Request{RefreshToken: credential.RefreshToken})
+	if err != nil {
+		if !s.stopping.Load() {
+			_ = s.store.RecordTokenRefreshError(credential.AccessToken, err.Error())
+		}
+		return events.RefreshTextTokenResult{}, fmt.Errorf("refresh oauth access token: %w", err)
+	}
+	if s.stopping.Load() {
+		return events.RefreshTextTokenResult{}, context.Canceled
+	}
+	accessToken, _, err := s.store.ApplyRefreshedToken(credential.AccessToken, refreshed.AccessToken, refreshed.RefreshToken, refreshed.IDToken)
+	if err != nil {
+		if !s.stopping.Load() {
+			_ = s.store.RecordTokenRefreshError(credential.AccessToken, err.Error())
+		}
+		return events.RefreshTextTokenResult{}, fmt.Errorf("apply refreshed oauth access token: %w", err)
+	}
+	account, found := s.store.ViewForAccessToken(accessToken)
+	if !found {
+		return events.RefreshTextTokenResult{}, fmt.Errorf("refreshed account not found")
+	}
+	return events.RefreshTextTokenResult{AccessToken: accessToken, Account: account, Refreshed: true}, nil
 }

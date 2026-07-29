@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,76 +16,114 @@ import (
 	"github.com/muidea/magicCommon/event"
 )
 
-func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
-	token, err := s.acquireChatGPTTextToken(ctx, request.Model)
+func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (out chatgpttext.Result, err error) {
+	account, err := s.acquireChatGPTTextToken(ctx, request.Model)
 	if err != nil {
 		slog.Warn("chatgpt text execution failed", "stage", "acquire_account")
 		return chatgpttext.Result{}, err
 	}
+	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
+
+	out, err = s.completeChatGPTTextOnce(ctx, account.AccessToken, request)
+	if !isInvalidChatGPTTextFailure(err) {
+		return out, err
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return out, mapContextError(contextErr)
+	}
+	refreshedToken, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
+	if refreshErr != nil {
+		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
+		return out, err
+	}
+	out, err = s.completeChatGPTTextOnce(ctx, refreshedToken, request)
+	if isInvalidChatGPTTextFailure(err) {
+		s.removeInvalidChatGPTTextToken(ctx, refreshedToken)
+	}
+	return out, err
+}
+
+func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (out chatgpttext.Result, err error) {
+	account, err := s.acquireChatGPTTextToken(ctx, request.Model)
+	if err != nil {
+		return chatgpttext.Result{}, err
+	}
+	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
+
+	out, emitted, err := s.streamChatGPTTextOnce(ctx, account.AccessToken, request, emit)
+	if !isInvalidChatGPTTextFailure(err) || emitted {
+		return out, err
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return out, mapContextError(contextErr)
+	}
+	refreshedToken, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
+	if refreshErr != nil {
+		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
+		return out, err
+	}
+	out, _, err = s.streamChatGPTTextOnce(ctx, refreshedToken, request, emit)
+	if isInvalidChatGPTTextFailure(err) {
+		s.removeInvalidChatGPTTextToken(ctx, refreshedToken)
+	}
+	return out, err
+}
+
+func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token string, request chatgpttext.Request) (chatgpttext.Result, error) {
 	value, eventErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompleteText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteTextCommand{
 		AccessToken: token, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
 	})).Get()
 	if eventErr != nil {
 		partial, isPartial := value.(upevents.CompleteTextResult)
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_complete", "event_error_code", eventErr.Code, "has_partial_result", value != nil, "partial_result_type_match", isPartial)
-		result := chatgpttext.Result{}
+		out := chatgpttext.Result{}
 		if isPartial {
-			result = chatgpttext.Result{
-				ConversationID: partial.ConversationID,
-				ActualModel:    partial.ActualModel,
-				Text:           partial.Text,
-			}
+			out = chatgpttext.Result{ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text}
 			if partial.ErrorClass != "" {
-				if partial.ErrorClass == upevents.ErrClassInvalidToken {
-					s.removeInvalidChatGPTTextToken(ctx, token)
-				}
-				return result, mapUpstreamTextFailure(partial.ErrorClass, eventErr)
+				return out, mapUpstreamTextFailure(partial.ErrorClass, eventErr)
 			}
 		}
-		return result, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text completion failed"))
+		return out, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text completion failed"))
 	}
 	completed, ok := value.(upevents.CompleteTextResult)
 	if !ok {
 		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text completion result"))
 	}
-	return chatgpttext.Result{
-		ConversationID: completed.ConversationID,
-		ActualModel:    completed.ActualModel,
-		Text:           completed.Text,
-	}, nil
+	out := chatgpttext.Result{ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text}
+	if completed.ErrorClass != "" {
+		return out, mapUpstreamTextFailure(completed.ErrorClass, fmt.Errorf("chatgpt text completion failed"))
+	}
+	return out, nil
 }
 
-func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
-	token, err := s.acquireChatGPTTextToken(ctx, request.Model)
-	if err != nil {
-		return chatgpttext.Result{}, err
-	}
+func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token string, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, bool, error) {
 	value, startErr := s.SendEvent(event.NewEventWithContext(upevents.TopicStartText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartTextCommand{
 		AccessToken: token, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
 	})).Get()
 	if startErr != nil {
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_start_stream", "event_error_code", startErr.Code)
-		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text stream failed"))
+		return chatgpttext.Result{}, false, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text stream failed"))
 	}
 	started, ok := value.(upevents.StartTextResult)
 	if !ok || started.StreamID == "" {
-		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream result"))
+		return chatgpttext.Result{}, false, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream result"))
 	}
 	defer s.SendEvent(event.NewEvent(upevents.TopicCancelText, s.ID(), upcommon.UnitID, nil, upevents.CancelTextCommand{StreamID: started.StreamID}))
 	var result chatgpttext.Result
 	var builder strings.Builder
+	emitted := false
 	for {
 		if err := ctx.Err(); err != nil {
-			return result, mapContextError(err)
+			return result, emitted, mapContextError(err)
 		}
 		value, pullErr := s.SendEvent(event.NewEventWithContext(upevents.TopicPullText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.PullTextCommand{StreamID: started.StreamID, TimeoutMillis: 1000})).Get()
 		if pullErr != nil {
 			slog.Warn("chatgpt text execution failed", "stage", "upstream_pull_stream", "event_error_code", pullErr.Code)
-			return result, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text stream failed"))
+			return result, emitted, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text stream failed"))
 		}
 		update, ok := value.(upevents.PullTextResult)
 		if !ok {
-			return result, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream update"))
+			return result, emitted, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream update"))
 		}
 		if update.ConversationID != "" {
 			result.ConversationID = update.ConversationID
@@ -93,23 +132,21 @@ func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit fu
 			result.ActualModel = update.ActualModel
 		}
 		if update.Delta != "" {
+			emitted = true
 			builder.WriteString(update.Delta)
 			result.Text = builder.String()
 			if emit != nil {
 				if err := emit(chatgpttext.Delta{Text: update.Delta, ActualModel: update.ActualModel}); err != nil {
-					return result, mapEmitError(err)
+					return result, emitted, mapEmitError(err)
 				}
 			}
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
-				if update.ErrorClass == upevents.ErrClassInvalidToken {
-					s.removeInvalidChatGPTTextToken(ctx, token)
-				}
-				return result, mapUpstreamTextFailure(update.ErrorClass, fmt.Errorf("chatgpt text stream failed"))
+				return result, emitted, mapUpstreamTextFailure(update.ErrorClass, fmt.Errorf("chatgpt text stream failed"))
 			}
 			result.Text = builder.String()
-			return result, nil
+			return result, emitted, nil
 		}
 	}
 }
@@ -121,21 +158,70 @@ func (s *Proxy) removeInvalidChatGPTTextToken(ctx context.Context, token string)
 	if strings.TrimSpace(token) == "" {
 		return
 	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRemoveInvalid, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RemoveInvalidCommand{AccessToken: token, Event: "chat_completion"})).Get()
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRemoveInvalid, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RemoveInvalidCommand{AccessToken: token, Event: "chat_completion"})).Get()
 }
 
-func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (string, error) {
+func (s *Proxy) refreshChatGPTTextToken(ctx context.Context, token string) (string, error) {
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("chatgpt access token is unavailable")
+	}
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RefreshTextTokenCommand{AccessToken: token})).Get()
+	if err != nil {
+		return "", fmt.Errorf("refresh chatgpt text token: %w", err)
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok || strings.TrimSpace(refreshed.AccessToken) == "" {
+		return "", fmt.Errorf("invalid refreshed chatgpt text token result")
+	}
+	return refreshed.AccessToken, nil
+}
+
+func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (accevents.AcquireTextTokenResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireTextTokenCommand{
 		Model: model, Operation: accevents.ModelOperationChatCompletions,
 	})).Get()
 	if err != nil {
-		return "", chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
+		return accevents.AcquireTextTokenResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
 	}
 	account, ok := value.(accevents.AcquireTextTokenResult)
 	if !ok || strings.TrimSpace(account.AccessToken) == "" {
-		return "", chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
+		return accevents.AcquireTextTokenResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
 	}
-	return account.AccessToken, nil
+	return account, nil
+}
+
+// recordChatGPTTextResult records the single final account outcome. Local
+// client disconnects, response-writer errors and request-content rejections do
+// not describe account health and therefore must not trigger account cooling.
+func (s *Proxy) recordChatGPTTextResult(ctx context.Context, accountID, model string, executionErr error) {
+	if strings.TrimSpace(accountID) == "" {
+		return
+	}
+	success := executionErr == nil
+	errorClass := ""
+	if !success {
+		var failure *chatgptfail.Failure
+		if !errors.As(executionErr, &failure) {
+			return
+		}
+		switch failure.Kind {
+		case chatgptfail.KindInvalidToken, chatgptfail.KindRateLimit, chatgptfail.KindTLS, chatgptfail.KindTimeout, chatgptfail.KindUpstream:
+			errorClass = string(failure.Kind)
+		default:
+			return
+		}
+	}
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordTextResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordTextResultCommand{
+		AccountID:  accountID,
+		Model:      model,
+		Success:    success,
+		ErrorClass: errorClass,
+	})).Get()
+}
+
+func isInvalidChatGPTTextFailure(err error) bool {
+	var failure *chatgptfail.Failure
+	return errors.As(err, &failure) && failure.Kind == chatgptfail.KindInvalidToken
 }
 
 func toUpstreamMessages(messages []chatgpttext.Message) []upevents.TextMessage {

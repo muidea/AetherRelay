@@ -51,6 +51,7 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]acce
 		Success:       9,
 		Fail:          2,
 		CreatedAt:     "2026-07-26T01:02:03Z",
+		TextCooldowns: []accevents.TextCooldownView{{Model: "gpt-5", Until: "2026-07-27T01:03:03Z", ErrorClass: "rate_limit"}},
 		AccessToken:   "token-very-secret",
 		Proxy:         "http://private.invalid",
 	}}, nil
@@ -180,7 +181,7 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	if listRecorder.Code != http.StatusOK || strings.Contains(body, "very-secret") || strings.Contains(body, "private.invalid") {
 		t.Fatalf("list=%d %s", listRecorder.Code, listRecorder.Body.String())
 	}
-	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`} {
+	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`, `"text_cooldowns":[{"model":"gpt-5","until":"2026-07-27T01:03:03Z","error_class":"rate_limit"}]`} {
 		if !strings.Contains(body, field) {
 			t.Fatalf("list response missing account operations field %q: %s", field, body)
 		}

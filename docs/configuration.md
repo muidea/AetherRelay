@@ -163,7 +163,7 @@ ChatGPT Web 管理页依赖对应运行时组件（账号池 / 图片任务 / �
 
 `chatgpt_web.enabled` 在进程启动时决定 ChatGPT Web 的运行组件是否装配。关闭时，`/api/chatgpt/**` 返回 `503 chatgpt web is not enabled`；不能只在运行中修改 YAML 后立即使用，启用或关闭该能力后必须重启 ai-proxy。
 
-ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
+ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。列表会投影仍生效的文本模型冷却（模型、错误类别、恢复时间），供管理页只读展示；冷却窗口目前固定为 60 秒，不提供 YAML 或 Web 调参。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
 
 ```text
 POST   <base>/api/chatgpt/accounts                 # {"tokens":[...],"source_type":"web"}
