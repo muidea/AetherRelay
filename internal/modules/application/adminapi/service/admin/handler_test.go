@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,13 @@ type testRuntime struct {
 	mu      sync.Mutex
 	cfg     config.Config
 	updates int
+}
+
+type rejectingRuntime struct{ cfg config.Config }
+
+func (r *rejectingRuntime) ConfigSnapshot() config.Config { return r.cfg }
+func (r *rejectingRuntime) UpdateConfig(config.Config) error {
+	return errors.New("activation rejected")
 }
 
 func (r *testRuntime) ConfigSnapshot() config.Config {
@@ -294,6 +302,107 @@ func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
 	provider := runtime.cfg.Providers["openai"]
 	if provider.BaseURL != "https://gateway.example.com/v1" || provider.APIKey != "secret-value" {
 		t.Fatalf("runtime provider = %+v", provider)
+	}
+}
+
+func TestHandlerManagesAdminDefaultLanguage(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+
+	get := httptest.NewRequest(http.MethodGet, "/admin/api/admin/preferences", nil)
+	get.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, get)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"default_language":"zh-CN"`) || !strings.Contains(rec.Body.String(), `"writable":true`) {
+		t.Fatalf("preferences = %d %s", rec.Code, rec.Body.String())
+	}
+
+	put := httptest.NewRequest(http.MethodPut, "/admin/api/admin/preferences", strings.NewReader(`{"default_language":"en-US"}`))
+	put.RemoteAddr = "127.0.0.1:1234"
+	put.Header.Set("Content-Type", "application/json")
+	put.Header.Set("X-AI-Proxy-Admin", "1")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, put)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"default_language":"en-US"`) {
+		t.Fatalf("update preferences = %d %s", rec.Code, rec.Body.String())
+	}
+	if runtime.ConfigSnapshot().AdminAuth.DefaultLanguage != "en-US" {
+		t.Fatalf("runtime default language = %q", runtime.ConfigSnapshot().AdminAuth.DefaultLanguage)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "admin_default_language: \"en-US\"") {
+		t.Fatalf("config did not persist default language:\n%s", raw)
+	}
+}
+
+func TestHandlerRejectsUnsupportedAdminDefaultLanguageWithoutWriting(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(path, &testRuntime{cfg: cfg})
+	req := httptest.NewRequest(http.MethodPut, "/admin/api/admin/preferences", strings.NewReader(`{"default_language":"fr-FR"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("unsupported language replaced config file")
+	}
+}
+
+func TestHandlerDoesNotPersistPreferencesWhenActivationFails(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &rejectingRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+	req := httptest.NewRequest(http.MethodPut, "/admin/api/admin/preferences", strings.NewReader(`{"default_language":"en-US"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("activation failure replaced config file")
+	}
+	if runtime.ConfigSnapshot().AdminAuth.DefaultLanguage != config.DefaultAdminLanguage {
+		t.Fatalf("runtime default language = %q", runtime.ConfigSnapshot().AdminAuth.DefaultLanguage)
 	}
 }
 

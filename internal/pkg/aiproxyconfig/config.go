@@ -27,6 +27,7 @@ const (
 
 	// Admin 登录安全默认值与边界。
 	DefaultAdminBasePath                 = "/admin"
+	DefaultAdminLanguage                 = "zh-CN"
 	DefaultAdminSessionTTLSeconds        = 28800
 	MinAdminSessionTTLSeconds            = 300
 	MaxAdminSessionTTLSeconds            = 86400
@@ -104,6 +105,9 @@ type AdminAuthConfig struct {
 	Enabled bool
 	// BasePath 是 Admin 页面与 API 前缀,默认 /admin。
 	BasePath string
+	// DefaultLanguage 是 Admin Web 的实例默认显示语言。仅支持 zh-CN 与 en-US。
+	// 浏览器或 URL 的临时选择可覆盖此值，不影响代理数据面行为。
+	DefaultLanguage string
 	// Username 是单管理员账号,区分大小写。
 	Username string
 	// PasswordHash 是 Argon2id PHC 字符串;禁止明文。
@@ -237,6 +241,7 @@ func Load(path string) (Config, error) {
 		AdminAuth: AdminAuthConfig{
 			Enabled:             false,
 			BasePath:            DefaultAdminBasePath,
+			DefaultLanguage:     DefaultAdminLanguage,
 			SessionCookieSecure: false,
 			SessionTTLSeconds:   DefaultAdminSessionTTLSeconds,
 		},
@@ -502,6 +507,8 @@ func setTopLevel(cfg *Config, key, value string) error {
 		cfg.AdminAuth.Enabled = b
 	case "admin_base_path":
 		cfg.AdminAuth.BasePath = strings.TrimSpace(value)
+	case "admin_default_language":
+		cfg.AdminAuth.DefaultLanguage = strings.TrimSpace(value)
 	case "admin_username":
 		// 账号区分大小写；仅 trim 首尾空白以便配置友好。
 		cfg.AdminAuth.Username = strings.TrimSpace(value)

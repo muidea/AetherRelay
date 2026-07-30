@@ -507,9 +507,13 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// loginPageHTML 是最小登录页;basePath 以安全 JSON 字面量注入。
-func loginPageHTML(basePath string) []byte {
+// loginPageHTML 是最小登录页;basePath 与实例默认语言以安全 JSON 字面量注入。
+func loginPageHTML(basePath, defaultLanguage string) []byte {
 	bp, _ := json.Marshal(basePath)
+	if strings.TrimSpace(defaultLanguage) == "" {
+		defaultLanguage = config.DefaultAdminLanguage
+	}
+	language, _ := json.Marshal(defaultLanguage)
 	const tpl = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -529,18 +533,31 @@ button{width:100%;height:36px;border:0;border-radius:6px;background:var(--primar
 </head>
 <body>
 <div class="card">
-  <h1>AI Proxy 管理登录</h1>
-  <p>请输入管理员账号与密码</p>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><label for="language" style="font-size:12px;margin:0">语言 <select id="language" style="width:auto;height:28px;padding:2px 5px"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label></div>
+  <h1 data-i18n="title">AI Proxy 管理登录</h1>
+  <p data-i18n="subtitle">请输入管理员账号与密码</p>
   <form id="f">
-    <div class="field"><label for="u">用户名</label><input id="u" name="username" autocomplete="username" required></div>
-    <div class="field"><label for="p">密码</label><input id="p" name="password" type="password" autocomplete="current-password" required></div>
-    <button id="btn" type="submit">登录</button>
+    <div class="field"><label for="u" data-i18n="username">用户名</label><input id="u" name="username" autocomplete="username" required></div>
+    <div class="field"><label for="p" data-i18n="password">密码</label><input id="p" name="password" type="password" autocomplete="current-password" required></div>
+    <button id="btn" type="submit" data-i18n="login">登录</button>
     <div class="err" id="err"></div>
   </form>
 </div>
 <script>
 window.__AI_PROXY_ADMIN_BASE_PATH__=BASE_PATH_JSON;
+window.__AI_PROXY_ADMIN_DEFAULT_LANGUAGE__=DEFAULT_LANGUAGE_JSON;
 const base=window.__AI_PROXY_ADMIN_BASE_PATH__||"/admin";
+const supported=new Set(["zh-CN","en-US"]),cookieName="ai_proxy_admin_lang";
+const zh={title:"AI Proxy 管理登录",subtitle:"请输入管理员账号与密码",username:"用户名",password:"密码",login:"登录",language:"语言"};
+const en={title:"Sign in to AI Proxy",subtitle:"Enter the administrator username and password",username:"Username",password:"Password",login:"Sign in",language:"Language"};
+function validLanguage(value){return supported.has(String(value||"").trim())?String(value).trim():""}
+function cookieLanguage(){const found=document.cookie.split(";").map(v=>v.trim()).find(v=>v.startsWith(cookieName+"="));return found?validLanguage(decodeURIComponent(found.slice(cookieName.length+1))):""}
+function urlLanguage(){return validLanguage(new URLSearchParams(location.search).get("lang"))}
+function browserLanguage(){for(const value of [...(navigator.languages||[]),navigator.language]){if(String(value||"").toLowerCase().startsWith("en"))return "en-US";if(String(value||"").toLowerCase().startsWith("zh"))return "zh-CN"}return "zh-CN"}
+let locale=urlLanguage()||cookieLanguage()||validLanguage(window.__AI_PROXY_ADMIN_DEFAULT_LANGUAGE__)||browserLanguage();
+function renderLanguage(){const dict=locale==="en-US"?en:zh;document.documentElement.lang=locale;document.title=locale==="en-US"?"AI Proxy · Sign in":"AI Proxy · 登录";document.querySelectorAll("[data-i18n]").forEach(el=>el.textContent=dict[el.dataset.i18n]||"");document.querySelector("label[for=language]").firstChild.nodeValue=dict.language+" ";document.getElementById("language").value=locale;}
+document.getElementById("language").onchange=e=>{const selected=validLanguage(e.target.value)||"zh-CN";document.cookie=cookieName+"="+encodeURIComponent(selected)+"; Path="+base+"; SameSite=Strict; Max-Age=31536000";locale=urlLanguage()||selected;renderLanguage();};
+renderLanguage();
 const errEl=document.getElementById("err");
 const btn=document.getElementById("btn");
 let retryTimer=null;
@@ -553,19 +570,20 @@ document.getElementById("f").onsubmit=async(e)=>{
     if(r.status===429){
       const ra=Number(r.headers.get("Retry-After")||"0");
       let left=Number.isFinite(ra)&&ra>0?Math.ceil(ra):900;
-      showErr("尝试过多，请 "+left+" 秒后重试");
+      showErr(locale==="en-US"?"Too many attempts. Try again in "+left+" seconds.":"尝试过多，请 "+left+" 秒后重试");
       if(retryTimer)clearInterval(retryTimer);
-      retryTimer=setInterval(()=>{left--;if(left<=0){clearInterval(retryTimer);showErr("");btn.disabled=false}else{showErr("尝试过多，请 "+left+" 秒后重试")}},1000);
+      retryTimer=setInterval(()=>{left--;if(left<=0){clearInterval(retryTimer);showErr("");btn.disabled=false}else{showErr(locale==="en-US"?"Too many attempts. Try again in "+left+" seconds.":"尝试过多，请 "+left+" 秒后重试")}},1000);
       return;
     }
-    if(!r.ok){showErr("用户名或密码错误");btn.disabled=false;return}
+    if(!r.ok){showErr(locale==="en-US"?"Invalid username or password":"用户名或密码错误");btn.disabled=false;return}
     location.replace(base+"/");
-  }catch(err){showErr("网络错误，请稍后重试");btn.disabled=false}
+  }catch(err){showErr(locale==="en-US"?"Network error. Try again later.":"网络错误，请稍后重试");btn.disabled=false}
 };
 </script>
 </body>
 </html>`
-	return []byte(strings.Replace(tpl, "BASE_PATH_JSON", string(bp), 1))
+	page := strings.Replace(tpl, "BASE_PATH_JSON", string(bp), 1)
+	return []byte(strings.Replace(page, "DEFAULT_LANGUAGE_JSON", string(language), 1))
 }
 
 func (h *Handler) serveLoginPage(w http.ResponseWriter, r *http.Request) {
@@ -588,5 +606,9 @@ func (h *Handler) serveLoginPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = w.Write(loginPageHTML(h.adminBasePath()))
+	defaultLanguage := config.DefaultAdminLanguage
+	if h.runtime != nil {
+		defaultLanguage = configuredAdminLanguage(h.runtime.ConfigSnapshot())
+	}
+	_, _ = w.Write(loginPageHTML(h.adminBasePath(), defaultLanguage))
 }

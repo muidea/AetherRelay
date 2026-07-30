@@ -359,6 +359,16 @@ func TestAuthIndexInjectsBasePath(t *testing.T) {
 	}
 }
 
+func TestLoginPageInjectsInstanceDefaultLanguage(t *testing.T) {
+	page := string(loginPageHTML("/ops/ai-proxy", "en-US"))
+	if !strings.Contains(page, `window.__AI_PROXY_ADMIN_DEFAULT_LANGUAGE__="en-US"`) {
+		t.Fatalf("missing default language injection: %s", page)
+	}
+	if !strings.Contains(page, `const en={title:"Sign in to AI Proxy"`) {
+		t.Fatal("login page is missing English translations")
+	}
+}
+
 func TestAuthOldAdminPathNotFoundWhenCustomBase(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)

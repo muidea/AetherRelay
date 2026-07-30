@@ -87,6 +87,7 @@ client_api_keys:
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
 | `admin_auth_enabled` / `AI_PROXY_ADMIN_AUTH_ENABLED` | Admin 登录开关，默认 `false`（保持 loopback-only）。 |
 | `admin_base_path` / `AI_PROXY_ADMIN_BASE_PATH` | Admin 页面与 API 前缀，默认 `/admin`；启动期路由，变更需重启。 |
+| `admin_default_language` | Admin Web 的实例默认语言，仅 `zh-CN` 或 `en-US`，默认 `zh-CN`；可在管理页热更新。 |
 | `admin_username` / `AI_PROXY_ADMIN_USERNAME` | 单管理员账号（开启认证时必填，区分大小写）。 |
 | `admin_password_hash` / `AI_PROXY_ADMIN_PASSWORD_HASH` | Argon2id PHC 哈希（开启认证时必填；禁止明文）。 |
 | `admin_session_cookie_secure` / `AI_PROXY_ADMIN_SESSION_COOKIE_SECURE` | 会话 Cookie 是否仅随 HTTPS 请求发送，默认 `false`。 |
@@ -175,6 +176,8 @@ codex_oauth:
 
 访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」提供图片任务、图片库与历史对话。Codex 账号表展示每个账号的模型缓存、失效时间或发现退避状态。相关管理 API 位于该前缀下的 `/api/chatgpt/**` 与 `/api/codex/**`。
 
+管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
+
 Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。
 
 ChatGPT Web 管理页依赖对应运行时组件（账号池 / 图片任务 / 图片存储）已装配；若组件未启用，页面会显示不可用状态而不是空数据。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。账号导出、OAuth 回调与完整 token 不会写入浏览器持久化存储。
@@ -219,6 +222,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 server:
   admin_auth_enabled: true
   admin_base_path: /ops/ai-proxy   # 可选；默认 /admin；变更需重启
+  admin_default_language: zh-CN    # 可选；zh-CN 或 en-US，可在管理页热更新
   admin_username: ops-admin
   admin_password_hash: ${AI_PROXY_ADMIN_PASSWORD_HASH}
   admin_session_cookie_secure: true # 可选；开启后仅 HTTPS 可携带会话 Cookie

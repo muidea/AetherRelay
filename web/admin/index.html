@@ -9,7 +9,7 @@
     *{box-sizing:border-box}body{margin:0;color:var(--text);background:var(--bg);font:14px/1.5715 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
     button,input,select,textarea{font:inherit}.shell{min-height:100vh}.header{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 32px;position:sticky;top:0;z-index:20;gap:24px}.brand{display:flex;align-items:center;gap:12px}.logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#1677ff,#69b1ff);display:grid;place-items:center;color:#fff;font-weight:700;box-shadow:0 4px 12px rgba(22,119,255,.28)}.brand h1{font-size:18px;margin:0}.brand small{display:block;color:var(--muted);font-size:12px;font-weight:400}
     .nav{display:flex;gap:4px;margin-left:18px}.nav a{padding:6px 14px;border-radius:6px;color:#595959;text-decoration:none}.nav a.active,.nav a:hover{color:var(--primary);background:#e6f4ff}
-    .header-status{margin-left:auto;display:flex;align-items:center;gap:8px;color:#595959}.dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(82,196,26,.12)}.dot.bad{background:var(--danger);box-shadow:0 0 0 3px rgba(255,77,79,.12)}
+    .header-status{margin-left:auto;display:flex;align-items:center;gap:8px;color:#595959}.language-control{display:inline-flex;align-items:center;gap:5px;color:#595959;font-size:12px}.language-control .control{width:auto;min-height:30px;padding:3px 7px}.dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(82,196,26,.12)}.dot.bad{background:var(--danger);box-shadow:0 0 0 3px rgba(255,77,79,.12)}
     main{width:100%;padding:28px 32px 48px}.hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:22px}.hero h2{font-size:24px;line-height:1.35;margin:0 0 6px}.hero p{margin:0;color:#666}.btn{height:32px;padding:4px 15px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:.2s}.btn:hover{color:var(--primary);border-color:var(--primary)}.btn-primary{color:#fff;background:var(--primary);border-color:var(--primary)}.btn-primary:hover{color:#fff;background:var(--primary-hover)}.btn:disabled{cursor:not-allowed;opacity:.55}.icon{font-size:18px;line-height:1}
     .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:18px}.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px}.stat-label{color:#666;margin-bottom:7px}.stat-value{font-size:28px;line-height:1.2;font-weight:600}.stat-hint{font-size:12px;color:var(--muted);margin-left:8px;font-weight:400}
     .card{background:var(--card);border:1px solid var(--line);border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,.02);overflow:hidden;margin-bottom:16px}.toolbar{min-height:44px;padding:6px 12px;display:flex;align-items:center;border-bottom:1px solid var(--line);gap:8px;flex-wrap:wrap}.toolbar-title{font-size:15px;font-weight:600}.toolbar-meta{color:var(--muted)}.search{margin-left:auto;width:220px;height:30px;border:1px solid var(--border);border-radius:5px;padding:3px 9px;outline:none}.search:hover,.search:focus{border-color:var(--primary)}
@@ -76,7 +76,7 @@
       <a href="#/account-pools/chatgptweb" id="navAccountPools">账号池</a>
       <a href="#/features/tasks" id="navFeatures">功能集</a>
     </nav>
-    <div class="header-status"><i class="dot" id="storeDot"></i><span id="storeLabel">本地管理模式</span><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
+    <div class="header-status"><i class="dot" id="storeDot"></i><span id="storeLabel">本地管理模式</span><label class="language-control" for="languageSelect">语言<select id="languageSelect" class="control" aria-label="显示语言"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label><button id="setDefaultLanguage" class="btn" type="button" title="设为实例默认语言">设为默认</button><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
   </header>
   <main>
     <section id="panelProviders" class="panel active">
@@ -495,7 +495,25 @@ function authHeaders(extra={}){
 function goLogin(){authState.csrf="";authState.username="";location.replace(ADMIN_BASE+"/login");}
 
 const capabilityOptions={openai:["chat_completions","responses","completions","embeddings"],anthropic:["messages"]};
-const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",poolSub:"chatgptweb",featureSub:"tasks",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
+const supportedLocales=new Set(["zh-CN","en-US"]);
+const languageCookieName="ai_proxy_admin_lang";
+// Keep stable Chinese source keys in one small runtime dictionary. Static DOM
+// is localized through the same dictionary, while dynamic labels use t().
+const enUS={
+  "管理控制台":"Administration console","Provider 管理":"Providers","客户端 Key":"Client keys","使用统计":"Usage","账号池":"Account pools","功能集":"Features","本地管理模式":"Local administration","退出登录":"Log out","语言":"Language","显示语言":"Display language","简体中文":"Simplified Chinese","设为默认":"Set as default","设为实例默认语言":"Set as the instance default language",
+  "新增 Provider":"Add provider","当前实例没有关联可写配置文件，只能查看 Provider。":"This instance has no writable configuration file; providers are read-only.","Provider 总数":"Providers","已启用":"Enabled","官方":"Official","第三方":"Third party","Provider 列表":"Provider list","搜索名称 / 来源 / 模型":"Search name, source, or model","正在加载配置…":"Loading configuration…",
+  "客户端 API Key":"Client API keys","创建、启停、轮换调用 ai-proxy 的客户端身份。明文 Key 仅在创建或轮换时显示一次。":"Create, enable, rotate, or disable identities that call ai-proxy. Plaintext keys are shown only when created or rotated.","＋ 新建 Key":"＋ New key","Key 列表":"Key list",
+  "基于 DuckDB 持久化明细的调用次数与 Token 汇总（UTC 日期）。":"Request and token totals from persisted DuckDB records (UTC).","今日":"Today","7天":"7 days","30天":"30 days","自定义":"Custom","刷新":"Refresh","导出 CSV":"Export CSV","全部 API Key":"All API keys","全部 Provider":"All providers","全部 Model":"All models","全部 Outcome":"All outcomes","精确与估算":"Exact and estimated","仅精确":"Exact only","仅估算":"Estimated only","开始时间（UTC）":"Start time (UTC)","结束时间（UTC）":"End time (UTC)","应用筛选":"Apply filters","调用次数":"Requests","总 Token":"Total tokens","输入 / 输出":"Input / output","成功率":"Success rate","调用次数趋势":"Request trend","Token 趋势（输入/输出）":"Token trend (input/output)","API Key 使用量汇总":"API key usage summary","最近调用明细":"Recent requests","加载更多":"Load more",
+  "集中管理 ChatGPT Web 与 Codex OAuth 账号。两类账号池的凭据、网络出口、刷新状态、冷却策略和模型目录相互隔离。":"Manage ChatGPT Web and Codex OAuth accounts. Credentials, network egress, refresh state, cooldown policies, and model catalogs are isolated between pools.","账号池类型":"Account pool type","提供图片任务、图片库和历史对话，用于提交任务、管理图片资产与查看服务端持久化的对话记录。":"Image tasks, image library, and conversation history for submitting work, managing assets, and viewing server-persisted conversations.","图片任务":"Image tasks","图片库":"Image library","历史对话":"Conversation history","临时对话":"Temporary chat",
+  "账号总数":"Accounts","正常 / 限流":"Normal / rate limited","异常 / 禁用":"Abnormal / disabled","可用配额合计":"Available quota","账号列表":"Account list","搜索脱敏邮箱":"Search masked email","全部状态":"All statuses","正常":"Normal","限流":"Rate limited","异常":"Abnormal","禁用":"Disabled","全部类型":"All types","刷新所选凭据":"Refresh selected credentials","导出所选账号":"Export selected accounts","删除所选账号":"Delete selected accounts","OAuth 导入":"OAuth import","导入 Token":"Import token","正在加载账号…":"Loading accounts…",
+  "首次使用时自动生成，可按需指定":"Generated on first use; specify one if needed","加载任务":"Load tasks","首次使用时生成浏览器专属的 owner_id。切换 owner_id 会清空当前列表并停止轮询。":"A browser-specific owner_id is generated on first use. Changing it clears the current list and stops polling.","提交图片任务":"Submit image task","文生图":"Text to image","图生图":"Image to image","重新生成":"Regenerate","可选":"Optional","例如 1024x1024":"For example, 1024x1024","提交任务":"Submit task","任务列表":"Task list","正在初始化 owner_id…":"Initializing owner_id…",
+  "图片数量":"Images","图片占用":"Image storage","磁盘已用 / 总量":"Disk used / total","磁盘剩余":"Disk free","开始日期":"Start date","结束日期":"End date","全部标签":"All tags","重新加载":"Reload","删除所选图片":"Delete selected images","正在加载图片…":"Loading images…","历史会话":"Conversations","新建":"New","尚未加载会话":"No conversations loaded","选择或创建对话":"Select or create a conversation","对话由服务端持久化，刷新页面后可恢复；内容不会保存到浏览器。":"Conversations are persisted on the server and restored after refresh; content is not stored in the browser.","复制全部":"Copy all","删除":"Delete","请从左侧选择对话，或创建新对话。":"Select a conversation on the left, or create one.","添加图片":"Add image","发送":"Send","停止生成":"Stop generation","创建对话":"Create conversation","模型":"Model","正在加载…":"Loading…","默认":"Default","取消":"Cancel","创建":"Create",
+  "名称":"Name","协议":"Protocol","留空则保留现有配置":"Leave empty to preserve the current setting","密钥不会从服务端回显。":"Secrets are never returned by the server.","模型匹配":"Model patterns","允许无认证上游":"Allow unauthenticated upstream","仅 loopback":"Loopback only","启用 Provider":"Enable provider","禁用后不参与路由":"Disabled providers are excluded from routing","保存并应用":"Save and apply","调用明细":"Request details","新建客户端 Key":"New client API key","创建后立即启用":"Enable immediately",
+  "内建":"Built-in","托管密钥":"Managed key","外部配置":"External configuration","已禁用":"Disabled","启用":"Enable","轮换":"Rotate","编辑":"Edit","检查":"Check","操作":"Actions","来源":"Source","可用性":"Availability","端点能力":"Endpoint capabilities","配置":"Configuration","暂无":"None","暂无数据":"No data","尚未配置客户端 Key":"No client API keys configured","尚未配置 Provider":"No providers configured","未找到匹配 Provider":"No matching providers","状态":"Status","调用":"Requests","成功/失败":"Success/failure","输入":"Input","输出":"Output","最后使用":"Last used","时间":"Time","开始时间":"Start time","结束时间":"End time","客户端端点":"Client endpoint","客户端协议":"Client protocol","上游协议":"Upstream protocol","上游端点":"Upstream endpoint","转换模式":"Conversion mode","错误代码":"Error code","总耗时 ms":"Total duration (ms)","上游耗时 ms":"Upstream duration (ms)","流式":"Streaming","估算":"Estimated","成功":"Success","失败":"Failed","信息":"Informational","重定向":"Redirect","客户端错误":"Client error","服务端错误":"Server error","待完成":"Pending","无记录 HTTP 状态":"No HTTP status recorded",
+  "待发送图片":"Pending image","移除图片":"Remove image","无预览":"No preview","选择":"Select","标签":"Tags","无标签":"No tags","预览":"Preview","关闭":"Close","保存":"Save","路径":"Path","复制":"Copy","已复制":"Copied","复制失败":"Copy failed","无可复制内容":"Nothing to copy","冷却中":"Cooling down","即将恢复":"Restoring soon","已到恢复时间":"Ready","超时":"Timed out","上游故障":"Upstream failure","临时故障":"Temporary failure","降级":"Degraded","不可用":"Unavailable","凭据异常":"Credential error","能力漂移":"Capability drift","待观测":"Awaiting observations","尚无成功请求":"No successful requests yet","等待首次发现":"Awaiting initial discovery","最近成功":"Last success","最近发现":"Last discovered","运行时内建":"Runtime built-in","API Key 已配置":"API key configured","本地无认证":"Local unauthenticated","未配置凭据":"Credentials not configured","检查结果":"Check result","Provider 检查成功":"Provider check succeeded","Provider 配置已保存并生效":"Provider configuration saved and activated","Provider 已启用":"Provider enabled","Provider 已禁用":"Provider disabled","Provider 已删除":"Provider deleted","内建 Provider 不可编辑":"Built-in providers cannot be edited","内建 Provider 不可切换":"Built-in providers cannot be toggled","内建 Provider 不可删除":"Built-in providers cannot be deleted","请选择模型":"Select a model","创建失败":"Create failed","发送失败":"Send failed","删除失败":"Delete failed","取消失败":"Cancel failed","读取会话失败":"Could not read conversation","加载更早消息失败":"Could not load earlier messages","无法加载对话":"Could not load conversation","历史对话当前不可用":"Conversation history is unavailable","暂无历史会话":"No conversation history","未命名会话":"Untitled conversation","暂无消息。发送首条消息以开始对话。":"No messages. Send the first message to start the conversation.","对话已创建":"Conversation created","对话已删除":"Conversation deleted","已发送取消请求":"Cancellation requested","请输入消息或添加图片附件":"Enter a message or add image attachments","每轮最多添加 4 张图片":"A turn supports at most 4 images","仅支持 PNG、JPEG、GIF、WebP 图片":"Only PNG, JPEG, GIF, and WebP images are supported","单轮图片总大小不能超过 20 MiB":"Total images per turn must not exceed 20 MiB","暂无可用模型":"No available models","无法加载模型":"Could not load models","图片任务已提交":"Image task submitted","已恢复轮询":"Polling resumed","图片任务已重新提交":"Image task resubmitted","标签已更新":"Tags updated","请先选择图片":"Select images first","图片删除正在进行中":"Image deletion is in progress","图片已删除":"Images deleted",
+  "查看并维护上游服务、模型路由模式和端点能力；来源按 Base URL 自动识别为内建 / 官方 / 第三方，保存后立即生效。":"View and maintain upstream services, model routing patterns, and endpoint capabilities. Source is identified from the base URL as built-in, official, or third party; changes apply immediately.","ChatGPT Web 的账号与功能服务。敏感凭据不会在页面展示，也不会保存到浏览器。":"ChatGPT Web account and feature services. Sensitive credentials are never displayed or saved in the browser.","ChatGPT Web 子页签":"ChatGPT Web tabs","ChatGPT Web 服务当前不可用。":"ChatGPT Web is currently unavailable.","此对话需要恢复：上一轮生成已中断，无法继续当前分支。请创建新对话。":"This conversation requires recovery: the previous generation was interrupted and this branch cannot continue. Create a new conversation.","输入消息，可附加图片。Enter 发送，Shift+Enter 换行":"Enter a message and optional images. Enter sends; Shift+Enter adds a line.","仅列出已验证且支持 chat_completions 的模型；research 专用模型不提供此功能。":"Only verified models that support chat_completions are listed; research-only models are unavailable here.","仅在首轮请求中发送":"Sent only with the first turn.","管理用于原生  的 Codex OAuth 账号，并查看账号级模型目录、凭据刷新与冷却状态。":"Manage Codex OAuth accounts for native Responses requests, including account model catalogs, credential refresh, and cooldown state.","Codex OAuth 服务当前不可用。":"Codex OAuth is currently unavailable.","正常账号":"Normal accounts","异常账号":"Abnormal accounts","禁用账号":"Disabled accounts","Codex 账号列表":"Codex accounts","搜索脱敏邮箱或本地 ID":"Search masked email or local ID","保存后名称会统一转为小写":"Names are normalized to lowercase when saved.","请立即复制 API Key":"Copy the API key now","关闭后无法再次查看。":"It cannot be viewed again after closing.","导入 Access Token":"Import access token","每行一个 access token，也可用逗号分隔；也支持 accounts.json":"One access token per line or comma-separated; accounts.json is also supported.","支持 token 文本，或 JSON 数组（字符串 / 含 access_token 的对象）。仅提交 access token 集合；不会显示或回显完整 token。":"Accepts token text or a JSON array (strings or objects with access_token). Only access tokens are submitted; full tokens are never displayed or echoed.","留空":"Leave empty","手工导入（web）":"Manual import (web)","编辑账号":"Edit account","账号 ID":"Account ID","出于安全设计，页面不展示或编辑 proxy / token。":"For security, proxies and tokens cannot be viewed or edited here.","点击开始后，在浏览器中完成上游登录，再把回调 URL/地址粘贴回来。授权 URL 与 session 仅保存在本页内存，不会写入浏览器存储。":"After starting, sign in upstream in the browser and paste the callback URL back here. The authorization URL and session remain only in this page's memory.","开始 OAuth":"Start OAuth","会话进行中。请完成上游登录后提交 callback；取消会销毁内存状态。":"Session in progress. Complete upstream sign-in and submit the callback; cancelling clears in-memory state.","粘贴完整 callback URL 或地址":"Paste the complete callback URL or address","完成导入":"Complete import","确认导出账号":"Confirm account export","将导出 ":"Exporting "," 个账号的敏感凭据（含 access/refresh token 等）。":" accounts' sensitive credentials (including access/refresh tokens).","导出内容不会在页面预览，也不会写入 localStorage/sessionStorage。下载完成后立即释放内存引用。":"Exported content is not previewed or stored in localStorage/sessionStorage. Memory references are released after download.","确认导出并下载":"Export and download","导入 Codex OAuth 凭据":"Import Codex OAuth credentials","仅接受 Codex OAuth 导出结构。凭据和代理仅在提交期间保留于页面内存，列表与后续页面都不会回显。":"Only Codex OAuth export data is accepted. Credentials and proxies remain in page memory only while submitting and are never echoed in later views.","账号代理（可选）":"Account proxy (optional)","此代理会同时用于授权换令牌、后续刷新和 Codex 请求，但不会在列表中显示。":"This proxy is used for authorization token exchange, later refreshes, and Codex requests; it is never shown in lists.","开始后会在新窗口打开 OpenAI 登录；请将最终的  完整 URL 粘贴回来。授权 URL 与会话不写入浏览器存储。":"Starting opens OpenAI sign-in in a new window; paste the final callback URL back here. Authorization URLs and sessions are not stored in the browser.","会话进行中。完成登录后提交 callback；关闭窗口会清除本页内存的会话引用。":"Session in progress. Submit the callback after sign-in; closing clears this page's in-memory session reference.","编辑标签":"Edit tags","tags（逗号或换行分隔）":"Tags (comma or newline separated)","预览图片":"Preview image"
+};
+const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],writable:false,editing:-1,query:"",tab:"providers",poolSub:"chatgptweb",featureSub:"tasks",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
@@ -506,7 +524,23 @@ const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
 const uniq=arr=>[...new Set(arr)];
-function compact(n){n=Number(n)||0;const a=Math.abs(n);if(a>=1e9)return(n/1e9).toFixed(2)+"B";if(a>=1e6)return(n/1e6).toFixed(2)+"M";if(a>=1e3)return(n/1e3).toFixed(1)+"K";return String(Math.round(n*100)/100)}
+function t(source,params={}){let value=state.locale==="en-US"?(enUS[source]||source):source;return value.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??""));}
+function normalizeLocale(value){return supportedLocales.has(String(value||"").trim())?String(value).trim():""}
+function readLanguageCookie(){const found=document.cookie.split(";").map(v=>v.trim()).find(v=>v.startsWith(languageCookieName+"="));return found?normalizeLocale(decodeURIComponent(found.slice(languageCookieName.length+1))):""}
+function urlLanguage(){return normalizeLocale(new URLSearchParams(location.search).get("lang"))}
+function browserLanguage(){for(const value of [...(navigator.languages||[]),navigator.language]){const normalized=String(value||"").toLowerCase();if(normalized.startsWith("en"))return "en-US";if(normalized.startsWith("zh"))return "zh-CN"}return ""}
+function resolveLocale(){const fromURL=urlLanguage();if(fromURL)return {locale:fromURL,source:"url"};const fromCookie=readLanguageCookie();if(fromCookie)return {locale:fromCookie,source:"browser"};const fromInstance=normalizeLocale(state.preferences?.default_language);if(fromInstance)return {locale:fromInstance,source:"instance"};return {locale:browserLanguage()||"zh-CN",source:"browser-language"}}
+function canTranslateText(node){const parent=node.parentElement;if(!parent)return false;return !parent.closest("script,style,textarea,pre,code,.tc-content,.tc-message-error");}
+const localizedTextSource=new WeakMap(),localizedAttributeSource=new WeakMap();
+function translateElementAttributes(element){if(!element||element.nodeType!==Node.ELEMENT_NODE)return;for(const name of ["title","placeholder","aria-label","alt"]){let original=localizedAttributeSource.get(element)?.[name];if(original===undefined){original=element.getAttribute(name);if(original!==null){const all=localizedAttributeSource.get(element)||{};all[name]=original;localizedAttributeSource.set(element,all);}}if(original!==null&&original!==undefined)element.setAttribute(name,state.locale==="en-US"?(enUS[original]||original):original);}}
+function translateDOM(root=document.body){if(!root)return;const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);const texts=[];while(walker.nextNode())texts.push(walker.currentNode);for(const node of texts){if(!canTranslateText(node))continue;let original=localizedTextSource.get(node);if(original===undefined){original=node.nodeValue;localizedTextSource.set(node,original);}node.nodeValue=state.locale==="en-US"?(enUS[original]||original):original;}if(root.nodeType===Node.ELEMENT_NODE)translateElementAttributes(root);root.querySelectorAll?.("*").forEach(translateElementAttributes);}
+function renderLocale(){document.documentElement.lang=state.locale;document.title=state.locale==="en-US"?"AI Proxy · Administration console":"AI Proxy · 管理控制台";const select=$("languageSelect");if(select)select.value=state.locale;const button=$("setDefaultLanguage");if(button){button.disabled=!state.preferences?.writable;button.title=state.localeSource==="url"?t("URL 语言参数优先；仍可设为实例默认"):t("设为实例默认语言");}translateDOM(document.body);}
+function applyLocale(locale,source){state.locale=normalizeLocale(locale)||"zh-CN";state.localeSource=source||"browser";renderLocale();showTab(state.tab);}
+function rememberLocale(locale){document.cookie=`${languageCookieName}=${encodeURIComponent(locale)}; Path=${ADMIN_BASE}; SameSite=Strict; Max-Age=31536000`;}
+async function loadAdminPreferences(){try{state.preferences=await request(apiURL("/api/admin/preferences"));}catch(e){state.preferences={default_language:"zh-CN",writable:false};}const resolved=resolveLocale();applyLocale(resolved.locale,resolved.source);}
+function formatNumber(value,options={}){return new Intl.NumberFormat(state.locale,options).format(Number(value)||0)}
+function formatDate(value,options={month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}){const date=value instanceof Date?value:new Date(value);if(Number.isNaN(date.getTime()))return String(value||"").slice(0,19);return new Intl.DateTimeFormat(state.locale,options).format(date)}
+function compact(n){return formatNumber(n,{notation:"compact",maximumFractionDigits:2})}
 function newUUID(){if(crypto&&crypto.randomUUID)return crypto.randomUUID();return "t-"+Date.now().toString(16)+"-"+Math.random().toString(16).slice(2,10)}
 const taskOwnerStorageKey="ai-proxy.chatgpt.image-tasks.owner";
 function ensureTaskOwner(){
@@ -541,7 +575,7 @@ function formatAccountDate(value){
   if(!raw)return "—";
   const date=new Date(raw);
   if(Number.isNaN(date.getTime()))return raw.slice(0,16);
-  return date.toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
+  return formatDate(date,{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
 }
 function formatRestoreAt(value){
   const raw=String(value||"").trim();
@@ -550,27 +584,27 @@ function formatRestoreAt(value){
   if(Number.isNaN(date.getTime()))return {absolute:raw.slice(0,19),relative:""};
   const seconds=Math.max(0,Math.ceil((date.getTime()-Date.now())/1000));
   const absolute=formatAccountDate(raw);
-  if(seconds===0)return {absolute,relative:"已到恢复时间"};
+  if(seconds===0)return {absolute,relative:t("已到恢复时间")};
   const totalHours=Math.ceil(seconds/3600);
-  return {absolute,relative:`剩余 ${Math.floor(totalHours/24)}天 ${totalHours%24}小时`};
+  return {absolute,relative:state.locale==="en-US"?`${Math.floor(totalHours/24)}d ${totalHours%24}h remaining`:`剩余 ${Math.floor(totalHours/24)}天 ${totalHours%24}小时`};
 }
 function formatCooldownUntil(value){
   const raw=String(value||"").trim();
-  if(!raw)return {absolute:"—",relative:"冷却中"};
+  if(!raw)return {absolute:"—",relative:t("冷却中")};
   const date=new Date(raw);
-  if(Number.isNaN(date.getTime()))return {absolute:raw.slice(0,19),relative:"冷却中"};
+  if(Number.isNaN(date.getTime()))return {absolute:raw.slice(0,19),relative:t("冷却中")};
   const seconds=Math.max(0,Math.ceil((date.getTime()-Date.now())/1000));
   const absolute=formatAccountDate(raw);
-  if(seconds===0)return {absolute,relative:"即将恢复"};
-  if(seconds<60)return {absolute,relative:`剩余 ${seconds} 秒`};
-  if(seconds<3600)return {absolute,relative:`剩余 ${Math.ceil(seconds/60)} 分钟`};
+  if(seconds===0)return {absolute,relative:t("即将恢复")};
+  if(seconds<60)return {absolute,relative:state.locale==="en-US"?`${seconds}s remaining`:`剩余 ${seconds} 秒`};
+  if(seconds<3600)return {absolute,relative:state.locale==="en-US"?`${Math.ceil(seconds/60)}m remaining`:`剩余 ${Math.ceil(seconds/60)} 分钟`};
   const totalHours=Math.ceil(seconds/3600);
-  return {absolute,relative:`剩余 ${Math.floor(totalHours/24)}天 ${totalHours%24}小时`};
+  return {absolute,relative:state.locale==="en-US"?`${Math.floor(totalHours/24)}d ${totalHours%24}h remaining`:`剩余 ${Math.floor(totalHours/24)}天 ${totalHours%24}小时`};
 }
 function textCooldownReason(value){
-  const labels={rate_limit:"限流",tls:"TLS",timeout:"超时",upstream:"上游故障"};
+  const labels={rate_limit:t("限流"),tls:"TLS",timeout:t("超时"),upstream:t("上游故障")};
   const key=String(value||"").trim().toLowerCase();
-  return labels[key]||key||"临时故障";
+  return labels[key]||key||t("临时故障");
 }
 function textCooldownBadges(value){
   const entries=(Array.isArray(value)?value:[]).filter(item=>item&&String(item.until||"").trim());
@@ -1498,7 +1532,7 @@ function renderChatGPTImages(){
       <div class="thumb-wrap" data-img-preview="${esc(full)}" data-img-title="${esc(img.name||img.path||"")}">${thumb?`<img src="${esc(thumb)}" alt="" loading="lazy">`:"无预览"}</div>
       <div class="meta">
         <div class="row"><label class="check"><input type="checkbox" data-img-check="${esc(img.path)}" ${checked}> 选择</label><button type="button" class="link-btn" data-img-tags="${esc(img.path)}">标签</button></div>
-        <div class="subtle" title="${esc(img.path)}">${esc(img.created_at?new Date(img.created_at).toLocaleString():(img.date||"—"))}</div>
+        <div class="subtle" title="${esc(img.path)}">${esc(img.created_at?formatDate(img.created_at):(img.date||"—"))}</div>
         <div class="tags">${tags||'<span class="subtle">无标签</span>'}</div>
       </div>
     </div>`;
@@ -1563,7 +1597,7 @@ async function rotateClientKey(id){if(!confirm(`轮换 ${id}？旧 Key 将立即
 function showClientSecret(key){$("clientSecret").value=key;$("clientSecretDialog").showModal()}
 
 async function loadProviders(){try{const data=await request(apiURL("/api/providers"));state.providers=data.providers||[];state.writable=Boolean(data.writable);$("readonlyNotice").style.display=state.writable?"none":"block";$("addButton").disabled=!state.writable;renderProviders()}catch(e){$("content").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
-function providerAvailabilityMeta(a,builtin=false){const status=a?.status||"unknown";const map={healthy:["正常","tag-status-active"],degraded:["降级","tag-purple"],unavailable:["不可用","tag-status-disabled"],credential_error:["凭据异常","tag-status-disabled"],capability_drift:["能力漂移","tag-purple"],disabled:["已禁用","tag-default"],unknown:["待观测","tag-default"]};const [label,cls]=map[status]||map.unknown;if(builtin)return `<span class="tag ${cls}">${label}</span>`;const detail=a?.last_success_at?`最近成功：${new Date(a.last_success_at).toLocaleString()}`:"尚无成功请求";return `<span class="tag ${cls}" title="${esc(detail)}">${label}</span>`}
+function providerAvailabilityMeta(a,builtin=false){const status=a?.status||"unknown";const map={healthy:[t("正常"),"tag-status-active"],degraded:[t("降级"),"tag-purple"],unavailable:[t("不可用"),"tag-status-disabled"],credential_error:[t("凭据异常"),"tag-status-disabled"],capability_drift:[t("能力漂移"),"tag-purple"],disabled:[t("已禁用"),"tag-default"],unknown:[t("待观测"),"tag-default"]};const [label,cls]=map[status]||map.unknown;if(builtin)return `<span class="tag ${cls}">${label}</span>`;const detail=a?.last_success_at?(state.locale==="en-US"?`Last successful request: ${formatDate(a.last_success_at)}`:`最近成功：${formatDate(a.last_success_at)}`):t("尚无成功请求");return `<span class="tag ${cls}" title="${esc(detail)}">${label}</span>`}
 function providerSourceMeta(p){
   const requested=p?.source||(p?.builtin?"builtin":"third_party");
   const map={builtin:["内建","tag-source-builtin","运行时托管，不可手工编辑"],official:["官方","tag-source-official","按 Base URL 识别为官方厂商 API"],third_party:["第三方","tag-source-third","按 Base URL 识别为网关/中继/自建上游"]};
@@ -1597,7 +1631,7 @@ function rowHTML(p,index){
   const models=(builtin?(p.models||[]):(p.models||[]).slice(0,4)).map(m=>`<span class="tag tag-default">${esc(m)}</span>`).join("")+(!builtin&&(p.models||[]).length>4?`<span class="tag tag-default">+${p.models.length-4}</span>`:"");
   const caps=(p.endpoint_capabilities||[]).map(c=>`<span class="tag tag-purple">${esc(c)}</span>`).join("");
   const conflicts=Number(p.conflict_count||0);
-  const detail=p.unavailable_reason||((p.updated_at&&`最近发现：${new Date(p.updated_at).toLocaleString()}`)||"等待首次发现");
+  const detail=p.unavailable_reason||((p.updated_at&&(state.locale==="en-US"?`Last discovered: ${formatDate(p.updated_at)}`:`最近发现：${formatDate(p.updated_at)}`))||t("等待首次发现"));
   const summary=builtin?`运行时内建${conflicts?` · 静态冲突 ${conflicts}`:""}`:(p.api_key_configured?"API Key 已配置":p.allow_unauthenticated?"本地无认证":"未配置凭据");
   const protocol=`<span class="tag ${p.protocol==="openai"?"":"tag-green"}">${esc(p.protocol)}</span>`;
   const builtinLabel=p.protocol==="codexoauth"?"Codex OAuth 内建上游":"ChatGPT Web 内建上游";
@@ -1700,7 +1734,7 @@ function svgStacked(ins,outs,labels){const w=600,h=180,pad=28;const totals=ins.m
 function renderKeyTable(rows){
   $("keyMeta").textContent=`${rows.length} 个 Key`;
   if(!rows.length){$("keyTable").innerHTML=`<div class="empty">暂无数据</div>`;return}
-  $("keyTable").innerHTML=`<div class="table-wrap"><table><thead><tr><th>Key ID</th><th>状态</th><th>调用</th><th>成功/失败</th><th>输入</th><th>输出</th><th>总 Token</th><th>最后使用</th></tr></thead><tbody>${rows.map(k=>{const id=k.api_key_id==="default"?"default（历史记录）":k.api_key_id;return `<tr><td>${esc(id)}</td><td><span class="tag">${esc(k.status||"")}</span></td><td>${k.requests||0}</td><td>${k.success_requests||0}/${k.failed_requests||0}</td><td title="${k.input_tokens||0}">${compact(k.input_tokens)}</td><td title="${k.output_tokens||0}">${compact(k.output_tokens)}</td><td title="${k.total_tokens||0}">${compact(k.total_tokens)}</td><td>${k.last_used_at?new Date(k.last_used_at).toLocaleString():"—"}</td></tr>`}).join("")}</tbody></table></div>`;
+  $("keyTable").innerHTML=`<div class="table-wrap"><table><thead><tr><th>Key ID</th><th>状态</th><th>调用</th><th>成功/失败</th><th>输入</th><th>输出</th><th>总 Token</th><th>最后使用</th></tr></thead><tbody>${rows.map(k=>{const id=k.api_key_id==="default"?"default（历史记录）":k.api_key_id;return `<tr><td>${esc(id)}</td><td><span class="tag">${esc(k.status||"")}</span></td><td>${formatNumber(k.requests)}</td><td>${formatNumber(k.success_requests)}/${formatNumber(k.failed_requests)}</td><td title="${k.input_tokens||0}">${compact(k.input_tokens)}</td><td title="${k.output_tokens||0}">${compact(k.output_tokens)}</td><td title="${k.total_tokens||0}">${compact(k.total_tokens)}</td><td>${k.last_used_at?formatDate(k.last_used_at):"—"}</td></tr>`}).join("")}</tbody></table></div>`;
 }
 function eventStatusMeta(event){
   const status=Number(event?.http_status);
@@ -1723,7 +1757,7 @@ async function loadEvents(reset=false){
     $("loadMoreEvents").disabled=!state.cursor;
     $("eventMeta").textContent=`${state.events.length} 条`+(state.cursor?"（可加载更多）":"");
     if(!state.events.length){$("eventTable").innerHTML=`<div class="empty">暂无调用明细</div>`;return}
-    $("eventTable").innerHTML=`<div class="table-wrap"><table style="min-width:1100px"><thead><tr><th>时间</th><th>Event</th><th>Key</th><th>Provider</th><th>Model</th><th>Op</th><th>Tokens</th><th>Status</th><th>Outcome</th><th>ms</th></tr></thead><tbody>${state.events.map((e,i)=>{const status=eventStatusMeta(e);return `<tr class="event-row ${status.className}" data-event="${i}"><td>${e.started_at?new Date(e.started_at).toLocaleString():"—"}</td><td class="subtle" title="${esc(e.event_id)}">${esc((e.event_id||"").slice(0,10))}…</td><td>${esc(e.api_key_id)}</td><td>${esc(e.provider||"")}</td><td>${esc(e.model||"")}</td><td>${esc(e.operation||"")}</td><td title="in/out/total">${e.input_tokens||0}/${e.output_tokens||0}/${e.total_tokens||0}${e.estimated?' <span class="tag">est</span>':""}</td><td><span class="status-pill" title="${status.title}">${status.label}</span></td><td>${esc(e.outcome||"")}</td><td>${e.duration_ms||0}</td></tr>`}).join("")}</tbody></table></div>`;
+    $("eventTable").innerHTML=`<div class="table-wrap"><table style="min-width:1100px"><thead><tr><th>时间</th><th>Event</th><th>Key</th><th>Provider</th><th>Model</th><th>Op</th><th>Tokens</th><th>Status</th><th>Outcome</th><th>ms</th></tr></thead><tbody>${state.events.map((e,i)=>{const status=eventStatusMeta(e);return `<tr class="event-row ${status.className}" data-event="${i}"><td>${e.started_at?formatDate(e.started_at):"—"}</td><td class="subtle" title="${esc(e.event_id)}">${esc((e.event_id||"").slice(0,10))}…</td><td>${esc(e.api_key_id)}</td><td>${esc(e.provider||"")}</td><td>${esc(e.model||"")}</td><td>${esc(e.operation||"")}</td><td title="in/out/total">${formatNumber(e.input_tokens)}/${formatNumber(e.output_tokens)}/${formatNumber(e.total_tokens)}${e.estimated?' <span class="tag">est</span>':""}</td><td><span class="status-pill" title="${status.title}">${status.label}</span></td><td>${esc(e.outcome||"")}</td><td>${formatNumber(e.duration_ms)}</td></tr>`}).join("")}</tbody></table></div>`;
     document.querySelectorAll("[data-event]").forEach(el=>el.onclick=()=>showUsageEvent(state.events[Number(el.dataset.event)]));
   }catch(e){$("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
 }
@@ -2287,8 +2321,29 @@ async function doLogout(){
   goLogin();
 }
 const logoutBtn=$("logoutBtn");if(logoutBtn)logoutBtn.onclick=()=>doLogout();
+const languageSelect=$("languageSelect");
+if(languageSelect)languageSelect.onchange=e=>{
+  const selected=normalizeLocale(e.target.value)||"zh-CN";
+  rememberLocale(selected);
+  const resolved=urlLanguage()?{locale:urlLanguage(),source:"url"}:{locale:selected,source:"browser"};
+  applyLocale(resolved.locale,resolved.source);
+  if(resolved.source==="url")toast(state.locale==="en-US"?"The URL language override remains active.":"URL 语言参数仍优先于浏览器选择。","error");
+};
+const setDefaultLanguage=$("setDefaultLanguage");
+if(setDefaultLanguage)setDefaultLanguage.onclick=async()=>{
+  if(!state.preferences?.writable){toast(t("当前实例没有关联可写配置文件，只能查看 Provider。"),"error");return;}
+  setDefaultLanguage.disabled=true;
+  try{
+    state.preferences=await request(apiURL("/api/admin/preferences"),{method:"PUT",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({default_language:state.locale})});
+    renderLocale();
+    toast(state.locale==="en-US"?"Instance default language updated.":"实例默认语言已更新。");
+  }catch(e){toast(e.message,"error");}
+  finally{setDefaultLanguage.disabled=!state.preferences?.writable;}
+};
+const localeObserver=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes){if(node.nodeType===Node.ELEMENT_NODE)translateDOM(node);}});
+localeObserver.observe(document.body,{childList:true,subtree:true});
 // boot
-initAuthSession().finally(()=>{
+Promise.allSettled([initAuthSession(),loadAdminPreferences()]).finally(()=>{
   const boot=parseHash();
   applyUsageState(boot);
   applyChatGPTState(boot);

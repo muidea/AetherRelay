@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -251,6 +249,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.updateProviders(w, r)
+	case rel == "/api/admin/preferences" && r.Method == http.MethodGet:
+		h.getAdminPreferences(w)
+	case rel == "/api/admin/preferences" && r.Method == http.MethodPut:
+		if !h.requireAdminMutation(w, r) {
+			return
+		}
+		h.updateAdminPreferences(w, r)
 	case strings.HasPrefix(rel, "/api/providers/") && strings.HasSuffix(rel, "/probe") && r.Method == http.MethodPost:
 		if !h.requireAdminMutation(w, r) {
 			return
@@ -844,81 +849,24 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := writeProviders(h.configPath, h.adminBasePath(), request.Providers)
+	rewrite, err := prepareConfigRewrite(h.configPath, h.adminBasePath(), func(root *yaml.Node) error {
+		existingSecrets := providerSecrets(root)
+		providersNode, buildErr := buildProvidersNode(request.Providers, existingSecrets)
+		if buildErr != nil {
+			return buildErr
+		}
+		setMappingValue(root, "providers", providersNode)
+		return nil
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.activateConfig(cfg); err != nil {
+	if err := h.activateAndCommitConfig(rewrite); err != nil {
 		writeError(w, http.StatusInternalServerError, "activate config: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "provider configuration saved and activated"})
-}
-
-func writeProviders(path, expectedAdminBasePath string, providers []providerInput) (config.Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("read config: %w", err)
-	}
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
-		return config.Config{}, fmt.Errorf("parse config: %w", err)
-	}
-	root, err := documentRoot(&document)
-	if err != nil {
-		return config.Config{}, err
-	}
-	existingSecrets := providerSecrets(root)
-	providersNode, err := buildProvidersNode(providers, existingSecrets)
-	if err != nil {
-		return config.Config{}, err
-	}
-	setMappingValue(root, "providers", providersNode)
-
-	var encoded bytes.Buffer
-	encoder := yaml.NewEncoder(&encoded)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(&document); err != nil {
-		return config.Config{}, fmt.Errorf("encode config: %w", err)
-	}
-	if err := encoder.Close(); err != nil {
-		return config.Config{}, fmt.Errorf("close config encoder: %w", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("stat config: %w", err)
-	}
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".ai-proxy-config-*.yaml")
-	if err != nil {
-		return config.Config{}, fmt.Errorf("create temporary config: %w", err)
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(info.Mode().Perm()); err != nil {
-		_ = temp.Close()
-		return config.Config{}, fmt.Errorf("set temporary config mode: %w", err)
-	}
-	if _, err := temp.Write(encoded.Bytes()); err != nil {
-		_ = temp.Close()
-		return config.Config{}, fmt.Errorf("write temporary config: %w", err)
-	}
-	if err := temp.Close(); err != nil {
-		return config.Config{}, fmt.Errorf("close temporary config: %w", err)
-	}
-
-	cfg, err := config.Load(tempPath)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("configuration rejected: %w", err)
-	}
-	if cfg.AdminAuth.BasePath != expectedAdminBasePath {
-		return config.Config{}, errAdminBasePathRestart
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return config.Config{}, fmt.Errorf("replace config: %w", err)
-	}
-	return cfg, nil
 }
 
 func documentRoot(document *yaml.Node) (*yaml.Node, error) {

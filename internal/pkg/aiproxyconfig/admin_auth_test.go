@@ -46,11 +46,38 @@ func TestLoadAdminAuthDefaultsWhenDisabled(t *testing.T) {
 	if cfg.AdminAuth.BasePath != DefaultAdminBasePath {
 		t.Fatalf("base path = %q", cfg.AdminAuth.BasePath)
 	}
+	if cfg.AdminAuth.DefaultLanguage != DefaultAdminLanguage {
+		t.Fatalf("default language = %q", cfg.AdminAuth.DefaultLanguage)
+	}
 	if cfg.AdminAuth.SessionTTLSeconds != DefaultAdminSessionTTLSeconds {
 		t.Fatalf("ttl = %d", cfg.AdminAuth.SessionTTLSeconds)
 	}
 	if cfg.AdminAuth.SessionCookieSecure {
 		t.Fatal("session cookie secure should default to false")
+	}
+}
+
+func TestLoadAdminDefaultLanguage(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  admin_default_language: en-US
+`+minimalProvidersYAML())
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AdminAuth.DefaultLanguage != "en-US" {
+		t.Fatalf("default language = %q", cfg.AdminAuth.DefaultLanguage)
+	}
+}
+
+func TestLoadAdminDefaultLanguageRejectsUnsupportedValue(t *testing.T) {
+	path := writeConfig(t, `
+server:
+  admin_default_language: fr-FR
+`+minimalProvidersYAML())
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "admin_default_language") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

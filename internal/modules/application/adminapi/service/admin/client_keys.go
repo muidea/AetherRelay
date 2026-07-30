@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -92,7 +89,7 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "client API key id already exists")
 		return
 	}
-	cfg, err := mutateClientKeys(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
+	rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
 		if mappingValue(node, id) != nil {
 			return errors.New("client API key id already exists")
 		}
@@ -106,7 +103,7 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.activateConfig(cfg); err != nil {
+	if err := h.activateAndCommitConfig(rewrite); err != nil {
 		writeError(w, http.StatusInternalServerError, "activate config: "+err.Error())
 		return
 	}
@@ -139,7 +136,7 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 			writeError(w, 500, "generate client API key")
 			return
 		}
-		cfg, err := mutateClientKeys(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
+		rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
 			entry := mappingValue(node, id)
 			if entry == nil {
 				return errors.New("client API key not found")
@@ -152,7 +149,7 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 			writeError(w, 400, err.Error())
 			return
 		}
-		if err := h.activateConfig(cfg); err != nil {
+		if err := h.activateAndCommitConfig(rewrite); err != nil {
 			writeError(w, 500, "activate config: "+err.Error())
 			return
 		}
@@ -167,7 +164,7 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 			writeError(w, 400, "enabled is required")
 			return
 		}
-		cfg, err := mutateClientKeys(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
+		rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
 			entry := mappingValue(node, id)
 			if entry == nil {
 				return errors.New("client API key not found")
@@ -179,18 +176,19 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 			writeError(w, 400, err.Error())
 			return
 		}
-		if err := h.activateConfig(cfg); err != nil {
+		if err := h.activateAndCommitConfig(rewrite); err != nil {
 			writeError(w, 500, "activate config: "+err.Error())
 			return
 		}
-		writeJSON(w, 200, clientKeyView{ID: id, Enabled: *input.Enabled, CredentialSource: credentialSource(cfg.ClientAPIKeys[id]), KeyConfigured: cfg.ClientAPIKeys[id].APIKey != "" || cfg.ClientAPIKeys[id].APIKeyHash != ""})
+		key := rewrite.config.ClientAPIKeys[id]
+		writeJSON(w, 200, clientKeyView{ID: id, Enabled: *input.Enabled, CredentialSource: credentialSource(key), KeyConfigured: key.APIKey != "" || key.APIKeyHash != ""})
 	case !rotate && r.Method == http.MethodDelete:
-		cfg, err := mutateClientKeys(h.configPath, h.adminBasePath(), func(node *yaml.Node) error { removeMappingValue(node, id); return nil })
+		rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error { removeMappingValue(node, id); return nil })
 		if err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
-		if err := h.activateConfig(cfg); err != nil {
+		if err := h.activateAndCommitConfig(rewrite); err != nil {
 			writeError(w, 500, "activate config: "+err.Error())
 			return
 		}
@@ -226,72 +224,18 @@ func generateClientKey() (string, string, error) {
 	return key, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func mutateClientKeys(path, expectedAdminBasePath string, mutate func(*yaml.Node) error) (config.Config, error) {
-	if strings.TrimSpace(path) == "" {
-		return config.Config{}, errors.New("no writable config file is active")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("read config: %w", err)
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return config.Config{}, fmt.Errorf("parse config: %w", err)
-	}
-	root, err := documentRoot(&doc)
-	if err != nil {
-		return config.Config{}, err
-	}
-	node := mappingValue(root, "client_api_keys")
-	if node == nil {
-		node = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		setMappingValue(root, "client_api_keys", node)
-	}
-	if node.Kind != yaml.MappingNode {
-		return config.Config{}, errors.New("client_api_keys must be a mapping")
-	}
-	if err := mutate(node); err != nil {
-		return config.Config{}, err
-	}
-	var encoded bytes.Buffer
-	enc := yaml.NewEncoder(&encoded)
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
-		return config.Config{}, err
-	}
-	_ = enc.Close()
-	info, err := os.Stat(path)
-	if err != nil {
-		return config.Config{}, err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".ai-proxy-config-*.yaml")
-	if err != nil {
-		return config.Config{}, err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
-		_ = tmp.Close()
-		return config.Config{}, err
-	}
-	if _, err := tmp.Write(encoded.Bytes()); err != nil {
-		_ = tmp.Close()
-		return config.Config{}, err
-	}
-	if err := tmp.Close(); err != nil {
-		return config.Config{}, err
-	}
-	cfg, err := config.Load(tmpPath)
-	if err != nil {
-		return config.Config{}, fmt.Errorf("configuration rejected: %w", err)
-	}
-	if cfg.AdminAuth.BasePath != expectedAdminBasePath {
-		return config.Config{}, errAdminBasePathRestart
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return config.Config{}, err
-	}
-	return cfg, nil
+func prepareClientKeysRewrite(path, expectedAdminBasePath string, mutate func(*yaml.Node) error) (*configRewrite, error) {
+	return prepareConfigRewrite(path, expectedAdminBasePath, func(root *yaml.Node) error {
+		node := mappingValue(root, "client_api_keys")
+		if node == nil {
+			node = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMappingValue(root, "client_api_keys", node)
+		}
+		if node.Kind != yaml.MappingNode {
+			return errors.New("client_api_keys must be a mapping")
+		}
+		return mutate(node)
+	})
 }
 
 func removeMappingValue(mapping *yaml.Node, key string) {

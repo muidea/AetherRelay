@@ -38,6 +38,8 @@ server:
   # admin_auth_enabled: false
   # Admin 页面/API 前缀，默认 /admin；启动期路由，变更需重启。
   # admin_base_path: /admin
+  # Admin Web 的实例默认语言：zh-CN 或 en-US，默认 zh-CN；管理页可热更新。
+  # admin_default_language: zh-CN
   # 单管理员账号（区分大小写）。
   # admin_username: ops-admin
   # 仅接受 Argon2id PHC 哈希；用 `ai-proxy admin password-hash` 生成后注入。

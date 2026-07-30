@@ -28,6 +28,10 @@ func normalizeAdminAuth(auth *AdminAuthConfig) error {
 		auth.BasePath = DefaultAdminBasePath
 	}
 	auth.BasePath = strings.TrimSpace(auth.BasePath)
+	if strings.TrimSpace(auth.DefaultLanguage) == "" {
+		auth.DefaultLanguage = DefaultAdminLanguage
+	}
+	auth.DefaultLanguage = strings.TrimSpace(auth.DefaultLanguage)
 	auth.Username = strings.TrimSpace(auth.Username)
 	auth.PasswordHash = strings.TrimSpace(auth.PasswordHash)
 	if auth.SessionTTLSeconds == 0 {
@@ -41,6 +45,9 @@ func normalizeAdminAuth(auth *AdminAuthConfig) error {
 // 开启时:账号、哈希与 TTL 必须合法,否则 fail-fast。
 func validateAdminAuth(auth AdminAuthConfig) error {
 	if err := validateAdminBasePath(auth.BasePath); err != nil {
+		return err
+	}
+	if err := validateAdminDefaultLanguage(auth.DefaultLanguage); err != nil {
 		return err
 	}
 	if auth.SessionTTLSeconds < MinAdminSessionTTLSeconds || auth.SessionTTLSeconds > MaxAdminSessionTTLSeconds {
@@ -63,6 +70,18 @@ func validateAdminAuth(auth AdminAuthConfig) error {
 		return fmt.Errorf("admin_password_hash is invalid")
 	}
 	return nil
+}
+
+// validateAdminDefaultLanguage keeps the instance-level Admin locale
+// deliberately small and stable. Browser-level language preferences are
+// handled by the UI and do not need to be persisted in proxy configuration.
+func validateAdminDefaultLanguage(language string) error {
+	switch language {
+	case "zh-CN", "en-US":
+		return nil
+	default:
+		return fmt.Errorf("admin_default_language must be one of zh-CN, en-US")
+	}
 }
 
 // validateAdminBasePath 校验 Admin basePath。
