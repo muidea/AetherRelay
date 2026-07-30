@@ -1,6 +1,7 @@
 /ai-proxy
 /bin/
 /dist/
+/deploy/
 config.yaml
 usage.csv
 usage.csv.bak.*

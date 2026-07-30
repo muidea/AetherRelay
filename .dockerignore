@@ -1,0 +1,17 @@
+.git
+.github
+ai-proxy
+bin
+dist
+var
+config.yaml
+*.duckdb
+*.duckdb.wal
+usage.csv
+usage.csv.bak.*
+interactions
+logs
+chatgpt-web-data
+CLAUDE.md
+prd.md
+docs

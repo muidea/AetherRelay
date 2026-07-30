@@ -1,0 +1,25 @@
+services:
+  ai-proxy:
+    image: ${AI_PROXY_IMAGE:-ghcr.io/muidea/ai-proxy:latest}
+    # For local image development, replace image with: build: .
+    restart: unless-stopped
+    ports:
+      # Keep the data plane local by default. Put a TLS reverse proxy in front
+      # or change this binding only after reviewing the access-control notes.
+      - "127.0.0.1:8080:8080"
+    environment:
+      AI_PROXY_CONFIG: /etc/ai-proxy/config.yaml
+      # Provider secrets are expanded from the mounted configuration at
+      # startup. Put them in an untracked .env file or an orchestrator secret.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_PROXY_ADMIN_PASSWORD_HASH: ${AI_PROXY_ADMIN_PASSWORD_HASH:-}
+    volumes:
+      # Mount the directory (rather than a single file): Admin writes replace
+      # config.yaml atomically when saving writable settings.
+      - ./deploy/config:/etc/ai-proxy
+      - ai-proxy-state:/var/lib/ai-proxy
+
+volumes:
+  ai-proxy-state:

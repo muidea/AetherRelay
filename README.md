@@ -27,12 +27,27 @@ Anthropic API base: http://127.0.0.1:8080
 
 所有数据端点都要求客户端 API Key：OpenAI 客户端使用 `Authorization: Bearer <key>`，Anthropic 客户端使用 `X-API-Key: <key>`。缺失、未知或禁用的 Key 返回 401，且不产生用量记录。
 
+## 容器快速开始
+
+发布镜像位于 `ghcr.io/muidea/ai-proxy`，提供 Linux amd64 与 arm64 清单。复制配置、按容器网络调整 `listen_addr` 与 `state.dir`，再启动：
+
+```bash
+mkdir -p deploy/config
+cp config.example.yaml deploy/config/config.yaml
+# 编辑 deploy/config/config.yaml：listen_addr=0.0.0.0:8080，state.dir=/var/lib/ai-proxy
+# 同时配置实际启用 Provider 的环境变量与客户端 Key。
+docker compose up -d
+```
+
+完整的配置目录权限、Admin 登录、持久化与升级步骤见[容器部署](docs/operations.md#容器部署)。
+
 ## 常用命令
 
 ```bash
 make run                         # 使用 config.yaml 启动
 make check                       # 格式、vet、全量测试
 make build                       # 构建当前平台二进制
+docker build -t ai-proxy:dev .   # 构建本地容器镜像
 make release-package VERSION=v1.2.3
 ai-proxy admin password-hash     # 交互式生成 Admin Argon2id 密码哈希
 ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创建或重置 Admin 登录凭据

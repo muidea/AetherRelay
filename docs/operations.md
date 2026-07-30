@@ -22,6 +22,99 @@ curl http://127.0.0.1:8080/stats
 
 `/metrics` 与 `/stats` 默认仅允许 loopback。若启用远程访问，应同时设置 `metrics_allowed_cidrs` 限制采集端来源。
 
+## 容器部署
+
+镜像发布到 GitHub Container Registry：`ghcr.io/muidea/ai-proxy`。`main` 成功构建后更新 `latest` 与 `main`，发布 `vX.Y.Z` tag 后会推送对应的 `X.Y.Z`、`X.Y` 与 Git SHA 标签；生产部署应固定到完整版本或 SHA，不要仅依赖 `latest`。每个标签同时提供 Linux `amd64` 与 `arm64` 镜像。
+
+容器内程序最终以 UID/GID `10001`（`ai-proxy`）运行。入口程序只在启动时以 root 初始化 `/var/lib/ai-proxy` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。这样既支持 Docker named volume，也避免容器擅自改变宿主机配置文件权限。
+
+### Docker Compose
+
+仓库中的 [`compose.yaml`](../compose.yaml) 是推荐起点。先建立一个可原子替换的**目录**挂载，而不是只挂载单个 `config.yaml` 文件：管理页保存 Provider、客户端 Key 与实例默认语言时会通过临时文件和 `rename` 更新配置。
+
+```bash
+mkdir -p deploy/config
+cp config.example.yaml deploy/config/config.yaml
+
+# 容器内需要监听全部网卡，且状态必须落到命名卷挂载点。
+${EDITOR:-vi} deploy/config/config.yaml
+```
+
+至少将配置调整为下列形态，并删除或禁用未使用的示例 Provider；所有仍启用的远程 Provider 都必须有可用凭据：
+
+```yaml
+server:
+  listen_addr: 0.0.0.0:8080
+  # Docker 转发连接在容器内不是 loopback。若要使用 /admin，必须开启登录保护。
+  admin_auth_enabled: true
+  admin_username: ops-admin
+  admin_password_hash: ${AI_PROXY_ADMIN_PASSWORD_HASH}
+  # 经 HTTPS 反向代理对外提供 Admin 时设为 true。
+  admin_session_cookie_secure: true
+
+state:
+  dir: /var/lib/ai-proxy
+  database: state.duckdb
+```
+
+生成 Admin 密码哈希时不会启动网关，也不会读取配置：
+
+```bash
+docker run --rm ghcr.io/muidea/ai-proxy:latest admin password-hash
+```
+
+在未纳入版本控制的 `.env` 或容器编排的 secret 中保存实际使用的 Provider Key 和哈希。例如：
+
+```dotenv
+OPENAI_API_KEY=sk-...
+AI_PROXY_ADMIN_PASSWORD_HASH=$argon2id$...
+```
+
+若需要从管理页修改配置，配置目录必须由 UID `10001` 可写；为了让配置本身和同目录临时文件保持私有，可在受控主机上执行：
+
+```bash
+sudo chown -R 10001:10001 deploy/config
+sudo chmod 700 deploy/config
+sudo chmod 600 deploy/config/config.yaml
+docker compose up -d
+docker compose logs -f ai-proxy
+```
+
+只需要只读配置时，可将 Compose 的配置卷改为 `:ro`；管理页会明确显示不可写，而数据代理与账号池仍可运行。容器的数据面默认仅发布到宿主机 `127.0.0.1:8080`。需要远程访问时，优先通过 HTTPS 反向代理转发，并保留原始 `Host`；不要直接把端口公开到不受控网络。启用登录后还应保留 `admin_session_cookie_secure: true`。
+
+检查状态：
+
+```bash
+docker compose ps
+docker compose exec ai-proxy curl --fail http://127.0.0.1:8080/healthz
+```
+
+命名卷 `ai-proxy-state` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除它。配置目录包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与数据卷一起纳入主机备份策略。
+
+### 直接运行镜像与升级
+
+不用 Compose 时也必须挂载配置**目录**与数据卷：
+
+```bash
+docker run -d --name ai-proxy \
+  --restart unless-stopped \
+  --env-file .env \
+  -p 127.0.0.1:8080:8080 \
+  -v "$PWD/deploy/config:/etc/ai-proxy" \
+  -v ai-proxy-state:/var/lib/ai-proxy \
+  ghcr.io/muidea/ai-proxy:1.2.3
+```
+
+升级保留同一配置目录和数据卷即可：
+
+```bash
+docker compose pull
+docker compose up -d
+docker image inspect ghcr.io/muidea/ai-proxy:latest --format '{{index .RepoDigests 0}}'
+```
+
+先按[备份与维护](#备份与维护)停止写入并备份，再进行跨大版本升级或迁移宿主机。不要并发运行两个容器指向同一个状态卷。
+
 ## Admin 登录安全（可选）
 
 默认 Admin 仅 loopback 可访问。需要远程运维时，启用账号密码登录：
