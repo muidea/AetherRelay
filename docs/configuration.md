@@ -159,20 +159,21 @@ chatgpt_web:
 ```yaml
 codex_oauth:
   enabled: false
-  models: gpt-5.2-codex, gpt-5.2
+  # models: gpt-5.2-codex, gpt-5.2 # 可选 allowlist
   refresh_account_interval_minute: 0
 ```
 
-- `models` 必须是精确模型 ID，作为 `codexoauth` 内建 Provider 的显式目录；它不会调用不稳定的账号模型发现接口。静态 Provider 使用同名模型时，静态路由优先。
+- 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 `GET /backend-api/codex/models` 自动发现模型；结果以受限投影持久化到账号池，6 小时后过期。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
+- `models` 现在可选；留空时发布全部有效账号快照的并集，设置时仅作为精确 allowlist。它不再是模型可用性的事实来源。静态 Provider 使用同名模型时，静态路由优先。
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）仅写入 `state.database`。管理列表严格脱敏，不返回 token、账号 ID 或代理 URL。
 - 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新以及 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新 IP 与请求 IP 不一致。
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
-- `enabled` 与 `refresh_account_interval_minute` 决定 Block 的订阅和定时器，修改后必须重启 ai-proxy。模型列表可随常规配置更新重建有效目录，但首次启用该能力也必须重启。
+- `enabled` 与 `refresh_account_interval_minute` 决定 Block 的订阅和定时器，修改后必须重启 ai-proxy。模型快照由运行时定时刷新；`models` allowlist 可随常规配置更新重建有效目录，但首次启用该能力也必须重启。
 
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量，以及在「ChatGPT Web」与「Codex OAuth」页签中维护各自账号池。相关管理 API 位于该前缀下的 `/api/chatgpt/**` 与 `/api/codex/**`。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」提供图片任务、图片库与历史对话。Codex 账号表展示每个账号的模型缓存、失效时间或发现退避状态。相关管理 API 位于该前缀下的 `/api/chatgpt/**` 与 `/api/codex/**`。
 
 Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。
 

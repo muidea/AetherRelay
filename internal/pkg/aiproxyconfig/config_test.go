@@ -143,6 +143,23 @@ codex_oauth:
 	}
 }
 
+func TestLoadAllowsCodexOAuthDiscoveryWithoutConfiguredModels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+codex_oauth:
+  enabled: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Codex OAuth discovery config: %v", err)
+	}
+	if !cfg.CodexOAuth.Enabled || len(cfg.CodexOAuth.Models) != 0 || len(cfg.Providers) != 0 {
+		t.Fatalf("config=%+v", cfg)
+	}
+}
+
 func TestLoadModelCatalog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

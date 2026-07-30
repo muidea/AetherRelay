@@ -203,7 +203,10 @@ func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.R
 	// The account owner deliberately returns its redacted failure classification
 	// together with a synchronous error. Keep that data: a timeout/network/429
 	// refresh failure needs a bounded cooldown, not an invalid-token quarantine.
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func refreshFailureClass(result accevents.RefreshTokenResult) string {

@@ -77,7 +77,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 | 原生代理 `/v1/responses` → codexoauth | `codexoauth` | 客户端 Key ID | 上游 Response `usage`（缺失时本地估算） |
 
 - 使用统计会记录 `upstream_protocol=codexoauth`、`upstream_endpoint=codex_oauth_responses`、`conversion_mode=codex_oauth_responses`，包括 interaction archive 关闭时的兜底结算。
-- 每个账号的代理同时用于 OAuth refresh 与 Codex Responses 请求。管理 API 与 Web 表格只返回稳定本地 ID、脱敏邮箱、状态、结果计数、模型冷却与最近刷新状态，绝不返回 token、account ID 或代理。
+- 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。管理 API 与 Web 表格只返回稳定本地 ID、脱敏邮箱、状态、结果计数、模型缓存、模型冷却与最近刷新状态，绝不返回 token、account ID 或代理。
 - 401 触发单飞 refresh 后只重试一次；429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。
 - `/v1/responses` 的非流式请求在内部要求上游 SSE，并仅在 `response.completed` 事件返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。P0 不提供 realtime/WebSocket、`responses/compact` 或网页会话能力。
 - `codex_oauth.enabled`、账号定时刷新间隔是启动期 Block 生命周期设置。修改它们后重启；不要把 YAML 热更新视作账号池已装配。

@@ -19,6 +19,8 @@ import (
 const (
 	defaultRateLimitCooldown = time.Minute
 	defaultTransientCooldown = 30 * time.Second
+	modelDiscoveryRetryBase  = 30 * time.Second
+	modelDiscoveryRetryMax   = 5 * time.Minute
 )
 
 type cooldown struct {
@@ -45,6 +47,12 @@ type account struct {
 	LastRefreshErrAt    string              `json:"last_token_refresh_error_at,omitempty"`
 	LastRefreshErrClass string              `json:"last_token_refresh_error_class,omitempty"`
 	Cooldowns           map[string]cooldown `json:"cooldowns,omitempty"`
+	// ModelSnapshot is the constrained account-scoped Codex capability cache.
+	// It never contains raw upstream JSON or credentials beyond this account.
+	ModelSnapshot           *events.AccountModelSnapshot `json:"model_snapshot,omitempty"`
+	ModelDiscoveryFailures  int                          `json:"model_discovery_failures,omitempty"`
+	ModelDiscoveryRetryAt   string                       `json:"model_discovery_retry_at,omitempty"`
+	ModelDiscoveryLastError string                       `json:"model_discovery_last_error,omitempty"`
 }
 
 type Store struct {
@@ -53,6 +61,9 @@ type Store struct {
 	items     map[string]*account
 	order     []string
 	index     int
+	// catalogVersion increments whenever an account's routing eligibility or
+	// cached model capability changes.
+	catalogVersion uint64
 }
 
 func Open(databasePath, memoryLimit string, threads int) (*Store, error) {
@@ -159,6 +170,7 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 		seenAccess[input.AccessToken] = struct{}{}
 		normalized = append(normalized, input)
 	}
+	changed := false
 	for _, input := range normalized {
 		var existing *account
 		for _, candidate := range s.items {
@@ -175,6 +187,7 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 		} else {
 			updated++
 		}
+		changed = true
 		existing.AccessToken = input.AccessToken
 		existing.RefreshToken = input.RefreshToken
 		existing.IDToken = strings.TrimSpace(input.IDToken)
@@ -185,9 +198,18 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 		if existing.Status == "" {
 			existing.Status = events.StatusNormal
 		}
+		// An import may replace a credential for a different account. Do not
+		// route from a capability snapshot learned with the old credential.
+		existing.ModelSnapshot = nil
+		existing.ModelDiscoveryFailures = 0
+		existing.ModelDiscoveryRetryAt = ""
+		existing.ModelDiscoveryLastError = ""
 	}
 	if err := s.saveLocked(); err != nil {
 		return 0, 0, 0, err
+	}
+	if changed {
+		s.bumpCatalogLocked()
 	}
 	return added, updated, skipped, nil
 }
@@ -206,6 +228,7 @@ func (s *Store) Delete(ids []string) (int, error) {
 	if deleted == 0 {
 		return 0, nil
 	}
+	s.bumpCatalogLocked()
 	order := s.order[:0]
 	for _, id := range s.order {
 		if _, exists := s.items[id]; exists {
@@ -226,12 +249,16 @@ func (s *Store) Update(id string, status, proxy *string) (events.AccountView, er
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
+	changed := false
 	if status != nil {
 		value := strings.ToLower(strings.TrimSpace(*status))
 		if value != events.StatusNormal && value != events.StatusAbnormal && value != events.StatusDisabled {
 			return events.AccountView{}, fmt.Errorf("invalid account status")
 		}
-		item.Status = value
+		if item.Status != value {
+			item.Status = value
+			changed = true
+		}
 	}
 	if proxy != nil {
 		if err := validateProxy(*proxy); err != nil {
@@ -241,6 +268,9 @@ func (s *Store) Update(id string, status, proxy *string) (events.AccountView, er
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, err
+	}
+	if changed {
+		s.bumpCatalogLocked()
 	}
 	return toView(item, time.Now().UTC()), nil
 }
@@ -259,7 +289,7 @@ func (s *Store) Acquire(model string, exclude []string) (events.AcquireResult, e
 		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" {
 			continue
 		}
-		if _, found := excluded[item.ID]; found || cooling(item, model, now) {
+		if _, found := excluded[item.ID]; found || cooling(item, model, now) || !accountSupportsModel(item, model, now) {
 			continue
 		}
 		s.index = (pos + 1) % len(s.order)
@@ -312,11 +342,16 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 	item.LastRefreshAt = now
 	item.LastRefreshErrAt = ""
 	item.LastRefreshErrClass = ""
+	statusChanged := false
 	if item.Status == events.StatusAbnormal {
 		item.Status = events.StatusNormal
+		statusChanged = true
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.RefreshTokenResult{}, err
+	}
+	if statusChanged {
+		s.bumpCatalogLocked()
 	}
 	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, Refreshed: true}, nil
 }
@@ -330,11 +365,16 @@ func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (eve
 	}
 	item.LastRefreshErrAt = time.Now().UTC().Format(time.RFC3339)
 	item.LastRefreshErrClass = strings.TrimSpace(errorClass)
-	if permanent {
+	statusChanged := false
+	if permanent && item.Status != events.StatusAbnormal {
 		item.Status = events.StatusAbnormal
+		statusChanged = true
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.RefreshTokenResult{}, err
+	}
+	if statusChanged {
+		s.bumpCatalogLocked()
 	}
 	return events.RefreshTokenResult{AccountID: item.ID, PermanentFailure: permanent, ErrorClass: errorClass}, nil
 }
@@ -346,13 +386,17 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
+	statusChanged := false
 	if success {
 		item.Success++
 	} else {
 		item.Fail++
 		switch strings.TrimSpace(errorClass) {
 		case events.ErrorInvalidToken:
-			item.Status = events.StatusAbnormal
+			if item.Status != events.StatusAbnormal {
+				item.Status = events.StatusAbnormal
+				statusChanged = true
+			}
 		case events.ErrorRateLimit, events.ErrorTimeout, events.ErrorNetwork, events.ErrorUpstream:
 			until := time.Now().UTC().Add(defaultTransientCooldown)
 			if errorClass == events.ErrorRateLimit {
@@ -369,6 +413,9 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, err
+	}
+	if statusChanged {
+		s.bumpCatalogLocked()
 	}
 	return toView(item, time.Now().UTC()), nil
 }
@@ -475,7 +522,25 @@ func parseExpiry(value string) (time.Time, bool) {
 }
 
 func toView(item *account, now time.Time) events.AccountView {
-	view := events.AccountView{ID: item.ID, Email: item.Email, PlanType: item.PlanType, Status: item.Status, Success: item.Success, Fail: item.Fail, CreatedAt: item.CreatedAt, LastUsedAt: item.LastUsedAt, LastTokenRefreshAt: item.LastRefreshAt, LastTokenRefreshErrorAt: item.LastRefreshErrAt, LastTokenRefreshErrorClass: item.LastRefreshErrClass}
+	view := events.AccountView{
+		ID:                         item.ID,
+		Email:                      item.Email,
+		PlanType:                   item.PlanType,
+		Status:                     item.Status,
+		Success:                    item.Success,
+		Fail:                       item.Fail,
+		CreatedAt:                  item.CreatedAt,
+		LastUsedAt:                 item.LastUsedAt,
+		LastTokenRefreshAt:         item.LastRefreshAt,
+		LastTokenRefreshErrorAt:    item.LastRefreshErrAt,
+		LastTokenRefreshErrorClass: item.LastRefreshErrClass,
+		ModelDiscoveryRetryAt:      item.ModelDiscoveryRetryAt,
+		ModelDiscoveryLastError:    item.ModelDiscoveryLastError,
+	}
+	if item.ModelSnapshot != nil {
+		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)
+		view.ModelSnapshot = &snapshot
+	}
 	for model, value := range item.Cooldowns {
 		if now.After(value.Until) {
 			continue
@@ -485,6 +550,230 @@ func toView(item *account, now time.Time) events.AccountView {
 	sort.Slice(view.Cooldowns, func(i, j int) bool { return view.Cooldowns[i].Model < view.Cooldowns[j].Model })
 	return view
 }
+
+// ListDiscoveryCandidates returns only normal accounts. The credential fields
+// are strictly EventHub-internal discovery inputs and cannot reach Admin.
+func (s *Store) ListDiscoveryCandidates() events.ListDiscoveryCandidatesResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	out := events.ListDiscoveryCandidatesResult{Version: s.catalogVersion}
+	for _, id := range s.order {
+		item := s.items[id]
+		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" {
+			continue
+		}
+		needs := item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now)
+		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
+			AccountID:       item.ID,
+			AccessToken:     item.AccessToken,
+			AccountIDHeader: item.AccountIDHeader,
+			Proxy:           item.Proxy,
+			NeedsDiscovery:  needs,
+			DiscoveryDue:    needs && modelDiscoveryRetryDue(item, now),
+		})
+	}
+	return out
+}
+
+func (s *Store) PutModelSnapshot(accountID string, snapshot events.AccountModelSnapshot) (uint64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return s.catalogVersion, false, fmt.Errorf("account id is required")
+	}
+	item := s.items[accountID]
+	if item == nil {
+		return s.catalogVersion, false, nil
+	}
+	clean := normalizeSnapshot(accountID, snapshot)
+	item.ModelSnapshot = &clean
+	item.ModelDiscoveryFailures = 0
+	item.ModelDiscoveryRetryAt = ""
+	item.ModelDiscoveryLastError = ""
+	if err := s.saveLocked(); err != nil {
+		return s.catalogVersion, false, err
+	}
+	s.bumpCatalogLocked()
+	return s.catalogVersion, true, nil
+}
+
+func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return "", false, fmt.Errorf("account id is required")
+	}
+	item := s.items[accountID]
+	if item == nil {
+		return "", false, nil
+	}
+	item.ModelDiscoveryFailures++
+	retryAt := time.Now().UTC().Add(modelDiscoveryRetryDelay(item.ModelDiscoveryFailures))
+	item.ModelDiscoveryRetryAt = retryAt.Format(time.RFC3339)
+	item.ModelDiscoveryLastError = bounded(message, 256)
+	if err := s.saveLocked(); err != nil {
+		return "", false, err
+	}
+	return item.ModelDiscoveryRetryAt, true, nil
+}
+
+// CatalogSnapshot builds the deduplicated union across routable accounts and
+// non-expired snapshots. A model is published only if the selected account can
+// actually be acquired for it.
+func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	byID := make(map[string]*events.CatalogModel)
+	available := 0
+	var latest time.Time
+	for _, id := range s.order {
+		item := s.items[id]
+		if item == nil || item.Status != events.StatusNormal {
+			continue
+		}
+		available++
+		if item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now) {
+			continue
+		}
+		if discoveredAt, err := time.Parse(time.RFC3339, item.ModelSnapshot.DiscoveredAt); err == nil && discoveredAt.After(latest) {
+			latest = discoveredAt
+		}
+		for _, model := range item.ModelSnapshot.Models {
+			modelID := strings.TrimSpace(model.ID)
+			if !validSnapshotModelID(modelID) {
+				continue
+			}
+			entry := byID[modelID]
+			if entry == nil {
+				entry = &events.CatalogModel{ID: modelID, CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
+				byID[modelID] = entry
+			}
+			if model.CreatedAt > entry.CreatedAt {
+				entry.CreatedAt = model.CreatedAt
+			}
+			if entry.OwnedBy == "" {
+				entry.OwnedBy = strings.TrimSpace(model.OwnedBy)
+			}
+			entry.AccountIDs = appendUnique(entry.AccountIDs, item.ID)
+		}
+	}
+	out := events.CatalogSnapshotResult{Version: s.catalogVersion, AvailableAccounts: available}
+	if !latest.IsZero() {
+		out.UpdatedAt = latest.UTC().Format(time.RFC3339)
+	}
+	for _, entry := range byID {
+		sort.Strings(entry.AccountIDs)
+		out.Models = append(out.Models, *entry)
+	}
+	sort.Slice(out.Models, func(i, j int) bool { return out.Models[i].ID < out.Models[j].ID })
+	return out
+}
+
+func accountSupportsModel(item *account, model string, now time.Time) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	if item == nil || item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now) {
+		return false
+	}
+	for _, entry := range item.ModelSnapshot.Models {
+		if entry.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
+func snapshotExpired(snapshot *events.AccountModelSnapshot, now time.Time) bool {
+	if snapshot == nil || strings.TrimSpace(snapshot.ExpiresAt) == "" {
+		return snapshot == nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339, snapshot.ExpiresAt)
+	return err != nil || !expiresAt.After(now)
+}
+
+func modelDiscoveryRetryDue(item *account, now time.Time) bool {
+	if item == nil || strings.TrimSpace(item.ModelDiscoveryRetryAt) == "" {
+		return true
+	}
+	retryAt, err := time.Parse(time.RFC3339, item.ModelDiscoveryRetryAt)
+	return err != nil || !retryAt.After(now)
+}
+
+func modelDiscoveryRetryDelay(failures int) time.Duration {
+	if failures < 1 {
+		failures = 1
+	}
+	delay := modelDiscoveryRetryBase
+	for attempt := 1; attempt < failures && delay < modelDiscoveryRetryMax; attempt++ {
+		delay *= 2
+	}
+	if delay > modelDiscoveryRetryMax {
+		return modelDiscoveryRetryMax
+	}
+	return delay
+}
+
+func normalizeSnapshot(accountID string, snapshot events.AccountModelSnapshot) events.AccountModelSnapshot {
+	out := events.AccountModelSnapshot{
+		AccountID:    accountID,
+		DiscoveredAt: strings.TrimSpace(snapshot.DiscoveredAt),
+		ExpiresAt:    strings.TrimSpace(snapshot.ExpiresAt),
+	}
+	if out.DiscoveredAt == "" {
+		out.DiscoveredAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	seen := make(map[string]struct{}, len(snapshot.Models))
+	for _, model := range snapshot.Models {
+		id := strings.TrimSpace(model.ID)
+		if !validSnapshotModelID(id) {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out.Models = append(out.Models, events.AccountModelEntry{ID: id, CreatedAt: model.CreatedAt, OwnedBy: bounded(model.OwnedBy, 128)})
+	}
+	sort.Slice(out.Models, func(i, j int) bool { return out.Models[i].ID < out.Models[j].ID })
+	return out
+}
+
+func validSnapshotModelID(id string) bool {
+	if id == "" || len(id) > 256 {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func bounded(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit > 0 && len(value) > limit {
+		return value[:limit]
+	}
+	return value
+}
+
+func (s *Store) bumpCatalogLocked() { s.catalogVersion++ }
 
 func validateProxy(value string) error {
 	value = strings.TrimSpace(value)

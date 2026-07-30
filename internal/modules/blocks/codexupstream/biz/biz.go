@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,10 @@ const (
 
 var responsesURL = "https://chatgpt.com/backend-api/codex/responses"
 
+// The model-list endpoint is account-scoped. Its client version is a local
+// Codex identity detail, never an inbound request parameter.
+var modelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=0.135.0"
+
 type streamUpdate struct {
 	data              []byte
 	done              bool
@@ -57,11 +62,12 @@ type Upstream struct {
 
 func New(hub event.Hub, background task.BackgroundRoutine) *Upstream {
 	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}}
-	b.topics = []string{events.TopicComplete, events.TopicStart, events.TopicPull, events.TopicCancel}
+	b.topics = []string{events.TopicComplete, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicListModels}
 	b.SubscribeFunc(events.TopicComplete, b.handleComplete)
 	b.SubscribeFunc(events.TopicStart, b.handleStart)
 	b.SubscribeFunc(events.TopicPull, b.handlePull)
 	b.SubscribeFunc(events.TopicCancel, b.handleCancel)
+	b.SubscribeFunc(events.TopicListModels, b.handleListModels)
 	return b
 }
 
@@ -200,6 +206,25 @@ func (s *Upstream) handleCancel(ev event.Event, result event.Result) {
 	result.Set(events.CancelResult{Cancelled: canceled}, nil)
 }
 
+// handleListModels projects the account-scoped Codex model endpoint into a
+// bounded DTO. Raw upstream payloads and credentials never leave this Block.
+func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.ListModelsCommand)
+	if !ok || strings.TrimSpace(cmd.AccessToken) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex model list command"))
+		return
+	}
+	models, class, err := listModels(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex model discovery failed: "+string(class)))
+		return
+	}
+	result.Set(events.ListModelsResult{Models: models}, nil)
+}
+
 func (s *Upstream) runStream(ctx context.Context, streamID string, stream *responseStream, body io.ReadCloser, maxLine int64) {
 	defer body.Close()
 	defer close(stream.updates)
@@ -267,6 +292,95 @@ func perform(ctx context.Context, accessToken, accountID, proxy string, body []b
 		return nil, classifyTransport(err), 0, err
 	}
 	return response, "", retryAfterSeconds(response.Header), nil
+}
+
+func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]events.ModelDescriptor, events.ErrorClass, error) {
+	client, err := newHTTPClient(proxy)
+	if err != nil {
+		return nil, events.ErrorProtocol, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return nil, events.ErrorProtocol, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
+	req.Header.Set("User-Agent", codexUserAgent)
+	req.Header.Set("Originator", codexOriginator)
+	if accountID = strings.TrimSpace(accountID); accountID != "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, classifyTransport(err), err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, classifyStatus(response.StatusCode), fmt.Errorf("Codex models request returned %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, (8<<20)+1))
+	if err != nil {
+		return nil, classifyTransport(err), err
+	}
+	if len(body) > 8<<20 {
+		return nil, events.ErrorProtocol, fmt.Errorf("Codex models response exceeds limit")
+	}
+	models, err := parseModels(body)
+	if err != nil {
+		return nil, events.ErrorProtocol, err
+	}
+	return models, "", nil
+}
+
+func parseModels(body []byte) ([]events.ModelDescriptor, error) {
+	var payload struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode Codex models: %w", err)
+	}
+	if payload.Models == nil {
+		return nil, fmt.Errorf("Codex models response has no models array")
+	}
+	seen := make(map[string]struct{}, len(payload.Models))
+	out := make([]events.ModelDescriptor, 0, len(payload.Models))
+	for _, raw := range payload.Models {
+		var item struct {
+			Slug    string `json:"slug"`
+			ID      string `json:"id"`
+			Created int64  `json:"created"`
+			OwnedBy string `json:"owned_by"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			continue
+		}
+		id := strings.TrimSpace(item.Slug)
+		if id == "" {
+			id = strings.TrimSpace(item.ID)
+		}
+		if !validModelID(id) {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, events.ModelDescriptor{ID: id, CreatedAt: item.Created, OwnedBy: strings.TrimSpace(item.OwnedBy)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func validModelID(id string) bool {
+	if id == "" || len(id) > 256 {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func forceStream(body []byte) ([]byte, error) {

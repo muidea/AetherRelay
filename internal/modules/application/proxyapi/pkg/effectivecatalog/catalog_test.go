@@ -86,14 +86,14 @@ func TestBuiltinProviderViewCapabilities(t *testing.T) {
 	}
 }
 
-func TestBuildCodexOAuthUsesExplicitModelsAndStaticConflictRule(t *testing.T) {
+func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) {
 	cfg := config.Config{
 		CodexOAuth: config.CodexOAuthConfig{Enabled: true, Models: []string{"gpt-5.2", "gpt-5.2-codex"}},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-5.2": {ID: "gpt-5.2", RouteOwner: "static", Operations: []string{config.ModelOperationChatCompletions}},
 		},
 	}
-	snap := BuildWithCodex(cfg, 0, 0, nil, "", 1)
+	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 1, AvailableAccounts: 1, Models: []PoolModel{{ID: "gpt-5.2"}, {ID: "gpt-5.2-codex"}}})
 	if snap.CodexOAuthProvider.Status != StatusDegraded || snap.CodexOAuthProvider.ConflictCount != 1 {
 		t.Fatalf("Codex provider=%+v", snap.CodexOAuthProvider)
 	}
@@ -106,5 +106,16 @@ func TestBuildCodexOAuthUsesExplicitModelsAndStaticConflictRule(t *testing.T) {
 	provider := BuiltinProviderViewFor(CodexOAuthProviderID)
 	if provider.Protocol != CodexOAuthProviderID || len(provider.EndpointCapabilities) != 1 || provider.EndpointCapabilities[0] != config.EndpointCapabilityResponses {
 		t.Fatalf("Codex synthetic provider=%+v", provider)
+	}
+}
+
+func TestBuildCodexOAuthPublishesDiscoveredUnionWithoutAllowlist(t *testing.T) {
+	cfg := config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}
+	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 4, AvailableAccounts: 2, UpdatedAt: "2026-07-30T00:00:00Z", Models: []PoolModel{{ID: "gpt-5.3-codex", OwnedBy: "openai"}}})
+	if snap.CodexOAuthProvider.Status != StatusReady || snap.CodexOAuthProvider.ModelCount != 1 || snap.CodexOAuthVersion != 4 {
+		t.Fatalf("Codex provider=%+v version=%d", snap.CodexOAuthProvider, snap.CodexOAuthVersion)
+	}
+	if route, ok := snap.Lookup("gpt-5.3-codex"); !ok || route.RouteOwner != CodexOAuthProviderID || route.OwnedBy != "openai" {
+		t.Fatalf("Codex discovered route=%+v ok=%v", route, ok)
 	}
 }

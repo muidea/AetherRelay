@@ -38,12 +38,12 @@ internal/modules/
   blocks/metricsruntime/  metrics/SLO Block；biz/ 管理 Registry 与 SLO 生命周期
     pkg/events/                 Metrics Block 的记录与查询 typed 合同及 EventHub-backed Port
   blocks/codexaccountpool/ Codex CLI OAuth 凭据资源 Block
-    biz/                         账号调度、结果反馈、PKCE 与 refresh 单飞
+    biz/                         账号调度、模型快照、结果反馈、PKCE 与 refresh 单飞
     internal/store/              DuckDB 的 Codex OAuth 独立持久化状态
     internal/oauth/              Codex OAuth 授权码与 refresh token client
     pkg/events/                  Codex 账号 owner 的 typed EventHub 合同
   blocks/codexupstream/    原生 Codex Responses 上游技术 Block
-    biz/                         HTTP/SSE、账号代理与有界 Pull/Cancel 流执行
+    biz/                         HTTP/SSE、账号作用域模型枚举、账号代理与有界 Pull/Cancel 流执行
     pkg/events/                  上游执行 owner 的 typed EventHub 合同
   application/proxyapi/         OpenAI/Anthropic Application Module
     biz/                         EventHub 配置更新与运行期依赖
@@ -94,7 +94,7 @@ web/admin/                嵌入二进制的管理页
 - `internal/services/aiproxy` 是进程级 service，不是 plugin module：它只驱动 application lifecycle，并通过 RouteRegistry Initiator 等待 HTTP listener 退出。
 - Config Block 是启动配置与 Provider 热更新后的当前配置 owner。`routeregistry` Initiator 是 magicEngine RouteRegistry 与 listener 的进程级基础设施 owner；它只暴露窄的 `RouteRegistryHelper`，不承载任何业务状态。listener 由 process service 在所有 Module 路由注册后启动，避免启动窗口 404。
 - Usage 与 Metrics/SLO 是独立技术 Block，不暴露 HTTP route 或可变资源对象。Metrics Block 经 `MetricsPort` 接收记录事件和返回只读投影；Proxy 直接持有其唯一使用的 Client API Key 索引与 interaction archive。
-- Codex OAuth 账号池是单一凭据资源 owner，因此位于 `blocks/codexaccountpool`，而不是 ChatGPT Web 的编排 Module；它以 typed EventHub 命令提供脱敏管理视图、短时 request credential、结果反馈与单飞刷新。`blocks/codexupstream` 只拥有 Codex Responses HTTP/SSE 技术执行，不持有账号池状态。`proxyapi` 负责获取账号、401 刷新后安全重试一次、429 切换账号及 usage/归档结算，HTTP handler 不直接访问 token、store 或上游 client。
+- Codex OAuth 账号池是单一凭据与模型快照资源 owner，因此位于 `blocks/codexaccountpool`，而不是 ChatGPT Web 的编排 Module；它以 typed EventHub 命令提供脱敏管理视图、短时 request credential、账号模型快照、结果反馈与单飞刷新。`blocks/codexupstream` 只拥有 Codex Responses HTTP/SSE 和账号作用域模型枚举技术执行，不持有账号池状态。`proxyapi` 负责编排定时发现、有效目录合成、获取账号、401 刷新后安全重试一次、429 切换账号及 usage/归档结算，HTTP handler 不直接访问 token、store 或上游 client。
 - Proxy API 与 Provider Admin 是有状态业务聚合 Module：它们通过 EventHub 获取 Block 依赖，并在 `Setup` 中注入 `RouteRegistryHelper`、在 `Run` 中注册各自路由。Admin 请求 Config Block 激活新配置，Config Block 同步命令 Proxy 应用新快照。Proxy 仅注册协议白名单路径，不依赖 Module Weight 确保路由优先级。
 - `internal/pkg/aiproxyarchive`、`internal/pkg/aiproxyclientauth`、`internal/pkg/aiproxyconfig`、`internal/pkg/aiproxystate`、`internal/pkg/aiproxyusage`、`internal/pkg/aiproxymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。`aiproxystate` 只提供同一 `state.database` 的受限连接与 owner 表，不承载跨 owner 的业务读写。
 - EventHub topic、Command、Data、Result 与 handler 由维护资源、状态或能力的 owner 在其 `pkg/events` 定义：调用方只导入并使用 owner 合同，不得按投递方复制 DTO 或 topic；`aiproxymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。

@@ -77,6 +77,88 @@ func TestCooldownAndRefreshDue(t *testing.T) {
 	}
 }
 
+func TestModelDiscoverySnapshotControlsCatalogAndAcquire(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: "access-a", RefreshToken: "refresh-a", AccountID: "account-a", Proxy: "http://127.0.0.1:8080"},
+		{AccessToken: "access-b", RefreshToken: "refresh-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := store.List()
+	if len(accounts) != 2 {
+		t.Fatalf("accounts=%+v", accounts)
+	}
+	candidates := store.ListDiscoveryCandidates()
+	if len(candidates.Candidates) != 2 || !candidates.Candidates[0].NeedsDiscovery || !candidates.Candidates[0].DiscoveryDue {
+		t.Fatalf("discovery candidates=%+v", candidates)
+	}
+	if candidates.Candidates[0].AccountIDHeader != "account-a" || candidates.Candidates[0].Proxy != "http://127.0.0.1:8080" {
+		t.Fatalf("candidate transport projection=%+v", candidates.Candidates[0])
+	}
+
+	now := time.Now().UTC()
+	if _, ok, err := store.PutModelSnapshot(accounts[0].ID, events.AccountModelSnapshot{
+		Models:       []events.AccountModelEntry{{ID: "gpt-5.2-codex", OwnedBy: "openai"}},
+		DiscoveredAt: now.Format(time.RFC3339),
+		ExpiresAt:    now.Add(time.Hour).Format(time.RFC3339),
+	}); err != nil || !ok {
+		t.Fatalf("put snapshot ok=%v err=%v", ok, err)
+	}
+	if _, err := store.Acquire("gpt-5.3-codex", nil); err == nil {
+		t.Fatal("undiscovered model must not acquire an account")
+	}
+	acquired, err := store.Acquire("gpt-5.2-codex", nil)
+	if err != nil || acquired.AccountID != accounts[0].ID {
+		t.Fatalf("acquire=%+v err=%v", acquired, err)
+	}
+	catalog := store.CatalogSnapshot()
+	if catalog.AvailableAccounts != 2 || len(catalog.Models) != 1 || catalog.Models[0].ID != "gpt-5.2-codex" || len(catalog.Models[0].AccountIDs) != 1 {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+	view, ok := store.View(accounts[0].ID)
+	if !ok || view.ModelSnapshot == nil || len(view.ModelSnapshot.Models) != 1 {
+		t.Fatalf("account view=%+v ok=%v", view, ok)
+	}
+	payload, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"access-a", "refresh-a", "account-a", "127.0.0.1:8080"} {
+		if contains(string(payload), secret) {
+			t.Fatalf("model discovery view leaked secret %q: %s", secret, payload)
+		}
+	}
+}
+
+func TestExpiredModelSnapshotIsNotPublishedAndFailureIsScoped(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	if _, ok, err := store.PutModelSnapshot(id, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-5.2-codex"}}, DiscoveredAt: past, ExpiresAt: past}); err != nil || !ok {
+		t.Fatalf("put expired snapshot ok=%v err=%v", ok, err)
+	}
+	if models := store.CatalogSnapshot().Models; len(models) != 0 {
+		t.Fatalf("expired snapshot was published: %+v", models)
+	}
+	if _, err := store.Acquire("gpt-5.2-codex", nil); err == nil {
+		t.Fatal("expired snapshot must not acquire")
+	}
+	retryAt, found, err := store.RecordModelDiscoveryFailure(id, "upstream unavailable")
+	if err != nil || !found || retryAt == "" {
+		t.Fatalf("failure retry_at=%q found=%v err=%v", retryAt, found, err)
+	}
+	candidates := store.ListDiscoveryCandidates()
+	if len(candidates.Candidates) != 1 || candidates.Candidates[0].DiscoveryDue {
+		t.Fatalf("failed account should honor discovery backoff: %+v", candidates)
+	}
+}
+
 func contains(value, needle string) bool {
 	for index := 0; index+len(needle) <= len(value); index++ {
 		if value[index:index+len(needle)] == needle {

@@ -40,6 +40,7 @@ type Proxy struct {
 	catalogPublisher CatalogPublisher
 	catalog          effectivecatalog.Snapshot
 	discoveryMu      sync.Mutex
+	codexDiscoveryMu sync.Mutex
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {

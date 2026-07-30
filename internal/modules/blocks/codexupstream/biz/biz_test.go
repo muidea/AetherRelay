@@ -71,3 +71,31 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	}
 	_ = response.Body.Close()
 }
+
+func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != "0.135.0" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.String())
+		}
+		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
+			t.Fatalf("account headers=%v", r.Header)
+		}
+		if r.Header.Get("User-Agent") != codexUserAgent || r.Header.Get("Originator") != codexOriginator {
+			t.Fatalf("Codex identity headers=%v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-5.2-codex","created":7,"owned_by":"openai"},{"id":"gpt-5.3-codex"},{"slug":"gpt-5.2-codex"},{"slug":"bad\nmodel"}]}`))
+	}))
+	defer server.Close()
+	previousURL := modelsURL
+	modelsURL = server.URL + "?client_version=0.135.0"
+	t.Cleanup(func() { modelsURL = previousURL })
+
+	models, class, err := listModels(context.Background(), "access-token", "account-header", "")
+	if err != nil || class != "" {
+		t.Fatalf("list models class=%q err=%v", class, err)
+	}
+	if len(models) != 2 || models[0].ID != "gpt-5.2-codex" || models[0].CreatedAt != 7 || models[1].ID != "gpt-5.3-codex" {
+		t.Fatalf("models=%+v", models)
+	}
+}

@@ -56,12 +56,14 @@ type Snapshot struct {
 	StaticModels    map[string]config.ModelInfo
 	BuiltinProvider BuiltinProvider
 	BuiltinModels   map[string]BuiltinModel
-	// Codex OAuth models are explicitly configured, while their credentials
-	// remain in the independent Codex account-pool owner.
+	// Codex OAuth models are discovered and cached by the independent Codex
+	// account-pool owner. Configured codex_oauth.models, when present, is an
+	// optional allowlist rather than a second model authority.
 	CodexOAuthProvider BuiltinProvider
 	CodexOAuthModels   map[string]BuiltinModel
 	// Version is the account-pool catalog generation used to build this snapshot.
-	Version uint64
+	Version           uint64
+	CodexOAuthVersion uint64
 }
 
 // Route is the request-time resolved model route from either static or builtin.
@@ -80,36 +82,45 @@ type Route struct {
 // Build constructs a snapshot from static config and account-pool catalog models.
 // Static exact model IDs always win over builtin models with the same ID.
 func Build(cfg config.Config, poolVersion uint64, availableAccounts int, poolModels []PoolModel, updatedAt string) Snapshot {
-	return BuildWithCodex(cfg, poolVersion, availableAccounts, poolModels, updatedAt, 0)
+	return BuildWithCodex(cfg, CatalogInput{Version: poolVersion, AvailableAccounts: availableAccounts, Models: poolModels, UpdatedAt: updatedAt}, CatalogInput{})
 }
 
-// BuildWithCodex constructs both builtin projections. Codex availability is a
-// runtime health count, not a model-discovery signal: its model IDs come from
-// the explicit codex_oauth.models configuration contract.
-func BuildWithCodex(cfg config.Config, poolVersion uint64, availableAccounts int, poolModels []PoolModel, updatedAt string, codexAvailable int) Snapshot {
+// CatalogInput is the constrained union emitted by one account-pool owner.
+// It contains no EventHub or persistence handles.
+type CatalogInput struct {
+	Version           uint64
+	AvailableAccounts int
+	Models            []PoolModel
+	UpdatedAt         string
+}
+
+// BuildWithCodex constructs both builtin projections from their separate,
+// account-scoped discovery caches. Static exact model IDs always win.
+func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 	static := map[string]config.ModelInfo{}
 	for id, info := range cfg.ModelCatalog {
 		static[id] = info
 	}
 	snap := Snapshot{
 		StaticModels:  static,
-		Version:       poolVersion,
+		Version:       chatGPT.Version,
 		BuiltinModels: map[string]BuiltinModel{},
 		BuiltinProvider: BuiltinProvider{
 			ID:                BuiltinProviderID,
 			Enabled:           cfg.ChatGPTWeb.Enabled,
-			AvailableAccounts: availableAccounts,
-			UpdatedAt:         strings.TrimSpace(updatedAt),
+			AvailableAccounts: chatGPT.AvailableAccounts,
+			UpdatedAt:         strings.TrimSpace(chatGPT.UpdatedAt),
 		},
 		CodexOAuthModels:   map[string]BuiltinModel{},
-		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Enabled: cfg.CodexOAuth.Enabled, AvailableAccounts: codexAvailable},
+		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Enabled: cfg.CodexOAuth.Enabled, AvailableAccounts: codex.AvailableAccounts, UpdatedAt: strings.TrimSpace(codex.UpdatedAt)},
+		CodexOAuthVersion:  codex.Version,
 	}
 	if !cfg.ChatGPTWeb.Enabled {
 		snap.BuiltinProvider.Status = StatusDisabled
 		snap.BuiltinProvider.UnavailableReason = "chatgpt_web is not enabled"
 	} else {
 		var conflicts []string
-		for _, model := range poolModels {
+		for _, model := range chatGPT.Models {
 			id := strings.TrimSpace(model.ID)
 			if id == "" || len(model.Operations) == 0 {
 				continue
@@ -137,10 +148,10 @@ func BuildWithCodex(cfg config.Config, poolVersion uint64, availableAccounts int
 			}
 		}
 		switch {
-		case availableAccounts == 0:
+		case chatGPT.AvailableAccounts == 0:
 			snap.BuiltinProvider.Status = StatusEmpty
 			snap.BuiltinProvider.UnavailableReason = "no available chatgpt web accounts"
-		case len(snap.BuiltinModels) == 0 && poolVersion == 0:
+		case len(snap.BuiltinModels) == 0 && chatGPT.Version == 0:
 			snap.BuiltinProvider.Status = StatusDiscovering
 			snap.BuiltinProvider.UnavailableReason = "model discovery has not completed"
 		case len(snap.BuiltinModels) == 0:
@@ -152,11 +163,11 @@ func BuildWithCodex(cfg config.Config, poolVersion uint64, availableAccounts int
 			snap.BuiltinProvider.Status = StatusReady
 		}
 	}
-	buildCodexOAuth(&snap, cfg, static, codexAvailable)
+	buildCodexOAuth(&snap, cfg, static, codex)
 	return snap
 }
 
-func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config.ModelInfo, available int) {
+func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config.ModelInfo, catalog CatalogInput) {
 	if snap == nil {
 		return
 	}
@@ -166,13 +177,27 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		provider.UnavailableReason = "codex_oauth is not enabled"
 		return
 	}
-	conflicts := make([]string, 0)
+	allowlist := make(map[string]struct{}, len(cfg.CodexOAuth.Models))
 	for _, id := range cfg.CodexOAuth.Models {
-		id = strings.TrimSpace(id)
+		if id = strings.TrimSpace(id); id != "" {
+			allowlist[id] = struct{}{}
+		}
+	}
+	conflicts := make([]string, 0)
+	for _, model := range catalog.Models {
+		id := strings.TrimSpace(model.ID)
 		if id == "" {
 			continue
 		}
-		entry := BuiltinModel{ID: id, Operations: []string{config.ModelOperationChatCompletions}, OwnedBy: "codex"}
+		if len(allowlist) > 0 {
+			if _, allowed := allowlist[id]; !allowed {
+				continue
+			}
+		}
+		entry := BuiltinModel{ID: id, Operations: []string{config.ModelOperationChatCompletions}, CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
+		if entry.OwnedBy == "" {
+			entry.OwnedBy = "codex"
+		}
 		if _, exists := static[id]; exists {
 			entry.ConflictWithStatic = true
 			conflicts = append(conflicts, id)
@@ -192,12 +217,19 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		}
 	}
 	switch {
-	case len(snap.CodexOAuthModels) == 0:
-		provider.Status = StatusEmpty
-		provider.UnavailableReason = "no configured Codex models"
-	case available == 0:
+	case catalog.AvailableAccounts == 0:
 		provider.Status = StatusEmpty
 		provider.UnavailableReason = "no available Codex OAuth accounts"
+	case len(snap.CodexOAuthModels) == 0 && catalog.Version == 0:
+		provider.Status = StatusDiscovering
+		provider.UnavailableReason = "model discovery has not completed"
+	case len(snap.CodexOAuthModels) == 0:
+		provider.Status = StatusEmpty
+		if len(allowlist) > 0 {
+			provider.UnavailableReason = "no discovered Codex models match the configured allowlist"
+		} else {
+			provider.UnavailableReason = "no discoverable Codex models"
+		}
 	case provider.ConflictCount > 0:
 		provider.Status = StatusDegraded
 	default:
@@ -218,7 +250,14 @@ func Reconfigure(cfg config.Config, previous Snapshot) Snapshot {
 			OwnedBy:    model.OwnedBy,
 		})
 	}
-	return BuildWithCodex(cfg, previous.Version, previous.BuiltinProvider.AvailableAccounts, poolModels, previous.BuiltinProvider.UpdatedAt, previous.CodexOAuthProvider.AvailableAccounts)
+	codexModels := make([]PoolModel, 0, len(previous.CodexOAuthModels))
+	for _, model := range previous.CodexOAuthModels {
+		codexModels = append(codexModels, PoolModel{ID: model.ID, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
+	}
+	return BuildWithCodex(cfg,
+		CatalogInput{Version: previous.Version, AvailableAccounts: previous.BuiltinProvider.AvailableAccounts, Models: poolModels, UpdatedAt: previous.BuiltinProvider.UpdatedAt},
+		CatalogInput{Version: previous.CodexOAuthVersion, AvailableAccounts: previous.CodexOAuthProvider.AvailableAccounts, Models: codexModels, UpdatedAt: previous.CodexOAuthProvider.UpdatedAt},
+	)
 }
 
 // PoolModel is the discovery input DTO (account-pool catalog projection).

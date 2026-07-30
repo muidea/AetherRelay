@@ -86,10 +86,11 @@ chatgpt_web:
     turn_timeout_seconds: 300
 
 # 独立 Codex CLI OAuth 账号池。凭据仅保存于 state.database，不写入 YAML。
-# models 必须是精确模型 ID；它们仅服务原生 POST /v1/responses。
+# 模型按账号自动发现并缓存；models 可选，设置时仅作为精确 allowlist，
+# 限制哪些已发现模型会对外发布。它们仅服务原生 POST /v1/responses。
 codex_oauth:
   enabled: false
-  models: gpt-5.2-codex, gpt-5.2
+  # models: gpt-5.2-codex, gpt-5.2
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
   refresh_account_interval_minute: 0
 
@@ -142,5 +143,6 @@ model_catalog:
     context_window_tokens: 8192
     max_output_tokens: 8191
     operations: embeddings
-  # ChatGPT Web 自动发现的模型不写入 model_catalog。
+  # ChatGPT Web 与 Codex OAuth 自动发现的模型不写入 model_catalog。
+
   # 若静态 catalog 与自动模型同名，静态 RouteOwner 优先。

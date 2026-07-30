@@ -13,6 +13,13 @@ const (
 	TopicHealth       = "aiproxy.codex.accountpool.command.health"
 	TopicOAuthStart   = "aiproxy.codex.accountpool.command.oauth_start"
 	TopicOAuthFinish  = "aiproxy.codex.accountpool.command.oauth_finish"
+	// Discovery contracts keep the constrained, account-scoped model cache in
+	// the account-pool owner. Tokens only cross the EventHub for the discovery
+	// request and are never exposed through the Admin HTTP API.
+	TopicListDiscoveryCandidates     = "aiproxy.codex.accountpool.command.list_discovery_candidates"
+	TopicPutModelSnapshot            = "aiproxy.codex.accountpool.command.put_model_snapshot"
+	TopicRecordModelDiscoveryFailure = "aiproxy.codex.accountpool.command.record_model_discovery_failure"
+	TopicCatalogSnapshot             = "aiproxy.codex.accountpool.command.catalog_snapshot"
 )
 
 const (
@@ -33,18 +40,21 @@ const (
 // AccountView is the redacted management projection. It never contains
 // access, refresh, or ID tokens, account IDs, or proxy URLs.
 type AccountView struct {
-	ID                         string         `json:"id"`
-	Email                      string         `json:"email,omitempty"`
-	PlanType                   string         `json:"plan_type,omitempty"`
-	Status                     string         `json:"status"`
-	Success                    int            `json:"success"`
-	Fail                       int            `json:"fail"`
-	CreatedAt                  string         `json:"created_at,omitempty"`
-	LastUsedAt                 string         `json:"last_used_at,omitempty"`
-	LastTokenRefreshAt         string         `json:"last_token_refresh_at,omitempty"`
-	LastTokenRefreshErrorAt    string         `json:"last_token_refresh_error_at,omitempty"`
-	LastTokenRefreshErrorClass string         `json:"last_token_refresh_error_class,omitempty"`
-	Cooldowns                  []CooldownView `json:"cooldowns,omitempty"`
+	ID                         string                `json:"id"`
+	Email                      string                `json:"email,omitempty"`
+	PlanType                   string                `json:"plan_type,omitempty"`
+	Status                     string                `json:"status"`
+	Success                    int                   `json:"success"`
+	Fail                       int                   `json:"fail"`
+	CreatedAt                  string                `json:"created_at,omitempty"`
+	LastUsedAt                 string                `json:"last_used_at,omitempty"`
+	LastTokenRefreshAt         string                `json:"last_token_refresh_at,omitempty"`
+	LastTokenRefreshErrorAt    string                `json:"last_token_refresh_error_at,omitempty"`
+	LastTokenRefreshErrorClass string                `json:"last_token_refresh_error_class,omitempty"`
+	Cooldowns                  []CooldownView        `json:"cooldowns,omitempty"`
+	ModelSnapshot              *AccountModelSnapshot `json:"model_snapshot,omitempty"`
+	ModelDiscoveryRetryAt      string                `json:"model_discovery_retry_at,omitempty"`
+	ModelDiscoveryLastError    string                `json:"model_discovery_last_error,omitempty"`
 }
 
 type CooldownView struct {
@@ -129,6 +139,76 @@ type RefreshByIDResult struct {
 	Refreshed int           `json:"refreshed"`
 	Failed    int           `json:"failed"`
 	Items     []AccountView `json:"items"`
+}
+
+// AccountModelEntry is one authoritative model ID returned by the Codex
+// account's /backend-api/codex/models endpoint. Codex OAuth is exposed only
+// through Responses, so the operation is fixed by the proxy owner instead of
+// trusting arbitrary upstream capability fields.
+type AccountModelEntry struct {
+	ID        string `json:"id"`
+	CreatedAt int64  `json:"created_at,omitempty"`
+	OwnedBy   string `json:"owned_by,omitempty"`
+}
+
+// AccountModelSnapshot is the persisted, bounded discovery cache for one
+// account. It deliberately excludes raw upstream payloads and credentials.
+type AccountModelSnapshot struct {
+	AccountID    string              `json:"account_id"`
+	Models       []AccountModelEntry `json:"models"`
+	DiscoveredAt string              `json:"discovered_at"`
+	ExpiresAt    string              `json:"expires_at,omitempty"`
+}
+
+type DiscoveryCandidate struct {
+	AccountID       string
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+	NeedsDiscovery  bool
+	DiscoveryDue    bool
+}
+
+type ListDiscoveryCandidatesCommand struct{}
+type ListDiscoveryCandidatesResult struct {
+	Candidates []DiscoveryCandidate
+	Version    uint64
+}
+
+type PutModelSnapshotCommand struct {
+	AccountID string
+	Snapshot  AccountModelSnapshot
+}
+type PutModelSnapshotResult struct {
+	Version uint64
+	OK      bool
+}
+
+type RecordModelDiscoveryFailureCommand struct {
+	AccountID string
+	Error     string
+}
+type RecordModelDiscoveryFailureResult struct {
+	RetryAt string
+	OK      bool
+}
+
+// CatalogModel is the deduplicated model union for healthy accounts. Account
+// IDs stay visible only to the proxy/account owners and are not an Admin API
+// response shape.
+type CatalogModel struct {
+	ID         string   `json:"id"`
+	CreatedAt  int64    `json:"created_at,omitempty"`
+	OwnedBy    string   `json:"owned_by,omitempty"`
+	AccountIDs []string `json:"account_ids,omitempty"`
+}
+
+type CatalogSnapshotCommand struct{}
+type CatalogSnapshotResult struct {
+	Version           uint64
+	Models            []CatalogModel
+	AvailableAccounts int
+	UpdatedAt         string
 }
 
 type HealthCommand struct{}

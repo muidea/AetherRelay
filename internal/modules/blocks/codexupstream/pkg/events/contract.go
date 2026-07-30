@@ -2,10 +2,11 @@
 package events
 
 const (
-	TopicComplete = "aiproxy.codex.upstream.command.complete"
-	TopicStart    = "aiproxy.codex.upstream.command.start"
-	TopicPull     = "aiproxy.codex.upstream.command.pull"
-	TopicCancel   = "aiproxy.codex.upstream.command.cancel"
+	TopicComplete   = "aiproxy.codex.upstream.command.complete"
+	TopicStart      = "aiproxy.codex.upstream.command.start"
+	TopicPull       = "aiproxy.codex.upstream.command.pull"
+	TopicCancel     = "aiproxy.codex.upstream.command.cancel"
+	TopicListModels = "aiproxy.codex.upstream.command.list_models"
 )
 
 type Header struct {
@@ -68,3 +69,21 @@ type PullResult struct {
 
 type CancelCommand struct{ StreamID string }
 type CancelResult struct{ Cancelled bool }
+
+// ListModelsCommand is intentionally credential-bearing only on the typed
+// EventHub path. It is never returned to an HTTP caller.
+type ListModelsCommand struct {
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+}
+
+// ModelDescriptor is the small, validated projection of a Codex model-list
+// entry. Unknown upstream fields never cross the Block boundary.
+type ModelDescriptor struct {
+	ID        string
+	CreatedAt int64
+	OwnedBy   string
+}
+
+type ListModelsResult struct{ Models []ModelDescriptor }

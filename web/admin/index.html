@@ -73,8 +73,8 @@
       <a href="#/providers" id="navProviders" class="active">Provider 管理</a>
       <a href="#/client-keys" id="navClientKeys">客户端 Key</a>
       <a href="#/usage" id="navUsage">使用统计</a>
-      <a href="#/chatgpt" id="navChatGPT">ChatGPT Web</a>
-      <a href="#/codex" id="navCodex">Codex OAuth</a>
+      <a href="#/account-pools/chatgptweb" id="navAccountPools">账号池</a>
+      <a href="#/features/tasks" id="navFeatures">功能集</a>
     </nav>
     <div class="header-status"><i class="dot" id="storeDot"></i><span id="storeLabel">本地管理模式</span><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
   </header>
@@ -149,14 +149,31 @@
       </section>
     </section>
 
+    <section id="panelAccountPools" class="panel">
+      <section class="hero"><div><h2>账号池管理</h2><p>ChatGPT Web 与 Codex OAuth 是彼此独立的账号池；凭据、代理、刷新、冷却和模型缓存均不会互相共享。</p></div></section>
+      <div class="subnav" role="tablist" aria-label="账号池类型">
+        <button type="button" id="poolSubChatGPT" data-pool-sub="chatgptweb" class="active">ChatGPT Web</button>
+        <button type="button" id="poolSubCodex" data-pool-sub="codex">Codex OAuth</button>
+      </div>
+    </section>
+
+    <section id="panelFeatures" class="panel">
+      <section class="hero"><div><h2>功能集</h2><p>图片任务、图片库与历史对话均由 ChatGPT Web 功能组件提供，分别用于提交、管理产物和恢复临时会话。</p></div></section>
+      <div class="subnav" role="tablist" aria-label="功能集">
+        <button type="button" id="featureSubTasks" data-feature-sub="tasks" class="active">图片任务</button>
+        <button type="button" id="featureSubImages" data-feature-sub="images">图片库</button>
+        <button type="button" id="featureSubChat" data-feature-sub="chat">历史对话</button>
+      </div>
+    </section>
+
     <section id="panelChatGPT" class="panel">
       <section class="hero">
         <div>
           <h2>ChatGPT Web</h2>
-          <p>管理 ChatGPT Web 账号池、临时文本对话、图片任务与本地图片库。本页仅面向管理员，敏感字段不会展示或持久化。</p>
+          <p>账号池与功能集均使用该独立的 ChatGPT Web 上游；敏感字段不会展示或写入浏览器存储。</p>
         </div>
       </section>
-      <div class="subnav" role="tablist" aria-label="ChatGPT Web 子页签">
+      <div id="cgLegacySubnav" class="subnav hidden" role="tablist" aria-label="ChatGPT Web 子页签">
         <button type="button" id="cgSubAccounts" class="active" data-cg-sub="accounts">账号池</button>
         <button type="button" id="cgSubTasks" data-cg-sub="tasks">图片任务</button>
         <button type="button" id="cgSubImages" data-cg-sub="images">图片库</button>
@@ -478,7 +495,7 @@ function authHeaders(extra={}){
 function goLogin(){authState.csrf="";authState.username="";location.replace(ADMIN_BASE+"/login");}
 
 const capabilityOptions={openai:["chat_completions","responses","completions","embeddings"],anthropic:["messages"]};
-const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
+const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",poolSub:"chatgptweb",featureSub:"tasks",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
@@ -628,14 +645,26 @@ function parseHash(){
   const p=new URLSearchParams(qs||"");
   let tab="providers";
   let cgSub="accounts";
+  let poolSub="chatgptweb";
+  let featureSub="tasks";
   if(path.startsWith("usage"))tab="usage";
   else if(path.startsWith("client-keys"))tab="client-keys";
+  else if(path.startsWith("account-pools")){
+    tab="account-pools";
+    const part=path.split("/")[1];
+    if(part==="codex"||part==="chatgptweb")poolSub=part;
+  }else if(path.startsWith("features")){
+    tab="features";
+    const part=path.split("/")[1];
+    if(part==="tasks"||part==="images"||part==="chat")featureSub=part;
+    cgSub=featureSub;
+  }
   else if(path.startsWith("chatgpt")){
-    tab="chatgpt";
     const parts=path.split("/");
     if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts"||parts[1]==="chat")cgSub=parts[1];
-  }else if(path.startsWith("codex"))tab="codex";
-  return {tab,cgSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||"",conversationId:p.get("id")||""};
+    if(cgSub==="accounts"){tab="account-pools";poolSub="chatgptweb"}else{tab="features";featureSub=cgSub}
+  }else if(path.startsWith("codex")){tab="account-pools";poolSub="codex"}
+  return {tab,cgSub,poolSub,featureSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||"",conversationId:p.get("id")||""};
 }
 function setHash(){
   if(state.tab==="usage"){
@@ -645,35 +674,61 @@ function setHash(){
     location.hash="#/usage?"+q.toString();
     return;
   }
-  if(state.tab==="chatgpt"){
-    const sub=state.cg.sub||"accounts";
+  if(state.tab==="account-pools"){
+    location.hash="#/account-pools/"+(state.poolSub||"chatgptweb");
+    return;
+  }
+  if(state.tab==="features"){
+    const sub=state.featureSub||"tasks";
     const q=new URLSearchParams();
     if(sub==="tasks"&&state.cg.tasks.owner)q.set("owner_id",state.cg.tasks.owner);
     if(sub==="chat"&&state.cg.chat.current&&state.cg.chat.current.id)q.set("id",state.cg.chat.current.id);
-    location.hash="#/chatgpt/"+sub+(q.toString()?"?"+q.toString():"");
+    location.hash="#/features/"+sub+(q.toString()?"?"+q.toString():"");
     return;
   }
-  if(state.tab==="codex"){location.hash="#/codex";return}
   location.hash="#/"+state.tab;
 }
 function showTab(tab){
-  if(state.tab==="chatgpt"&&tab!=="chatgpt"){stopAllTaskPolling();stopTemporaryChatPolling();}
+  if(state.tab==="features"&&tab!=="features"){stopAllTaskPolling();stopTemporaryChatPolling();}
   state.tab=tab;
   $("panelProviders").classList.toggle("active",tab==="providers");
   $("panelClientKeys").classList.toggle("active",tab==="client-keys");
   $("panelUsage").classList.toggle("active",tab==="usage");
-  $("panelChatGPT").classList.toggle("active",tab==="chatgpt");
-  $("panelCodex").classList.toggle("active",tab==="codex");
+  $("panelAccountPools").classList.toggle("active",tab==="account-pools");
+  $("panelFeatures").classList.toggle("active",tab==="features");
+  $("panelChatGPT").classList.toggle("active",(tab==="account-pools"&&state.poolSub!=="codex")||tab==="features");
+  $("panelCodex").classList.toggle("active",tab==="account-pools"&&state.poolSub==="codex");
   $("navProviders").classList.toggle("active",tab==="providers");
   $("navClientKeys").classList.toggle("active",tab==="client-keys");
   $("navUsage").classList.toggle("active",tab==="usage");
-  $("navChatGPT").classList.toggle("active",tab==="chatgpt");
-  $("navCodex").classList.toggle("active",tab==="codex");
+  $("navAccountPools").classList.toggle("active",tab==="account-pools");
+  $("navFeatures").classList.toggle("active",tab==="features");
   if(tab==="usage"){loadFilterOptions(false);loadUsage(true)}
   else if(tab==="client-keys")loadClientKeys();
-  else if(tab==="chatgpt")showChatGPTSub(state.cg.sub||"accounts");
-  else if(tab==="codex")loadCodexAccounts();
+  else if(tab==="account-pools")showAccountPoolSub(state.poolSub||"chatgptweb");
+  else if(tab==="features")showFeatureSub(state.featureSub||"tasks");
   else loadProviders();
+}
+function showAccountPoolSub(sub){
+  state.poolSub=sub==="codex"?"codex":"chatgptweb";
+  $("poolSubChatGPT").classList.toggle("active",state.poolSub==="chatgptweb");
+  $("poolSubCodex").classList.toggle("active",state.poolSub==="codex");
+  $("panelChatGPT").classList.toggle("active",state.tab==="account-pools"&&state.poolSub==="chatgptweb");
+  $("panelCodex").classList.toggle("active",state.tab==="account-pools"&&state.poolSub==="codex");
+  if(state.poolSub==="codex")loadCodexAccounts();
+  else showChatGPTSub("accounts");
+  if(state.tab==="account-pools")setHash();
+}
+function showFeatureSub(sub){
+  if(sub!=="images"&&sub!=="chat")sub="tasks";
+  state.featureSub=sub;
+  $("featureSubTasks").classList.toggle("active",sub==="tasks");
+  $("featureSubImages").classList.toggle("active",sub==="images");
+  $("featureSubChat").classList.toggle("active",sub==="chat");
+  $("panelChatGPT").classList.toggle("active",state.tab==="features");
+  $("panelCodex").classList.remove("active");
+  showChatGPTSub(sub);
+  if(state.tab==="features")setHash();
 }
 function showChatGPTSub(sub){
   if(state.cg.sub==="tasks"&&sub!=="tasks")stopAllTaskPolling();
@@ -687,7 +742,7 @@ function showChatGPTSub(sub){
   $("cgSubTasks").classList.toggle("active",state.cg.sub==="tasks");
   $("cgSubImages").classList.toggle("active",state.cg.sub==="images");
   $("cgSubChat").classList.toggle("active",state.cg.sub==="chat");
-  if(state.tab==="chatgpt")setHash();
+  if(state.tab==="features")setHash();
   if(state.cg.sub==="accounts")loadChatGPTAccounts();
   else if(state.cg.sub==="tasks"){
     setTaskMode(state.cg.tasks.mode||"generation");
@@ -733,6 +788,20 @@ function codexRefreshBadge(account){
   if(!refreshedAt)return "";
   return `<div class="account-refresh-state"><span class="tag tag-refresh-ok">${esc(`最近刷新 · ${formatAccountDate(refreshedAt)}`)}</span></div>`;
 }
+function codexModelSnapshotBadge(account){
+  const snapshot=account?.model_snapshot;
+  const models=Array.isArray(snapshot?.models)?snapshot.models:[];
+  const retryAt=String(account?.model_discovery_retry_at||"").trim();
+  const lastError=String(account?.model_discovery_last_error||"").trim();
+  if(!snapshot){
+    const retry=retryAt?`<div class="subtle" title="${esc(lastError||"模型发现暂不可用")}">待发现${retryAt?` · 下次 ${esc(formatAccountDate(retryAt))}`:""}</div>`:"<div class=\"subtle\">待发现</div>";
+    return retry;
+  }
+  const visible=models.slice(0,3).map(model=>`<span class="tag tag-purple">${esc(model.id||"")}</span>`).join("");
+  const more=models.length>3?`<span class="tag tag-default">+${models.length-3}</span>`:"";
+  const expires=snapshot.expires_at?`<div class="subtle">缓存至 ${esc(formatAccountDate(snapshot.expires_at))}</div>`:"";
+  return `<div class="tags">${visible||"<span class=\"subtle\">未发现可用模型</span>"}${more}</div>${expires}`;
+}
 async function loadCodexAccounts(){
   const box=$("codexAccTable");
   box.className="loading";box.innerHTML=`<div class="spin"></div><div>正在读取账号…</div>`;
@@ -751,7 +820,7 @@ async function loadCodexAccounts(){
 function filteredCodexAccounts(){
   const q=(state.codex.query||"").trim().toLowerCase();
   if(!q)return state.codex.accounts;
-  return state.codex.accounts.filter(item=>String(item.id||"").toLowerCase().includes(q)||String(item.email||"").toLowerCase().includes(q));
+  return state.codex.accounts.filter(item=>String(item.id||"").toLowerCase().includes(q)||String(item.email||"").toLowerCase().includes(q)||(item.model_snapshot?.models||[]).some(model=>String(model.id||"").toLowerCase().includes(q)));
 }
 function renderCodexAccounts(){
   const all=state.codex.accounts||[],rows=filteredCodexAccounts();
@@ -767,10 +836,10 @@ function renderCodexAccounts(){
   if(!rows.length){$("codexAccTable").className="";$("codexAccTable").innerHTML=`<div class="empty">${all.length?"没有匹配的账号":"尚未导入 Codex OAuth 账号"}</div>`;return}
   const body=rows.map(item=>{
     const id=String(item.id||"");
-    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td class="mono" title="${esc(id)}">${esc(id)}</td><td>${maskEmail(item.email)}</td><td>${codexStatusTag(item.status)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}</td><td>${Number(item.success)||0}</td><td>${Number(item.fail)||0}</td><td class="subtle">${esc(formatAccountDate(item.last_used_at))}</td><td class="subtle">${esc(formatAccountDate(item.created_at))}</td><td><div class="actions"><button class="link-btn" data-codex-refresh="${esc(id)}" ${state.codex.busy?"disabled":""}>刷新</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>删除</button></div></td></tr>`;
+    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td class="mono" title="${esc(id)}">${esc(id)}</td><td>${maskEmail(item.email)}</td><td>${codexStatusTag(item.status)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}</td><td>${codexModelSnapshotBadge(item)}</td><td>${Number(item.success)||0}</td><td>${Number(item.fail)||0}</td><td class="subtle">${esc(formatAccountDate(item.last_used_at))}</td><td class="subtle">${esc(formatAccountDate(item.created_at))}</td><td><div class="actions"><button class="link-btn" data-codex-refresh="${esc(id)}" ${state.codex.busy?"disabled":""}>刷新</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>删除</button></div></td></tr>`;
   }).join("");
   $("codexAccTable").className="";
-  $("codexAccTable").innerHTML=`<div class="table-wrap"><table><thead><tr><th style="width:42px"><input type="checkbox" id="codexCheckAll" title="全选当前筛选"></th><th>本地 ID</th><th>邮箱</th><th>状态 / 冷却 / 刷新</th><th>成功</th><th>失败</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  $("codexAccTable").innerHTML=`<div class="table-wrap"><table><thead><tr><th style="width:42px"><input type="checkbox" id="codexCheckAll" title="全选当前筛选"></th><th>本地 ID</th><th>邮箱</th><th>状态 / 冷却 / 刷新</th><th>模型缓存</th><th>成功</th><th>失败</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${body}</tbody></table></div>`;
   const allBox=$("codexCheckAll");
   allBox.checked=rows.length>0&&rows.every(item=>state.codex.selected.has(item.id));
   allBox.indeterminate=rows.some(item=>state.codex.selected.has(item.id))&&!allBox.checked;
@@ -1698,6 +1767,8 @@ function applyUsageState(p){
   }
 }
 function applyChatGPTState(p){
+  if(p.poolSub==="chatgptweb"||p.poolSub==="codex")state.poolSub=p.poolSub;
+  if(p.featureSub==="tasks"||p.featureSub==="images"||p.featureSub==="chat")state.featureSub=p.featureSub;
   if(p.cgSub)state.cg.sub=p.cgSub;
   if(typeof p.owner==="string"){
     state.cg.tasks.owner=p.owner;
@@ -2118,6 +2189,8 @@ function copyAllTemporaryMessages(){
 }
 
 // ChatGPT Web events
+document.querySelectorAll("[data-pool-sub]").forEach(btn=>btn.onclick=()=>{showAccountPoolSub(btn.dataset.poolSub)});
+document.querySelectorAll("[data-feature-sub]").forEach(btn=>btn.onclick=()=>{showFeatureSub(btn.dataset.featureSub)});
 $("codexRetry").onclick=loadCodexAccounts;
 $("codexAccReload").onclick=loadCodexAccounts;
 $("codexAccSearch").oninput=e=>{state.codex.query=e.target.value;renderCodexAccounts()};

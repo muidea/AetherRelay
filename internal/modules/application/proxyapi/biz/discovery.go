@@ -15,6 +15,8 @@ import (
 	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	codexcommon "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
 	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	codexupcommon "ai-proxy/internal/modules/blocks/codexupstream/pkg/common"
+	codexupevents "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 
@@ -52,19 +54,23 @@ func (s *Proxy) startModelDiscovery(ctx context.Context) {
 		return
 	}
 	// Initial empty-but-enabled snapshot so the service can start before the
-	// first successful discovery round completes.
-	s.publishCatalog(effectivecatalog.BuildWithCodex(s.config, 0, 0, nil, time.Now().UTC().Format(time.RFC3339), 0))
+	// first successful account-scoped discovery round completes.
+	s.publishCatalog(effectivecatalog.BuildWithCodex(s.config, effectivecatalog.CatalogInput{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}, effectivecatalog.CatalogInput{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}))
+	// Kick immediate discovery for each enabled OAuth domain, then schedule
+	// periodic full scans and a faster retry watch.
+	if s.config.ChatGPTWeb.Enabled {
+		_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })
+	}
 	if s.config.CodexOAuth.Enabled {
-		s.refreshEffectiveCatalog(ctx)
+		_ = s.BackgroundRoutine().AsyncFunction(func() { s.runCodexDiscoveryRound(ctx, false) })
 	}
-	if !s.config.ChatGPTWeb.Enabled {
-		return
-	}
-	// Kick an immediate discovery pass, then schedule periodic full scans and a
-	// faster watch that only rebuilds/discovers when accounts still need it.
-	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })
 	s.Timer(ctx, discoveryInterval, 0, func() {
-		s.runDiscoveryRound(ctx, false)
+		if s.config.ChatGPTWeb.Enabled {
+			s.runDiscoveryRound(ctx, false)
+		}
+		if s.config.CodexOAuth.Enabled {
+			s.runCodexDiscoveryRound(ctx, false)
+		}
 	})
 	s.Timer(ctx, discoveryWatchInterval, discoveryWatchInterval, func() {
 		s.watchDiscovery(ctx)
@@ -72,20 +78,29 @@ func (s *Proxy) startModelDiscovery(ctx context.Context) {
 }
 
 func (s *Proxy) watchDiscovery(ctx context.Context) {
-	if !s.config.ChatGPTWeb.Enabled {
-		return
-	}
 	// Always rebuild from durable snapshots so Admin/import races converge even
 	// when no upstream round is needed.
 	s.refreshEffectiveCatalog(ctx)
-	candidates, err := s.listDiscoveryCandidates(ctx)
-	if err != nil {
-		return
+	if s.config.ChatGPTWeb.Enabled {
+		candidates, err := s.listDiscoveryCandidates(ctx)
+		if err == nil {
+			for _, candidate := range candidates.Candidates {
+				if candidate.DiscoveryDue {
+					_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, true) })
+					break
+				}
+			}
+		}
 	}
-	for _, candidate := range candidates.Candidates {
-		if candidate.DiscoveryDue {
-			_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, true) })
-			return
+	if s.config.CodexOAuth.Enabled {
+		candidates, err := s.listCodexDiscoveryCandidates(ctx)
+		if err == nil {
+			for _, candidate := range candidates.Candidates {
+				if candidate.DiscoveryDue {
+					_ = s.BackgroundRoutine().AsyncFunction(func() { s.runCodexDiscoveryRound(ctx, true) })
+					break
+				}
+			}
 		}
 	}
 }
@@ -199,6 +214,77 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 	}
 }
 
+func (s *Proxy) runCodexDiscoveryRound(ctx context.Context, dueOnly bool) {
+	if !s.config.CodexOAuth.Enabled {
+		return
+	}
+	if !s.codexDiscoveryMu.TryLock() {
+		return
+	}
+	defer s.codexDiscoveryMu.Unlock()
+
+	candidates, err := s.listCodexDiscoveryCandidates(ctx)
+	if err != nil {
+		slog.Warn("Codex model discovery failed", "stage", "list_candidates", "error", err.Error())
+		return
+	}
+	sem := make(chan struct{}, discoveryConcurrency)
+	var wg sync.WaitGroup
+	for _, candidate := range candidates.Candidates {
+		if strings.TrimSpace(candidate.AccountID) == "" || strings.TrimSpace(candidate.AccessToken) == "" {
+			continue
+		}
+		if dueOnly && !candidate.DiscoveryDue {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		cand := candidate
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			s.discoverOneCodexAccount(ctx, cand)
+		}()
+	}
+	wg.Wait()
+	s.refreshEffectiveCatalog(ctx)
+}
+
+func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexevents.DiscoveryCandidate) {
+	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
+	defer cancel()
+	value, err := s.SendEvent(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{
+		AccessToken:     candidate.AccessToken,
+		AccountIDHeader: candidate.AccountIDHeader,
+		Proxy:           candidate.Proxy,
+	})).Get()
+	if err != nil {
+		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", err)
+		return
+	}
+	listed, ok := value.(codexupevents.ListModelsResult)
+	if !ok {
+		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", fmt.Errorf("invalid model list result"))
+		return
+	}
+	now := time.Now().UTC()
+	snapshot := codexevents.AccountModelSnapshot{
+		AccountID:    candidate.AccountID,
+		DiscoveredAt: now.Format(time.RFC3339),
+		ExpiresAt:    now.Add(modelSnapshotTTL).Format(time.RFC3339),
+	}
+	for _, model := range listed.Models {
+		if strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		snapshot.Models = append(snapshot.Models, codexevents.AccountModelEntry{ID: model.ID, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
+	}
+	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutModelSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutModelSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot})).Get()
+	if putErr != nil {
+		s.recordCodexDiscoveryFailure(ctx, candidate, "put_snapshot", putErr)
+	}
+}
+
 func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, cause error) {
 	if cause == nil {
 		return
@@ -215,6 +301,17 @@ func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.
 	}
 }
 
+func (s *Proxy) recordCodexDiscoveryFailure(ctx context.Context, candidate codexevents.DiscoveryCandidate, stage string, cause error) {
+	if cause == nil {
+		return
+	}
+	slog.Warn("Codex model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error", cause.Error())
+	_, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRecordModelDiscoveryFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordModelDiscoveryFailureCommand{AccountID: candidate.AccountID, Error: cause.Error()})).Get()
+	if err != nil {
+		slog.Warn("Codex model discovery failure was not recorded", "account_id", candidate.AccountID, "error", err.Error())
+	}
+}
+
 func (s *Proxy) listDiscoveryCandidates(ctx context.Context) (accevents.ListDiscoveryCandidatesResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicListDiscoveryCandidates, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.ListDiscoveryCandidatesCommand{})).Get()
 	if err != nil {
@@ -227,34 +324,53 @@ func (s *Proxy) listDiscoveryCandidates(ctx context.Context) (accevents.ListDisc
 	return result, nil
 }
 
+func (s *Proxy) listCodexDiscoveryCandidates(ctx context.Context) (codexevents.ListDiscoveryCandidatesResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicListDiscoveryCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListDiscoveryCandidatesCommand{})).Get()
+	if err != nil {
+		return codexevents.ListDiscoveryCandidatesResult{}, fmt.Errorf("list Codex discovery candidates failed")
+	}
+	result, ok := value.(codexevents.ListDiscoveryCandidatesResult)
+	if !ok {
+		return codexevents.ListDiscoveryCandidatesResult{}, fmt.Errorf("invalid Codex discovery candidates result")
+	}
+	return result, nil
+}
+
 func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
-	result := accevents.CatalogSnapshotResult{}
+	chatGPTResult := accevents.CatalogSnapshotResult{}
 	if s.config.ChatGPTWeb.Enabled {
 		value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicCatalogSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.CatalogSnapshotCommand{})).Get()
 		if err != nil {
 			slog.Warn("chatgpt model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
 		} else if snapshot, ok := value.(accevents.CatalogSnapshotResult); ok {
-			result = snapshot
+			chatGPTResult = snapshot
 		}
 	}
-	codexAvailable := 0
+	codexResult := codexevents.CatalogSnapshotResult{}
 	if s.config.CodexOAuth.Enabled {
-		value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicHealth, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.HealthCommand{})).Get()
+		value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicCatalogSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.CatalogSnapshotCommand{})).Get()
 		if err != nil {
-			slog.Warn("Codex account health query failed", "error", err.Error())
-		} else if health, ok := value.(codexevents.HealthResult); ok {
-			codexAvailable = health.Available
+			slog.Warn("Codex model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
+		} else if snapshot, ok := value.(codexevents.CatalogSnapshotResult); ok {
+			codexResult = snapshot
 		}
 	}
-	poolModels := make([]effectivecatalog.PoolModel, 0, len(result.Models))
-	for _, model := range result.Models {
-		poolModels = append(poolModels, effectivecatalog.PoolModel{
+	chatGPTModels := make([]effectivecatalog.PoolModel, 0, len(chatGPTResult.Models))
+	for _, model := range chatGPTResult.Models {
+		chatGPTModels = append(chatGPTModels, effectivecatalog.PoolModel{
 			ID:         model.ID,
 			Operations: append([]string(nil), model.Operations...),
 			CreatedAt:  model.CreatedAt,
 			OwnedBy:    model.OwnedBy,
 		})
 	}
-	snap := effectivecatalog.BuildWithCodex(s.config, result.Version, result.AvailableAccounts, poolModels, result.UpdatedAt, codexAvailable)
+	codexModels := make([]effectivecatalog.PoolModel, 0, len(codexResult.Models))
+	for _, model := range codexResult.Models {
+		codexModels = append(codexModels, effectivecatalog.PoolModel{ID: model.ID, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
+	}
+	snap := effectivecatalog.BuildWithCodex(s.config,
+		effectivecatalog.CatalogInput{Version: chatGPTResult.Version, AvailableAccounts: chatGPTResult.AvailableAccounts, Models: chatGPTModels, UpdatedAt: chatGPTResult.UpdatedAt},
+		effectivecatalog.CatalogInput{Version: codexResult.Version, AvailableAccounts: codexResult.AvailableAccounts, Models: codexModels, UpdatedAt: codexResult.UpdatedAt},
+	)
 	s.publishCatalog(snap)
 }

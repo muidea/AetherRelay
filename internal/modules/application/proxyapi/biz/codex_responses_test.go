@@ -32,7 +32,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 	accounts.Subscribe(accevents.TopicRefreshToken, func(ev event.Event, result event.Result) {
 		refreshes++
 		if command := ev.Data().(accevents.RefreshTokenCommand); command.AccountID != "account-1" {
-			t.Fatalf("refresh command=%+v", command)
+			t.Errorf("refresh command=%+v", command)
 		}
 		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", Refreshed: true}, nil)
 	})
@@ -49,13 +49,13 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 		command := ev.Data().(upevents.CompleteCommand)
 		if attempts == 1 {
 			if command.AccessToken != "old-token" || command.Proxy != "http://old-proxy.invalid:8080" {
-				t.Fatalf("first upstream command=%+v", command)
+				t.Errorf("first upstream command=%+v", command)
 			}
 			result.Set(upevents.CompleteResult{ErrorClass: upevents.ErrorInvalidToken}, nil)
 			return
 		}
 		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
-			t.Fatalf("retry upstream command=%+v", command)
+			t.Errorf("retry upstream command=%+v", command)
 		}
 		result.Set(upevents.CompleteResult{Body: []byte(`{"object":"response","id":"resp_recovered"}`)}, nil)
 	})
@@ -91,7 +91,7 @@ func TestCompleteCodexResponsesUsesRefreshFailureClassForCooldownAndSwitchesAcco
 			return
 		}
 		if len(command.Exclude) != 1 || command.Exclude[0] != "account-1" {
-			t.Fatalf("unexpected exclusion=%+v", command.Exclude)
+			t.Errorf("unexpected exclusion=%+v", command.Exclude)
 		}
 		result.Set(accevents.AcquireResult{AccountID: "account-2", AccessToken: "healthy-token"}, nil)
 	})
@@ -112,7 +112,7 @@ func TestCompleteCodexResponsesUsesRefreshFailureClassForCooldownAndSwitchesAcco
 			return
 		}
 		if command.AccessToken != "healthy-token" {
-			t.Fatalf("unexpected upstream command=%+v", command)
+			t.Errorf("unexpected upstream command=%+v", command)
 		}
 		result.Set(upevents.CompleteResult{Body: []byte(`{"object":"response","id":"resp_fallback"}`)}, nil)
 	})

@@ -146,9 +146,9 @@ type ChatGPTWebConfig struct {
 	TemporaryChat                TemporaryChatConfig
 }
 
-// CodexOAuthConfig enables the native Codex Responses account pool. Models are
-// intentionally explicit: Codex does not provide a stable account-scoped
-// public model-list endpoint that ai-proxy can safely treat as an authority.
+// CodexOAuthConfig enables the native Codex Responses account pool. Models is
+// optional: when set it restricts the discovered account-model union; when
+// empty every validated model discovered for a healthy account is eligible.
 type CodexOAuthConfig struct {
 	Enabled                      bool
 	Models                       []string
@@ -2106,9 +2106,6 @@ func validateCodexOAuth(codex CodexOAuthConfig) error {
 	}
 	if !codex.Enabled {
 		return nil
-	}
-	if len(codex.Models) == 0 {
-		return fmt.Errorf("codex_oauth.models is required when codex_oauth.enabled is true")
 	}
 	for _, model := range codex.Models {
 		if strings.TrimSpace(model) == "" || strings.Contains(model, "*") {
