@@ -239,7 +239,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 	s.store.MarkRunning(ownerID, taskID, "getting_account")
 
 	// acquire account
-	accEv := event.NewEvent(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageTokenCommand{})
+	accEv := event.NewEvent(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageTokenCommand{Model: model, Operation: accevents.ModelOperationImageGenerations})
 	accRes := s.SendEvent(accEv)
 	accVal, accErr := accRes.Get()
 	if accErr != nil {
@@ -260,13 +260,37 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 	s.store.MarkProgress(ownerID, taskID, "starting_generation")
 	genVal, genErr := s.generateWithBootstrapRetry(ownerID, taskID, token, accOut.Account.Proxy, prompt, model, size, quality)
 	if genErr != nil {
-		conversationID := ""
-		if partial, ok := genVal.(upevents.GenerateImageResult); ok {
-			conversationID = partial.ConversationID
+		recovered := false
+		invalidRemoved := false
+		conversationID, class := generationFailure(genVal)
+		if class == upevents.ErrClassInvalidToken && conversationID == "" {
+			refreshed, permanent, refreshErr := s.refreshImageToken(token)
+			if refreshErr == nil && !permanent {
+				s.store.MarkProgress(ownerID, taskID, "retrying_after_oauth_refresh")
+				genVal, genErr = s.generateWithBootstrapRetry(ownerID, taskID, refreshed.AccessToken, refreshed.Account.Proxy, prompt, model, size, quality)
+				if genErr == nil {
+					recovered = true
+				} else {
+					conversationID, class = generationFailure(genVal)
+				}
+			} else if permanent {
+				s.removeInvalidImageToken(token)
+				invalidRemoved = true
+			} else {
+				class = upevents.ErrClassUpstream
+			}
 		}
-		s.markImageResult(token, false)
-		s.store.MarkError(ownerID, taskID, genErr.Error(), conversationID)
-		return
+		if !recovered {
+			if class == upevents.ErrClassInvalidToken && !invalidRemoved {
+				s.removeInvalidImageToken(token)
+			}
+			if class == "" {
+				class = upevents.ErrClassUpstream
+			}
+			s.markImageResult(token, model, false, string(class))
+			s.store.MarkError(ownerID, taskID, genErr.Error(), conversationID)
+			return
+		}
 	}
 	genOut, ok := genVal.(upevents.GenerateImageResult)
 	if !ok {
@@ -277,12 +301,12 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 	s.store.MarkProgress(ownerID, taskID, "receiving_image")
 	data, persistErr := s.persistImageOutputs(genOut.Images, baseURL)
 	if persistErr != nil {
-		s.markImageResult(token, true)
+		s.markImageResult(token, model, true, "")
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), genOut.ConversationID)
 		return
 	}
 
-	s.markImageResult(token, true)
+	s.markImageResult(token, model, true, "")
 	s.store.MarkSuccess(ownerID, taskID, data, genOut.ConversationID, genOut.Usage, time.Since(start).Milliseconds())
 }
 
@@ -324,7 +348,7 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 	}
 
 	s.store.MarkProgress(ownerID, taskID, "getting_account")
-	accEv := event.NewEvent(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageTokenCommand{})
+	accEv := event.NewEvent(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageTokenCommand{Model: model, Operation: accevents.ModelOperationImageGenerations})
 	accRes := s.SendEvent(accEv)
 	accVal, accErr := accRes.Get()
 	if accErr != nil {
@@ -356,13 +380,37 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 	editRes := s.SendEvent(editEv)
 	editVal, editErr := editRes.Get()
 	if editErr != nil {
-		conversationID := ""
-		if partial, ok := editVal.(upevents.EditImageResult); ok {
-			conversationID = partial.ConversationID
+		recovered := false
+		invalidRemoved := false
+		conversationID, class := editFailure(editVal)
+		if class == upevents.ErrClassInvalidToken && conversationID == "" {
+			refreshed, permanent, refreshErr := s.refreshImageToken(token)
+			if refreshErr == nil && !permanent {
+				s.store.MarkProgress(ownerID, taskID, "retrying_after_oauth_refresh")
+				editVal, editErr = s.executeEdit(refreshed.AccessToken, refreshed.Account.Proxy, prompt, model, size, quality, images)
+				if editErr == nil {
+					recovered = true
+				} else {
+					conversationID, class = editFailure(editVal)
+				}
+			} else if permanent {
+				s.removeInvalidImageToken(token)
+				invalidRemoved = true
+			} else {
+				class = upevents.ErrClassUpstream
+			}
 		}
-		s.markImageResult(token, false)
-		s.store.MarkError(ownerID, taskID, editErr.Error(), conversationID)
-		return
+		if !recovered {
+			if class == upevents.ErrClassInvalidToken && !invalidRemoved {
+				s.removeInvalidImageToken(token)
+			}
+			if class == "" {
+				class = upevents.ErrClassUpstream
+			}
+			s.markImageResult(token, model, false, string(class))
+			s.store.MarkError(ownerID, taskID, editErr.Error(), conversationID)
+			return
+		}
 	}
 	editOut, ok := editVal.(upevents.EditImageResult)
 	if !ok {
@@ -372,11 +420,11 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 
 	data, persistErr := s.persistImageOutputs(editOut.Images, baseURL)
 	if persistErr != nil {
-		s.markImageResult(token, true)
+		s.markImageResult(token, model, true, "")
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), editOut.ConversationID)
 		return
 	}
-	s.markImageResult(token, true)
+	s.markImageResult(token, model, true, "")
 	s.store.MarkSuccess(ownerID, taskID, data, editOut.ConversationID, editOut.Usage, time.Since(start).Milliseconds())
 }
 
@@ -419,11 +467,11 @@ func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID str
 	s.store.MarkProgress(ownerID, taskID, "receiving_image")
 	data, persistErr := s.persistImageOutputs(resumed.Images, baseURL)
 	if persistErr != nil {
-		s.markImageResult(token, true)
+		s.markImageResult(token, "", true, "")
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), conversationID)
 		return
 	}
-	s.markImageResult(token, true)
+	s.markImageResult(token, "", true, "")
 	s.store.MarkSuccess(ownerID, taskID, data, conversationID, nil, time.Since(start).Milliseconds())
 }
 
@@ -459,12 +507,57 @@ func (s *ImageTask) releaseImageSlot(accessToken string) {
 	}
 }
 
-func (s *ImageTask) markImageResult(accessToken string, success bool) {
-	value, err := s.SendEvent(event.NewEvent(accevents.TopicMarkImageResult, s.ID(), acccommon.UnitID, nil, accevents.MarkImageResultCommand{AccessToken: accessToken, Success: success})).Get()
+func (s *ImageTask) markImageResult(accessToken, model string, success bool, errorClass string) {
+	value, err := s.SendEvent(event.NewEvent(accevents.TopicMarkImageResult, s.ID(), acccommon.UnitID, nil, accevents.MarkImageResultCommand{AccessToken: accessToken, Model: model, Success: success, ErrorClass: errorClass})).Get()
 	if err != nil {
 		return
 	}
 	if _, ok := value.(accevents.MarkImageResultResult); !ok {
 		return
 	}
+}
+
+func generationFailure(value any) (string, upevents.ErrorClass) {
+	if partial, ok := value.(upevents.GenerateImageResult); ok {
+		return partial.ConversationID, partial.ErrorClass
+	}
+	return "", ""
+}
+
+func editFailure(value any) (string, upevents.ErrorClass) {
+	if partial, ok := value.(upevents.EditImageResult); ok {
+		return partial.ConversationID, partial.ErrorClass
+	}
+	return "", ""
+}
+
+func (s *ImageTask) executeEdit(token, proxy, prompt, model, size, quality string, images [][]byte) (any, *cd.Error) {
+	return s.SendEvent(event.NewEvent(upevents.TopicEditImage, s.ID(), upcommon.UnitID, nil, upevents.EditImageCommand{
+		AccessToken: token, Proxy: proxy, Prompt: prompt, Model: model, Size: size, Quality: quality, Images: images,
+	})).Get()
+}
+
+func (s *ImageTask) refreshImageToken(token string) (accevents.RefreshTextTokenResult, bool, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), context.Background(), accevents.RefreshTextTokenCommand{AccessToken: token})).Get()
+	if err != nil {
+		return accevents.RefreshTextTokenResult{}, false, err
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok {
+		return accevents.RefreshTextTokenResult{}, false, fmt.Errorf("invalid refreshed image account result")
+	}
+	if refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "" {
+		return refreshed, false, nil
+	}
+	if refreshed.PermanentFailure {
+		return refreshed, true, nil
+	}
+	return refreshed, false, fmt.Errorf("chatgpt oauth refresh temporarily unavailable")
+}
+
+func (s *ImageTask) removeInvalidImageToken(token string) {
+	if strings.TrimSpace(token) == "" {
+		return
+	}
+	_, _ = s.SendEvent(event.NewEvent(accevents.TopicRemoveInvalid, s.ID(), acccommon.UnitID, nil, accevents.RemoveInvalidCommand{AccessToken: token, Event: "image_generation"})).Get()
 }

@@ -67,11 +67,21 @@ type AccountView struct {
 	// TextCooldowns is a read-only projection of active model-scoped account
 	// cooldowns. It intentionally contains no credential or persistence data.
 	TextCooldowns []TextCooldownView `json:"text_cooldowns,omitempty"`
+	// ImageCooldowns is independent from text scheduling: a temporarily
+	// failing image model must not make an otherwise healthy text model
+	// unavailable on the same account.
+	ImageCooldowns []ImageCooldownView `json:"image_cooldowns,omitempty"`
 }
 
 // TextCooldownView is an active account/model recovery window exposed to the
 // management UI. Empty Model means an account-wide cooldown.
 type TextCooldownView struct {
+	Model      string `json:"model,omitempty"`
+	Until      string `json:"until"`
+	ErrorClass string `json:"error_class"`
+}
+
+type ImageCooldownView struct {
 	Model      string `json:"model,omitempty"`
 	Until      string `json:"until"`
 	ErrorClass string `json:"error_class"`
@@ -134,7 +144,11 @@ type ReleaseImageSlotCommand struct{ AccessToken string }
 type ReleaseImageSlotResult struct{ OK bool }
 type MarkImageResultCommand struct {
 	AccessToken string
-	Success     bool
+	// Model scopes retry cooling to the affected image model. Empty keeps
+	// compatibility with pre-catalog task recovery callers.
+	Model      string
+	Success    bool
+	ErrorClass string
 }
 type MarkImageResultResult struct{ Account AccountView }
 type AcquireTextTokenCommand struct {

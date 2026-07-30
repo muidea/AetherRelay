@@ -52,7 +52,7 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 	}
 	defer r.Body.Close()
 
-	if err := round.WriteRequest(bodyBytes); err != nil {
+	if err := h.writeArchiveRequest(round, bodyBytes); err != nil {
 		log.Printf("archive request: %v", err)
 	}
 	h.archiveAndLogClientRequest(round, r, len(bodyBytes))
@@ -153,7 +153,7 @@ func (h *Handler) forwardAnthropicNative(w http.ResponseWriter, r *http.Request,
 	if len(responseBody) > 0 {
 		_, _ = w.Write(responseBody)
 	}
-	if err := round.WriteResponse(responsePath, responseBody); err != nil {
+	if err := h.writeArchiveResponse(round, responsePath, responseBody); err != nil {
 		log.Printf("archive anthropic response: %v", err)
 	}
 	usage := tokenUsage{}
@@ -350,7 +350,7 @@ func (h *Handler) writeConversionUpstreamError(w http.ResponseWriter, r *http.Re
 		_, _ = w.Write(outBody)
 	}
 	responsePath := responseFileName(contentType, false)
-	if err := round.WriteResponse(responsePath, outBody); err != nil {
+	if err := h.writeArchiveResponse(round, responsePath, outBody); err != nil {
 		log.Printf("archive converted upstream error: %v", err)
 	}
 	duration := time.Since(start)
@@ -710,7 +710,7 @@ func (h *Handler) handleAnthropicBuffered(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(openAIBody)
-	if err := round.WriteResponse("response.json", openAIBody); err != nil {
+	if err := h.writeArchiveResponse(round, "response.json", openAIBody); err != nil {
 		log.Printf("archive anthropic response: %v", err)
 	}
 	duration := time.Since(start)
@@ -740,7 +740,7 @@ func (h *Handler) handleOpenAIToAnthropicBuffered(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(anthropicBody)
-	if err := round.WriteResponse("response.json", anthropicBody); err != nil {
+	if err := h.writeArchiveResponse(round, "response.json", anthropicBody); err != nil {
 		log.Printf("archive openai→anthropic response: %v", err)
 	}
 	duration := time.Since(start)
@@ -878,7 +878,7 @@ func (h *Handler) handleAnthropicStream(w http.ResponseWriter, r *http.Request, 
 	prepareSSEHeaders(w.Header())
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	archiveWriter, err := round.CreateResponseWriter("response.sse")
+	archiveWriter, err := h.createArchiveResponseWriter(round, "response.sse")
 	if err != nil {
 		log.Printf("archive anthropic stream response: %v", err)
 	}
@@ -1011,7 +1011,7 @@ func (h *Handler) handleAnthropicStream(w http.ResponseWriter, r *http.Request, 
 	if streamErr == nil {
 		if fullResponse, err := streamCompletionJSON(id, currentModel, created, "assistant", content.String(), finishReason, usage); err != nil {
 			log.Printf("build anthropic stream full response: %v", err)
-		} else if err := round.WriteResponse("response.json", append(fullResponse, '\n')); err != nil {
+		} else if err := h.writeArchiveResponse(round, "response.json", append(fullResponse, '\n')); err != nil {
 			log.Printf("archive anthropic stream full response: %v", err)
 		} else {
 			fullPath = "response.json"
@@ -1031,7 +1031,7 @@ func (h *Handler) handleOpenAIToAnthropicStream(w http.ResponseWriter, r *http.R
 	prepareSSEHeaders(w.Header())
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	archiveWriter, err := round.CreateResponseWriter("response.sse")
+	archiveWriter, err := h.createArchiveResponseWriter(round, "response.sse")
 	if err != nil {
 		log.Printf("archive openai→anthropic stream: %v", err)
 	}
@@ -1248,7 +1248,7 @@ func (h *Handler) handleOpenAIToAnthropicStream(w http.ResponseWriter, r *http.R
 		}
 		if encoded, err := json.Marshal(full); err != nil {
 			log.Printf("build openai→anthropic full response: %v", err)
-		} else if err := round.WriteResponse("response.json", append(encoded, '\n')); err != nil {
+		} else if err := h.writeArchiveResponse(round, "response.json", append(encoded, '\n')); err != nil {
 			log.Printf("archive openai→anthropic full response: %v", err)
 		} else {
 			fullPath = "response.json"

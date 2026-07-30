@@ -59,6 +59,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 | 路径 | `provider` | `api_key_id` | token |
 | --- | --- | --- | --- |
 | 代理 `/v1/chat/completions` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
+| 代理受限 `/v1/responses` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
 | 代理 `/v1/images/*` → chatgptweb | `chatgptweb` | 客户端 Key ID | 上游 Usage（有则 `estimated=false`） |
 | Admin 临时对话 | `chatgptweb` | `admin:<管理员用户名>` | 本地估计，`estimated=true` |
 
@@ -71,7 +72,11 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 
 启用 `chatgpt_web.enabled` 后，进程自动注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。禁止在 `providers` 中再声明 `protocol: chatgptweb`。
 
-`chatgptweb` 的公开 `POST /v1/chat/completions` 支持纯文本 `messages[].content`，以及 OpenAI content-part 数组中的 `text` 与 `image_url`。`image_url.url` 仅接受 PNG、JPEG、GIF、WebP 的 Base64 data URI；每个请求最多 4 张、合计不超过 20 MiB。代理不会下载远程 URL，因此不会为该字段打开 SSRF 通道。图片仅可用于 `user` 消息；`input_audio`、`file`、工具调用和其他未列出的 content part 会返回 `invalid_request`。这不是 Responses API 或完整 ChatGPT 网页能力的兼容承诺。
+`chatgptweb` 的公开 `POST /v1/chat/completions` 支持纯文本 `messages[].content`，以及 OpenAI content-part 数组中的 `text` 与 `image_url`。`image_url.url` 仅接受 PNG、JPEG、GIF、WebP 的 Base64 data URI；每个请求最多 4 张、合计不超过 20 MiB，且单图像素不得超过 4000 万。代理不会下载远程 URL，因此不会为该字段打开 SSRF 通道。图片仅可用于 `user` 消息；`input_audio`、`file`、工具调用和其他未列出的 content part 会返回 `invalid_request`。
+
+公开 `POST /v1/responses` 是同一文本执行器的无状态受限投影：支持字符串或 message-array `input`、`instructions`、`reasoning.effort`、`input_text` 和 data-URI `input_image`，以及基础 buffered/SSE `output`、`usage`。它不会保存 Responses 会话，也不支持 tools/function calling、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。常用采样、追踪和存储字段可兼容忽略，并在 interaction metadata 的 `ignored_features` 中可审计；会改变语义的字段会在访问账号和上游前返回 `conversion_unsupported`。
+
+图片请求的账号结果按模型独立记录。`rate_limit`、TLS、超时或上游故障会生成 60 秒生图冷却；`invalid_token` 会先触发一次 OAuth 刷新，只有尚未创建 ChatGPT conversation 时才重投一次，已有 conversation 永不盲重投。管理页只读展示文本/生图冷却和刷新状态。interaction archive 对 data URI 与 `b64_json` 始终只存 MIME、字节数和 SHA-256 摘要，不存图像字节。
 
 ## ChatGPT Web 管理页运维注意
 

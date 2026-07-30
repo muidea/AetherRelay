@@ -134,10 +134,8 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 		h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", encErr, false))
 		return
 	}
-	if round != nil {
-		if payload, mErr := json.Marshal(result); mErr == nil {
-			_ = round.WriteResponse("response.json", append(payload, '\n'))
-		}
+	if payload, mErr := json.Marshal(result); mErr == nil {
+		_ = h.writeArchiveResponse(round, "response.json", append(payload, '\n'))
 	}
 	h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, nil)
 }

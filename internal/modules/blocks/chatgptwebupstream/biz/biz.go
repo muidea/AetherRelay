@@ -157,13 +157,13 @@ func (s *Upstream) handleGenerateImage(ev event.Event, result event.Result) {
 	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
 		slog.Warn("chatgpt web image generation failed", "stage", "create_client")
-		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
+		result.Set(events.GenerateImageResult{ErrorClass: classifyError(err)}, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
 	generated, err := client.GenerateImage(context.Background(), upclient.ImageRequest{Prompt: cmd.Prompt, Model: cmd.Model, Size: cmd.Size, Quality: cmd.Quality}, upclient.ImagePollOptions{})
 	if err != nil {
 		slog.Warn("chatgpt web image generation failed", "error_class", classifyError(err))
-		result.Set(events.GenerateImageResult{ConversationID: generated.ConversationID}, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.GenerateImageResult{ConversationID: generated.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	images := make([]events.ImageOutput, 0, len(generated.Images))
@@ -185,18 +185,18 @@ func (s *Upstream) handleEditImage(ev event.Event, result event.Result) {
 	slog.Debug("chatgpt web image edit received")
 	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
+		result.Set(events.EditImageResult{ErrorClass: classifyError(err)}, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
 	references, err := client.UploadImageReferences(cmd.Images)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.EditImageResult{ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	generated, err := client.GenerateImage(context.Background(), upclient.ImageRequest{Prompt: cmd.Prompt, Model: cmd.Model, Size: cmd.Size, Quality: cmd.Quality, References: references}, upclient.ImagePollOptions{})
 	if err != nil {
 		slog.Warn("chatgpt web image edit failed", "error_class", classifyError(err))
-		result.Set(events.EditImageResult{ConversationID: generated.ConversationID}, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.EditImageResult{ConversationID: generated.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	images := make([]events.ImageOutput, 0, len(generated.Images))
@@ -217,13 +217,13 @@ func (s *Upstream) handleResumeImage(ev event.Event, result event.Result) {
 	}
 	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
+		result.Set(events.ResumeImageResult{ConversationID: cmd.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
 	timeout := time.Duration(cmd.ExtraTimeoutSecs) * time.Second
 	resumed, err := client.ResumeImage(context.Background(), cmd.ConversationID, timeout)
 	if err != nil {
-		result.Set(events.ResumeImageResult{ConversationID: resumed.ConversationID}, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.ResumeImageResult{ConversationID: resumed.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	images := make([]events.ImageOutput, 0, len(resumed.Images))

@@ -29,8 +29,10 @@ const (
 	// gateway's legacy transient cooldown. A 429 is intentionally treated as
 	// the same short, persisted recovery window here: ChatGPT Web does not
 	// expose a reliable retry-after value on every text transport.
-	textRateLimitCooldown = time.Minute
-	textTransientCooldown = time.Minute
+	textRateLimitCooldown  = time.Minute
+	textTransientCooldown  = time.Minute
+	imageRateLimitCooldown = time.Minute
+	imageTransientCooldown = time.Minute
 )
 
 type Account struct {
@@ -980,6 +982,9 @@ func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string,
 		if s.imageInflight[token] >= s.concurrency {
 			continue
 		}
+		if imageCooldownActiveLocked(acc, model, time.Now().UTC()) {
+			continue
+		}
 		if !accountSupportsModelLocked(acc, model, operation) {
 			continue
 		}
@@ -1023,7 +1028,10 @@ func (s *Store) ReleaseImageSlot(token string) {
 	}
 }
 
-func (s *Store) MarkImageResult(token string, success bool) (events.AccountView, bool) {
+// MarkImageResult updates success/failure accounting and a model-scoped image
+// recovery window. It mirrors text recovery semantics while deliberately
+// keeping image cooling independent from text scheduling.
+func (s *Store) MarkImageResult(token, model string, success bool, errorClass string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	token = s.resolveTokenLocked(token)
@@ -1032,20 +1040,32 @@ func (s *Store) MarkImageResult(token string, success bool) (events.AccountView,
 		return events.AccountView{}, false
 	}
 	changed := false
-	if success && acc.Quota > 0 {
-		acc.Quota--
-		changed = true
-		if acc.Quota == 0 {
-			acc.Status = StatusLimited
-		}
-	}
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
 	}
 	if success {
+		if acc.Quota > 0 {
+			acc.Quota--
+			changed = true
+			if acc.Quota == 0 {
+				acc.Status = StatusLimited
+			}
+		}
 		acc.Extra["success"] = extraInt(acc, "success") + 1
+		clearImageCooldownLocked(acc, model)
 	} else {
 		acc.Extra["fail"] = extraInt(acc, "fail") + 1
+		now := time.Now().UTC()
+		switch strings.ToLower(strings.TrimSpace(errorClass)) {
+		case "invalid_token":
+			acc.Status = StatusAbnormal
+			acc.Quota = 0
+			changed = true
+		case "rate_limit":
+			setImageCooldownLocked(acc, model, now.Add(imageRateLimitCooldown), "rate_limit")
+		case "tls", "timeout", "upstream":
+			setImageCooldownLocked(acc, model, now.Add(imageTransientCooldown), strings.ToLower(strings.TrimSpace(errorClass)))
+		}
 	}
 	_ = s.saveLocked()
 	if changed {
@@ -1054,6 +1074,20 @@ func (s *Store) MarkImageResult(token string, success bool) (events.AccountView,
 	view := toView(acc, true)
 	view.ImageInflight = s.imageInflight[token]
 	return view, true
+}
+
+const imageCooldownExtraKey = "image_cooldowns"
+
+func imageCooldownActiveLocked(acc *Account, model string, now time.Time) bool {
+	return cooldownActiveLocked(acc, imageCooldownExtraKey, model, now)
+}
+
+func setImageCooldownLocked(acc *Account, model string, until time.Time, errorClass string) {
+	setCooldownLocked(acc, imageCooldownExtraKey, model, until, errorClass)
+}
+
+func clearImageCooldownLocked(acc *Account, model string) {
+	clearCooldownLocked(acc, imageCooldownExtraKey, model)
 }
 
 func (s *Store) AcquireTextToken(exclude []string, model, operation string) (events.AccountView, bool) {
@@ -1176,10 +1210,14 @@ func textCooldownKey(model string) string {
 }
 
 func textCooldownActiveLocked(acc *Account, model string, now time.Time) bool {
+	return cooldownActiveLocked(acc, textCooldownExtraKey, model, now)
+}
+
+func cooldownActiveLocked(acc *Account, extraKey, model string, now time.Time) bool {
 	if acc == nil || acc.Extra == nil {
 		return false
 	}
-	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	cooldowns, ok := acc.Extra[extraKey].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -1197,16 +1235,20 @@ func textCooldownActiveLocked(acc *Account, model string, now time.Time) bool {
 }
 
 func setTextCooldownLocked(acc *Account, model string, until time.Time, errorClass string) {
+	setCooldownLocked(acc, textCooldownExtraKey, model, until, errorClass)
+}
+
+func setCooldownLocked(acc *Account, extraKey, model string, until time.Time, errorClass string) {
 	if acc == nil {
 		return
 	}
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
 	}
-	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	cooldowns, ok := acc.Extra[extraKey].(map[string]any)
 	if !ok {
 		cooldowns = map[string]any{}
-		acc.Extra[textCooldownExtraKey] = cooldowns
+		acc.Extra[extraKey] = cooldowns
 	}
 	key := textCooldownKey(model)
 	if existing, ok := cooldowns[key].(map[string]any); ok {
@@ -1223,16 +1265,20 @@ func setTextCooldownLocked(acc *Account, model string, until time.Time, errorCla
 }
 
 func clearTextCooldownLocked(acc *Account, model string) {
+	clearCooldownLocked(acc, textCooldownExtraKey, model)
+}
+
+func clearCooldownLocked(acc *Account, extraKey, model string) {
 	if acc == nil || acc.Extra == nil {
 		return
 	}
-	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	cooldowns, ok := acc.Extra[extraKey].(map[string]any)
 	if !ok {
 		return
 	}
 	delete(cooldowns, textCooldownKey(model))
 	if len(cooldowns) == 0 {
-		delete(acc.Extra, textCooldownExtraKey)
+		delete(acc.Extra, extraKey)
 	}
 }
 
@@ -1289,6 +1335,7 @@ func toView(acc *Account, withToken bool) events.AccountView {
 		LastTokenRefreshErrorAt:    extraString(acc, "last_token_refresh_error_at"),
 		LastTokenRefreshErrorClass: extraString(acc, "last_token_refresh_error_class"),
 		TextCooldowns:              activeTextCooldowns(acc, time.Now().UTC()),
+		ImageCooldowns:             activeImageCooldowns(acc, time.Now().UTC()),
 	}
 	if withToken {
 		v.AccessToken = acc.AccessToken
@@ -1300,14 +1347,38 @@ func toView(acc *Account, withToken bool) events.AccountView {
 // windows for the admin read model. Expired records may remain in Extra until
 // the next account mutation, but they must never be rendered as live state.
 func activeTextCooldowns(acc *Account, now time.Time) []events.TextCooldownView {
+	entries := activeCooldownEntries(acc, textCooldownExtraKey, now)
+	items := make([]events.TextCooldownView, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, events.TextCooldownView{Model: entry.Model, Until: entry.Until, ErrorClass: entry.ErrorClass})
+	}
+	return items
+}
+
+func activeImageCooldowns(acc *Account, now time.Time) []events.ImageCooldownView {
+	entries := activeCooldownEntries(acc, imageCooldownExtraKey, now)
+	items := make([]events.ImageCooldownView, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, events.ImageCooldownView{Model: entry.Model, Until: entry.Until, ErrorClass: entry.ErrorClass})
+	}
+	return items
+}
+
+type cooldownEntry struct {
+	Model      string
+	Until      string
+	ErrorClass string
+}
+
+func activeCooldownEntries(acc *Account, extraKey string, now time.Time) []cooldownEntry {
 	if acc == nil || acc.Extra == nil {
 		return nil
 	}
-	cooldowns, ok := acc.Extra[textCooldownExtraKey].(map[string]any)
+	cooldowns, ok := acc.Extra[extraKey].(map[string]any)
 	if !ok {
 		return nil
 	}
-	items := make([]events.TextCooldownView, 0, len(cooldowns))
+	items := make([]cooldownEntry, 0, len(cooldowns))
 	for key, raw := range cooldowns {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -1321,7 +1392,7 @@ func activeTextCooldowns(acc *Account, now time.Time) []events.TextCooldownView 
 		if model == "*" {
 			model = ""
 		}
-		items = append(items, events.TextCooldownView{
+		items = append(items, cooldownEntry{
 			Model:      model,
 			Until:      until.Format(time.RFC3339),
 			ErrorClass: asString(entry["error_class"]),

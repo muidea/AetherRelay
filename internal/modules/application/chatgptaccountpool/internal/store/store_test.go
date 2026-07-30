@@ -49,7 +49,7 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 	if !ok {
 		t.Fatal("acquire after release failed")
 	}
-	result, marked := s.MarkImageResult(acc2.AccessToken, true)
+	result, marked := s.MarkImageResult(acc2.AccessToken, "", true, "")
 	if !marked || result.Success != 1 || result.Fail != 0 || result.ImageInflight != 1 {
 		t.Fatalf("image result accounting=%+v marked=%v", result, marked)
 	}
@@ -456,5 +456,49 @@ func TestTextCooldownIsModelScopedAndExpires(t *testing.T) {
 	}
 	if _, exists := s.items["token-a"].Extra[textCooldownExtraKey]; exists {
 		t.Fatal("successful text result must clear its model cooldown")
+	}
+}
+
+func TestImageCooldownIsModelScopedAndClearsOnSuccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	s := New(path, 1)
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	quota := 3
+	account, found, err := s.Update("token-a", "plus", StatusNormal, &quota, "")
+	if err != nil || !found {
+		t.Fatalf("update found=%v err=%v", found, err)
+	}
+	if _, ok, err := s.PutModelSnapshot(account.ID, events.AccountModelSnapshot{AccountID: account.ID, Models: []events.AccountModelEntry{
+		{ID: "gpt-image-2", Operations: []string{events.ModelOperationImageGenerations}},
+		{ID: "gpt-image-1", Operations: []string{events.ModelOperationImageGenerations}},
+	}}); err != nil || !ok {
+		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
+	}
+	if _, ok := s.MarkImageResult("token-a", "gpt-image-2", false, "rate_limit"); !ok {
+		t.Fatal("record image rate limit")
+	}
+	items := s.List()
+	if len(items) != 1 || len(items[0].ImageCooldowns) != 1 {
+		t.Fatalf("image cooldown view=%+v", items)
+	}
+	cooldown := items[0].ImageCooldowns[0]
+	if cooldown.Model != "gpt-image-2" || cooldown.ErrorClass != "rate_limit" || cooldown.Until == "" {
+		t.Fatalf("image cooldown=%+v", cooldown)
+	}
+	if _, ok := s.AcquireImageToken("", "", nil, "gpt-image-2", events.ModelOperationImageGenerations); ok {
+		t.Fatal("rate-limited image model must be in cooldown")
+	}
+	if acquired, ok := s.AcquireImageToken("", "", nil, "gpt-image-1", events.ModelOperationImageGenerations); !ok || acquired.ID != account.ID {
+		t.Fatalf("unaffected image model acquire=%+v ok=%v", acquired, ok)
+	} else {
+		s.ReleaseImageSlot(acquired.AccessToken)
+	}
+	if _, ok := s.MarkImageResult("token-a", "gpt-image-2", true, ""); !ok {
+		t.Fatal("record image success")
+	}
+	if items := s.List(); len(items) != 1 || len(items[0].ImageCooldowns) != 0 {
+		t.Fatalf("success must clear image cooldown: %+v", items)
 	}
 }

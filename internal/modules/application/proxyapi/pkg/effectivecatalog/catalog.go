@@ -228,7 +228,7 @@ func BuiltinProviderView() config.Provider {
 	return config.Provider{
 		Name:                 BuiltinProviderID,
 		Protocol:             BuiltinProviderID,
-		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityImages},
+		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses, config.EndpointCapabilityImages},
 		Disabled:             false,
 	}
 }

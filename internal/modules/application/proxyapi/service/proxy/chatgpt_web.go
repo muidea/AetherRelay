@@ -29,6 +29,16 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusServiceUnavailable, apiErr, streamFailFromKind(chatgptfail.KindProviderUnavailable, apiErr.Code+": "+apiErr.Message, nil), tokenUsage{})
 		return
 	}
+	ignored, compatibilityErr := chatGPTWebChatCompatibility(body)
+	if compatibilityErr != nil {
+		compatibilityErr.Model = model
+		fail := newStreamFailWithCode(streamKindError, compatibilityErr.Code, compatibilityErr.Code+": "+compatibilityErr.Message, fmt.Errorf("%s", compatibilityErr.Message), false)
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *compatibilityErr, fail, tokenUsage{})
+		return
+	}
+	if round != nil {
+		round.SetIgnoredFeatures(ignored)
+	}
 	request, err := chatGPTTextRequest(model, body)
 	if err != nil {
 		apiErr := APIError{Code: ErrorCodeInvalidRequest, Message: err.Error(), Model: model}
@@ -67,9 +77,7 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 		}
 		bodyBytes, _ := json.Marshal(payload)
 		bodyBytes = append(bodyBytes, '\n')
-		if round != nil {
-			_ = round.WriteResponse("response.json", bodyBytes)
-		}
+		_ = h.writeArchiveResponse(round, "response.json", bodyBytes)
 		h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, nil)
 		return
 	}
@@ -171,9 +179,7 @@ func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.
 	}
 	body, _ := json.Marshal(APIErrorResponse{Error: apiErr})
 	body = append(body, '\n')
-	if round != nil {
-		_ = round.WriteResponse("response.json", body)
-	}
+	_ = h.writeArchiveResponse(round, "response.json", body)
 	if fail == nil {
 		fail = newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, nil, false)
 	}

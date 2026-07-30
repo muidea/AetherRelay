@@ -60,7 +60,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 		_ = r.Body.Close()
 	}
 	if len(bodyBytes) > 0 {
-		if err := round.WriteRequest(bodyBytes); err != nil {
+		if err := h.writeArchiveRequest(round, bodyBytes); err != nil {
 			// best-effort
 		}
 	}
@@ -77,7 +77,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
-	if err := round.WriteResponse("response.json", body); err != nil {
+	if err := h.writeArchiveResponse(round, "response.json", body); err != nil {
 		// best-effort archive
 	}
 	duration := time.Since(start)

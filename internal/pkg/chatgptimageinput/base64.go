@@ -3,8 +3,14 @@
 package imageinput
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"strings"
 
 	"github.com/gabriel-vasile/mimetype"
@@ -19,6 +25,10 @@ const (
 	// runtime knobs.
 	MaxChatImageCount = 4
 	MaxChatImageBytes = 20 << 20
+	// MaxChatImagePixels bounds decoded image dimensions before an attachment
+	// reaches the ChatGPT Web upload chain. It prevents tiny compressed image
+	// payloads from requesting unbounded raster allocation downstream.
+	MaxChatImagePixels = 40_000_000
 )
 
 // Image is a validated image payload suitable for a ChatGPT Web attachment.
@@ -100,9 +110,50 @@ func ValidateImage(value []byte) (Image, error) {
 	mimeType := strings.ToLower(mimetype.Detect(value).String())
 	switch mimeType {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		width, height, err := imageDimensions(value, mimeType)
+		if err != nil || width <= 0 || height <= 0 {
+			return Image{}, fmt.Errorf("invalid %s image", mimeType)
+		}
+		if width > MaxChatImagePixels/height {
+			return Image{}, fmt.Errorf("image dimensions exceed %d pixels", MaxChatImagePixels)
+		}
 		return Image{Bytes: value, MIMEType: mimeType}, nil
 	default:
 		return Image{}, fmt.Errorf("unsupported image MIME type %q", mimeType)
+	}
+}
+
+func imageDimensions(value []byte, mimeType string) (int, int, error) {
+	if mimeType != "image/webp" {
+		config, _, err := image.DecodeConfig(bytes.NewReader(value))
+		return config.Width, config.Height, err
+	}
+	return webpDimensions(value)
+}
+
+// webpDimensions validates enough of the WebP container to obtain its canvas
+// dimensions without importing an upstream-owner internal package.
+func webpDimensions(value []byte) (int, int, error) {
+	if len(value) < 30 || string(value[:4]) != "RIFF" || string(value[8:12]) != "WEBP" {
+		return 0, 0, fmt.Errorf("invalid WebP header")
+	}
+	switch string(value[12:16]) {
+	case "VP8X":
+		return 1 + int(value[24]) + int(value[25])<<8 + int(value[26])<<16,
+			1 + int(value[27]) + int(value[28])<<8 + int(value[29])<<16, nil
+	case "VP8 ":
+		if value[23] != 0x9d || value[24] != 0x01 || value[25] != 0x2a {
+			return 0, 0, fmt.Errorf("invalid VP8 frame")
+		}
+		return int(binary.LittleEndian.Uint16(value[26:28]) & 0x3fff), int(binary.LittleEndian.Uint16(value[28:30]) & 0x3fff), nil
+	case "VP8L":
+		if len(value) < 25 || value[20] != 0x2f {
+			return 0, 0, fmt.Errorf("invalid VP8L frame")
+		}
+		bits := binary.LittleEndian.Uint32(value[21:25])
+		return 1 + int(bits&0x3fff), 1 + int((bits>>14)&0x3fff), nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported WebP chunk")
 	}
 }
 

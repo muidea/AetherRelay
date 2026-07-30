@@ -469,7 +469,7 @@ func (s *Account) handleMarkImage(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid mark image command"))
 		return
 	}
-	acc, found := s.store.MarkImageResult(cmd.AccessToken, cmd.Success)
+	acc, found := s.store.MarkImageResult(cmd.AccessToken, cmd.Model, cmd.Success, cmd.ErrorClass)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "account not found"))
 		return

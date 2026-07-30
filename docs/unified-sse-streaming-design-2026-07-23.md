@@ -41,7 +41,7 @@
 | --- | --- | --- | --- |
 | `/v1/chat/completions` | OpenAI Chat Completions | native | 基础文本转换 |
 | `/v1/messages` | Anthropic Messages | 基础文本转换 | native |
-| `/v1/responses` | OpenAI Responses | native | 不支持 |
+| `/v1/responses` | OpenAI Responses | native | 内建 ChatGPT Web 仅提供无状态受限投影（基础文本、data-URI 图片、基础 SSE/output/usage） |
 | `/v1/completions` | OpenAI Completions | native | 不支持 |
 | `/v1/embeddings` | 不适用 | 非流式 native | 不支持 |
 
@@ -112,4 +112,3 @@ X-Accel-Buffering: no
 - `/v1/responses` 只走 OpenAI direct capability，不通过 Anthropic 转换派生；
 - 流大小、单行大小、空闲超时、客户端取消、终止事件和用量归档测试通过；
 - 不新增 WebSocket 路由、Hijacker 依赖或 WS 配置项。
-

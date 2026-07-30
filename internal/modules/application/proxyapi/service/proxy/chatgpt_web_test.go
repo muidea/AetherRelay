@@ -115,6 +115,90 @@ func TestChatGPTWebPassesImagePartsToExecutor(t *testing.T) {
 	}
 }
 
+func TestChatGPTWebCompatibilityRejectsToolsAndRecordsIgnoredControls(t *testing.T) {
+	ignored, apiErr := chatGPTWebChatCompatibility(map[string]any{
+		"model": "gpt-5", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		"temperature": 0.2, "top_p": 0.9, "user": "client-1",
+	})
+	if apiErr != nil || strings.Join(ignored, ",") != "temperature,top_p,user" {
+		t.Fatalf("ignored=%v apiErr=%+v", ignored, apiErr)
+	}
+	_, apiErr = chatGPTWebChatCompatibility(map[string]any{
+		"model": "gpt-5", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		"tools": []any{map[string]any{"type": "function"}},
+	})
+	if apiErr == nil || apiErr.Code != ErrorCodeConversionUnsupported || apiErr.Feature != "tools" {
+		t.Fatalf("tools apiErr=%+v", apiErr)
+	}
+}
+
+func TestChatGPTWebResponsesProjectsBoundedInputAndSSE(t *testing.T) {
+	store := usage.NewMemoryStore()
+	var received chatgpttext.Request
+	h := newChatGPTWebHandler(t, store, chatGPTTextExecutorStub{
+		complete: func(_ context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
+			received = request
+			return chatgpttext.Result{ConversationID: "conv-1", ActualModel: "gpt-5-actual", Text: "done"}, nil
+		},
+		stream: func(_ context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
+			received = request
+			if err := emit(chatgpttext.Delta{Text: "hel", ActualModel: "gpt-5-actual"}); err != nil {
+				return chatgpttext.Result{}, err
+			}
+			if err := emit(chatgpttext.Delta{Text: "lo"}); err != nil {
+				return chatgpttext.Result{}, err
+			}
+			return chatgpttext.Result{ActualModel: "gpt-5-actual", Text: "hello"}, nil
+		},
+	})
+	body := `{"model":"gpt-5","instructions":"be concise","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}]}],"temperature":0.5}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-client-key")
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"object":"response"`) || !strings.Contains(resp.Body.String(), `"text":"done"`) {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if len(received.Messages) != 2 || received.Messages[0].Role != "system" || received.Messages[1].Content != "inspect" || len(received.Messages[1].Images) != 1 {
+		t.Fatalf("request=%+v", received)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","stream":true,"input":"say hello"}`))
+	req.Header.Set("Authorization", "Bearer test-client-key")
+	resp = httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	for _, eventType := range []string{"response.created", "response.output_text.delta", "response.output_text.done", "response.completed"} {
+		if !strings.Contains(resp.Body.String(), eventType) {
+			t.Fatalf("missing %s in %s", eventType, resp.Body.String())
+		}
+	}
+	if events := usageEvents(t, store); len(events) != 2 {
+		t.Fatalf("usage=%+v", events)
+	} else {
+		foundStream := false
+		for _, event := range events {
+			if event.Stream && event.Outcome == "success" && event.UpstreamEndpoint == "chatgptweb_responses" && event.ConversionMode == TransportModeChatGPTWebResponses {
+				foundStream = true
+			}
+		}
+		if !foundStream {
+			t.Fatalf("responses stream usage=%+v", events)
+		}
+	}
+}
+
+func TestChatGPTWebResponsesRejectsStatefulAndToolSemantics(t *testing.T) {
+	for _, feature := range []string{"tools", "previous_response_id", "background"} {
+		body := map[string]any{"model": "gpt-5", "input": "hello", feature: true}
+		if feature == "tools" {
+			body[feature] = []any{map[string]any{"type": "function"}}
+		}
+		if _, _, apiErr := chatGPTResponsesRequest("gpt-5", body); apiErr == nil || apiErr.Code != ErrorCodeConversionUnsupported || apiErr.Feature != feature {
+			t.Fatalf("feature=%s apiErr=%+v", feature, apiErr)
+		}
+	}
+}
+
 func TestChatGPTWebTextSuccessSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	h := newChatGPTWebHandler(t, store, chatGPTTextExecutorStub{})

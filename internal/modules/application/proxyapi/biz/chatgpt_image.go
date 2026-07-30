@@ -75,58 +75,88 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 	}
 	defer s.releaseChatGPTImageSlot(ctx, account.AccessToken)
 
-	var value any
-	var upstreamErr *cd.Error
+	activeToken, activeProxy := account.AccessToken, account.Account.Proxy
+	for attempt := 0; attempt < 2; attempt++ {
+		value, upstreamErr := s.executeChatGPTImageOnce(ctx, activeToken, activeProxy, request, edit)
+		outputs, usage, conversationID, class, valid := imageUpstreamResult(value, edit)
+		if upstreamErr == nil && valid && class == "" && len(outputs) > 0 {
+			// A completed generation consumes account quota even when local image
+			// storage or client delivery later fails. Those local errors must not
+			// poison account health or leave quota feedback stale.
+			s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, true, "")
+			data, err := s.presentChatGPTImages(ctx, outputs, request.ResponseFormat, request.BaseURL)
+			if err != nil {
+				return oneImageResult{Usage: usage}, err
+			}
+			return oneImageResult{Data: data, Usage: usage}, nil
+		}
+		if !valid {
+			return oneImageResult{Usage: usage}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt image upstream result"))
+		}
+		if class == "" {
+			class = upevents.ErrClassUpstream
+		}
+		if upstreamErr != nil {
+			slog.Warn("chatgpt image execution failed", "stage", "upstream_execute", "event_error_code", upstreamErr.Code, "error_class", class, "has_conversation", conversationID != "")
+		}
+
+		// An invalid access token gets one refresh attempt. Only a failure before
+		// ChatGPT created a conversation may be submitted again; retrying after a
+		// conversation ID exists could generate a duplicate image.
+		if class == upevents.ErrClassInvalidToken && attempt == 0 {
+			refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, activeToken)
+			if refreshErr != nil {
+				s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(upevents.ErrClassUpstream))
+				return oneImageResult{Usage: usage}, refreshErr
+			}
+			if permanent {
+				s.removeInvalidChatGPTTextToken(ctx, activeToken)
+				s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(upevents.ErrClassInvalidToken))
+				return oneImageResult{Usage: usage}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image credential is invalid"))
+			}
+			if conversationID == "" {
+				activeToken, activeProxy = refreshed.AccessToken, refreshed.Account.Proxy
+				continue
+			}
+			// The refreshed credential is kept for subsequent resume/recovery, but
+			// this synchronous request is not resubmitted.
+			s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(upevents.ErrClassUpstream))
+			return oneImageResult{Usage: usage}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image conversation needs resume"))
+		}
+
+		if class == upevents.ErrClassInvalidToken {
+			s.removeInvalidChatGPTTextToken(ctx, activeToken)
+		}
+		s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(class))
+		return oneImageResult{Usage: usage}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image upstream failed"))
+	}
+	return oneImageResult{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("chatgpt image retry exhausted"))
+}
+
+func (s *Proxy) executeChatGPTImageOnce(ctx context.Context, token, proxy string, request chatgptimage.Request, edit bool) (any, *cd.Error) {
 	if edit {
-		value, upstreamErr = s.SendEvent(event.NewEventWithContext(upevents.TopicEditImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.EditImageCommand{AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality, Images: request.Images})).Get()
-	} else {
-		value, upstreamErr = s.SendEvent(event.NewEventWithContext(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.GenerateImageCommand{AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality})).Get()
+		return s.SendEvent(event.NewEventWithContext(upevents.TopicEditImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.EditImageCommand{AccessToken: token, Proxy: proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality, Images: request.Images})).Get()
 	}
-	if upstreamErr != nil {
-		partialUsage := imageUsageFromUpstream(value, edit)
-		_, generationResult := value.(upevents.GenerateImageResult)
-		_, editResult := value.(upevents.EditImageResult)
-		slog.Warn("chatgpt image execution failed", "stage", "upstream_execute", "event_error_code", upstreamErr.Code, "generation_result_type_match", generationResult, "edit_result_type_match", editResult)
-		s.markChatGPTImageResult(ctx, account.AccessToken, false)
-		return oneImageResult{Usage: partialUsage}, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt image upstream failed"))
-	}
-	var outputs []upevents.ImageOutput
-	var usage *tokenusage.Usage
+	return s.SendEvent(event.NewEventWithContext(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.GenerateImageCommand{AccessToken: token, Proxy: proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality})).Get()
+}
+
+func imageUpstreamResult(value any, edit bool) ([]upevents.ImageOutput, *tokenusage.Usage, string, upevents.ErrorClass, bool) {
 	if edit {
 		result, ok := value.(upevents.EditImageResult)
 		if !ok {
-			return oneImageResult{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt image edit result"))
+			return nil, nil, "", "", false
 		}
-		outputs = result.Images
-		usage = result.Usage
-	} else {
-		result, ok := value.(upevents.GenerateImageResult)
-		if !ok {
-			return oneImageResult{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt image generation result"))
-		}
-		outputs = result.Images
-		usage = result.Usage
+		return result.Images, result.Usage, result.ConversationID, result.ErrorClass, true
 	}
-	data, err := s.presentChatGPTImages(ctx, outputs, request.ResponseFormat, request.BaseURL)
-	if err != nil {
-		s.markChatGPTImageResult(ctx, account.AccessToken, false)
-		return oneImageResult{Usage: usage}, err
+	result, ok := value.(upevents.GenerateImageResult)
+	if !ok {
+		return nil, nil, "", "", false
 	}
-	s.markChatGPTImageResult(ctx, account.AccessToken, true)
-	return oneImageResult{Data: data, Usage: usage}, nil
+	return result.Images, result.Usage, result.ConversationID, result.ErrorClass, true
 }
 
-func imageUsageFromUpstream(value any, edit bool) *tokenusage.Usage {
-	if edit {
-		if result, ok := value.(upevents.EditImageResult); ok {
-			return result.Usage
-		}
-		return nil
-	}
-	if result, ok := value.(upevents.GenerateImageResult); ok {
-		return result.Usage
-	}
-	return nil
+func mapUpstreamImageFailure(class upevents.ErrorClass, cause error) error {
+	return chatgptfail.New(chatgptfail.FromUpstreamClass(string(class)), cause)
 }
 
 func addTokenUsage(base, extra *tokenusage.Usage) *tokenusage.Usage {
@@ -184,6 +214,6 @@ func (s *Proxy) releaseChatGPTImageSlot(ctx context.Context, token string) {
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicReleaseImageSlot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.ReleaseImageSlotCommand{AccessToken: token})).Get()
 }
 
-func (s *Proxy) markChatGPTImageResult(ctx context.Context, token string, success bool) {
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMarkImageResult, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.MarkImageResultCommand{AccessToken: token, Success: success})).Get()
+func (s *Proxy) markChatGPTImageResult(ctx context.Context, token, model string, success bool, errorClass string) {
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMarkImageResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MarkImageResultCommand{AccessToken: token, Model: model, Success: success, ErrorClass: errorClass})).Get()
 }

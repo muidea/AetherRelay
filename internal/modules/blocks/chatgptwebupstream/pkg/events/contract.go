@@ -87,6 +87,10 @@ type GenerateImageResult struct {
 	Images         []ImageOutput
 	ConversationID string
 	Usage          *tokenusage.Usage
+	// ErrorClass is populated alongside a partial result when the upstream
+	// request failed. It lets the proxy owner make a safe retry decision
+	// without parsing an upstream error string.
+	ErrorClass ErrorClass
 }
 
 type EditImageCommand struct {
@@ -103,6 +107,7 @@ type EditImageResult struct {
 	Images         []ImageOutput
 	ConversationID string
 	Usage          *tokenusage.Usage
+	ErrorClass     ErrorClass
 }
 
 type ResumeImageCommand struct {
@@ -115,6 +120,7 @@ type ResumeImageCommand struct {
 type ResumeImageResult struct {
 	Images         []ImageOutput
 	ConversationID string
+	ErrorClass     ErrorClass
 }
 
 type TextMessage struct {

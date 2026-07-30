@@ -81,7 +81,7 @@ func TestBuildDisabledAndEmptyStates(t *testing.T) {
 
 func TestBuiltinProviderViewCapabilities(t *testing.T) {
 	provider := BuiltinProviderView()
-	if provider.Protocol != BuiltinProviderID || len(provider.EndpointCapabilities) != 2 {
+	if provider.Protocol != BuiltinProviderID || len(provider.EndpointCapabilities) != 3 {
 		t.Fatalf("provider=%+v", provider)
 	}
 }

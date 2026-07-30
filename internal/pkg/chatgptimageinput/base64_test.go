@@ -3,9 +3,12 @@ package imageinput
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +53,19 @@ func TestDecodeDataURLImageValidatesDeclaredAndDetectedImage(t *testing.T) {
 		if _, err := DecodeDataURLImage(value); err == nil {
 			t.Fatalf("input %q unexpectedly succeeded", value)
 		}
+	}
+}
+
+func TestValidateImageRejectsExcessivePixelDimensions(t *testing.T) {
+	header := make([]byte, 8+4+4+13+4)
+	copy(header, []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a})
+	binary.BigEndian.PutUint32(header[8:12], 13)
+	copy(header[12:16], "IHDR")
+	binary.BigEndian.PutUint32(header[16:20], 7000)
+	binary.BigEndian.PutUint32(header[20:24], 6000)
+	header[24], header[25], header[26] = 8, 6, 0
+	binary.BigEndian.PutUint32(header[29:33], crc32.ChecksumIEEE(header[12:29]))
+	if _, err := ValidateImage(header); err == nil || !strings.Contains(err.Error(), "pixels") {
+		t.Fatalf("oversized image err=%v", err)
 	}
 }

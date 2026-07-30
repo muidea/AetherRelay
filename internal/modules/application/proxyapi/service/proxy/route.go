@@ -17,6 +17,10 @@ const (
 	TransportModeNative            = "native"
 	TransportModeOpenAIToAnthropic = "openai_to_anthropic"
 	TransportModeAnthropicToOpenAI = "anthropic_to_openai"
+	// TransportModeChatGPTWebResponses is a bounded, stateless Responses
+	// projection backed by the ChatGPT Web text executor. It intentionally is
+	// not a native upstream Responses implementation.
+	TransportModeChatGPTWebResponses = "chatgptweb_responses"
 )
 
 // TransportPlan 是请求期唯一转发计划:固定入站协议/path、上游协议/path 与转换方式。
@@ -262,6 +266,11 @@ func applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, ow
 			return base, true
 		}
 	case "/v1/responses":
+		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
+			base.UpstreamEndpoint = "chatgptweb_responses"
+			base.Mode = TransportModeChatGPTWebResponses
+			return base, true
+		}
 		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
 			base.UpstreamEndpoint = "/v1/responses"
 			base.Mode = TransportModeNative

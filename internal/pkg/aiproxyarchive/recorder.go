@@ -38,6 +38,11 @@ type Round struct {
 	UpstreamProtocol string
 	UpstreamEndpoint string
 	ConversionMode   string
+	// IgnoredFeatures records explicitly compatibility-degraded request fields.
+	// It is populated by a bounded protocol adapter and never contains payload
+	// values, so metadata can explain a degraded request without retaining
+	// sensitive input.
+	IgnoredFeatures []string
 	// UpstreamDuration 是本次上游 HTTP 请求（含首包探测）的耗时，仅供
 	// usage 结算使用；完整 metadata 当前仍保留总请求耗时。
 	UpstreamDuration time.Duration
@@ -106,6 +111,15 @@ func (r *Round) SetUpstreamDuration(duration time.Duration) {
 	r.UpstreamDuration = duration
 }
 
+// SetIgnoredFeatures records the request fields intentionally not represented
+// by a bounded adapter. Callers must pass field names only, never values.
+func (r *Round) SetIgnoredFeatures(features []string) {
+	if r == nil {
+		return
+	}
+	r.IgnoredFeatures = append([]string(nil), features...)
+}
+
 type Metadata struct {
 	ID         int       `json:"id"`
 	StartedAt  time.Time `json:"started_at"`
@@ -118,18 +132,19 @@ type Metadata struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	// Operation / ClientEndpoint / Upstream* / ConversionMode 记录 TransportPlan 权威字段。
-	Operation              string `json:"operation,omitempty"`
-	ClientEndpoint         string `json:"client_endpoint,omitempty"`
-	ClientProtocol         string `json:"client_protocol,omitempty"`
-	UpstreamProtocol       string `json:"upstream_protocol,omitempty"`
-	UpstreamEndpoint       string `json:"upstream_endpoint,omitempty"`
-	ConversionMode         string `json:"conversion_mode,omitempty"`
-	StablePrefixHash       string `json:"stable_prefix_hash,omitempty"`
-	RequestFingerprint     string `json:"request_fingerprint,omitempty"`
-	StablePrefixDrift      bool   `json:"stable_prefix_drift,omitempty"`
-	StablePrefixDriftCount int    `json:"stable_prefix_drift_count,omitempty"`
-	Stream                 bool   `json:"stream"`
-	HTTPStatus             int    `json:"http_status"`
+	Operation              string   `json:"operation,omitempty"`
+	ClientEndpoint         string   `json:"client_endpoint,omitempty"`
+	ClientProtocol         string   `json:"client_protocol,omitempty"`
+	UpstreamProtocol       string   `json:"upstream_protocol,omitempty"`
+	UpstreamEndpoint       string   `json:"upstream_endpoint,omitempty"`
+	ConversionMode         string   `json:"conversion_mode,omitempty"`
+	IgnoredFeatures        []string `json:"ignored_features,omitempty"`
+	StablePrefixHash       string   `json:"stable_prefix_hash,omitempty"`
+	RequestFingerprint     string   `json:"request_fingerprint,omitempty"`
+	StablePrefixDrift      bool     `json:"stable_prefix_drift,omitempty"`
+	StablePrefixDriftCount int      `json:"stable_prefix_drift_count,omitempty"`
+	Stream                 bool     `json:"stream"`
+	HTTPStatus             int      `json:"http_status"`
 	// Outcome 与 DuckDB/Prometheus 对齐的业务结果枚举。
 	Outcome                  string  `json:"outcome,omitempty"`
 	DurationMS               int64   `json:"duration_ms"`

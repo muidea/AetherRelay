@@ -507,6 +507,19 @@ function textCooldownBadges(value){
   if(entries.length>visible.length)visible.push(`<span class="tag tag-cooldown" title="还有 ${entries.length-visible.length} 个模型处于冷却">+${entries.length-visible.length}</span>`);
   return `<div class="account-cooldowns">${visible.join("")}</div>`;
 }
+function imageCooldownBadges(value){
+  const entries=(Array.isArray(value)?value:[]).filter(item=>item&&String(item.until||"").trim());
+  if(!entries.length)return "";
+  const visible=entries.slice(0,2).map(item=>{
+    const model=String(item.model||"").trim()||"全部生图模型";
+    const reason=textCooldownReason(item.error_class);
+    const when=formatCooldownUntil(item.until);
+    const title=`生图 · ${model} · ${reason} · 恢复时间：${when.absolute}`;
+    return `<span class="tag tag-cooldown" title="${esc(title)}">${esc(`生图 · ${model} · ${when.relative}`)}</span>`;
+  });
+  if(entries.length>visible.length)visible.push(`<span class="tag tag-cooldown" title="还有 ${entries.length-visible.length} 个生图模型处于冷却">+${entries.length-visible.length}</span>`);
+  return `<div class="account-cooldowns">${visible.join("")}</div>`;
+}
 function tokenRefreshReason(value){
   const labels={invalid_grant:"刷新凭据已失效",unauthorized:"OAuth 未授权",rejected:"OAuth 拒绝",rate_limit:"OAuth 限流",timeout:"OAuth 超时",upstream:"OAuth 上游故障",transport:"网络故障",decode:"响应异常",missing_access_token:"响应缺少令牌",unavailable:"暂不可用"};
   const key=String(value||"").trim().toLowerCase();
@@ -712,7 +725,7 @@ function renderChatGPTAccounts(){
       <td class="mono" title="${esc(a.id)}">${esc(a.id)}</td>
       <td>${esc(a.type||"—")}</td>
       <td>${esc(a.source_type||"—")}</td>
-      <td class="account-status-cell">${statusTag(a.status)}${textCooldownBadges(a.text_cooldowns)}${tokenRefreshBadge(a)}</td>
+      <td class="account-status-cell">${statusTag(a.status)}${textCooldownBadges(a.text_cooldowns)}${imageCooldownBadges(a.image_cooldowns)}${tokenRefreshBadge(a)}</td>
       <td>${maskEmail(a.email)}</td>
       <td class="subtle">${esc(formatAccountDate(a.created_at))}</td>
       <td><span class="tag">${quota}</span></td>

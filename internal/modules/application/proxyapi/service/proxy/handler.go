@@ -225,7 +225,7 @@ func requireResolvedConfig(cfg config.Config) error {
 		}
 		if provider.Protocol == "chatgptweb" {
 			for _, capName := range provider.EndpointCapabilities {
-				if capName != config.EndpointCapabilityChatCompletions && capName != config.EndpointCapabilityImages {
+				if capName != config.EndpointCapabilityChatCompletions && capName != config.EndpointCapabilityResponses && capName != config.EndpointCapabilityImages {
 					return fmt.Errorf("provider %q: endpoint_capabilities %q invalid for chatgptweb protocol", name, capName)
 				}
 			}
@@ -526,7 +526,11 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 			rec.UpstreamEndpoint = chatGPTWebUsageEndpoint(r)
 		}
 		if rec.ConversionMode == "" {
-			rec.ConversionMode = TransportModeNative
+			if r != nil && r.URL != nil && NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
+				rec.ConversionMode = TransportModeChatGPTWebResponses
+			} else {
+				rec.ConversionMode = TransportModeNative
+			}
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -667,7 +671,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		stableHash, fingerprint := ComputeRequestFingerprint(bodyBytes)
 		round.SetFingerprint(stableHash, fingerprint)
 	}
-	if err := round.WriteRequest(bodyBytes); err != nil {
+	if err := h.writeArchiveRequest(round, bodyBytes); err != nil {
 		log.Printf("archive request: %v", err)
 	}
 	h.archiveAndLogClientRequest(round, r, len(bodyBytes))
@@ -834,7 +838,7 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	}
 	body = append(body, '\n')
 	if round != nil {
-		if err := round.WriteResponse("response.json", body); err != nil {
+		if err := h.writeArchiveResponse(round, "response.json", body); err != nil {
 			log.Printf("archive api error response: %v", err)
 		}
 	}
@@ -846,6 +850,9 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 }
 
 func chatGPTWebUsageEndpoint(r *http.Request) string {
+	if r != nil && r.URL != nil && NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
+		return "chatgptweb_responses"
+	}
 	if r != nil && r.URL != nil && strings.HasPrefix(r.URL.Path, "/v1/images/") {
 		return "chatgptweb_images"
 	}
@@ -871,7 +878,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	}
 	defer r.Body.Close()
 	rawBody, rawModel, rawStream := parseRawRequestBody(body)
-	if err := round.WriteRequest(body); err != nil {
+	if err := h.writeArchiveRequest(round, body); err != nil {
 		log.Printf("archive raw request: %v", err)
 	}
 	h.archiveAndLogClientRequest(round, r, len(body))
@@ -879,6 +886,11 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	plan, apiErr := h.resolveTransportPlan(r, rawModel)
 	if apiErr != nil {
 		h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, statusForAPIError(apiErr), *apiErr)
+		return
+	}
+	if plan.Mode == TransportModeChatGPTWebResponses && plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
+		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), rawStream)
+		h.handleChatGPTWebResponses(w, r, start, plan.RouteOwner, rawModel, rawStream, rawBody)
 		return
 	}
 	if plan.Mode != TransportModeNative {
@@ -971,7 +983,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	if len(responseBody) > 0 {
 		_, _ = w.Write(responseBody)
 	}
-	if err := round.WriteResponse(responsePath, responseBody); err != nil {
+	if err := h.writeArchiveResponse(round, responsePath, responseBody); err != nil {
 		log.Printf("archive raw response: %v", err)
 	}
 	usage := tokenUsage{}
@@ -1019,7 +1031,7 @@ func (h *Handler) handleBufferedResponse(w http.ResponseWriter, resp *http.Respo
 		}
 	}
 	responsePath := responseFileName(resp.Header.Get("Content-Type"), false)
-	if err := round.WriteResponse(responsePath, responseBody); err != nil {
+	if err := h.writeArchiveResponse(round, responsePath, responseBody); err != nil {
 		log.Printf("archive response: %v", err)
 	}
 	duration := time.Since(start)
@@ -1032,7 +1044,7 @@ func (h *Handler) handleStreamResponse(w http.ResponseWriter, resp *http.Respons
 	prepareSSEHeaders(w.Header())
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
-	archiveWriter, err := round.CreateResponseWriter("response.sse")
+	archiveWriter, err := h.createArchiveResponseWriter(round, "response.sse")
 	if err != nil {
 		log.Printf("archive stream response: %v", err)
 	}
@@ -1102,7 +1114,7 @@ func (h *Handler) handleStreamResponse(w http.ResponseWriter, resp *http.Respons
 	if streamErr == nil && !accumulator.Truncated() {
 		if fullResponse, err := accumulator.ResponseJSON(); err != nil {
 			log.Printf("build stream full response: %v", err)
-		} else if err := round.WriteResponse("response.json", append(fullResponse, '\n')); err != nil {
+		} else if err := h.writeArchiveResponse(round, "response.json", append(fullResponse, '\n')); err != nil {
 			log.Printf("archive stream full response: %v", err)
 		} else {
 			fullPath = "response.json"
@@ -1156,7 +1168,7 @@ func parseRawRequestBody(body []byte) (map[string]any, string, bool) {
 }
 
 func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Response, round *archive.Round, providerName string, provider config.Provider, model string, requestBody map[string]any, requestContext context.Context, cancel context.CancelFunc, requestPath string) (tokenUsage, string, *streamFail) {
-	archiveWriter, err := round.CreateResponseWriter("response.sse")
+	archiveWriter, err := h.createArchiveResponseWriter(round, "response.sse")
 	if err != nil {
 		log.Printf("archive raw stream response: %v", err)
 	}
@@ -1253,7 +1265,7 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 		if streamErr == nil && !openAIAccumulator.Truncated() && proto == streamProtoChatCompletions {
 			if fullResponse, err := openAIAccumulator.ResponseJSON(); err != nil {
 				log.Printf("build raw stream full response: %v", err)
-			} else if err := round.WriteResponse("response.json", append(fullResponse, '\n')); err != nil {
+			} else if err := h.writeArchiveResponse(round, "response.json", append(fullResponse, '\n')); err != nil {
 				log.Printf("archive raw stream full response: %v", err)
 			} else {
 				fullPath = "response.json"
@@ -1276,7 +1288,7 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 	if streamErr == nil && !anthropicAccumulator.Truncated() {
 		if fullResponse, err := anthropicAccumulator.ResponseJSON(usage); err != nil {
 			log.Printf("build anthropic raw stream full response: %v", err)
-		} else if err := round.WriteResponse("response.json", append(fullResponse, '\n')); err != nil {
+		} else if err := h.writeArchiveResponse(round, "response.json", append(fullResponse, '\n')); err != nil {
 			log.Printf("archive anthropic raw stream full response: %v", err)
 		} else {
 			fullPath = "response.json"
@@ -1810,6 +1822,7 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.UpstreamProtocol = round.UpstreamProtocol
 		meta.UpstreamEndpoint = round.UpstreamEndpoint
 		meta.ConversionMode = round.ConversionMode
+		meta.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
 	}
 	if round != nil {
 		if round.HasFile("request.meta.json") {

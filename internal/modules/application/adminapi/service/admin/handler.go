@@ -619,7 +619,7 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 		Name:                 effectivecatalog.BuiltinProviderID,
 		Protocol:             effectivecatalog.BuiltinProviderID,
 		BaseURL:              "(account pool)",
-		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityImages},
+		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses, config.EndpointCapabilityImages},
 		Enabled:              true,
 		APIKeyConfigured:     false,
 		Source:               ProviderSourceBuiltin,

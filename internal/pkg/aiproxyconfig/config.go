@@ -1667,7 +1667,7 @@ func validateProtocolEndpointCaps(protocol string, caps []string) error {
 				return fmt.Errorf("unknown endpoint capability %q", capName)
 			}
 		case "chatgptweb":
-			if capName != EndpointCapabilityChatCompletions && capName != EndpointCapabilityImages {
+			if capName != EndpointCapabilityChatCompletions && capName != EndpointCapabilityResponses && capName != EndpointCapabilityImages {
 				return fmt.Errorf("endpoint_capabilities %q is invalid for chatgptweb protocol", capName)
 			}
 		}
@@ -1720,7 +1720,7 @@ func ProviderSupportsInboundPath(provider Provider, path string) bool {
 			return ProviderHasDirectEndpoint(provider, EndpointCapabilityChatCompletions)
 		}
 	case "/v1/responses":
-		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityResponses)
+		return (provider.Protocol == "openai" || provider.Protocol == "chatgptweb") && ProviderHasDirectEndpoint(provider, EndpointCapabilityResponses)
 	case "/v1/completions":
 		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityCompletions)
 	case "/v1/embeddings":

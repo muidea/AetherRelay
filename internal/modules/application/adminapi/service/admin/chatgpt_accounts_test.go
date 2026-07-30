@@ -58,6 +58,7 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]acce
 		LastTokenRefreshErrorAt:    "2026-07-27T01:00:00Z",
 		LastTokenRefreshErrorClass: "rate_limit",
 		TextCooldowns:              []accevents.TextCooldownView{{Model: "gpt-5", Until: "2026-07-27T01:03:03Z", ErrorClass: "rate_limit"}},
+		ImageCooldowns:             []accevents.ImageCooldownView{{Model: "gpt-image-2", Until: "2026-07-27T01:03:03Z", ErrorClass: "timeout"}},
 		AccessToken:                "token-very-secret",
 		Proxy:                      "http://private.invalid",
 	}}, nil
@@ -191,7 +192,7 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	if listRecorder.Code != http.StatusOK || strings.Contains(body, "very-secret") || strings.Contains(body, "private.invalid") {
 		t.Fatalf("list=%d %s", listRecorder.Code, listRecorder.Body.String())
 	}
-	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`, `"last_token_refresh_at":"2026-07-27T00:30:00Z"`, `"last_token_refresh_error_at":"2026-07-27T01:00:00Z"`, `"last_token_refresh_error_class":"rate_limit"`, `"text_cooldowns":[{"model":"gpt-5","until":"2026-07-27T01:03:03Z","error_class":"rate_limit"}]`} {
+	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`, `"last_token_refresh_at":"2026-07-27T00:30:00Z"`, `"last_token_refresh_error_at":"2026-07-27T01:00:00Z"`, `"last_token_refresh_error_class":"rate_limit"`, `"text_cooldowns":[{"model":"gpt-5","until":"2026-07-27T01:03:03Z","error_class":"rate_limit"}]`, `"image_cooldowns":[{"model":"gpt-image-2","until":"2026-07-27T01:03:03Z","error_class":"timeout"}]`} {
 		if !strings.Contains(body, field) {
 			t.Fatalf("list response missing account operations field %q: %s", field, body)
 		}
@@ -377,7 +378,7 @@ func TestTemporaryChatTurnAcceptsMultipartImagesAndServesOwnerScopedContent(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}); err != nil {
+	if _, err := part.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x80, 0x02, 0x3f, 0x91, 0xc3, 0xf3, 0xe1, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
