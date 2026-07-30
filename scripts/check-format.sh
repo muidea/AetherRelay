@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# 仅检查受 Git 管理的 Go 源文件，避免平台相关的目录遍历和未跟踪文件干扰。
+# 仅检查受 Git 管理的项目 Go 源文件，避免平台相关的目录遍历、未跟踪文件和第三方 vendor 源码干扰。
 set -euo pipefail
 
 unformatted="$({
   while IFS= read -r -d '' file; do
+    # vendor 是上游依赖的快照，不应由项目的格式检查改写。
+    [[ "$file" == vendor/* ]] && continue
     # 暂存删除后，索引仍会列出文件；只检查工作区中实际存在的源文件。
     [[ -f "$file" ]] && gofmt -l "$file"
   done < <(git ls-files -z -- '*.go')
