@@ -85,6 +85,14 @@ chatgpt_web:
     max_message_bytes: 262144
     turn_timeout_seconds: 300
 
+# 独立 Codex CLI OAuth 账号池。凭据仅保存于 state.database，不写入 YAML。
+# models 必须是精确模型 ID；它们仅服务原生 POST /v1/responses。
+codex_oauth:
+  enabled: false
+  models: gpt-5.2-codex, gpt-5.2
+  # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
+  refresh_account_interval_minute: 0
+
 providers:
   # 每个 enabled provider 必须显式声明 protocol、base_url、endpoint_capabilities。
   # 远程空 api_key 启动失败；仅 loopback 上游可设 allow_unauthenticated: true。
@@ -111,7 +119,7 @@ providers:
     api_key: ${ANTHROPIC_API_KEY}
     endpoint_capabilities: messages
     models: claude*
-  # chatgptweb 是保留的内建 Provider ID，禁止在 providers 中声明。
+  # chatgptweb 与 codexoauth 是保留的内建 Provider ID，禁止在 providers 中声明。
   # 启用 chatgpt_web.enabled 后由运行时自动注入，模型来自账号池发现结果。
 
 # 全局模型目录(各 provider 共用)。model ID 严格区分大小写(exact match)。

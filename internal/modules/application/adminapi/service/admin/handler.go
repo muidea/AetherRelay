@@ -22,6 +22,7 @@ import (
 	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
+	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -72,12 +73,26 @@ type ChatGPTRuntime interface {
 	DeleteTemporaryConversation(context.Context, tempevents.DeleteConversationCommand) (tempevents.DeleteConversationResult, error)
 }
 
+// CodexRuntime is intentionally independent from ChatGPTRuntime: the two
+// OAuth domains have different credential, proxy, and session semantics.
+type CodexRuntime interface {
+	ListCodexAccounts(context.Context) ([]codexevents.AccountView, error)
+	ImportCodexAccounts(context.Context, []codexevents.CredentialInput) (codexevents.ImportResult, error)
+	DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error)
+	UpdateCodexAccount(context.Context, codexevents.UpdateCommand) (codexevents.UpdateResult, error)
+	RefreshCodexAccounts(context.Context, []string) (codexevents.RefreshByIDResult, error)
+	StartCodexOAuth(context.Context, string, string) (codexevents.OAuthStartResult, error)
+	FinishCodexOAuth(context.Context, string, string) (codexevents.OAuthFinishResult, error)
+}
+
 // chatGPTAvailability is intentionally optional to keep isolated HTTP tests
 // focused on the transport contract. The production Admin runtime implements
 // it and reports whether ChatGPT Web was enabled at process start.
 type chatGPTAvailability interface {
 	ChatGPTWebEnabled() bool
 }
+
+type codexAvailability interface{ CodexOAuthEnabled() bool }
 
 type Handler struct {
 	configPath      string
@@ -86,6 +101,7 @@ type Handler struct {
 	metricsRegistry metricsport.Port
 	auth            *authState
 	chatGPT         ChatGPTRuntime
+	codex           CodexRuntime
 	updateMu        sync.Mutex
 }
 
@@ -151,6 +167,7 @@ func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
 }
 
 func (h *Handler) WithChatGPTRuntime(runtime ChatGPTRuntime) *Handler { h.chatGPT = runtime; return h }
+func (h *Handler) WithCodexRuntime(runtime CodexRuntime) *Handler     { h.codex = runtime; return h }
 
 // WithMetrics 挂接 usage 查询的健康与错误观测；nil-safe，便于单测复用。
 func (h *Handler) WithMetrics(source any) *Handler {
@@ -223,6 +240,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(rel, "/api/chatgpt/") && !h.chatGPTWebAvailable():
 		writeError(w, http.StatusServiceUnavailable, "chatgpt web is not enabled")
+	case strings.HasPrefix(rel, "/api/codex/") && !h.codexOAuthAvailable():
+		writeError(w, http.StatusServiceUnavailable, "Codex OAuth is not enabled")
 	case (rel == "/" || rel == "") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
@@ -245,6 +264,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.clientAPIKeyAction(w, r, rel)
 	case strings.HasPrefix(rel, "/api/usage/"):
 		h.usageAPI(w, r, rel)
+	case rel == "/api/codex/accounts" && r.Method == http.MethodGet:
+		h.listCodexAccounts(w, r)
+	case rel == "/api/codex/accounts" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.importCodexAccounts(w, r)
+		}
+	case rel == "/api/codex/accounts" && r.Method == http.MethodDelete:
+		if h.requireAdminMutation(w, r) {
+			h.deleteCodexAccounts(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/codex/accounts/") && r.Method == http.MethodPatch:
+		if h.requireAdminMutation(w, r) {
+			h.updateCodexAccount(w, r, rel)
+		}
+	case rel == "/api/codex/accounts/refresh" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.refreshCodexAccounts(w, r)
+		}
+	case rel == "/api/codex/accounts/oauth/start" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.startCodexOAuth(w, r)
+		}
+	case rel == "/api/codex/accounts/oauth/finish" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.finishCodexOAuth(w, r)
+		}
 	case rel == "/api/chatgpt/accounts" && r.Method == http.MethodGet:
 		h.listChatGPTAccounts(w, r)
 	case rel == "/api/chatgpt/accounts" && r.Method == http.MethodPost:
@@ -346,6 +391,14 @@ func (h *Handler) chatGPTWebAvailable() bool {
 	}
 	availability, ok := h.chatGPT.(chatGPTAvailability)
 	return !ok || availability.ChatGPTWebEnabled()
+}
+
+func (h *Handler) codexOAuthAvailable() bool {
+	if h.codex == nil {
+		return false
+	}
+	availability, ok := h.codex.(codexAvailability)
+	return !ok || availability.CodexOAuthEnabled()
 }
 
 func (h *Handler) listChatGPTImages(w http.ResponseWriter, r *http.Request) {
@@ -587,7 +640,7 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	}
 	sort.Strings(names)
 
-	providers := make([]providerView, 0, len(names)+1)
+	providers := make([]providerView, 0, len(names)+2)
 	for _, name := range names {
 		provider := cfg.Providers[name]
 		providers = append(providers, providerView{
@@ -605,13 +658,51 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	}
 	if cfg.ChatGPTWeb.Enabled {
 		providers = append(providers, h.builtinChatGPTProviderView())
-		sort.SliceStable(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
 	}
+	if cfg.CodexOAuth.Enabled {
+		providers = append(providers, h.builtinCodexProviderView())
+	}
+	sort.SliceStable(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers":  providers,
 		"writable":   strings.TrimSpace(h.configPath) != "",
 		"hot_reload": true,
 	})
+}
+
+func (h *Handler) builtinCodexProviderView() providerView {
+	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Enabled: true, Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
+	if h.chatGPT == nil {
+		view.Availability = providerAvailability{Status: "unavailable"}
+		view.UnavailableReason = "effective catalog is unavailable"
+		return view
+	}
+	snap, err := h.chatGPT.ChatGPTEffectiveCatalog(context.Background())
+	if err != nil {
+		view.Availability = providerAvailability{Status: "unavailable"}
+		view.UnavailableReason = "catalog snapshot unavailable"
+		return view
+	}
+	bp := snap.CodexOAuthProvider
+	view.ModelCount, view.AvailableAccounts, view.ConflictCount = bp.ModelCount, bp.AvailableAccounts, bp.ConflictCount
+	view.ConflictModels, view.UpdatedAt, view.UnavailableReason = append([]string(nil), bp.ConflictModels...), bp.UpdatedAt, bp.UnavailableReason
+	for id, model := range snap.CodexOAuthModels {
+		if !model.ConflictWithStatic {
+			view.Models = append(view.Models, id)
+		}
+	}
+	sort.Strings(view.Models)
+	switch bp.Status {
+	case effectivecatalog.StatusReady:
+		view.Availability = providerAvailability{Status: "healthy"}
+	case effectivecatalog.StatusDegraded:
+		view.Availability = providerAvailability{Status: "degraded"}
+	case effectivecatalog.StatusEmpty:
+		view.Availability = providerAvailability{Status: "unavailable"}
+	default:
+		view.Availability = providerAvailability{Status: "unknown"}
+	}
+	return view
 }
 
 func (h *Handler) builtinChatGPTProviderView() providerView {
@@ -743,12 +834,12 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, item := range request.Providers {
-		if strings.EqualFold(strings.TrimSpace(item.Name), "chatgptweb") || strings.TrimSpace(item.Protocol) == "chatgptweb" {
-			writeError(w, http.StatusBadRequest, "protocol chatgptweb is reserved for the builtin provider")
+		if strings.EqualFold(strings.TrimSpace(item.Name), "chatgptweb") || strings.EqualFold(strings.TrimSpace(item.Name), "codexoauth") || strings.TrimSpace(item.Protocol) == "chatgptweb" || strings.TrimSpace(item.Protocol) == "codexoauth" {
+			writeError(w, http.StatusBadRequest, "builtin provider protocols are reserved")
 			return
 		}
 	}
-	if len(request.Providers) == 0 && !h.runtime.ConfigSnapshot().ChatGPTWeb.Enabled {
+	if len(request.Providers) == 0 && !h.runtime.ConfigSnapshot().ChatGPTWeb.Enabled && !h.runtime.ConfigSnapshot().CodexOAuth.Enabled {
 		writeError(w, http.StatusBadRequest, "at least one provider is required")
 		return
 	}

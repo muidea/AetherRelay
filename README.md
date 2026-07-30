@@ -14,7 +14,7 @@ make run
 
 默认地址为 `http://127.0.0.1:8080`。启动后可访问：
 
-- [Provider、客户端 Key、使用统计与 ChatGPT Web 管理](http://127.0.0.1:8080/admin/)（默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
+- [Provider、客户端 Key、使用统计、ChatGPT Web 与 Codex OAuth 管理](http://127.0.0.1:8080/admin/)（默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
 - `GET /healthz`
 - `GET /metrics`、`GET /stats`（默认仅 loopback）
 
@@ -47,7 +47,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创�
 | 配置、客户端 Key、Provider 管理 | [配置参考](docs/configuration.md) |
 | 运行、监控、归档、探针、备份与发布 | [运维与发布](docs/operations.md) |
 | 目录职责与 magicCommon 生命周期 | [代码结构](docs/structure.md) |
-| 已实现功能的设计背景 | [客户端 Key](docs/client-api-key-management-design-2026-07-20.md)、[Admin 登录](docs/admin-login-security-design-2026-07-23.md)、[ChatGPT Web 管理](docs/chatgpt-web-admin-closure-design-2026-07-26.md)、[SSE](docs/unified-sse-streaming-design-2026-07-23.md) |
+| 已实现功能的设计背景 | [客户端 Key](docs/client-api-key-management-design-2026-07-20.md)、[Admin 登录](docs/admin-login-security-design-2026-07-23.md)、[ChatGPT Web 管理](docs/chatgpt-web-admin-closure-design-2026-07-26.md)、[Codex OAuth 号池](docs/codex-oauth-account-pool-design-2026-07-30.md)、[SSE](docs/unified-sse-streaming-design-2026-07-23.md) |
 | 路由与协议设计参考 | [Provider Capability Contract](docs/provider-capability-contract-design-2026-07-15.md) |
 
 带日期的计划、审计和现场记录是历史材料，不是运行时合同；当前行为以本 README、配置参考、运维说明、代码结构以及自动化测试为准。

@@ -21,6 +21,10 @@ const (
 	// projection backed by the ChatGPT Web text executor. It intentionally is
 	// not a native upstream Responses implementation.
 	TransportModeChatGPTWebResponses = "chatgptweb_responses"
+	// TransportModeCodexOAuthResponses is a native Responses relay backed by
+	// the Codex OAuth account pool. No ChatGPT Web message-tree projection is
+	// involved.
+	TransportModeCodexOAuthResponses = "codex_oauth_responses"
 )
 
 // TransportPlan 是请求期唯一转发计划:固定入站协议/path、上游协议/path 与转换方式。
@@ -190,8 +194,8 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 		}
 	}
 	var provider config.Provider
-	if route.Builtin || owner == effectivecatalog.BuiltinProviderID {
-		provider = effectivecatalog.BuiltinProviderView()
+	if route.Builtin || owner == effectivecatalog.BuiltinProviderID || owner == effectivecatalog.CodexOAuthProviderID {
+		provider = effectivecatalog.BuiltinProviderViewFor(owner)
 	} else {
 		var found bool
 		provider, found = cfg.Providers[owner]
@@ -274,6 +278,11 @@ func applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, ow
 		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
 			base.UpstreamEndpoint = "/v1/responses"
 			base.Mode = TransportModeNative
+			return base, true
+		}
+		if upstreamProtocol == effectivecatalog.CodexOAuthProviderID && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
+			base.UpstreamEndpoint = "codex_oauth_responses"
+			base.Mode = TransportModeCodexOAuthResponses
 			return base, true
 		}
 	case "/v1/completions":

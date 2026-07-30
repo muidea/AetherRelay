@@ -21,6 +21,7 @@ import (
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyarchive"
 	"ai-proxy/internal/pkg/aiproxyclientauth"
@@ -42,6 +43,7 @@ type Handler struct {
 	client              *http.Client
 	chatGPTText         chatgpttext.Executor
 	chatGPTImage        chatgptimage.Executor
+	codexResponses      codexresponses.Executor
 }
 
 // WithChatGPTTextExecutor binds proxyapi's owner-local ChatGPT execution
@@ -57,6 +59,15 @@ func (h *Handler) WithChatGPTTextExecutor(executor chatgpttext.Executor) *Handle
 func (h *Handler) WithChatGPTImageExecutor(executor chatgptimage.Executor) *Handler {
 	h.cfgMu.Lock()
 	h.chatGPTImage = executor
+	h.cfgMu.Unlock()
+	return h
+}
+
+// WithCodexResponsesExecutor binds proxyapi's native Codex Responses use case.
+// The HTTP adapter remains EventHub-free and never receives OAuth credentials.
+func (h *Handler) WithCodexResponsesExecutor(executor codexresponses.Executor) *Handler {
+	h.cfgMu.Lock()
+	h.codexResponses = executor
 	h.cfgMu.Unlock()
 	return h
 }
@@ -107,6 +118,7 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	for id, key := range h.cfg.ClientAPIKeys {
 		cfg.ClientAPIKeys[id] = key
 	}
+	cfg.CodexOAuth.Models = append([]string(nil), h.cfg.CodexOAuth.Models...)
 	return cfg
 }
 
@@ -193,8 +205,8 @@ func requireResolvedConfig(cfg config.Config) error {
 		}
 		switch provider.Protocol {
 		case "openai", "anthropic":
-		case "chatgptweb":
-			return fmt.Errorf("provider %q: protocol chatgptweb is reserved for the builtin provider", name)
+		case "chatgptweb", "codexoauth":
+			return fmt.Errorf("provider %q: builtin provider protocol %q is reserved", name, provider.Protocol)
 		case "":
 			return fmt.Errorf("provider %q: protocol unresolved", name)
 		default:
@@ -518,18 +530,29 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		rec.ConversionMode = round.ConversionMode
 		rec.UpstreamDuration = round.UpstreamDuration
 	}
-	// When interaction archive is disabled, chatgptweb settlement still needs
+	// When interaction archive is disabled, builtin settlement still needs
 	// stable plan labels so usage dashboards can filter provider traffic.
-	if rec.UpstreamProtocol == "" && (provider == effectivecatalog.BuiltinProviderID || provider == "chatgptweb") {
-		rec.UpstreamProtocol = effectivecatalog.BuiltinProviderID
-		if rec.UpstreamEndpoint == "" {
-			rec.UpstreamEndpoint = chatGPTWebUsageEndpoint(r)
-		}
-		if rec.ConversionMode == "" {
-			if r != nil && r.URL != nil && NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
-				rec.ConversionMode = TransportModeChatGPTWebResponses
-			} else {
-				rec.ConversionMode = TransportModeNative
+	if rec.UpstreamProtocol == "" {
+		switch provider {
+		case effectivecatalog.BuiltinProviderID:
+			rec.UpstreamProtocol = effectivecatalog.BuiltinProviderID
+			if rec.UpstreamEndpoint == "" {
+				rec.UpstreamEndpoint = chatGPTWebUsageEndpoint(r)
+			}
+			if rec.ConversionMode == "" {
+				if r != nil && r.URL != nil && NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
+					rec.ConversionMode = TransportModeChatGPTWebResponses
+				} else {
+					rec.ConversionMode = TransportModeNative
+				}
+			}
+		case effectivecatalog.CodexOAuthProviderID:
+			rec.UpstreamProtocol = effectivecatalog.CodexOAuthProviderID
+			if rec.UpstreamEndpoint == "" {
+				rec.UpstreamEndpoint = "codex_oauth_responses"
+			}
+			if rec.ConversionMode == "" {
+				rec.ConversionMode = TransportModeCodexOAuthResponses
 			}
 		}
 	}
@@ -891,6 +914,11 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	if plan.Mode == TransportModeChatGPTWebResponses && plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), rawStream)
 		h.handleChatGPTWebResponses(w, r, start, plan.RouteOwner, rawModel, rawStream, rawBody)
+		return
+	}
+	if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
+		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), rawStream)
+		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, body, rawBody, rawStream)
 		return
 	}
 	if plan.Mode != TransportModeNative {

@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
@@ -9,6 +10,7 @@ import (
 	"ai-proxy/internal/modules/blocks/configruntime/pkg/common"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
 	"ai-proxy/internal/pkg/aiproxybootstrap"
+	config "ai-proxy/internal/pkg/aiproxyconfig"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -68,6 +70,13 @@ func (s *ConfigRuntime) handleActivate(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid config activate command"))
 		return
 	}
+	s.mu.RLock()
+	current := s.bootstrap.Config
+	s.mu.RUnlock()
+	if err := validateHotReload(current, command.Config); err != nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
+		return
+	}
 	if err := proxyevents.UpdateConfig(ev.Context(), s.EventHub(), s.ID(), command.Config); err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, "activate proxy config: "+err.Error()))
 		return
@@ -76,4 +85,18 @@ func (s *ConfigRuntime) handleActivate(ev event.Event, result event.Result) {
 	s.bootstrap.Config = command.Config
 	s.mu.Unlock()
 	result.Set(struct{}{}, nil)
+}
+
+// validateHotReload keeps configuration truthful. These capabilities own
+// stores, EventHub subscriptions, timers, and upstream clients assembled at
+// process start; changing their lifecycle settings in a YAML rewrite cannot
+// make those components appear, disappear, or reschedule safely.
+func validateHotReload(current, next config.Config) error {
+	if current.ChatGPTWeb != next.ChatGPTWeb {
+		return fmt.Errorf("chatgpt_web runtime settings require an ai-proxy restart")
+	}
+	if current.CodexOAuth.Enabled != next.CodexOAuth.Enabled || current.CodexOAuth.RefreshAccountIntervalMinute != next.CodexOAuth.RefreshAccountIntervalMinute {
+		return fmt.Errorf("codex_oauth.enabled and codex_oauth.refresh_account_interval_minute require an ai-proxy restart")
+	}
+	return nil
 }

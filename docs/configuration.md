@@ -30,13 +30,13 @@ model_catalog:
     operations: chat_completions
 ```
 
-`model_catalog` 是静态 Provider 的模型、容量、operation 与唯一 RouteOwner 的权威；模型 ID exact 且严格区分大小写。启用 ChatGPT Web 后，运行时有效目录还会合成账号池自动发现的模型。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；[Provider Capability Contract](provider-capability-contract-design-2026-07-15.md) 保留为设计参考。
+`model_catalog` 是静态 Provider 的模型、容量、operation 与唯一 RouteOwner 的权威；模型 ID exact 且严格区分大小写。启用 ChatGPT Web 或 Codex OAuth 后，运行时有效目录还会合成各自的内建模型。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；[Provider Capability Contract](provider-capability-contract-design-2026-07-15.md) 保留为设计参考。
 
 ## Provider 与模型路由
 
 每个 enabled Provider 必须显式设置：
 
-- `protocol`：仅 `openai` 或 `anthropic`。`chatgptweb` 是保留协议/ID，禁止写入 `providers`；启用 `chatgpt_web` 后由运行时自动注入内建 Provider。
+- `protocol`：仅 `openai` 或 `anthropic`。`chatgptweb` 与 `codexoauth` 是保留协议/ID，禁止写入 `providers`；分别由 `chatgpt_web` 与 `codex_oauth` 在运行时注入内建 Provider。
 - `base_url`：可带或不带 `/v1`，代理会避免重复拼接。
 - `endpoint_capabilities`：上游直接支持的端点能力，不能由 protocol 自动推断。
 - `models`：用于启动期将 catalog model 解析为唯一 RouteOwner 的 pattern。
@@ -101,6 +101,7 @@ client_api_keys:
 - `/v1/chat/completions` 返回 OpenAI Chat Completions SSE，必要时转换 Anthropic 上游事件。
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。它不支持 tools/function calling、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
+- 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
 - 跨协议转换只保证基础文本，tools、thinking、多模态等未支持能力在访问上游前拒绝。
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[统一文本流式 SSE 收口设计](unified-sse-streaming-design-2026-07-23.md)。
@@ -119,7 +120,7 @@ state:
 
 `state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、不可迁移或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
 
-`state.database` 的业务表按 owner 划分：用量 owner 管理其用量表；账号池管理 `chatgpt_accounts`；图片任务管理 `chatgpt_image_tasks`；图片库管理 `chatgpt_images` 与 `chatgpt_image_tags`。不使用通用 JSON 文档表。图片元数据保留 JSON 扩展列，但账号、任务和图片的归属主键及图片查询字段均为独立列。
+`state.database` 的业务表按 owner 划分：用量 owner 管理其用量表；ChatGPT 账号池管理 `chatgpt_accounts`；Codex OAuth 账号池管理 `codex_oauth_accounts`；图片任务管理 `chatgpt_image_tasks`；图片库管理 `chatgpt_images` 与 `chatgpt_image_tags`。不使用通用 JSON 文档表。图片元数据保留 JSON 扩展列，但账号、任务和图片的归属主键及图片查询字段均为独立列。
 
 工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 
@@ -153,15 +154,33 @@ chatgpt_web:
 - 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、受限 `/v1/responses`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。
 - 若自动模型与任一 enabled 静态 Provider 的 exact model 冲突，静态 RouteOwner 优先；Admin Provider 列表会显示冲突摘要。
 
+## Codex OAuth 本地账号池
+
+```yaml
+codex_oauth:
+  enabled: false
+  models: gpt-5.2-codex, gpt-5.2
+  refresh_account_interval_minute: 0
+```
+
+- `models` 必须是精确模型 ID，作为 `codexoauth` 内建 Provider 的显式目录；它不会调用不稳定的账号模型发现接口。静态 Provider 使用同名模型时，静态路由优先。
+- 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）仅写入 `state.database`。管理列表严格脱敏，不返回 token、账号 ID 或代理 URL。
+- 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新以及 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新 IP 与请求 IP 不一致。
+- 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
+- `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
+- `enabled` 与 `refresh_account_interval_minute` 决定 Block 的订阅和定时器，修改后必须重启 ai-proxy。模型列表可随常规配置更新重建有效目录，但首次启用该能力也必须重启。
+
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量，以及在「ChatGPT Web」页签中维护账号池、图片任务与本地图片库。相关管理 API 同样位于该前缀下的 `/api/chatgpt/**`。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量，以及在「ChatGPT Web」与「Codex OAuth」页签中维护各自账号池。相关管理 API 位于该前缀下的 `/api/chatgpt/**` 与 `/api/codex/**`。
 
 Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。
 
 ChatGPT Web 管理页依赖对应运行时组件（账号池 / 图片任务 / 图片存储）已装配；若组件未启用，页面会显示不可用状态而不是空数据。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。账号导出、OAuth 回调与完整 token 不会写入浏览器持久化存储。
 
 `chatgpt_web.enabled` 在进程启动时决定 ChatGPT Web 的运行组件是否装配。关闭时，`/api/chatgpt/**` 返回 `503 chatgpt web is not enabled`；不能只在运行中修改 YAML 后立即使用，启用或关闭该能力后必须重启 ai-proxy。
+
+`codex_oauth.enabled` 同样在进程启动时装配独立账号池 Block。关闭时，`/api/codex/**` 返回 `503 Codex OAuth is not enabled`；Provider 管理页不会把它当作可编辑的静态 Provider。Codex 管理页支持脱敏列表、批量刷新、删除、JSON 凭据导入与 PKCE OAuth 导入；OAuth callback、token 与代理不会写入浏览器持久化存储。
 
 ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。列表会分别投影仍生效的文本与生图模型冷却（模型、错误类别、恢复时间），以及最近凭据刷新成功时间或失败类别/时间，供管理页只读展示；绝不返回原始 OAuth 错误、Token 或代理。冷却窗口目前固定为 60 秒，不提供 YAML 或 Web 调参。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
 

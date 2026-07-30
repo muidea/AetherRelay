@@ -13,6 +13,8 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	codexcommon "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
+	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 
@@ -45,13 +47,19 @@ func (s *Proxy) BindCatalogPublisher(publisher CatalogPublisher) {
 }
 
 func (s *Proxy) startModelDiscovery(ctx context.Context) {
-	if !s.config.ChatGPTWeb.Enabled {
+	if !s.config.ChatGPTWeb.Enabled && !s.config.CodexOAuth.Enabled {
 		s.publishCatalog(effectivecatalog.FromStatic(s.config))
 		return
 	}
 	// Initial empty-but-enabled snapshot so the service can start before the
 	// first successful discovery round completes.
-	s.publishCatalog(effectivecatalog.Build(s.config, 0, 0, nil, time.Now().UTC().Format(time.RFC3339)))
+	s.publishCatalog(effectivecatalog.BuildWithCodex(s.config, 0, 0, nil, time.Now().UTC().Format(time.RFC3339), 0))
+	if s.config.CodexOAuth.Enabled {
+		s.refreshEffectiveCatalog(ctx)
+	}
+	if !s.config.ChatGPTWeb.Enabled {
+		return
+	}
 	// Kick an immediate discovery pass, then schedule periodic full scans and a
 	// faster watch that only rebuilds/discovers when accounts still need it.
 	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })
@@ -220,14 +228,23 @@ func (s *Proxy) listDiscoveryCandidates(ctx context.Context) (accevents.ListDisc
 }
 
 func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicCatalogSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.CatalogSnapshotCommand{})).Get()
-	if err != nil {
-		slog.Warn("chatgpt model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
-		return
+	result := accevents.CatalogSnapshotResult{}
+	if s.config.ChatGPTWeb.Enabled {
+		value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicCatalogSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.CatalogSnapshotCommand{})).Get()
+		if err != nil {
+			slog.Warn("chatgpt model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
+		} else if snapshot, ok := value.(accevents.CatalogSnapshotResult); ok {
+			result = snapshot
+		}
 	}
-	result, ok := value.(accevents.CatalogSnapshotResult)
-	if !ok {
-		return
+	codexAvailable := 0
+	if s.config.CodexOAuth.Enabled {
+		value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicHealth, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.HealthCommand{})).Get()
+		if err != nil {
+			slog.Warn("Codex account health query failed", "error", err.Error())
+		} else if health, ok := value.(codexevents.HealthResult); ok {
+			codexAvailable = health.Available
+		}
 	}
 	poolModels := make([]effectivecatalog.PoolModel, 0, len(result.Models))
 	for _, model := range result.Models {
@@ -238,6 +255,6 @@ func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
 			OwnedBy:    model.OwnedBy,
 		})
 	}
-	snap := effectivecatalog.Build(s.config, result.Version, result.AvailableAccounts, poolModels, result.UpdatedAt)
+	snap := effectivecatalog.BuildWithCodex(s.config, result.Version, result.AvailableAccounts, poolModels, result.UpdatedAt, codexAvailable)
 	s.publishCatalog(snap)
 }

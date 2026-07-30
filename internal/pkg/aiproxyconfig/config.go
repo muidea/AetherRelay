@@ -73,6 +73,9 @@ type Config struct {
 	// ChatGPTWeb 是 ChatGPT Web 账号池和图片能力的本地运行配置。
 	// DataDir is derived from State.Dir and is not independently configured.
 	ChatGPTWeb ChatGPTWebConfig
+	// CodexOAuth is a separate Codex CLI OAuth account domain. It never shares
+	// ChatGPT Web credentials, conversations, or account runtime state.
+	CodexOAuth CodexOAuthConfig
 	Providers  map[string]Provider
 	// ModelCatalog 是全局模型元数据目录,供 GET /v1/models 使用;是请求路由与 /v1/models 的共同 authority。
 	ModelCatalog map[string]ModelInfo
@@ -141,6 +144,15 @@ type ChatGPTWebConfig struct {
 	DataDir                      string
 	RefreshAccountIntervalMinute int
 	TemporaryChat                TemporaryChatConfig
+}
+
+// CodexOAuthConfig enables the native Codex Responses account pool. Models are
+// intentionally explicit: Codex does not provide a stable account-scoped
+// public model-list endpoint that ai-proxy can safely treat as an authority.
+type CodexOAuthConfig struct {
+	Enabled                      bool
+	Models                       []string
+	RefreshAccountIntervalMinute int
 }
 
 // TemporaryChatConfig controls Admin temporary multi-turn text conversations.
@@ -248,6 +260,7 @@ func Load(path string) (Config, error) {
 				TurnTimeoutSeconds:         300,
 			},
 		},
+		CodexOAuth:   CodexOAuthConfig{Enabled: false},
 		Providers:    map[string]Provider{},
 		ModelCatalog: map[string]ModelInfo{},
 	}
@@ -315,7 +328,7 @@ func loadFile(path string, cfg *Config) error {
 		switch {
 		case indent == 0 && !hasValue:
 			switch key {
-			case "server", "state", "providers", "model_catalog", "client_api_keys", "chatgpt_web":
+			case "server", "state", "providers", "model_catalog", "client_api_keys", "chatgpt_web", "codex_oauth":
 				section = key
 				providerName = ""
 				modelName = ""
@@ -349,6 +362,8 @@ func loadFile(path string, cfg *Config) error {
 		case section == "chatgpt_web" && indent >= 2:
 			chatgptWebSub = ""
 			setErr = setChatGPTWeb(cfg, key, expand(value))
+		case section == "codex_oauth" && indent >= 2:
+			setErr = setCodexOAuth(cfg, key, expand(value))
 		case section == "client_api_keys" && indent == 2 && !hasValue:
 			clientKeyID = key
 			providerName = ""
@@ -559,6 +574,28 @@ func setChatGPTWeb(cfg *Config, key, value string) error {
 		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
 	default:
 		return fmt.Errorf("chatgpt_web: unknown key %q", key)
+	}
+	return nil
+}
+
+func setCodexOAuth(cfg *Config, key, value string) error {
+	switch key {
+	case "enabled":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.enabled: %w", err)
+		}
+		cfg.CodexOAuth.Enabled = b
+	case "models":
+		cfg.CodexOAuth.Models = parseCSVList(value, false)
+	case "refresh_account_interval_minute":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.refresh_account_interval_minute: %w", err)
+		}
+		cfg.CodexOAuth.RefreshAccountIntervalMinute = n
+	default:
+		return fmt.Errorf("codex_oauth: unknown key %q", key)
 	}
 	return nil
 }
@@ -798,6 +835,23 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
 	}
+	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_ENABLED"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CODEX_OAUTH_ENABLED: %w", err)
+		}
+		cfg.CodexOAuth.Enabled = b
+	}
+	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_MODELS"); value != "" {
+		cfg.CodexOAuth.Models = parseCSVList(value, false)
+	}
+	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_REFRESH_ACCOUNT_INTERVAL_MINUTE"); value != "" {
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CODEX_OAUTH_REFRESH_ACCOUNT_INTERVAL_MINUTE: %w", err)
+		}
+		cfg.CodexOAuth.RefreshAccountIntervalMinute = n
+	}
 	if value := os.Getenv("AI_PROXY_DEBUG_LOG"); value != "" {
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -907,6 +961,7 @@ func normalize(cfg *Config, configPath string) error {
 	cfg.InteractionDir = cfg.State.InteractionsDir()
 	cfg.InteractionRetention = cfg.State.InteractionRetention
 	cfg.ChatGPTWeb.DataDir = cfg.State.Dir
+	cfg.CodexOAuth.Models = normalizeModelPatterns(cfg.CodexOAuth.Models)
 	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
 	if err := normalizeClientAPIKeys(cfg); err != nil {
 		return err
@@ -1001,10 +1056,10 @@ func validateMetricsCIDRs(cidrs []string) error {
 }
 
 func validate(cfg Config) error {
-	if len(cfg.Providers) == 0 && !cfg.ChatGPTWeb.Enabled {
+	if len(cfg.Providers) == 0 && !cfg.ChatGPTWeb.Enabled && !cfg.CodexOAuth.Enabled {
 		return fmt.Errorf("no providers configured; declare providers in config.yaml")
 	}
-	if !hasEnabledProvider(cfg.Providers) && !cfg.ChatGPTWeb.Enabled {
+	if !hasEnabledProvider(cfg.Providers) && !cfg.ChatGPTWeb.Enabled && !cfg.CodexOAuth.Enabled {
 		return fmt.Errorf("no enabled providers configured")
 	}
 	// client_api_keys 是归属机制而非强制登录;非 loopback 监听不再要求 inbound key。
@@ -1016,6 +1071,9 @@ func validate(cfg Config) error {
 		return err
 	}
 	if err := validateChatGPTWeb(cfg.ChatGPTWeb); err != nil {
+		return err
+	}
+	if err := validateCodexOAuth(cfg.CodexOAuth); err != nil {
 		return err
 	}
 	if err := validateProviders(cfg); err != nil {
@@ -1720,7 +1778,7 @@ func ProviderSupportsInboundPath(provider Provider, path string) bool {
 			return ProviderHasDirectEndpoint(provider, EndpointCapabilityChatCompletions)
 		}
 	case "/v1/responses":
-		return (provider.Protocol == "openai" || provider.Protocol == "chatgptweb") && ProviderHasDirectEndpoint(provider, EndpointCapabilityResponses)
+		return (provider.Protocol == "openai" || provider.Protocol == "chatgptweb" || provider.Protocol == "codexoauth") && ProviderHasDirectEndpoint(provider, EndpointCapabilityResponses)
 	case "/v1/completions":
 		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityCompletions)
 	case "/v1/embeddings":
@@ -2038,6 +2096,27 @@ func validateChatGPTWeb(web ChatGPTWebConfig) error {
 	}
 	if tc.TurnTimeoutSeconds <= 0 {
 		return fmt.Errorf("chatgpt_web.temporary_chat.turn_timeout_seconds must be > 0")
+	}
+	return nil
+}
+
+func validateCodexOAuth(codex CodexOAuthConfig) error {
+	if codex.RefreshAccountIntervalMinute < 0 {
+		return fmt.Errorf("codex_oauth.refresh_account_interval_minute must be >= 0")
+	}
+	if !codex.Enabled {
+		return nil
+	}
+	if len(codex.Models) == 0 {
+		return fmt.Errorf("codex_oauth.models is required when codex_oauth.enabled is true")
+	}
+	for _, model := range codex.Models {
+		if strings.TrimSpace(model) == "" || strings.Contains(model, "*") {
+			return fmt.Errorf("codex_oauth.models must contain exact model ids")
+		}
+		if err := validateModelCatalogID(model); err != nil {
+			return fmt.Errorf("codex_oauth.models: %w", err)
+		}
 	}
 	return nil
 }

@@ -123,7 +123,7 @@ func (s *Proxy) handleUpdate(ev event.Event, result event.Result) {
 	// Keep the constrained auto-discovered projection while the account-pool
 	// query runs, so a hot reload never makes ChatGPT Web models disappear.
 	s.publishCatalog(effectivecatalog.Reconfigure(command.Config, previous))
-	if command.Config.ChatGPTWeb.Enabled {
+	if command.Config.ChatGPTWeb.Enabled || command.Config.CodexOAuth.Enabled {
 		s.refreshEffectiveCatalog(ev.Context())
 	}
 	result.Set(struct{}{}, nil)

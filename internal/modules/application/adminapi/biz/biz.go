@@ -76,6 +76,9 @@ func (s *Admin) ChatGPTWebEnabled() bool {
 	return s.ConfigSnapshot().ChatGPTWeb.Enabled
 }
 
+// CodexOAuthEnabled reports the separately assembled Codex OAuth component.
+func (s *Admin) CodexOAuthEnabled() bool { return s.ConfigSnapshot().CodexOAuth.Enabled }
+
 func (s *Admin) UpdateConfig(cfg config.Config) error {
 	return configevents.Activate(context.Background(), s.EventHub(), s.ID(), cfg)
 }

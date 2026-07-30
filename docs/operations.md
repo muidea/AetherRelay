@@ -68,6 +68,20 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 - 本设计落地前，部分 chatgptweb 成功请求可能被误记为 `error`/`proxy_internal_error`（`completePendingUsage` 兜底），历史行不回溯修正。
 - Admin 异步图片任务默认不进全局 usage（仍在任务详情展示任务级 Usage）。
 
+## Codex OAuth 用量与账号池
+
+启用 `codex_oauth.enabled` 后，进程注入只读内建 Provider `codexoauth`。它与 `chatgptweb` 是两个独立账号域：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
+
+| 路径 | `provider` | `api_key_id` | token |
+| --- | --- | --- | --- |
+| 原生代理 `/v1/responses` → codexoauth | `codexoauth` | 客户端 Key ID | 上游 Response `usage`（缺失时本地估算） |
+
+- 使用统计会记录 `upstream_protocol=codexoauth`、`upstream_endpoint=codex_oauth_responses`、`conversion_mode=codex_oauth_responses`，包括 interaction archive 关闭时的兜底结算。
+- 每个账号的代理同时用于 OAuth refresh 与 Codex Responses 请求。管理 API 与 Web 表格只返回稳定本地 ID、脱敏邮箱、状态、结果计数、模型冷却与最近刷新状态，绝不返回 token、account ID 或代理。
+- 401 触发单飞 refresh 后只重试一次；429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。
+- `/v1/responses` 的非流式请求在内部要求上游 SSE，并仅在 `response.completed` 事件返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。P0 不提供 realtime/WebSocket、`responses/compact` 或网页会话能力。
+- `codex_oauth.enabled`、账号定时刷新间隔是启动期 Block 生命周期设置。修改它们后重启；不要把 YAML 热更新视作账号池已装配。
+
 ## ChatGPT Web 内建 Provider
 
 启用 `chatgpt_web.enabled` 后，进程自动注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。禁止在 `providers` 中再声明 `protocol: chatgptweb`。

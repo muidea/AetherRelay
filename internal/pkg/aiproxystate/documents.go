@@ -23,6 +23,14 @@ type AccountRow struct {
 	Payload     json.RawMessage
 }
 
+// CodexOAuthAccountRow is a Codex OAuth credential record. Its primary key is
+// the stable local account ID rather than a rotating access token.
+type CodexOAuthAccountRow struct {
+	ID       string
+	Position int
+	Payload  json.RawMessage
+}
+
 // ImageTaskRow is a task record scoped by its owner and client task ID.
 type ImageTaskRow struct {
 	OwnerID string
@@ -180,6 +188,12 @@ func migrate(db *sql.DB) error {
             payload JSON NOT NULL,
             updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
         )`,
+		`CREATE TABLE IF NOT EXISTS codex_oauth_accounts (
+            id VARCHAR PRIMARY KEY,
+            position BIGINT NOT NULL,
+            payload JSON NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+        )`,
 		`CREATE TABLE IF NOT EXISTS chatgpt_image_tasks (
             owner_id VARCHAR NOT NULL,
             task_id VARCHAR NOT NULL,
@@ -307,6 +321,36 @@ func (s *Documents) ReplaceAccounts(values []AccountRow) error {
 	return s.replace("DELETE FROM chatgpt_accounts", func(tx *sql.Tx) error {
 		for _, value := range values {
 			if _, err := tx.Exec(`INSERT INTO chatgpt_accounts(access_token, position, payload, updated_at) VALUES (?, ?, CAST(? AS JSON), NOW())`, value.AccessToken, value.Position, string(value.Payload)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Documents) LoadCodexOAuthAccounts() ([]CodexOAuthAccountRow, error) {
+	rows, err := s.queryRows(`SELECT id, position, CAST(payload AS VARCHAR) FROM codex_oauth_accounts ORDER BY position, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []CodexOAuthAccountRow
+	for rows.Next() {
+		var row CodexOAuthAccountRow
+		var payload string
+		if err := rows.Scan(&row.ID, &row.Position, &payload); err != nil {
+			return nil, err
+		}
+		row.Payload = json.RawMessage(payload)
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *Documents) ReplaceCodexOAuthAccounts(values []CodexOAuthAccountRow) error {
+	return s.replace("DELETE FROM codex_oauth_accounts", func(tx *sql.Tx) error {
+		for _, value := range values {
+			if _, err := tx.Exec(`INSERT INTO codex_oauth_accounts(id, position, payload, updated_at) VALUES (?, ?, CAST(? AS JSON), NOW())`, value.ID, value.Position, string(value.Payload)); err != nil {
 				return err
 			}
 		}

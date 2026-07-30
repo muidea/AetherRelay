@@ -11,6 +11,8 @@ import (
 	_ "ai-proxy/internal/modules/application/proxyapi"
 	_ "ai-proxy/internal/modules/blocks/chatgptimagestore"
 	_ "ai-proxy/internal/modules/blocks/chatgptwebupstream"
+	_ "ai-proxy/internal/modules/blocks/codexaccountpool"
+	_ "ai-proxy/internal/modules/blocks/codexupstream"
 	_ "ai-proxy/internal/modules/blocks/configruntime"
 	_ "ai-proxy/internal/modules/blocks/metricsruntime"
 	_ "ai-proxy/internal/modules/blocks/usageruntime"

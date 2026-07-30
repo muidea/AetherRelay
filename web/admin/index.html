@@ -74,6 +74,7 @@
       <a href="#/client-keys" id="navClientKeys">客户端 Key</a>
       <a href="#/usage" id="navUsage">使用统计</a>
       <a href="#/chatgpt" id="navChatGPT">ChatGPT Web</a>
+      <a href="#/codex" id="navCodex">Codex OAuth</a>
     </nav>
     <div class="header-status"><i class="dot" id="storeDot"></i><span id="storeLabel">本地管理模式</span><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
   </header>
@@ -302,6 +303,36 @@
       </dialog>
 
     </section>
+
+    <section id="panelCodex" class="panel">
+      <section class="hero">
+        <div>
+          <h2>Codex OAuth</h2>
+          <p>管理独立的 Codex CLI OAuth 账号池。它不与 ChatGPT Web 共享凭据、代理、模型发现或会话；仅用于原生 <code>/v1/responses</code>。</p>
+        </div>
+      </section>
+      <div id="codexUnavailable" class="notice" style="display:none">Codex OAuth 组件未启用或不可用。<button type="button" class="btn" id="codexRetry" style="margin-left:10px">重试</button></div>
+      <section class="stats" id="codexAccountStats">
+        <div class="stat"><div class="stat-label">账号总数</div><div class="stat-value" id="codexAccTotal">—</div></div>
+        <div class="stat"><div class="stat-label">正常账号</div><div class="stat-value" id="codexAccAvailable">—</div></div>
+        <div class="stat"><div class="stat-label">异常账号</div><div class="stat-value" id="codexAccAbnormal">—</div></div>
+        <div class="stat"><div class="stat-label">禁用账号</div><div class="stat-value" id="codexAccDisabled">—</div></div>
+      </section>
+      <section class="card">
+        <div class="toolbar cg-account-toolbar">
+          <span class="toolbar-title">Codex 账号列表</span><span class="toolbar-meta" id="codexAccMeta"></span>
+          <input id="codexAccSearch" class="search" type="search" autocomplete="off" placeholder="搜索脱敏邮箱或本地 ID">
+          <div class="cg-toolbar-actions">
+            <button type="button" class="btn" id="codexAccReload">刷新列表</button>
+            <button type="button" class="btn" id="codexAccRefresh">刷新选中</button>
+            <button type="button" class="btn link-danger" id="codexAccDelete">删除选中</button>
+            <button type="button" class="btn" id="codexAccOAuth">OAuth 导入</button>
+            <button type="button" class="btn btn-primary" id="codexAccImport">导入凭据</button>
+          </div>
+        </div>
+        <div id="codexAccTable" class="loading"><div class="spin"></div><div>正在读取账号…</div></div>
+      </section>
+    </section>
   </main>
 </div>
 
@@ -387,6 +418,35 @@
   </div>
   <div class="modal-foot"><button class="btn" type="button" id="cgExportCancel">取消</button><button class="btn btn-primary" type="button" id="cgExportConfirm">确认导出并下载</button></div>
 </dialog>
+<dialog id="codexImportDialog">
+  <form id="codexImportForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title">导入 Codex OAuth 凭据</span><button class="close" type="button" id="codexImportClose">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label class="label required" for="codexImportAccounts">accounts JSON</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea></div>
+      <div class="help">仅接受 Codex OAuth 导出结构。凭据和代理仅在提交期间保留于页面内存，列表与后续页面都不会回显。</div>
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" id="codexImportCancel">取消</button><button class="btn btn-primary" type="submit" id="codexImportSubmit">导入</button></div>
+  </form>
+</dialog>
+<dialog id="codexOAuthDialog">
+  <form id="codexOAuthForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title">Codex OAuth 导入</span><button class="close" type="button" id="codexOAuthClose">×</button></div>
+    <div class="modal-body">
+      <div id="codexOAuthStepStart">
+        <div class="field"><label class="label" for="codexOAuthHint">email_hint（可选）</label><input id="codexOAuthHint" class="control" autocomplete="off"></div>
+        <div class="field"><label class="label" for="codexOAuthProxy">账号代理（可选）</label><input id="codexOAuthProxy" class="control" type="url" autocomplete="off" placeholder="http://proxy.example:8080"><div class="help">此代理会同时用于授权换令牌、后续刷新和 Codex 请求，但不会在列表中显示。</div></div>
+        <p class="help">开始后会在新窗口打开 OpenAI 登录；请将最终的 <code>http://localhost:1455/auth/callback?...</code> 完整 URL 粘贴回来。授权 URL 与会话不写入浏览器存储。</p>
+        <button type="button" class="btn btn-primary" id="codexOAuthStart">开始 OAuth</button>
+      </div>
+      <div id="codexOAuthStepFinish" class="hidden">
+        <div class="notice" style="display:block;margin-top:12px">会话进行中。完成登录后提交 callback；关闭窗口会清除本页内存的会话引用。</div>
+        <div class="field" style="margin-top:12px"><label class="label required" for="codexOAuthCallback">callback URL</label><textarea id="codexOAuthCallback" class="control" rows="3" autocomplete="off" placeholder="粘贴完整 http://localhost:1455/auth/callback?... URL"></textarea></div>
+        <div class="help" id="codexOAuthExpireHint"></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" id="codexOAuthCancel">取消</button><button class="btn btn-primary hidden" type="submit" id="codexOAuthFinish">完成导入</button></div>
+  </form>
+</dialog>
 <dialog id="cgTagsDialog">
   <form id="cgTagsForm" autocomplete="off">
     <div class="modal-head"><span class="modal-title">编辑标签</span><button class="close" type="button" id="cgTagsClose">×</button></div>
@@ -423,7 +483,8 @@ const state={providers:[],writable:false,editing:-1,query:"",tab:"providers",ran
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
-    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}}};
+    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}},
+  codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
@@ -573,7 +634,7 @@ function parseHash(){
     tab="chatgpt";
     const parts=path.split("/");
     if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts"||parts[1]==="chat")cgSub=parts[1];
-  }
+  }else if(path.startsWith("codex"))tab="codex";
   return {tab,cgSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||"",conversationId:p.get("id")||""};
 }
 function setHash(){
@@ -592,6 +653,7 @@ function setHash(){
     location.hash="#/chatgpt/"+sub+(q.toString()?"?"+q.toString():"");
     return;
   }
+  if(state.tab==="codex"){location.hash="#/codex";return}
   location.hash="#/"+state.tab;
 }
 function showTab(tab){
@@ -601,13 +663,16 @@ function showTab(tab){
   $("panelClientKeys").classList.toggle("active",tab==="client-keys");
   $("panelUsage").classList.toggle("active",tab==="usage");
   $("panelChatGPT").classList.toggle("active",tab==="chatgpt");
+  $("panelCodex").classList.toggle("active",tab==="codex");
   $("navProviders").classList.toggle("active",tab==="providers");
   $("navClientKeys").classList.toggle("active",tab==="client-keys");
   $("navUsage").classList.toggle("active",tab==="usage");
   $("navChatGPT").classList.toggle("active",tab==="chatgpt");
+  $("navCodex").classList.toggle("active",tab==="codex");
   if(tab==="usage"){loadFilterOptions(false);loadUsage(true)}
   else if(tab==="client-keys")loadClientKeys();
   else if(tab==="chatgpt")showChatGPTSub(state.cg.sub||"accounts");
+  else if(tab==="codex")loadCodexAccounts();
   else loadProviders();
 }
 function showChatGPTSub(sub){
@@ -645,6 +710,131 @@ function setChatGPTUnavailable(msg){
 function setChatGPTAvailable(){
   state.cg.available=true;
   $("cgUnavailable").style.display="none";
+}
+function setCodexUnavailable(msg){
+  state.codex.available=false;
+  const box=$("codexUnavailable");
+  box.style.display="block";
+  if(box.firstChild&&box.firstChild.nodeType===3)box.firstChild.textContent=(msg||"Codex OAuth 组件未启用或不可用。")+" ";
+  else box.insertBefore(document.createTextNode((msg||"Codex OAuth 组件未启用或不可用。")+" "),box.firstChild);
+}
+function setCodexAvailable(){state.codex.available=true;$("codexUnavailable").style.display="none"}
+function codexStatusTag(status){
+  const value=String(status||"").toLowerCase();
+  const map={normal:"status-normal",abnormal:"status-abnormal",disabled:"status-disabled"};
+  const labels={normal:"正常",abnormal:"异常",disabled:"禁用"};
+  return `<span class="tag ${map[value]||"tag-default"}">${esc(labels[value]||status||"—")}</span>`;
+}
+function codexRefreshBadge(account){
+  const failedAt=String(account?.last_token_refresh_error_at||"").trim();
+  const failureClass=String(account?.last_token_refresh_error_class||"").trim();
+  const refreshedAt=String(account?.last_token_refresh_at||"").trim();
+  if(failureClass)return `<div class="account-refresh-state"><span class="tag tag-refresh-failure" title="${esc(`最近刷新失败：${failureClass} · ${formatAccountDate(failedAt)}`)}">${esc(`刷新失败 · ${failureClass}`)}</span></div>`;
+  if(!refreshedAt)return "";
+  return `<div class="account-refresh-state"><span class="tag tag-refresh-ok">${esc(`最近刷新 · ${formatAccountDate(refreshedAt)}`)}</span></div>`;
+}
+async function loadCodexAccounts(){
+  const box=$("codexAccTable");
+  box.className="loading";box.innerHTML=`<div class="spin"></div><div>正在读取账号…</div>`;
+  try{
+    const data=await request(apiURL("/api/codex/accounts"));
+    setCodexAvailable();
+    state.codex.accounts=Array.isArray(data.items)?data.items:[];
+    const ids=new Set(state.codex.accounts.map(item=>item.id));
+    state.codex.selected.forEach(id=>{if(!ids.has(id))state.codex.selected.delete(id)});
+    renderCodexAccounts();
+  }catch(e){
+    if(e.status===503){setCodexUnavailable(e.message);box.className="";box.innerHTML=`<div class="empty">${esc(e.message||"Codex OAuth 组件未启用或不可用")}</div>`;return}
+    box.className="";box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+function filteredCodexAccounts(){
+  const q=(state.codex.query||"").trim().toLowerCase();
+  if(!q)return state.codex.accounts;
+  return state.codex.accounts.filter(item=>String(item.id||"").toLowerCase().includes(q)||String(item.email||"").toLowerCase().includes(q));
+}
+function renderCodexAccounts(){
+  const all=state.codex.accounts||[],rows=filteredCodexAccounts();
+  const counts={normal:0,abnormal:0,disabled:0};
+  all.forEach(item=>{const status=String(item.status||"").toLowerCase();if(counts[status]!=null)counts[status]++});
+  $("codexAccTotal").textContent=all.length;
+  $("codexAccAvailable").textContent=counts.normal;
+  $("codexAccAbnormal").textContent=counts.abnormal;
+  $("codexAccDisabled").textContent=counts.disabled;
+  $("codexAccMeta").textContent=`显示 ${rows.length} / ${all.length}`;
+  $("codexAccRefresh").disabled=state.codex.busy;
+  $("codexAccDelete").disabled=state.codex.busy;
+  if(!rows.length){$("codexAccTable").className="";$("codexAccTable").innerHTML=`<div class="empty">${all.length?"没有匹配的账号":"尚未导入 Codex OAuth 账号"}</div>`;return}
+  const body=rows.map(item=>{
+    const id=String(item.id||"");
+    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td class="mono" title="${esc(id)}">${esc(id)}</td><td>${maskEmail(item.email)}</td><td>${codexStatusTag(item.status)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}</td><td>${Number(item.success)||0}</td><td>${Number(item.fail)||0}</td><td class="subtle">${esc(formatAccountDate(item.last_used_at))}</td><td class="subtle">${esc(formatAccountDate(item.created_at))}</td><td><div class="actions"><button class="link-btn" data-codex-refresh="${esc(id)}" ${state.codex.busy?"disabled":""}>刷新</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>删除</button></div></td></tr>`;
+  }).join("");
+  $("codexAccTable").className="";
+  $("codexAccTable").innerHTML=`<div class="table-wrap"><table><thead><tr><th style="width:42px"><input type="checkbox" id="codexCheckAll" title="全选当前筛选"></th><th>本地 ID</th><th>邮箱</th><th>状态 / 冷却 / 刷新</th><th>成功</th><th>失败</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  const allBox=$("codexCheckAll");
+  allBox.checked=rows.length>0&&rows.every(item=>state.codex.selected.has(item.id));
+  allBox.indeterminate=rows.some(item=>state.codex.selected.has(item.id))&&!allBox.checked;
+  allBox.onchange=()=>{rows.forEach(item=>{if(allBox.checked)state.codex.selected.add(item.id);else state.codex.selected.delete(item.id)});renderCodexAccounts()};
+  document.querySelectorAll("[data-codex-check]").forEach(el=>el.onchange=()=>{const id=el.dataset.codexCheck;if(el.checked)state.codex.selected.add(id);else state.codex.selected.delete(id)});
+  document.querySelectorAll("[data-codex-refresh]").forEach(el=>el.onclick=()=>refreshCodexAccounts([el.dataset.codexRefresh]));
+  document.querySelectorAll("[data-codex-delete]").forEach(el=>el.onclick=()=>deleteCodexAccounts([el.dataset.codexDelete]));
+}
+function selectedCodexIDs(){return [...state.codex.selected]}
+function clearCodexImport(){ $("codexImportAccounts").value="" }
+function openCodexImport(){clearCodexImport();$("codexImportDialog").showModal()}
+async function submitCodexImport(event){
+  event.preventDefault();
+  let parsed;
+  try{parsed=JSON.parse($("codexImportAccounts").value||"")}catch(_){toast("账号 JSON 格式无效","error");return}
+  const accounts=Array.isArray(parsed)?parsed:(parsed&&Array.isArray(parsed.accounts)?parsed.accounts:[]);
+  if(!accounts.length||accounts.some(item=>!item||typeof item!=="object")){toast("accounts 必须是非空对象数组","error");return}
+  $("codexImportSubmit").disabled=true;
+  try{
+    const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({accounts})});
+    toast(`导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`);
+    clearCodexImport();$("codexImportDialog").close();await loadCodexAccounts();
+  }catch(e){toast(e.message,"error")}finally{$("codexImportSubmit").disabled=false}
+}
+async function deleteCodexAccounts(ids){
+  ids=uniq((ids||[]).filter(Boolean));
+  if(!ids.length){toast("请先选择账号","error");return}
+  if(!confirm(`确认删除 ${ids.length} 个 Codex OAuth 账号？此操作不可恢复。`))return;
+  state.codex.busy=true;renderCodexAccounts();
+  try{await request(apiURL("/api/codex/accounts"),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});ids.forEach(id=>state.codex.selected.delete(id));toast("账号已删除");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
+}
+async function refreshCodexAccounts(ids){
+  ids=uniq((ids||[]).filter(Boolean));
+  if(!ids.length){toast("请先选择账号","error");return}
+  state.codex.busy=true;renderCodexAccounts();
+  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
+}
+function clearCodexOAuthMemory(){
+  state.codex.oauth={sessionId:"",authorizeURL:"",expiresIn:0};
+  $("codexOAuthCallback").value="";$("codexOAuthExpireHint").textContent="";
+}
+function openCodexOAuth(){
+  clearCodexOAuthMemory();$("codexOAuthHint").value="";$("codexOAuthProxy").value="";
+  $("codexOAuthStepStart").classList.remove("hidden");$("codexOAuthStepFinish").classList.add("hidden");$("codexOAuthFinish").classList.add("hidden");$("codexOAuthDialog").showModal();
+}
+async function startCodexOAuth(){
+  $("codexOAuthStart").disabled=true;
+  try{
+    const body={email_hint:$("codexOAuthHint").value.trim(),proxy:$("codexOAuthProxy").value.trim()};
+    if(!body.email_hint)delete body.email_hint;if(!body.proxy)delete body.proxy;
+    const result=await request(apiURL("/api/codex/accounts/oauth/start"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    state.codex.oauth={sessionId:result.session_id||"",authorizeURL:result.authorize_url||"",expiresIn:Number(result.expires_in)||0};
+    if(!state.codex.oauth.sessionId||!state.codex.oauth.authorizeURL)throw new Error("OAuth 启动响应不完整");
+    $("codexOAuthStepStart").classList.add("hidden");$("codexOAuthStepFinish").classList.remove("hidden");$("codexOAuthFinish").classList.remove("hidden");
+    $("codexOAuthExpireHint").textContent=state.codex.oauth.expiresIn?`会话约 ${state.codex.oauth.expiresIn}s 后过期。若没有打开登录窗口，请允许弹窗后重试。`:"若没有打开登录窗口，请允许弹窗后重试。";
+    window.open(state.codex.oauth.authorizeURL,"_blank","noopener,noreferrer");
+  }catch(e){toast(e.message,"error")}finally{$("codexOAuthStart").disabled=false}
+}
+async function finishCodexOAuth(event){
+  event.preventDefault();
+  const callback=$("codexOAuthCallback").value.trim(),sessionID=state.codex.oauth.sessionId;
+  if(!callback||!sessionID){toast("会话未开始或 callback URL 为空","error");return}
+  $("codexOAuthFinish").disabled=true;
+  try{await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});toast("Codex OAuth 账号已导入");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
 }
 function statusTag(status){
   const map={"正常":"status-normal","限流":"status-limited","异常":"status-abnormal","禁用":"status-disabled"};
@@ -1341,7 +1531,8 @@ function rowHTML(p,index){
   const detail=p.unavailable_reason||((p.updated_at&&`最近发现：${new Date(p.updated_at).toLocaleString()}`)||"等待首次发现");
   const summary=builtin?`运行时内建${conflicts?` · 静态冲突 ${conflicts}`:""}`:(p.api_key_configured?"API Key 已配置":p.allow_unauthenticated?"本地无认证":"未配置凭据");
   const protocol=`<span class="tag ${p.protocol==="openai"?"":"tag-green"}">${esc(p.protocol)}</span>`;
-  const baseURL=builtin?`<div class="subtle" title="${esc(detail)}">ChatGPT Web 内建上游</div>`:`<div class="url" title="${esc(p.base_url)}">${esc(p.base_url)}</div>`;
+  const builtinLabel=p.protocol==="codexoauth"?"Codex OAuth 内建上游":"ChatGPT Web 内建上游";
+  const baseURL=builtin?`<div class="subtle" title="${esc(detail)}">${esc(builtinLabel)}</div>`:`<div class="url" title="${esc(p.base_url)}">${esc(p.base_url)}</div>`;
   const capability=`<div class="tags">${caps}</div>`;
   const toggle=builtin?`<label class="switch" title="内建 Provider 由运行时托管"><input type="checkbox" checked disabled aria-label="内建 Provider 运行时托管"><span class="slider"></span></label>`:`<label class="switch"><input data-toggle="${index}" type="checkbox" ${p.enabled?"checked":""} ${state.writable?"":"disabled"}><span class="slider"></span></label>`;
   const actions=builtin?`<div class="actions" title="内建 Provider 不支持手工检查、编辑或删除"><button class="link-btn" disabled>检查</button><button class="link-btn" disabled>编辑</button><button class="link-btn link-danger" disabled>删除</button></div>`:`<div class="actions"><button class="link-btn" data-probe="${esc(p.name)}" ${p.enabled?"":"disabled"}>检查</button><button class="link-btn" data-edit="${index}" ${state.writable?"":"disabled"}>编辑</button><button class="link-btn link-danger" data-delete="${index}" ${state.writable?"":"disabled"}>删除</button></div>`;
@@ -1522,7 +1713,7 @@ window.addEventListener("hashchange",()=>{
   applyChatGPTState(p);
   showTab(p.tab);
 });
-window.addEventListener("pagehide",()=>{stopAllTaskPolling();stopTemporaryChatPolling();clearTemporaryPendingImages();clearOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+window.addEventListener("pagehide",()=>{stopAllTaskPolling();stopTemporaryChatPolling();clearTemporaryPendingImages();clearOAuthMemory();clearCodexOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
 
 
 // Temporary chat (server-persisted; no Web Storage)
@@ -1927,6 +2118,19 @@ function copyAllTemporaryMessages(){
 }
 
 // ChatGPT Web events
+$("codexRetry").onclick=loadCodexAccounts;
+$("codexAccReload").onclick=loadCodexAccounts;
+$("codexAccSearch").oninput=e=>{state.codex.query=e.target.value;renderCodexAccounts()};
+$("codexAccImport").onclick=openCodexImport;
+$("codexImportClose").onclick=$("codexImportCancel").onclick=()=>{clearCodexImport();$("codexImportDialog").close()};
+$("codexImportDialog").addEventListener("close",clearCodexImport);
+$("codexImportForm").onsubmit=submitCodexImport;
+$("codexAccRefresh").onclick=()=>refreshCodexAccounts(selectedCodexIDs());
+$("codexAccDelete").onclick=()=>deleteCodexAccounts(selectedCodexIDs());
+$("codexAccOAuth").onclick=openCodexOAuth;
+$("codexOAuthClose").onclick=$("codexOAuthCancel").onclick=()=>{clearCodexOAuthMemory();$("codexOAuthDialog").close()};
+$("codexOAuthStart").onclick=startCodexOAuth;
+$("codexOAuthForm").onsubmit=finishCodexOAuth;
 document.querySelectorAll("[data-cg-sub]").forEach(btn=>btn.onclick=()=>{state.cg.sub=btn.dataset.cgSub;setHash();showChatGPTSub(state.cg.sub)});
 $("cgRetry").onclick=()=>showChatGPTSub(state.cg.sub||"accounts");
 $("cgAccSearch").oninput=e=>{state.cg.query=e.target.value;renderChatGPTAccounts()};

@@ -124,6 +124,25 @@ chatgpt_web:
 	}
 }
 
+func TestLoadAllowsCodexOAuthAsOnlyProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+codex_oauth:
+  enabled: true
+  models: gpt-5.2, gpt-5.2-codex
+  refresh_account_interval_minute: 15
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load codex-oauth-only config: %v", err)
+	}
+	if !cfg.CodexOAuth.Enabled || cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || len(cfg.CodexOAuth.Models) != 2 || len(cfg.Providers) != 0 {
+		t.Fatalf("config=%+v", cfg)
+	}
+}
+
 func TestLoadModelCatalog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
