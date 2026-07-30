@@ -29,7 +29,9 @@ func TestDecodeBase64ImagesRejectsInvalidInput(t *testing.T) {
 
 func TestDecodeDataURLImageValidatesDeclaredAndDetectedImage(t *testing.T) {
 	var pngData bytes.Buffer
-	if err := png.Encode(&pngData, image.NewUniform(color.RGBA{R: 1, G: 2, B: 3, A: 255})); err != nil {
+	pngImage := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	pngImage.SetRGBA(0, 0, color.RGBA{R: 1, G: 2, B: 3, A: 255})
+	if err := png.Encode(&pngData, pngImage); err != nil {
 		t.Fatal(err)
 	}
 	image, err := DecodeDataURLImage("data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData.Bytes()))
