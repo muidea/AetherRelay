@@ -167,7 +167,7 @@
     </section>
 
     <section id="panelChatGPT" class="panel">
-      <section class="hero">
+      <section id="cgHero" class="hero">
         <div>
           <h2>ChatGPT Web</h2>
           <p>ChatGPT Web 的账号与功能服务。敏感凭据不会在页面展示，也不会保存到浏览器。</p>
@@ -731,6 +731,7 @@ function showTab(tab){
   $("panelAccountPools").classList.toggle("active",tab==="account-pools");
   $("panelFeatures").classList.toggle("active",tab==="features");
   $("panelChatGPT").classList.toggle("active",(tab==="account-pools"&&state.poolSub!=="codex")||tab==="features");
+  $("cgHero").classList.toggle("hidden",tab==="features");
   $("panelCodex").classList.toggle("active",tab==="account-pools"&&state.poolSub==="codex");
   $("navProviders").classList.toggle("active",tab==="providers");
   $("navClientKeys").classList.toggle("active",tab==="client-keys");
@@ -760,6 +761,7 @@ function showFeatureSub(sub){
   $("featureSubImages").classList.toggle("active",sub==="images");
   $("featureSubChat").classList.toggle("active",sub==="chat");
   $("panelChatGPT").classList.toggle("active",state.tab==="features");
+  $("cgHero").classList.toggle("hidden",state.tab==="features");
   $("panelCodex").classList.remove("active");
   showChatGPTSub(sub);
   if(state.tab==="features")setHash();
