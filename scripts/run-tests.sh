@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail
 
 output_file="$(mktemp)"
-trap 'rm -f "$output_file"' EXIT
+cleanup() {
+	status=$?
+	if [[ $status -ne 0 ]]; then
+		cat "$output_file"
+	fi
+	rm -f "$output_file"
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
-if ! go test ./... -count=1 >"$output_file" 2>&1; then
-  cat "$output_file"
-  exit 1
-fi
+go test ./... -count=1 >"$output_file" 2>&1
