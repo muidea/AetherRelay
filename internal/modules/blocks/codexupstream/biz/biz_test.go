@@ -18,7 +18,7 @@ func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(value)
-	for _, required := range []string{`"stream":true`, `"tools"`, `"metadata"`} {
+	for _, required := range []string{`"stream":true`, `"store":false`, `"tools"`, `"metadata"`} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("forced request lost native field %s: %s", required, text)
 		}
@@ -31,9 +31,9 @@ func TestCompletedResponseSupportsJSONAndSSE(t *testing.T) {
 	if err != nil || class != "" || observation.UsageLimited || string(value) != `{"object":"response","id":"resp_1"}` {
 		t.Fatalf("json completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
 	}
-	sseResponse := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_2\"}}\n\n"))}
+	sseResponse := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello \"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_2\"}}\n\n"))}
 	value, class, observation, err = completedResponse(sseResponse, 1024)
-	if err != nil || class != "" || observation.UsageLimited || !strings.Contains(string(value), `"resp_2"`) {
+	if err != nil || class != "" || observation.UsageLimited || !strings.Contains(string(value), `"resp_2"`) || !strings.Contains(string(value), `"output_text":"hello world"`) {
 		t.Fatalf("sse completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
 	}
 }

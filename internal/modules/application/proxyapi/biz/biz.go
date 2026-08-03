@@ -28,6 +28,14 @@ type ConfigUpdater interface {
 	UpdateConfig(config.Config) error
 }
 
+// FeatureExecutor is implemented by proxyapi's local HTTP service. Other
+// modules reach it only through proxy-owned typed EventHub commands.
+type FeatureExecutor interface {
+	FeatureCatalog(context.Context) proxyevents.FeatureCatalogResult
+	ExecuteFeatureText(context.Context, proxyevents.ExecuteFeatureTextCommand) (proxyevents.ExecuteFeatureTextResult, error)
+	ExecuteFeatureImage(context.Context, proxyevents.ExecuteFeatureImageCommand) (proxyevents.ExecuteFeatureImageResult, error)
+}
+
 type Proxy struct {
 	basebiz.Base
 	config   config.Config
@@ -37,6 +45,7 @@ type Proxy struct {
 
 	mu                 sync.RWMutex
 	updater            ConfigUpdater
+	featureExecutor    FeatureExecutor
 	catalogPublisher   CatalogPublisher
 	catalog            effectivecatalog.Snapshot
 	discoveryMu        sync.Mutex
@@ -77,6 +86,9 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicCodexDiscoveryProgress, biz.handleCodexDiscoveryProgress)
 	biz.SubscribeFunc(proxyevents.TopicStartCodexUsageRefresh, biz.handleStartCodexUsageRefresh)
 	biz.SubscribeFunc(proxyevents.TopicCodexUsageProgress, biz.handleCodexUsageProgress)
+	biz.SubscribeFunc(proxyevents.TopicFeatureCatalog, biz.handleFeatureCatalog)
+	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureText, biz.handleExecuteFeatureText)
+	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureImage, biz.handleExecuteFeatureImage)
 	return biz, nil
 }
 
@@ -92,8 +104,12 @@ func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicCodexDiscoveryProgress)
 	s.UnsubscribeFunc(proxyevents.TopicStartCodexUsageRefresh)
 	s.UnsubscribeFunc(proxyevents.TopicCodexUsageProgress)
+	s.UnsubscribeFunc(proxyevents.TopicFeatureCatalog)
+	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureText)
+	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureImage)
 	s.mu.Lock()
 	s.updater = nil
+	s.featureExecutor = nil
 	s.catalogPublisher = nil
 	s.catalog = effectivecatalog.Snapshot{}
 	s.mu.Unlock()
@@ -105,6 +121,74 @@ func (s *Proxy) Teardown(context.Context) {
 	s.usage = nil
 	s.metrics = nil
 	s.recorder = nil
+}
+
+func (s *Proxy) BindFeatureExecutor(executor FeatureExecutor) {
+	s.mu.Lock()
+	s.featureExecutor = executor
+	s.mu.Unlock()
+}
+
+func (s *Proxy) handleFeatureCatalog(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	s.mu.RLock()
+	executor := s.featureExecutor
+	s.mu.RUnlock()
+	if executor == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "feature executor is unavailable"))
+		return
+	}
+	result.Set(executor.FeatureCatalog(ev.Context()), nil)
+}
+
+func (s *Proxy) handleExecuteFeatureText(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(proxyevents.ExecuteFeatureTextCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid feature text command"))
+		return
+	}
+	s.mu.RLock()
+	executor := s.featureExecutor
+	s.mu.RUnlock()
+	if executor == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "feature executor is unavailable"))
+		return
+	}
+	out, err := executor.ExecuteFeatureText(ev.Context(), cmd)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(out, nil)
+}
+
+func (s *Proxy) handleExecuteFeatureImage(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(proxyevents.ExecuteFeatureImageCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid feature image command"))
+		return
+	}
+	s.mu.RLock()
+	executor := s.featureExecutor
+	s.mu.RUnlock()
+	if executor == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "feature executor is unavailable"))
+		return
+	}
+	out, err := executor.ExecuteFeatureImage(ev.Context(), cmd)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(out, nil)
 }
 
 func (s *Proxy) Config() config.Config       { return s.config }

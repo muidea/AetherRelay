@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"ai-proxy/internal/modules/application/chatgptimagetask/internal/store"
 	"ai-proxy/internal/modules/application/chatgptimagetask/pkg/common"
 	events "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
 	imgcommon "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/common"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
@@ -37,9 +40,6 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	bootstrap, err := configevents.RequestBootstrap(ctx, b.EventHub(), b.ID())
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
-	}
-	if !bootstrap.Config.ChatGPTWeb.Enabled {
-		return b, nil
 	}
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, err.Error())
@@ -236,78 +236,31 @@ func isRetryableBootstrapFailure(task events.TaskView) bool {
 
 func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality, baseURL string) {
 	start := time.Now()
-	s.store.MarkRunning(ownerID, taskID, "getting_account")
-
-	// acquire account
-	accEv := event.NewEvent(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageTokenCommand{Model: model, Operation: accevents.ModelOperationImageGenerations})
-	accRes := s.SendEvent(accEv)
-	accVal, accErr := accRes.Get()
-	if accErr != nil {
-		s.store.MarkError(ownerID, taskID, accErr.Error(), "")
+	s.store.MarkRunning(ownerID, taskID, "selecting_provider")
+	value, executeErr := s.SendEvent(event.NewEvent(proxyevents.TopicExecuteFeatureImage, s.ID(), proxycommon.UnitID, nil, proxyevents.ExecuteFeatureImageCommand{
+		OwnerID: ownerID, Model: model, Prompt: prompt, Size: size, Quality: quality,
+	})).Get()
+	if executeErr != nil {
+		s.store.MarkError(ownerID, taskID, executeErr.Error(), "")
 		return
 	}
-	accOut, ok := accVal.(accevents.AcquireImageTokenResult)
-	if !ok {
-		s.store.MarkError(ownerID, taskID, "invalid acquire result", "")
+	generated, ok := value.(proxyevents.ExecuteFeatureImageResult)
+	if !ok || len(generated.Data) == 0 {
+		s.store.MarkError(ownerID, taskID, "invalid feature image result", "")
 		return
 	}
-	token := accOut.AccessToken
-	s.store.SetAccountID(ownerID, taskID, accOut.Account.ID)
-	defer func() {
-		s.releaseImageSlot(token)
-	}()
-
-	s.store.MarkProgress(ownerID, taskID, "starting_generation")
-	genVal, genErr := s.generateWithBootstrapRetry(ownerID, taskID, token, accOut.Account.Proxy, prompt, model, size, quality)
-	if genErr != nil {
-		recovered := false
-		invalidRemoved := false
-		conversationID, class := generationFailure(genVal)
-		if class == upevents.ErrClassInvalidToken && conversationID == "" {
-			refreshed, permanent, refreshErr := s.refreshImageToken(token)
-			if refreshErr == nil && !permanent {
-				s.store.MarkProgress(ownerID, taskID, "retrying_after_oauth_refresh")
-				genVal, genErr = s.generateWithBootstrapRetry(ownerID, taskID, refreshed.AccessToken, refreshed.Account.Proxy, prompt, model, size, quality)
-				if genErr == nil {
-					recovered = true
-				} else {
-					conversationID, class = generationFailure(genVal)
-				}
-			} else if permanent {
-				s.removeInvalidImageToken(token)
-				invalidRemoved = true
-			} else {
-				class = upevents.ErrClassUpstream
-			}
-		}
-		if !recovered {
-			if class == upevents.ErrClassInvalidToken && !invalidRemoved {
-				s.removeInvalidImageToken(token)
-			}
-			if class == "" {
-				class = upevents.ErrClassUpstream
-			}
-			s.markImageResult(token, model, false, string(class))
-			s.store.MarkError(ownerID, taskID, genErr.Error(), conversationID)
-			return
-		}
-	}
-	genOut, ok := genVal.(upevents.GenerateImageResult)
-	if !ok {
-		s.store.MarkError(ownerID, taskID, "invalid generate result", "")
-		return
-	}
-
+	s.store.SetProvider(ownerID, taskID, generated.Provider)
 	s.store.MarkProgress(ownerID, taskID, "receiving_image")
-	data, persistErr := s.persistImageOutputs(genOut.Images, baseURL)
+	outputs := make([]upevents.ImageOutput, 0, len(generated.Data))
+	for _, item := range generated.Data {
+		outputs = append(outputs, featureImageOutput(item))
+	}
+	data, persistErr := s.persistImageOutputs(outputs, baseURL)
 	if persistErr != nil {
-		s.markImageResult(token, model, true, "")
-		s.store.MarkError(ownerID, taskID, persistErr.Error(), genOut.ConversationID)
+		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
 	}
-
-	s.markImageResult(token, model, true, "")
-	s.store.MarkSuccess(ownerID, taskID, data, genOut.ConversationID, genOut.Usage, time.Since(start).Milliseconds())
+	s.store.MarkSuccess(ownerID, taskID, data, "", nil, time.Since(start).Milliseconds())
 }
 
 // generateWithBootstrapRetry retries only the first, pre-conversation
@@ -347,85 +300,40 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 		return
 	}
 
-	s.store.MarkProgress(ownerID, taskID, "getting_account")
-	accEv := event.NewEvent(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageTokenCommand{Model: model, Operation: accevents.ModelOperationImageGenerations})
-	accRes := s.SendEvent(accEv)
-	accVal, accErr := accRes.Get()
-	if accErr != nil {
-		s.store.MarkError(ownerID, taskID, accErr.Error(), "")
+	s.store.MarkProgress(ownerID, taskID, "selecting_provider")
+	value, executeErr := s.SendEvent(event.NewEvent(proxyevents.TopicExecuteFeatureImage, s.ID(), proxycommon.UnitID, nil, proxyevents.ExecuteFeatureImageCommand{
+		OwnerID: ownerID, Model: model, Prompt: prompt, Size: size, Quality: quality, Images: images,
+	})).Get()
+	if executeErr != nil {
+		s.store.MarkError(ownerID, taskID, executeErr.Error(), "")
 		return
 	}
-	accOut, ok := accVal.(accevents.AcquireImageTokenResult)
-	if !ok {
-		s.store.MarkError(ownerID, taskID, "invalid acquire result", "")
+	edited, ok := value.(proxyevents.ExecuteFeatureImageResult)
+	if !ok || len(edited.Data) == 0 {
+		s.store.MarkError(ownerID, taskID, "invalid feature image result", "")
 		return
 	}
-	token := accOut.AccessToken
-	s.store.SetAccountID(ownerID, taskID, accOut.Account.ID)
-	defer func() {
-		s.releaseImageSlot(token)
-	}()
-
-	s.store.MarkProgress(ownerID, taskID, "starting_edit")
-	editEv := event.NewEvent(upevents.TopicEditImage, s.ID(), upcommon.UnitID, nil, upevents.EditImageCommand{
-		AccessToken: token,
-		Proxy:       accOut.Account.Proxy,
-
-		Prompt:  prompt,
-		Model:   model,
-		Size:    size,
-		Quality: quality,
-		Images:  images,
-	})
-	editRes := s.SendEvent(editEv)
-	editVal, editErr := editRes.Get()
-	if editErr != nil {
-		recovered := false
-		invalidRemoved := false
-		conversationID, class := editFailure(editVal)
-		if class == upevents.ErrClassInvalidToken && conversationID == "" {
-			refreshed, permanent, refreshErr := s.refreshImageToken(token)
-			if refreshErr == nil && !permanent {
-				s.store.MarkProgress(ownerID, taskID, "retrying_after_oauth_refresh")
-				editVal, editErr = s.executeEdit(refreshed.AccessToken, refreshed.Account.Proxy, prompt, model, size, quality, images)
-				if editErr == nil {
-					recovered = true
-				} else {
-					conversationID, class = editFailure(editVal)
-				}
-			} else if permanent {
-				s.removeInvalidImageToken(token)
-				invalidRemoved = true
-			} else {
-				class = upevents.ErrClassUpstream
-			}
-		}
-		if !recovered {
-			if class == upevents.ErrClassInvalidToken && !invalidRemoved {
-				s.removeInvalidImageToken(token)
-			}
-			if class == "" {
-				class = upevents.ErrClassUpstream
-			}
-			s.markImageResult(token, model, false, string(class))
-			s.store.MarkError(ownerID, taskID, editErr.Error(), conversationID)
-			return
-		}
+	s.store.SetProvider(ownerID, taskID, edited.Provider)
+	outputs := make([]upevents.ImageOutput, 0, len(edited.Data))
+	for _, item := range edited.Data {
+		outputs = append(outputs, featureImageOutput(item))
 	}
-	editOut, ok := editVal.(upevents.EditImageResult)
-	if !ok {
-		s.store.MarkError(ownerID, taskID, "invalid edit result", "")
-		return
-	}
-
-	data, persistErr := s.persistImageOutputs(editOut.Images, baseURL)
+	data, persistErr := s.persistImageOutputs(outputs, baseURL)
 	if persistErr != nil {
-		s.markImageResult(token, model, true, "")
-		s.store.MarkError(ownerID, taskID, persistErr.Error(), editOut.ConversationID)
+		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
 	}
-	s.markImageResult(token, model, true, "")
-	s.store.MarkSuccess(ownerID, taskID, data, editOut.ConversationID, editOut.Usage, time.Since(start).Milliseconds())
+	s.store.MarkSuccess(ownerID, taskID, data, "", nil, time.Since(start).Milliseconds())
+}
+
+func featureImageOutput(item proxyevents.FeatureImageData) upevents.ImageOutput {
+	output := upevents.ImageOutput{URL: item.URL, B64JSON: item.B64JSON, RevisedPrompt: item.RevisedPrompt}
+	if item.B64JSON != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(item.B64JSON); err == nil {
+			output.Bytes = decoded
+		}
+	}
+	return output
 }
 
 func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID string, extraTimeoutSecs int, baseURL string) {

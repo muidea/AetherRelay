@@ -106,7 +106,7 @@ func cloneRaw(value json.RawMessage) json.RawMessage {
 
 func knownTaskField(key string) bool {
 	switch key {
-	case "id", "status", "mode", "model", "prompt", "size", "quality", "created_at", "updated_at", "conversation_id", "data", "error", "progress", "elapsed_secs", "duration_ms", "usage", "owner_id", "account_id", "started_ts", "created_ts":
+	case "id", "status", "mode", "model", "provider", "prompt", "size", "quality", "created_at", "updated_at", "conversation_id", "data", "error", "progress", "elapsed_secs", "duration_ms", "usage", "owner_id", "account_id", "started_ts", "created_ts":
 		return true
 	default:
 		return false
@@ -326,6 +326,20 @@ func (s *Store) SetAccountID(ownerID, taskID, accountID string) {
 		return
 	}
 	rec.AccountID = strings.TrimSpace(accountID)
+	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.items[key] = rec
+	_ = s.saveLocked()
+}
+
+func (s *Store) SetProvider(ownerID, taskID, provider string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := taskKey(ownerID, taskID)
+	rec, ok := s.items[key]
+	if !ok {
+		return
+	}
+	rec.Provider = strings.TrimSpace(provider)
 	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.items[key] = rec
 	_ = s.saveLocked()

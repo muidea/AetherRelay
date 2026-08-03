@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,15 +41,21 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	if bodyLimit <= 0 {
 		bodyLimit = config.DefaultMaxRequestBodyBytes
 	}
-	if executor == nil {
-		h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusServiceUnavailable, APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt image executor is unavailable"}, streamFailFromKind(chatgptfail.KindProviderUnavailable, "provider_unavailable: chatgpt image executor is unavailable", nil), tokenUsage{})
-		return
-	}
 	var body chatGPTImageBody
 	var editImages, masks [][]byte
+	var rawPayload []byte
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		var err error
+		rawPayload, err = io.ReadAll(http.MaxBytesReader(w, r.Body, bodyLimit))
+		if err == nil {
+			r.Body = io.NopCloser(bytes.NewReader(rawPayload))
+		}
+		if err != nil {
+			fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: invalid multipart image request", err, false)
+			h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: "invalid multipart image request"}, fail, tokenUsage{})
+			return
+		}
 		body, editImages, masks, err = parseChatGPTImageMultipart(w, r, bodyLimit)
 		if err != nil {
 			fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: "+err.Error(), err, false)
@@ -56,7 +63,9 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 			return
 		}
 	} else if strings.HasPrefix(contentType, "application/json") {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, bodyLimit)).Decode(&body); err != nil {
+		var err error
+		rawPayload, err = io.ReadAll(http.MaxBytesReader(w, r.Body, bodyLimit))
+		if err != nil || json.Unmarshal(rawPayload, &body) != nil {
 			fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: invalid JSON image request", err, false)
 			h.writeChatGPTImageAPIError(w, round, r, start, "", "", false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: "invalid JSON image request"}, fail, tokenUsage{})
 			return
@@ -69,19 +78,36 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	if body.Model == "" {
 		body.Model = "gpt-image-2"
 	}
-	plan, apiErr := ResolveTransportPlan(cfg, h.EffectiveCatalog(), r.Method, r.URL.Path, body.Model)
-	if apiErr != nil {
+	plans, apiErr := h.resolveTransportPlans(r, body.Model)
+	if apiErr != nil || len(plans) == 0 {
 		// Route errors still need explicit Complete so completePendingUsage is not the success path.
+		if apiErr == nil {
+			apiErr = &APIError{Code: ErrorCodeProviderUnavailable, Message: "no compatible image provider is available", Model: body.Model}
+		}
 		h.writeArchivedAPIError(w, round, r, start, "", body.Model, false, statusForAPIError(apiErr), *apiErr)
 		return
 	}
+	plan := plans[0]
 	if plan.UpstreamProtocol != "chatgptweb" {
-		fail := newStreamFailWithCode(streamKindError, ErrorCodeEndpointUnsupported, "endpoint_unsupported: image route owner is not ChatGPT Web", nil, false)
-		h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, http.StatusBadGateway, APIError{Code: ErrorCodeEndpointUnsupported, Message: "image route owner is not ChatGPT Web", Model: body.Model}, fail, tokenUsage{})
+		result, selected, err := h.doNativeUpstreamCandidates(r, round, plans, rawPayload, len(rawPayload), false, r.URL.RawQuery, r.Method)
+		if err != nil {
+			h.writeArchivedError(w, round, r, start, plan.RouteOwner, body.Model, false, http.StatusBadGateway, err.Error())
+			return
+		}
+		if result.Cancel != nil {
+			defer result.Cancel()
+		}
+		defer result.Response.Body.Close()
+		h.archiveAndLogTransportPlan(round, r, selected, result.Provider, false)
+		h.handleBufferedResponse(w, result.Response, round, start, result.ProviderName, body.Model, false, map[string]any{"model": body.Model, "prompt": body.Prompt}, r)
 		return
 	}
-	if round != nil {
-		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
+	if executor == nil {
+		if h.tryImageNativeFallback(w, r, round, start, plans[1:], rawPayload, body) {
+			return
+		}
+		h.writeChatGPTImageAPIError(w, round, r, start, "", body.Model, false, http.StatusServiceUnavailable, APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt image executor is unavailable"}, streamFailFromKind(chatgptfail.KindProviderUnavailable, "provider_unavailable: chatgpt image executor is unavailable", nil), tokenUsage{})
+		return
 	}
 	if body.N == 0 {
 		body.N = 1
@@ -122,11 +148,20 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	}
 	tok := tokenUsageFromImageResult(result)
 	if err != nil {
+		if h.tryImageNativeFallback(w, r, round, start, plans[1:], rawPayload, body) {
+			return
+		}
+		if round != nil {
+			h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
+		}
 		fail := streamFailFromChatGPTImageErr(err)
 		status := statusForChatGPTFailure(fail)
 		// Partial n>1 failures still carry accumulated Usage on result.
 		h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, status, APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt image request failed", Model: body.Model}, fail, tok)
 		return
+	}
+	if round != nil {
+		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	// Encode only the public JSON fields; Usage is json:"-".
@@ -138,6 +173,23 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 		_ = h.writeArchiveResponse(round, "response.json", append(payload, '\n'))
 	}
 	h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, nil)
+}
+
+func (h *Handler) tryImageNativeFallback(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, plans []TransportPlan, rawPayload []byte, body chatGPTImageBody) bool {
+	if len(rawPayload) == 0 || len(plans) == 0 {
+		return false
+	}
+	result, selected, err := h.doNativeUpstreamCandidates(r, round, plans, rawPayload, len(rawPayload), false, r.URL.RawQuery, r.Method)
+	if err != nil || result.Response == nil {
+		return false
+	}
+	if result.Cancel != nil {
+		defer result.Cancel()
+	}
+	defer result.Response.Body.Close()
+	h.archiveAndLogTransportPlan(round, r, selected, result.Provider, false)
+	h.handleBufferedResponse(w, result.Response, round, start, result.ProviderName, body.Model, false, map[string]any{"model": body.Model, "prompt": body.Prompt}, r)
+	return true
 }
 
 func tokenUsageFromImageResult(result chatgptimage.Result) tokenUsage {

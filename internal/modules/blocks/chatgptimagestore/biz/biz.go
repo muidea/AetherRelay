@@ -28,9 +28,6 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}
-	if !bootstrap.Config.ChatGPTWeb.Enabled {
-		return b, nil
-	}
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "create chatgpt web data directory: "+err.Error())
 	}

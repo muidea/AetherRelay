@@ -170,11 +170,11 @@ func TestCompleteCodexResponsesRecordsObservedQuotaExhaustion(t *testing.T) {
 }
 
 func TestFailureFromUpstreamDistinguishesQuotaExhaustion(t *testing.T) {
-	quotaFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{UsageLimited: true, ResetAt: "2026-08-03T12:00:00Z"})
+	quotaFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{UsageLimited: true, ResetAt: "2026-08-03T12:00:00Z"}, 429)
 	if !quotaFailure.QuotaExhausted || quotaFailure.QuotaResetAt != "2026-08-03T12:00:00Z" {
 		t.Fatalf("quota failure=%+v", quotaFailure)
 	}
-	genericFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{})
+	genericFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{}, 429)
 	if genericFailure.QuotaExhausted || genericFailure.QuotaResetAt != "" {
 		t.Fatalf("generic failure=%+v", genericFailure)
 	}

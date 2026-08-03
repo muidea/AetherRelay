@@ -96,6 +96,10 @@ type chatGPTAvailability interface {
 	ChatGPTWebEnabled() bool
 }
 
+type featureCatalogRuntime interface {
+	FeatureCatalog(context.Context) (proxyevents.FeatureCatalogResult, error)
+}
+
 type codexAvailability interface{ CodexOAuthEnabled() bool }
 
 type Handler struct {
@@ -256,7 +260,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case strings.HasPrefix(rel, "/api/chatgpt/") && !h.chatGPTWebAvailable():
+	case rel == "/api/features/models" && r.Method == http.MethodGet:
+		h.featureCatalog(w, r)
+	case strings.HasPrefix(rel, "/api/chatgpt/accounts") && !h.chatGPTWebAvailable():
 		writeError(w, http.StatusServiceUnavailable, "chatgpt web is not enabled")
 	case strings.HasPrefix(rel, "/api/codex/") && !h.codexOAuthAvailable():
 		writeError(w, http.StatusServiceUnavailable, "Codex OAuth is not enabled")
@@ -425,6 +431,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (h *Handler) featureCatalog(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := h.chatGPT.(featureCatalogRuntime)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "feature catalog is unavailable")
+		return
+	}
+	result, err := runtime.FeatureCatalog(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) chatGPTWebAvailable() bool {

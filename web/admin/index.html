@@ -247,7 +247,7 @@
             <div class="field"><label class="label required" for="cgTaskClientId">client_task_id</label>
               <div class="task-id-row"><input id="cgTaskClientId" class="control mono" required autocomplete="off"><button type="button" class="btn" id="cgTaskRegenId">重新生成</button></div>
             </div>
-            <div class="field"><label class="label" for="cgTaskModel">model</label><input id="cgTaskModel" class="control" autocomplete="off" placeholder="可选"></div>
+            <div class="field"><label class="label required" for="cgTaskModel">model</label><select id="cgTaskModel" class="control" required><option value="">正在加载…</option></select><div class="help">仅列出当前至少有一个可用 Provider 的生图模型。</div></div>
             <div class="field"><label class="label" for="cgTaskSize">size</label><input id="cgTaskSize" class="control" autocomplete="off" placeholder="例如 1024x1024"></div>
             <div class="field"><label class="label" for="cgTaskQuality">quality</label><input id="cgTaskQuality" class="control" autocomplete="off" placeholder="可选"></div>
             <div class="field full"><label class="label required" for="cgTaskPrompt">prompt</label><textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off"></textarea></div>
@@ -321,7 +321,7 @@
         <form id="tcCreateForm" autocomplete="off">
           <div class="modal-head"><span class="modal-title">创建对话</span><button class="close" type="button" id="tcCreateClose">×</button></div>
           <div class="modal-body">
-            <div class="field"><label class="label required" for="tcModel">模型</label><select id="tcModel" class="control" required><option value="">正在加载…</option></select><div class="help">仅列出已验证且支持 chat_completions 的模型；research 专用模型不提供此功能。</div></div>
+            <div class="field"><label class="label required" for="tcModel">模型</label><select id="tcModel" class="control" required><option value="">正在加载…</option></select><div class="help">列出当前可由任一 Provider 通过 Chat Completions 或 Responses 执行的模型；实际 Provider 由路由优先级、健康度与故障转移决定。</div></div>
             <div class="field"><label class="label" for="tcEffort">thinking effort</label>
               <select id="tcEffort" class="control"><option value="">默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select>
             </div>
@@ -568,6 +568,7 @@ Object.assign(enUS,{
 const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],writable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"chatgptweb",featureSub:"tasks",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
+    featureCatalog:null,
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
     chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}},
@@ -836,6 +837,7 @@ function showChatGPTSub(sub){
     setTaskMode(state.cg.tasks.mode||"generation");
     if(!($("cgTaskClientId").value||"").trim())$("cgTaskClientId").value=newUUID();
     ensureTaskOwner();
+    loadFeatureModels();
     loadChatGPTTasks(false);
   }else if(state.cg.sub==="chat"){
     loadTemporaryChatModels();
@@ -1503,6 +1505,7 @@ function setTaskMode(mode){
   $("cgTaskModeGen").classList.toggle("active",state.cg.tasks.mode==="generation");
   $("cgTaskModeEdit").classList.toggle("active",state.cg.tasks.mode==="edit");
   $("cgTaskImagesField").classList.toggle("hidden",state.cg.tasks.mode!=="edit");
+  loadFeatureModels();
 }
 function renderTaskGuide(){
   stopAllTaskPolling();
@@ -1588,7 +1591,7 @@ function renderChatGPTTasks(){
       <td class="mono" title="${esc(t.id)}">${esc((t.id||"").slice(0,12))}${(t.id||"").length>12?"…":""}</td>
       <td class="mono subtle" title="${esc(t.conversation_id||"")}">${esc(t.conversation_id||"—")}</td>
       <td>${esc(t.mode||"—")}</td>
-      <td>${esc(t.model||"—")}</td>
+      <td>${esc(t.model||"—")}${t.provider?`<div class="subtle">${esc(t.provider)}</div>`:""}</td>
       <td>${taskStatusTag(t.status)}</td>
       <td><span class="task-progress" title="${esc(progress)}">${esc(progress)}</span></td>
       <td class="task-elapsed">${esc(elapsed)}</td>
@@ -2123,33 +2126,44 @@ async function loadTemporaryChatModels(){
   const sel=$("tcModel");
   if(!sel)return;
   try{
-    const data=await request(apiURL("/api/providers"));
+    const data=await loadFeatureCatalog();
     setChatGPTAvailable();
-    const items=Array.isArray(data.providers)?data.providers:(Array.isArray(data)?data:[]);
-    const models=[];
-    items.forEach(p=>{
-      // Temporary chat is pinned to ChatGPT Web accounts; do not offer
-      // similarly named models from unrelated Providers.
-      if(!p||!p.enabled||!p.builtin)return;
-      const ops=p.endpoint_capabilities||[];
-      const isChat=ops.includes("chat_completions")||ops.includes("messages")||(p.models||[]).length;
-      if(!isChat)return;
-      (p.models||[]).forEach(m=>{
-        const id=String(m||"").trim();
-        if(!id)return;
-        if(/research|deep[_-]research/i.test(id))return;
-        if(!models.includes(id))models.push(id);
-      });
-    });
-    // Prefer builtin chatgpt models when present.
-    state.cg.chat.models=models.sort();
+    const models=Array.isArray(data.text_models)?data.text_models:[];
+    state.cg.chat.models=models.map(item=>String(item.id||"")).filter(Boolean);
     if(!state.cg.chat.models.length){
       sel.innerHTML=`<option value="">暂无可用模型</option>`;
       return;
     }
-    sel.innerHTML=state.cg.chat.models.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    sel.innerHTML=models.map(item=>{
+      const providers=(item.providers||[]).map(provider=>provider.name).filter(Boolean).join(" / ");
+      return `<option value="${esc(item.id)}">${esc(item.id)}${providers?` — ${esc(providers)}`:""}</option>`;
+    }).join("");
   }catch(e){
-    if(e.status===503)setChatGPTUnavailable(e.message);
+    sel.innerHTML=`<option value="">无法加载模型</option>`;
+  }
+}
+
+async function loadFeatureCatalog(force=false){
+  if(!force&&state.cg.featureCatalog)return state.cg.featureCatalog;
+  const data=await request(apiURL("/api/features/models"));
+  state.cg.featureCatalog=data||{};
+  return state.cg.featureCatalog;
+}
+
+async function loadFeatureModels(){
+  const sel=$("cgTaskModel");
+  if(!sel)return;
+  const selected=sel.value;
+  try{
+    const data=await loadFeatureCatalog();
+    const key=state.cg.tasks.mode==="edit"?"image_edit_models":"image_models";
+    const models=Array.isArray(data[key])?data[key]:[];
+    sel.innerHTML=models.length?models.map(item=>{
+      const providers=(item.providers||[]).map(provider=>provider.name).filter(Boolean).join(" / ");
+      return `<option value="${esc(item.id)}">${esc(item.id)}${providers?` — ${esc(providers)}`:""}</option>`;
+    }).join(""):`<option value="">暂无可用模型</option>`;
+    if(selected&&models.some(item=>item.id===selected))sel.value=selected;
+  }catch(e){
     sel.innerHTML=`<option value="">无法加载模型</option>`;
   }
 }
@@ -2184,7 +2198,7 @@ function renderTemporaryMessages(){
   }
   $("tcTitle").textContent=conv.title||"未命名会话";
   const modelRerouted=conv.actual_model&&conv.actual_model!==conv.model?" · 上游已调整路由":"";
-  $("tcMeta").textContent=`请求模型：${conv.model||"—"} · 实际模型：${conv.actual_model||"上游未返回"}${modelRerouted} · 账号：${conv.account_display||conv.account_id||"—"} · 状态：${temporaryChatStatusLabel(conv.status)} · 到期：${((conv.expires_at||"").replace("T"," ").replace("Z",""))||"—"}`;
+  $("tcMeta").textContent=`请求模型：${conv.model||"—"} · 实际模型：${conv.actual_model||"上游未返回"}${modelRerouted} · Provider：${conv.provider||"—"} · 状态：${temporaryChatStatusLabel(conv.status)} · 到期：${((conv.expires_at||"").replace("T"," ").replace("Z",""))||"—"}`;
   $("tcCopyAll").disabled=!messages.length;
   $("tcDelete").disabled=false;
   const recovery=conv.status==="recovery_required";

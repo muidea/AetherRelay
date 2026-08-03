@@ -36,6 +36,7 @@ type ConversationView struct {
 	// the persistent account identifier.
 	AccountID      string `json:"-"`
 	AccountDisplay string `json:"account_display,omitempty"`
+	Provider       string `json:"provider"`
 	// Model is the model requested when the conversation was created.
 	Model string `json:"model"`
 	// ActualModel is supplied only when the upstream SSE explicitly reports a

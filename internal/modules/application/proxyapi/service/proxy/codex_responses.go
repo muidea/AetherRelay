@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,27 +26,12 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	}
 	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw)}
 	if !stream {
-		response, err := executor.CompleteCodexResponses(r.Context(), request)
+		response, err := h.completeCodexOAuthResponse(r.Context(), model, raw)
 		if err != nil {
 			h.writeCodexResponsesError(w, r, round, started, provider, model, false, err)
 			return
 		}
-		copyCodexHeaders(w.Header(), response.Headers)
-		if w.Header().Get("Content-Type") == "" {
-			w.Header().Set("Content-Type", "application/json")
-		}
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(response.Body); err != nil {
-			failure := codexresponses.NewFailure(codexresponses.KindClientWrite, 0, err)
-			tok := codexResponseUsage(response.Body, body)
-			h.recordAndPrintFail(round, r, provider, model, false, http.StatusOK, time.Since(started), tok, streamFailFromCodex(failure))
-			h.writeArchiveMetadata(round, provider, model, false, http.StatusOK, time.Since(started), tok, "response.json", failure.Error(), "", outcomeFromStreamFail(streamFailFromCodex(failure), http.StatusOK))
-			return
-		}
-		_ = h.writeArchiveResponse(round, "response.json", response.Body)
-		tok := codexResponseUsage(response.Body, body)
-		h.recordAndPrint(round, r, provider, model, false, http.StatusOK, time.Since(started), tok, "")
-		h.writeArchiveMetadata(round, provider, model, false, http.StatusOK, time.Since(started), tok, "response.json", "", "", "success")
+		h.writeCodexOAuthCompleteSuccess(w, r, round, started, provider, model, body, response)
 		return
 	}
 
@@ -105,8 +91,35 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	h.writeArchiveMetadata(round, provider, model, true, http.StatusOK, time.Since(started), tok, "response.sse", "", "", "success")
 }
 
+func (h *Handler) completeCodexOAuthResponse(ctx context.Context, model string, raw []byte) (codexresponses.Result, error) {
+	if h.codexResponses == nil {
+		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable"))
+	}
+	return h.codexResponses.CompleteCodexResponses(ctx, codexresponses.Request{Model: model, Body: bytes.Clone(raw)})
+}
+
+func (h *Handler) writeCodexOAuthCompleteSuccess(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, requestBody map[string]any, response codexresponses.Result) {
+	copyCodexHeaders(w.Header(), response.Headers)
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(response.Body); err != nil {
+		failure := codexresponses.NewFailure(codexresponses.KindClientWrite, 0, err)
+		tok := codexResponseUsage(response.Body, requestBody)
+		h.recordAndPrintFail(round, r, provider, model, false, http.StatusOK, time.Since(started), tok, streamFailFromCodex(failure))
+		h.writeArchiveMetadata(round, provider, model, false, http.StatusOK, time.Since(started), tok, "response.json", failure.Error(), "", outcomeFromStreamFail(streamFailFromCodex(failure), http.StatusOK))
+		return
+	}
+	_ = h.writeArchiveResponse(round, "response.json", response.Body)
+	tok := codexResponseUsage(response.Body, requestBody)
+	h.recordAndPrint(round, r, provider, model, false, http.StatusOK, time.Since(started), tok, "")
+	h.writeArchiveMetadata(round, provider, model, false, http.StatusOK, time.Since(started), tok, "response.json", "", "", "success")
+}
+
 func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, stream bool, err error) {
 	failure := streamFailFromCodexError(err)
+	codexFailure, _ := codexresponses.AsFailure(err)
 	status := http.StatusBadGateway
 	code := ErrorCodeUpstreamUnavailable
 	switch failure.ErrorCode {
@@ -123,7 +136,11 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	if failure.ErrorCode == string(codexresponses.KindInvalidToken) {
 		code = ErrorCodeUpstreamUnavailable
 	}
-	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: "Codex OAuth response failed: " + failure.ErrorCode, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID})
+	message := "Codex OAuth response failed: " + failure.ErrorCode
+	if codexFailure != nil && codexFailure.HTTPStatus > 0 {
+		message += fmt.Sprintf(" (upstream HTTP %d)", codexFailure.HTTPStatus)
+	}
+	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID})
 }
 
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {

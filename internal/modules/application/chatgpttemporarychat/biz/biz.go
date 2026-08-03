@@ -13,6 +13,8 @@ import (
 	"ai-proxy/internal/modules/application/chatgpttemporarychat/internal/store"
 	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
 	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
+	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
 	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
@@ -64,6 +66,7 @@ type turnRuntime struct {
 	errorClass        string
 	errorMessage      string
 	cancelRequested   bool
+	requestCancel     context.CancelFunc
 	updates           chan turnUpdate
 }
 
@@ -86,7 +89,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}
-	if !bootstrap.Config.ChatGPTWeb.Enabled || !bootstrap.Config.ChatGPTWeb.TemporaryChat.Enabled {
+	if !bootstrap.Config.ChatGPTWeb.TemporaryChat.Enabled {
 		return b, nil
 	}
 	tc := bootstrap.Config.ChatGPTWeb.TemporaryChat
@@ -145,15 +148,22 @@ func (s *TemporaryChat) Teardown(context.Context) {
 	s.turnMu.Lock()
 	s.stopping = true
 	streamIDs := make([]string, 0, len(s.turns))
+	requestCancels := make([]context.CancelFunc, 0, len(s.turns))
 	for _, turn := range s.turns {
 		if turn.streamID != "" {
 			streamIDs = append(streamIDs, turn.streamID)
+		}
+		if turn.requestCancel != nil {
+			requestCancels = append(requestCancels, turn.requestCancel)
 		}
 	}
 	s.turnMu.Unlock()
 	s.stopOnce.Do(func() { close(s.stopCh) })
 	for _, streamID := range streamIDs {
 		s.cancelUpstream(streamID)
+	}
+	for _, cancel := range requestCancels {
+		cancel()
 	}
 	// Stream workers must publish their interrupted terminal state before the
 	// DuckDB handle is closed. This prevents shutdown races and nil stores.
@@ -202,17 +212,32 @@ func (s *TemporaryChat) handleCreate(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid create conversation command"))
 		return
 	}
-	account, err := s.acquireTextAccount("", cmd.Model)
-	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+	value, catalogErr := s.SendEvent(event.NewEventWithContext(proxyevents.TopicFeatureCatalog, s.ID(), proxycommon.UnitID, event.NewHeader(), ev.Context(), proxyevents.FeatureCatalogCommand{})).Get()
+	if catalogErr != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "feature catalog unavailable"))
 		return
 	}
-	view, err := s.store.CreateConversation(cmd.OwnerID, cmd.Model, cmd.ThinkingEffort, cmd.SystemPrompt, account.Account.ID)
+	catalog, ok := value.(proxyevents.FeatureCatalogResult)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.Unexpected, "invalid feature catalog"))
+		return
+	}
+	provider := ""
+	for _, model := range catalog.TextModels {
+		if model.ID == strings.TrimSpace(cmd.Model) && len(model.Providers) > 0 {
+			provider = model.Providers[0].Name
+			break
+		}
+	}
+	if provider == "" {
+		result.Set(nil, cd.NewError(cd.Unexpected, "no compatible provider for selected model"))
+		return
+	}
+	view, err := s.store.CreateConversation(cmd.OwnerID, cmd.Model, cmd.ThinkingEffort, cmd.SystemPrompt, provider, "")
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
-	view.AccountDisplay = maskAccount(account.Account)
 	result.Set(events.ConversationResult{Conversation: view}, nil)
 }
 
@@ -287,8 +312,75 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
-	// usage.Start after store.StartTurn; failure marks the turn and returns 503 without
-	// touching account pool or upstream.
+	if started.AccountID != "" {
+		s.startLegacyTurn(cmd, started, result)
+		return
+	}
+	detail, err := s.store.GetConversation(cmd.OwnerID, cmd.ConversationID, nil, 200)
+	if err != nil {
+		_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "store", "failed to load conversation history")
+		result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation history"))
+		return
+	}
+	messages := make([]proxyevents.FeatureTextMessage, 0, len(detail.Messages)+1)
+	if strings.TrimSpace(started.SystemPrompt) != "" {
+		messages = append(messages, proxyevents.FeatureTextMessage{Role: "system", Content: started.SystemPrompt})
+	}
+	for _, message := range detail.Messages {
+		if message.ID == started.AssistantMessage.ID {
+			continue
+		}
+		item := proxyevents.FeatureTextMessage{Role: message.Role, Content: message.Content}
+		if message.ID == started.UserMessage.ID {
+			item.Images = started.Images
+		}
+		messages = append(messages, item)
+	}
+	timeout := s.turnTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	requestCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	runtime := &turnRuntime{
+		ownerID:           cmd.OwnerID,
+		conversationID:    cmd.ConversationID,
+		turnID:            started.TurnID,
+		userSequence:      started.UserSequence,
+		assistantSequence: started.AssistantSequence,
+		model:             started.Model,
+		systemPrompt:      started.SystemPrompt,
+		userContent:       cmd.Content,
+		startedAt:         time.Now().UTC(),
+		requestCancel:     cancel,
+		updates:           make(chan turnUpdate, 64),
+	}
+	s.turnMu.Lock()
+	if s.stopping {
+		s.turnMu.Unlock()
+		cancel()
+		_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", true, "interrupted", "request interrupted by process shutdown")
+		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
+		return
+	}
+	s.turns[turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID)] = runtime
+	s.turnWG.Add(1)
+	s.turnMu.Unlock()
+	s.AsyncTask(func() {
+		defer s.turnWG.Done()
+		s.runFeatureTurn(requestCtx, runtime, messages, started.ThinkingEffort)
+	})
+	result.Set(events.StartTurnResult{
+		TurnID:           started.TurnID,
+		Conversation:     started.Conversation,
+		UserMessage:      started.UserMessage,
+		AssistantMessage: started.AssistantMessage,
+	}, nil)
+}
+
+// startLegacyTurn preserves continuation semantics for conversations created
+// before feature routing became Provider-neutral. New conversations never pin
+// an account and therefore never enter this compatibility path.
+func (s *TemporaryChat) startLegacyTurn(cmd events.StartTurnCommand, started store.TurnStart, result event.Result) {
 	eventID := uuid.NewString()
 	startedAt := time.Now().UTC()
 	if err := s.startTurnUsage(cmd.OwnerID, eventID, started.Model, startedAt); err != nil {
@@ -310,14 +402,9 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	}
 	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content, Images: started.Images})
 	startCommand := upevents.StartTextCommand{
-		AccessToken:     account.AccessToken,
-		Proxy:           account.Account.Proxy,
-		Model:           started.Model,
-		Messages:        messages,
-		ThinkingEffort:  started.ThinkingEffort,
-		ConversationID:  started.UpstreamConversationID,
-		ParentMessageID: started.ParentMessageID,
-		TimeoutMillis:   int(s.turnTimeout / time.Millisecond),
+		AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Model: started.Model, Messages: messages,
+		ThinkingEffort: started.ThinkingEffort, ConversationID: started.UpstreamConversationID, ParentMessageID: started.ParentMessageID,
+		TimeoutMillis: int(s.turnTimeout / time.Millisecond),
 	}
 	streamID, streamErr := s.startTextStream(startCommand)
 	if streamErr != nil {
@@ -328,20 +415,11 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		return
 	}
 	runtime := &turnRuntime{
-		ownerID:           cmd.OwnerID,
-		conversationID:    cmd.ConversationID,
-		turnID:            started.TurnID,
-		userSequence:      started.UserSequence,
-		assistantSequence: started.AssistantSequence,
-		streamID:          streamID,
-		startCommand:      startCommand,
-		usageEventID:      eventID,
-		model:             started.Model,
-		systemPrompt:      started.SystemPrompt,
-		userContent:       cmd.Content,
-		firstTurn:         firstTurn,
-		startedAt:         startedAt,
-		updates:           make(chan turnUpdate, 64),
+		ownerID: cmd.OwnerID, conversationID: cmd.ConversationID, turnID: started.TurnID,
+		userSequence: started.UserSequence, assistantSequence: started.AssistantSequence,
+		streamID: streamID, startCommand: startCommand, usageEventID: eventID, model: started.Model,
+		systemPrompt: started.SystemPrompt, userContent: cmd.Content, firstTurn: firstTurn, startedAt: startedAt,
+		updates: make(chan turnUpdate, 64),
 	}
 	s.turnMu.Lock()
 	if s.stopping {
@@ -355,17 +433,52 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	s.turns[turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID)] = runtime
 	s.turnWG.Add(1)
 	s.turnMu.Unlock()
-	accountID := started.AccountID
 	s.AsyncTask(func() {
 		defer s.turnWG.Done()
-		s.runTurn(runtime, accountID)
+		s.runTurn(runtime, started.AccountID)
 	})
-	result.Set(events.StartTurnResult{
-		TurnID:           started.TurnID,
-		Conversation:     started.Conversation,
-		UserMessage:      started.UserMessage,
-		AssistantMessage: started.AssistantMessage,
-	}, nil)
+	result.Set(events.StartTurnResult{TurnID: started.TurnID, Conversation: started.Conversation, UserMessage: started.UserMessage, AssistantMessage: started.AssistantMessage}, nil)
+}
+
+func (s *TemporaryChat) runFeatureTurn(ctx context.Context, runtime *turnRuntime, messages []proxyevents.FeatureTextMessage, thinkingEffort string) {
+	defer runtime.requestCancel()
+	value, requestErr := s.SendEvent(event.NewEventWithContext(proxyevents.TopicExecuteFeatureText, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.ExecuteFeatureTextCommand{
+		OwnerID:        runtime.ownerID,
+		Model:          runtime.model,
+		Messages:       messages,
+		ThinkingEffort: thinkingEffort,
+	})).Get()
+	response, ok := value.(proxyevents.ExecuteFeatureTextResult)
+	cancelled, stopping := s.turnFlags(runtime)
+	errorClass, errorMessage := "", ""
+	if cancelled || stopping || ctx.Err() != nil {
+		cancelled = true
+		if stopping {
+			errorClass, errorMessage = "interrupted", "request interrupted by process shutdown"
+		} else {
+			errorClass, errorMessage = "cancelled", "cancelled by user"
+		}
+	} else if requestErr != nil || !ok {
+		errorClass, errorMessage = "provider_unavailable", "no compatible provider completed the request"
+	}
+	content, actualModel := response.Text, response.ActualModel
+	if response.Provider != "" {
+		_ = s.store.SetProvider(runtime.ownerID, runtime.conversationID, response.Provider)
+	}
+	if errorClass == "" && content != "" {
+		_ = s.store.UpdateAssistantDelta(runtime.ownerID, runtime.conversationID, runtime.assistantSequence, content)
+		s.publishTurn(runtime, turnUpdate{delta: content, actualModel: actualModel})
+	}
+	completed, err := s.store.CompleteFeatureTurn(runtime.ownerID, runtime.conversationID, runtime.userSequence, runtime.assistantSequence, content, actualModel, cancelled, errorClass, errorMessage)
+	if err != nil {
+		s.publishTurn(runtime, turnUpdate{done: true, errorClass: "store", errorMessage: "failed to persist turn"})
+	} else {
+		message := completed.Message
+		s.publishTurn(runtime, turnUpdate{done: true, message: &message, actualModel: actualModel, errorClass: errorClass, errorMessage: errorMessage})
+	}
+	s.turnMu.Lock()
+	delete(s.turns, turnKey(runtime.ownerID, runtime.conversationID, runtime.turnID))
+	s.turnMu.Unlock()
 }
 
 func (s *TemporaryChat) startTextStream(command upevents.StartTextCommand) (string, error) {
@@ -648,8 +761,12 @@ func (s *TemporaryChat) handleCancelTurn(ev event.Event, result event.Result) {
 	if runtime != nil {
 		runtime.cancelRequested = true
 		streamID := runtime.streamID
+		requestCancel := runtime.requestCancel
 		s.turnMu.Unlock()
 		s.cancelUpstream(streamID)
+		if requestCancel != nil {
+			requestCancel()
+		}
 	} else {
 		s.turnMu.Unlock()
 	}
@@ -697,6 +814,9 @@ func (s *TemporaryChat) handleDelete(ev event.Event, result event.Result) {
 		if runtime.ownerID == cmd.OwnerID && runtime.conversationID == cmd.ConversationID {
 			runtime.cancelRequested = true
 			s.cancelUpstream(runtime.streamID)
+			if runtime.requestCancel != nil {
+				runtime.requestCancel()
+			}
 			delete(s.turns, key)
 		}
 	}

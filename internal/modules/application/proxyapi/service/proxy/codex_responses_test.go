@@ -127,3 +127,44 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 		t.Fatalf("usage events=%+v", events)
 	}
 }
+
+func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
+	cfg := mustHandlerConfig(config.Config{
+		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
+		Providers: map[string]config.Provider{
+			"backup": {
+				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 20,
+				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses},
+			},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "backup"},
+		},
+	})
+	store := usage.NewMemoryStore()
+	failure := codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream failed"))
+	failure.HTTPStatus = http.StatusBadGateway
+	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+		return codexresponses.Result{}, failure
+	}})
+	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-shared"}}}))
+	attempts := 0
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return testResponse(http.StatusOK, "application/json", `{"object":"response","id":"resp_backup","output_text":"ok"}`), nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-shared","input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"resp_backup"`)) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if attempts != 1 {
+		t.Fatalf("direct attempts=%d want 1", attempts)
+	}
+	events := usageEvents(t, store)
+	if len(events) != 1 || events[0].Provider != "backup" || events[0].Outcome != "success" {
+		t.Fatalf("usage events=%+v", events)
+	}
+}

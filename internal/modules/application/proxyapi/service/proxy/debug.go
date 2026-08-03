@@ -127,6 +127,11 @@ func (h *Handler) archiveAndLogProviderSelection(round *archive.Round, r *http.R
 
 // archiveAndLogTransportPlan 记录 RouteOwner 选择与 TransportPlan 权威字段。
 func (h *Handler) archiveAndLogTransportPlan(round *archive.Round, r *http.Request, plan TransportPlan, provider config.Provider, stream bool) {
+	if r != nil {
+		if trace, ok := r.Context().Value(featureExecutionTraceKey{}).(*featureExecutionTrace); ok && trace != nil {
+			trace.provider = plan.RouteOwner
+		}
+	}
 	if round != nil {
 		round.SetTransportPlan(
 			plan.Operation,

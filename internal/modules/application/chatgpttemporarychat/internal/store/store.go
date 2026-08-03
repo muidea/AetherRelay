@@ -57,14 +57,24 @@ func (s *Store) Close() error {
 	return s.docs.Close()
 }
 
-func (s *Store) CreateConversation(ownerID, model, thinkingEffort, systemPrompt, accountID string) (events.ConversationView, error) {
+func (s *Store) CreateConversation(ownerID, model, thinkingEffort, systemPrompt, provider string, accountIDs ...string) (events.ConversationView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	accountID := ""
+	if len(accountIDs) > 0 {
+		accountID = accountIDs[0]
+	} else {
+		// Compatibility for conversations created by the former ChatGPT Web-only
+		// call shape, whose fifth argument was the pinned account ID.
+		accountID = provider
+		provider = "chatgptweb"
+	}
 	ownerID = strings.TrimSpace(ownerID)
 	model = strings.TrimSpace(model)
 	accountID = strings.TrimSpace(accountID)
-	if ownerID == "" || model == "" || accountID == "" {
-		return events.ConversationView{}, fmt.Errorf("owner, model and account are required")
+	provider = strings.TrimSpace(provider)
+	if ownerID == "" || model == "" || provider == "" {
+		return events.ConversationView{}, fmt.Errorf("owner, model and provider are required")
 	}
 	systemPrompt = strings.TrimSpace(systemPrompt)
 	if len(systemPrompt) > s.cfg.MaxMessageBytes {
@@ -86,6 +96,7 @@ func (s *Store) CreateConversation(ownerID, model, thinkingEffort, systemPrompt,
 		ConversationID: uuid.NewString(),
 		Title:          "新对话",
 		AccountID:      accountID,
+		Provider:       provider,
 		Model:          model,
 		ThinkingEffort: strings.TrimSpace(thinkingEffort),
 		SystemPrompt:   systemPrompt,
@@ -166,6 +177,24 @@ func (s *Store) LoadConversationRow(ownerID, conversationID string) (aiproxystat
 	return s.docs.LoadTemporaryConversation(ownerID, conversationID)
 }
 
+func (s *Store) SetProvider(ownerID, conversationID, provider string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return nil
+	}
+	row, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("conversation not found")
+	}
+	row.Provider = provider
+	return s.docs.UpdateTemporaryConversation(row)
+}
+
 type TurnStart struct {
 	Conversation           events.ConversationView
 	UserMessage            events.MessageView
@@ -176,6 +205,7 @@ type TurnStart struct {
 	UpstreamConversationID string
 	ParentMessageID        string
 	AccountID              string
+	Provider               string
 	Model                  string
 	ThinkingEffort         string
 	SystemPrompt           string
@@ -284,6 +314,7 @@ func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs .
 		UpstreamConversationID: row.UpstreamConversationID,
 		ParentMessageID:        row.ParentMessageID,
 		AccountID:              row.AccountID,
+		Provider:               defaultProvider(row.Provider),
 		Model:                  row.Model,
 		ThinkingEffort:         row.ThinkingEffort,
 		SystemPrompt:           row.SystemPrompt,
@@ -331,6 +362,14 @@ type TurnComplete struct {
 }
 
 func (s *Store) CompleteTurn(ownerID, conversationID string, userSequence, assistantSequence int64, content, actualModel, upstreamConversationID, assistantMessageID string, cancelled, interrupted, recoveryRequired bool, errorClass, errorMessage string) (TurnComplete, error) {
+	return s.completeTurn(ownerID, conversationID, userSequence, assistantSequence, content, actualModel, upstreamConversationID, assistantMessageID, cancelled, interrupted, recoveryRequired, errorClass, errorMessage, true)
+}
+
+func (s *Store) CompleteFeatureTurn(ownerID, conversationID string, userSequence, assistantSequence int64, content, actualModel string, cancelled bool, errorClass, errorMessage string) (TurnComplete, error) {
+	return s.completeTurn(ownerID, conversationID, userSequence, assistantSequence, content, actualModel, "", "", cancelled, false, false, errorClass, errorMessage, false)
+}
+
+func (s *Store) completeTurn(ownerID, conversationID string, userSequence, assistantSequence int64, content, actualModel, upstreamConversationID, assistantMessageID string, cancelled, interrupted, recoveryRequired bool, errorClass, errorMessage string, requireAnchors bool) (TurnComplete, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
@@ -341,7 +380,7 @@ func (s *Store) CompleteTurn(ownerID, conversationID string, userSequence, assis
 		return TurnComplete{}, fmt.Errorf("conversation not found")
 	}
 	now := time.Now().UTC()
-	if !cancelled && errorClass == "" && (upstreamConversationID == "" || assistantMessageID == "") {
+	if requireAnchors && !cancelled && errorClass == "" && (upstreamConversationID == "" || assistantMessageID == "") {
 		// A text response without both anchors cannot be continued safely. Keep
 		// the visible response but force a new conversation instead of guessing.
 		interrupted = true
@@ -499,6 +538,7 @@ func conversationView(row aiproxystate.TemporaryConversationRow) events.Conversa
 		ID:             row.ConversationID,
 		Title:          row.Title,
 		AccountDisplay: maskAccountID(row.AccountID),
+		Provider:       defaultProvider(row.Provider),
 		Model:          row.Model,
 		ActualModel:    row.ActualModel,
 		ThinkingEffort: row.ThinkingEffort,
@@ -508,6 +548,13 @@ func conversationView(row aiproxystate.TemporaryConversationRow) events.Conversa
 		UpdatedAt:      row.UpdatedAt.UTC().Format(time.RFC3339),
 		ExpiresAt:      row.ExpiresAt.UTC().Format(time.RFC3339),
 	}
+}
+
+func defaultProvider(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return "chatgptweb"
 }
 
 func maskAccountID(value string) string {

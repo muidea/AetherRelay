@@ -293,6 +293,18 @@ func (s *Admin) ChatGPTEffectiveCatalog(ctx context.Context) (effectivecatalog.S
 	return result.Snapshot, nil
 }
 
+func (s *Admin) FeatureCatalog(ctx context.Context) (proxyevents.FeatureCatalogResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicFeatureCatalog, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.FeatureCatalogCommand{})).Get()
+	if err != nil {
+		return proxyevents.FeatureCatalogResult{}, fmt.Errorf("feature catalog unavailable")
+	}
+	result, ok := value.(proxyevents.FeatureCatalogResult)
+	if !ok {
+		return proxyevents.FeatureCatalogResult{}, fmt.Errorf("invalid feature catalog result")
+	}
+	return result, nil
+}
+
 func (s *Admin) CreateTemporaryConversation(ctx context.Context, cmd tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicCreate, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
 	if err != nil {

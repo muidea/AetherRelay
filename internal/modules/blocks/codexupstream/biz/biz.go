@@ -112,7 +112,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		observation, retryAfter := readRateLimitObservation(response)
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
 		return
 	}
 	completed, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
@@ -145,7 +145,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		observation, retryAfter := readRateLimitObservation(response)
 		_ = response.Body.Close()
-		result.Set(events.StartResult{Headers: responseHeaders(response.Header), ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
+		result.Set(events.StartResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
 		return
 	}
 	streamID := uuid.NewString()
@@ -667,6 +667,10 @@ func forceStream(body []byte) ([]byte, error) {
 		return nil, err
 	}
 	values["stream"] = json.RawMessage("true")
+	// The ChatGPT Codex backend accepts native Responses requests only as
+	// non-persisted executions. Downstream clients need not know this transport
+	// detail, so enforce it at the upstream boundary.
+	values["store"] = json.RawMessage("false")
 	return json.Marshal(values)
 }
 
@@ -694,6 +698,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 		return payload, "", events.RateLimitObservation{}, nil
 	}
 	reader := bufio.NewReader(response.Body)
+	var outputText strings.Builder
 	for {
 		line, err := readLine(reader, 1<<20)
 		if len(line) > 0 {
@@ -702,13 +707,16 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 				payload := []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
 				var event struct {
 					Type     string          `json:"type"`
+					Delta    string          `json:"delta"`
 					Response json.RawMessage `json:"response"`
 				}
 				if json.Unmarshal(payload, &event) == nil {
 					switch event.Type {
+					case "response.output_text.delta":
+						outputText.WriteString(event.Delta)
 					case "response.completed":
 						if len(event.Response) > 0 {
-							return event.Response, "", events.RateLimitObservation{}, nil
+							return responseWithOutputText(event.Response, outputText.String()), "", events.RateLimitObservation{}, nil
 						}
 					case "response.failed", "response.incomplete":
 						observation := rateLimitObservation(payload, time.Now().UTC())
@@ -728,6 +736,29 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 			return nil, classifyTransport(err), events.RateLimitObservation{}, err
 		}
 	}
+}
+
+func responseWithOutputText(response json.RawMessage, text string) []byte {
+	if strings.TrimSpace(text) == "" {
+		return bytes.Clone(response)
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(response, &object) != nil {
+		return bytes.Clone(response)
+	}
+	if existing := strings.TrimSpace(string(object["output_text"])); existing != "" && existing != `""` && existing != "null" {
+		return bytes.Clone(response)
+	}
+	encoded, err := json.Marshal(text)
+	if err != nil {
+		return bytes.Clone(response)
+	}
+	object["output_text"] = encoded
+	result, err := json.Marshal(object)
+	if err != nil {
+		return bytes.Clone(response)
+	}
+	return result
 }
 
 func readLine(reader *bufio.Reader, limit int64) ([]byte, error) {

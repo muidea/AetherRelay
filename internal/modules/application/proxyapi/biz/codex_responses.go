@@ -140,7 +140,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex upstream result"))
 	}
 	if completed.ErrorClass != "" {
-		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit)
+		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus)
 	}
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 }
@@ -157,7 +157,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	if startedUpstream.ErrorClass != "" {
-		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit)
+		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus)
 	}
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
@@ -184,7 +184,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
-				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit)
+				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
 			}
 			return nil
 		}
@@ -235,24 +235,28 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 	}
 	return result
 }
-func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation) *codexresponses.Failure {
+func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int) *codexresponses.Failure {
+	var failure *codexresponses.Failure
 	switch class {
 	case upevents.ErrorInvalidToken:
-		return codexresponses.NewFailure(codexresponses.KindInvalidToken, retryAfter, fmt.Errorf("Codex OAuth access token rejected"))
+		failure = codexresponses.NewFailure(codexresponses.KindInvalidToken, retryAfter, fmt.Errorf("Codex OAuth access token rejected"))
 	case upevents.ErrorRateLimit:
 		if rateLimit.UsageLimited {
-			return codexresponses.NewQuotaFailure(codexresponses.KindRateLimit, retryAfter, true, rateLimit.ResetAt, fmt.Errorf("Codex upstream usage limit reached"))
+			failure = codexresponses.NewQuotaFailure(codexresponses.KindRateLimit, retryAfter, true, rateLimit.ResetAt, fmt.Errorf("Codex upstream usage limit reached"))
+		} else {
+			failure = codexresponses.NewFailure(codexresponses.KindRateLimit, retryAfter, fmt.Errorf("Codex upstream rate limited"))
 		}
-		return codexresponses.NewFailure(codexresponses.KindRateLimit, retryAfter, fmt.Errorf("Codex upstream rate limited"))
 	case upevents.ErrorTimeout:
-		return codexresponses.NewFailure(codexresponses.KindTimeout, retryAfter, fmt.Errorf("Codex upstream timed out"))
+		failure = codexresponses.NewFailure(codexresponses.KindTimeout, retryAfter, fmt.Errorf("Codex upstream timed out"))
 	case upevents.ErrorNetwork:
-		return codexresponses.NewFailure(codexresponses.KindNetwork, retryAfter, fmt.Errorf("Codex upstream network failed"))
+		failure = codexresponses.NewFailure(codexresponses.KindNetwork, retryAfter, fmt.Errorf("Codex upstream network failed"))
 	case upevents.ErrorProtocol:
-		return codexresponses.NewFailure(codexresponses.KindProtocol, retryAfter, fmt.Errorf("Codex upstream protocol failed"))
+		failure = codexresponses.NewFailure(codexresponses.KindProtocol, retryAfter, fmt.Errorf("Codex upstream protocol failed"))
 	default:
-		return codexresponses.NewFailure(codexresponses.KindUpstream, retryAfter, fmt.Errorf("Codex upstream failed"))
+		failure = codexresponses.NewFailure(codexresponses.KindUpstream, retryAfter, fmt.Errorf("Codex upstream failed"))
 	}
+	failure.HTTPStatus = httpStatus
+	return failure
 }
 func clientFailure(err error) error {
 	if errors.Is(err, context.Canceled) {

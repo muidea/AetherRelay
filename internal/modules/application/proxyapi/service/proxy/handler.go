@@ -77,6 +77,8 @@ type archiveRoundKey struct{}
 
 type usageCompletionKey struct{}
 
+type internalFeatureIdentityKey struct{}
+
 type usageCompletion struct{ done atomic.Bool }
 
 func withArchiveRound(ctx context.Context, round *archive.Round) context.Context {
@@ -95,6 +97,19 @@ func withUsageCompletion(ctx context.Context, completion *usageCompletion) conte
 func usageCompletionFromContext(ctx context.Context) *usageCompletion {
 	completion, _ := ctx.Value(usageCompletionKey{}).(*usageCompletion)
 	return completion
+}
+
+func withInternalFeatureIdentity(ctx context.Context, ownerID string) context.Context {
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		ownerID = "admin"
+	}
+	return context.WithValue(ctx, internalFeatureIdentityKey{}, clientauth.ClientIdentity{KeyID: "admin:" + ownerID})
+}
+
+func internalFeatureIdentity(ctx context.Context) (clientauth.ClientIdentity, bool) {
+	identity, ok := ctx.Value(internalFeatureIdentityKey{}).(clientauth.ClientIdentity)
+	return identity, ok && strings.TrimSpace(identity.KeyID) != ""
 }
 
 // ConfigSnapshot 返回当前生效配置的独立快照，避免管理接口读取切片或 map 时
@@ -367,8 +382,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 客户端身份解析:缺失、未知、禁用或冲突 Key 均返回 401(不计 usage)。
-	identity, err := clientauth.ResolveHeaders(r.Header, h.clientKeyIndex.Load())
-	if err != nil {
+	identity, internal := internalFeatureIdentity(r.Context())
+	if !internal {
+		var err error
+		identity, err = clientauth.ResolveHeaders(r.Header, h.clientKeyIndex.Load())
+		if err != nil {
+			writeClientProtocolError(w, http.StatusUnauthorized, clientProtocolFromRequest(r), APIError{
+				Code:           ErrorCodeAuthenticationFailed,
+				Message:        "missing or invalid client api key",
+				ClientProtocol: clientProtocolFromRequest(r),
+				ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
+				Operation:      OperationForPath(r.URL.Path),
+			})
+			return
+		}
+	}
+	if strings.TrimSpace(identity.KeyID) == "" {
 		writeClientProtocolError(w, http.StatusUnauthorized, clientProtocolFromRequest(r), APIError{
 			Code:           ErrorCodeAuthenticationFailed,
 			Message:        "missing or invalid client api key",
@@ -919,8 +948,30 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
-		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), rawStream)
-		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, body, rawBody, rawStream)
+		if !rawStream {
+			response, codexErr := h.completeCodexOAuthResponse(r.Context(), rawModel, body)
+			if codexErr == nil {
+				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
+				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
+				return
+			}
+			h.recordCandidateFailure(r, plan, http.StatusBadGateway, time.Since(start))
+			fallbackResult, selected, fallbackErr := h.doNativeUpstreamCandidates(r, round, plans[1:], body, len(body), false, r.URL.RawQuery, r.Method)
+			if fallbackErr == nil && fallbackResult.Response != nil {
+				if fallbackResult.Cancel != nil {
+					defer fallbackResult.Cancel()
+				}
+				defer fallbackResult.Response.Body.Close()
+				h.archiveAndLogTransportPlan(round, r, selected, fallbackResult.Provider, false)
+				h.handleBufferedResponse(w, fallbackResult.Response, round, start, fallbackResult.ProviderName, rawModel, false, rawBody, r)
+				return
+			}
+			h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
+			h.writeCodexResponsesError(w, r, round, start, plan.RouteOwner, rawModel, false, codexErr)
+			return
+		}
+		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), true)
+		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, body, rawBody, true)
 		return
 	}
 	if plan.Mode != TransportModeNative {

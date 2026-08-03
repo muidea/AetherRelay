@@ -46,6 +46,7 @@ type CompleteCommand struct {
 type CompleteResult struct {
 	Body              []byte
 	Headers           []Header
+	HTTPStatus        int
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
 	RateLimit         RateLimitObservation
@@ -61,6 +62,7 @@ type StartCommand struct {
 type StartResult struct {
 	StreamID          string
 	Headers           []Header
+	HTTPStatus        int
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
 	RateLimit         RateLimitObservation

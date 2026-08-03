@@ -55,6 +55,7 @@ type TemporaryConversationRow struct {
 	ConversationID         string
 	Title                  string
 	AccountID              string
+	Provider               string
 	Model                  string
 	ActualModel            string
 	ThinkingEffort         string
@@ -265,6 +266,7 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_message_images_owner_conversation_message
             ON chatgpt_temporary_message_images(owner_id, conversation_id, message_id)`,
 		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
+		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS provider VARCHAR DEFAULT 'chatgptweb'`,
 		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
 		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS image_metadata JSON DEFAULT '[]'`,
 	}
@@ -489,10 +491,10 @@ func (s *Documents) CreateTemporaryConversation(row TemporaryConversationRow) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.shared.db.Exec(`INSERT INTO chatgpt_temporary_conversations(
-		owner_id, conversation_id, title, account_id, model, actual_model, thinking_effort, system_prompt,
+		owner_id, conversation_id, title, account_id, provider, model, actual_model, thinking_effort, system_prompt,
 		upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.OwnerID, row.ConversationID, row.Title, row.AccountID, row.Model, row.ActualModel, row.ThinkingEffort, row.SystemPrompt,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.OwnerID, row.ConversationID, row.Title, row.AccountID, row.Provider, row.Model, row.ActualModel, row.ThinkingEffort, row.SystemPrompt,
 		row.UpstreamConversationID, row.ParentMessageID, row.Status, row.CreatedAt, row.UpdatedAt, row.ExpiresAt,
 	)
 	return err
@@ -510,14 +512,14 @@ func (s *Documents) ListTemporaryConversations(ownerID string, limit int, update
 		err  error
 	)
 	if updatedBefore == nil {
-		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, model, actual_model, thinking_effort, system_prompt,
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, provider, model, actual_model, thinking_effort, system_prompt,
 			upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
 			FROM chatgpt_temporary_conversations
 			WHERE owner_id = ? AND status != 'closed' AND expires_at > NOW()
 			ORDER BY updated_at DESC
 			LIMIT ?`, ownerID, limit)
 	} else {
-		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, model, actual_model, thinking_effort, system_prompt,
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, provider, model, actual_model, thinking_effort, system_prompt,
 			upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
 			FROM chatgpt_temporary_conversations
 			WHERE owner_id = ? AND status != 'closed' AND expires_at > NOW() AND updated_at < ?
@@ -535,7 +537,7 @@ func (s *Documents) LoadTemporaryConversation(ownerID, conversationID string) (T
 	if s == nil || s.shared == nil || s.shared.db == nil {
 		return TemporaryConversationRow{}, false, fmt.Errorf("state database is unavailable")
 	}
-	row := s.shared.db.QueryRow(`SELECT owner_id, conversation_id, title, account_id, model, actual_model, thinking_effort, system_prompt,
+	row := s.shared.db.QueryRow(`SELECT owner_id, conversation_id, title, account_id, provider, model, actual_model, thinking_effort, system_prompt,
 		upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
 		FROM chatgpt_temporary_conversations
 		WHERE owner_id = ? AND conversation_id = ? AND status != 'closed'`, ownerID, conversationID)
@@ -565,10 +567,10 @@ func (s *Documents) UpdateTemporaryConversation(row TemporaryConversationRow) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.shared.db.Exec(`UPDATE chatgpt_temporary_conversations SET
-		title = ?, account_id = ?, model = ?, actual_model = ?, thinking_effort = ?, system_prompt = ?,
+		title = ?, account_id = ?, provider = ?, model = ?, actual_model = ?, thinking_effort = ?, system_prompt = ?,
 		upstream_conversation_id = ?, parent_message_id = ?, status = ?, updated_at = ?, expires_at = ?
 		WHERE owner_id = ? AND conversation_id = ?`,
-		row.Title, row.AccountID, row.Model, row.ActualModel, row.ThinkingEffort, row.SystemPrompt,
+		row.Title, row.AccountID, row.Provider, row.Model, row.ActualModel, row.ThinkingEffort, row.SystemPrompt,
 		row.UpstreamConversationID, row.ParentMessageID, row.Status, row.UpdatedAt, row.ExpiresAt,
 		row.OwnerID, row.ConversationID,
 	)
@@ -618,10 +620,10 @@ func (s *Documents) StartTemporaryTurn(conversation TemporaryConversationRow, us
 		}
 	}
 	res, err := tx.Exec(`UPDATE chatgpt_temporary_conversations SET
-		title = ?, account_id = ?, model = ?, actual_model = ?, thinking_effort = ?, system_prompt = ?,
+		title = ?, account_id = ?, provider = ?, model = ?, actual_model = ?, thinking_effort = ?, system_prompt = ?,
 		upstream_conversation_id = ?, parent_message_id = ?, status = ?, updated_at = ?, expires_at = ?
 		WHERE owner_id = ? AND conversation_id = ?`,
-		conversation.Title, conversation.AccountID, conversation.Model, conversation.ActualModel, conversation.ThinkingEffort, conversation.SystemPrompt,
+		conversation.Title, conversation.AccountID, conversation.Provider, conversation.Model, conversation.ActualModel, conversation.ThinkingEffort, conversation.SystemPrompt,
 		conversation.UpstreamConversationID, conversation.ParentMessageID, conversation.Status, conversation.UpdatedAt, conversation.ExpiresAt,
 		conversation.OwnerID, conversation.ConversationID,
 	)
@@ -890,7 +892,7 @@ func (s *Documents) ListStreamingTemporaryConversations() ([]TemporaryConversati
 	if s == nil || s.shared == nil || s.shared.db == nil {
 		return nil, fmt.Errorf("state database is unavailable")
 	}
-	rows, err := s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, model, actual_model, thinking_effort, system_prompt,
+	rows, err := s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, provider, model, actual_model, thinking_effort, system_prompt,
 		upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
 		FROM chatgpt_temporary_conversations
 		WHERE status = 'streaming'
@@ -972,7 +974,7 @@ type rowScanner interface {
 func scanTemporaryConversation(scanner rowScanner) (TemporaryConversationRow, error) {
 	var row TemporaryConversationRow
 	err := scanner.Scan(
-		&row.OwnerID, &row.ConversationID, &row.Title, &row.AccountID, &row.Model, &row.ActualModel, &row.ThinkingEffort, &row.SystemPrompt,
+		&row.OwnerID, &row.ConversationID, &row.Title, &row.AccountID, &row.Provider, &row.Model, &row.ActualModel, &row.ThinkingEffort, &row.SystemPrompt,
 		&row.UpstreamConversationID, &row.ParentMessageID, &row.Status, &row.CreatedAt, &row.UpdatedAt, &row.ExpiresAt,
 	)
 	return row, err

@@ -5,14 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	"ai-proxy/internal/modules/application/chatgptimagetask/internal/store"
 	imgcommon "ai-proxy/internal/modules/application/chatgptimagetask/pkg/common"
 	imgevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
-	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
@@ -29,28 +27,14 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 		t.Fatalf("create task: created=%v err=%v", created, err)
 	}
 
-	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
-	accounts.Subscribe(accevents.TopicAcquireImageToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://task-proxy.invalid:8080"}}, nil)
-	})
-	accounts.Subscribe(accevents.TopicReleaseImageSlot, func(_ event.Event, result event.Result) {
-		result.Set(accevents.ReleaseImageSlotResult{OK: true}, nil)
-	})
-	accounts.Subscribe(accevents.TopicMarkImageResult, func(_ event.Event, result event.Result) {
-		result.Set(accevents.MarkImageResultResult{}, nil)
-	})
-
-	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
-	upstream.Subscribe(upevents.TopicGenerateImage, func(ev event.Event, result event.Result) {
-		if command := ev.Data().(upevents.GenerateImageCommand); command.Proxy != "http://task-proxy.invalid:8080" {
-			t.Fatalf("task image proxy=%q", command.Proxy)
+	proxy := event.NewSimpleObserver(proxycommon.UnitID, hub)
+	proxy.Subscribe(proxyevents.TopicExecuteFeatureImage, func(ev event.Event, result event.Result) {
+		if command := ev.Data().(proxyevents.ExecuteFeatureImageCommand); command.Model != "gpt-image-2" {
+			t.Fatalf("task image model=%q", command.Model)
 		}
-		// This successful EventHub result has a nil *cd.Error. The retry helper
-		// must preserve that typed nil rather than converting it to a non-nil
-		// error interface and recording "<nil>" as a task failure.
-		result.Set(upevents.GenerateImageResult{
-			ConversationID: "conversation-1",
-			Images:         []upevents.ImageOutput{{URL: "https://example.invalid/image.png"}},
+		result.Set(proxyevents.ExecuteFeatureImageResult{
+			Provider: "openai-static",
+			Data:     []proxyevents.FeatureImageData{{URL: "https://example.invalid/image.png"}},
 		}, nil)
 	})
 
@@ -58,7 +42,7 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 	imageTask.runGeneration("owner", "task", "prompt", "gpt-image-2", "", "", "")
 
 	view, found := tasks.Get("owner", "task")
-	if !found || view.Status != imgevents.StatusSuccess || view.Error != "" || view.ConversationID != "conversation-1" {
+	if !found || view.Status != imgevents.StatusSuccess || view.Error != "" || view.Provider != "openai-static" {
 		t.Fatalf("task=%+v found=%v", view, found)
 	}
 }

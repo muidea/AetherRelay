@@ -36,6 +36,7 @@ const (
 
 type Failure struct {
 	Kind              ErrorKind
+	HTTPStatus        int
 	RetryAfterSeconds int
 	QuotaExhausted    bool
 	QuotaResetAt      string

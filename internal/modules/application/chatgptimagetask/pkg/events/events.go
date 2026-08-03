@@ -23,6 +23,7 @@ type TaskView struct {
 	Status         string            `json:"status"`
 	Mode           string            `json:"mode"`
 	Model          string            `json:"model,omitempty"`
+	Provider       string            `json:"provider,omitempty"`
 	Prompt         string            `json:"prompt,omitempty"`
 	Size           string            `json:"size,omitempty"`
 	Quality        string            `json:"quality,omitempty"`

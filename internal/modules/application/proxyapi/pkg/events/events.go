@@ -19,6 +19,9 @@ const (
 	TopicCodexDiscoveryProgress = "aiproxy.proxy.query.codex_discovery_progress"
 	TopicStartCodexUsageRefresh = "aiproxy.proxy.command.start_codex_usage_refresh"
 	TopicCodexUsageProgress     = "aiproxy.proxy.query.codex_usage_progress"
+	TopicFeatureCatalog         = "aiproxy.proxy.query.feature_catalog"
+	TopicExecuteFeatureText     = "aiproxy.proxy.command.execute_feature_text"
+	TopicExecuteFeatureImage    = "aiproxy.proxy.command.execute_feature_image"
 )
 
 type UpdateConfigCommand struct{ Config config.Config }
@@ -29,6 +32,68 @@ type UpdateConfigCommand struct{ Config config.Config }
 type EffectiveCatalogCommand struct{}
 
 type EffectiveCatalogResult struct{ Snapshot effectivecatalog.Snapshot }
+
+// FeatureCatalog is the proxy-owned projection used by Admin feature pages.
+// It is derived from the same request-time transport plans as /v1 endpoints,
+// so a model is never offered unless at least one compatible Provider exists.
+type FeatureCatalogCommand struct{}
+
+type FeatureProvider struct {
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Priority int    `json:"priority"`
+}
+
+type FeatureModel struct {
+	ID        string            `json:"id"`
+	Providers []FeatureProvider `json:"providers"`
+}
+
+type FeatureCatalogResult struct {
+	TextModels      []FeatureModel `json:"text_models"`
+	ImageModels     []FeatureModel `json:"image_models"`
+	ImageEditModels []FeatureModel `json:"image_edit_models"`
+}
+
+type FeatureTextMessage struct {
+	Role    string
+	Content string
+	Images  [][]byte
+}
+
+type ExecuteFeatureTextCommand struct {
+	OwnerID        string
+	Model          string
+	Messages       []FeatureTextMessage
+	ThinkingEffort string
+}
+
+type ExecuteFeatureTextResult struct {
+	Provider    string
+	ActualModel string
+	Text        string
+}
+
+type ExecuteFeatureImageCommand struct {
+	OwnerID string
+	Model   string
+	Prompt  string
+	Size    string
+	Quality string
+	Images  [][]byte
+}
+
+type FeatureImageData struct {
+	URL           string
+	B64JSON       string
+	RevisedPrompt string
+}
+
+type ExecuteFeatureImageResult struct {
+	Provider string
+	Model    string
+	Data     []FeatureImageData
+}
 
 // StartCodexDiscoveryCommand asks the proxy orchestrator to refresh the
 // account-scoped Codex model snapshot. An empty AccountIDs list refreshes all
