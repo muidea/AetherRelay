@@ -33,6 +33,7 @@ type ConfigUpdater interface {
 type FeatureExecutor interface {
 	FeatureCatalog(context.Context) proxyevents.FeatureCatalogResult
 	ExecuteFeatureText(context.Context, proxyevents.ExecuteFeatureTextCommand) (proxyevents.ExecuteFeatureTextResult, error)
+	ExecuteFeatureSearch(context.Context, proxyevents.ExecuteFeatureSearchCommand) (proxyevents.ExecuteFeatureSearchResult, error)
 	ExecuteFeatureImage(context.Context, proxyevents.ExecuteFeatureImageCommand) (proxyevents.ExecuteFeatureImageResult, error)
 }
 
@@ -88,6 +89,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicCodexUsageProgress, biz.handleCodexUsageProgress)
 	biz.SubscribeFunc(proxyevents.TopicFeatureCatalog, biz.handleFeatureCatalog)
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureText, biz.handleExecuteFeatureText)
+	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureSearch, biz.handleExecuteFeatureSearch)
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureImage, biz.handleExecuteFeatureImage)
 	return biz, nil
 }
@@ -106,6 +108,7 @@ func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicCodexUsageProgress)
 	s.UnsubscribeFunc(proxyevents.TopicFeatureCatalog)
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureText)
+	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureSearch)
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureImage)
 	s.mu.Lock()
 	s.updater = nil
@@ -160,6 +163,30 @@ func (s *Proxy) handleExecuteFeatureText(ev event.Event, result event.Result) {
 		return
 	}
 	out, err := executor.ExecuteFeatureText(ev.Context(), cmd)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(out, nil)
+}
+
+func (s *Proxy) handleExecuteFeatureSearch(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(proxyevents.ExecuteFeatureSearchCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid feature search command"))
+		return
+	}
+	s.mu.RLock()
+	executor := s.featureExecutor
+	s.mu.RUnlock()
+	if executor == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "feature executor is unavailable"))
+		return
+	}
+	out, err := executor.ExecuteFeatureSearch(ev.Context(), cmd)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return

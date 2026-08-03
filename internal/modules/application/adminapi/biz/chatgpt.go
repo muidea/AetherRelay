@@ -305,6 +305,21 @@ func (s *Admin) FeatureCatalog(ctx context.Context) (proxyevents.FeatureCatalogR
 	return result, nil
 }
 
+// ExecuteFeatureSearch delegates the Admin online-search page to Proxy's
+// typed command. Admin never receives account credentials or an upstream
+// client; Proxy remains the owner of routing and account feedback.
+func (s *Admin) ExecuteFeatureSearch(ctx context.Context, cmd proxyevents.ExecuteFeatureSearchCommand) (proxyevents.ExecuteFeatureSearchResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicExecuteFeatureSearch, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return proxyevents.ExecuteFeatureSearchResult{}, fmt.Errorf("web search unavailable")
+	}
+	result, ok := value.(proxyevents.ExecuteFeatureSearchResult)
+	if !ok {
+		return proxyevents.ExecuteFeatureSearchResult{}, fmt.Errorf("invalid web search result")
+	}
+	return result, nil
+}
+
 func (s *Admin) CreateTemporaryConversation(ctx context.Context, cmd tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicCreate, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
 	if err != nil {

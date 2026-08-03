@@ -14,7 +14,7 @@ make run
 
 默认地址为 `http://127.0.0.1:8080`。启动后可访问：
 
-- [Provider、客户端 Key、使用统计、账号池与功能集管理](http://127.0.0.1:8080/admin/)（账号池区分 ChatGPT Web / Codex OAuth；功能集包含图片任务、图片库与历史对话。临时对话可按轮启用受限联网搜索。默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
+- [Provider、客户端 Key、使用统计、账号池与功能集管理](http://127.0.0.1:8080/admin/)（账号池区分 ChatGPT Web / Codex OAuth；功能集包含图片任务、图片库、在线搜索与临时对话。临时对话可按轮启用受限联网搜索。默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
 - `GET /healthz`
 - `GET /metrics`、`GET /stats`（默认仅 loopback）
 

@@ -61,6 +61,8 @@ func RouteLabel(r *http.Request) string {
 		return "messages"
 	case "/v1/responses":
 		return "responses"
+	case "/v1/search":
+		return "search"
 	case "/v1/completions":
 		return "completions"
 	case "/v1/embeddings":
@@ -83,7 +85,7 @@ func RouteLabel(r *http.Request) string {
 func OperationForPath(path string) string {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
 	switch path {
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions":
+	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/search":
 		return config.ModelOperationChatCompletions
 	case "/v1/embeddings":
 		return config.ModelOperationEmbeddings
@@ -100,7 +102,7 @@ func ClientProtocolForPath(path string) string {
 	switch path {
 	case "/v1/messages":
 		return ClientProtocolAnthropic
-	case "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models":
+	case "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
 		return ClientProtocolOpenAI
 	default:
 		return ""
@@ -290,6 +292,16 @@ func applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, ow
 		if upstreamProtocol == effectivecatalog.CodexOAuthProviderID && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
 			base.UpstreamEndpoint = "codex_oauth_responses"
 			base.Mode = TransportModeCodexOAuthResponses
+			return base, true
+		}
+	case "/v1/search":
+		// /v1/search is an ai-proxy extension for the one Web-search operation
+		// that can be represented faithfully. Never route it to a same-model
+		// static Provider: that would silently become a normal completion or an
+		// unrelated upstream tool call.
+		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
+			base.UpstreamEndpoint = "chatgptweb_search"
+			base.Mode = TransportModeNative
 			return base, true
 		}
 	case "/v1/completions":

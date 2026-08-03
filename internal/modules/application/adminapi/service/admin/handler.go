@@ -101,6 +101,10 @@ type featureCatalogRuntime interface {
 	FeatureCatalog(context.Context) (proxyevents.FeatureCatalogResult, error)
 }
 
+type featureSearchRuntime interface {
+	ExecuteFeatureSearch(context.Context, proxyevents.ExecuteFeatureSearchCommand) (proxyevents.ExecuteFeatureSearchResult, error)
+}
+
 type codexAvailability interface{ CodexOAuthEnabled() bool }
 
 type Handler struct {
@@ -263,6 +267,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case rel == "/api/features/models" && r.Method == http.MethodGet:
 		h.featureCatalog(w, r)
+	case rel == "/api/features/search" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.executeFeatureSearch(w, r)
+		}
 	case strings.HasPrefix(rel, "/api/chatgpt/accounts") && !h.chatGPTWebAvailable():
 		writeError(w, http.StatusServiceUnavailable, "chatgpt web is not enabled")
 	case strings.HasPrefix(rel, "/api/codex/") && !h.codexOAuthAvailable():

@@ -23,6 +23,7 @@ const (
 	TopicCodexUsageProgress     = "aiproxy.proxy.query.codex_usage_progress"
 	TopicFeatureCatalog         = "aiproxy.proxy.query.feature_catalog"
 	TopicExecuteFeatureText     = "aiproxy.proxy.command.execute_feature_text"
+	TopicExecuteFeatureSearch   = "aiproxy.proxy.command.execute_feature_search"
 	TopicExecuteFeatureImage    = "aiproxy.proxy.command.execute_feature_image"
 )
 
@@ -54,6 +55,7 @@ type FeatureModel struct {
 
 type FeatureCatalogResult struct {
 	TextModels      []FeatureModel `json:"text_models"`
+	SearchModels    []FeatureModel `json:"search_models"`
 	ImageModels     []FeatureModel `json:"image_models"`
 	ImageEditModels []FeatureModel `json:"image_edit_models"`
 }
@@ -79,6 +81,28 @@ type ExecuteFeatureTextResult struct {
 	Provider    string
 	ActualModel string
 	Text        string
+}
+
+// ExecuteFeatureSearchCommand is the Admin feature-page projection of the
+// public /v1/search contract. It carries only immutable request data; Proxy
+// owns routing, credentials, account feedback and upstream execution.
+type ExecuteFeatureSearchCommand struct {
+	OwnerID string
+	Model   string
+	Query   string
+}
+
+type FeatureSearchSource struct {
+	Title   string `json:"title,omitempty"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+type ExecuteFeatureSearchResult struct {
+	Provider    string                `json:"provider"`
+	ActualModel string                `json:"actual_model"`
+	Text        string                `json:"output_text"`
+	Sources     []FeatureSearchSource `json:"sources"`
 }
 
 type ExecuteFeatureImageCommand struct {

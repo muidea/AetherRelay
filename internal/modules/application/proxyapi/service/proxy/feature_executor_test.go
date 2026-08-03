@@ -7,6 +7,7 @@ import (
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
@@ -76,6 +77,18 @@ func TestExecuteFeatureTextSendsFilesThroughResponses(t *testing.T) {
 	}
 	out, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{OwnerID: "owner", Model: "gpt-5", Messages: []proxyevents.FeatureTextMessage{{Role: "user", Files: []chatattachment.File{{Name: "notes.md", ContentType: "text/markdown", Bytes: []byte("# hello")}}}}})
 	if err != nil || out.Text != "done" || len(received.Messages) != 1 || len(received.Messages[0].Files) != 1 || received.Messages[0].Files[0].Name != "notes.md" {
+		t.Fatalf("out=%+v received=%+v err=%v", out, received, err)
+	}
+}
+
+func TestExecuteFeatureSearchUsesDedicatedSearchEndpoint(t *testing.T) {
+	var received chatgptsearch.Request
+	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
+		received = request
+		return chatgptsearch.Result{ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test"}}}, nil
+	}})
+	out, err := h.ExecuteFeatureSearch(context.Background(), proxyevents.ExecuteFeatureSearchCommand{OwnerID: "admin", Model: "gpt-5", Query: "latest news"})
+	if err != nil || out.Provider != "chatgptweb" || out.ActualModel != "gpt-5-search" || out.Text != "Answer" || len(out.Sources) != 1 || received.Query != "latest news" {
 		t.Fatalf("out=%+v received=%+v err=%v", out, received, err)
 	}
 }

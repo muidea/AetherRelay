@@ -463,6 +463,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleAnthropicMessages(w, r, requestID)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 		h.handleModels(w, r, requestID)
+	case r.URL.Path == "/v1/search" && r.Method == http.MethodPost:
+		h.handleSearch(w, r, requestID)
 	default:
 		// OpenAI 白名单透传:/v1/responses,/v1/completions,/v1/embeddings
 		h.forwardRaw(w, r, requestID)
@@ -718,7 +720,7 @@ func (h *Handler) readLimitedUpstream(body io.Reader) ([]byte, error) {
 // isSupportedInbound 限制客户端只能访问标准 OpenAI / Anthropic path。
 func isSupportedInbound(method, path string) bool {
 	switch path {
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits":
+	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
 		return method == http.MethodPost
 	case "/v1/models":
 		return method == http.MethodGet || method == http.MethodPost
@@ -917,6 +919,9 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 func chatGPTWebUsageEndpoint(r *http.Request) string {
 	if r != nil && r.URL != nil && NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
 		return "chatgptweb_responses"
+	}
+	if r != nil && r.URL != nil && NormalizeClientEndpoint(r.URL.Path) == "/v1/search" {
+		return "chatgptweb_search"
 	}
 	if r != nil && r.URL != nil && strings.HasPrefix(r.URL.Path, "/v1/images/") {
 		return "chatgptweb_images"

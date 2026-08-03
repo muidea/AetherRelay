@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
@@ -58,6 +59,9 @@ func (h *Handler) FeatureCatalog(ctx context.Context) proxyevents.FeatureCatalog
 	for _, id := range ids {
 		if providers := h.featureProvidersFor(ctx, id, []string{"/v1/chat/completions", "/v1/responses"}); len(providers) > 0 {
 			result.TextModels = append(result.TextModels, proxyevents.FeatureModel{ID: id, Providers: providers})
+		}
+		if providers := h.featureProvidersFor(ctx, id, []string{"/v1/search"}); len(providers) > 0 {
+			result.SearchModels = append(result.SearchModels, proxyevents.FeatureModel{ID: id, Providers: providers})
 		}
 		if providers := h.featureProvidersFor(ctx, id, []string{"/v1/images/generations"}); len(providers) > 0 {
 			result.ImageModels = append(result.ImageModels, proxyevents.FeatureModel{ID: id, Providers: providers})
@@ -129,6 +133,27 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 				return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search does not support image attachments")
 			}
 		}
+		query := ""
+		for index := len(command.Messages) - 1; index >= 0; index-- {
+			message := command.Messages[index]
+			if strings.EqualFold(strings.TrimSpace(message.Role), "user") && strings.TrimSpace(message.Content) != "" {
+				query = strings.TrimSpace(message.Content)
+				break
+			}
+		}
+		if query == "" {
+			return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search requires a non-empty user message")
+		}
+		search, err := h.ExecuteFeatureSearch(ctx, proxyevents.ExecuteFeatureSearchCommand{OwnerID: command.OwnerID, Model: model, Query: query})
+		if err != nil {
+			return proxyevents.ExecuteFeatureTextResult{Provider: search.Provider, ActualModel: search.ActualModel}, err
+		}
+		sources := make([]chatgptsearch.Source, 0, len(search.Sources))
+		for _, source := range search.Sources {
+			sources = append(sources, chatgptsearch.Source{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
+		}
+		text, _ := presentChatGPTWebSearch(chatgptsearch.Result{Text: search.Text, Sources: sources})
+		return proxyevents.ExecuteFeatureTextResult{Provider: search.Provider, ActualModel: search.ActualModel, Text: text}, nil
 	}
 	endpoint := "/v1/chat/completions"
 	if hasFiles {
@@ -204,6 +229,40 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		return proxyevents.ExecuteFeatureTextResult{}, err
 	}
 	return proxyevents.ExecuteFeatureTextResult{Provider: firstNonEmpty(trace.provider, plans[0].RouteOwner), ActualModel: firstNonEmpty(actualModel, model), Text: text}, nil
+}
+
+// ExecuteFeatureSearch runs the same isolated forced-search flow exposed by
+// /v1/search. Keeping the Admin page on this endpoint guarantees that a
+// same-model third-party Provider cannot receive a search request.
+func (h *Handler) ExecuteFeatureSearch(ctx context.Context, command proxyevents.ExecuteFeatureSearchCommand) (proxyevents.ExecuteFeatureSearchResult, error) {
+	model, query := strings.TrimSpace(command.Model), strings.TrimSpace(command.Query)
+	if model == "" || query == "" {
+		return proxyevents.ExecuteFeatureSearchResult{}, fmt.Errorf("feature search model and query are required")
+	}
+	probe, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/v1/search", nil)
+	plans, apiErr := h.resolveTransportPlans(probe, model)
+	if apiErr != nil || len(plans) == 0 {
+		return proxyevents.ExecuteFeatureSearchResult{}, fmt.Errorf("no ChatGPT Web search provider can serve model %q", model)
+	}
+	payload, _ := json.Marshal(webSearchRequest{Model: model, Query: query})
+	response, trace, err := h.executeFeatureRequest(ctx, command.OwnerID, "/v1/search", "application/json", payload)
+	if err != nil {
+		return proxyevents.ExecuteFeatureSearchResult{Provider: trace.provider}, err
+	}
+	var decoded webSearchResponse
+	if err := json.Unmarshal(response, &decoded); err != nil || strings.TrimSpace(decoded.OutputText) == "" {
+		return proxyevents.ExecuteFeatureSearchResult{}, fmt.Errorf("invalid web search response")
+	}
+	out := proxyevents.ExecuteFeatureSearchResult{
+		Provider:    firstNonEmpty(trace.provider, plans[0].RouteOwner),
+		ActualModel: firstNonEmpty(decoded.Model, model),
+		Text:        decoded.OutputText,
+		Sources:     make([]proxyevents.FeatureSearchSource, 0, len(decoded.Sources)),
+	}
+	for _, source := range decoded.Sources {
+		out.Sources = append(out.Sources, proxyevents.FeatureSearchSource{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
+	}
+	return out, nil
 }
 
 func (h *Handler) ExecuteFeatureImage(ctx context.Context, command proxyevents.ExecuteFeatureImageCommand) (proxyevents.ExecuteFeatureImageResult, error) {

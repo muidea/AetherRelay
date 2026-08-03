@@ -15,6 +15,7 @@ import (
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
 	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 )
 
@@ -37,6 +38,9 @@ type chatGPTAccountRuntimeStub struct {
 	temporaryTurn      tempevents.StartTurnCommand
 	temporaryCreateErr error
 	temporaryGetErr    error
+	searchCommand      proxyevents.ExecuteFeatureSearchCommand
+	searchResult       proxyevents.ExecuteFeatureSearchResult
+	searchErr          error
 }
 
 type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
@@ -146,6 +150,17 @@ func (s *chatGPTAccountRuntimeStub) ChatGPTEffectiveCatalog(context.Context) (ef
 	return effectivecatalog.Empty(), nil
 }
 
+func (s *chatGPTAccountRuntimeStub) ExecuteFeatureSearch(_ context.Context, command proxyevents.ExecuteFeatureSearchCommand) (proxyevents.ExecuteFeatureSearchResult, error) {
+	s.searchCommand = command
+	if s.searchErr != nil {
+		return proxyevents.ExecuteFeatureSearchResult{}, s.searchErr
+	}
+	if s.searchResult.Text != "" {
+		return s.searchResult, nil
+	}
+	return proxyevents.ExecuteFeatureSearchResult{Provider: "chatgptweb", ActualModel: command.Model, Text: "answer", Sources: []proxyevents.FeatureSearchSource{{Title: "Example", URL: "https://example.test"}}}, nil
+}
+
 func (s *chatGPTAccountRuntimeStub) CreateTemporaryConversation(_ context.Context, command tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
 	s.temporaryCreate = command
 	if s.temporaryCreateErr != nil {
@@ -230,6 +245,19 @@ func TestChatGPTImageTaskRetryGeneration(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted || runtime.retryOwner != "owner-1" || runtime.retryTaskID != "task-1" || runtime.retryBaseURL != "http://example.com" || !strings.Contains(rec.Body.String(), `"retrying_submission"`) {
 		t.Fatalf("retry status=%d owner=%q task=%q base=%q body=%s", rec.Code, runtime.retryOwner, runtime.retryTaskID, runtime.retryBaseURL, rec.Body.String())
+	}
+}
+
+func TestAdminFeatureSearchUsesScopedProxyCommand(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/features/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.searchCommand.OwnerID != "admin" || runtime.searchCommand.Model != "gpt-5" || runtime.searchCommand.Query != "latest news" || !strings.Contains(rec.Body.String(), `"output_text":"answer"`) || !strings.Contains(rec.Body.String(), `"url":"https://example.test"`) {
+		t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.searchCommand, rec.Body.String())
 	}
 }
 
