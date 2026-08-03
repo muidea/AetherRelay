@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目定位
 
-`ai-proxy` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 路由到唯一上游 RouteOwner，必要时做基础协议转换。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
+`ai-proxy` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 解析有序上游候选链；必要时做基础协议转换，并仅在响应未提交的可重试失败时回退。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
 
 当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
 
@@ -49,7 +49,7 @@ internal/modules/application/proxyapi  OpenAI/Anthropic Application Module：Pro
 internal/modules/application/adminapi  Provider 管理与 usage Application Module
 internal/initiators/routeregistry  magicEngine RouteRegistry 与 HTTP listener Initiator
 
-internal/pkg/aiproxyconfig       配置加载、规范化、启动期校验；解析 model_catalog → RouteOwner
+internal/pkg/aiproxyconfig       配置加载、规范化、启动期校验；解析 model_catalog → 有序 RouteOwners
 internal/pkg/aiproxyarchive      interactions/{round_id}/ 轮次归档与保留策略
 internal/pkg/aiproxyclientauth   客户端 API Key 身份解析（SHA-256 索引，仅内存）
 internal/pkg/aiproxyusage        DuckDB 用量 Store（Start/Complete/Dashboard/Events/导出）
@@ -64,14 +64,14 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 路由与协议合同（核心）
 
-`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效目录 = 静态 `model_catalog` ∪ 两个账号池各自的有效模型快照并集；静态同名 exact 冲突时优先。Codex 不提供模型 allowlist，账号发现快照是其唯一模型权威。`/v1/models` 与 `ResolveTransportPlan` 必须读同一 `effectivecatalog.Snapshot`。
+`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效目录 = 静态 `model_catalog` ∪ 两个账号池各自的有效模型快照并集；同名来源保留为按优先级排序的候选，而非相互覆盖。Codex 不提供模型 allowlist，账号发现快照是其唯一模型权威。`/v1/models` 与 `ResolveTransportPlans` 必须读同一 `effectivecatalog.Snapshot`。
 
 
 
 两阶段权威，不要绕过：
 
-1. **启动期** `config.Load`：每个静态 `model_catalog` 条目必须 **exact、大小写敏感** 地唯一匹配一个 enabled provider 的 `models` pattern，写入 `ModelInfo.RouteOwner` / `ResolvedModelRoute`。`operations` 必填且必须与对应 Provider 的 endpoint capability 相交可服务；enabled provider 必须显式配置 `endpoint_capabilities`（不得从 protocol 推断）。ChatGPT Web 模型不写入 YAML，由运行时发现。
-2. **请求期** `ResolveTransportPlan(cfg, snap, method, path, model)`（`internal/modules/application/proxyapi/service/proxy/route.go`）：从同一 `effectivecatalog.Snapshot` 查找 exact model（静态或内建 `chatgptweb`），再套固定转发矩阵生成 `TransportPlan`。**禁止**再扫 provider 选路、fallback、`default_provider`、`X-AI-Provider` / `?provider=` / `provider/model` 前缀。禁止在 YAML 中声明 `protocol: chatgptweb`。
+1. **启动期** `config.Load`：每个静态 `model_catalog` 条目必须 **exact、大小写敏感** 地匹配至少一个 enabled provider 的 `models` pattern，按 `priority` 降序写入 `ModelInfo.RouteOwners` / `ResolvedModelRoute`（`RouteOwner` 保留首候选兼容投影）。`operations` 必填且每项至少有一个候选与 endpoint capability 相交可服务；enabled provider 必须显式配置 `endpoint_capabilities`（不得从 protocol 推断）。ChatGPT Web 模型不写入 YAML，由运行时发现。
+2. **请求期** `ResolveTransportPlans(cfg, snap, method, path, model)`（`internal/modules/application/proxyapi/service/proxy/route.go`）：从同一 `effectivecatalog.Snapshot` 查找 exact model（静态或内建），再套固定转发矩阵生成候选 `TransportPlan`。请求不能用 `default_provider`、旧 `fallbacks` 列表、`X-AI-Provider` / `?provider=` / `provider/model` 前缀覆盖顺序。仅限 response 未写出时，按每候选 `fallback` 策略尝试可重试失败的下一项。禁止在 YAML 中声明 `protocol: chatgptweb`。
 
 入站白名单：
 
@@ -103,7 +103,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
-热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 的唯一 RouteOwner 合同。
+热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 的候选链与 operation 可服务合同。
 
 ## 安全与资源边界
 
@@ -124,6 +124,6 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 - **model id 严格大小写敏感**；catalog 与 body 必须原文 exact 匹配。
 - 改路由/能力矩阵时同步：`internal/pkg/aiproxyconfig` 校验、`ResolveTransportPlan`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
-- 不引入 provider fallback、default_provider，或从 protocol 推断 `endpoint_capabilities`。
+- 不引入请求侧 provider override、`default_provider`、旧 `fallbacks` 列表，或从 protocol 推断 `endpoint_capabilities`。`priority` / `fallback` 是唯一的静态候选策略配置。
 - `Makefile` 默认 `-buildvcs=false`，避免非完整 git worktree 下 build 失败。
 - 文档、管理 UI 文案以中文为主；代码标识符保持英文。

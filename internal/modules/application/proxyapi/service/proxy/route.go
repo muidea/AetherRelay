@@ -38,6 +38,8 @@ type TransportPlan struct {
 	UpstreamProtocol string
 	UpstreamEndpoint string
 	Mode             string // native | openai_to_anthropic | anthropic_to_openai
+	Priority         int
+	Fallback         bool
 }
 
 // IsConversion 表示需要协议转换(非 native 直通)。
@@ -116,12 +118,21 @@ func ProviderHasDirectEndpoint(provider config.Provider, capability string) bool
 	return config.ProviderHasDirectEndpoint(provider, capability)
 }
 
-// ResolveTransportPlan 是请求期单一入口:在 ResolvedModelRoute 之上应用固定转发矩阵。
-// 步骤 1—6 任一失败均返回 typed APIError,调用方不得创建上游请求。
-// ResolveTransportPlan is the request-time single entry: look up the model in
-// the effective catalog snapshot (static + builtin), then apply the fixed
-// transport matrix. snap must be the same snapshot used by /v1/models.
+// ResolveTransportPlan returns the first compatible candidate for compatibility
+// callers. Request executors that can safely retry must use
+// ResolveTransportPlans to obtain the complete ordered chain.
 func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) (TransportPlan, *APIError) {
+	plans, apiErr := ResolveTransportPlans(cfg, snap, method, path, modelID)
+	if apiErr != nil {
+		return TransportPlan{}, apiErr
+	}
+	return plans[0], nil
+}
+
+// ResolveTransportPlans validates the inbound request and returns every
+// compatible candidate in deterministic priority order. It never creates an
+// upstream request and is shared by routing, fallback, and Admin projections.
+func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) ([]TransportPlan, *APIError) {
 	clientEndpoint := NormalizeClientEndpoint(path)
 	operation := OperationForPath(clientEndpoint)
 	clientProtocol := ClientProtocolForPath(clientEndpoint)
@@ -129,7 +140,7 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 
 	// 入站白名单(执行端点)由 isSupportedInbound 保证;此处仍防御未知 path。
 	if clientEndpoint == "" || operation == "" || clientProtocol == "" {
-		return TransportPlan{}, &APIError{
+		return nil, &APIError{
 			Code:           ErrorCodeEndpointUnsupported,
 			Message:        fmt.Sprintf("inbound endpoint %q is not supported", path),
 			Model:          modelID,
@@ -140,7 +151,7 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 	}
 	if method != "" && method != http.MethodPost {
 		// 执行端点仅 POST;/v1/models 不走本函数。
-		return TransportPlan{}, &APIError{
+		return nil, &APIError{
 			Code:           ErrorCodeEndpointUnsupported,
 			Message:        fmt.Sprintf("method %s is not supported for endpoint %q", method, clientEndpoint),
 			Model:          modelID,
@@ -151,7 +162,7 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 	}
 
 	if modelID == "" {
-		return TransportPlan{}, &APIError{
+		return nil, &APIError{
 			Code:           ErrorCodeModelRequired,
 			Message:        "model is required",
 			Operation:      operation,
@@ -160,9 +171,8 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 		}
 	}
 
-	route, ok := snap.Lookup(modelID)
-	if !ok {
-		return TransportPlan{}, &APIError{
+	if _, ok := snap.Lookup(modelID); !ok {
+		return nil, &APIError{
 			Code:           ErrorCodeModelNotFound,
 			Message:        fmt.Sprintf("model %q was not found in the effective model catalog", modelID),
 			Model:          modelID,
@@ -171,8 +181,9 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 			ClientProtocol: clientProtocol,
 		}
 	}
-	if !route.SupportsOperation(operation) {
-		return TransportPlan{}, &APIError{
+	candidates := snap.CandidatesFor(modelID, operation)
+	if len(candidates) == 0 {
+		return nil, &APIError{
 			Code:           ErrorCodeOperationUnsupported,
 			Message:        fmt.Sprintf("model %q does not support operation %q", modelID, operation),
 			Model:          modelID,
@@ -182,48 +193,44 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 		}
 	}
 
-	owner := strings.TrimSpace(route.RouteOwner)
-	if owner == "" {
-		return TransportPlan{}, &APIError{
-			Code:           ErrorCodeRouteContractInvalid,
-			Message:        fmt.Sprintf("model %q has no resolved route owner", modelID),
+	plans := make([]TransportPlan, 0, len(candidates))
+	for _, candidate := range candidates {
+		owner := strings.TrimSpace(candidate.RouteOwner)
+		if owner == "" {
+			continue
+		}
+		var provider config.Provider
+		if candidate.Builtin || owner == effectivecatalog.BuiltinProviderID || owner == effectivecatalog.CodexOAuthProviderID {
+			provider = effectivecatalog.BuiltinProviderViewFor(owner)
+		} else {
+			var found bool
+			provider, found = cfg.Providers[owner]
+			if !found || provider.Disabled {
+				continue
+			}
+		}
+		plan, ok := applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, owner, provider)
+		if !ok {
+			continue
+		}
+		if len(plans) > 0 && !candidate.Fallback {
+			continue
+		}
+		plan.Priority = candidate.Priority
+		plan.Fallback = candidate.Fallback
+		plans = append(plans, plan)
+	}
+	if len(plans) == 0 {
+		return nil, &APIError{
+			Code:           ErrorCodeEndpointUnsupported,
+			Message:        fmt.Sprintf("no compatible provider can serve endpoint %q for model %q", clientEndpoint, modelID),
 			Model:          modelID,
 			Operation:      operation,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
 		}
 	}
-	var provider config.Provider
-	if route.Builtin || owner == effectivecatalog.BuiltinProviderID || owner == effectivecatalog.CodexOAuthProviderID {
-		provider = effectivecatalog.BuiltinProviderViewFor(owner)
-	} else {
-		var found bool
-		provider, found = cfg.Providers[owner]
-		if !found || provider.Disabled {
-			return TransportPlan{}, &APIError{
-				Code:           ErrorCodeProviderUnavailable,
-				Message:        fmt.Sprintf("provider %q for model %q is unavailable", owner, modelID),
-				Model:          modelID,
-				Operation:      operation,
-				ClientEndpoint: clientEndpoint,
-				ClientProtocol: clientProtocol,
-			}
-		}
-	}
-
-	plan, ok := applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, owner, provider)
-	if !ok {
-		return TransportPlan{}, &APIError{
-			Code:             ErrorCodeEndpointUnsupported,
-			Message:          fmt.Sprintf("provider %q cannot serve endpoint %q for model %q", owner, clientEndpoint, modelID),
-			Model:            modelID,
-			Operation:        operation,
-			ClientEndpoint:   clientEndpoint,
-			ClientProtocol:   clientProtocol,
-			UpstreamProtocol: provider.Protocol,
-		}
-	}
-	return plan, nil
+	return plans, nil
 }
 
 // applyTransportMatrix 仅应用固定转发矩阵(设计文档 §9)。

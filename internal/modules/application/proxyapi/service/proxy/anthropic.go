@@ -64,71 +64,57 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 	}
 	model, _ := body["model"].(string)
 	stream, _ := body["stream"].(bool)
-	plan, apiErr := h.resolveTransportPlan(r, model)
+	plans, apiErr := h.resolveTransportPlans(r, model)
 	if apiErr != nil {
 		h.writeArchivedAPIError(w, round, r, start, "", model, stream, statusForAPIError(apiErr), *apiErr)
 		return
 	}
-	provider, ok := h.cfg.Providers[plan.RouteOwner]
-	if !ok {
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusServiceUnavailable, APIError{
-			Code:             ErrorCodeProviderUnavailable,
-			Message:          fmt.Sprintf("provider %q is not configured", plan.RouteOwner),
-			Model:            model,
-			Operation:        plan.Operation,
-			ClientEndpoint:   plan.ClientEndpoint,
-			ClientProtocol:   plan.ClientProtocol,
-			UpstreamProtocol: plan.UpstreamProtocol,
-		})
-		return
-	}
-	h.archiveAndLogTransportPlan(round, r, plan, provider, stream)
-
-	switch plan.Mode {
-	case TransportModeNative:
-		h.forwardAnthropicNative(w, r, round, start, plan, provider, bodyBytes, body, model, stream)
-	case TransportModeAnthropicToOpenAI:
-		if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
-			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(apiErr), *apiErr)
+	plan := plans[0]
+	candidates, preflightErr := h.prepareAnthropicMessageCandidates(plans, bodyBytes, body, stream, r.URL.RawQuery, r.Method)
+	if len(candidates) == 0 {
+		if preflightErr != nil {
+			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(preflightErr), *preflightErr)
 			return
 		}
-		h.convertAnthropicMessagesToOpenAI(w, r, round, start, plan, provider, body, model, stream)
-	default:
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{
-			Code:             ErrorCodeEndpointUnsupported,
-			Message:          fmt.Sprintf("transport mode %q is not valid for %s", plan.Mode, plan.ClientEndpoint),
-			Model:            model,
-			Operation:        plan.Operation,
-			ClientEndpoint:   plan.ClientEndpoint,
-			ClientProtocol:   plan.ClientProtocol,
-			UpstreamProtocol: plan.UpstreamProtocol,
-		})
+		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, Operation: plan.Operation, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
+		return
 	}
-}
-
-func (h *Handler) forwardAnthropicNative(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, plan TransportPlan, provider config.Provider, bodyBytes []byte, body map[string]any, model string, stream bool) {
-	providerName := plan.RouteOwner
-	// 与其它标准推理端点保持一致：只有请求体 stream=true 才进入 SSE 生命周期。
-	streamRequest := stream
-	result, err := h.doUpstreamPath(r, round, providerName, provider, bodyBytes, len(bodyBytes), streamRequest, plan.UpstreamEndpoint, r.URL.RawQuery, r.Method)
+	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
 	if err != nil {
-		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, err.Error())
+		h.writeArchivedError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadGateway, err.Error())
 		return
 	}
 	resp := result.Response
-	providerName = result.ProviderName
-	provider = result.Provider
+	providerName := result.ProviderName
+	provider := result.Provider
+	selectedPlan := selected.Plan
+	h.archiveAndLogTransportPlan(round, r, selectedPlan, provider, stream)
 	if result.Cancel != nil {
 		defer result.Cancel()
 	}
 	defer resp.Body.Close()
+	if selectedPlan.Mode == TransportModeAnthropicToOpenAI {
+		if resp.StatusCode >= http.StatusBadRequest {
+			h.writeConversionUpstreamError(w, r, resp, round, start, selectedPlan, providerName, model, stream)
+			return
+		}
+		if stream {
+			h.handleOpenAIToAnthropicStream(w, r, resp, round, start, providerName, model, body, r.Context(), result.Cancel)
+			return
+		}
+		h.handleOpenAIToAnthropicBuffered(w, r, resp, round, start, providerName, model, body)
+		return
+	}
+	h.writePreparedAnthropicNativeResponse(w, r, round, start, selectedPlan, providerName, provider, resp, model, stream, body, result.Cancel)
+}
 
+func (h *Handler) writePreparedAnthropicNativeResponse(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, plan TransportPlan, providerName string, provider config.Provider, resp *http.Response, model string, stream bool, body map[string]any, cancel context.CancelFunc) {
 	responsePath := responseFileName(resp.Header.Get("Content-Type"), strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "event-stream"))
 	if strings.HasSuffix(responsePath, ".sse") {
 		copyResponseHeader(w.Header(), resp.Header)
 		prepareSSEHeaders(w.Header())
 		w.WriteHeader(resp.StatusCode)
-		usage, fullPath, streamErr := h.copyAndArchiveRawStream(w, resp, round, providerName, provider, model, body, r.Context(), result.Cancel, plan.UpstreamEndpoint)
+		usage, fullPath, streamErr := h.copyAndArchiveRawStream(w, resp, round, providerName, provider, model, body, r.Context(), cancel, plan.UpstreamEndpoint)
 		duration := time.Since(start)
 		errMsg := ""
 		if streamErr != nil {
@@ -157,80 +143,12 @@ func (h *Handler) forwardAnthropicNative(w http.ResponseWriter, r *http.Request,
 		log.Printf("archive anthropic response: %v", err)
 	}
 	usage := tokenUsage{}
-	if resp.StatusCode < 400 {
+	if resp.StatusCode < http.StatusBadRequest {
 		usage = usageFromRawResponse(provider, responseBody, body)
 	}
 	duration := time.Since(start)
 	h.recordAndPrint(round, r, providerName, model, stream, resp.StatusCode, duration, usage, "")
 	h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, usage, responsePath, "", "", "")
-}
-
-func (h *Handler) convertAnthropicMessagesToOpenAI(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, plan TransportPlan, provider config.Provider, body map[string]any, model string, stream bool) {
-	providerName := plan.RouteOwner
-	openAIBody, err := buildOpenAIChatFromAnthropic(body, model, stream)
-	if err != nil {
-		// 转换构造失败视为 conversion_unsupported(preflight 后仍可能因消息结构失败)。
-		h.writeArchivedAPIError(w, round, r, start, providerName, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
-		return
-	}
-	result, err := h.doUpstreamPath(r, round, providerName, provider, openAIBody, len(openAIBody), stream, plan.UpstreamEndpoint, "", http.MethodPost)
-	if err != nil {
-		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, err.Error())
-		return
-	}
-	resp := result.Response
-	providerName = result.ProviderName
-	if result.Cancel != nil {
-		defer result.Cancel()
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		h.writeConversionUpstreamError(w, r, resp, round, start, plan, providerName, model, stream)
-		return
-	}
-	if stream {
-		h.handleOpenAIToAnthropicStream(w, r, resp, round, start, providerName, model, body, r.Context(), result.Cancel)
-		return
-	}
-	h.handleOpenAIToAnthropicBuffered(w, r, resp, round, start, providerName, model, body)
-}
-
-// handleAnthropicChatCompletions: OpenAI 客户端 /v1/chat/completions → Anthropic 上游 /v1/messages。
-func (h *Handler) handleAnthropicChatCompletions(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, plan TransportPlan, provider config.Provider, _ []byte, body map[string]any, model string, stream bool) {
-	providerName := plan.RouteOwner
-	payload, err := buildAnthropicRequest(body, model, stream)
-	if err != nil {
-		h.writeArchivedAPIError(w, round, r, start, providerName, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
-		return
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	result, err := h.doUpstreamPath(r, round, providerName, provider, encoded, len(encoded), stream, plan.UpstreamEndpoint, "", http.MethodPost)
-	if err != nil {
-		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, err.Error())
-		return
-	}
-	resp := result.Response
-	providerName = result.ProviderName
-	if result.Cancel != nil {
-		defer result.Cancel()
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		h.writeConversionUpstreamError(w, r, resp, round, start, plan, providerName, model, stream)
-		return
-	}
-	if stream {
-		h.handleAnthropicStream(w, r, resp, round, start, providerName, model, body, r.Context(), result.Cancel)
-		return
-	}
-	h.handleAnthropicBuffered(w, r, resp, round, start, providerName, model, body)
 }
 
 // ValidateConversionRequest 在访问上游前检查 payload 是否处于转换最低保证范围。

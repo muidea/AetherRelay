@@ -39,6 +39,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(metricsevents.TopicRecord, biz.handleRecord)
 	biz.SubscribeFunc(metricsevents.TopicPrometheus, biz.handlePrometheus)
 	biz.SubscribeFunc(metricsevents.TopicStats, biz.handleStats)
+	biz.SubscribeFunc(metricsevents.TopicProviderHealth, biz.handleProviderHealth)
 	return biz, nil
 }
 
@@ -57,6 +58,7 @@ func (s *MetricsRuntime) Teardown(context.Context) {
 	s.UnsubscribeFunc(metricsevents.TopicRecord)
 	s.UnsubscribeFunc(metricsevents.TopicPrometheus)
 	s.UnsubscribeFunc(metricsevents.TopicStats)
+	s.UnsubscribeFunc(metricsevents.TopicProviderHealth)
 	if s.runtime != nil {
 		s.runtime.Close()
 	}
@@ -144,4 +146,16 @@ func (s *MetricsRuntime) handleStats(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(metricsevents.BytesResult{Data: data}, nil)
+}
+
+func (s *MetricsRuntime) handleProviderHealth(ev event.Event, result event.Result) {
+	if _, ok := ev.Data().(metricsevents.ProviderHealthCommand); !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid metrics provider health command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Registry() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "metrics block is not ready"))
+		return
+	}
+	result.Set(metricsevents.ProviderHealthResult{Values: s.runtime.Registry().ProviderHealthSnapshot()}, nil)
 }

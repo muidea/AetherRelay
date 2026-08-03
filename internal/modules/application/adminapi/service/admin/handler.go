@@ -114,6 +114,8 @@ type providerView struct {
 	Models               []string             `json:"models"`
 	EndpointCapabilities []string             `json:"endpoint_capabilities"`
 	AllowUnauthenticated bool                 `json:"allow_unauthenticated"`
+	Priority             int                  `json:"priority"`
+	Fallback             bool                 `json:"fallback"`
 	Enabled              bool                 `json:"enabled"`
 	APIKeyConfigured     bool                 `json:"api_key_configured"`
 	Availability         providerAvailability `json:"availability"`
@@ -132,14 +134,40 @@ type providerView struct {
 }
 
 type providerAvailability struct {
-	Status              string `json:"status"`
-	Successes           int64  `json:"successes"`
-	Failures            int64  `json:"failures"`
-	ConsecutiveFailures int64  `json:"consecutive_failures"`
-	LastSuccessAt       string `json:"last_success_at,omitempty"`
-	LastFailureAt       string `json:"last_failure_at,omitempty"`
-	LastStatus          int    `json:"last_status,omitempty"`
-	LastOutcome         string `json:"last_outcome,omitempty"`
+	Status              string  `json:"status"`
+	Successes           int64   `json:"successes"`
+	Failures            int64   `json:"failures"`
+	ConsecutiveFailures int64   `json:"consecutive_failures"`
+	LastSuccessAt       string  `json:"last_success_at,omitempty"`
+	LastFailureAt       string  `json:"last_failure_at,omitempty"`
+	LastStatus          int     `json:"last_status,omitempty"`
+	LastOutcome         string  `json:"last_outcome,omitempty"`
+	Score               int     `json:"score"`
+	WindowSeconds       int     `json:"window_seconds"`
+	SampleCount         int64   `json:"sample_count"`
+	SuccessRate         float64 `json:"success_rate"`
+	P50MS               float64 `json:"p50_ms"`
+	P95MS               float64 `json:"p95_ms"`
+	CircuitState        string  `json:"circuit_state,omitempty"`
+	CircuitRetryAt      string  `json:"circuit_retry_at,omitempty"`
+}
+
+type routingCandidateView struct {
+	Provider     string   `json:"provider"`
+	Priority     int      `json:"priority"`
+	Fallback     bool     `json:"fallback"`
+	Builtin      bool     `json:"builtin"`
+	Operations   []string `json:"operations"`
+	HealthStatus string   `json:"health_status"`
+	HealthScore  int      `json:"health_score"`
+	CircuitState string   `json:"circuit_state,omitempty"`
+	Selection    string   `json:"selection"`
+}
+
+type routingModelView struct {
+	Model      string                 `json:"model"`
+	Operation  string                 `json:"operation"`
+	Candidates []routingCandidateView `json:"candidates"`
 }
 
 type providerInput struct {
@@ -151,6 +179,8 @@ type providerInput struct {
 	Models               []string `json:"models"`
 	EndpointCapabilities []string `json:"endpoint_capabilities"`
 	AllowUnauthenticated bool     `json:"allow_unauthenticated"`
+	Priority             *int     `json:"priority"`
+	Fallback             *bool    `json:"fallback"`
 	Enabled              bool     `json:"enabled"`
 }
 
@@ -248,6 +278,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
 		h.listProviders(w)
+	case rel == "/api/routing/models" && r.Method == http.MethodGet:
+		h.listRoutingModels(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodPut:
 		if !h.requireAdminMutation(w, r) {
 			return
@@ -665,6 +697,8 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 			Models:               append([]string(nil), provider.Models...),
 			EndpointCapabilities: append([]string(nil), provider.EndpointCapabilities...),
 			AllowUnauthenticated: provider.AllowUnauthenticated,
+			Priority:             config.EffectiveProviderPriority(provider),
+			Fallback:             config.EffectiveProviderFallback(provider),
 			Enabled:              !provider.Disabled,
 			APIKeyConfigured:     strings.TrimSpace(provider.APIKey) != "",
 			Availability:         health[name],
@@ -685,8 +719,88 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	})
 }
 
+func (h *Handler) listRoutingModels(w http.ResponseWriter, r *http.Request) {
+	// The account-pool projection is preferred when available. Static-only
+	// deployments intentionally have no ChatGPTRuntime, but their configured
+	// provider candidate chain is still a valid routing read model.
+	snap := effectivecatalog.FromStatic(h.runtime.ConfigSnapshot())
+	if h.chatGPT != nil {
+		value, err := h.chatGPT.ChatGPTEffectiveCatalog(r.Context())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "effective catalog is unavailable")
+			return
+		}
+		snap = value
+	}
+	modelFilter := strings.TrimSpace(r.URL.Query().Get("model"))
+	operationFilter := strings.TrimSpace(r.URL.Query().Get("operation"))
+	health := map[string]providerAvailability{}
+	if h.metricsRegistry != nil {
+		for name, value := range h.metricsRegistry.ProviderHealthSnapshot() {
+			health[name] = providerAvailability{Status: value.Status, Score: value.Score, CircuitState: value.CircuitState}
+		}
+	}
+	views := make([]routingModelView, 0)
+	for _, model := range snap.SortedModelIDs() {
+		if modelFilter != "" && model != modelFilter {
+			continue
+		}
+		operations := map[string]struct{}{}
+		for _, candidate := range snap.CandidatesFor(model, "") {
+			for _, operation := range candidate.Operations {
+				operations[operation] = struct{}{}
+			}
+		}
+		for operation := range operations {
+			if operationFilter != "" && operation != operationFilter {
+				continue
+			}
+			candidates := snap.CandidatesFor(model, operation)
+			items := make([]routingCandidateView, 0, len(candidates))
+			for _, candidate := range candidates {
+				observed := health[candidate.RouteOwner]
+				selection := "fallback"
+				if observed.Status == "unhealthy" || observed.Status == "credential_error" || observed.CircuitState == "open" {
+					selection = "excluded"
+				}
+				items = append(items, routingCandidateView{Provider: candidate.RouteOwner, Priority: candidate.Priority, Fallback: candidate.Fallback, Builtin: candidate.Builtin, Operations: append([]string(nil), candidate.Operations...), HealthStatus: observed.Status, HealthScore: observed.Score, CircuitState: observed.CircuitState, Selection: selection})
+			}
+			sort.SliceStable(items, func(i, j int) bool {
+				if items[i].Priority != items[j].Priority {
+					return items[i].Priority > items[j].Priority
+				}
+				if items[i].HealthScore != items[j].HealthScore {
+					return items[i].HealthScore > items[j].HealthScore
+				}
+				return items[i].Provider < items[j].Provider
+			})
+			primarySet := false
+			for index := range items {
+				if items[index].HealthStatus == "unhealthy" || items[index].HealthStatus == "credential_error" || items[index].CircuitState == "open" {
+					items[index].Selection = "excluded"
+				} else if !primarySet {
+					items[index].Selection = "primary"
+					primarySet = true
+				} else if !items[index].Fallback {
+					items[index].Selection = "not_fallback"
+				} else {
+					items[index].Selection = "fallback"
+				}
+			}
+			views = append(views, routingModelView{Model: model, Operation: operation, Candidates: items})
+		}
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		if views[i].Model != views[j].Model {
+			return views[i].Model < views[j].Model
+		}
+		return views[i].Operation < views[j].Operation
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"routes": views})
+}
+
 func (h *Handler) builtinCodexProviderView() providerView {
-	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Enabled: true, Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
+	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Priority: effectivecatalog.CodexOAuthPriority, Fallback: true, Enabled: true, Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
 	if h.chatGPT == nil {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "effective catalog is unavailable"
@@ -701,10 +815,8 @@ func (h *Handler) builtinCodexProviderView() providerView {
 	bp := snap.CodexOAuthProvider
 	view.ModelCount, view.AvailableAccounts, view.ConflictCount = bp.ModelCount, bp.AvailableAccounts, bp.ConflictCount
 	view.ConflictModels, view.UpdatedAt, view.UnavailableReason = append([]string(nil), bp.ConflictModels...), bp.UpdatedAt, bp.UnavailableReason
-	for id, model := range snap.CodexOAuthModels {
-		if !model.ConflictWithStatic {
-			view.Models = append(view.Models, id)
-		}
+	for id := range snap.CodexOAuthModels {
+		view.Models = append(view.Models, id)
 	}
 	sort.Strings(view.Models)
 	switch bp.Status {
@@ -717,6 +829,7 @@ func (h *Handler) builtinCodexProviderView() providerView {
 	default:
 		view.Availability = providerAvailability{Status: "unknown"}
 	}
+	h.applyObservedHealth(&view)
 	return view
 }
 
@@ -726,6 +839,8 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 		Protocol:             effectivecatalog.BuiltinProviderID,
 		BaseURL:              "(account pool)",
 		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses, config.EndpointCapabilityImages},
+		Priority:             effectivecatalog.ChatGPTWebPriority,
+		Fallback:             false,
 		Enabled:              true,
 		APIKeyConfigured:     false,
 		Source:               ProviderSourceBuiltin,
@@ -751,10 +866,7 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 	view.UpdatedAt = bp.UpdatedAt
 	view.UnavailableReason = bp.UnavailableReason
 	models := make([]string, 0, len(snap.BuiltinModels))
-	for id, model := range snap.BuiltinModels {
-		if model.ConflictWithStatic {
-			continue
-		}
+	for id := range snap.BuiltinModels {
 		models = append(models, id)
 	}
 	sort.Strings(models)
@@ -771,7 +883,44 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 	default:
 		view.Availability = providerAvailability{Status: "unavailable"}
 	}
+	h.applyObservedHealth(&view)
 	return view
+}
+
+func (h *Handler) applyObservedHealth(view *providerView) {
+	if view == nil || h.metricsRegistry == nil {
+		return
+	}
+	value, ok := h.metricsRegistry.ProviderHealthSnapshot()[view.Name]
+	if !ok {
+		return
+	}
+	availability := providerAvailability{
+		Status: value.Status, Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures,
+		LastSuccessAt: formatOptionalTime(value.LastSuccessAt), LastFailureAt: formatOptionalTime(value.LastFailureAt), LastStatus: value.LastStatus, LastOutcome: value.LastOutcome,
+		Score: value.Score, WindowSeconds: value.WindowSeconds, SampleCount: value.SampleCount, SuccessRate: value.SuccessRate,
+		P50MS: value.P50MS, P95MS: value.P95MS, CircuitState: value.CircuitState, CircuitRetryAt: formatOptionalTime(value.CircuitRetryAt),
+	}
+	if availability.Status != "" && availability.Status != "unknown" {
+		view.Availability = availability
+		return
+	}
+	// Preserve catalog/credential state while still surfacing live counters.
+	view.Availability.Successes = availability.Successes
+	view.Availability.Failures = availability.Failures
+	view.Availability.ConsecutiveFailures = availability.ConsecutiveFailures
+	view.Availability.LastSuccessAt = availability.LastSuccessAt
+	view.Availability.LastFailureAt = availability.LastFailureAt
+	view.Availability.LastStatus = availability.LastStatus
+	view.Availability.LastOutcome = availability.LastOutcome
+	view.Availability.Score = availability.Score
+	view.Availability.WindowSeconds = availability.WindowSeconds
+	view.Availability.SampleCount = availability.SampleCount
+	view.Availability.SuccessRate = availability.SuccessRate
+	view.Availability.P50MS = availability.P50MS
+	view.Availability.P95MS = availability.P95MS
+	view.Availability.CircuitState = availability.CircuitState
+	view.Availability.CircuitRetryAt = availability.CircuitRetryAt
 }
 
 func (h *Handler) providerHealth(cfg config.Config) map[string]providerAvailability {
@@ -786,39 +935,13 @@ func (h *Handler) providerHealth(cfg config.Config) map[string]providerAvailabil
 	if h.metricsRegistry == nil {
 		return result
 	}
-	data, err := h.metricsRegistry.StatsJSON()
-	if err != nil {
-		return result
-	}
-	var snapshot struct {
-		ProviderHealth map[string]struct {
-			Successes           int64  `json:"successes"`
-			Failures            int64  `json:"failures"`
-			ConsecutiveFailures int64  `json:"consecutive_failures"`
-			LastSuccessAt       string `json:"last_success_at"`
-			LastFailureAt       string `json:"last_failure_at"`
-			LastStatus          int    `json:"last_status"`
-			LastOutcome         string `json:"last_outcome"`
-		} `json:"provider_health"`
-	}
-	if json.Unmarshal(data, &snapshot) != nil {
-		return result
-	}
-	for name, value := range snapshot.ProviderHealth {
-		status := "unknown"
-		switch {
-		case value.LastOutcome == "capability_drift":
-			status = "capability_drift"
-		case value.LastStatus == 401 || value.LastStatus == 403:
-			status = "credential_error"
-		case value.ConsecutiveFailures >= 3:
-			status = "unavailable"
-		case value.Failures > 0:
-			status = "degraded"
-		case value.Successes > 0:
-			status = "healthy"
+	for name, value := range h.metricsRegistry.ProviderHealthSnapshot() {
+		result[name] = providerAvailability{
+			Status: value.Status, Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures,
+			LastSuccessAt: formatOptionalTime(value.LastSuccessAt), LastFailureAt: formatOptionalTime(value.LastFailureAt), LastStatus: value.LastStatus, LastOutcome: value.LastOutcome,
+			Score: value.Score, WindowSeconds: value.WindowSeconds, SampleCount: value.SampleCount, SuccessRate: value.SuccessRate,
+			P50MS: value.P50MS, P95MS: value.P95MS, CircuitState: value.CircuitState, CircuitRetryAt: formatOptionalTime(value.CircuitRetryAt),
 		}
-		result[name] = providerAvailability{Status: status, Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures, LastSuccessAt: value.LastSuccessAt, LastFailureAt: value.LastFailureAt, LastStatus: value.LastStatus, LastOutcome: value.LastOutcome}
 	}
 	for name, provider := range cfg.Providers {
 		if provider.Disabled {
@@ -826,6 +949,13 @@ func (h *Handler) providerHealth(cfg config.Config) map[string]providerAvailabil
 		}
 	}
 	return result
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
@@ -937,6 +1067,16 @@ func buildProvidersNode(inputs []providerInput, existingSecrets map[string]strin
 		appendScalar(provider, "protocol", strings.ToLower(strings.TrimSpace(input.Protocol)), "!!str")
 		appendScalar(provider, "base_url", strings.TrimSpace(input.BaseURL), "!!str")
 		appendScalar(provider, "api_key", secret, "!!str")
+		priority := config.DefaultProviderPriority
+		if input.Priority != nil {
+			priority = *input.Priority
+		}
+		fallback := true
+		if input.Fallback != nil {
+			fallback = *input.Fallback
+		}
+		appendScalar(provider, "priority", fmt.Sprintf("%d", priority), "!!int")
+		appendScalar(provider, "fallback", fmt.Sprintf("%t", fallback), "!!bool")
 		appendScalar(provider, "endpoint_capabilities", strings.Join(input.EndpointCapabilities, ", "), "!!str")
 		appendScalar(provider, "models", strings.Join(input.Models, ", "), "!!str")
 		if input.AllowUnauthenticated {

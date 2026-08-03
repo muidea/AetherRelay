@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -686,8 +687,8 @@ providers:
 		t.Fatal(err)
 	}
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "fallbacks is not supported") {
-		t.Fatalf("error = %v, want fallbacks not supported", err)
+	if err == nil || !strings.Contains(err.Error(), "use priority and fallback") {
+		t.Fatalf("error = %v, want migration guidance", err)
 	}
 }
 
@@ -1110,7 +1111,7 @@ model_catalog:
 	}
 }
 
-func TestLoadRejectsCatalogModelWithAmbiguousRoute(t *testing.T) {
+func TestLoadBuildsOrderedCatalogCandidates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1120,12 +1121,15 @@ providers:
     api_key: test
     endpoint_capabilities: chat_completions, responses, completions, embeddings
     models: shared-*
+    priority: 200
   backup:
     protocol: openai
     base_url: https://b.example
     api_key: test
     endpoint_capabilities: chat_completions, responses, completions, embeddings
     models: shared-*
+    priority: 10
+    fallback: true
 model_catalog:
   shared-model:
     context_window_tokens: 128000
@@ -1134,9 +1138,13 @@ model_catalog:
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "multiple enabled providers") {
-		t.Fatalf("error = %v, want multiple enabled providers", err)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := cfg.ModelCatalog["shared-model"]
+	if info.RouteOwner != "primary" || !reflect.DeepEqual(info.RouteOwners, []string{"primary", "backup"}) {
+		t.Fatalf("route candidates = %#v", info)
 	}
 }
 
@@ -1231,8 +1239,58 @@ model_catalog:
 		t.Fatal(err)
 	}
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "operation") || !strings.Contains(err.Error(), "endpoint_capabilities") {
-		t.Fatalf("error = %v, want operation/capability mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "operation") || !strings.Contains(err.Error(), "not serviceable by any matching provider") {
+		t.Fatalf("error = %v, want operation/serviceability mismatch", err)
+	}
+}
+
+func TestLoadPreservesExplicitZeroProviderPriority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  zero:
+    protocol: openai
+    base_url: https://example.com
+    api_key: test
+    endpoint_capabilities: chat_completions
+    models: gpt-*
+    priority: 0
+  defaulted:
+    protocol: openai
+    base_url: https://fallback.example
+    api_key: test
+    endpoint_capabilities: chat_completions
+    models: gpt-*
+  no-fallback:
+    protocol: openai
+    base_url: https://no-fallback.example
+    api_key: test
+    endpoint_capabilities: chat_completions
+    models: other-*
+    fallback: false
+model_catalog:
+  gpt-test:
+    context_window_tokens: 8192
+    max_output_tokens: 4096
+    operations: chat_completions
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := EffectiveProviderPriority(cfg.Providers["zero"]); got != 0 {
+		t.Fatalf("explicit zero priority = %d, want 0", got)
+	}
+	if got := EffectiveProviderPriority(cfg.Providers["defaulted"]); got != DefaultProviderPriority {
+		t.Fatalf("default priority = %d, want %d", got, DefaultProviderPriority)
+	}
+	if !EffectiveProviderFallback(cfg.Providers["defaulted"]) || EffectiveProviderFallback(cfg.Providers["no-fallback"]) {
+		t.Fatalf("fallback defaults = defaulted:%t no-fallback:%t", EffectiveProviderFallback(cfg.Providers["defaulted"]), EffectiveProviderFallback(cfg.Providers["no-fallback"]))
+	}
+	if got := cfg.ModelCatalog["gpt-test"].RouteOwners; !reflect.DeepEqual(got, []string{"defaulted", "zero"}) {
+		t.Fatalf("route owners = %#v", got)
 	}
 }
 

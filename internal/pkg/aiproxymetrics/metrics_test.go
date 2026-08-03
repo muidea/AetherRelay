@@ -85,6 +85,52 @@ func TestProviderHealthSnapshotTracksLatestOutcome(t *testing.T) {
 	}
 }
 
+func TestProviderHealthIgnoresLocalClientAndConversionErrors(t *testing.T) {
+	r := NewRegistry()
+	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "conversion", "", "", "", "openai_to_anthropic")
+	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusUnprocessableEntity, time.Millisecond, "error", "", "", "", "")
+	if got := r.ProviderHealthSnapshot(); len(got) != 0 {
+		t.Fatalf("local request errors must not affect provider health: %#v", got)
+	}
+	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "capability_drift", "", "", "", "")
+	if got := r.ProviderHealthSnapshot()["openai"]; got.Status != "capability_drift" || got.SampleCount != 1 {
+		t.Fatalf("capability drift must remain observable: %#v", got)
+	}
+}
+
+func TestProviderHealthUsesLowSampleUnknownAndOpensCircuit(t *testing.T) {
+	r := NewRegistry()
+	r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusOK, 10*time.Millisecond, "success", "", "", "", "")
+	if got := r.ProviderHealthSnapshot()["provider"]; got.Status != "unknown" || got.SampleCount != 1 || got.Score != 100 || got.CircuitState != "closed" {
+		t.Fatalf("low-sample health=%#v", got)
+	}
+	for range 3 {
+		r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusBadGateway, 20*time.Millisecond, "upstream_failed", "", "", "", "")
+	}
+	if got := r.ProviderHealthSnapshot()["provider"]; got.Status != "unhealthy" || got.CircuitState != "open" || got.CircuitRetryAt.IsZero() {
+		t.Fatalf("circuit health=%#v", got)
+	}
+}
+
+func TestProviderHealthHalfOpenIsRoutableRecoveryProbe(t *testing.T) {
+	r := NewRegistry()
+	for range 3 {
+		r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+	}
+	// Do not wait for the production cooldown in a test. The expired circuit
+	// must become a half-open, routable probe rather than remain unhealthy.
+	r.mu.Lock()
+	value := r.providerHealth["provider"]
+	value.CircuitOpenUntil = time.Now().Add(-time.Second)
+	r.providerHealth["provider"] = value
+	r.mu.Unlock()
+
+	got := r.ProviderHealthSnapshot()["provider"]
+	if got.CircuitState != "half_open" || got.Status != "degraded" {
+		t.Fatalf("expired circuit must permit recovery probe: %#v", got)
+	}
+}
+
 func TestClientUsageAndStoreMetrics(t *testing.T) {
 	r := NewRegistry()
 	r.InitializeClientUsage(map[string]ClientUsage{"default": {Requests: 2, InputTokens: 10, OutputTokens: 5, TotalTokens: 15}})

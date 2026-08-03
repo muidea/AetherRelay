@@ -87,7 +87,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "routingContent", "routingSearch", "provider_priority",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
@@ -109,6 +109,48 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"source":"official"`) {
 		t.Fatalf("provider response missing official source from base_url: %s", rec.Body.String())
+	}
+}
+
+func TestHandlerListsStaticRoutingCandidates(t *testing.T) {
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"primary": {Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"shared"}, Priority: 200, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+			"backup":  {Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"shared"}, Priority: 100, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"shared": {ID: "shared", ContextWindowTokens: 8192, MaxOutputTokens: 4096, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary", RouteOwners: []string{"primary", "backup"}},
+		},
+	}
+	handler := NewHandler("", &testRuntime{cfg: cfg})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/routing/models", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Routes []struct {
+			Model      string `json:"model"`
+			Operation  string `json:"operation"`
+			Candidates []struct {
+				Provider  string `json:"provider"`
+				Priority  int    `json:"priority"`
+				Fallback  bool   `json:"fallback"`
+				Selection string `json:"selection"`
+			} `json:"candidates"`
+		} `json:"routes"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Routes) != 1 || payload.Routes[0].Model != "shared" || payload.Routes[0].Operation != config.ModelOperationChatCompletions {
+		t.Fatalf("routes=%+v", payload.Routes)
+	}
+	candidates := payload.Routes[0].Candidates
+	if len(candidates) != 2 || candidates[0].Provider != "primary" || candidates[0].Priority != 200 || candidates[0].Selection != "primary" || candidates[1].Provider != "backup" || !candidates[1].Fallback || candidates[1].Selection != "fallback" {
+		t.Fatalf("candidates=%+v", candidates)
 	}
 }
 
@@ -183,7 +225,12 @@ func TestHandlerRejectsRemoteAdminAccess(t *testing.T) {
 
 func TestHandlerProjectsProviderAvailability(t *testing.T) {
 	registry := metrics.NewRegistry()
-	registry.RecordRequest("healthy", "m", "chat_completions", http.StatusOK, time.Millisecond, "success")
+	for range 3 {
+		registry.RecordRequest("healthy", "m", "chat_completions", http.StatusOK, time.Millisecond, "success")
+	}
+	for range 4 {
+		registry.RecordRequest("degraded", "m", "chat_completions", http.StatusOK, time.Millisecond, "success")
+	}
 	registry.RecordRequest("degraded", "m", "chat_completions", http.StatusBadGateway, time.Millisecond, "upstream_failed")
 	for range 3 {
 		registry.RecordRequest("unavailable", "m", "chat_completions", http.StatusServiceUnavailable, time.Millisecond, "upstream_failed")
@@ -202,7 +249,7 @@ func TestHandlerProjectsProviderAvailability(t *testing.T) {
 	handler := NewHandler("", &testRuntime{cfg: cfg}).WithMetrics(registry)
 	availability := handler.providerHealth(cfg)
 	for name, want := range map[string]string{
-		"healthy": "healthy", "degraded": "degraded", "unavailable": "unavailable",
+		"healthy": "healthy", "degraded": "degraded", "unavailable": "unhealthy",
 		"credential": "credential_error", "drift": "capability_drift", "unknown": "unknown", "disabled": "disabled",
 	} {
 		if got := availability[name].Status; got != want {
@@ -252,7 +299,7 @@ func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 		t.Fatalf("probe = %d %s", rec.Code, rec.Body.String())
 	}
 	availability := handler.providerHealth(cfg)["openai"]
-	if availability.Status != "healthy" || availability.LastOutcome != "success" {
+	if availability.Status != "unknown" || availability.LastOutcome != "success" || availability.SampleCount != 1 || availability.Score != 100 {
 		t.Fatalf("availability = %#v", availability)
 	}
 }
@@ -266,12 +313,14 @@ func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
 	}
 	runtime := &testRuntime{cfg: cfg}
 	handler := NewHandler(path, runtime)
+	zeroPriority := 0
 	body, err := json.Marshal(updateRequest{Providers: []providerInput{{
 		Name:                 "openai",
 		Protocol:             "openai",
 		BaseURL:              "https://gateway.example.com/v1",
 		Models:               []string{"gpt-*"},
 		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+		Priority:             &zeroPriority,
 		Enabled:              true,
 	}}})
 	if err != nil {
@@ -294,13 +343,16 @@ func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
 	if !strings.Contains(string(raw), "${ADMIN_TEST_API_KEY}") {
 		t.Fatalf("raw API key expression was not preserved:\n%s", raw)
 	}
+	if !strings.Contains(string(raw), "priority: 0") {
+		t.Fatalf("explicit zero priority was not persisted:\n%s", raw)
+	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	if runtime.updates != 1 {
 		t.Fatalf("updates = %d, want 1", runtime.updates)
 	}
 	provider := runtime.cfg.Providers["openai"]
-	if provider.BaseURL != "https://gateway.example.com/v1" || provider.APIKey != "secret-value" {
+	if provider.BaseURL != "https://gateway.example.com/v1" || provider.APIKey != "secret-value" || config.EffectiveProviderPriority(provider) != 0 {
 		t.Fatalf("runtime provider = %+v", provider)
 	}
 }

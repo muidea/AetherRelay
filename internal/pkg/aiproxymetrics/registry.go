@@ -4,6 +4,7 @@
 package metrics
 
 import (
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,11 @@ import (
 
 // 延迟样本每个 (provider, model) 组合的容量上限;超过会触发降采样。
 const latencySamplesCap = 2048
+
+// providerHealthSamplesCap bounds the in-memory rolling health window per
+// provider. Health is a process-local live signal and is intentionally not
+// persisted across restart.
+const providerHealthSamplesCap = 512
 
 // maxModelsPerProvider 限制每个 provider 下独立 model label 数量。
 // 超出后新 model 归一为 otherModelLabel,防止客户端通过通配路由刷爆 map。
@@ -84,6 +90,7 @@ type Registry struct {
 	upstreamErrors   map[errorKey]uint64
 	upstreamAttempts map[string]uint64 // provider -> total attempts
 	providerHealth   map[string]providerHealth
+	healthSamples    map[string][]healthSample
 
 	clientRequests          map[clientUsageKey]uint64
 	clientInput             map[clientUsageKey]uint64
@@ -127,6 +134,7 @@ func NewRegistry() *Registry {
 		upstreamErrors:            map[errorKey]uint64{},
 		upstreamAttempts:          map[string]uint64{},
 		providerHealth:            map[string]providerHealth{},
+		healthSamples:             map[string][]healthSample{},
 		clientRequests:            map[clientUsageKey]uint64{},
 		clientInput:               map[clientUsageKey]uint64{},
 		clientOutput:              map[clientUsageKey]uint64{},
@@ -319,20 +327,30 @@ func (r *Registry) RecordRequestPlan(provider, model, route string, status int, 
 		UpstreamEndpoint: boundEndpointLabel(upstreamEndpoint), ConversionMode: boundModeLabel(conversionMode),
 	}
 	r.requestCount[key]++
-	if provider != "" {
+	if provider != "" && shouldTrackProviderHealth(status, outcome) {
+		now := time.Now()
 		h := r.providerHealth[provider]
 		h.LastOutcome = outcome
 		if status >= 200 && status < 400 && outcome == "success" {
 			h.Successes++
 			h.ConsecutiveFailures = 0
-			h.LastSuccessAt = time.Now()
+			h.LastSuccessAt = now
+			h.CircuitOpenUntil = time.Time{}
 		} else if outcome != "success" || status == 401 || status == 403 || status == 408 || status == 429 || status >= 500 {
 			h.Failures++
 			h.ConsecutiveFailures++
-			h.LastFailureAt = time.Now()
+			h.LastFailureAt = now
 			h.LastStatus = status
+			if h.ConsecutiveFailures >= 3 && retryableHealthFailure(status, outcome) {
+				h.CircuitOpenUntil = now.Add(30 * time.Second)
+			}
 		}
 		r.providerHealth[provider] = h
+		samples := r.healthSamples[provider]
+		if len(samples) >= providerHealthSamplesCap {
+			samples = samples[providerHealthSamplesCap/2:]
+		}
+		r.healthSamples[provider] = append(samples, healthSample{At: now, Model: model, Operation: route, Status: status, Outcome: outcome, Duration: duration})
 	}
 	seconds := duration.Seconds()
 	r.requestDurationSum[key] += seconds
@@ -352,6 +370,37 @@ func (r *Registry) RecordRequestPlan(provider, model, route string, status int, 
 		samples = samples[latencySamplesCap/2:]
 	}
 	r.latencySamples[latKey] = append(samples, seconds)
+}
+
+// shouldTrackProviderHealth keeps the provider-health window about upstream
+// availability. Client validation, unsupported conversion features, and other
+// local 4xx outcomes remain request metrics but must not make a healthy
+// upstream look degraded.
+func shouldTrackProviderHealth(status int, outcome string) bool {
+	if status >= 200 && status < 400 && outcome == "success" {
+		return true
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError {
+		return true
+	}
+	switch outcome {
+	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol", "capability_drift":
+		return true
+	default:
+		return false
+	}
+}
+
+func retryableHealthFailure(status int, outcome string) bool {
+	if status == 408 || status == 429 || status >= 500 || status <= 0 {
+		return true
+	}
+	switch outcome {
+	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol":
+		return true
+	default:
+		return false
+	}
 }
 
 // RecordTokens 累计 token 用量,并按 cached_input_tokens>0 判定 cache hit/miss。

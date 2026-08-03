@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -84,5 +85,45 @@ func TestCodexOAuthResponsesDoesNotServeChatCompletions(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
+	cfg := mustHandlerConfig(config.Config{
+		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
+		Providers: map[string]config.Provider{
+			"primary": {
+				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 200,
+				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses},
+			},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary"},
+		},
+	})
+	store := usage.NewMemoryStore()
+	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{})
+	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-shared"}}}))
+	attempts := 0
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if r.URL.Host != "primary.test" {
+			return nil, fmt.Errorf("unexpected direct provider %q", r.URL.Host)
+		}
+		return testResponse(http.StatusBadGateway, "application/json", `{"error":"bad gateway"}`), nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-shared","input":"hello","tools":[{"type":"function","name":"lookup"}]}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"object":"response"`)) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if attempts != 1 {
+		t.Fatalf("direct attempts=%d want 1", attempts)
+	}
+	events := usageEvents(t, store)
+	if len(events) != 1 || events[0].Provider != effectivecatalog.CodexOAuthProviderID || events[0].Outcome != "success" {
+		t.Fatalf("usage events=%+v", events)
 	}
 }

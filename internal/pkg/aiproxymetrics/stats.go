@@ -41,7 +41,18 @@ type providerHealth struct {
 	LastSuccessAt, LastFailureAt             time.Time
 	LastStatus                               int
 	LastOutcome                              string
+	CircuitOpenUntil                         time.Time
 }
+
+type healthSample struct {
+	At        time.Time
+	Model     string
+	Operation string
+	Status    int
+	Outcome   string
+	Duration  time.Duration
+}
+
 type StatsProviderHealth struct {
 	Successes           int64     `json:"successes"`
 	Failures            int64     `json:"failures"`
@@ -50,7 +61,18 @@ type StatsProviderHealth struct {
 	LastFailureAt       time.Time `json:"last_failure_at,omitempty"`
 	LastStatus          int       `json:"last_status,omitempty"`
 	LastOutcome         string    `json:"last_outcome,omitempty"`
+	Status              string    `json:"status"`
+	Score               int       `json:"score"`
+	WindowSeconds       int       `json:"window_seconds"`
+	SampleCount         int64     `json:"sample_count"`
+	SuccessRate         float64   `json:"success_rate"`
+	P50MS               float64   `json:"p50_ms"`
+	P95MS               float64   `json:"p95_ms"`
+	CircuitState        string    `json:"circuit_state"`
+	CircuitRetryAt      time.Time `json:"circuit_retry_at,omitempty"`
 }
+
+const providerHealthWindow = 5 * time.Minute
 
 // StatsRequests 汇总请求计数。
 type StatsRequests struct {
@@ -202,8 +224,9 @@ func buildStatsLocked(r *Registry) StatsJSON {
 	}
 
 	health := make(map[string]StatsProviderHealth, len(r.providerHealth))
+	now := time.Now()
 	for provider, value := range r.providerHealth {
-		health[provider] = StatsProviderHealth{Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures, LastSuccessAt: value.LastSuccessAt, LastFailureAt: value.LastFailureAt, LastStatus: value.LastStatus, LastOutcome: value.LastOutcome}
+		health[provider] = buildProviderHealth(value, r.healthSamples[provider], now)
 	}
 	return StatsJSON{
 		UptimeSeconds:  uptime,
@@ -214,6 +237,109 @@ func buildStatsLocked(r *Registry) StatsJSON {
 		Usage:          usage,
 		ProviderHealth: health,
 	}
+}
+
+func buildProviderHealth(value providerHealth, samples []healthSample, now time.Time) StatsProviderHealth {
+	result := StatsProviderHealth{
+		Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures,
+		LastSuccessAt: value.LastSuccessAt, LastFailureAt: value.LastFailureAt, LastStatus: value.LastStatus, LastOutcome: value.LastOutcome,
+		Status: "unknown", WindowSeconds: int(providerHealthWindow.Seconds()), CircuitState: "closed",
+	}
+	halfOpen := false
+	if value.CircuitOpenUntil.After(now) {
+		result.Status = "unhealthy"
+		result.Score = 0
+		result.CircuitState = "open"
+		result.CircuitRetryAt = value.CircuitOpenUntil
+	} else if !value.CircuitOpenUntil.IsZero() && value.ConsecutiveFailures >= 3 {
+		// Once the open interval has elapsed, the next request is the recovery
+		// probe. It must remain routable; leaving Status as "unhealthy" would
+		// cause the router to exclude it forever until the whole sample window
+		// expired. A successful probe clears the circuit in RecordRequestPlan;
+		// a retryable failure opens it again.
+		halfOpen = true
+		result.CircuitState = "half_open"
+		result.Status = "degraded"
+	}
+	if value.LastStatus == 401 || value.LastStatus == 403 {
+		result.Status = "credential_error"
+	}
+	// A capability contract mismatch is neither a transient availability
+	// problem nor a credential failure. Keep it visible to Admin and leave
+	// routing eligible so another request with a compatible shape can recover
+	// the live signal; it is never silently flattened to "unknown".
+	capabilityDrift := value.LastOutcome == "capability_drift"
+	if capabilityDrift {
+		result.Status = "capability_drift"
+	}
+	cutoff := now.Add(-providerHealthWindow)
+	durations := make([]float64, 0, len(samples))
+	var successes, failures int64
+	for _, sample := range samples {
+		if sample.At.Before(cutoff) {
+			continue
+		}
+		result.SampleCount++
+		if sample.Status >= 200 && sample.Status < 400 && sample.Outcome == "success" {
+			successes++
+		} else {
+			failures++
+		}
+		durations = append(durations, float64(sample.Duration.Milliseconds()))
+	}
+	if result.SampleCount == 0 || result.Status == "credential_error" {
+		return result
+	}
+	result.SuccessRate = roundTo(float64(successes)/float64(result.SampleCount), 4)
+	if len(durations) > 0 {
+		sortFloats(durations)
+		result.P50MS = roundTo(percentile(durations, 0.50), 3)
+		result.P95MS = roundTo(percentile(durations, 0.95), 3)
+	}
+	result.Score = int(math.Round(result.SuccessRate * 100))
+	if result.P95MS > 30000 {
+		result.Score = max(0, result.Score-10)
+	}
+	if value.ConsecutiveFailures > 0 {
+		result.Score = max(0, result.Score-int(min(value.ConsecutiveFailures*5, 20)))
+	}
+	if result.CircuitState == "open" {
+		return result
+	}
+	if halfOpen && result.Status == "degraded" {
+		return result
+	}
+	if result.SampleCount < 3 {
+		return result
+	}
+	if capabilityDrift {
+		return result
+	}
+	switch {
+	case failures == 0 && result.SuccessRate >= 0.95 && value.ConsecutiveFailures == 0:
+		result.Status = "healthy"
+	case result.SuccessRate < 0.8 || value.ConsecutiveFailures >= 3:
+		result.Status = "unhealthy"
+	default:
+		result.Status = "degraded"
+	}
+	return result
+}
+
+// ProviderHealthSnapshot returns an immutable current-window projection for
+// routing and Admin. It never exposes Registry internals.
+func (r *Registry) ProviderHealthSnapshot() map[string]StatsProviderHealth {
+	if r == nil {
+		return map[string]StatsProviderHealth{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make(map[string]StatsProviderHealth, len(r.providerHealth))
+	now := time.Now()
+	for provider, value := range r.providerHealth {
+		result[provider] = buildProviderHealth(value, r.healthSamples[provider], now)
+	}
+	return result
 }
 
 func latencyLabel(k latencyKey) string {

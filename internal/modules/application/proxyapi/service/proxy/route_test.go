@@ -182,6 +182,46 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 	}
 }
 
+func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing.T) {
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"primary": {
+				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"shared"}, Priority: 200,
+				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+			},
+			"backup": {
+				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"shared"}, Priority: 20,
+				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+			},
+			"standby-disabled": {
+				Name: "standby-disabled", Protocol: "openai", BaseURL: "https://disabled.test", APIKey: "k", Models: []string{"shared"}, Priority: 10,
+				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+			},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"shared": {
+				ID: "shared", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
+				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary", RouteOwners: []string{"standby-disabled", "backup", "primary"},
+			},
+		},
+	}
+	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/chat/completions", "shared")
+	if apiErr != nil {
+		t.Fatalf("ResolveTransportPlans: %#v", apiErr)
+	}
+	if len(plans) != 3 {
+		t.Fatalf("plans=%+v", plans)
+	}
+	for index, want := range []string{"primary", "backup", "standby-disabled"} {
+		if plans[index].RouteOwner != want {
+			t.Fatalf("plan[%d]=%q want %q", index, plans[index].RouteOwner, want)
+		}
+	}
+	if plans[0].Priority != 200 || plans[1].Priority != 20 || plans[2].Priority != 10 {
+		t.Fatalf("priorities=%+v", plans)
+	}
+}
+
 func TestValidateConversionRequestRejectsFeatures(t *testing.T) {
 	plan := TransportPlan{
 		ModelID:          "claude-test",

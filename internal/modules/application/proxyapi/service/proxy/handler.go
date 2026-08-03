@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -112,6 +113,7 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	cfg.ModelCatalog = make(map[string]config.ModelInfo, len(h.cfg.ModelCatalog))
 	for id, info := range h.cfg.ModelCatalog {
 		info.Operations = append([]string(nil), info.Operations...)
+		info.RouteOwners = append([]string(nil), info.RouteOwners...)
 		cfg.ModelCatalog[id] = info
 	}
 	cfg.ClientAPIKeys = make(map[string]config.ClientAPIKey, len(h.cfg.ClientAPIKeys))
@@ -261,21 +263,35 @@ func requireResolvedConfig(cfg config.Config) error {
 		if err := assertUniqueSortedKnownList("model_catalog."+id+" operations", info.Operations, knownModelOperations()); err != nil {
 			return err
 		}
-		owner := strings.TrimSpace(info.RouteOwner)
-		if owner == "" {
-			return fmt.Errorf("model_catalog.%s: RouteOwner unresolved", id)
+		owners := append([]string(nil), info.RouteOwners...)
+		if len(owners) == 0 && strings.TrimSpace(info.RouteOwner) != "" {
+			owners = []string{info.RouteOwner}
 		}
-		provider, ok := cfg.Providers[owner]
-		if !ok || provider.Disabled {
-			return fmt.Errorf("model_catalog.%s: RouteOwner %q missing or disabled", id, owner)
+		if len(owners) == 0 {
+			return fmt.Errorf("model_catalog.%s: route candidates unresolved", id)
 		}
-		if !config.ProviderMatchesModel(owner, provider, id) {
-			return fmt.Errorf("model_catalog.%s: RouteOwner %q does not match model", id, owner)
+		matched := map[string]config.Provider{}
+		for _, owner := range owners {
+			provider, ok := cfg.Providers[owner]
+			if !ok || provider.Disabled {
+				return fmt.Errorf("model_catalog.%s: route candidate %q missing or disabled", id, owner)
+			}
+			if !config.ProviderMatchesModel(owner, provider, id) {
+				return fmt.Errorf("model_catalog.%s: route candidate %q does not match model", id, owner)
+			}
+			matched[owner] = provider
 		}
 		for _, op := range info.Operations {
 			path := config.OperationToPrimaryInboundPath(op)
-			if path == "" || !config.ProviderSupportsInboundPath(provider, path) {
-				return fmt.Errorf("model_catalog.%s: operation %q not serviceable by RouteOwner %q", id, op, owner)
+			serviceable := false
+			for _, provider := range matched {
+				if path != "" && config.ProviderSupportsInboundPath(provider, path) {
+					serviceable = true
+					break
+				}
+			}
+			if !serviceable {
+				return fmt.Errorf("model_catalog.%s: operation %q not serviceable by route candidates", id, op)
 			}
 		}
 	}
@@ -706,11 +722,12 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 
 	model, _ := body["model"].(string)
 	stream, _ := body["stream"].(bool)
-	plan, apiErr := h.resolveTransportPlan(r, model)
+	plans, apiErr := h.resolveTransportPlans(r, model)
 	if apiErr != nil {
 		h.writeArchivedAPIError(w, round, r, start, "", model, stream, statusForAPIError(apiErr), *apiErr)
 		return
 	}
+	plan := plans[0]
 	if plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
 		// chatgptweb is an in-memory builtin provider, never a static
 		// cfg.Providers entry. Route it before looking up static providers.
@@ -718,57 +735,42 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		h.handleChatGPTWebChatCompletions(w, r, start, plan.RouteOwner, model, stream, body)
 		return
 	}
-	provider, ok := h.cfg.Providers[plan.RouteOwner]
-	if !ok {
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusServiceUnavailable, APIError{
-			Code:             ErrorCodeProviderUnavailable,
-			Message:          fmt.Sprintf("provider %q is not configured", plan.RouteOwner),
-			Model:            model,
-			Operation:        plan.Operation,
-			ClientEndpoint:   plan.ClientEndpoint,
-			ClientProtocol:   plan.ClientProtocol,
-			UpstreamProtocol: plan.UpstreamProtocol,
-		})
-		return
-	}
-	// model 路由仅使用 body.model + ResolvedModelRoute + TransportPlan authority。
-	h.archiveAndLogTransportPlan(round, r, plan, provider, stream)
-	switch plan.Mode {
-	case TransportModeOpenAIToAnthropic:
-		if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
-			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(apiErr), *apiErr)
+	candidates, preflightErr := h.prepareOpenAIChatCandidates(plans, bodyBytes, body, stream, r.URL.RawQuery, r.Method)
+	if len(candidates) == 0 {
+		if preflightErr != nil {
+			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(preflightErr), *preflightErr)
 			return
 		}
-		h.handleAnthropicChatCompletions(w, r, round, start, plan, provider, bodyBytes, body, model, stream)
-		return
-	case TransportModeNative:
-		// OpenAI client → OpenAI upstream native
-	default:
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{
-			Code:             ErrorCodeEndpointUnsupported,
-			Message:          fmt.Sprintf("transport mode %q is not valid for %s", plan.Mode, plan.ClientEndpoint),
-			Model:            model,
-			Operation:        plan.Operation,
-			ClientEndpoint:   plan.ClientEndpoint,
-			ClientProtocol:   plan.ClientProtocol,
-			UpstreamProtocol: plan.UpstreamProtocol,
-		})
+		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, Operation: plan.Operation, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
 		return
 	}
-
-	result, err := h.doUpstreamPath(r, round, plan.RouteOwner, provider, bodyBytes, len(bodyBytes), stream, plan.UpstreamEndpoint, r.URL.RawQuery, r.Method)
+	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
 	if err != nil {
 		h.writeArchivedError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadGateway, err.Error())
 		return
 	}
 	resp := result.Response
 	providerName := result.ProviderName
+	provider := result.Provider
+	selectedPlan := selected.Plan
+	h.archiveAndLogTransportPlan(round, r, selectedPlan, provider, stream)
 	if result.Cancel != nil {
 		defer result.Cancel()
 	}
 	defer resp.Body.Close()
-
-	if stream && resp.StatusCode < 400 {
+	if selectedPlan.Mode == TransportModeOpenAIToAnthropic {
+		if resp.StatusCode >= http.StatusBadRequest {
+			h.writeConversionUpstreamError(w, r, resp, round, start, selectedPlan, providerName, model, stream)
+			return
+		}
+		if stream {
+			h.handleAnthropicStream(w, r, resp, round, start, providerName, model, body, r.Context(), result.Cancel)
+			return
+		}
+		h.handleAnthropicBuffered(w, r, resp, round, start, providerName, model, body)
+		return
+	}
+	if stream && resp.StatusCode < http.StatusBadRequest {
 		h.handleStreamResponse(w, resp, round, start, providerName, model, body, r.Context(), result.Cancel, r)
 		return
 	}
@@ -905,11 +907,12 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	}
 	h.archiveAndLogClientRequest(round, r, len(body))
 	// responses/completions/embeddings 仅允许矩阵中的 native 组合;TransportPlan 统一裁决。
-	plan, apiErr := h.resolveTransportPlan(r, rawModel)
+	plans, apiErr := h.resolveTransportPlans(r, rawModel)
 	if apiErr != nil {
 		h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, statusForAPIError(apiErr), *apiErr)
 		return
 	}
+	plan := plans[0]
 	if plan.Mode == TransportModeChatGPTWebResponses && plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), rawStream)
 		h.handleChatGPTWebResponses(w, r, start, plan.RouteOwner, rawModel, rawStream, rawBody)
@@ -956,18 +959,36 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		len(body),
 		headerSummary(sanitizeHeaders(r.Header)),
 	)
-	h.archiveAndLogTransportPlan(round, r, plan, provider, rawStream)
 	// 标准推理端点统一以请求体 stream=true 作为 SSE 开关。Accept 只描述客户端
 	// 可接受的响应类型，不能把原本的非流式请求隐式改成长连接。
 	streamRequest := rawStream
-	result, err := h.doUpstreamPath(r, round, providerName, provider, body, len(body), streamRequest, plan.UpstreamEndpoint, r.URL.RawQuery, r.Method)
+	result, plan, err := h.doNativeUpstreamCandidates(r, round, plans, body, len(body), streamRequest, r.URL.RawQuery, r.Method)
 	if err != nil {
+		if codexPlan, ok := codexFallbackPlan(plans, plan); ok {
+			h.recordCandidateFailure(r, plan, http.StatusBadGateway, result.Duration)
+			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
+			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, body, rawBody, rawStream)
+			return
+		}
 		h.writeArchivedError(w, round, r, start, providerName, rawModel, rawStream, http.StatusBadGateway, err.Error())
 		return
+	}
+	if retryableUpstreamStatus(result.Response.StatusCode) {
+		if codexPlan, ok := codexFallbackPlan(plans, plan); ok {
+			h.recordCandidateFailure(r, plan, result.Response.StatusCode, result.Duration)
+			_ = result.Response.Body.Close()
+			if result.Cancel != nil {
+				result.Cancel()
+			}
+			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
+			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, body, rawBody, rawStream)
+			return
+		}
 	}
 	resp := result.Response
 	providerName = result.ProviderName
 	provider = result.Provider
+	h.archiveAndLogTransportPlan(round, r, plan, provider, rawStream)
 	if result.Cancel != nil {
 		defer result.Cancel()
 	}
@@ -1332,12 +1353,230 @@ type upstreamResult struct {
 	Cancel       context.CancelFunc
 }
 
+// preparedHTTPCandidate is an already preflighted request attempt. Payload
+// construction happens before any upstream call, so an unsupported conversion
+// may be skipped in favour of a lower native candidate without losing request
+// semantics or committing a response.
+type preparedHTTPCandidate struct {
+	Plan     TransportPlan
+	Provider config.Provider
+	Body     []byte
+	Stream   bool
+	RawQuery string
+	Method   string
+}
+
+func (h *Handler) prepareOpenAIChatCandidates(plans []TransportPlan, raw []byte, body map[string]any, stream bool, rawQuery, method string) ([]preparedHTTPCandidate, *APIError) {
+	result := make([]preparedHTTPCandidate, 0, len(plans))
+	var firstErr *APIError
+	for _, plan := range plans {
+		provider, ok := h.cfg.Providers[plan.RouteOwner]
+		if !ok || provider.Disabled {
+			continue
+		}
+		switch plan.Mode {
+		case TransportModeNative:
+			if plan.UpstreamProtocol != "openai" {
+				continue
+			}
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: raw, Stream: stream, RawQuery: rawQuery, Method: method})
+		case TransportModeOpenAIToAnthropic:
+			if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
+				if firstErr == nil {
+					copyErr := *apiErr
+					firstErr = &copyErr
+				}
+				continue
+			}
+			payload, err := buildAnthropicRequest(body, plan.ModelID, stream)
+			if err != nil {
+				apiErr := conversionAPIError(plan, err)
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				apiErr := APIError{Code: ErrorCodeProxyInternalError, Message: err.Error(), Model: plan.ModelID, Operation: plan.Operation, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol}
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost})
+		}
+	}
+	return result, firstErr
+}
+
+func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw []byte, body map[string]any, stream bool, rawQuery, method string) ([]preparedHTTPCandidate, *APIError) {
+	result := make([]preparedHTTPCandidate, 0, len(plans))
+	var firstErr *APIError
+	for _, plan := range plans {
+		provider, ok := h.cfg.Providers[plan.RouteOwner]
+		if !ok || provider.Disabled {
+			continue
+		}
+		switch plan.Mode {
+		case TransportModeNative:
+			if plan.UpstreamProtocol != "anthropic" {
+				continue
+			}
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: raw, Stream: stream, RawQuery: rawQuery, Method: method})
+		case TransportModeAnthropicToOpenAI:
+			if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
+				if firstErr == nil {
+					copyErr := *apiErr
+					firstErr = &copyErr
+				}
+				continue
+			}
+			encoded, err := buildOpenAIChatFromAnthropic(body, plan.ModelID, stream)
+			if err != nil {
+				apiErr := conversionAPIError(plan, err)
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost})
+		}
+	}
+	return result, firstErr
+}
+
+func (h *Handler) doPreparedHTTPCandidates(r *http.Request, round *archive.Round, candidates []preparedHTTPCandidate) (upstreamResult, preparedHTTPCandidate, error) {
+	var lastErr error
+	var last preparedHTTPCandidate
+	for index, candidate := range candidates {
+		result, err := h.doUpstreamPath(r, round, candidate.Plan.RouteOwner, candidate.Provider, candidate.Body, len(candidate.Body), candidate.Stream, candidate.Plan.UpstreamEndpoint, candidate.RawQuery, candidate.Method)
+		if err != nil {
+			last, lastErr = candidate, err
+			if index < len(candidates)-1 {
+				h.recordCandidateFailure(r, candidate.Plan, http.StatusBadGateway, result.Duration)
+			}
+			continue
+		}
+		if retryableUpstreamStatus(result.Response.StatusCode) {
+			if index == len(candidates)-1 {
+				return result, candidate, nil
+			}
+			h.recordCandidateFailure(r, candidate.Plan, result.Response.StatusCode, result.Duration)
+			_ = result.Response.Body.Close()
+			if result.Cancel != nil {
+				result.Cancel()
+			}
+			last = candidate
+			lastErr = fmt.Errorf("upstream %s returned %d", candidate.Plan.RouteOwner, result.Response.StatusCode)
+			continue
+		}
+		return result, candidate, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no prepared HTTP provider is eligible")
+	}
+	return upstreamResult{}, last, lastErr
+}
+
+// doNativeUpstreamCandidates executes direct HTTP candidates that preserve the
+// incoming protocol body. It advances only before a client response is
+// committed; conversion and builtin executors have request-specific semantic
+// gates and must opt in separately.
+func (h *Handler) doNativeUpstreamCandidates(r *http.Request, round *archive.Round, plans []TransportPlan, body []byte, bodyBytes int, stream bool, rawQuery, method string) (upstreamResult, TransportPlan, error) {
+	candidates := make([]TransportPlan, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Mode == TransportModeNative && plan.UpstreamProtocol != effectivecatalog.BuiltinProviderID && plan.UpstreamProtocol != effectivecatalog.CodexOAuthProviderID {
+			candidates = append(candidates, plan)
+		}
+	}
+	var lastErr error
+	var lastPlan TransportPlan
+	for index, plan := range candidates {
+		provider, ok := h.cfg.Providers[plan.RouteOwner]
+		if !ok || provider.Disabled {
+			lastErr = fmt.Errorf("provider %q is unavailable", plan.RouteOwner)
+			lastPlan = plan
+			continue
+		}
+		result, err := h.doUpstreamPath(r, round, plan.RouteOwner, provider, body, bodyBytes, stream, plan.UpstreamEndpoint, rawQuery, method)
+		if err != nil {
+			lastErr = err
+			lastPlan = plan
+			if index < len(candidates)-1 && h.metricsRegistry != nil {
+				h.metricsRegistry.RecordRequestPlan(plan.RouteOwner, plan.ModelID, RouteLabel(r), http.StatusBadGateway, result.Duration, "upstream_failed", plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+			}
+			continue
+		}
+		if retryableUpstreamStatus(result.Response.StatusCode) {
+			lastErr = fmt.Errorf("upstream %s returned %d", plan.RouteOwner, result.Response.StatusCode)
+			lastPlan = plan
+			if index == len(candidates)-1 {
+				// There is no eligible fallback left. Preserve the upstream status
+				// and response rather than collapsing it into a synthetic 502.
+				return result, plan, nil
+			}
+			if h.metricsRegistry != nil {
+				h.metricsRegistry.RecordRequestPlan(plan.RouteOwner, plan.ModelID, RouteLabel(r), result.Response.StatusCode, result.Duration, "upstream_failed", plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+			}
+			_ = result.Response.Body.Close()
+			if result.Cancel != nil {
+				result.Cancel()
+			}
+			continue
+		}
+		return result, plan, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no direct native provider is eligible for model %q", firstPlanModel(plans))
+	}
+	return upstreamResult{}, lastPlan, lastErr
+}
+
+func retryableUpstreamStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func firstPlanModel(plans []TransportPlan) string {
+	if len(plans) == 0 {
+		return ""
+	}
+	return plans[0].ModelID
+}
+
+// codexFallbackPlan returns the next enabled native Codex executor candidate
+// after a failed direct HTTP plan. It is only used by /v1/responses, where the
+// Codex port preserves the native Responses object and no conversion occurs.
+func codexFallbackPlan(plans []TransportPlan, after TransportPlan) (TransportPlan, bool) {
+	foundAfter := false
+	for _, plan := range plans {
+		if !foundAfter {
+			if plan.RouteOwner == after.RouteOwner && plan.UpstreamEndpoint == after.UpstreamEndpoint && plan.Mode == after.Mode {
+				foundAfter = true
+			}
+			continue
+		}
+		if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID && plan.Fallback {
+			return plan, true
+		}
+	}
+	return TransportPlan{}, false
+}
+
+func (h *Handler) recordCandidateFailure(r *http.Request, plan TransportPlan, status int, duration time.Duration) {
+	if h == nil || h.metricsRegistry == nil || strings.TrimSpace(plan.RouteOwner) == "" {
+		return
+	}
+	h.metricsRegistry.RecordRequestPlan(plan.RouteOwner, plan.ModelID, RouteLabel(r), status, duration, "upstream_failed", plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+}
+
 func (h *Handler) doUpstream(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool) (upstreamResult, error) {
 	return h.doUpstreamPath(r, round, providerName, provider, body, bodyBytes, stream, r.URL.Path, r.URL.RawQuery, r.Method)
 }
 
 func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool, path, rawQuery, method string) (upstreamResult, error) {
-	// catalog RouteOwner 是唯一的上游；任何错误都直接返回给客户端，不会尝试其他 provider。
+	// A caller may execute one candidate or the bounded safe native candidate
+	// chain. This helper itself owns only one upstream HTTP attempt.
 	ctx, cancel := h.upstreamContext(r.Context(), stream)
 	req, err := h.newUpstreamRequestForPath(ctx, r, provider, body, path, rawQuery, method, stream)
 	if err != nil {
@@ -1362,15 +1601,17 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 		round.SetUpstreamDuration(duration)
 	}
 	h.archiveAndLogUpstreamResponse(round, r, providerName, provider, resp, duration, err)
-	if resp != nil && resp.StatusCode >= 400 {
+	if h.metricsRegistry != nil && resp != nil && resp.StatusCode >= 400 {
 		h.metricsRegistry.RecordUpstreamError(providerName, resp.StatusCode)
 	}
 	if err != nil {
 		if cancel != nil {
 			cancel()
 		}
-		h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptHeader)
-		h.metricsRegistry.RecordUpstreamError(providerName, -1)
+		if h.metricsRegistry != nil {
+			h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptHeader)
+			h.metricsRegistry.RecordUpstreamError(providerName, -1)
+		}
 		return upstreamResult{}, err
 	}
 
@@ -1384,8 +1625,10 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 			if cancel != nil {
 				cancel()
 			}
-			h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptFirstEvent)
-			h.metricsRegistry.RecordUpstreamError(providerName, -1)
+			if h.metricsRegistry != nil {
+				h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptFirstEvent)
+				h.metricsRegistry.RecordUpstreamError(providerName, -1)
+			}
 			return upstreamResult{}, peekErr
 		}
 		resp = primed
@@ -1396,7 +1639,9 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 	if stream {
 		kind = metrics.AttemptFirstEvent
 	}
-	h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, kind)
+	if h.metricsRegistry != nil {
+		h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, kind)
+	}
 	return upstreamResult{ProviderName: providerName, Provider: provider, Response: resp, Duration: duration, Cancel: cancel}, nil
 }
 
@@ -1634,6 +1879,14 @@ func joinUpstreamPath(basePath, incomingPath string) string {
 // resolveTransportPlan 是执行端点的唯一路由入口:解析 ResolvedModelRoute + TransportPlan。
 // 已禁用 X-AI-Provider / ?provider= / provider/model 显式选择;不允许修改 RouteOwner。
 func (h *Handler) resolveTransportPlan(r *http.Request, model string) (TransportPlan, *APIError) {
+	plans, apiErr := h.resolveTransportPlans(r, model)
+	if apiErr != nil {
+		return TransportPlan{}, apiErr
+	}
+	return plans[0], nil
+}
+
+func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]TransportPlan, *APIError) {
 	method := ""
 	path := ""
 	if r != nil {
@@ -1642,7 +1895,37 @@ func (h *Handler) resolveTransportPlan(r *http.Request, model string) (Transport
 			path = r.URL.Path
 		}
 	}
-	return ResolveTransportPlan(h.cfg, h.EffectiveCatalog(), method, path, model)
+	plans, apiErr := ResolveTransportPlans(h.cfg, h.EffectiveCatalog(), method, path, model)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	if h.metricsRegistry == nil {
+		return plans, nil
+	}
+	health := h.metricsRegistry.ProviderHealthSnapshot()
+	eligible := make([]TransportPlan, 0, len(plans))
+	for _, plan := range plans {
+		value, ok := health[plan.RouteOwner]
+		if ok && (value.Status == "unhealthy" || value.Status == "credential_error" || value.CircuitState == "open") {
+			continue
+		}
+		eligible = append(eligible, plan)
+	}
+	if len(eligible) == 0 {
+		first := plans[0]
+		return nil, &APIError{Code: ErrorCodeProviderUnavailable, Message: fmt.Sprintf("all providers for model %q are unhealthy", model), Model: model, Operation: first.Operation, ClientEndpoint: first.ClientEndpoint, ClientProtocol: first.ClientProtocol}
+	}
+	sort.SliceStable(eligible, func(i, j int) bool {
+		if eligible[i].Priority != eligible[j].Priority {
+			return eligible[i].Priority > eligible[j].Priority
+		}
+		left, right := health[eligible[i].RouteOwner], health[eligible[j].RouteOwner]
+		if left.Score != right.Score {
+			return left.Score > right.Score
+		}
+		return eligible[i].RouteOwner < eligible[j].RouteOwner
+	})
+	return eligible, nil
 }
 
 // resolveProviderName 保留为兼容包装:返回 RouteOwner 与 operation。

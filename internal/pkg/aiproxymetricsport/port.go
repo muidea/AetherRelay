@@ -24,6 +24,7 @@ type Reporter interface {
 type Reader interface {
 	Prometheus() ([]byte, error)
 	StatsJSON() ([]byte, error)
+	ProviderHealthSnapshot() map[string]metrics.StatsProviderHealth
 }
 
 type Port interface {
@@ -58,3 +59,7 @@ func (p directPort) Prometheus() ([]byte, error) {
 }
 
 func (p directPort) StatsJSON() ([]byte, error) { return p.Registry.StatsJSON() }
+
+func (p directPort) ProviderHealthSnapshot() map[string]metrics.StatsProviderHealth {
+	return p.Registry.ProviderHealthSnapshot()
+}

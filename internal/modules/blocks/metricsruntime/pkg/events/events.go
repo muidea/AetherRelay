@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	TopicAcquire    = "aiproxy.metrics.command.acquire"
-	TopicRecord     = "aiproxy.metrics.event.record"
-	TopicPrometheus = "aiproxy.metrics.command.prometheus"
-	TopicStats      = "aiproxy.metrics.command.stats"
+	TopicAcquire        = "aiproxy.metrics.command.acquire"
+	TopicRecord         = "aiproxy.metrics.event.record"
+	TopicPrometheus     = "aiproxy.metrics.command.prometheus"
+	TopicStats          = "aiproxy.metrics.command.stats"
+	TopicProviderHealth = "aiproxy.metrics.command.provider_health"
 )
 
 type AcquireCommand struct{}
@@ -59,3 +60,8 @@ type RecordCommand struct {
 type PrometheusCommand struct{}
 type StatsCommand struct{}
 type BytesResult struct{ Data []byte }
+
+type ProviderHealthCommand struct{}
+type ProviderHealthResult struct {
+	Values map[string]metrics.StatsProviderHealth
+}

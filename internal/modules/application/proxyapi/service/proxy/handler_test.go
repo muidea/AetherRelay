@@ -2596,7 +2596,7 @@ func TestRequireResolvedConfigAllowsEmptyCatalog(t *testing.T) {
 }
 
 func TestRetryableUpstreamErrorDoesNotSwitchProvider(t *testing.T) {
-	// 5xx 仅打唯一 RouteOwner,不切换其它 provider。
+	// 此夹具只声明一个可服务候选；5xx 必须直接保留给客户端。
 	tmpDir := t.TempDir()
 	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
 	if err != nil {
@@ -2629,6 +2629,125 @@ func TestRetryableUpstreamErrorDoesNotSwitchProvider(t *testing.T) {
 	}
 	if len(hosts) != 1 || hosts[0] != "primary.test" {
 		t.Fatalf("hosts=%v, want only primary.test once", hosts)
+	}
+}
+
+func TestRetryableUpstreamErrorFallsBackToLowerPriorityCandidate(t *testing.T) {
+	tmpDir := t.TempDir()
+	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := []string{}
+	registry := metrics.NewRegistry()
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr:     ":0",
+		InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"primary": {Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 200},
+			"backup":  {Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 100},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"gpt-test": {
+				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
+				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary", RouteOwners: []string{"primary", "backup"},
+			},
+		},
+	})
+	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, registry)
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Host)
+		if r.URL.Host == "primary.test" {
+			return testResponse(http.StatusBadGateway, "application/json", `{"error":"bad gateway"}`), nil
+		}
+		return testResponse(http.StatusOK, "application/json", `{"id":"chatcmpl-backup","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`), nil
+	})
+	rec := newResponseRecorder()
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got, want := strings.Join(hosts, ","), "primary.test,backup.test"; got != want {
+		t.Fatalf("hosts=%q want %q", got, want)
+	}
+	health := registry.ProviderHealthSnapshot()
+	if primary := health["primary"]; primary.SampleCount != 1 || primary.Failures != 1 || primary.Status != "unknown" {
+		t.Fatalf("primary health=%+v", primary)
+	}
+	if backup := health["backup"]; backup.SampleCount != 1 || backup.Successes != 1 || backup.Score != 100 {
+		t.Fatalf("backup health=%+v", backup)
+	}
+}
+
+func TestChatCompletionSkipsUnsupportedConversionForNativeFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := []string{}
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr:     ":0",
+		InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"conversion": {Name: "conversion", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 200, EndpointCapabilities: []string{config.EndpointCapabilityMessages}},
+			"native":     {Name: "native", Protocol: "openai", BaseURL: "https://native.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 100, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "conversion", RouteOwners: []string{"conversion", "native"}},
+		},
+	})
+	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Host)
+		if r.URL.Host != "native.test" {
+			return nil, fmt.Errorf("unexpected conversion upstream request to %q", r.URL.Host)
+		}
+		return testResponse(http.StatusOK, "application/json", `{"id":"chatcmpl-native","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
+	})
+	rec := newResponseRecorder()
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got, want := strings.Join(hosts, ","), "native.test"; got != want {
+		t.Fatalf("hosts=%q want %q", got, want)
+	}
+}
+
+func TestAnthropicMessagesSkipsUnsupportedConversionForNativeFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := []string{}
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr:     ":0",
+		InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"conversion": {Name: "conversion", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 200, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+			"native":     {Name: "native", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 100, EndpointCapabilities: []string{config.EndpointCapabilityMessages}},
+		},
+		ModelCatalog: map[string]config.ModelInfo{
+			"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "conversion", RouteOwners: []string{"conversion", "native"}},
+		},
+	})
+	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Host)
+		if r.URL.Host != "anthropic.test" {
+			return nil, fmt.Errorf("unexpected conversion upstream request to %q", r.URL.Host)
+		}
+		return testResponse(http.StatusOK, "application/json", `{"id":"msg_native","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`), nil
+	})
+	rec := newResponseRecorder()
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/messages", `{"model":"shared-model","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got, want := strings.Join(hosts, ","), "anthropic.test"; got != want {
+		t.Fatalf("hosts=%q want %q", got, want)
 	}
 }
 

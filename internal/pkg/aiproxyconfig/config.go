@@ -169,28 +169,38 @@ type TemporaryChatConfig struct {
 	TurnTimeoutSeconds         int
 }
 
-// ModelInfo 描述客户端可查询的模型能力与确定路由(各 provider 共用同一目录)。
-// Operations 为规范化执行合同。
-// RouteOwner 在启动校验后填入唯一匹配的 enabled provider 名。
+// ModelInfo describes client-visible model metadata and ordered static
+// provider candidates. RouteOwner remains the first candidate for focused
+// compatibility callers; request routing must use RouteOwners.
 type ModelInfo struct {
 	ID                  string
 	ContextWindowTokens int
 	MaxOutputTokens     int
 	Operations          []string
 	RouteOwner          string
+	RouteOwners         []string
 }
 
 // ResolvedModelRoute 是启动期只读模型路由 authority 的请求侧视图。
 // 回答“这个具体模型属于谁、具备哪些业务 operation”,供 /v1/models 与请求路由共同消费。
 // 与 ModelInfo 同源:LookupResolvedModelRoute 从 ModelCatalog 投影,不单独持有第二份状态。
 type ResolvedModelRoute struct {
-	ModelID    string
-	Operations []string
-	RouteOwner string
+	ModelID     string
+	Operations  []string
+	RouteOwner  string
+	RouteOwners []string
 }
 
 // MaxModelCatalogIDLength 限制 model_catalog id 长度,避免异常配置与标签膨胀。
 const MaxModelCatalogIDLength = 256
+
+const (
+	// DefaultProviderPriority preserves the existing behavior for configurations
+	// that have not opted into explicit provider ordering.
+	DefaultProviderPriority = 100
+	MinProviderPriority     = -1000
+	MaxProviderPriority     = 1000
+)
 
 // SLOConfig 描述可观测性层面的服务等级目标。
 type SLOConfig struct {
@@ -213,6 +223,20 @@ type Provider struct {
 	BaseURL  string
 	APIKey   string
 	Models   []string
+	// Priority selects the first provider for an otherwise equivalent model
+	// candidate. Higher values win. An omitted YAML value normalizes to
+	// DefaultProviderPriority; an explicit zero remains a valid priority.
+	Priority int
+	// priorityConfigured distinguishes an omitted YAML key from an explicit
+	// priority: 0. It is private so configuration loading remains the sole
+	// authority for defaulting.
+	priorityConfigured bool
+	// Fallback permits this provider to serve after a higher-priority candidate
+	// fails before the client response is committed.
+	Fallback bool
+	// fallbackConfigured distinguishes omitted YAML from false. It is private so
+	// only configuration loading owns defaulting.
+	fallbackConfigured bool
 	// EndpointCapabilities 为 provider 显式声明的直通端点能力(非 protocol 推断)。
 	// 取值: chat_completions / messages / responses / completions / embeddings。
 	EndpointCapabilities []string
@@ -697,8 +721,22 @@ func setProvider(cfg *Config, name, key, value string) error {
 	case "models", "model_patterns":
 		// models 严格区分大小写,与请求 body.model 原文匹配。
 		provider.Models = parseModelList(value)
+	case "priority":
+		n, err := parseStrictInt(value)
+		if err != nil {
+			return fmt.Errorf("providers.%s.priority: %w", name, err)
+		}
+		provider.Priority = n
+		provider.priorityConfigured = true
+	case "fallback":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("providers.%s.fallback: %w", name, err)
+		}
+		provider.Fallback = b
+		provider.fallbackConfigured = true
 	case "fallbacks", "fallback_providers":
-		return fmt.Errorf("providers.%s: fallbacks is not supported; remove fallbacks and rely on unique model_catalog RouteOwner", name)
+		return fmt.Errorf("providers.%s: use priority and fallback instead of %q", name, key)
 	case "endpoint_capabilities", "endpoint_capability":
 		caps, err := parseEndpointCapabilities(value)
 		if err != nil {
@@ -980,6 +1018,12 @@ func normalize(cfg *Config, configPath string) error {
 			provider.Protocol = strings.ToLower(provider.Protocol)
 		}
 		provider.BaseURL = strings.TrimRight(provider.BaseURL, "/")
+		if !provider.priorityConfigured {
+			provider.Priority = DefaultProviderPriority
+		}
+		if !provider.fallbackConfigured {
+			provider.Fallback = true
+		}
 		// models 严格区分大小写,与请求 body.model 原文匹配。
 		provider.Models = normalizeModelPatterns(provider.Models)
 		caps, err := normalizeEndpointCapabilities(provider.EndpointCapabilities)
@@ -1027,6 +1071,7 @@ func normalize(cfg *Config, configPath string) error {
 			return fmt.Errorf("duplicate model_catalog id: %q (also seen as %q)", id, prev.ID)
 		}
 		info.RouteOwner = "" // filled in validateModelRoutes
+		info.RouteOwners = nil
 		catalog[id] = info
 	}
 	cfg.ModelCatalog = catalog
@@ -1144,6 +1189,9 @@ func validateProviders(cfg Config) error {
 		}
 		if provider.Disabled {
 			continue
+		}
+		if provider.Priority < MinProviderPriority || provider.Priority > MaxProviderPriority {
+			return fmt.Errorf("provider %q priority must be in [%d,%d]", name, MinProviderPriority, MaxProviderPriority)
 		}
 		if strings.TrimSpace(provider.Protocol) == "" {
 			return fmt.Errorf("provider %q protocol is required (explicit; not inferred from name)", name)
@@ -1391,6 +1439,14 @@ func parseStrictNonNegativeInt(value string) (int, error) {
 	return parsed, nil
 }
 
+func parseStrictInt(value string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer %q", value)
+	}
+	return parsed, nil
+}
+
 func parseStrictPositiveInt64(value string) (int64, error) {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	if err != nil {
@@ -1539,10 +1595,9 @@ func validateModelCatalogID(id string) error {
 	return nil
 }
 
-// validateModelRoutes 保证每个 catalog model:
-// 1) 容量完整且 max_output < context_window;
-// 2) 唯一匹配一个 enabled provider,并写入 RouteOwner。
-// 校验通过后 ModelCatalog 成为路由与 /v1/models 的唯一 authority;无 fallback 兜底。
+// validateModelRoutes resolves every enabled matching provider into an ordered
+// candidate set. A catalog operation must be serviceable by at least one
+// candidate; a single model is no longer forced to one provider.
 func validateModelRoutes(cfg Config) error {
 	// mutate via reassignment of map values
 	// caller holds cfg by value but map is reference — safe to update entries.
@@ -1554,24 +1609,32 @@ func validateModelRoutes(cfg Config) error {
 			return fmt.Errorf("model_catalog.%s: max_output_tokens must be less than context_window_tokens", id)
 		}
 		matches := matchingEnabledProviders(cfg.Providers, id)
-		switch len(matches) {
-		case 0:
+		if len(matches) == 0 {
 			return fmt.Errorf("model_catalog.%s: no enabled provider matches model; configure providers.*.models", id)
-		case 1:
-			info.RouteOwner = matches[0]
-		default:
-			return fmt.Errorf("model_catalog.%s: multiple enabled providers match model %v; disambiguate providers.*.models", id, matches)
 		}
-		primary, ok := cfg.Providers[info.RouteOwner]
-		if !ok || primary.Disabled {
-			return fmt.Errorf("model_catalog.%s: route owner %q is missing or disabled", id, info.RouteOwner)
+		sortProviderCandidates(cfg.Providers, matches)
+		info.RouteOwners = append([]string(nil), matches...)
+		info.RouteOwner = ""
+		for _, op := range info.Operations {
+			path := OperationToPrimaryInboundPath(op)
+			found := false
+			for _, name := range matches {
+				provider := cfg.Providers[name]
+				if !ProviderSupportsInboundPath(provider, path) {
+					continue
+				}
+				found = true
+				if info.RouteOwner == "" {
+					info.RouteOwner = name
+				}
+				break
+			}
+			if !found {
+				return fmt.Errorf("model_catalog.%s: operation %q is not serviceable by any matching provider", id, op)
+			}
 		}
-		if !ProviderMatchesModel(info.RouteOwner, primary, id) {
-			return fmt.Errorf("model_catalog.%s: route owner %q models do not match model id", id, info.RouteOwner)
-		}
-		// catalog operations 必须可被 RouteOwner 在 canonical 入站 path 上服务。
-		if err := validateModelOperationsAgainstProvider(id, info.Operations, primary); err != nil {
-			return err
+		if info.RouteOwner == "" {
+			return fmt.Errorf("model_catalog.%s: no route candidate supports declared operations", id)
 		}
 		cfg.ModelCatalog[id] = info
 	}
@@ -1613,6 +1676,37 @@ func matchingEnabledProviders(providers map[string]Provider, model string) []str
 	}
 	sort.Strings(matches)
 	return matches
+}
+
+func sortProviderCandidates(providers map[string]Provider, names []string) {
+	sort.SliceStable(names, func(i, j int) bool {
+		left := EffectiveProviderPriority(providers[names[i]])
+		right := EffectiveProviderPriority(providers[names[j]])
+		if left != right {
+			return left > right
+		}
+		return names[i] < names[j]
+	})
+}
+
+// EffectiveProviderPriority returns the compatibility default for an omitted
+// priority. It is also safe for focused tests that construct Provider values
+// without first running Load, where a zero value means "unspecified".
+func EffectiveProviderPriority(provider Provider) int {
+	if provider.Priority == 0 && !provider.priorityConfigured {
+		return DefaultProviderPriority
+	}
+	return provider.Priority
+}
+
+// EffectiveProviderFallback returns the compatibility default for an omitted
+// fallback key. Focused in-memory Config fixtures do not carry YAML presence
+// metadata, so their zero-value Provider follows the production default too.
+func EffectiveProviderFallback(provider Provider) bool {
+	if !provider.fallbackConfigured {
+		return true
+	}
+	return provider.Fallback
 }
 
 // ProviderMatchesModel 判断 provider 的 models 模式是否匹配 model(区分大小写,仅 trim)。
@@ -1852,9 +1946,10 @@ func LookupResolvedModelRoute(cfg Config, modelID string) (ResolvedModelRoute, b
 		return ResolvedModelRoute{}, false
 	}
 	return ResolvedModelRoute{
-		ModelID:    info.ID,
-		Operations: append([]string(nil), info.Operations...),
-		RouteOwner: info.RouteOwner,
+		ModelID:     info.ID,
+		Operations:  append([]string(nil), info.Operations...),
+		RouteOwner:  info.RouteOwner,
+		RouteOwners: append([]string(nil), info.RouteOwners...),
 	}, true
 }
 

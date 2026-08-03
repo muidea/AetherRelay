@@ -85,6 +85,27 @@ func (c client) StatsJSON() ([]byte, error) {
 	return c.query(event.NewEventWithContext(TopicStats, c.source, common.UnitID, event.NewHeader(), context.Background(), StatsCommand{}), "metrics stats")
 }
 
+func (c client) ProviderHealthSnapshot() map[string]metrics.StatsProviderHealth {
+	ev := event.NewEventWithContext(TopicProviderHealth, c.source, common.UnitID, event.NewHeader(), context.Background(), ProviderHealthCommand{})
+	result, err := send(c.hub, ev, "metrics provider health")
+	if err != nil {
+		return map[string]metrics.StatsProviderHealth{}
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return map[string]metrics.StatsProviderHealth{}
+	}
+	payload, ok := data.(ProviderHealthResult)
+	if !ok {
+		return map[string]metrics.StatsProviderHealth{}
+	}
+	values := make(map[string]metrics.StatsProviderHealth, len(payload.Values))
+	for name, value := range payload.Values {
+		values[name] = value
+	}
+	return values
+}
+
 func (c client) record(command RecordCommand) {
 	if c.hub == nil {
 		return

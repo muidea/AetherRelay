@@ -1,6 +1,6 @@
 # ai-proxy
 
-轻量级本地 LLM API 网关。它提供 OpenAI 和 Anthropic 标准入站端点，严格按请求中的 exact `model` 路由到唯一上游 Provider；用量明细持久化至进程内嵌 DuckDB，并提供本地 Web 管理页。
+轻量级本地 LLM API 网关。它提供 OpenAI 和 Anthropic 标准入站端点，严格按请求中的 exact `model` 解析有序 Provider 候选链；仅在响应尚未提交且失败可安全重试时回退到低优先级候选。用量明细持久化至进程内嵌 DuckDB，并提供本地 Web 管理页。
 
 ## 快速开始
 

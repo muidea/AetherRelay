@@ -49,7 +49,10 @@ server:
   # 会话绝对有效期（秒），默认 28800（8h），范围 300~86400。
   # admin_session_ttl_seconds: 28800
 
-# 路由仅按 model_catalog exact model → 唯一 RouteOwner；请保证各 provider 的 models 互不重叠。
+# 路由仅按 model_catalog exact model。一个模型可匹配多个 enabled Provider：
+# 按 priority 降序选择；同优先级按 Provider 名稳定排序。仅在客户端尚未收到响应时，
+# 对网络错误、408、429、5xx 与首个流事件失败尝试 fallback: true 的下一候选。
+# 不支持 default_provider、fallbacks 列表或请求侧强制指定 Provider。
 # 客户端使用标准 path:
 #   OpenAI:  POST /v1/chat/completions|/v1/responses|/v1/completions|/v1/embeddings, GET/POST /v1/models
 #   Anthropic: POST /v1/messages
@@ -104,6 +107,10 @@ providers:
   # base_url 可带或不带 /v1；代理会按入站 path 智能拼接并去重。
     base_url: https://onlycode.shop/v1
     api_key: ${OPENAI_API_KEY}
+    # 省略时为 100；范围 -1000~1000，数值越大优先级越高。
+    priority: 100
+    # 作为低优先级候选时是否允许安全回退；省略时为 true。
+    fallback: true
     endpoint_capabilities: chat_completions, responses, completions, embeddings
     models: gpt-*, chatgpt-*, o*, text-embedding-*
   deepseek:
@@ -111,6 +118,8 @@ providers:
     protocol: openai
     base_url: https://api.deepseek.com
     api_key: ${DEEPSEEK_API_KEY}
+    priority: 100
+    fallback: true
     endpoint_capabilities: chat_completions, responses, completions, embeddings
     models: deepseek*
   anthropic:
@@ -119,12 +128,14 @@ providers:
   # 转换与直通均走统一 path join；带/不带 /v1 均可。
     base_url: https://onlycode.shop
     api_key: ${ANTHROPIC_API_KEY}
+    priority: 100
+    fallback: true
     endpoint_capabilities: messages
     models: claude*
   # chatgptweb 与 codexoauth 是保留的内建 Provider ID，禁止在 providers 中声明。
   # 启用 chatgpt_web.enabled 后由运行时自动注入，模型来自账号池发现结果。
 
-# 全局模型目录(各 provider 共用)。model ID 严格区分大小写(exact match)。
+# 全局模型目录(各 Provider 共用)。model ID 严格区分大小写(exact match)。
 # GET /v1/models 仅返回此处登记的模型,
 # 并附带 contextWindowTokens / maxOutputTokens / operations。model_catalog 是路由与能力的共同 authority。
 model_catalog:
@@ -146,4 +157,6 @@ model_catalog:
     operations: embeddings
   # ChatGPT Web 与 Codex OAuth 自动发现的模型不写入 model_catalog。
 
-  # 若静态 catalog 与自动模型同名，静态 RouteOwner 优先。
+  # 同名静态与自动模型会共同构成候选链：静态默认 priority=100，
+  # Codex OAuth 固定为 90（可用于原生 /v1/responses 回退），
+  # ChatGPT Web 固定为 10 且默认不作为回退。

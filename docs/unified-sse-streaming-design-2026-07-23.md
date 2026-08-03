@@ -91,7 +91,7 @@ X-Accel-Buffering: no
 ## 7. 生命周期与安全
 
 - 客户端仍通过 `Authorization: Bearer` 或 `X-API-Key` 完成应用层认证；客户端凭据不转发给上游。
-- 请求只按 exact `model` 解析唯一 RouteOwner，SSE 不改变路由策略，也不触发流中 fallback。
+- 请求只按 exact `model` 解析有序 Provider 候选。SSE 不改变候选策略；仅在首个事件尚未确认前的探测失败可安全尝试下一候选，一旦任何响应头或流事件已写给客户端，绝不触发流中 fallback。
 - 首个 SSE 行在提交成功状态前探测；首事件失败作为上游错误返回。
 - 客户端断开时取消上游请求。
 - `stream_idle_timeout_seconds` 限制连续无事件时长。
