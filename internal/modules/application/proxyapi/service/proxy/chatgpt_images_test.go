@@ -125,15 +125,49 @@ func TestChatGPTImageSuccessSettlesUsage(t *testing.T) {
 	}
 }
 
+func TestChatGPTImageKeepsInternalMetadataWithoutLeakingIt(t *testing.T) {
+	store := usage.NewMemoryStore()
+	exec := chatGPTImageExecutorStub{generate: func(context.Context, chatgptimage.Request) (chatgptimage.Result, error) {
+		return chatgptimage.Result{
+			Created:        1,
+			Data:           []chatgptimage.Data{{B64JSON: "aaa"}},
+			Usage:          &tokenusage.Usage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8},
+			ConversationID: "conversation-1",
+			AccountID:      "account-1",
+		}, nil
+	}}
+	h := newChatGPTImageHandler(t, store, exec)
+	trace := &featureExecutionTrace{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"gpt-image-2","prompt":"a cat"}`))
+	req = req.WithContext(context.WithValue(req.Context(), featureExecutionTraceKey{}, trace))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-client-key")
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if trace.conversationID != "conversation-1" || trace.accountID != "account-1" || trace.usage == nil || trace.usage.TotalTokens != 8 {
+		t.Fatalf("trace=%+v", trace)
+	}
+	for _, private := range []string{"conversation-1", "account-1", "total_tokens"} {
+		if strings.Contains(resp.Body.String(), private) {
+			t.Fatalf("public response leaked %q: %s", private, resp.Body.String())
+		}
+	}
+}
+
 func TestChatGPTImageFailureSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	exec := chatGPTImageExecutorStub{
 		generate: func(context.Context, chatgptimage.Request) (chatgptimage.Result, error) {
-			return chatgptimage.Result{Usage: &tokenusage.Usage{PromptTokens: 3, CompletionTokens: 0, TotalTokens: 3}}, chatgptfail.New(chatgptfail.KindUpstream, errors.New("upstream boom"))
+			return chatgptimage.Result{Usage: &tokenusage.Usage{PromptTokens: 3, CompletionTokens: 0, TotalTokens: 3}, ConversationID: "conversation-1", AccountID: "account-1"}, chatgptfail.New(chatgptfail.KindUpstream, errors.New("upstream boom"))
 		},
 	}
 	h := newChatGPTImageHandler(t, store, exec)
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"gpt-image-2","prompt":"a cat"}`))
+	trace := &featureExecutionTrace{}
+	req = req.WithContext(context.WithValue(req.Context(), featureExecutionTraceKey{}, trace))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -151,6 +185,9 @@ func TestChatGPTImageFailureSettlesUsage(t *testing.T) {
 	}
 	if ev.InputTokens != 3 {
 		t.Fatalf("partial usage lost: %+v", ev)
+	}
+	if trace.conversationID != "conversation-1" || trace.accountID != "account-1" {
+		t.Fatalf("recovery trace=%+v", trace)
 	}
 }
 

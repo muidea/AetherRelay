@@ -27,7 +27,7 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 
 	accountObs := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accountObs.Subscribe(accevents.TopicAcquireImageToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{Proxy: "http://image-proxy.invalid:8080"}}, nil)
+		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://image-proxy.invalid:8080"}}, nil)
 	})
 	accountObs.Subscribe(accevents.TopicReleaseImageSlot, func(_ event.Event, result event.Result) {
 		result.Set(accevents.ReleaseImageSlotResult{OK: true}, nil)
@@ -45,8 +45,9 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 		calls++
 		if calls == 1 {
 			result.Set(upevents.GenerateImageResult{
-				Images: []upevents.ImageOutput{{B64JSON: "first"}},
-				Usage:  &tokenusage.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8},
+				Images:         []upevents.ImageOutput{{B64JSON: "first"}},
+				Usage:          &tokenusage.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8},
+				ConversationID: "conversation-1",
 			}, nil)
 			return
 		}
@@ -67,6 +68,9 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 	}
 	if result.Usage == nil || result.Usage.PromptTokens != 10 || result.Usage.CompletionTokens != 16 || result.Usage.TotalTokens != 26 {
 		t.Fatalf("failed-call usage was lost: %+v", result.Usage)
+	}
+	if result.ConversationID != "conversation-1" || result.AccountID != "account-1" {
+		t.Fatalf("recovery metadata was lost: %+v", result)
 	}
 }
 
@@ -113,11 +117,14 @@ func TestGenerateImageRefreshesInvalidOAuthThenRetriesBeforeConversation(t *test
 		if command.AccessToken != "new-token" || command.Proxy != "http://new.invalid:8080" {
 			t.Fatalf("retry command=%+v", command)
 		}
-		result.Set(upevents.GenerateImageResult{Images: []upevents.ImageOutput{{B64JSON: "aW1hZ2U="}}}, nil)
+		result.Set(upevents.GenerateImageResult{Images: []upevents.ImageOutput{{B64JSON: "aW1hZ2U="}}, ConversationID: "conversation-1"}, nil)
 	})
 	p := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
 	result, err := p.GenerateImage(context.Background(), chatgptimage.Request{Prompt: "cat", Model: "gpt-image-2", N: 1, ResponseFormat: "b64_json"})
 	if err != nil || calls != 2 || refreshes != 1 || marks != 1 || len(result.Data) != 1 {
 		t.Fatalf("result=%+v err=%v calls=%d refreshes=%d marks=%d", result, err, calls, refreshes, marks)
+	}
+	if result.ConversationID != "conversation-1" || result.AccountID != "account-1" {
+		t.Fatalf("result metadata=%+v", result)
 	}
 }

@@ -148,9 +148,12 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	}
 	tok := tokenUsageFromImageResult(result)
 	if err != nil {
-		if h.tryImageNativeFallback(w, r, round, start, plans[1:], rawPayload, body) {
+		// Once ChatGPT created a conversation, switching providers could submit
+		// the same generation twice. Preserve the recovery metadata instead.
+		if result.ConversationID == "" && h.tryImageNativeFallback(w, r, round, start, plans[1:], rawPayload, body) {
 			return
 		}
+		setFeatureImageTrace(r, plan.RouteOwner, result)
 		if round != nil {
 			h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
 		}
@@ -163,6 +166,7 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	if round != nil {
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
 	}
+	setFeatureImageTrace(r, plan.RouteOwner, result)
 	w.Header().Set("Content-Type", "application/json")
 	// Encode only the public JSON fields; Usage is json:"-".
 	if encErr := json.NewEncoder(w).Encode(result); encErr != nil {
@@ -173,6 +177,20 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 		_ = h.writeArchiveResponse(round, "response.json", append(payload, '\n'))
 	}
 	h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, nil)
+}
+
+func setFeatureImageTrace(r *http.Request, provider string, result chatgptimage.Result) {
+	if r == nil {
+		return
+	}
+	trace, ok := r.Context().Value(featureExecutionTraceKey{}).(*featureExecutionTrace)
+	if !ok || trace == nil {
+		return
+	}
+	trace.provider = strings.TrimSpace(provider)
+	trace.conversationID = strings.TrimSpace(result.ConversationID)
+	trace.accountID = strings.TrimSpace(result.AccountID)
+	trace.usage = result.Usage
 }
 
 func (h *Handler) tryImageNativeFallback(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, plans []TransportPlan, rawPayload []byte, body chatGPTImageBody) bool {

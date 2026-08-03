@@ -22,8 +22,10 @@ import (
 )
 
 type oneImageResult struct {
-	Data  []chatgptimage.Data
-	Usage *tokenusage.Usage
+	Data           []chatgptimage.Data
+	Usage          *tokenusage.Usage
+	ConversationID string
+	AccountID      string
 }
 
 func (s *Proxy) GenerateImage(ctx context.Context, request chatgptimage.Request) (chatgptimage.Result, error) {
@@ -54,6 +56,10 @@ func (s *Proxy) runChatGPTImages(ctx context.Context, request chatgptimage.Reque
 		// error. Preserve that bounded partial projection for the single proxy
 		// usage event before returning the request failure.
 		result.Usage = addTokenUsage(result.Usage, output.Usage)
+		if result.ConversationID == "" && output.ConversationID != "" {
+			result.ConversationID = output.ConversationID
+			result.AccountID = output.AccountID
+		}
 		if err != nil {
 			// Preserve already-accumulated usage/data when a later of n calls fails.
 			return result, err
@@ -86,9 +92,9 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 			s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, true, "")
 			data, err := s.presentChatGPTImages(ctx, outputs, request.ResponseFormat, request.BaseURL)
 			if err != nil {
-				return oneImageResult{Usage: usage}, err
+				return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, err
 			}
-			return oneImageResult{Data: data, Usage: usage}, nil
+			return oneImageResult{Data: data, Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, nil
 		}
 		if !valid {
 			return oneImageResult{Usage: usage}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt image upstream result"))
@@ -107,12 +113,12 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 			refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, activeToken)
 			if refreshErr != nil {
 				s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(upevents.ErrClassUpstream))
-				return oneImageResult{Usage: usage}, refreshErr
+				return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, refreshErr
 			}
 			if permanent {
 				s.removeInvalidChatGPTTextToken(ctx, activeToken)
 				s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(upevents.ErrClassInvalidToken))
-				return oneImageResult{Usage: usage}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image credential is invalid"))
+				return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image credential is invalid"))
 			}
 			if conversationID == "" {
 				activeToken, activeProxy = refreshed.AccessToken, refreshed.Account.Proxy
@@ -121,14 +127,14 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 			// The refreshed credential is kept for subsequent resume/recovery, but
 			// this synchronous request is not resubmitted.
 			s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(upevents.ErrClassUpstream))
-			return oneImageResult{Usage: usage}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image conversation needs resume"))
+			return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image conversation needs resume"))
 		}
 
 		if class == upevents.ErrClassInvalidToken {
 			s.removeInvalidChatGPTTextToken(ctx, activeToken)
 		}
 		s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, false, string(class))
-		return oneImageResult{Usage: usage}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image upstream failed"))
+		return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image upstream failed"))
 	}
 	return oneImageResult{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("chatgpt image retry exhausted"))
 }

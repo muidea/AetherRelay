@@ -8,6 +8,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/common"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyconfig"
+	"ai-proxy/internal/pkg/chatgpttokenusage"
 
 	"github.com/muidea/magicCommon/event"
 )
@@ -90,9 +91,12 @@ type FeatureImageData struct {
 }
 
 type ExecuteFeatureImageResult struct {
-	Provider string
-	Model    string
-	Data     []FeatureImageData
+	Provider       string
+	Model          string
+	Data           []FeatureImageData
+	ConversationID string
+	AccountID      string
+	Usage          *tokenusage.Usage
 }
 
 // StartCodexDiscoveryCommand asks the proxy orchestrator to refresh the

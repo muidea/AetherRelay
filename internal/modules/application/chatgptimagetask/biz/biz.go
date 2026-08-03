@@ -241,7 +241,13 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 		OwnerID: ownerID, Model: model, Prompt: prompt, Size: size, Quality: quality,
 	})).Get()
 	if executeErr != nil {
-		s.store.MarkError(ownerID, taskID, executeErr.Error(), "")
+		if partial, ok := value.(proxyevents.ExecuteFeatureImageResult); ok {
+			s.store.SetProvider(ownerID, taskID, partial.Provider)
+			s.store.SetAccountID(ownerID, taskID, partial.AccountID)
+			s.store.MarkError(ownerID, taskID, executeErr.Error(), partial.ConversationID)
+		} else {
+			s.store.MarkError(ownerID, taskID, executeErr.Error(), "")
+		}
 		return
 	}
 	generated, ok := value.(proxyevents.ExecuteFeatureImageResult)
@@ -250,6 +256,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 		return
 	}
 	s.store.SetProvider(ownerID, taskID, generated.Provider)
+	s.store.SetAccountID(ownerID, taskID, generated.AccountID)
 	s.store.MarkProgress(ownerID, taskID, "receiving_image")
 	outputs := make([]upevents.ImageOutput, 0, len(generated.Data))
 	for _, item := range generated.Data {
@@ -260,7 +267,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
 	}
-	s.store.MarkSuccess(ownerID, taskID, data, "", nil, time.Since(start).Milliseconds())
+	s.store.MarkSuccess(ownerID, taskID, data, generated.ConversationID, generated.Usage, time.Since(start).Milliseconds())
 }
 
 // generateWithBootstrapRetry retries only the first, pre-conversation
@@ -305,7 +312,13 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 		OwnerID: ownerID, Model: model, Prompt: prompt, Size: size, Quality: quality, Images: images,
 	})).Get()
 	if executeErr != nil {
-		s.store.MarkError(ownerID, taskID, executeErr.Error(), "")
+		if partial, ok := value.(proxyevents.ExecuteFeatureImageResult); ok {
+			s.store.SetProvider(ownerID, taskID, partial.Provider)
+			s.store.SetAccountID(ownerID, taskID, partial.AccountID)
+			s.store.MarkError(ownerID, taskID, executeErr.Error(), partial.ConversationID)
+		} else {
+			s.store.MarkError(ownerID, taskID, executeErr.Error(), "")
+		}
 		return
 	}
 	edited, ok := value.(proxyevents.ExecuteFeatureImageResult)
@@ -314,6 +327,7 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 		return
 	}
 	s.store.SetProvider(ownerID, taskID, edited.Provider)
+	s.store.SetAccountID(ownerID, taskID, edited.AccountID)
 	outputs := make([]upevents.ImageOutput, 0, len(edited.Data))
 	for _, item := range edited.Data {
 		outputs = append(outputs, featureImageOutput(item))
@@ -323,7 +337,7 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
 	}
-	s.store.MarkSuccess(ownerID, taskID, data, "", nil, time.Since(start).Milliseconds())
+	s.store.MarkSuccess(ownerID, taskID, data, edited.ConversationID, edited.Usage, time.Since(start).Milliseconds())
 }
 
 func featureImageOutput(item proxyevents.FeatureImageData) upevents.ImageOutput {

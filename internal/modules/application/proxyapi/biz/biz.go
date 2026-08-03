@@ -185,7 +185,7 @@ func (s *Proxy) handleExecuteFeatureImage(ev event.Event, result event.Result) {
 	}
 	out, err := executor.ExecuteFeatureImage(ev.Context(), cmd)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(out, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	result.Set(out, nil)

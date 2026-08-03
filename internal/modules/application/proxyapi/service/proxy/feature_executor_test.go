@@ -2,9 +2,15 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
+	"ai-proxy/internal/pkg/aiproxyusage"
+	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
 
 func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
@@ -52,5 +58,36 @@ func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
 	}
 	if len(catalog.ImageEditModels) != 1 || catalog.ImageEditModels[0].ID != "image-model" {
 		t.Fatalf("image edit models=%+v", catalog.ImageEditModels)
+	}
+}
+
+func TestExecuteFeatureImagePreservesChatGPTRecoveryMetadata(t *testing.T) {
+	exec := chatGPTImageExecutorStub{generate: func(context.Context, chatgptimage.Request) (chatgptimage.Result, error) {
+		return chatgptimage.Result{
+			Created:        1,
+			Data:           []chatgptimage.Data{{B64JSON: "aaa"}},
+			Usage:          &tokenusage.Usage{TotalTokens: 8},
+			ConversationID: "conversation-1",
+			AccountID:      "account-1",
+		}, nil
+	}}
+	h := newChatGPTImageHandler(t, usage.NewMemoryStore(), exec)
+	out, err := h.ExecuteFeatureImage(context.Background(), proxyevents.ExecuteFeatureImageCommand{OwnerID: "owner", Model: "gpt-image-2", Prompt: "cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Provider != "chatgptweb" || out.ConversationID != "conversation-1" || out.AccountID != "account-1" || out.Usage == nil || out.Usage.TotalTokens != 8 || len(out.Data) != 1 {
+		t.Fatalf("result=%+v", out)
+	}
+}
+
+func TestExecuteFeatureImagePreservesPartialRecoveryMetadata(t *testing.T) {
+	exec := chatGPTImageExecutorStub{generate: func(context.Context, chatgptimage.Request) (chatgptimage.Result, error) {
+		return chatgptimage.Result{ConversationID: "conversation-1", AccountID: "account-1"}, chatgptfail.New(chatgptfail.KindUpstream, errors.New("timeout"))
+	}}
+	h := newChatGPTImageHandler(t, usage.NewMemoryStore(), exec)
+	out, err := h.ExecuteFeatureImage(context.Background(), proxyevents.ExecuteFeatureImageCommand{OwnerID: "owner", Model: "gpt-image-2", Prompt: "cat"})
+	if err == nil || out.Provider != "chatgptweb" || out.ConversationID != "conversation-1" || out.AccountID != "account-1" {
+		t.Fatalf("result=%+v err=%v", out, err)
 	}
 }

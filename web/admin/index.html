@@ -1551,6 +1551,12 @@ function upsertTask(task){
   const idx=state.cg.tasks.items.findIndex(t=>t.id===task.id);
   if(idx>=0)state.cg.tasks.items[idx]=task;else state.cg.tasks.items.unshift(task);
 }
+function sortChatGPTTasks(items){
+  return [...(Array.isArray(items)?items:[])].sort((a,b)=>{
+    const created=String(b?.created_at||"").localeCompare(String(a?.created_at||""));
+    return created||String(a?.id||"").localeCompare(String(b?.id||""));
+  });
+}
 async function loadChatGPTTasks(keepPolling){
   const owner=ensureTaskOwner();
   state.cg.tasks.owner=owner;
@@ -1560,7 +1566,7 @@ async function loadChatGPTTasks(keepPolling){
   try{
     const data=await request(apiURL(`/api/chatgpt/image-tasks?owner_id=${encodeURIComponent(owner)}`));
     setChatGPTAvailable();
-    state.cg.tasks.items=Array.isArray(data.items)?data.items:[];
+    state.cg.tasks.items=sortChatGPTTasks(data.items);
     renderChatGPTTasks();
     state.cg.tasks.items.filter(t=>!isTerminalTask(t)).forEach(t=>startTaskPolling(t.id));
   }catch(e){
@@ -1569,7 +1575,7 @@ async function loadChatGPTTasks(keepPolling){
   }
 }
 function renderChatGPTTasks(){
-  const items=state.cg.tasks.items||[];
+  const items=sortChatGPTTasks(state.cg.tasks.items);
   $("cgTaskMeta").textContent=`${items.length} 个任务 · owner=${state.cg.tasks.owner||"—"}`;
   if(!items.length){$("cgTaskTable").className="";$("cgTaskTable").innerHTML=`<div class="empty">当前 owner_id 下暂无任务</div>`;return}
   const rows=items.map(t=>{

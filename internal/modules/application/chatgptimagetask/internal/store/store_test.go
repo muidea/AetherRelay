@@ -45,3 +45,19 @@ func TestRetryGenerationResetsOnlyPreConversationGeneration(t *testing.T) {
 		t.Fatalf("conversation task retried=%v err=%v", retried, err)
 	}
 }
+
+func TestListUsesStableNewestFirstOrder(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "state.duckdb"))
+	defer s.Close()
+	for _, id := range []string{"task-b", "task-a"} {
+		if _, created, err := s.GetOrCreateGeneration("owner", id, "prompt", "gpt-image-2", "", ""); err != nil || !created {
+			t.Fatalf("create %s: created=%v err=%v", id, created, err)
+		}
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		items, missing := s.List("owner", nil)
+		if len(missing) != 0 || len(items) != 2 || items[0].ID != "task-a" || items[1].ID != "task-b" {
+			t.Fatalf("attempt %d items=%+v missing=%v", attempt, items, missing)
+		}
+	}
+}

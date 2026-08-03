@@ -32,9 +32,11 @@ type Data struct {
 // On error, Data/Usage may still hold already-produced partial results when
 // earlier of n upstream calls succeeded.
 type Result struct {
-	Created int64             `json:"created"`
-	Data    []Data            `json:"data"`
-	Usage   *tokenusage.Usage `json:"-"`
+	Created        int64             `json:"created"`
+	Data           []Data            `json:"data"`
+	Usage          *tokenusage.Usage `json:"-"`
+	ConversationID string            `json:"-"`
+	AccountID      string            `json:"-"`
 }
 
 // Executor is implemented by proxyapi Biz; HTTP adapters never receive an

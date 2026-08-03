@@ -428,6 +428,12 @@ func (s *Store) List(ownerID string, taskIDs []string) (items []events.TaskView,
 			}
 			items = append(items, withElapsed(rec, now))
 		}
+		sort.SliceStable(items, func(i, j int) bool {
+			if items[i].CreatedAt != items[j].CreatedAt {
+				return items[i].CreatedAt > items[j].CreatedAt
+			}
+			return items[i].ID < items[j].ID
+		})
 		return items, nil
 	}
 	for _, id := range taskIDs {

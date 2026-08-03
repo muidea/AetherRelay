@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
+	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
 
 type featureResponse struct {
@@ -20,7 +21,12 @@ type featureResponse struct {
 	body   bytes.Buffer
 }
 
-type featureExecutionTrace struct{ provider string }
+type featureExecutionTrace struct {
+	provider       string
+	conversationID string
+	accountID      string
+	usage          *tokenusage.Usage
+}
 type featureExecutionTraceKey struct{}
 
 func newFeatureResponse() *featureResponse     { return &featureResponse{header: make(http.Header)} }
@@ -144,7 +150,7 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		}
 	}
 	payload, _ := json.Marshal(body)
-	response, provider, err := h.executeFeatureRequest(ctx, command.OwnerID, endpoint, "application/json", payload)
+	response, trace, err := h.executeFeatureRequest(ctx, command.OwnerID, endpoint, "application/json", payload)
 	if err != nil {
 		return proxyevents.ExecuteFeatureTextResult{}, err
 	}
@@ -152,7 +158,7 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 	if err != nil {
 		return proxyevents.ExecuteFeatureTextResult{}, err
 	}
-	return proxyevents.ExecuteFeatureTextResult{Provider: firstNonEmpty(provider, plans[0].RouteOwner), ActualModel: firstNonEmpty(actualModel, model), Text: text}, nil
+	return proxyevents.ExecuteFeatureTextResult{Provider: firstNonEmpty(trace.provider, plans[0].RouteOwner), ActualModel: firstNonEmpty(actualModel, model), Text: text}, nil
 }
 
 func (h *Handler) ExecuteFeatureImage(ctx context.Context, command proxyevents.ExecuteFeatureImageCommand) (proxyevents.ExecuteFeatureImageResult, error) {
@@ -209,9 +215,9 @@ func (h *Handler) ExecuteFeatureImage(ctx context.Context, command proxyevents.E
 		contentType = writer.FormDataContentType()
 		payload = encoded.Bytes()
 	}
-	response, provider, err := h.executeFeatureRequest(ctx, command.OwnerID, endpoint, contentType, payload)
+	response, trace, err := h.executeFeatureRequest(ctx, command.OwnerID, endpoint, contentType, payload)
 	if err != nil {
-		return proxyevents.ExecuteFeatureImageResult{}, err
+		return proxyevents.ExecuteFeatureImageResult{Provider: trace.provider, ConversationID: trace.conversationID, AccountID: trace.accountID, Usage: trace.usage}, err
 	}
 	var decoded struct {
 		Data []struct {
@@ -223,19 +229,19 @@ func (h *Handler) ExecuteFeatureImage(ctx context.Context, command proxyevents.E
 	if err := json.Unmarshal(response, &decoded); err != nil || len(decoded.Data) == 0 {
 		return proxyevents.ExecuteFeatureImageResult{}, fmt.Errorf("invalid image provider response")
 	}
-	out := proxyevents.ExecuteFeatureImageResult{Provider: firstNonEmpty(provider, plans[0].RouteOwner), Model: model}
+	out := proxyevents.ExecuteFeatureImageResult{Provider: firstNonEmpty(trace.provider, plans[0].RouteOwner), Model: model, ConversationID: trace.conversationID, AccountID: trace.accountID, Usage: trace.usage}
 	for _, item := range decoded.Data {
 		out.Data = append(out.Data, proxyevents.FeatureImageData{URL: item.URL, B64JSON: item.B64JSON, RevisedPrompt: item.RevisedPrompt})
 	}
 	return out, nil
 }
 
-func (h *Handler) executeFeatureRequest(ctx context.Context, ownerID, endpoint, contentType string, payload []byte) ([]byte, string, error) {
+func (h *Handler) executeFeatureRequest(ctx context.Context, ownerID, endpoint, contentType string, payload []byte) ([]byte, featureExecutionTrace, error) {
 	trace := &featureExecutionTrace{}
 	ctx = context.WithValue(withInternalFeatureIdentity(ctx, ownerID), featureExecutionTraceKey{}, trace)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return nil, "", err
+		return nil, featureExecutionTrace{}, err
 	}
 	request.Header.Set("Content-Type", contentType)
 	response := newFeatureResponse()
@@ -251,9 +257,9 @@ func (h *Handler) executeFeatureRequest(ctx context.Context, ownerID, endpoint, 
 		if message == "" {
 			message = fmt.Sprintf("feature provider request failed with HTTP %d", response.status)
 		}
-		return nil, trace.provider, fmt.Errorf("%s", message)
+		return nil, *trace, fmt.Errorf("%s", message)
 	}
-	return bytes.Clone(response.body.Bytes()), trace.provider, nil
+	return bytes.Clone(response.body.Bytes()), *trace, nil
 }
 
 func extractFeatureText(body []byte, endpoint string) (string, string, error) {

@@ -516,14 +516,14 @@ func (s *Documents) ListTemporaryConversations(ownerID string, limit int, update
 			upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
 			FROM chatgpt_temporary_conversations
 			WHERE owner_id = ? AND status != 'closed' AND expires_at > NOW()
-			ORDER BY updated_at DESC
+			ORDER BY updated_at DESC, conversation_id ASC
 			LIMIT ?`, ownerID, limit)
 	} else {
 		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, title, account_id, provider, model, actual_model, thinking_effort, system_prompt,
 			upstream_conversation_id, parent_message_id, status, created_at, updated_at, expires_at
 			FROM chatgpt_temporary_conversations
 			WHERE owner_id = ? AND status != 'closed' AND expires_at > NOW() AND updated_at < ?
-			ORDER BY updated_at DESC
+			ORDER BY updated_at DESC, conversation_id ASC
 			LIMIT ?`, ownerID, *updatedBefore, limit)
 	}
 	if err != nil {
