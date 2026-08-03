@@ -92,7 +92,9 @@ func (s *ConfigRuntime) handleActivate(ev event.Event, result event.Result) {
 // process start; changing their lifecycle settings in a YAML rewrite cannot
 // make those components appear, disappear, or reschedule safely.
 func validateHotReload(current, next config.Config) error {
-	if current.ChatGPTWeb != next.ChatGPTWeb {
+	if current.ChatGPTWeb.Enabled != next.ChatGPTWeb.Enabled ||
+		current.ChatGPTWeb.RefreshAccountIntervalMinute != next.ChatGPTWeb.RefreshAccountIntervalMinute ||
+		current.ChatGPTWeb.TemporaryChat != next.ChatGPTWeb.TemporaryChat {
 		return fmt.Errorf("chatgpt_web runtime settings require an ai-proxy restart")
 	}
 	if current.CodexOAuth.Enabled != next.CodexOAuth.Enabled || current.CodexOAuth.RefreshAccountIntervalMinute != next.CodexOAuth.RefreshAccountIntervalMinute {

@@ -48,7 +48,7 @@ model_catalog:
 
 回退只会发生在客户端响应尚未提交时，并且仅针对网络错误、`408`、`429`、`5xx` 或流式请求的首事件探测失败。一次已写出的 SSE/HTTP 响应绝不切换 Provider。转换候选会先做语义预检：不支持的 tools、多模态或结构化字段不会被静默删改；若后续存在可原生保留该语义的候选，可改用该候选，否则返回 `conversion_unsupported`。图片任务一旦提交不回退，避免重复创建。
 
-运行时健康度是 5 分钟的有界样本窗口：少于 3 个样本显示 `unknown`；连续 3 次可重试失败会打开 30 秒熔断，路由会跳过熔断、`unhealthy` 或 `credential_error` 候选。健康度不替代账号池的真实可用性判断。管理页的 Provider 列显示样本量、成功率、P95 和熔断状态；`GET <admin_base_path>/api/routing/models` 返回模型、operation 与当前候选链读模型。
+运行时健康度是 5 分钟的有界样本窗口：少于 3 个样本显示 `unknown`；连续 3 次可重试失败会打开 30 秒熔断，路由会跳过熔断、`unhealthy` 或 `credential_error` 候选。健康度不替代账号池的真实可用性判断。管理页将可用性与健康度合并为单一状态视图，显示样本量、成功率、P95、熔断和账号池可路由原因。
 
 ## 客户端 API Key
 
@@ -136,6 +136,8 @@ state:
 ```yaml
 chatgpt_web:
   enabled: false
+  provider_enabled: false
+  priority: 10
   refresh_account_interval_minute: 0
   temporary_chat:
     enabled: true
@@ -147,6 +149,8 @@ chatgpt_web:
 ```
 
 - 默认关闭。`enabled: true` 后，ChatGPT Web 账号池、上游、图片存储、异步图片任务与 Admin 临时文本对话会一并装配。
+- `provider_enabled` 只控制已装配的内建 Provider 是否参与模型路由；省略时跟随 `enabled`，可通过 Provider 管理页热更新。它不会停止账号刷新、图片任务或临时对话。
+- `priority` 是内建 Provider 的候选优先级（`-1000` 到 `1000`，默认 `10`），可通过 Provider 管理页热更新；ChatGPT Web 不作为回退候选。
 - 账号、任务、图片索引和标签保存于 `state.database`；不得写入 YAML、环境变量、日志或版本库。
 - 旧的 `usage_store`、`chatgpt_web.data_dir`、`interaction_dir` 及相应环境变量均不再支持；所有本地路径和 DuckDB 资源参数只能在 `state` 中声明。
 - `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
@@ -159,20 +163,22 @@ chatgpt_web:
 - 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。模型与模型级 operation 来自账号池对 ChatGPT Web `/backend-api/models` 的枚举并集。
 - 临时对话会持久化创建时的请求模型；仅当 ChatGPT Web SSE 的 assistant `message.metadata.model_slug` 明确返回时，才记录并展示该轮上游实际模型。模型正文的自述不作为路由证据；上游未返回该字段时管理页显示“上游未返回”。
 - 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、受限 `/v1/responses`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。
-- 自动模型与静态 Provider 同名时会保留全部候选；静态 Provider 默认优先级为 `100`，Codex OAuth 固定为 `90`，ChatGPT Web 固定为 `10` 且默认不作为回退。Admin Provider 列表会显示重叠摘要，而「模型路由」会显示实际候选顺序。
+- 自动模型与静态 Provider 同名时会保留全部候选；静态 Provider 默认优先级为 `100`，Codex OAuth 默认 `90`，ChatGPT Web 默认 `10` 且不作为回退。Provider 表提供内建 Provider 的路由启停与优先级控制，并显示重叠摘要。
 
 ## Codex OAuth 本地账号池
 
 ```yaml
 codex_oauth:
   enabled: false
+  provider_enabled: false
+  priority: 90
   refresh_account_interval_minute: 0
 ```
 
 - 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 `GET /backend-api/codex/models` 自动发现模型；结果以受限投影持久化到账号池，6 小时后过期。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。
 - 管理页展示的是上游观察到的“额度耗尽”和可选恢复时间，而不是 OpenAI 套餐的官方剩余额度百分比。只有 Codex 明确返回 `usage_limit_reached` 才会写入该观察；普通 429 仍只产生模型冷却。
-- 可路由模型始终是全部健康账号模型快照的并集；不提供 `codex_oauth.models` 筛选项。静态 Provider 使用同名模型时，两者都会进入候选链；静态默认优先级为 `100`，Codex OAuth 固定为 `90`，可在安全的原生 Responses 失败场景回退。升级前若配置了该项，必须将其移除。
+- 可路由模型始终是全部健康账号模型快照的并集；不提供 `codex_oauth.models` 筛选项。静态 Provider 使用同名模型时，两者都会进入候选链；静态默认优先级为 `100`，Codex OAuth 默认 `90`，可在安全的原生 Responses 失败场景回退。`provider_enabled` 与 `priority` 是可热更新的路由策略；升级前若配置了 `codex_oauth.models`，必须将其移除。
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）仅写入 `state.database`。管理列表严格脱敏，不返回 token、账号 ID 或代理 URL。
 - 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新以及 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新 IP 与请求 IP 不一致。
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
@@ -185,7 +191,7 @@ codex_oauth:
 
 管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
 
-Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。表中还可编辑静态 Provider 的优先级与回退开关，并展示运行时健康度；内建 Provider 的路由策略为只读。下方「模型路由」读模型用于核对同名模型的候选、健康排除和回退资格。
+Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。静态 Provider 可编辑优先级与回退开关；内建 Provider 不可删除，但可热更新路由启停与优先级。状态列合并账号池可用性与请求健康度，避免同一 Provider 出现两套相互矛盾的状态。
 
 ChatGPT Web 管理页依赖对应运行时组件（账号池 / 图片任务 / 图片存储）已装配；若组件未启用，页面会显示不可用状态而不是空数据。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。账号导出、OAuth 回调与完整 token 不会写入浏览器持久化存储。
 

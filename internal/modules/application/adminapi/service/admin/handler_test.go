@@ -87,10 +87,15 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "routingContent", "routingSearch", "provider_priority",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "data-builtin-priority-save", "builtin-providers",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
+		}
+	}
+	for _, removed := range []string{"routingContent", "routingSearch", "/api/routing/models"} {
+		if strings.Contains(rec.Body.String(), removed) {
+			t.Fatalf("admin page still exposes model routing marker %q", removed)
 		}
 	}
 
@@ -112,45 +117,14 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 }
 
-func TestHandlerListsStaticRoutingCandidates(t *testing.T) {
-	cfg := config.Config{
-		Providers: map[string]config.Provider{
-			"primary": {Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"shared"}, Priority: 200, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
-			"backup":  {Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"shared"}, Priority: 100, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
-		},
-		ModelCatalog: map[string]config.ModelInfo{
-			"shared": {ID: "shared", ContextWindowTokens: 8192, MaxOutputTokens: 4096, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary", RouteOwners: []string{"primary", "backup"}},
-		},
-	}
-	handler := NewHandler("", &testRuntime{cfg: cfg})
+func TestHandlerDoesNotExposeRoutingModels(t *testing.T) {
+	handler := NewHandler("", &testRuntime{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/routing/models", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var payload struct {
-		Routes []struct {
-			Model      string `json:"model"`
-			Operation  string `json:"operation"`
-			Candidates []struct {
-				Provider  string `json:"provider"`
-				Priority  int    `json:"priority"`
-				Fallback  bool   `json:"fallback"`
-				Selection string `json:"selection"`
-			} `json:"candidates"`
-		} `json:"routes"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Routes) != 1 || payload.Routes[0].Model != "shared" || payload.Routes[0].Operation != config.ModelOperationChatCompletions {
-		t.Fatalf("routes=%+v", payload.Routes)
-	}
-	candidates := payload.Routes[0].Candidates
-	if len(candidates) != 2 || candidates[0].Provider != "primary" || candidates[0].Priority != 200 || candidates[0].Selection != "primary" || candidates[1].Provider != "backup" || !candidates[1].Fallback || candidates[1].Selection != "fallback" {
-		t.Fatalf("candidates=%+v", candidates)
 	}
 }
 
@@ -258,6 +232,19 @@ func TestHandlerProjectsProviderAvailability(t *testing.T) {
 	}
 }
 
+func TestBuiltinDisabledAvailabilityKeepsMetricsAsDetails(t *testing.T) {
+	registry := metrics.NewRegistry()
+	for range 3 {
+		registry.RecordRequest("chatgptweb", "gpt-5", "chat_completions", http.StatusOK, time.Millisecond, "success")
+	}
+	handler := NewHandler("", &testRuntime{}).WithMetrics(registry)
+	view := providerView{Name: "chatgptweb", Availability: providerAvailability{Status: "disabled"}}
+	handler.applyObservedHealth(&view)
+	if view.Availability.Status != "disabled" || view.Availability.SampleCount != 3 || view.Availability.SuccessRate != 1 {
+		t.Fatalf("availability=%+v", view.Availability)
+	}
+}
+
 func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
@@ -354,6 +341,96 @@ func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
 	provider := runtime.cfg.Providers["openai"]
 	if provider.BaseURL != "https://gateway.example.com/v1" || provider.APIKey != "secret-value" || config.EffectiveProviderPriority(provider) != 0 {
 		t.Fatalf("runtime provider = %+v", provider)
+	}
+}
+
+func TestHandlerUpdatesBuiltinProviderRoutingPolicy(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte(`
+chatgpt_web:
+  enabled: true
+  provider_enabled: true
+  priority: 10
+codex_oauth:
+  enabled: true
+  provider_enabled: true
+  priority: 90
+`)...)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+	enabled := false
+	priority := 0
+	body, err := json.Marshal(builtinProviderInput{Enabled: &enabled, Priority: &priority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/builtin-providers/chatgptweb", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update = %d %s", rec.Code, rec.Body.String())
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(persisted), "provider_enabled: false") || !strings.Contains(string(persisted), "priority: 0") {
+		t.Fatalf("builtin route policy was not persisted:\n%s", persisted)
+	}
+	updated := runtime.ConfigSnapshot()
+	if config.EffectiveChatGPTWebProviderEnabled(updated.ChatGPTWeb) || config.EffectiveChatGPTWebProviderPriority(updated.ChatGPTWeb) != 0 {
+		t.Fatalf("runtime builtin policy = %+v", updated.ChatGPTWeb)
+	}
+	if runtime.updates != 1 {
+		t.Fatalf("updates=%d want 1", runtime.updates)
+	}
+}
+
+func TestHandlerListsDisabledBuiltinProviders(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(path, &testRuntime{cfg: cfg})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/providers", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Providers []providerView `json:"providers"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]providerView{}
+	for _, provider := range payload.Providers {
+		got[provider.Name] = provider
+	}
+	for _, id := range []string{"chatgptweb", "codexoauth"} {
+		provider, ok := got[id]
+		if !ok || !provider.Builtin || provider.Enabled || provider.Availability.Status != "disabled" {
+			t.Fatalf("builtin %s = %+v, present=%t", id, provider, ok)
+		}
 	}
 }
 

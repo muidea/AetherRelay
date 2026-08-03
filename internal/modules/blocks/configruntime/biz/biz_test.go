@@ -20,3 +20,18 @@ func TestValidateHotReloadRejectsLifecycleChanges(t *testing.T) {
 		t.Fatalf("ChatGPT enable transition error = %v", err)
 	}
 }
+
+func TestValidateHotReloadAllowsBuiltinRoutingPolicy(t *testing.T) {
+	current := config.Config{
+		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true, ProviderEnabled: true},
+		CodexOAuth: config.CodexOAuthConfig{Enabled: true, ProviderEnabled: true},
+	}
+	next := current
+	next.ChatGPTWeb.ProviderEnabled = false
+	next.ChatGPTWeb.Priority = 5
+	next.CodexOAuth.ProviderEnabled = false
+	next.CodexOAuth.Priority = 120
+	if err := validateHotReload(current, next); err != nil {
+		t.Fatalf("builtin routing policy should hot reload: %v", err)
+	}
+}

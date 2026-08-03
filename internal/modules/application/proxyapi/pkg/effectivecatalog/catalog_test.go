@@ -1,10 +1,84 @@
 package effectivecatalog
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
+
+func TestBuildOmitsRoutingDisabledBuiltinProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `
+chatgpt_web:
+  enabled: true
+  provider_enabled: false
+  priority: 240
+providers:
+  static:
+    enabled: true
+    protocol: openai
+    base_url: http://127.0.0.1:8081
+    allow_unauthenticated: true
+    endpoint_capabilities: chat_completions
+    models: static-model
+model_catalog:
+  static-model:
+    context_window_tokens: 8192
+    max_output_tokens: 1024
+    operations: chat_completions
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := Build(cfg, 1, 1, []PoolModel{{ID: "gpt-5", Operations: []string{config.ModelOperationChatCompletions}}}, "2026-08-03T00:00:00Z")
+	if snap.BuiltinProvider.Enabled || snap.BuiltinProvider.Status != StatusDisabled {
+		t.Fatalf("builtin provider=%+v", snap.BuiltinProvider)
+	}
+	if candidates := snap.CandidatesFor("gpt-5", config.ModelOperationChatCompletions); len(candidates) != 0 {
+		t.Fatalf("disabled builtin candidates=%+v", candidates)
+	}
+}
+
+func TestBuildUsesConfiguredBuiltinPriority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `
+codex_oauth:
+  enabled: true
+  provider_enabled: true
+  priority: 240
+providers:
+  static:
+    enabled: true
+    protocol: openai
+    base_url: http://127.0.0.1:8081
+    allow_unauthenticated: true
+    endpoint_capabilities: chat_completions
+    models: gpt-5.3-codex
+model_catalog:
+  gpt-5.3-codex:
+    context_window_tokens: 8192
+    max_output_tokens: 1024
+    operations: chat_completions
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 1, AvailableAccounts: 1, Models: []PoolModel{{ID: "gpt-5.3-codex"}}})
+	candidates := snap.CandidatesFor("gpt-5.3-codex", config.ModelOperationChatCompletions)
+	if len(candidates) != 2 || candidates[0].RouteOwner != CodexOAuthProviderID || candidates[0].Priority != 240 {
+		t.Fatalf("candidates=%+v", candidates)
+	}
+}
 
 func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 	cfg := config.Config{

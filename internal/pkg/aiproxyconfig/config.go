@@ -144,7 +144,17 @@ type UsageStoreConfig struct {
 // DataDir is derived from state.dir and cannot be configured separately.
 // 启用后，ChatGPT Web 模型由内建 Provider 自动发现并与静态目录合成。
 type ChatGPTWebConfig struct {
-	Enabled                      bool
+	Enabled bool
+	// ProviderEnabled controls whether the already configured account pool
+	// participates in request routing. It is deliberately separate from
+	// Enabled: the latter owns process-start lifecycle and storage setup.
+	// An omitted value follows Enabled for backwards compatibility.
+	ProviderEnabled           bool
+	providerEnabledConfigured bool
+	// Priority controls the builtin ChatGPT Web candidate position. An omitted
+	// value uses DefaultChatGPTWebProviderPriority; an explicit zero is valid.
+	Priority                     int
+	priorityConfigured           bool
 	DataDir                      string
 	RefreshAccountIntervalMinute int
 	TemporaryChat                TemporaryChatConfig
@@ -153,7 +163,16 @@ type ChatGPTWebConfig struct {
 // CodexOAuthConfig enables the native Codex Responses account pool. Its
 // routable model catalog is always derived from account-level discovery.
 type CodexOAuthConfig struct {
-	Enabled                      bool
+	Enabled bool
+	// ProviderEnabled controls routing only. It does not create or destroy the
+	// Codex OAuth account-pool runtime, so Admin can safely hot-update it.
+	// An omitted value follows Enabled for backwards compatibility.
+	ProviderEnabled           bool
+	providerEnabledConfigured bool
+	// Priority controls the builtin Codex OAuth candidate position. An omitted
+	// value uses DefaultCodexOAuthProviderPriority; an explicit zero is valid.
+	Priority                     int
+	priorityConfigured           bool
 	RefreshAccountIntervalMinute int
 }
 
@@ -200,6 +219,10 @@ const (
 	DefaultProviderPriority = 100
 	MinProviderPriority     = -1000
 	MaxProviderPriority     = 1000
+	// Builtin defaults preserve the established static > Codex > ChatGPT Web
+	// route order while allowing an explicit configuration override.
+	DefaultCodexOAuthProviderPriority = 90
+	DefaultChatGPTWebProviderPriority = 10
 )
 
 // SLOConfig 描述可观测性层面的服务等级目标。
@@ -595,6 +618,20 @@ func setChatGPTWeb(cfg *Config, key, value string) error {
 			return fmt.Errorf("chatgpt_web.enabled: %w", err)
 		}
 		cfg.ChatGPTWeb.Enabled = b
+	case "provider_enabled":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.provider_enabled: %w", err)
+		}
+		cfg.ChatGPTWeb.ProviderEnabled = b
+		cfg.ChatGPTWeb.providerEnabledConfigured = true
+	case "priority":
+		n, err := parseStrictInt(value)
+		if err != nil {
+			return fmt.Errorf("chatgpt_web.priority: %w", err)
+		}
+		cfg.ChatGPTWeb.Priority = n
+		cfg.ChatGPTWeb.priorityConfigured = true
 	case "refresh_account_interval_minute":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -615,6 +652,20 @@ func setCodexOAuth(cfg *Config, key, value string) error {
 			return fmt.Errorf("codex_oauth.enabled: %w", err)
 		}
 		cfg.CodexOAuth.Enabled = b
+	case "provider_enabled":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.provider_enabled: %w", err)
+		}
+		cfg.CodexOAuth.ProviderEnabled = b
+		cfg.CodexOAuth.providerEnabledConfigured = true
+	case "priority":
+		n, err := parseStrictInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.priority: %w", err)
+		}
+		cfg.CodexOAuth.Priority = n
+		cfg.CodexOAuth.priorityConfigured = true
 	case "refresh_account_interval_minute":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -869,6 +920,22 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.ChatGPTWeb.Enabled = b
 	}
+	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_PROVIDER_ENABLED"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CHATGPT_WEB_PROVIDER_ENABLED: %w", err)
+		}
+		cfg.ChatGPTWeb.ProviderEnabled = b
+		cfg.ChatGPTWeb.providerEnabledConfigured = true
+	}
+	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_PRIORITY"); value != "" {
+		n, err := parseStrictInt(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CHATGPT_WEB_PRIORITY: %w", err)
+		}
+		cfg.ChatGPTWeb.Priority = n
+		cfg.ChatGPTWeb.priorityConfigured = true
+	}
 	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_REFRESH_ACCOUNT_INTERVAL_MINUTE"); value != "" {
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -882,6 +949,22 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("AI_PROXY_CODEX_OAUTH_ENABLED: %w", err)
 		}
 		cfg.CodexOAuth.Enabled = b
+	}
+	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_PROVIDER_ENABLED"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CODEX_OAUTH_PROVIDER_ENABLED: %w", err)
+		}
+		cfg.CodexOAuth.ProviderEnabled = b
+		cfg.CodexOAuth.providerEnabledConfigured = true
+	}
+	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_PRIORITY"); value != "" {
+		n, err := parseStrictInt(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_CODEX_OAUTH_PRIORITY: %w", err)
+		}
+		cfg.CodexOAuth.Priority = n
+		cfg.CodexOAuth.priorityConfigured = true
 	}
 	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_REFRESH_ACCOUNT_INTERVAL_MINUTE"); value != "" {
 		n, err := parseStrictNonNegativeInt(value)
@@ -999,6 +1082,18 @@ func normalize(cfg *Config, configPath string) error {
 	cfg.InteractionDir = cfg.State.InteractionsDir()
 	cfg.InteractionRetention = cfg.State.InteractionRetention
 	cfg.ChatGPTWeb.DataDir = cfg.State.Dir
+	if !cfg.ChatGPTWeb.providerEnabledConfigured {
+		cfg.ChatGPTWeb.ProviderEnabled = cfg.ChatGPTWeb.Enabled
+	}
+	if !cfg.ChatGPTWeb.priorityConfigured {
+		cfg.ChatGPTWeb.Priority = DefaultChatGPTWebProviderPriority
+	}
+	if !cfg.CodexOAuth.priorityConfigured {
+		cfg.CodexOAuth.Priority = DefaultCodexOAuthProviderPriority
+	}
+	if !cfg.CodexOAuth.providerEnabledConfigured {
+		cfg.CodexOAuth.ProviderEnabled = cfg.CodexOAuth.Enabled
+	}
 	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
 	if err := normalizeClientAPIKeys(cfg); err != nil {
 		return err
@@ -1100,10 +1195,12 @@ func validateMetricsCIDRs(cidrs []string) error {
 }
 
 func validate(cfg Config) error {
-	if len(cfg.Providers) == 0 && !cfg.ChatGPTWeb.Enabled && !cfg.CodexOAuth.Enabled {
+	chatGPTProviderEnabled := EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb)
+	codexProviderEnabled := EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth)
+	if len(cfg.Providers) == 0 && !chatGPTProviderEnabled && !codexProviderEnabled {
 		return fmt.Errorf("no providers configured; declare providers in config.yaml")
 	}
-	if !hasEnabledProvider(cfg.Providers) && !cfg.ChatGPTWeb.Enabled && !cfg.CodexOAuth.Enabled {
+	if !hasEnabledProvider(cfg.Providers) && !chatGPTProviderEnabled && !codexProviderEnabled {
 		return fmt.Errorf("no enabled providers configured")
 	}
 	// client_api_keys 是归属机制而非强制登录;非 loopback 监听不再要求 inbound key。
@@ -1709,6 +1806,37 @@ func EffectiveProviderFallback(provider Provider) bool {
 	return provider.Fallback
 }
 
+// EffectiveChatGPTWebProviderPriority returns the persisted builtin priority
+// or its stable default for focused in-memory tests and legacy configs.
+func EffectiveChatGPTWebProviderPriority(web ChatGPTWebConfig) int {
+	if web.Priority == 0 && !web.priorityConfigured {
+		return DefaultChatGPTWebProviderPriority
+	}
+	return web.Priority
+}
+
+// EffectiveChatGPTWebProviderEnabled returns the route-level enablement for
+// the builtin provider. In-memory fixtures and legacy YAML without an
+// explicit provider_enabled key preserve the lifecycle Enabled value.
+func EffectiveChatGPTWebProviderEnabled(web ChatGPTWebConfig) bool {
+	return web.Enabled && (!web.providerEnabledConfigured || web.ProviderEnabled)
+}
+
+// EffectiveCodexOAuthProviderPriority returns the persisted builtin priority
+// or its stable default for focused in-memory tests and legacy configs.
+func EffectiveCodexOAuthProviderPriority(codex CodexOAuthConfig) int {
+	if codex.Priority == 0 && !codex.priorityConfigured {
+		return DefaultCodexOAuthProviderPriority
+	}
+	return codex.Priority
+}
+
+// EffectiveCodexOAuthProviderEnabled is the Codex counterpart of
+// EffectiveChatGPTWebProviderEnabled.
+func EffectiveCodexOAuthProviderEnabled(codex CodexOAuthConfig) bool {
+	return codex.Enabled && (!codex.providerEnabledConfigured || codex.ProviderEnabled)
+}
+
 // ProviderMatchesModel 判断 provider 的 models 模式是否匹配 model(区分大小写,仅 trim)。
 func ProviderMatchesModel(_ string, provider Provider, model string) bool {
 	for _, pattern := range provider.Models {
@@ -2172,6 +2300,9 @@ func normalizeTemporaryChat(tc *TemporaryChatConfig) {
 }
 
 func validateChatGPTWeb(web ChatGPTWebConfig) error {
+	if web.Priority < MinProviderPriority || web.Priority > MaxProviderPriority {
+		return fmt.Errorf("chatgpt_web.priority must be in [%d,%d]", MinProviderPriority, MaxProviderPriority)
+	}
 	if web.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("chatgpt_web.refresh_account_interval_minute must be >= 0")
 	}
@@ -2195,6 +2326,9 @@ func validateChatGPTWeb(web ChatGPTWebConfig) error {
 }
 
 func validateCodexOAuth(codex CodexOAuthConfig) error {
+	if codex.Priority < MinProviderPriority || codex.Priority > MaxProviderPriority {
+		return fmt.Errorf("codex_oauth.priority must be in [%d,%d]", MinProviderPriority, MaxProviderPriority)
+	}
 	if codex.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("codex_oauth.refresh_account_interval_minute must be >= 0")
 	}

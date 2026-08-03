@@ -122,8 +122,9 @@ type providerView struct {
 	// Source is a display-only classification derived from builtin + base_url
 	// (builtin / official / third_party). It is never read from or written to YAML.
 	Source string `json:"source"`
-	// Builtin marks the non-persistent chatgptweb provider. Admin must not
-	// offer edit/delete/toggle/probe for builtin rows.
+	// Builtin marks an account-pool provider that is not represented in the
+	// static providers mapping. Admin permits only its route enablement and
+	// priority policy; protocol, credentials, probe, and deletion stay managed.
 	Builtin           bool     `json:"builtin,omitempty"`
 	ModelCount        int      `json:"model_count,omitempty"`
 	AvailableAccounts int      `json:"available_accounts,omitempty"`
@@ -150,24 +151,6 @@ type providerAvailability struct {
 	P95MS               float64 `json:"p95_ms"`
 	CircuitState        string  `json:"circuit_state,omitempty"`
 	CircuitRetryAt      string  `json:"circuit_retry_at,omitempty"`
-}
-
-type routingCandidateView struct {
-	Provider     string   `json:"provider"`
-	Priority     int      `json:"priority"`
-	Fallback     bool     `json:"fallback"`
-	Builtin      bool     `json:"builtin"`
-	Operations   []string `json:"operations"`
-	HealthStatus string   `json:"health_status"`
-	HealthScore  int      `json:"health_score"`
-	CircuitState string   `json:"circuit_state,omitempty"`
-	Selection    string   `json:"selection"`
-}
-
-type routingModelView struct {
-	Model      string                 `json:"model"`
-	Operation  string                 `json:"operation"`
-	Candidates []routingCandidateView `json:"candidates"`
 }
 
 type providerInput struct {
@@ -278,13 +261,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
 		h.listProviders(w)
-	case rel == "/api/routing/models" && r.Method == http.MethodGet:
-		h.listRoutingModels(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodPut:
 		if !h.requireAdminMutation(w, r) {
 			return
 		}
 		h.updateProviders(w, r)
+	case strings.HasPrefix(rel, "/api/builtin-providers/") && r.Method == http.MethodPatch:
+		if !h.requireAdminMutation(w, r) {
+			return
+		}
+		h.updateBuiltinProvider(w, r, rel)
 	case rel == "/api/admin/preferences" && r.Method == http.MethodGet:
 		h.getAdminPreferences(w)
 	case rel == "/api/admin/preferences" && r.Method == http.MethodPut:
@@ -705,12 +691,12 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 			Source:               classifyProviderSource(false, provider.BaseURL),
 		})
 	}
-	if cfg.ChatGPTWeb.Enabled {
-		providers = append(providers, h.builtinChatGPTProviderView())
-	}
-	if cfg.CodexOAuth.Enabled {
-		providers = append(providers, h.builtinCodexProviderView())
-	}
+	// Builtin rows remain visible while disabled so operators can re-enable
+	// routing or adjust priority without hand-editing YAML.
+	providers = append(providers,
+		h.builtinChatGPTProviderView(cfg),
+		h.builtinCodexProviderView(cfg),
+	)
 	sort.SliceStable(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers":  providers,
@@ -719,97 +705,27 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	})
 }
 
-func (h *Handler) listRoutingModels(w http.ResponseWriter, r *http.Request) {
-	// The account-pool projection is preferred when available. Static-only
-	// deployments intentionally have no ChatGPTRuntime, but their configured
-	// provider candidate chain is still a valid routing read model.
-	snap := effectivecatalog.FromStatic(h.runtime.ConfigSnapshot())
-	if h.chatGPT != nil {
-		value, err := h.chatGPT.ChatGPTEffectiveCatalog(r.Context())
-		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "effective catalog is unavailable")
-			return
-		}
-		snap = value
-	}
-	modelFilter := strings.TrimSpace(r.URL.Query().Get("model"))
-	operationFilter := strings.TrimSpace(r.URL.Query().Get("operation"))
-	health := map[string]providerAvailability{}
-	if h.metricsRegistry != nil {
-		for name, value := range h.metricsRegistry.ProviderHealthSnapshot() {
-			health[name] = providerAvailability{Status: value.Status, Score: value.Score, CircuitState: value.CircuitState}
-		}
-	}
-	views := make([]routingModelView, 0)
-	for _, model := range snap.SortedModelIDs() {
-		if modelFilter != "" && model != modelFilter {
-			continue
-		}
-		operations := map[string]struct{}{}
-		for _, candidate := range snap.CandidatesFor(model, "") {
-			for _, operation := range candidate.Operations {
-				operations[operation] = struct{}{}
-			}
-		}
-		for operation := range operations {
-			if operationFilter != "" && operation != operationFilter {
-				continue
-			}
-			candidates := snap.CandidatesFor(model, operation)
-			items := make([]routingCandidateView, 0, len(candidates))
-			for _, candidate := range candidates {
-				observed := health[candidate.RouteOwner]
-				selection := "fallback"
-				if observed.Status == "unhealthy" || observed.Status == "credential_error" || observed.CircuitState == "open" {
-					selection = "excluded"
-				}
-				items = append(items, routingCandidateView{Provider: candidate.RouteOwner, Priority: candidate.Priority, Fallback: candidate.Fallback, Builtin: candidate.Builtin, Operations: append([]string(nil), candidate.Operations...), HealthStatus: observed.Status, HealthScore: observed.Score, CircuitState: observed.CircuitState, Selection: selection})
-			}
-			sort.SliceStable(items, func(i, j int) bool {
-				if items[i].Priority != items[j].Priority {
-					return items[i].Priority > items[j].Priority
-				}
-				if items[i].HealthScore != items[j].HealthScore {
-					return items[i].HealthScore > items[j].HealthScore
-				}
-				return items[i].Provider < items[j].Provider
-			})
-			primarySet := false
-			for index := range items {
-				if items[index].HealthStatus == "unhealthy" || items[index].HealthStatus == "credential_error" || items[index].CircuitState == "open" {
-					items[index].Selection = "excluded"
-				} else if !primarySet {
-					items[index].Selection = "primary"
-					primarySet = true
-				} else if !items[index].Fallback {
-					items[index].Selection = "not_fallback"
-				} else {
-					items[index].Selection = "fallback"
-				}
-			}
-			views = append(views, routingModelView{Model: model, Operation: operation, Candidates: items})
-		}
-	}
-	sort.SliceStable(views, func(i, j int) bool {
-		if views[i].Model != views[j].Model {
-			return views[i].Model < views[j].Model
-		}
-		return views[i].Operation < views[j].Operation
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"routes": views})
-}
-
-func (h *Handler) builtinCodexProviderView() providerView {
-	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Priority: effectivecatalog.CodexOAuthPriority, Fallback: true, Enabled: true, Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
+func (h *Handler) builtinCodexProviderView(cfg config.Config) providerView {
+	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true, Enabled: config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth), Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
 	if h.chatGPT == nil {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "effective catalog is unavailable"
+		if !view.Enabled {
+			view.Availability.Status = "disabled"
+			view.UnavailableReason = codexBuiltinDisabledReason(cfg)
+		}
+		h.applyObservedHealth(&view)
 		return view
 	}
 	snap, err := h.chatGPT.ChatGPTEffectiveCatalog(context.Background())
 	if err != nil {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "catalog snapshot unavailable"
+		if !view.Enabled {
+			view.Availability.Status = "disabled"
+			view.UnavailableReason = codexBuiltinDisabledReason(cfg)
+		}
+		h.applyObservedHealth(&view)
 		return view
 	}
 	bp := snap.CodexOAuthProvider
@@ -829,19 +745,23 @@ func (h *Handler) builtinCodexProviderView() providerView {
 	default:
 		view.Availability = providerAvailability{Status: "unknown"}
 	}
+	if !view.Enabled {
+		view.Availability.Status = "disabled"
+		view.UnavailableReason = codexBuiltinDisabledReason(cfg)
+	}
 	h.applyObservedHealth(&view)
 	return view
 }
 
-func (h *Handler) builtinChatGPTProviderView() providerView {
+func (h *Handler) builtinChatGPTProviderView(cfg config.Config) providerView {
 	view := providerView{
 		Name:                 effectivecatalog.BuiltinProviderID,
 		Protocol:             effectivecatalog.BuiltinProviderID,
 		BaseURL:              "(account pool)",
 		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses, config.EndpointCapabilityImages},
-		Priority:             effectivecatalog.ChatGPTWebPriority,
+		Priority:             config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb),
 		Fallback:             false,
-		Enabled:              true,
+		Enabled:              config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb),
 		APIKeyConfigured:     false,
 		Source:               ProviderSourceBuiltin,
 		Builtin:              true,
@@ -850,12 +770,22 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 	if h.chatGPT == nil || !h.chatGPTWebAvailable() {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "chatgpt web is not available"
+		if !view.Enabled {
+			view.Availability.Status = "disabled"
+			view.UnavailableReason = chatGPTBuiltinDisabledReason(cfg)
+		}
+		h.applyObservedHealth(&view)
 		return view
 	}
 	snap, err := h.chatGPT.ChatGPTEffectiveCatalog(context.Background())
 	if err != nil {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "catalog snapshot unavailable"
+		if !view.Enabled {
+			view.Availability.Status = "disabled"
+			view.UnavailableReason = chatGPTBuiltinDisabledReason(cfg)
+		}
+		h.applyObservedHealth(&view)
 		return view
 	}
 	bp := snap.BuiltinProvider
@@ -883,8 +813,26 @@ func (h *Handler) builtinChatGPTProviderView() providerView {
 	default:
 		view.Availability = providerAvailability{Status: "unavailable"}
 	}
+	if !view.Enabled {
+		view.Availability.Status = "disabled"
+		view.UnavailableReason = chatGPTBuiltinDisabledReason(cfg)
+	}
 	h.applyObservedHealth(&view)
 	return view
+}
+
+func chatGPTBuiltinDisabledReason(cfg config.Config) string {
+	if !cfg.ChatGPTWeb.Enabled {
+		return "chatgpt web account-pool runtime is disabled; enable it and restart ai-proxy"
+	}
+	return "chatgpt web provider routing is disabled"
+}
+
+func codexBuiltinDisabledReason(cfg config.Config) string {
+	if !cfg.CodexOAuth.Enabled {
+		return "Codex OAuth account-pool runtime is disabled; enable it and restart ai-proxy"
+	}
+	return "Codex OAuth provider routing is disabled"
 }
 
 func (h *Handler) applyObservedHealth(view *providerView) {
@@ -901,26 +849,40 @@ func (h *Handler) applyObservedHealth(view *providerView) {
 		Score: value.Score, WindowSeconds: value.WindowSeconds, SampleCount: value.SampleCount, SuccessRate: value.SuccessRate,
 		P50MS: value.P50MS, P95MS: value.P95MS, CircuitState: value.CircuitState, CircuitRetryAt: formatOptionalTime(value.CircuitRetryAt),
 	}
+	// Account-pool disabled/empty state is authoritative: an old successful
+	// request sample must not make an intentionally disabled or unroutable
+	// builtin provider look usable. Metrics still supply the diagnostic detail.
+	if view.Availability.Status == "disabled" || view.Availability.Status == "unavailable" {
+		mergeProviderAvailabilityDetails(&view.Availability, availability)
+		return
+	}
 	if availability.Status != "" && availability.Status != "unknown" {
 		view.Availability = availability
 		return
 	}
 	// Preserve catalog/credential state while still surfacing live counters.
-	view.Availability.Successes = availability.Successes
-	view.Availability.Failures = availability.Failures
-	view.Availability.ConsecutiveFailures = availability.ConsecutiveFailures
-	view.Availability.LastSuccessAt = availability.LastSuccessAt
-	view.Availability.LastFailureAt = availability.LastFailureAt
-	view.Availability.LastStatus = availability.LastStatus
-	view.Availability.LastOutcome = availability.LastOutcome
-	view.Availability.Score = availability.Score
-	view.Availability.WindowSeconds = availability.WindowSeconds
-	view.Availability.SampleCount = availability.SampleCount
-	view.Availability.SuccessRate = availability.SuccessRate
-	view.Availability.P50MS = availability.P50MS
-	view.Availability.P95MS = availability.P95MS
-	view.Availability.CircuitState = availability.CircuitState
-	view.Availability.CircuitRetryAt = availability.CircuitRetryAt
+	mergeProviderAvailabilityDetails(&view.Availability, availability)
+}
+
+func mergeProviderAvailabilityDetails(target *providerAvailability, observed providerAvailability) {
+	if target == nil {
+		return
+	}
+	target.Successes = observed.Successes
+	target.Failures = observed.Failures
+	target.ConsecutiveFailures = observed.ConsecutiveFailures
+	target.LastSuccessAt = observed.LastSuccessAt
+	target.LastFailureAt = observed.LastFailureAt
+	target.LastStatus = observed.LastStatus
+	target.LastOutcome = observed.LastOutcome
+	target.Score = observed.Score
+	target.WindowSeconds = observed.WindowSeconds
+	target.SampleCount = observed.SampleCount
+	target.SuccessRate = observed.SuccessRate
+	target.P50MS = observed.P50MS
+	target.P95MS = observed.P95MS
+	target.CircuitState = observed.CircuitState
+	target.CircuitRetryAt = observed.CircuitRetryAt
 }
 
 func (h *Handler) providerHealth(cfg config.Config) map[string]providerAvailability {
@@ -984,7 +946,8 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(request.Providers) == 0 && !h.runtime.ConfigSnapshot().ChatGPTWeb.Enabled && !h.runtime.ConfigSnapshot().CodexOAuth.Enabled {
+	current := h.runtime.ConfigSnapshot()
+	if len(request.Providers) == 0 && !config.EffectiveChatGPTWebProviderEnabled(current.ChatGPTWeb) && !config.EffectiveCodexOAuthProviderEnabled(current.CodexOAuth) {
 		writeError(w, http.StatusBadRequest, "at least one provider is required")
 		return
 	}

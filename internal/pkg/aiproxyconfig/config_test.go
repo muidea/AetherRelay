@@ -143,6 +143,52 @@ codex_oauth:
 	}
 }
 
+func TestLoadBuiltinProviderPriorities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+chatgpt_web:
+  enabled: true
+  provider_enabled: false
+  priority: 0
+codex_oauth:
+  enabled: true
+  provider_enabled: true
+  priority: 135
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb); got != 0 {
+		t.Fatalf("chatgpt priority=%d want 0", got)
+	}
+	if got := EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth); got != 135 {
+		t.Fatalf("codex priority=%d want 135", got)
+	}
+	if EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb) {
+		t.Fatalf("chatgpt provider routing should be disabled")
+	}
+	if !EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth) {
+		t.Fatalf("codex provider routing should be enabled")
+	}
+}
+
+func TestLoadRejectsBuiltinProviderPriorityOutOfRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+chatgpt_web:
+  enabled: true
+  priority: 1001
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "chatgpt_web.priority") {
+		t.Fatalf("Load error=%v", err)
+	}
+}
+
 func TestLoadAllowsCodexOAuthDiscoveryWithoutConfiguredModels(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

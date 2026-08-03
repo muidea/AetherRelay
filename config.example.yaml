@@ -79,6 +79,11 @@ state:
 # ChatGPT Web 账号池与图片能力。默认关闭；账号凭据不写入本配置，
 chatgpt_web:
   enabled: false
+  # 控制内建 Provider 是否参与模型路由；不影响账号池、图片与临时对话。
+  # 省略时跟随 enabled；Provider 管理页可热更新此项。
+  provider_enabled: false
+  # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 10。
+  priority: 10
   # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
   refresh_account_interval_minute: 0
   # Admin 临时文本多轮对话（服务端 DuckDB 持久化；浏览器不落会话正文）
@@ -95,6 +100,11 @@ chatgpt_web:
 # 原生 POST /v1/responses。
 codex_oauth:
   enabled: false
+  # 控制内建 Provider 是否参与模型路由；不影响 Codex 账号池维护。
+  # 省略时跟随 enabled；Provider 管理页可热更新此项。
+  provider_enabled: false
+  # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 90。
+  priority: 90
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
   refresh_account_interval_minute: 0
 

@@ -14,8 +14,8 @@ import (
 const (
 	BuiltinProviderID    = "chatgptweb"
 	CodexOAuthProviderID = "codexoauth"
-	CodexOAuthPriority   = 90
-	ChatGPTWebPriority   = 10
+	CodexOAuthPriority   = config.DefaultCodexOAuthProviderPriority
+	ChatGPTWebPriority   = config.DefaultChatGPTWebProviderPriority
 )
 
 // BuiltinProviderStatus is a coarse health projection for Admin and routing.
@@ -138,18 +138,22 @@ func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 		BuiltinModels: map[string]BuiltinModel{},
 		BuiltinProvider: BuiltinProvider{
 			ID:                BuiltinProviderID,
-			Enabled:           cfg.ChatGPTWeb.Enabled,
+			Enabled:           config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb),
 			AvailableAccounts: chatGPT.AvailableAccounts,
 			UpdatedAt:         strings.TrimSpace(chatGPT.UpdatedAt),
 		},
 		CodexOAuthModels:   map[string]BuiltinModel{},
 		Candidates:         map[string][]Candidate{},
-		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Enabled: cfg.CodexOAuth.Enabled, AvailableAccounts: codex.AvailableAccounts, UpdatedAt: strings.TrimSpace(codex.UpdatedAt)},
+		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Enabled: config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth), AvailableAccounts: codex.AvailableAccounts, UpdatedAt: strings.TrimSpace(codex.UpdatedAt)},
 		CodexOAuthVersion:  codex.Version,
 	}
-	if !cfg.ChatGPTWeb.Enabled {
+	if !config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb) {
 		snap.BuiltinProvider.Status = StatusDisabled
-		snap.BuiltinProvider.UnavailableReason = "chatgpt_web is not enabled"
+		if !cfg.ChatGPTWeb.Enabled {
+			snap.BuiltinProvider.UnavailableReason = "chatgpt web account-pool runtime is disabled"
+		} else {
+			snap.BuiltinProvider.UnavailableReason = "chatgpt web provider routing is disabled"
+		}
 	} else {
 		var conflicts []string
 		for _, model := range chatGPT.Models {
@@ -199,9 +203,13 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		return
 	}
 	provider := &snap.CodexOAuthProvider
-	if !cfg.CodexOAuth.Enabled {
+	if !config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth) {
 		provider.Status = StatusDisabled
-		provider.UnavailableReason = "codex_oauth is not enabled"
+		if !cfg.CodexOAuth.Enabled {
+			provider.UnavailableReason = "Codex OAuth account-pool runtime is disabled"
+		} else {
+			provider.UnavailableReason = "Codex OAuth provider routing is disabled"
+		}
 		return
 	}
 	conflicts := make([]string, 0)
@@ -289,7 +297,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 		for id, model := range snap.CodexOAuthModels {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: CodexOAuthProviderID, Operations: append([]string(nil), model.Operations...), Builtin: true,
-				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: CodexOAuthPriority, Fallback: true,
+				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true,
 			})
 		}
 	}
@@ -297,7 +305,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 		for id, model := range snap.BuiltinModels {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: BuiltinProviderID, Operations: append([]string(nil), model.Operations...), Builtin: true,
-				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: ChatGPTWebPriority, Fallback: false,
+				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb), Fallback: false,
 			})
 		}
 	}
