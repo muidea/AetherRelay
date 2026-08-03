@@ -22,16 +22,17 @@ Admin / Proxy HTTP adapter
 ## P0 行为
 
 1. 轮询获得状态为 `normal`、且不在对应模型冷却期的账号。
-2. 成功、401、429、超时、网络、协议和上游失败均回写账号结果。
+2. 成功、401、429、超时、网络、协议和上游失败均回写账号结果；上游明确的 `usage_limit_reached` 额外记录账号/模型级额度耗尽与可选恢复时间，普通 429 不伪装为套餐额度。
 3. 401 对同一账号按本地 ID 单飞 refresh；refresh 成功且尚未对客户端输出时仅重试一次。
 4. 429 和瞬态错误写模型级冷却；`Retry-After` 不超过 3600 秒。429 仅在尚未输出 SSE 时改用未尝试账号。
 5. 非流式请求强制请求上游 SSE，读取 `response.completed.response` 后返回原生对象；若上游返回 JSON Response 对象，则直接保留。
 6. 流式请求在 EventHub 中使用 `Start/Pull/Cancel` 的有界 DTO；任何客户端写入失败、超时或 teardown 都取消上游 body。
 7. Proxy 的发现编排按账号读取 `GET /backend-api/codex/models`，使用该账号代理、Bearer token 和 ChatGPT account header；仅持久化受限模型投影。快照 6 小时有效，失败按账号独立指数退避，且只有有有效快照的账号可被该模型调度。
+8. 导入、凭据刷新和 OAuth 完成会提交即时发现任务；管理端可通过 `POST /api/codex/accounts/discovery` 按选中账号或全池手动同步，并通过 `GET /api/codex/accounts/discovery/progress/{id}` 查看有界进度。Proxy 维护这项编排状态，Admin 只经 typed EventHub 调用，账号池和上游 Block 不彼此直接访问。
 
 ## 配置与运维
 
 - `codex_oauth.enabled`、`refresh_account_interval_minute` 在启动期决定 Block 生命周期，修改后重启。
 - `models` 是可选精确 allowlist；留空时有效目录由健康账号的模型快照并集生成，设置时仅发布命中 allowlist 的已发现模型。静态 Provider 的同名模型优先。
 - 定时 refresh 只处理已有可解析到期时间、且将在 5 分钟内过期的正常账号；无 expiry 的导入凭据由实际 401 驱动刷新。
-- Admin 的 `/api/codex/**` 和「账号池 / Codex OAuth」页面支持脱敏列表、模型缓存状态、JSON 导入、批量 refresh/delete 与 PKCE OAuth。图片任务、图片库和历史对话归入「功能集」。callback、token、account ID、proxy 不会回显或写入 Web Storage。
+- Admin 的 `/api/codex/**` 和「账号池 / Codex OAuth」页面支持脱敏列表、模型缓存/发现进度、额度观察、JSON 导入、批量 refresh/delete 与 PKCE OAuth。内建 Provider 的可用性单元直接显示不可用原因、可路由账号数和模型数。图片任务、图片库和历史对话归入「功能集」。callback、token、account ID、proxy 不会回显或写入 Web Storage。

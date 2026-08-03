@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
@@ -141,5 +142,50 @@ func TestCodexDiscoveryUsesAccountScopedCredentialsAndSkipsBackoff(t *testing.T)
 	defer mu.Unlock()
 	if requests != 2 || len(stored) != 2 {
 		t.Fatalf("full discovery requests=%d snapshots=%+v", requests, stored)
+	}
+}
+
+func TestManualCodexDiscoveryReportsAccountScopedProgress(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ListDiscoveryCandidatesResult{Candidates: []codexevents.DiscoveryCandidate{{AccountID: "account-1", AccessToken: "token-1"}}}, nil)
+	})
+	accounts.Subscribe(codexevents.TopicPutModelSnapshot, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.PutModelSnapshotResult{OK: true}, nil)
+	})
+	accounts.Subscribe(codexevents.TopicCatalogSnapshot, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.CatalogSnapshotResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(codexupcommon.UnitID, hub)
+	upstream.Subscribe(codexupevents.TopicListModels, func(_ event.Event, result event.Result) {
+		result.Set(codexupevents.ListModelsResult{Models: []codexupevents.ModelDescriptor{{ID: "gpt-5.2-codex"}}}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}}
+	started, err := proxy.StartCodexModelDiscovery(context.Background(), []string{"account-1", "account-1"})
+	if err != nil || started.ProgressID == "" || started.Done {
+		t.Fatalf("start=%+v err=%v", started, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		progress, found := proxy.CodexModelDiscoveryProgress(started.ProgressID)
+		if !found {
+			t.Fatal("manual discovery progress disappeared")
+		}
+		if progress.Done {
+			if progress.Total != 1 || progress.Processed != 1 || progress.Succeeded != 1 || progress.Failed != 0 || progress.LastError != "" || progress.CompletedAt == "" {
+				t.Fatalf("progress=%+v", progress)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("manual discovery did not complete: %+v", progress)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

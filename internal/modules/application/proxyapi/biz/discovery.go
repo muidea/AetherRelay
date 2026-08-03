@@ -11,12 +11,14 @@ import (
 	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	codexcommon "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
 	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
 	codexupcommon "ai-proxy/internal/modules/blocks/codexupstream/pkg/common"
 	codexupevents "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
+	"github.com/google/uuid"
 	"github.com/muidea/magicCommon/event"
 )
 
@@ -34,6 +36,8 @@ const (
 	discoveryAccountTimeout = 45 * time.Second
 	// discoveryConcurrency caps concurrent upstream model enumerations.
 	discoveryConcurrency = 2
+	// codexDiscoveryProgressRetention bounds process-local manual job history.
+	codexDiscoveryProgressRetention = 30 * time.Minute
 )
 
 // CatalogPublisher is the narrow service-side capability used to atomically
@@ -222,35 +226,112 @@ func (s *Proxy) runCodexDiscoveryRound(ctx context.Context, dueOnly bool) {
 		return
 	}
 	defer s.codexDiscoveryMu.Unlock()
+	s.runCodexDiscoveryRoundLocked(ctx, dueOnly, nil, "")
+}
+
+// StartCodexModelDiscovery starts an explicit, account-scoped model refresh.
+// It is intentionally owned by proxyapi: the account pool owns credentials and
+// snapshots while codexupstream owns HTTP, and only proxyapi may coordinate the
+// two. The returned progress survives only for a bounded time in this process.
+func (s *Proxy) StartCodexModelDiscovery(ctx context.Context, accountIDs []string) (proxyevents.CodexDiscoveryProgress, error) {
+	if !s.config.CodexOAuth.Enabled {
+		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("Codex OAuth is not enabled")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	progress := proxyevents.CodexDiscoveryProgress{
+		ProgressID: uuid.NewString(),
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	s.putCodexDiscoveryProgress(progress)
+	requested := uniqueCodexAccountIDs(accountIDs)
+	if err := s.BackgroundRoutine().AsyncFunction(func() {
+		s.runCodexDiscoveryJob(context.WithoutCancel(ctx), progress.ProgressID, requested)
+	}); err != nil {
+		s.finishCodexDiscoveryProgress(progress.ProgressID, err.Error())
+		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("Codex model discovery task unavailable")
+	}
+	return progress, nil
+}
+
+// CodexModelDiscoveryProgress returns a bounded projection of an explicit
+// discovery task. The account pool snapshot remains the durable source of
+// truth after the task record expires.
+func (s *Proxy) CodexModelDiscoveryProgress(progressID string) (proxyevents.CodexDiscoveryProgress, bool) {
+	s.discoveryJobsMu.RLock()
+	progress, found := s.codexDiscoveryJobs[strings.TrimSpace(progressID)]
+	s.discoveryJobsMu.RUnlock()
+	if found && progress.Done && progress.CompletedAt != "" {
+		if completedAt, err := time.Parse(time.RFC3339, progress.CompletedAt); err == nil && time.Since(completedAt) > codexDiscoveryProgressRetention {
+			return proxyevents.CodexDiscoveryProgress{}, false
+		}
+	}
+	return progress, found
+}
+
+func (s *Proxy) runCodexDiscoveryJob(ctx context.Context, progressID string, accountIDs []string) {
+	// Automatic rounds use TryLock to avoid a timer backlog. An operator-asked
+	// round instead waits its turn so a click is never silently dropped.
+	s.codexDiscoveryMu.Lock()
+	defer s.codexDiscoveryMu.Unlock()
+	s.runCodexDiscoveryRoundLocked(ctx, false, accountIDs, progressID)
+}
+
+// runCodexDiscoveryRoundLocked performs one discovery generation. Callers
+// hold codexDiscoveryMu. Empty progressID denotes the periodic internal round.
+func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, accountIDs []string, progressID string) {
 
 	candidates, err := s.listCodexDiscoveryCandidates(ctx)
 	if err != nil {
 		slog.Warn("Codex model discovery failed", "stage", "list_candidates", "error", err.Error())
+		s.finishCodexDiscoveryProgress(progressID, err.Error())
 		return
 	}
-	sem := make(chan struct{}, discoveryConcurrency)
-	var wg sync.WaitGroup
+	requested := make(map[string]struct{}, len(accountIDs))
+	for _, accountID := range accountIDs {
+		requested[accountID] = struct{}{}
+	}
+	selected := make([]codexevents.DiscoveryCandidate, 0, len(candidates.Candidates))
 	for _, candidate := range candidates.Candidates {
 		if strings.TrimSpace(candidate.AccountID) == "" || strings.TrimSpace(candidate.AccessToken) == "" {
 			continue
 		}
+		if len(requested) > 0 {
+			if _, ok := requested[candidate.AccountID]; !ok {
+				continue
+			}
+		}
 		if dueOnly && !candidate.DiscoveryDue {
 			continue
 		}
+		selected = append(selected, candidate)
+	}
+	s.setCodexDiscoveryTotal(progressID, len(selected), len(requested) > 0 && len(selected) == 0)
+	if len(selected) == 0 {
+		s.refreshEffectiveCatalog(ctx)
+		s.finishCodexDiscoveryProgress(progressID, "")
+		return
+	}
+	sem := make(chan struct{}, discoveryConcurrency)
+	var wg sync.WaitGroup
+	for _, candidate := range selected {
 		wg.Add(1)
 		sem <- struct{}{}
 		cand := candidate
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			s.discoverOneCodexAccount(ctx, cand)
+			err := s.discoverOneCodexAccount(ctx, cand)
+			s.advanceCodexDiscoveryProgress(progressID, err)
 		}()
 	}
 	wg.Wait()
 	s.refreshEffectiveCatalog(ctx)
+	s.finishCodexDiscoveryProgress(progressID, "")
 }
 
-func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexevents.DiscoveryCandidate) {
+func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexevents.DiscoveryCandidate) error {
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
 	value, err := s.SendEvent(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{
@@ -260,12 +341,13 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 	})).Get()
 	if err != nil {
 		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", err)
-		return
+		return err
 	}
 	listed, ok := value.(codexupevents.ListModelsResult)
 	if !ok {
-		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", fmt.Errorf("invalid model list result"))
-		return
+		err := fmt.Errorf("invalid model list result")
+		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", err)
+		return err
 	}
 	now := time.Now().UTC()
 	snapshot := codexevents.AccountModelSnapshot{
@@ -282,7 +364,113 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutModelSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutModelSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot})).Get()
 	if putErr != nil {
 		s.recordCodexDiscoveryFailure(ctx, candidate, "put_snapshot", putErr)
+		return putErr
 	}
+	return nil
+}
+
+func uniqueCodexAccountIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func (s *Proxy) putCodexDiscoveryProgress(progress proxyevents.CodexDiscoveryProgress) {
+	s.discoveryJobsMu.Lock()
+	if s.codexDiscoveryJobs == nil {
+		s.codexDiscoveryJobs = map[string]proxyevents.CodexDiscoveryProgress{}
+	}
+	now := time.Now().UTC()
+	for id, item := range s.codexDiscoveryJobs {
+		if !item.Done || item.CompletedAt == "" {
+			continue
+		}
+		completedAt, err := time.Parse(time.RFC3339, item.CompletedAt)
+		if err == nil && now.Sub(completedAt) > codexDiscoveryProgressRetention {
+			delete(s.codexDiscoveryJobs, id)
+		}
+	}
+	s.codexDiscoveryJobs[progress.ProgressID] = progress
+	s.discoveryJobsMu.Unlock()
+}
+
+func (s *Proxy) setCodexDiscoveryTotal(progressID string, total int, noEligibleSelected bool) {
+	if strings.TrimSpace(progressID) == "" {
+		return
+	}
+	s.discoveryJobsMu.Lock()
+	progress, found := s.codexDiscoveryJobs[progressID]
+	if found {
+		progress.Total = total
+		if total == 0 {
+			if noEligibleSelected {
+				progress.LastError = "none of the requested Codex OAuth accounts is eligible for model discovery"
+			} else {
+				progress.LastError = "no eligible Codex OAuth account was found for model discovery"
+			}
+		}
+		s.codexDiscoveryJobs[progressID] = progress
+	}
+	s.discoveryJobsMu.Unlock()
+}
+
+func (s *Proxy) advanceCodexDiscoveryProgress(progressID string, err error) {
+	if strings.TrimSpace(progressID) == "" {
+		return
+	}
+	s.discoveryJobsMu.Lock()
+	progress, found := s.codexDiscoveryJobs[progressID]
+	if found {
+		progress.Processed++
+		if err == nil {
+			progress.Succeeded++
+		} else {
+			progress.Failed++
+			progress.LastError = boundedDiscoveryError(err.Error())
+		}
+		s.codexDiscoveryJobs[progressID] = progress
+	}
+	s.discoveryJobsMu.Unlock()
+}
+
+func (s *Proxy) finishCodexDiscoveryProgress(progressID, failure string) {
+	if strings.TrimSpace(progressID) == "" {
+		return
+	}
+	s.discoveryJobsMu.Lock()
+	progress, found := s.codexDiscoveryJobs[progressID]
+	if found {
+		if strings.TrimSpace(failure) != "" {
+			progress.LastError = boundedDiscoveryError(failure)
+			if progress.Total == 0 {
+				progress.Failed = 1
+			}
+		}
+		progress.Done = true
+		progress.CompletedAt = time.Now().UTC().Format(time.RFC3339)
+		s.codexDiscoveryJobs[progressID] = progress
+	}
+	s.discoveryJobsMu.Unlock()
+}
+
+func boundedDiscoveryError(value string) string {
+	value = strings.TrimSpace(value)
+	const limit = 240
+	if len(value) > limit {
+		return value[:limit]
+	}
+	return value
 }
 
 func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, cause error) {

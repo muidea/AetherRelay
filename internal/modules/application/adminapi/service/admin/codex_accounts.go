@@ -118,6 +118,43 @@ func (h *Handler) refreshCodexAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *Handler) startCodexModelDiscovery(w http.ResponseWriter, r *http.Request) {
+	if h.codex == nil {
+		writeError(w, http.StatusServiceUnavailable, "Codex account pool is unavailable")
+		return
+	}
+	var body struct {
+		AccountIDs []string `json:"account_ids"`
+	}
+	if !decodeAdminBody(w, r, &body) {
+		return
+	}
+	progress, err := h.codex.StartCodexModelDiscovery(r.Context(), body.AccountIDs)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, progress)
+}
+
+func (h *Handler) codexModelDiscoveryProgress(w http.ResponseWriter, r *http.Request, rel string) {
+	if h.codex == nil {
+		writeError(w, http.StatusServiceUnavailable, "Codex account pool is unavailable")
+		return
+	}
+	progressID := strings.Trim(strings.TrimPrefix(rel, "/api/codex/accounts/discovery/progress/"), "/")
+	if progressID == "" || strings.Contains(progressID, "/") {
+		writeError(w, http.StatusBadRequest, "discovery progress id is required")
+		return
+	}
+	progress, err := h.codex.CodexModelDiscoveryProgress(r.Context(), progressID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, progress)
+}
+
 func (h *Handler) startCodexOAuth(w http.ResponseWriter, r *http.Request) {
 	if h.codex == nil {
 		writeError(w, http.StatusServiceUnavailable, "Codex account pool is unavailable")

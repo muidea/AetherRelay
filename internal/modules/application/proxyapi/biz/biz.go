@@ -35,16 +35,18 @@ type Proxy struct {
 	metrics  metricsport.Port
 	recorder *archive.Recorder
 
-	mu               sync.RWMutex
-	updater          ConfigUpdater
-	catalogPublisher CatalogPublisher
-	catalog          effectivecatalog.Snapshot
-	discoveryMu      sync.Mutex
-	codexDiscoveryMu sync.Mutex
+	mu                 sync.RWMutex
+	updater            ConfigUpdater
+	catalogPublisher   CatalogPublisher
+	catalog            effectivecatalog.Snapshot
+	discoveryMu        sync.Mutex
+	codexDiscoveryMu   sync.Mutex
+	discoveryJobsMu    sync.RWMutex
+	codexDiscoveryJobs map[string]proxyevents.CodexDiscoveryProgress
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {
-	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}}
 	bootstrap, err := configevents.RequestBootstrap(ctx, biz.EventHub(), biz.ID())
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
@@ -69,6 +71,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.recorder = recorder
 	biz.SubscribeFunc(proxyevents.TopicUpdateConfig, biz.handleUpdate)
 	biz.SubscribeFunc(proxyevents.TopicEffectiveCatalog, biz.handleEffectiveCatalog)
+	biz.SubscribeFunc(proxyevents.TopicStartCodexDiscovery, biz.handleStartCodexDiscovery)
+	biz.SubscribeFunc(proxyevents.TopicCodexDiscoveryProgress, biz.handleCodexDiscoveryProgress)
 	return biz, nil
 }
 
@@ -80,11 +84,16 @@ func (s *Proxy) Run(ctx context.Context) *cd.Error {
 func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicUpdateConfig)
 	s.UnsubscribeFunc(proxyevents.TopicEffectiveCatalog)
+	s.UnsubscribeFunc(proxyevents.TopicStartCodexDiscovery)
+	s.UnsubscribeFunc(proxyevents.TopicCodexDiscoveryProgress)
 	s.mu.Lock()
 	s.updater = nil
 	s.catalogPublisher = nil
 	s.catalog = effectivecatalog.Snapshot{}
 	s.mu.Unlock()
+	s.discoveryJobsMu.Lock()
+	s.codexDiscoveryJobs = nil
+	s.discoveryJobsMu.Unlock()
 	s.config = config.Config{}
 	s.usage = nil
 	s.metrics = nil
@@ -136,4 +145,38 @@ func (s *Proxy) handleEffectiveCatalog(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(proxyevents.EffectiveCatalogResult{Snapshot: s.EffectiveCatalog()}, nil)
+}
+
+func (s *Proxy) handleStartCodexDiscovery(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(proxyevents.StartCodexDiscoveryCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex discovery command"))
+		return
+	}
+	progress, err := s.StartCodexModelDiscovery(context.WithoutCancel(ev.Context()), command.AccountIDs)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(proxyevents.StartCodexDiscoveryResult{Progress: progress}, nil)
+}
+
+func (s *Proxy) handleCodexDiscoveryProgress(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(proxyevents.CodexDiscoveryProgressCommand)
+	if !ok || command.ProgressID == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex discovery progress command"))
+		return
+	}
+	progress, found := s.CodexModelDiscoveryProgress(command.ProgressID)
+	if !found {
+		result.Set(nil, cd.NewError(cd.NotFound, "Codex model discovery progress not found"))
+		return
+	}
+	result.Set(proxyevents.CodexDiscoveryProgressResult{Progress: progress}, nil)
 }

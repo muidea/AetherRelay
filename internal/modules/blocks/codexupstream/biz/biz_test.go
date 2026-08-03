@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	events "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
 )
@@ -26,14 +27,14 @@ func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
 
 func TestCompletedResponseSupportsJSONAndSSE(t *testing.T) {
 	jsonResponse := &http.Response{Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"object":"response","id":"resp_1"}`))}
-	value, class, err := completedResponse(jsonResponse, 1024)
-	if err != nil || class != "" || string(value) != `{"object":"response","id":"resp_1"}` {
-		t.Fatalf("json completed response = %s class=%s err=%v", value, class, err)
+	value, class, observation, err := completedResponse(jsonResponse, 1024)
+	if err != nil || class != "" || observation.UsageLimited || string(value) != `{"object":"response","id":"resp_1"}` {
+		t.Fatalf("json completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
 	}
 	sseResponse := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_2\"}}\n\n"))}
-	value, class, err = completedResponse(sseResponse, 1024)
-	if err != nil || class != "" || !strings.Contains(string(value), `"resp_2"`) {
-		t.Fatalf("sse completed response = %s class=%s err=%v", value, class, err)
+	value, class, observation, err = completedResponse(sseResponse, 1024)
+	if err != nil || class != "" || observation.UsageLimited || !strings.Contains(string(value), `"resp_2"`) {
+		t.Fatalf("sse completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
 	}
 }
 
@@ -43,6 +44,32 @@ func TestTerminalClass(t *testing.T) {
 	}
 	if done, class := terminalClass([]byte("data: {\"type\":\"response.failed\"}\n")); !done || class != events.ErrorUpstream {
 		t.Fatalf("failed terminal = done=%v class=%q", done, class)
+	}
+}
+
+func TestRateLimitObservationReadsCodexUsageReset(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	observation := rateLimitObservation([]byte(`{"error":{"type":"usage_limit_reached","resets_in_seconds":120}}`), now)
+	if !observation.UsageLimited || observation.ResetAt != now.Add(120*time.Second).Format(time.RFC3339) {
+		t.Fatalf("observation=%+v", observation)
+	}
+	done, class, streamObservation := terminalOutcome([]byte("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"type\":\"usage_limit_reached\",\"resets_in_seconds\":120}}}\n"))
+	if !done || class != events.ErrorRateLimit || !streamObservation.UsageLimited {
+		t.Fatalf("terminal outcome done=%v class=%q observation=%+v", done, class, streamObservation)
+	}
+	isoObservation := rateLimitObservation([]byte(`{"error":{"type":"usage_limit_reached","resets_at":"2023-11-14T22:16:40Z"}}`), now)
+	if !isoObservation.UsageLimited || isoObservation.ResetAt != "2023-11-14T22:16:40Z" {
+		t.Fatalf("ISO reset observation=%+v", isoObservation)
+	}
+	if class := errorClassWithRateLimit(http.StatusInternalServerError, isoObservation); class != events.ErrorRateLimit {
+		t.Fatalf("usage limit class=%q", class)
+	}
+}
+
+func TestRateLimitObservationDoesNotTreatGeneric429AsQuotaExhaustion(t *testing.T) {
+	observation := rateLimitObservation([]byte(`{"error":{"type":"rate_limit_exceeded","resets_in_seconds":120}}`), time.Now().UTC())
+	if observation.UsageLimited || observation.ResetAt != "" {
+		t.Fatalf("generic rate limit observation=%+v", observation)
 	}
 }
 

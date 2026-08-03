@@ -24,7 +24,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		}
 		out, failure := s.completeCodexOnce(ctx, account, request)
 		if failure == nil {
-			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0)
+			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 			return out, nil
 		}
 		if failure.Kind == codexresponses.KindInvalidToken {
@@ -32,22 +32,22 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 			if refreshErr == nil && refreshed.Refreshed {
 				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy}, request)
 				if failure == nil {
-					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0)
+					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 					return out, nil
 				}
 			}
 			if refreshErr != nil {
-				s.recordCodexResult(ctx, account.AccountID, request.Model, false, refreshFailureClass(refreshed), 0)
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, refreshFailureClass(refreshed), 0, false, "")
 				tried = append(tried, account.AccountID)
 				continue
 			}
 			if refreshed.PermanentFailure {
-				s.recordCodexResult(ctx, account.AccountID, request.Model, false, accevents.ErrorInvalidToken, 0)
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, accevents.ErrorInvalidToken, 0, false, "")
 				tried = append(tried, account.AccountID)
 				continue
 			}
 		}
-		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds)
+		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 		if failure.Kind == codexresponses.KindRateLimit || failure.Kind == codexresponses.KindInvalidToken {
 			tried = append(tried, account.AccountID)
 			continue
@@ -72,7 +72,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 			return emit(line)
 		})
 		if err == nil {
-			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0)
+			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 			return nil
 		}
 		failure, _ := codexresponses.AsFailure(err)
@@ -80,7 +80,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 			return err
 		}
 		if emitted {
-			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds)
+			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 			return err
 		}
 		if failure.Kind == codexresponses.KindInvalidToken {
@@ -88,18 +88,18 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 			if refreshErr == nil && refreshed.Refreshed {
 				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy}, request, started, emit)
 				if err == nil {
-					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0)
+					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 					return nil
 				}
 				failure, _ = codexresponses.AsFailure(err)
 			}
 			if refreshErr != nil {
-				s.recordCodexResult(ctx, account.AccountID, request.Model, false, refreshFailureClass(refreshed), 0)
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, refreshFailureClass(refreshed), 0, false, "")
 				tried = append(tried, account.AccountID)
 				continue
 			}
 			if refreshed.PermanentFailure {
-				s.recordCodexResult(ctx, account.AccountID, request.Model, false, accevents.ErrorInvalidToken, 0)
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, accevents.ErrorInvalidToken, 0, false, "")
 				tried = append(tried, account.AccountID)
 				continue
 			}
@@ -107,7 +107,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if failure == nil {
 			return err
 		}
-		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds)
+		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 		if failure.Kind == codexresponses.KindRateLimit || failure.Kind == codexresponses.KindInvalidToken {
 			tried = append(tried, account.AccountID)
 			continue
@@ -140,7 +140,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex upstream result"))
 	}
 	if completed.ErrorClass != "" {
-		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds)
+		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit)
 	}
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 }
@@ -157,7 +157,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	if startedUpstream.ErrorClass != "" {
-		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds)
+		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit)
 	}
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
@@ -184,7 +184,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
-				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds)
+				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit)
 			}
 			return nil
 		}
@@ -218,11 +218,14 @@ func refreshFailureClass(result accevents.RefreshTokenResult) string {
 	}
 }
 
-func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success bool, class string, retryAfter int) {
+func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success bool, class string, retryAfter int, quotaExhausted bool, quotaResetAt string) {
 	if strings.TrimSpace(id) == "" {
 		return
 	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{AccountID: id, Model: model, Success: success, ErrorClass: class, RetryAfterSeconds: retryAfter})).Get()
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
+		AccountID: id, Model: model, Success: success, ErrorClass: class, RetryAfterSeconds: retryAfter,
+		QuotaExhausted: quotaExhausted, QuotaResetAt: quotaResetAt,
+	})).Get()
 }
 
 func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
@@ -232,11 +235,14 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 	}
 	return result
 }
-func failureFromUpstream(class upevents.ErrorClass, retryAfter int) *codexresponses.Failure {
+func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation) *codexresponses.Failure {
 	switch class {
 	case upevents.ErrorInvalidToken:
 		return codexresponses.NewFailure(codexresponses.KindInvalidToken, retryAfter, fmt.Errorf("Codex OAuth access token rejected"))
 	case upevents.ErrorRateLimit:
+		if rateLimit.UsageLimited {
+			return codexresponses.NewQuotaFailure(codexresponses.KindRateLimit, retryAfter, true, rateLimit.ResetAt, fmt.Errorf("Codex upstream usage limit reached"))
+		}
 		return codexresponses.NewFailure(codexresponses.KindRateLimit, retryAfter, fmt.Errorf("Codex upstream rate limited"))
 	case upevents.ErrorTimeout:
 		return codexresponses.NewFailure(codexresponses.KindTimeout, retryAfter, fmt.Errorf("Codex upstream timed out"))

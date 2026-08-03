@@ -52,6 +52,7 @@ type AccountView struct {
 	LastTokenRefreshErrorAt    string                `json:"last_token_refresh_error_at,omitempty"`
 	LastTokenRefreshErrorClass string                `json:"last_token_refresh_error_class,omitempty"`
 	Cooldowns                  []CooldownView        `json:"cooldowns,omitempty"`
+	QuotaObservations          []QuotaObservation    `json:"quota_observations,omitempty"`
 	ModelSnapshot              *AccountModelSnapshot `json:"model_snapshot,omitempty"`
 	ModelDiscoveryRetryAt      string                `json:"model_discovery_retry_at,omitempty"`
 	ModelDiscoveryLastError    string                `json:"model_discovery_last_error,omitempty"`
@@ -61,6 +62,16 @@ type CooldownView struct {
 	Model      string `json:"model"`
 	Until      string `json:"until"`
 	ErrorClass string `json:"error_class"`
+}
+
+// QuotaObservation is an upstream-observed account/model limit state. It is
+// intentionally not a claimed remaining quota: Codex does not provide that
+// value through the account model endpoint.
+type QuotaObservation struct {
+	Model      string `json:"model"`
+	State      string `json:"state"`
+	ObservedAt string `json:"observed_at"`
+	ResetAt    string `json:"reset_at,omitempty"`
 }
 
 // CredentialInput is the deliberate secret-bearing Admin import contract.
@@ -120,6 +131,8 @@ type RecordResultCommand struct {
 	Success           bool
 	ErrorClass        string
 	RetryAfterSeconds int
+	QuotaExhausted    bool
+	QuotaResetAt      string
 }
 type RecordResultResult struct{ Account AccountView }
 

@@ -341,12 +341,14 @@
           <input id="codexAccSearch" class="search" type="search" autocomplete="off" placeholder="搜索脱敏邮箱或本地 ID">
           <div class="cg-toolbar-actions">
             <button type="button" class="btn" id="codexAccReload">重新加载</button>
+            <button type="button" class="btn" id="codexAccDiscovery">同步模型</button>
             <button type="button" class="btn" id="codexAccRefresh">刷新所选凭据</button>
             <button type="button" class="btn link-danger" id="codexAccDelete">删除所选账号</button>
             <button type="button" class="btn" id="codexAccOAuth">OAuth 导入</button>
             <button type="button" class="btn btn-primary" id="codexAccImport">导入凭据</button>
           </div>
         </div>
+        <div id="codexDiscoveryProgress" class="notice" style="display:none"></div>
         <div id="codexAccTable" class="loading"><div class="spin"></div><div>正在加载账号…</div></div>
       </section>
     </section>
@@ -513,13 +515,16 @@ const enUS={
   "待发送图片":"Pending image","移除图片":"Remove image","无预览":"No preview","选择":"Select","标签":"Tags","无标签":"No tags","预览":"Preview","关闭":"Close","保存":"Save","路径":"Path","复制":"Copy","已复制":"Copied","复制失败":"Copy failed","无可复制内容":"Nothing to copy","冷却中":"Cooling down","即将恢复":"Restoring soon","已到恢复时间":"Ready","超时":"Timed out","上游故障":"Upstream failure","临时故障":"Temporary failure","降级":"Degraded","不可用":"Unavailable","凭据异常":"Credential error","能力漂移":"Capability drift","待观测":"Awaiting observations","尚无成功请求":"No successful requests yet","等待首次发现":"Awaiting initial discovery","最近成功":"Last success","最近发现":"Last discovered","运行时内建":"Runtime built-in","API Key 已配置":"API key configured","本地无认证":"Local unauthenticated","未配置凭据":"Credentials not configured","检查结果":"Check result","Provider 检查成功":"Provider check succeeded","Provider 配置已保存并生效":"Provider configuration saved and activated","Provider 已启用":"Provider enabled","Provider 已禁用":"Provider disabled","Provider 已删除":"Provider deleted","内建 Provider 不可编辑":"Built-in providers cannot be edited","内建 Provider 不可切换":"Built-in providers cannot be toggled","内建 Provider 不可删除":"Built-in providers cannot be deleted","请选择模型":"Select a model","创建失败":"Create failed","发送失败":"Send failed","删除失败":"Delete failed","取消失败":"Cancel failed","读取会话失败":"Could not read conversation","加载更早消息失败":"Could not load earlier messages","无法加载对话":"Could not load conversation","历史对话当前不可用":"Conversation history is unavailable","暂无历史会话":"No conversation history","未命名会话":"Untitled conversation","暂无消息。发送首条消息以开始对话。":"No messages. Send the first message to start the conversation.","对话已创建":"Conversation created","对话已删除":"Conversation deleted","已发送取消请求":"Cancellation requested","请输入消息或添加图片附件":"Enter a message or add image attachments","每轮最多添加 4 张图片":"A turn supports at most 4 images","仅支持 PNG、JPEG、GIF、WebP 图片":"Only PNG, JPEG, GIF, and WebP images are supported","单轮图片总大小不能超过 20 MiB":"Total images per turn must not exceed 20 MiB","暂无可用模型":"No available models","无法加载模型":"Could not load models","图片任务已提交":"Image task submitted","已恢复轮询":"Polling resumed","图片任务已重新提交":"Image task resubmitted","标签已更新":"Tags updated","请先选择图片":"Select images first","图片删除正在进行中":"Image deletion is in progress","图片已删除":"Images deleted",
   "查看并维护上游服务、模型路由模式和端点能力；来源按 Base URL 自动识别为内建 / 官方 / 第三方，保存后立即生效。":"View and maintain upstream services, model routing patterns, and endpoint capabilities. Source is identified from the base URL as built-in, official, or third party; changes apply immediately.","ChatGPT Web 的账号与功能服务。敏感凭据不会在页面展示，也不会保存到浏览器。":"ChatGPT Web account and feature services. Sensitive credentials are never displayed or saved in the browser.","ChatGPT Web 子页签":"ChatGPT Web tabs","ChatGPT Web 服务当前不可用。":"ChatGPT Web is currently unavailable.","此对话需要恢复：上一轮生成已中断，无法继续当前分支。请创建新对话。":"This conversation requires recovery: the previous generation was interrupted and this branch cannot continue. Create a new conversation.","输入消息，可附加图片。Enter 发送，Shift+Enter 换行":"Enter a message and optional images. Enter sends; Shift+Enter adds a line.","仅列出已验证且支持 chat_completions 的模型；research 专用模型不提供此功能。":"Only verified models that support chat_completions are listed; research-only models are unavailable here.","仅在首轮请求中发送":"Sent only with the first turn.","管理用于原生  的 Codex OAuth 账号，并查看账号级模型目录、凭据刷新与冷却状态。":"Manage Codex OAuth accounts for native Responses requests, including account model catalogs, credential refresh, and cooldown state.","Codex OAuth 服务当前不可用。":"Codex OAuth is currently unavailable.","正常账号":"Normal accounts","异常账号":"Abnormal accounts","禁用账号":"Disabled accounts","Codex 账号列表":"Codex accounts","搜索脱敏邮箱或本地 ID":"Search masked email or local ID","保存后名称会统一转为小写":"Names are normalized to lowercase when saved.","请立即复制 API Key":"Copy the API key now","关闭后无法再次查看。":"It cannot be viewed again after closing.","导入 Access Token":"Import access token","每行一个 access token，也可用逗号分隔；也支持 accounts.json":"One access token per line or comma-separated; accounts.json is also supported.","支持 token 文本，或 JSON 数组（字符串 / 含 access_token 的对象）。仅提交 access token 集合；不会显示或回显完整 token。":"Accepts token text or a JSON array (strings or objects with access_token). Only access tokens are submitted; full tokens are never displayed or echoed.","留空":"Leave empty","手工导入（web）":"Manual import (web)","编辑账号":"Edit account","账号 ID":"Account ID","出于安全设计，页面不展示或编辑 proxy / token。":"For security, proxies and tokens cannot be viewed or edited here.","点击开始后，在浏览器中完成上游登录，再把回调 URL/地址粘贴回来。授权 URL 与 session 仅保存在本页内存，不会写入浏览器存储。":"After starting, sign in upstream in the browser and paste the callback URL back here. The authorization URL and session remain only in this page's memory.","开始 OAuth":"Start OAuth","会话进行中。请完成上游登录后提交 callback；取消会销毁内存状态。":"Session in progress. Complete upstream sign-in and submit the callback; cancelling clears in-memory state.","粘贴完整 callback URL 或地址":"Paste the complete callback URL or address","完成导入":"Complete import","确认导出账号":"Confirm account export","将导出 ":"Exporting "," 个账号的敏感凭据（含 access/refresh token 等）。":" accounts' sensitive credentials (including access/refresh tokens).","导出内容不会在页面预览，也不会写入 localStorage/sessionStorage。下载完成后立即释放内存引用。":"Exported content is not previewed or stored in localStorage/sessionStorage. Memory references are released after download.","确认导出并下载":"Export and download","导入 Codex OAuth 凭据":"Import Codex OAuth credentials","仅接受 Codex OAuth 导出结构。凭据和代理仅在提交期间保留于页面内存，列表与后续页面都不会回显。":"Only Codex OAuth export data is accepted. Credentials and proxies remain in page memory only while submitting and are never echoed in later views.","账号代理（可选）":"Account proxy (optional)","此代理会同时用于授权换令牌、后续刷新和 Codex 请求，但不会在列表中显示。":"This proxy is used for authorization token exchange, later refreshes, and Codex requests; it is never shown in lists.","开始后会在新窗口打开 OpenAI 登录；请将最终的  完整 URL 粘贴回来。授权 URL 与会话不写入浏览器存储。":"Starting opens OpenAI sign-in in a new window; paste the final callback URL back here. Authorization URLs and sessions are not stored in the browser.","会话进行中。完成登录后提交 callback；关闭窗口会清除本页内存的会话引用。":"Session in progress. Submit the callback after sign-in; closing clears this page's in-memory session reference.","编辑标签":"Edit tags","tags（逗号或换行分隔）":"Tags (comma or newline separated)","预览图片":"Preview image"
 };
+Object.assign(enUS,{
+  "同步模型":"Sync models","刷新凭据":"Refresh credentials","模型发现中":"Discovering models","模型目录同步暂不可用":"Model catalog synchronization is unavailable","模型发现失败：{error}；下次尝试 {time}":"Model discovery failed: {error}; next attempt {time}","等待模型同步":"Awaiting model synchronization","已发现 {count} 个模型":"Discovered {count} models","缓存有效至 {time}":"Cached until {time}","未发现模型":"No models discovered","观察到额度耗尽 · {model} · 恢复于 {time}":"Observed quota exhaustion · {model} · resets {time}","上游未提供恢复时间":"Upstream did not provide a reset time","模型同步完成：成功 {succeeded}，失败 {failed}，共 {total} 个账号":"Model synchronization complete: {succeeded} succeeded, {failed} failed, {total} accounts total","模型发现中：已处理 {processed}/{total}，成功 {succeeded}，失败 {failed}":"Discovering models: {processed}/{total} processed, {succeeded} succeeded, {failed} failed","最后错误：{error}":"Last error: {error}","模型同步进度查询失败：{error}。请重新加载账号列表。":"Could not retrieve model synchronization progress: {error}. Reload the account list.","不可用原因：{reason}":"Unavailable reason: {reason}","可路由账号 {count}":"Routable accounts {count}","模型 {count}":"Models {count}","最近发现 {time}":"Last discovered {time}"
+});
 const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],writable:false,editing:-1,query:"",tab:"providers",poolSub:"chatgptweb",featureSub:"tasks",range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
     chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}},
-  codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
+  codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,discovery:{progressId:"",timer:null,failures:0,done:true},oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
@@ -830,13 +835,71 @@ function codexModelSnapshotBadge(account){
   const retryAt=String(account?.model_discovery_retry_at||"").trim();
   const lastError=String(account?.model_discovery_last_error||"").trim();
   if(!snapshot){
-    const retry=retryAt?`<div class="subtle" title="${esc(lastError||"模型目录同步暂不可用")}">等待模型同步 · 下次尝试 ${esc(formatAccountDate(retryAt))}</div>`:"<div class=\"subtle\">等待模型同步</div>";
-    return retry;
+    if(!state.codex.discovery.done)return `<div class="subtle">${esc(t("模型发现中"))}</div>`;
+    if(retryAt)return `<div class="subtle" title="${esc(lastError||t("模型目录同步暂不可用"))}">${esc(t("模型发现失败：{error}；下次尝试 {time}",{error:lastError||t("模型目录同步暂不可用"),time:formatAccountDate(retryAt)}))}</div>`;
+    return `<div class="subtle">${esc(t("等待模型同步"))}</div>`;
   }
   const visible=models.slice(0,3).map(model=>`<span class="tag tag-purple">${esc(model.id||"")}</span>`).join("");
   const more=models.length>3?`<span class="tag tag-default">+${models.length-3}</span>`:"";
-  const expires=snapshot.expires_at?`<div class="subtle">缓存有效至 ${esc(formatAccountDate(snapshot.expires_at))}</div>`:"";
-  return `<div class="tags">${visible||"<span class=\"subtle\">未发现模型</span>"}${more}</div>${expires}`;
+  const discovered=`<div class="subtle">${esc(t("已发现 {count} 个模型",{count:models.length}))}</div>`;
+  const expires=snapshot.expires_at?`<div class="subtle">${esc(t("缓存有效至 {time}",{time:formatAccountDate(snapshot.expires_at)}))}</div>`:"";
+  return `${discovered}<div class="tags">${visible||`<span class="subtle">${esc(t("未发现模型"))}</span>`}${more}</div>${expires}`;
+}
+function codexQuotaObservationBadges(account){
+  const observations=Array.isArray(account?.quota_observations)?account.quota_observations:[];
+  return observations.map(item=>{
+    if(String(item?.state||"").toLowerCase()!=="exhausted")return "";
+    const model=String(item?.model||"").trim()||"—";
+    const resetAt=String(item?.reset_at||"").trim();
+    const reset=resetAt?formatAccountDate(resetAt):t("上游未提供恢复时间");
+    const label=t("观察到额度耗尽 · {model} · 恢复于 {time}",{model,time:reset});
+    return `<div class="account-refresh-state"><span class="tag tag-refresh-failure" title="${esc(label)}">${esc(label)}</span></div>`;
+  }).join("");
+}
+function renderCodexDiscoveryProgress(progress){
+  const box=$("codexDiscoveryProgress");
+  if(!progress||!progress.progress_id){box.style.display="none";box.textContent="";return}
+  const total=Number(progress.total)||0,processed=Number(progress.processed)||0,succeeded=Number(progress.succeeded)||0,failed=Number(progress.failed)||0;
+  const done=Boolean(progress.done);
+  const summary=done?t("模型同步完成：成功 {succeeded}，失败 {failed}，共 {total} 个账号",{succeeded,failed,total}):t("模型发现中：已处理 {processed}/{total}，成功 {succeeded}，失败 {failed}",{processed,total,succeeded,failed});
+  const error=String(progress.last_error||"").trim();
+  box.textContent=error?`${summary} · ${t("最后错误：{error}",{error})}`:summary;
+  box.style.display="block";
+}
+function stopCodexDiscoveryPolling(){
+  if(state.codex.discovery.timer){clearTimeout(state.codex.discovery.timer);state.codex.discovery.timer=null}
+}
+function beginCodexDiscoveryPolling(progress){
+  if(!progress?.progress_id)return;
+  stopCodexDiscoveryPolling();
+  state.codex.discovery.progressId=progress.progress_id;state.codex.discovery.failures=0;state.codex.discovery.done=Boolean(progress.done);
+  renderCodexDiscoveryProgress(progress);renderCodexAccounts();
+  const tick=async()=>{
+    const pid=state.codex.discovery.progressId;
+    if(!pid)return;
+    try{
+      const current=await request(apiURL(`/api/codex/accounts/discovery/progress/${encodeURIComponent(pid)}`));
+      if(pid!==state.codex.discovery.progressId)return;
+      state.codex.discovery.failures=0;state.codex.discovery.done=Boolean(current.done);
+      renderCodexDiscoveryProgress(current);renderCodexAccounts();
+      if(current.done){state.codex.discovery.timer=null;await loadCodexAccounts();return}
+      state.codex.discovery.timer=setTimeout(tick,900);
+    }catch(e){
+      if(pid!==state.codex.discovery.progressId)return;
+      state.codex.discovery.failures++;
+      if(state.codex.discovery.failures>=3){state.codex.discovery.done=true;$("codexDiscoveryProgress").textContent=t("模型同步进度查询失败：{error}。请重新加载账号列表。",{error:e.message});$("codexDiscoveryProgress").style.display="block";renderCodexAccounts();return}
+      state.codex.discovery.timer=setTimeout(tick,1200);
+    }
+  };
+  if(progress.done){loadCodexAccounts();return}
+  tick();
+}
+async function startCodexModelDiscovery(ids=[]){
+  ids=uniq((ids||[]).filter(Boolean));
+  try{
+    const progress=await request(apiURL("/api/codex/accounts/discovery"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({account_ids:ids})});
+    beginCodexDiscoveryPolling(progress);
+  }catch(e){toast(e.message,"error")}
 }
 async function loadCodexAccounts(){
   const box=$("codexAccTable");
@@ -867,12 +930,14 @@ function renderCodexAccounts(){
   $("codexAccAbnormal").textContent=counts.abnormal;
   $("codexAccDisabled").textContent=counts.disabled;
   $("codexAccMeta").textContent=`显示 ${rows.length} / ${all.length}`;
+  const discovering=!state.codex.discovery.done&&Boolean(state.codex.discovery.progressId);
+  $("codexAccDiscovery").disabled=state.codex.busy||discovering;
   $("codexAccRefresh").disabled=state.codex.busy;
   $("codexAccDelete").disabled=state.codex.busy;
   if(!rows.length){$("codexAccTable").className="";$("codexAccTable").innerHTML=`<div class="empty">${all.length?"未找到匹配账号":"尚未导入 Codex OAuth 账号"}</div>`;return}
   const body=rows.map(item=>{
     const id=String(item.id||"");
-    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td class="mono" title="${esc(id)}">${esc(id)}</td><td>${maskEmail(item.email)}</td><td>${codexStatusTag(item.status)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}</td><td>${codexModelSnapshotBadge(item)}</td><td>${Number(item.success)||0}</td><td>${Number(item.fail)||0}</td><td class="subtle">${esc(formatAccountDate(item.last_used_at))}</td><td class="subtle">${esc(formatAccountDate(item.created_at))}</td><td><div class="actions"><button class="link-btn" data-codex-refresh="${esc(id)}" ${state.codex.busy?"disabled":""}>刷新凭据</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>删除</button></div></td></tr>`;
+    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td class="mono" title="${esc(id)}">${esc(id)}</td><td>${maskEmail(item.email)}</td><td>${codexStatusTag(item.status)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}${codexQuotaObservationBadges(item)}</td><td>${codexModelSnapshotBadge(item)}</td><td>${Number(item.success)||0}</td><td>${Number(item.fail)||0}</td><td class="subtle">${esc(formatAccountDate(item.last_used_at))}</td><td class="subtle">${esc(formatAccountDate(item.created_at))}</td><td><div class="actions"><button class="link-btn" data-codex-discovery="${esc(id)}" ${state.codex.busy||discovering?"disabled":""}>${esc(t("同步模型"))}</button><button class="link-btn" data-codex-refresh="${esc(id)}" ${state.codex.busy?"disabled":""}>${esc(t("刷新凭据"))}</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>${esc(t("删除"))}</button></div></td></tr>`;
   }).join("");
   $("codexAccTable").className="";
   $("codexAccTable").innerHTML=`<div class="table-wrap"><table><thead><tr><th style="width:42px"><input type="checkbox" id="codexCheckAll" title="选择当前筛选结果"></th><th>本地 ID</th><th>邮箱</th><th>运行状态</th><th>模型缓存</th><th>成功</th><th>失败</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${body}</tbody></table></div>`;
@@ -882,6 +947,7 @@ function renderCodexAccounts(){
   allBox.onchange=()=>{rows.forEach(item=>{if(allBox.checked)state.codex.selected.add(item.id);else state.codex.selected.delete(item.id)});renderCodexAccounts()};
   document.querySelectorAll("[data-codex-check]").forEach(el=>el.onchange=()=>{const id=el.dataset.codexCheck;if(el.checked)state.codex.selected.add(id);else state.codex.selected.delete(id)});
   document.querySelectorAll("[data-codex-refresh]").forEach(el=>el.onclick=()=>refreshCodexAccounts([el.dataset.codexRefresh]));
+  document.querySelectorAll("[data-codex-discovery]").forEach(el=>el.onclick=()=>startCodexModelDiscovery([el.dataset.codexDiscovery]));
   document.querySelectorAll("[data-codex-delete]").forEach(el=>el.onclick=()=>deleteCodexAccounts([el.dataset.codexDelete]));
 }
 function selectedCodexIDs(){return [...state.codex.selected]}
@@ -897,6 +963,8 @@ async function submitCodexImport(event){
   try{
     const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({accounts})});
     toast(`导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`);
+    if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery);
+    else if(result.model_discovery_error)toast(result.model_discovery_error,"error");
     clearCodexImport();$("codexImportDialog").close();await loadCodexAccounts();
   }catch(e){toast(e.message,"error")}finally{$("codexImportSubmit").disabled=false}
 }
@@ -911,7 +979,7 @@ async function refreshCodexAccounts(ids){
   ids=uniq((ids||[]).filter(Boolean));
   if(!ids.length){toast("请先选择账号","error");return}
   state.codex.busy=true;renderCodexAccounts();
-  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
+  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery);else if(result.model_discovery_error)toast(result.model_discovery_error,"error");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
 }
 function clearCodexOAuthMemory(){
   state.codex.oauth={sessionId:"",authorizeURL:"",expiresIn:0};
@@ -939,7 +1007,7 @@ async function finishCodexOAuth(event){
   const callback=$("codexOAuthCallback").value.trim(),sessionID=state.codex.oauth.sessionId;
   if(!callback||!sessionID){toast("会话未开始或 callback URL 为空","error");return}
   $("codexOAuthFinish").disabled=true;
-  try{await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});toast("Codex OAuth 账号已导入");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
+  try{const result=await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});toast("Codex OAuth 账号已导入");if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery);else if(result.model_discovery_error)toast(result.model_discovery_error,"error");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
 }
 function statusTag(status){
   const map={"正常":"status-normal","限流":"status-limited","异常":"status-abnormal","禁用":"status-disabled"};
@@ -1600,6 +1668,7 @@ function showClientSecret(key){$("clientSecret").value=key;$("clientSecretDialog
 
 async function loadProviders(){try{const data=await request(apiURL("/api/providers"));state.providers=data.providers||[];state.writable=Boolean(data.writable);$("readonlyNotice").style.display=state.writable?"none":"block";$("addButton").disabled=!state.writable;renderProviders()}catch(e){$("content").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 function providerAvailabilityMeta(a,builtin=false){const status=a?.status||"unknown";const map={healthy:[t("正常"),"tag-status-active"],degraded:[t("降级"),"tag-purple"],unavailable:[t("不可用"),"tag-status-disabled"],credential_error:[t("凭据异常"),"tag-status-disabled"],capability_drift:[t("能力漂移"),"tag-purple"],disabled:[t("已禁用"),"tag-default"],unknown:[t("待观测"),"tag-default"]};const [label,cls]=map[status]||map.unknown;if(builtin)return `<span class="tag ${cls}">${label}</span>`;const detail=a?.last_success_at?(state.locale==="en-US"?`Last successful request: ${formatDate(a.last_success_at)}`:`最近成功：${formatDate(a.last_success_at)}`):t("尚无成功请求");return `<span class="tag ${cls}" title="${esc(detail)}">${label}</span>`}
+function builtinAvailabilityMeta(p){const status=providerAvailabilityMeta(p.availability,true);const reason=String(p?.unavailable_reason||"").trim();const details=[];if(Number.isFinite(Number(p?.available_accounts)))details.push(t("可路由账号 {count}",{count:Number(p.available_accounts)||0}));if(Number.isFinite(Number(p?.model_count)))details.push(t("模型 {count}",{count:Number(p.model_count)||0}));if(p?.updated_at)details.push(t("最近发现 {time}",{time:formatDate(p.updated_at)}));const reasonHTML=reason?`<div class="subtle" style="color:var(--danger)">${esc(t("不可用原因：{reason}",{reason}))}</div>`:"";const detailsHTML=details.length?`<div class="subtle">${esc(details.join(" · "))}</div>`:"";return `${status}${reasonHTML}${detailsHTML}`}
 function providerSourceMeta(p){
   const requested=p?.source||(p?.builtin?"builtin":"third_party");
   const map={builtin:["内建","tag-source-builtin","运行时托管，不可手工编辑"],official:["官方","tag-source-official","按 Base URL 识别为官方厂商 API"],third_party:["第三方","tag-source-third","按 Base URL 识别为网关/中继/自建上游"]};
@@ -1641,7 +1710,7 @@ function rowHTML(p,index){
   const capability=`<div class="tags">${caps}</div>`;
   const toggle=builtin?`<label class="switch" title="内建 Provider 由运行时托管"><input type="checkbox" checked disabled aria-label="内建 Provider 运行时托管"><span class="slider"></span></label>`:`<label class="switch"><input data-toggle="${index}" type="checkbox" ${p.enabled?"checked":""} ${state.writable?"":"disabled"}><span class="slider"></span></label>`;
   const actions=builtin?`<div class="actions" title="内建 Provider 不支持手工检查、编辑或删除"><button class="link-btn" disabled>检查</button><button class="link-btn" disabled>编辑</button><button class="link-btn link-danger" disabled>删除</button></div>`:`<div class="actions"><button class="link-btn" data-probe="${esc(p.name)}" ${p.enabled?"":"disabled"}>检查</button><button class="link-btn" data-edit="${index}" ${state.writable?"":"disabled"}>编辑</button><button class="link-btn link-danger" data-delete="${index}" ${state.writable?"":"disabled"}>删除</button></div>`;
-  return `<tr><td><div class="provider-name">${esc(p.name)}</div><div class="subtle">${esc(summary)}</div></td><td>${source.html}</td><td>${protocol}</td><td>${baseURL}</td><td>${providerAvailabilityMeta(p.availability,builtin)}</td><td><div class="tags">${models||"<span class=\"subtle\">暂无</span>"}</div></td><td>${capability}</td><td>${toggle}</td><td>${actions}</td></tr>`;
+  return `<tr><td><div class="provider-name">${esc(p.name)}</div><div class="subtle">${esc(summary)}</div></td><td>${source.html}</td><td>${protocol}</td><td>${baseURL}</td><td>${builtin?builtinAvailabilityMeta(p):providerAvailabilityMeta(p.availability,false)}</td><td><div class="tags">${models||"<span class=\"subtle\">暂无</span>"}</div></td><td>${capability}</td><td>${toggle}</td><td>${actions}</td></tr>`;
 }
 function renderCapabilities(selected=[]){const protocol=$("protocol").value;const opts=capabilityOptions[protocol]||[];$("capabilities").innerHTML=opts.map(c=>`<label class="check"><input type="checkbox" value="${c}" ${selected.includes(c)?"checked":""}>${c}</label>`).join("")}
 function openDialog(index=-1){if(!state.writable)return;if(index>=0&&state.providers[index]&&state.providers[index].builtin){toast("内建 Provider 不可编辑","error");return}state.editing=index;const editing=index>=0;const p=editing?state.providers[index]:null;$("modalTitle").textContent=editing?`编辑 ${p.name}`:"新增 Provider";$("name").value=p?.name||"";$("name").disabled=editing;$("protocol").value=p?.protocol||"openai";$("baseURL").value=p?.base_url||"";$("apiKey").value="";$("models").value=(p?.models||[]).join(", ");$("allowUnauthenticated").checked=Boolean(p?.allow_unauthenticated);$("enabled").checked=p?Boolean(p.enabled):true;renderCapabilities(p?.endpoint_capabilities||capabilityOptions[$("protocol").value]);$("providerDialog").showModal()}
@@ -2229,6 +2298,7 @@ document.querySelectorAll("[data-pool-sub]").forEach(btn=>btn.onclick=()=>{showA
 document.querySelectorAll("[data-feature-sub]").forEach(btn=>btn.onclick=()=>{showFeatureSub(btn.dataset.featureSub)});
 $("codexRetry").onclick=loadCodexAccounts;
 $("codexAccReload").onclick=loadCodexAccounts;
+$("codexAccDiscovery").onclick=()=>startCodexModelDiscovery(selectedCodexIDs());
 $("codexAccSearch").oninput=e=>{state.codex.query=e.target.value;renderCodexAccounts()};
 $("codexAccImport").onclick=openCodexImport;
 $("codexImportClose").onclick=$("codexImportCancel").onclick=()=>{clearCodexImport();$("codexImportDialog").close()};

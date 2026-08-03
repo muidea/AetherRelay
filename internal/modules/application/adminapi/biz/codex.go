@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"ai-proxy/internal/modules/application/adminapi/pkg/codexmanagement"
+	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	common "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
 	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
 	"github.com/muidea/magicCommon/event"
@@ -20,16 +23,23 @@ func (s *Admin) ListCodexAccounts(ctx context.Context) ([]events.AccountView, er
 	}
 	return result.Items, nil
 }
-func (s *Admin) ImportCodexAccounts(ctx context.Context, accounts []events.CredentialInput) (events.ImportResult, error) {
+func (s *Admin) ImportCodexAccounts(ctx context.Context, accounts []events.CredentialInput) (codexmanagement.ImportResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(events.TopicImport, s.ID(), common.UnitID, event.NewHeader(), ctx, events.ImportCommand{Accounts: accounts})).Get()
 	if err != nil {
-		return events.ImportResult{}, fmt.Errorf("Codex account import failed")
+		return codexmanagement.ImportResult{}, fmt.Errorf("Codex account import failed")
 	}
 	result, ok := value.(events.ImportResult)
 	if !ok {
-		return events.ImportResult{}, fmt.Errorf("invalid Codex account import result")
+		return codexmanagement.ImportResult{}, fmt.Errorf("invalid Codex account import result")
 	}
-	return result, nil
+	output := codexmanagement.ImportResult{Added: result.Added, Updated: result.Updated, Skipped: result.Skipped}
+	progress, discoveryErr := s.StartCodexModelDiscovery(context.WithoutCancel(ctx), nil)
+	if discoveryErr != nil {
+		output.ModelDiscoveryError = discoveryErr.Error()
+	} else {
+		output.ModelDiscovery = &progress
+	}
+	return output, nil
 }
 func (s *Admin) DeleteCodexAccounts(ctx context.Context, ids []string) (events.DeleteResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(events.TopicDelete, s.ID(), common.UnitID, event.NewHeader(), ctx, events.DeleteCommand{IDs: ids})).Get()
@@ -53,16 +63,23 @@ func (s *Admin) UpdateCodexAccount(ctx context.Context, command events.UpdateCom
 	}
 	return result, nil
 }
-func (s *Admin) RefreshCodexAccounts(ctx context.Context, ids []string) (events.RefreshByIDResult, error) {
+func (s *Admin) RefreshCodexAccounts(ctx context.Context, ids []string) (codexmanagement.RefreshResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(events.TopicRefreshByID, s.ID(), common.UnitID, event.NewHeader(), ctx, events.RefreshByIDCommand{IDs: ids})).Get()
 	if err != nil {
-		return events.RefreshByIDResult{}, fmt.Errorf("Codex account refresh failed")
+		return codexmanagement.RefreshResult{}, fmt.Errorf("Codex account refresh failed")
 	}
 	result, ok := value.(events.RefreshByIDResult)
 	if !ok {
-		return events.RefreshByIDResult{}, fmt.Errorf("invalid Codex account refresh result")
+		return codexmanagement.RefreshResult{}, fmt.Errorf("invalid Codex account refresh result")
 	}
-	return result, nil
+	output := codexmanagement.RefreshResult{Refreshed: result.Refreshed, Failed: result.Failed, Items: result.Items}
+	progress, discoveryErr := s.StartCodexModelDiscovery(context.WithoutCancel(ctx), ids)
+	if discoveryErr != nil {
+		output.ModelDiscoveryError = discoveryErr.Error()
+	} else {
+		output.ModelDiscovery = &progress
+	}
+	return output, nil
 }
 func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy string) (events.OAuthStartResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(events.TopicOAuthStart, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthStartCommand{EmailHint: hint, Proxy: proxy})).Get()
@@ -75,14 +92,52 @@ func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy string) (events
 	}
 	return result, nil
 }
-func (s *Admin) FinishCodexOAuth(ctx context.Context, sessionID, callback string) (events.OAuthFinishResult, error) {
+func (s *Admin) FinishCodexOAuth(ctx context.Context, sessionID, callback string) (codexmanagement.OAuthFinishResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(events.TopicOAuthFinish, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthFinishCommand{SessionID: sessionID, Callback: callback})).Get()
 	if err != nil {
-		return events.OAuthFinishResult{}, fmt.Errorf("Codex OAuth finish failed")
+		return codexmanagement.OAuthFinishResult{}, fmt.Errorf("Codex OAuth finish failed")
 	}
 	result, ok := value.(events.OAuthFinishResult)
 	if !ok {
-		return events.OAuthFinishResult{}, fmt.Errorf("invalid Codex OAuth finish result")
+		return codexmanagement.OAuthFinishResult{}, fmt.Errorf("invalid Codex OAuth finish result")
 	}
-	return result, nil
+	output := codexmanagement.OAuthFinishResult{Added: result.Added, Item: result.Item}
+	accountIDs := []string(nil)
+	if result.Item.ID != "" {
+		accountIDs = []string{result.Item.ID}
+	}
+	progress, discoveryErr := s.StartCodexModelDiscovery(context.WithoutCancel(ctx), accountIDs)
+	if discoveryErr != nil {
+		output.ModelDiscoveryError = discoveryErr.Error()
+	} else {
+		output.ModelDiscovery = &progress
+	}
+	return output, nil
+}
+
+// StartCodexModelDiscovery asks the proxy orchestrator to synchronize the
+// account-scoped Codex model cache. Admin never talks to codexupstream or the
+// account store directly.
+func (s *Admin) StartCodexModelDiscovery(ctx context.Context, accountIDs []string) (proxyevents.CodexDiscoveryProgress, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicStartCodexDiscovery, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.StartCodexDiscoveryCommand{AccountIDs: accountIDs})).Get()
+	if err != nil {
+		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("Codex model discovery unavailable")
+	}
+	result, ok := value.(proxyevents.StartCodexDiscoveryResult)
+	if !ok || !result.Progress.Valid() {
+		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("invalid Codex model discovery result")
+	}
+	return result.Progress, nil
+}
+
+func (s *Admin) CodexModelDiscoveryProgress(ctx context.Context, progressID string) (proxyevents.CodexDiscoveryProgress, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicCodexDiscoveryProgress, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.CodexDiscoveryProgressCommand{ProgressID: progressID})).Get()
+	if err != nil {
+		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("Codex model discovery progress unavailable")
+	}
+	result, ok := value.(proxyevents.CodexDiscoveryProgressResult)
+	if !ok || !result.Progress.Valid() {
+		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("invalid Codex model discovery progress result")
+	}
+	return result.Progress, nil
 }

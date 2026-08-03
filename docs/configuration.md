@@ -165,6 +165,8 @@ codex_oauth:
 ```
 
 - 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 `GET /backend-api/codex/models` 自动发现模型；结果以受限投影持久化到账号池，6 小时后过期。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
+- 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。
+- 管理页展示的是上游观察到的“额度耗尽”和可选恢复时间，而不是 OpenAI 套餐的官方剩余额度百分比。只有 Codex 明确返回 `usage_limit_reached` 才会写入该观察；普通 429 仍只产生模型冷却。
 - `models` 现在可选；留空时发布全部有效账号快照的并集，设置时仅作为精确 allowlist。它不再是模型可用性的事实来源。静态 Provider 使用同名模型时，静态路由优先。
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）仅写入 `state.database`。管理列表严格脱敏，不返回 token、账号 ID 或代理 URL。
 - 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新以及 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新 IP 与请求 IP 不一致。
@@ -174,7 +176,7 @@ codex_oauth:
 
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」提供图片任务、图片库与历史对话。Codex 账号表展示每个账号的模型缓存、失效时间或发现退避状态。相关管理 API 位于该前缀下的 `/api/chatgpt/**` 与 `/api/codex/**`。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」提供图片任务、图片库与历史对话。Codex 账号表展示每个账号的模型缓存、发现进度/退避、模型冷却与上游观察到的额度耗尽状态；内建 Provider 会直接显示不可用原因、可路由账号数和模型数。相关管理 API 位于该前缀下的 `/api/chatgpt/**` 与 `/api/codex/**`。
 
 管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
 

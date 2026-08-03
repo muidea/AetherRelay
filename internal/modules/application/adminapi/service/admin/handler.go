@@ -15,10 +15,12 @@ import (
 	"sync"
 	"time"
 
+	"ai-proxy/internal/modules/application/adminapi/pkg/codexmanagement"
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
 	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
@@ -75,12 +77,14 @@ type ChatGPTRuntime interface {
 // OAuth domains have different credential, proxy, and session semantics.
 type CodexRuntime interface {
 	ListCodexAccounts(context.Context) ([]codexevents.AccountView, error)
-	ImportCodexAccounts(context.Context, []codexevents.CredentialInput) (codexevents.ImportResult, error)
+	ImportCodexAccounts(context.Context, []codexevents.CredentialInput) (codexmanagement.ImportResult, error)
 	DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error)
 	UpdateCodexAccount(context.Context, codexevents.UpdateCommand) (codexevents.UpdateResult, error)
-	RefreshCodexAccounts(context.Context, []string) (codexevents.RefreshByIDResult, error)
+	RefreshCodexAccounts(context.Context, []string) (codexmanagement.RefreshResult, error)
 	StartCodexOAuth(context.Context, string, string) (codexevents.OAuthStartResult, error)
-	FinishCodexOAuth(context.Context, string, string) (codexevents.OAuthFinishResult, error)
+	FinishCodexOAuth(context.Context, string, string) (codexmanagement.OAuthFinishResult, error)
+	StartCodexModelDiscovery(context.Context, []string) (proxyevents.CodexDiscoveryProgress, error)
+	CodexModelDiscoveryProgress(context.Context, string) (proxyevents.CodexDiscoveryProgress, error)
 }
 
 // chatGPTAvailability is intentionally optional to keep isolated HTTP tests
@@ -287,6 +291,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.requireAdminMutation(w, r) {
 			h.refreshCodexAccounts(w, r)
 		}
+	case rel == "/api/codex/accounts/discovery" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.startCodexModelDiscovery(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/codex/accounts/discovery/progress/") && r.Method == http.MethodGet:
+		h.codexModelDiscoveryProgress(w, r, rel)
 	case rel == "/api/codex/accounts/oauth/start" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.startCodexOAuth(w, r)

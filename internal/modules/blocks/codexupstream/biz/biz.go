@@ -46,6 +46,7 @@ type streamUpdate struct {
 	done              bool
 	errorClass        events.ErrorClass
 	retryAfterSeconds int
+	rateLimit         events.RateLimitObservation
 }
 
 type responseStream struct {
@@ -105,12 +106,13 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: classifyStatus(response.StatusCode), RetryAfterSeconds: retryAfterSeconds(response.Header)}, nil)
+		observation, retryAfter := readRateLimitObservation(response)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
 		return
 	}
-	completed, class, err := completedResponse(response, cmd.MaxResponseBytes)
+	completed, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: class}, nil)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation}, nil)
 		return
 	}
 	result.Set(events.CompleteResult{Body: completed, Headers: responseHeaders(response.Header)}, nil)
@@ -136,8 +138,9 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		observation, retryAfter := readRateLimitObservation(response)
 		_ = response.Body.Close()
-		result.Set(events.StartResult{Headers: responseHeaders(response.Header), ErrorClass: classifyStatus(response.StatusCode), RetryAfterSeconds: retryAfterSeconds(response.Header)}, nil)
+		result.Set(events.StartResult{Headers: responseHeaders(response.Header), ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
 		return
 	}
 	streamID := uuid.NewString()
@@ -185,7 +188,7 @@ func (s *Upstream) handlePull(ev event.Event, result event.Result) {
 		if update.done {
 			s.removeStream(cmd.StreamID)
 		}
-		result.Set(events.PullResult{Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds}, nil)
+		result.Set(events.PullResult{Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
 	case <-time.After(timeout):
 		result.Set(events.PullResult{}, nil)
 	case <-ev.Context().Done():
@@ -236,8 +239,8 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 			if !sendUpdate(ctx, stream, streamUpdate{data: line}) {
 				return
 			}
-			if done, class := terminalClass(line); done {
-				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class})
+			if done, class, observation := terminalOutcome(line); done {
+				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
 				return
 			}
 		}
@@ -392,9 +395,9 @@ func forceStream(body []byte) ([]byte, error) {
 	return json.Marshal(values)
 }
 
-func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.ErrorClass, error) {
+func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.ErrorClass, events.RateLimitObservation, error) {
 	if response == nil || response.Body == nil {
-		return nil, events.ErrorProtocol, fmt.Errorf("Codex response body is unavailable")
+		return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response body is unavailable")
 	}
 	if maxBytes <= 0 {
 		maxBytes = 32 << 20
@@ -402,18 +405,18 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
 		payload, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 		if err != nil {
-			return nil, classifyTransport(err), err
+			return nil, classifyTransport(err), events.RateLimitObservation{}, err
 		}
 		if int64(len(payload)) > maxBytes {
-			return nil, events.ErrorProtocol, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
+			return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
 		}
 		var object struct {
 			Object string `json:"object"`
 		}
 		if err := json.Unmarshal(payload, &object); err != nil || object.Object != "response" {
-			return nil, events.ErrorProtocol, fmt.Errorf("invalid native Codex response object")
+			return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("invalid native Codex response object")
 		}
-		return payload, "", nil
+		return payload, "", events.RateLimitObservation{}, nil
 	}
 	reader := bufio.NewReader(response.Body)
 	for {
@@ -430,19 +433,24 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 					switch event.Type {
 					case "response.completed":
 						if len(event.Response) > 0 {
-							return event.Response, "", nil
+							return event.Response, "", events.RateLimitObservation{}, nil
 						}
 					case "response.failed", "response.incomplete":
-						return nil, events.ErrorUpstream, fmt.Errorf("Codex response did not complete")
+						observation := rateLimitObservation(payload, time.Now().UTC())
+						class := events.ErrorUpstream
+						if observation.UsageLimited {
+							class = events.ErrorRateLimit
+						}
+						return nil, class, observation, fmt.Errorf("Codex response did not complete")
 					}
 				}
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, events.ErrorProtocol, fmt.Errorf("Codex response ended without response.completed")
+				return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response ended without response.completed")
 			}
-			return nil, classifyTransport(err), err
+			return nil, classifyTransport(err), events.RateLimitObservation{}, err
 		}
 	}
 }
@@ -485,6 +493,129 @@ func terminalClass(line []byte) (bool, events.ErrorClass) {
 	default:
 		return false, ""
 	}
+}
+
+func terminalOutcome(line []byte) (bool, events.ErrorClass, events.RateLimitObservation) {
+	done, class := terminalClass(line)
+	if !done {
+		return false, "", events.RateLimitObservation{}
+	}
+	observation := rateLimitObservationFromLine(line, time.Now().UTC())
+	if observation.UsageLimited {
+		class = events.ErrorRateLimit
+	}
+	return true, class, observation
+}
+
+func readRateLimitObservation(response *http.Response) (events.RateLimitObservation, int) {
+	if response == nil || response.Body == nil {
+		return events.RateLimitObservation{}, 0
+	}
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	observation := rateLimitObservation(body, time.Now().UTC())
+	return observation, maxRetryAfter(retryAfterSeconds(response.Header), retryAfterFromObservation(observation))
+}
+
+func rateLimitObservationFromLine(line []byte, now time.Time) events.RateLimitObservation {
+	trimmed := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(trimmed, "data:") {
+		return events.RateLimitObservation{}
+	}
+	return rateLimitObservation([]byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))), now)
+}
+
+func rateLimitObservation(body []byte, now time.Time) events.RateLimitObservation {
+	var payload struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type            string          `json:"type"`
+			ResetsAt        json.RawMessage `json:"resets_at"`
+			ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
+		} `json:"error"`
+		Response struct {
+			Error struct {
+				Type            string          `json:"type"`
+				ResetsAt        json.RawMessage `json:"resets_at"`
+				ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return events.RateLimitObservation{}
+	}
+	errorType, resetsAt, resetsIn := payload.Error.Type, payload.Error.ResetsAt, payload.Error.ResetsInSeconds
+	if errorType == "" {
+		errorType, resetsAt, resetsIn = payload.Response.Error.Type, payload.Response.Error.ResetsAt, payload.Response.Error.ResetsInSeconds
+	}
+	if !strings.EqualFold(strings.TrimSpace(errorType), "usage_limit_reached") {
+		return events.RateLimitObservation{}
+	}
+	observation := events.RateLimitObservation{UsageLimited: true}
+	if resetAt, ok := rawResetAt(resetsAt, now); ok {
+		observation.ResetAt = resetAt.Format(time.RFC3339)
+		return observation
+	}
+	if seconds, ok := rawPositiveInt(resetsIn); ok {
+		observation.ResetAt = now.Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339)
+	}
+	return observation
+}
+
+func rawResetAt(raw json.RawMessage, now time.Time) (time.Time, bool) {
+	value := strings.Trim(strings.TrimSpace(string(raw)), "\"")
+	if timestamp, err := time.Parse(time.RFC3339, value); err == nil && timestamp.After(now) {
+		return timestamp.UTC(), true
+	}
+	seconds, ok := rawPositiveInt(raw)
+	if !ok {
+		return time.Time{}, false
+	}
+	if seconds > 1_000_000_000_000 {
+		seconds /= 1000
+	}
+	resetAt := time.Unix(seconds, 0).UTC()
+	return resetAt, resetAt.After(now)
+}
+
+func rawPositiveInt(raw json.RawMessage) (int64, bool) {
+	value := strings.Trim(strings.TrimSpace(string(raw)), "\"")
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	return seconds, err == nil && seconds > 0
+}
+
+func retryAfterFromObservation(observation events.RateLimitObservation) int {
+	if !observation.UsageLimited || strings.TrimSpace(observation.ResetAt) == "" {
+		return 0
+	}
+	resetAt, err := time.Parse(time.RFC3339, observation.ResetAt)
+	if err != nil || !resetAt.After(time.Now().UTC()) {
+		return 0
+	}
+	seconds := int(time.Until(resetAt).Seconds())
+	if seconds < 1 {
+		return 1
+	}
+	if seconds > 3600 {
+		return 3600
+	}
+	return seconds
+}
+
+func maxRetryAfter(values ...int) int {
+	result := 0
+	for _, value := range values {
+		if value > result {
+			result = value
+		}
+	}
+	return result
+}
+
+func errorClassWithRateLimit(statusCode int, observation events.RateLimitObservation) events.ErrorClass {
+	if observation.UsageLimited {
+		return events.ErrorRateLimit
+	}
+	return classifyStatus(statusCode)
 }
 
 func sendUpdate(ctx context.Context, stream *responseStream, update streamUpdate) bool {

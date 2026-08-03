@@ -28,25 +28,32 @@ type cooldown struct {
 	ErrorClass string    `json:"error_class"`
 }
 
+type quotaObservation struct {
+	State      string `json:"state"`
+	ObservedAt string `json:"observed_at"`
+	ResetAt    string `json:"reset_at,omitempty"`
+}
+
 type account struct {
-	ID                  string              `json:"id"`
-	AccessToken         string              `json:"access_token"`
-	RefreshToken        string              `json:"refresh_token"`
-	IDToken             string              `json:"id_token,omitempty"`
-	AccountIDHeader     string              `json:"account_id,omitempty"`
-	Email               string              `json:"email,omitempty"`
-	PlanType            string              `json:"plan_type,omitempty"`
-	Expired             string              `json:"expired,omitempty"`
-	Proxy               string              `json:"proxy,omitempty"`
-	Status              string              `json:"status"`
-	Success             int                 `json:"success"`
-	Fail                int                 `json:"fail"`
-	CreatedAt           string              `json:"created_at"`
-	LastUsedAt          string              `json:"last_used_at,omitempty"`
-	LastRefreshAt       string              `json:"last_token_refresh_at,omitempty"`
-	LastRefreshErrAt    string              `json:"last_token_refresh_error_at,omitempty"`
-	LastRefreshErrClass string              `json:"last_token_refresh_error_class,omitempty"`
-	Cooldowns           map[string]cooldown `json:"cooldowns,omitempty"`
+	ID                  string                      `json:"id"`
+	AccessToken         string                      `json:"access_token"`
+	RefreshToken        string                      `json:"refresh_token"`
+	IDToken             string                      `json:"id_token,omitempty"`
+	AccountIDHeader     string                      `json:"account_id,omitempty"`
+	Email               string                      `json:"email,omitempty"`
+	PlanType            string                      `json:"plan_type,omitempty"`
+	Expired             string                      `json:"expired,omitempty"`
+	Proxy               string                      `json:"proxy,omitempty"`
+	Status              string                      `json:"status"`
+	Success             int                         `json:"success"`
+	Fail                int                         `json:"fail"`
+	CreatedAt           string                      `json:"created_at"`
+	LastUsedAt          string                      `json:"last_used_at,omitempty"`
+	LastRefreshAt       string                      `json:"last_token_refresh_at,omitempty"`
+	LastRefreshErrAt    string                      `json:"last_token_refresh_error_at,omitempty"`
+	LastRefreshErrClass string                      `json:"last_token_refresh_error_class,omitempty"`
+	Cooldowns           map[string]cooldown         `json:"cooldowns,omitempty"`
+	QuotaObservations   map[string]quotaObservation `json:"quota_observations,omitempty"`
 	// ModelSnapshot is the constrained account-scoped Codex capability cache.
 	// It never contains raw upstream JSON or credentials beyond this account.
 	ModelSnapshot           *events.AccountModelSnapshot `json:"model_snapshot,omitempty"`
@@ -379,18 +386,31 @@ func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (eve
 	return events.RefreshTokenResult{AccountID: item.ID, PermanentFailure: permanent, ErrorClass: errorClass}, nil
 }
 
-func (s *Store) RecordResult(id, model string, success bool, errorClass string, retryAfterSeconds int) (events.AccountView, error) {
+func (s *Store) RecordResult(id, model string, success bool, errorClass string, retryAfterSeconds int, quotaExhausted bool, quotaResetAt string) (events.AccountView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
+	now := time.Now().UTC()
 	statusChanged := false
+	model = strings.TrimSpace(model)
 	if success {
 		item.Success++
+		delete(item.QuotaObservations, model)
 	} else {
 		item.Fail++
+		if quotaExhausted && model != "" {
+			if item.QuotaObservations == nil {
+				item.QuotaObservations = map[string]quotaObservation{}
+			}
+			item.QuotaObservations[model] = quotaObservation{
+				State:      "exhausted",
+				ObservedAt: now.Format(time.RFC3339),
+				ResetAt:    normalizeQuotaResetAt(quotaResetAt),
+			}
+		}
 		switch strings.TrimSpace(errorClass) {
 		case events.ErrorInvalidToken:
 			if item.Status != events.StatusAbnormal {
@@ -398,17 +418,25 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 				statusChanged = true
 			}
 		case events.ErrorRateLimit, events.ErrorTimeout, events.ErrorNetwork, events.ErrorUpstream:
-			until := time.Now().UTC().Add(defaultTransientCooldown)
+			until := now.Add(defaultTransientCooldown)
 			if errorClass == events.ErrorRateLimit {
-				until = time.Now().UTC().Add(defaultRateLimitCooldown)
+				until = now.Add(defaultRateLimitCooldown)
 			}
 			if retryAfterSeconds > 0 {
-				until = time.Now().UTC().Add(time.Duration(retryAfterSeconds) * time.Second)
+				until = now.Add(time.Duration(retryAfterSeconds) * time.Second)
+			}
+			// A verified Codex usage-limit reset is more precise than Retry-After.
+			// Keep this account/model out of selection until that upstream-provided
+			// recovery point, even when the generic retry hint is capped.
+			if quotaExhausted {
+				if resetAt, ok := parseExpiry(quotaResetAt); ok && resetAt.After(now) {
+					until = resetAt
+				}
 			}
 			if item.Cooldowns == nil {
 				item.Cooldowns = map[string]cooldown{}
 			}
-			item.Cooldowns[strings.TrimSpace(model)] = cooldown{Until: until, ErrorClass: errorClass}
+			item.Cooldowns[model] = cooldown{Until: until, ErrorClass: errorClass}
 		}
 	}
 	if err := s.saveLocked(); err != nil {
@@ -417,7 +445,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 	if statusChanged {
 		s.bumpCatalogLocked()
 	}
-	return toView(item, time.Now().UTC()), nil
+	return toView(item, now), nil
 }
 
 func (s *Store) Health() events.HealthResult {
@@ -548,7 +576,25 @@ func toView(item *account, now time.Time) events.AccountView {
 		view.Cooldowns = append(view.Cooldowns, events.CooldownView{Model: model, Until: value.Until.Format(time.RFC3339), ErrorClass: value.ErrorClass})
 	}
 	sort.Slice(view.Cooldowns, func(i, j int) bool { return view.Cooldowns[i].Model < view.Cooldowns[j].Model })
+	for model, value := range item.QuotaObservations {
+		if value.State != "exhausted" {
+			continue
+		}
+		if resetAt, err := time.Parse(time.RFC3339, value.ResetAt); err == nil && !resetAt.After(now) {
+			continue
+		}
+		view.QuotaObservations = append(view.QuotaObservations, events.QuotaObservation{Model: model, State: value.State, ObservedAt: value.ObservedAt, ResetAt: value.ResetAt})
+	}
+	sort.Slice(view.QuotaObservations, func(i, j int) bool { return view.QuotaObservations[i].Model < view.QuotaObservations[j].Model })
 	return view
+}
+
+func normalizeQuotaResetAt(value string) string {
+	resetAt, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	return resetAt.UTC().Format(time.RFC3339)
 }
 
 // ListDiscoveryCandidates returns only normal accounts. The credential fields

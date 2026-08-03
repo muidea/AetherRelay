@@ -77,6 +77,35 @@ func TestCooldownAndRefreshDue(t *testing.T) {
 	}
 }
 
+func TestQuotaObservationIsAccountAndModelScopedAndClearsOnSuccess(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID := store.List()[0].ID
+	resetAt := time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)
+	view, err := store.RecordResult(accountID, "gpt-5.2-codex", false, events.ErrorRateLimit, 30, true, resetAt)
+	if err != nil || len(view.QuotaObservations) != 1 {
+		t.Fatalf("quota record view=%+v err=%v", view, err)
+	}
+	observation := view.QuotaObservations[0]
+	if observation.Model != "gpt-5.2-codex" || observation.State != "exhausted" || observation.ResetAt != resetAt {
+		t.Fatalf("quota observation=%+v", observation)
+	}
+	if len(view.Cooldowns) != 1 || view.Cooldowns[0].Until != resetAt {
+		t.Fatalf("quota reset must define the model cooldown: %+v", view.Cooldowns)
+	}
+	view, err = store.RecordResult(accountID, "gpt-5.2-codex", true, "", 0, false, "")
+	if err != nil || len(view.QuotaObservations) != 0 {
+		t.Fatalf("successful account result did not clear quota observation: %+v err=%v", view, err)
+	}
+	view, err = store.RecordResult(accountID, "gpt-5.2-codex", false, events.ErrorRateLimit, 30, false, resetAt)
+	if err != nil || len(view.QuotaObservations) != 0 {
+		t.Fatalf("generic rate limit must not create quota observation: %+v err=%v", view, err)
+	}
+}
+
 func TestModelDiscoverySnapshotControlsCatalogAndAcquire(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, err := store.Import([]events.CredentialInput{

@@ -25,6 +25,13 @@ const (
 	ErrorProtocol     ErrorClass = "protocol"
 )
 
+// RateLimitObservation is the bounded projection of an upstream limit error.
+// It never carries the raw upstream error body.
+type RateLimitObservation struct {
+	UsageLimited bool
+	ResetAt      string
+}
+
 // CompleteCommand and StartCommand deliberately carry bounded source-wire JSON
 // as bytes. This preserves native Responses objects without map/any EventHub
 // envelopes or a lossy proxy-side protocol translation.
@@ -40,6 +47,7 @@ type CompleteResult struct {
 	Headers           []Header
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
+	RateLimit         RateLimitObservation
 }
 
 type StartCommand struct {
@@ -54,6 +62,7 @@ type StartResult struct {
 	Headers           []Header
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
+	RateLimit         RateLimitObservation
 }
 
 type PullCommand struct {
@@ -65,6 +74,7 @@ type PullResult struct {
 	Done              bool
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
+	RateLimit         RateLimitObservation
 }
 
 type CancelCommand struct{ StreamID string }

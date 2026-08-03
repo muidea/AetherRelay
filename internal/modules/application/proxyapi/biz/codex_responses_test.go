@@ -130,3 +130,52 @@ func TestCompleteCodexResponsesUsesRefreshFailureClassForCooldownAndSwitchesAcco
 		t.Fatalf("fallback success feedback=%+v", second)
 	}
 }
+
+func TestCompleteCodexResponsesRecordsObservedQuotaExhaustion(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
+		if len(ev.Data().(accevents.AcquireCommand).Exclude) > 0 {
+			result.Set(nil, cd.NewError(cd.NotFound, "no fallback account"))
+			return
+		}
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "token"}, nil)
+	})
+	recorded := make(chan accevents.RecordResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicComplete, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CompleteResult{
+			ErrorClass:        upevents.ErrorRateLimit,
+			RetryAfterSeconds: 120,
+			RateLimit:         upevents.RateLimitObservation{UsageLimited: true, ResetAt: "2026-08-03T12:00:00Z"},
+		}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	if _, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-5.2-codex", Body: []byte(`{"model":"gpt-5.2-codex"}`)}); err == nil {
+		t.Fatal("quota-limited account without fallback must fail")
+	}
+	command := <-recorded
+	if command.Success || !command.QuotaExhausted || command.QuotaResetAt != "2026-08-03T12:00:00Z" || command.ErrorClass != string(codexresponses.KindRateLimit) {
+		t.Fatalf("quota feedback=%+v", command)
+	}
+}
+
+func TestFailureFromUpstreamDistinguishesQuotaExhaustion(t *testing.T) {
+	quotaFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{UsageLimited: true, ResetAt: "2026-08-03T12:00:00Z"})
+	if !quotaFailure.QuotaExhausted || quotaFailure.QuotaResetAt != "2026-08-03T12:00:00Z" {
+		t.Fatalf("quota failure=%+v", quotaFailure)
+	}
+	genericFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{})
+	if genericFailure.QuotaExhausted || genericFailure.QuotaResetAt != "" {
+		t.Fatalf("generic failure=%+v", genericFailure)
+	}
+}

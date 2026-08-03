@@ -37,6 +37,8 @@ const (
 type Failure struct {
 	Kind              ErrorKind
 	RetryAfterSeconds int
+	QuotaExhausted    bool
+	QuotaResetAt      string
 	Err               error
 }
 
@@ -57,6 +59,10 @@ func (e *Failure) Unwrap() error {
 }
 func NewFailure(kind ErrorKind, retryAfter int, err error) *Failure {
 	return &Failure{Kind: kind, RetryAfterSeconds: retryAfter, Err: err}
+}
+
+func NewQuotaFailure(kind ErrorKind, retryAfter int, exhausted bool, resetAt string, err error) *Failure {
+	return &Failure{Kind: kind, RetryAfterSeconds: retryAfter, QuotaExhausted: exhausted, QuotaResetAt: resetAt, Err: err}
 }
 func AsFailure(err error) (*Failure, bool) { var value *Failure; return value, errors.As(err, &value) }
 
