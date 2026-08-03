@@ -21,7 +21,8 @@ type temporaryConversationBody struct {
 }
 
 type temporaryTurnBody struct {
-	Content string `json:"content"`
+	Content   string `json:"content"`
+	WebSearch bool   `json:"web_search"`
 }
 
 const temporaryChatMultipartLimit = imageinput.MaxChatImageBytes + (1 << 20)
@@ -161,6 +162,7 @@ func (h *Handler) startTemporaryTurn(w http.ResponseWriter, r *http.Request, rel
 		OwnerID:        ownerID,
 		ConversationID: id,
 		Content:        body.Content,
+		WebSearch:      body.WebSearch,
 		Images:         images,
 		Attachments:    attachments,
 	})
@@ -184,6 +186,13 @@ func decodeTemporaryTurnBody(w http.ResponseWriter, r *http.Request) (temporaryT
 		return temporaryTurnBody{}, nil, nil, fmt.Errorf("invalid multipart temporary chat request")
 	}
 	body := temporaryTurnBody{Content: firstTemporaryFormValue(r.MultipartForm, "content")}
+	if raw := strings.TrimSpace(firstTemporaryFormValue(r.MultipartForm, "web_search")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return temporaryTurnBody{}, nil, nil, fmt.Errorf("web_search must be true or false")
+		}
+		body.WebSearch = value
+	}
 	images, err := temporaryTurnImages(r.MultipartForm)
 	if err != nil {
 		return temporaryTurnBody{}, nil, nil, err

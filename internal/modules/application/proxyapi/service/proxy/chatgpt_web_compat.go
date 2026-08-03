@@ -18,12 +18,23 @@ func chatGPTWebChatCompatibility(body map[string]any) ([]string, *APIError) {
 	if body == nil {
 		return nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "request body is required"}
 	}
+	search, searchErr := chatGPTWebSearchToolInvocation(body, true)
+	if searchErr != nil {
+		return nil, searchErr
+	}
 	for _, feature := range []string{
-		"tools", "tool_choice", "parallel_tool_calls", "functions", "function_call",
+		"parallel_tool_calls", "functions", "function_call",
 		"response_format", "logprobs", "top_logprobs",
 	} {
 		if _, present := body[feature]; present {
 			return nil, unsupportedChatGPTWebFeature(feature)
+		}
+	}
+	if !search.Enabled {
+		for _, feature := range []string{"tools", "tool_choice"} {
+			if _, present := body[feature]; present {
+				return nil, unsupportedChatGPTWebFeature(feature)
+			}
 		}
 	}
 	if n, present := body["n"]; present && !isOne(n) {
@@ -49,7 +60,7 @@ func chatGPTWebChatCompatibility(body map[string]any) ([]string, *APIError) {
 
 	known := map[string]struct{}{
 		"model": {}, "messages": {}, "stream": {}, "reasoning_effort": {},
-		"tools": {}, "tool_choice": {}, "parallel_tool_calls": {}, "functions": {}, "function_call": {},
+		"tools": {}, "tool_choice": {}, "parallel_tool_calls": {}, "functions": {}, "function_call": {}, "web_search_options": {},
 		"response_format": {}, "logprobs": {}, "top_logprobs": {}, "n": {},
 	}
 	ignored := make([]string, 0, len(body))

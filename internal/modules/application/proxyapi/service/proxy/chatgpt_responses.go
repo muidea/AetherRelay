@@ -21,6 +21,17 @@ import (
 // remote image references.
 func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, body map[string]any) {
 	round := archiveRoundFromContext(r.Context())
+	searchInvocation, searchErr := chatGPTWebResponsesSearchInvocation(body)
+	if searchErr != nil {
+		searchErr.Model = model
+		fail := newStreamFailWithCode(streamKindError, searchErr.Code, searchErr.Code+": "+searchErr.Message, fmt.Errorf("%s", searchErr.Message), false)
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *searchErr, fail, tokenUsage{})
+		return
+	}
+	if searchInvocation.Enabled {
+		h.handleChatGPTWebSearchResponses(w, r, started, provider, model, stream, searchInvocation)
+		return
+	}
 	h.cfgMu.RLock()
 	executor := h.chatGPTText
 	h.cfgMu.RUnlock()
@@ -168,11 +179,20 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 	if body == nil {
 		return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "request body is required"}
 	}
+	search, searchErr := chatGPTWebResponsesSearchInvocation(body)
+	if searchErr != nil {
+		return chatgpttext.Request{}, nil, searchErr
+	}
 	for _, feature := range []string{
-		"tools", "tool_choice", "parallel_tool_calls", "previous_response_id", "background", "conversation", "prompt", "include", "truncation",
+		"tool_choice", "parallel_tool_calls", "previous_response_id", "background", "conversation", "prompt", "include", "truncation",
 	} {
 		if _, present := body[feature]; present {
 			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature(feature)
+		}
+	}
+	if !search.Enabled {
+		if _, present := body["tools"]; present {
+			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature("tools")
 		}
 	}
 	if text, present := body["text"].(map[string]any); present {

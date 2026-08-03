@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -43,6 +44,7 @@ type Handler struct {
 	driftTracker        *FingerprintDriftTracker
 	client              *http.Client
 	chatGPTText         chatgpttext.Executor
+	chatGPTSearch       chatgptsearch.Executor
 	chatGPTImage        chatgptimage.Executor
 	codexResponses      codexresponses.Executor
 }
@@ -52,6 +54,16 @@ type Handler struct {
 func (h *Handler) WithChatGPTTextExecutor(executor chatgpttext.Executor) *Handler {
 	h.cfgMu.Lock()
 	h.chatGPTText = executor
+	h.cfgMu.Unlock()
+	return h
+}
+
+// WithChatGPTSearchExecutor binds proxyapi's owner-local forced Web search
+// port. It is deliberately separate from text completion so protocol adapters
+// cannot accidentally treat arbitrary tools as supported.
+func (h *Handler) WithChatGPTSearchExecutor(executor chatgptsearch.Executor) *Handler {
+	h.cfgMu.Lock()
+	h.chatGPTSearch = executor
 	h.cfgMu.Unlock()
 	return h
 }

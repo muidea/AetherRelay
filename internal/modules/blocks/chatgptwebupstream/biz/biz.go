@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,6 +63,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicEditImage,
 		events.TopicResumeImage,
 		events.TopicCompleteText,
+		events.TopicSearch,
 		events.TopicStartText,
 		events.TopicPullText,
 		events.TopicCancelText,
@@ -72,6 +74,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b.SubscribeFunc(events.TopicEditImage, b.handleEditImage)
 	b.SubscribeFunc(events.TopicResumeImage, b.handleResumeImage)
 	b.SubscribeFunc(events.TopicCompleteText, b.handleCompleteText)
+	b.SubscribeFunc(events.TopicSearch, b.handleSearch)
 	b.SubscribeFunc(events.TopicStartText, b.handleStartText)
 	b.SubscribeFunc(events.TopicPullText, b.handlePullText)
 	b.SubscribeFunc(events.TopicCancelText, b.handleCancelText)
@@ -276,6 +279,46 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		ActualModel:        completed.ActualModel,
 		Text:               completed.Text,
 	}, nil)
+}
+
+func (s *Upstream) handleSearch(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.SearchCommand)
+	if !ok || strings.TrimSpace(cmd.AccessToken) == "" || strings.TrimSpace(cmd.Query) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid search command"))
+		return
+	}
+	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
+	if err != nil {
+		result.Set(events.SearchResult{ErrorClass: classifyError(err)}, cd.NewError(cd.IllegalParam, err.Error()))
+		return
+	}
+	searched, err := s.search(client, ev.Context(), upclient.SearchRequest{Model: cmd.Model, Query: cmd.Query})
+	if err != nil {
+		class := classifyError(err)
+		result.Set(events.SearchResult{ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, ErrorClass: class}, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	sources := make([]events.SearchSource, 0, len(searched.Sources))
+	for _, source := range searched.Sources {
+		sources = append(sources, events.SearchSource{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
+	}
+	result.Set(events.SearchResult{ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, Sources: sources}, nil)
+}
+
+// search keeps the same panic boundary as regular Web text execution. The
+// reverse client is a third-party TLS transport; panics must become a typed,
+// cooldown-eligible upstream failure rather than take down the process.
+func (s *Upstream) search(client *upclient.Client, ctx context.Context, request upclient.SearchRequest) (searched upclient.SearchResult, err error) {
+	defer func() {
+		if recover() != nil {
+			slog.Warn("chatgpt web search failed", "stage", "search_panic")
+			err = errors.New("chatgpt search transport failed")
+		}
+	}()
+	return client.Search(ctx, request)
 }
 
 // completeText converts an unexpected transport-library panic into the same

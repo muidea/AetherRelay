@@ -13,6 +13,7 @@ const (
 	TopicEditImage     = "aiproxy.chatgpt.webupstream.command.edit_image"
 	TopicResumeImage   = "aiproxy.chatgpt.webupstream.command.resume_image"
 	TopicCompleteText  = "aiproxy.chatgpt.webupstream.command.complete_text"
+	TopicSearch        = "aiproxy.chatgpt.webupstream.command.search"
 	TopicStartText     = "aiproxy.chatgpt.webupstream.command.start_text"
 	TopicPullText      = "aiproxy.chatgpt.webupstream.command.pull_text"
 	TopicCancelText    = "aiproxy.chatgpt.webupstream.command.cancel_text"
@@ -149,6 +150,32 @@ type CompleteTextResult struct {
 	ActualModel        string
 	Text               string
 	ErrorClass         ErrorClass
+}
+
+// SearchCommand starts one isolated, upstream-forced Web search conversation.
+// It deliberately accepts only a single textual query: conversation history,
+// tool loops and browser/plugin state are not representable by this contract.
+type SearchCommand struct {
+	AccessToken string
+	Proxy       string
+	Model       string
+	Query       string
+}
+
+// SearchSource is a bounded, public-safe projection of one upstream source.
+// Raw upstream document nodes and tool payloads never cross the Block boundary.
+type SearchSource struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
+type SearchResult struct {
+	ConversationID string
+	ActualModel    string
+	Text           string
+	Sources        []SearchSource
+	ErrorClass     ErrorClass
 }
 
 type StartTextCommand struct {

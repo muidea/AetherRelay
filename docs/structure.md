@@ -64,8 +64,8 @@ internal/modules/
     internal/store/              DuckDB 图片任务状态存储
     pkg/events/                  图片任务 owner 的 typed EventHub 合同
   blocks/chatgptwebupstream/     ChatGPT Web 上游技术 Block
-    biz/                         账号检查、文本流与图片 Web transport 编排
-    internal/client/             浏览器指纹、Chat requirements、文本/图片/上传协议
+    biz/                         账号检查、文本流、强制搜索与图片 Web transport 编排
+    internal/client/             浏览器指纹、Chat requirements、文本/搜索/图片/上传协议
     pkg/events/                  ChatGPT Web 上游 owner 的 typed EventHub 合同
   blocks/chatgptimagestore/      ChatGPT 图片本地存储 Block
     biz/                         图片、缩略图、标签与本地容量管理

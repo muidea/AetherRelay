@@ -62,6 +62,7 @@ type turnRuntime struct {
 	systemPrompt      string
 	userContent       string
 	firstTurn         bool
+	webSearch         bool
 	startedAt         time.Time
 	done              bool
 	errorClass        string
@@ -299,6 +300,10 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid start turn command"))
 		return
 	}
+	if cmd.WebSearch && (len(cmd.Images) > 0 || len(cmd.Attachments) > 0) {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "web search does not support image or file attachments"))
+		return
+	}
 	s.turnMu.Lock()
 	stopping := s.stopping
 	s.turnMu.Unlock()
@@ -316,6 +321,11 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		return
 	}
 	if started.AccountID != "" {
+		if cmd.WebSearch {
+			_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "conversion_unsupported", "web search is unavailable for legacy account-pinned conversations")
+			result.Set(nil, cd.NewError(cd.IllegalParam, "web search is unavailable for legacy account-pinned conversations; create a new conversation"))
+			return
+		}
 		s.startLegacyTurn(cmd, started, result)
 		return
 	}
@@ -331,6 +341,15 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation attachments"))
 		return
 	}
+	if cmd.WebSearch {
+		for _, message := range messages {
+			if len(message.Images) > 0 || len(message.Files) > 0 {
+				_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "conversion_unsupported", "web search does not support image or file attachments in this conversation")
+				result.Set(nil, cd.NewError(cd.IllegalParam, "web search does not support image or file attachments in this conversation"))
+				return
+			}
+		}
+	}
 	timeout := s.turnTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -345,6 +364,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		model:             started.Model,
 		systemPrompt:      started.SystemPrompt,
 		userContent:       cmd.Content,
+		webSearch:         cmd.WebSearch,
 		startedAt:         time.Now().UTC(),
 		requestCancel:     cancel,
 		updates:           make(chan turnUpdate, 64),
@@ -500,6 +520,7 @@ func (s *TemporaryChat) runFeatureTurn(ctx context.Context, runtime *turnRuntime
 		Model:          runtime.model,
 		Messages:       messages,
 		ThinkingEffort: thinkingEffort,
+		WebSearch:      runtime.webSearch,
 	})).Get()
 	response, ok := value.(proxyevents.ExecuteFeatureTextResult)
 	cancelled, stopping := s.turnFlags(runtime)

@@ -136,8 +136,12 @@ type StartTurnCommand struct {
 	OwnerID        string
 	ConversationID string
 	Content        string
-	Images         []ImageInput
-	Attachments    []chatattachment.File
+	// WebSearch requests one forced web-search turn. It is intentionally
+	// ephemeral: the conversation remains server-persisted, but no hidden
+	// browser search state is reused by later turns.
+	WebSearch   bool
+	Images      []ImageInput
+	Attachments []chatattachment.File
 }
 
 type StartTurnResult struct {

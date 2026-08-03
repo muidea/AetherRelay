@@ -108,7 +108,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
 	}
-	for _, removed := range []string{"routingContent", "routingSearch", "/api/routing/models", "data-builtin-priority-save", "builtin-policy", "历史对话", "历史会话"} {
+	for _, removed := range []string{"routingContent", "routingSearch", "/api/routing/models", "data-builtin-priority-save", "builtin-policy", "<th>Base URL</th>", "<th>路由策略</th>", "历史对话", "历史会话"} {
 		if strings.Contains(rec.Body.String(), removed) {
 			t.Fatalf("admin page still exposes model routing marker %q", removed)
 		}

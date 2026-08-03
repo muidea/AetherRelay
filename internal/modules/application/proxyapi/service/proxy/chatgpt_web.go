@@ -19,6 +19,25 @@ import (
 
 func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, body map[string]any) {
 	round := archiveRoundFromContext(r.Context())
+	ignored, compatibilityErr := chatGPTWebChatCompatibility(body)
+	if compatibilityErr != nil {
+		compatibilityErr.Model = model
+		fail := newStreamFailWithCode(streamKindError, compatibilityErr.Code, compatibilityErr.Code+": "+compatibilityErr.Message, fmt.Errorf("%s", compatibilityErr.Message), false)
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *compatibilityErr, fail, tokenUsage{})
+		return
+	}
+	searchInvocation, searchErr := chatGPTWebChatSearchInvocation(body)
+	if searchErr != nil {
+		searchErr.Model = model
+		fail := newStreamFailWithCode(streamKindError, searchErr.Code, searchErr.Code+": "+searchErr.Message, fmt.Errorf("%s", searchErr.Message), false)
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *searchErr, fail, tokenUsage{})
+		return
+	}
+	if searchInvocation.Enabled {
+		searchInvocation.Ignored = uniqueSortedFeatures(append(searchInvocation.Ignored, ignored...))
+		h.handleChatGPTWebSearchChat(w, r, started, provider, model, stream, searchInvocation)
+		return
+	}
 	settleModel := strings.TrimSpace(model)
 
 	h.cfgMu.RLock()
@@ -27,13 +46,6 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 	if executor == nil {
 		apiErr := APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt web executor is unavailable", Model: model}
 		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusServiceUnavailable, apiErr, streamFailFromKind(chatgptfail.KindProviderUnavailable, apiErr.Code+": "+apiErr.Message, nil), tokenUsage{})
-		return
-	}
-	ignored, compatibilityErr := chatGPTWebChatCompatibility(body)
-	if compatibilityErr != nil {
-		compatibilityErr.Model = model
-		fail := newStreamFailWithCode(streamKindError, compatibilityErr.Code, compatibilityErr.Code+": "+compatibilityErr.Message, fmt.Errorf("%s", compatibilityErr.Message), false)
-		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *compatibilityErr, fail, tokenUsage{})
 		return
 	}
 	if round != nil {
@@ -387,8 +399,9 @@ func pathOrEmpty(r *http.Request) string {
 }
 
 type openAIChatMessage struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content"`
+	Role        string              `json:"role,omitempty"`
+	Content     string              `json:"content"`
+	Annotations []openAIURLCitation `json:"annotations,omitempty"`
 }
 type openAIChatChoice struct {
 	Index        int               `json:"index"`

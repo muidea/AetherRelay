@@ -120,6 +120,16 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 			break
 		}
 	}
+	if command.WebSearch && hasFiles {
+		return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search does not support file attachments")
+	}
+	if command.WebSearch {
+		for _, message := range command.Messages {
+			if len(message.Images) > 0 {
+				return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search does not support image attachments")
+			}
+		}
+	}
 	endpoint := "/v1/chat/completions"
 	if hasFiles {
 		endpoint = "/v1/responses"
@@ -169,6 +179,9 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		messages = append(messages, map[string]any{"role": message.Role, "content": content})
 	}
 	body := map[string]any{"model": model, "stream": false}
+	if command.WebSearch {
+		body["tools"] = []any{map[string]any{"type": "web_search"}}
+	}
 	if endpoint == "/v1/responses" {
 		body["input"] = messages
 	} else {

@@ -70,6 +70,9 @@ type ExecuteFeatureTextCommand struct {
 	Model          string
 	Messages       []FeatureTextMessage
 	ThinkingEffort string
+	// WebSearch requests the restricted OpenAI web-search tool projection.
+	// It is a single forced search, not an arbitrary tools/function loop.
+	WebSearch bool
 }
 
 type ExecuteFeatureTextResult struct {
