@@ -91,6 +91,13 @@ func TestClassifyStatus(t *testing.T) {
 	}
 }
 
+func TestClassifyStatusResponseDoesNotEchoUnknownBody(t *testing.T) {
+	err := classifyStatusResponse("test", 422, strings.NewReader(`{"request":"sensitive prompt"}`))
+	if strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("unexpected response body in error: %v", err)
+	}
+}
+
 type requirementsDoer struct {
 	finalizeBody string
 	prepareBody  string

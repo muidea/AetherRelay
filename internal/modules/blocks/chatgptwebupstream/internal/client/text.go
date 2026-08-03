@@ -97,7 +97,7 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return TextResult{}, classifyStatus("text_conversation", response.StatusCode)
+		return TextResult{}, classifyStatusResponse("text_conversation", response.StatusCode, response.Body)
 	}
 	return parseTextSSE(ctx, io.LimitReader(response.Body, maxTextSSEBytes), emit)
 }
@@ -185,8 +185,6 @@ func textConversationPayload(request TextRequest, inputs []preparedTextMessage) 
 			for _, ref := range input.References {
 				if ref.Width > 0 && ref.Height > 0 {
 					parts = append(parts, textImagePart{ContentType: "image_asset_pointer", AssetPointer: "file-service://" + ref.FileID, Width: ref.Width, Height: ref.Height, SizeBytes: ref.FileSize})
-				} else {
-					parts = append(parts, textFilePart{ContentType: "file_asset_pointer", AssetPointer: "file-service://" + ref.FileID, Name: ref.FileName, MIMEType: ref.MIMEType, SizeBytes: ref.FileSize})
 				}
 				attachments = append(attachments, textAttachment{ID: ref.FileID, MIMEType: ref.MIMEType, Name: ref.FileName, Size: ref.FileSize, Width: ref.Width, Height: ref.Height})
 			}
@@ -248,20 +246,13 @@ type textImagePart struct {
 	Height       int    `json:"height"`
 	SizeBytes    int64  `json:"size_bytes"`
 }
-type textFilePart struct {
-	ContentType  string `json:"content_type"`
-	AssetPointer string `json:"asset_pointer"`
-	Name         string `json:"name"`
-	MIMEType     string `json:"mime_type"`
-	SizeBytes    int64  `json:"size_bytes"`
-}
 type textAttachment struct {
 	ID       string `json:"id"`
-	MIMEType string `json:"mimeType"`
+	MIMEType string `json:"mime_type"`
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
 }
 type textMetadata struct {
 	Attachments []textAttachment `json:"attachments,omitempty"`

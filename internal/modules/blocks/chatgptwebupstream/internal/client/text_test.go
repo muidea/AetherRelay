@@ -96,8 +96,28 @@ func TestTextConversationPayloadUsesFileServicePointers(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := string(body)
-	if !strings.Contains(encoded, `"content_type":"multimodal_text"`) || !strings.Contains(encoded, `"asset_pointer":"file-service://file_123"`) || !strings.Contains(encoded, `"content_type":"file_asset_pointer"`) || !strings.Contains(encoded, `"asset_pointer":"file-service://file_456"`) || !strings.Contains(encoded, `"attachments":[`) || !strings.Contains(encoded, `"describe"`) {
+	if !strings.Contains(encoded, `"content_type":"multimodal_text"`) || !strings.Contains(encoded, `"asset_pointer":"file-service://file_123"`) || !strings.Contains(encoded, `"mime_type":"text/markdown"`) || !strings.Contains(encoded, `"attachments":[`) || !strings.Contains(encoded, `"describe"`) {
 		t.Fatalf("payload=%s", encoded)
+	}
+	if strings.Contains(encoded, `"content_type":"file_asset_pointer"`) || strings.Contains(encoded, `"asset_pointer":"file-service://file_456"`) || strings.Contains(encoded, `"mimeType"`) || strings.Contains(encoded, `"width":0`) || strings.Contains(encoded, `"height":0`) {
+		t.Fatalf("document attachment used unsupported Web fields: %s", encoded)
+	}
+}
+
+type textErrorDoer struct{ textDoer }
+
+func (d *textErrorDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/backend-api/conversation" {
+		return &http.Response{StatusCode: 422, Body: io.NopCloser(strings.NewReader(`{"detail":"invalid attachment payload"}`)), Header: make(http.Header)}, nil
+	}
+	return d.textDoer.Do(request)
+}
+
+func TestCompleteTextIncludesBoundedStructuredUpstreamError(t *testing.T) {
+	client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", &textErrorDoer{})
+	_, err := client.CompleteText(context.Background(), TextRequest{Model: "gpt-5", Messages: []TextMessage{{Role: "user", Content: "hello"}}})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "invalid attachment payload") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

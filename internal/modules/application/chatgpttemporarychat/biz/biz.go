@@ -21,6 +21,7 @@ import (
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
 	usageevents "ai-proxy/internal/modules/blocks/usageruntime/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyusage"
+	"ai-proxy/internal/pkg/chatattachment"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
@@ -324,20 +325,11 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation history"))
 		return
 	}
-	messages := make([]proxyevents.FeatureTextMessage, 0, len(detail.Messages)+1)
-	if strings.TrimSpace(started.SystemPrompt) != "" {
-		messages = append(messages, proxyevents.FeatureTextMessage{Role: "system", Content: started.SystemPrompt})
-	}
-	for _, message := range detail.Messages {
-		if message.ID == started.AssistantMessage.ID {
-			continue
-		}
-		item := proxyevents.FeatureTextMessage{Role: message.Role, Content: message.Content}
-		if message.ID == started.UserMessage.ID {
-			item.Images = started.Images
-			item.Files = started.Files
-		}
-		messages = append(messages, item)
+	messages, err := s.buildFeatureMessages(cmd.OwnerID, cmd.ConversationID, detail, started)
+	if err != nil {
+		_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "store", "failed to load conversation attachments")
+		result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation attachments"))
+		return
 	}
 	timeout := s.turnTimeout
 	if timeout <= 0 {
@@ -378,6 +370,64 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		UserMessage:      started.UserMessage,
 		AssistantMessage: started.AssistantMessage,
 	}, nil)
+}
+
+func (s *TemporaryChat) buildFeatureMessages(ownerID, conversationID string, detail events.ConversationDetailResult, started store.TurnStart) ([]proxyevents.FeatureTextMessage, error) {
+	messages := make([]proxyevents.FeatureTextMessage, 0, len(detail.Messages)+1)
+	if strings.TrimSpace(started.SystemPrompt) != "" {
+		messages = append(messages, proxyevents.FeatureTextMessage{Role: "system", Content: started.SystemPrompt})
+	}
+	failedSequences := map[int64]struct{}{}
+	for _, message := range detail.Messages {
+		if message.ID == started.AssistantMessage.ID {
+			continue
+		}
+		if message.Status == events.MessageStatusError || message.Status == events.MessageStatusCancelled || message.Status == events.MessageStatusInterrupted {
+			failedSequences[message.Sequence] = struct{}{}
+			if message.Role == "assistant" {
+				failedSequences[message.Sequence-1] = struct{}{}
+			}
+		}
+	}
+	for _, message := range detail.Messages {
+		if message.ID == started.AssistantMessage.ID {
+			continue
+		}
+		if _, failed := failedSequences[message.Sequence]; failed {
+			continue
+		}
+		item := proxyevents.FeatureTextMessage{Role: message.Role, Content: message.Content}
+		if message.ID == started.UserMessage.ID {
+			item.Images = started.Images
+			item.Files = started.Files
+		} else if message.Role == "user" {
+			for _, image := range message.Images {
+				row, found, err := s.store.GetMessageImage(ownerID, conversationID, message.ID, image.ID)
+				if err != nil {
+					return nil, fmt.Errorf("load historical image %s: %w", image.ID, err)
+				}
+				if !found {
+					return nil, fmt.Errorf("load historical image %s: not found", image.ID)
+				}
+				item.Images = append(item.Images, row.Bytes)
+			}
+			for _, attachment := range message.Attachments {
+				row, found, err := s.store.GetMessageAttachment(ownerID, conversationID, message.ID, attachment.ID)
+				if err != nil {
+					return nil, fmt.Errorf("load historical attachment %s: %w", attachment.ID, err)
+				}
+				if !found {
+					return nil, fmt.Errorf("load historical attachment %s: not found", attachment.ID)
+				}
+				item.Files = append(item.Files, chatattachment.File{Name: row.FileName, ContentType: row.ContentType, Bytes: row.Bytes})
+			}
+		}
+		if strings.TrimSpace(item.Content) == "" && len(item.Images) == 0 && len(item.Files) == 0 {
+			continue
+		}
+		messages = append(messages, item)
+	}
+	return messages, nil
 }
 
 // startLegacyTurn preserves continuation semantics for conversations created

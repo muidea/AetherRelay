@@ -1,9 +1,12 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 )
 
 type ErrorClass string
@@ -20,14 +23,67 @@ type Error struct {
 	Class      ErrorClass
 	Operation  string
 	StatusCode int
+	Detail     string
 	Cause      error
 }
 
 func (e *Error) Error() string {
 	if e.StatusCode != 0 {
+		if e.Detail != "" {
+			return fmt.Sprintf("%s: HTTP %d (%s): %s", e.Operation, e.StatusCode, e.Class, e.Detail)
+		}
 		return fmt.Sprintf("%s: HTTP %d (%s)", e.Operation, e.StatusCode, e.Class)
 	}
 	return fmt.Sprintf("%s: %s: %v", e.Operation, e.Class, e.Cause)
+}
+
+func classifyStatusResponse(operation string, status int, body io.Reader) error {
+	classified := classifyStatus(operation, status).(*Error)
+	if body == nil {
+		return classified
+	}
+	data, err := io.ReadAll(io.LimitReader(body, 32<<10))
+	if err != nil || len(data) == 0 {
+		return classified
+	}
+	var payload any
+	if json.Unmarshal(data, &payload) == nil {
+		classified.Detail = upstreamErrorDetail(payload)
+	}
+	return classified
+}
+
+func upstreamErrorDetail(value any) string {
+	var find func(any) string
+	find = func(current any) string {
+		switch item := current.(type) {
+		case map[string]any:
+			for _, key := range []string{"message", "detail", "code"} {
+				if text, ok := item[key].(string); ok && strings.TrimSpace(text) != "" {
+					return text
+				}
+			}
+			for _, key := range []string{"error", "errors"} {
+				if nested, ok := item[key]; ok {
+					if text := find(nested); text != "" {
+						return text
+					}
+				}
+			}
+		case []any:
+			for _, nested := range item {
+				if text := find(nested); text != "" {
+					return text
+				}
+			}
+		}
+		return ""
+	}
+	detail := strings.Join(strings.Fields(find(value)), " ")
+	if len(detail) > 512 {
+		detail = detail[:512]
+	}
+	return detail
 }
 func (e *Error) Unwrap() error { return e.Cause }
 
