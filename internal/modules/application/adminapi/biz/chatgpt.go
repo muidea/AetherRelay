@@ -320,6 +320,30 @@ func (s *Admin) ExecuteFeatureSearch(ctx context.Context, cmd proxyevents.Execut
 	return result, nil
 }
 
+func (s *Admin) ListFeatureSearchHistory(ctx context.Context, cmd proxyevents.ListFeatureSearchHistoryCommand) (proxyevents.ListFeatureSearchHistoryResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicListFeatureSearchHistory, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return proxyevents.ListFeatureSearchHistoryResult{}, fmt.Errorf("web search history unavailable")
+	}
+	result, ok := value.(proxyevents.ListFeatureSearchHistoryResult)
+	if !ok {
+		return proxyevents.ListFeatureSearchHistoryResult{}, fmt.Errorf("invalid web search history list result")
+	}
+	return result, nil
+}
+
+func (s *Admin) GetFeatureSearchHistory(ctx context.Context, cmd proxyevents.GetFeatureSearchHistoryCommand) (proxyevents.GetFeatureSearchHistoryResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicGetFeatureSearchHistory, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return proxyevents.GetFeatureSearchHistoryResult{}, fmt.Errorf("web search history entry not found")
+	}
+	result, ok := value.(proxyevents.GetFeatureSearchHistoryResult)
+	if !ok {
+		return proxyevents.GetFeatureSearchHistoryResult{}, fmt.Errorf("invalid web search history detail result")
+	}
+	return result, nil
+}
+
 func (s *Admin) CreateTemporaryConversation(ctx context.Context, cmd tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicCreate, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
 	if err != nil {

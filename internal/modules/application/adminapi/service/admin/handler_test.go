@@ -101,7 +101,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "featureSubSearch", "cgPanelSearch", "/api/features/search", "function submitFeatureSearch(event)",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)",
 		`id="featureSubChat" data-feature-sub="chat">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {

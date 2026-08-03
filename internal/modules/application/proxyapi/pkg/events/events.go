@@ -15,16 +15,18 @@ import (
 )
 
 const (
-	TopicUpdateConfig           = "aiproxy.proxy.command.update"
-	TopicEffectiveCatalog       = "aiproxy.proxy.query.effective_catalog"
-	TopicStartCodexDiscovery    = "aiproxy.proxy.command.start_codex_discovery"
-	TopicCodexDiscoveryProgress = "aiproxy.proxy.query.codex_discovery_progress"
-	TopicStartCodexUsageRefresh = "aiproxy.proxy.command.start_codex_usage_refresh"
-	TopicCodexUsageProgress     = "aiproxy.proxy.query.codex_usage_progress"
-	TopicFeatureCatalog         = "aiproxy.proxy.query.feature_catalog"
-	TopicExecuteFeatureText     = "aiproxy.proxy.command.execute_feature_text"
-	TopicExecuteFeatureSearch   = "aiproxy.proxy.command.execute_feature_search"
-	TopicExecuteFeatureImage    = "aiproxy.proxy.command.execute_feature_image"
+	TopicUpdateConfig             = "aiproxy.proxy.command.update"
+	TopicEffectiveCatalog         = "aiproxy.proxy.query.effective_catalog"
+	TopicStartCodexDiscovery      = "aiproxy.proxy.command.start_codex_discovery"
+	TopicCodexDiscoveryProgress   = "aiproxy.proxy.query.codex_discovery_progress"
+	TopicStartCodexUsageRefresh   = "aiproxy.proxy.command.start_codex_usage_refresh"
+	TopicCodexUsageProgress       = "aiproxy.proxy.query.codex_usage_progress"
+	TopicFeatureCatalog           = "aiproxy.proxy.query.feature_catalog"
+	TopicExecuteFeatureText       = "aiproxy.proxy.command.execute_feature_text"
+	TopicExecuteFeatureSearch     = "aiproxy.proxy.command.execute_feature_search"
+	TopicListFeatureSearchHistory = "aiproxy.proxy.query.feature_search_history"
+	TopicGetFeatureSearchHistory  = "aiproxy.proxy.query.feature_search_history_detail"
+	TopicExecuteFeatureImage      = "aiproxy.proxy.command.execute_feature_image"
 )
 
 type UpdateConfigCommand struct{ Config config.Config }
@@ -99,10 +101,44 @@ type FeatureSearchSource struct {
 }
 
 type ExecuteFeatureSearchResult struct {
+	HistoryID   string                `json:"history_id,omitempty"`
 	Provider    string                `json:"provider"`
 	ActualModel string                `json:"actual_model"`
 	Text        string                `json:"output_text"`
 	Sources     []FeatureSearchSource `json:"sources"`
+}
+
+// FeatureSearchHistoryItem is a bounded, owner-scoped list projection. The
+// answer and source URLs are intentionally returned only by Get so opening the
+// feature page does not transfer every historical result.
+type FeatureSearchHistoryItem struct {
+	ID          string `json:"id"`
+	Model       string `json:"model"`
+	ActualModel string `json:"actual_model,omitempty"`
+	Query       string `json:"query"`
+	Provider    string `json:"provider"`
+	CreatedAt   string `json:"created_at"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+type ListFeatureSearchHistoryCommand struct {
+	OwnerID string
+	Limit   int
+}
+
+type ListFeatureSearchHistoryResult struct {
+	Items []FeatureSearchHistoryItem `json:"items"`
+}
+
+type GetFeatureSearchHistoryCommand struct {
+	OwnerID string
+	ID      string
+}
+
+type GetFeatureSearchHistoryResult struct {
+	FeatureSearchHistoryItem
+	Text    string                `json:"output_text"`
+	Sources []FeatureSearchSource `json:"sources"`
 }
 
 type ExecuteFeatureImageCommand struct {

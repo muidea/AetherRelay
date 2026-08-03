@@ -41,6 +41,11 @@ type chatGPTAccountRuntimeStub struct {
 	searchCommand      proxyevents.ExecuteFeatureSearchCommand
 	searchResult       proxyevents.ExecuteFeatureSearchResult
 	searchErr          error
+	searchHistoryList  proxyevents.ListFeatureSearchHistoryCommand
+	searchHistoryGet   proxyevents.GetFeatureSearchHistoryCommand
+	searchHistory      proxyevents.ListFeatureSearchHistoryResult
+	searchHistoryItem  proxyevents.GetFeatureSearchHistoryResult
+	searchHistoryErr   error
 }
 
 type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
@@ -161,6 +166,22 @@ func (s *chatGPTAccountRuntimeStub) ExecuteFeatureSearch(_ context.Context, comm
 	return proxyevents.ExecuteFeatureSearchResult{Provider: "chatgptweb", ActualModel: command.Model, Text: "answer", Sources: []proxyevents.FeatureSearchSource{{Title: "Example", URL: "https://example.test"}}}, nil
 }
 
+func (s *chatGPTAccountRuntimeStub) ListFeatureSearchHistory(_ context.Context, command proxyevents.ListFeatureSearchHistoryCommand) (proxyevents.ListFeatureSearchHistoryResult, error) {
+	s.searchHistoryList = command
+	if s.searchHistoryErr != nil {
+		return proxyevents.ListFeatureSearchHistoryResult{}, s.searchHistoryErr
+	}
+	return s.searchHistory, nil
+}
+
+func (s *chatGPTAccountRuntimeStub) GetFeatureSearchHistory(_ context.Context, command proxyevents.GetFeatureSearchHistoryCommand) (proxyevents.GetFeatureSearchHistoryResult, error) {
+	s.searchHistoryGet = command
+	if s.searchHistoryErr != nil {
+		return proxyevents.GetFeatureSearchHistoryResult{}, s.searchHistoryErr
+	}
+	return s.searchHistoryItem, nil
+}
+
 func (s *chatGPTAccountRuntimeStub) CreateTemporaryConversation(_ context.Context, command tempevents.CreateConversationCommand) (tempevents.ConversationResult, error) {
 	s.temporaryCreate = command
 	if s.temporaryCreateErr != nil {
@@ -258,6 +279,30 @@ func TestAdminFeatureSearchUsesScopedProxyCommand(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || runtime.searchCommand.OwnerID != "admin" || runtime.searchCommand.Model != "gpt-5" || runtime.searchCommand.Query != "latest news" || !strings.Contains(rec.Body.String(), `"output_text":"answer"`) || !strings.Contains(rec.Body.String(), `"url":"https://example.test"`) {
 		t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.searchCommand, rec.Body.String())
+	}
+}
+
+func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{
+		searchHistory:     proxyevents.ListFeatureSearchHistoryResult{Items: []proxyevents.FeatureSearchHistoryItem{{ID: "search-1", Query: "latest news", Model: "gpt-5"}}},
+		searchHistoryItem: proxyevents.GetFeatureSearchHistoryResult{FeatureSearchHistoryItem: proxyevents.FeatureSearchHistoryItem{ID: "search-1", Query: "latest news", Model: "gpt-5"}, Text: "answer", Sources: []proxyevents.FeatureSearchSource{{URL: "https://example.test"}}},
+	}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/features/search/history", nil)
+	listReq.RemoteAddr = "127.0.0.1:1234"
+	listReq.Header.Set("X-AI-Proxy-Admin", "1")
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK || runtime.searchHistoryList.OwnerID != "admin" || runtime.searchHistoryList.Limit != 50 || !strings.Contains(listRec.Body.String(), `"search-1"`) {
+		t.Fatalf("list status=%d command=%+v body=%s", listRec.Code, runtime.searchHistoryList, listRec.Body.String())
+	}
+	detailReq := httptest.NewRequest(http.MethodGet, "/admin/api/features/search/history/search-1", nil)
+	detailReq.RemoteAddr = "127.0.0.1:1234"
+	detailReq.Header.Set("X-AI-Proxy-Admin", "1")
+	detailRec := httptest.NewRecorder()
+	handler.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK || runtime.searchHistoryGet.OwnerID != "admin" || runtime.searchHistoryGet.ID != "search-1" || !strings.Contains(detailRec.Body.String(), `"output_text":"answer"`) {
+		t.Fatalf("detail status=%d command=%+v body=%s", detailRec.Code, runtime.searchHistoryGet, detailRec.Body.String())
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"ai-proxy/internal/modules/application/proxyapi/internal/searchhistory"
 	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
@@ -43,6 +44,7 @@ type Proxy struct {
 	usage    usage.Store
 	metrics  metricsport.Port
 	recorder *archive.Recorder
+	history  *searchhistory.Store
 
 	mu                 sync.RWMutex
 	updater            ConfigUpdater
@@ -77,6 +79,13 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.Unexpected, "init interaction archive: "+err.Error())
 	}
+	if bootstrap.Config.ChatGPTWeb.Enabled {
+		history, openErr := searchhistory.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, searchhistory.Config{})
+		if openErr != nil {
+			return nil, cd.NewError(cd.Unexpected, "open web search history: "+openErr.Error())
+		}
+		biz.history = history
+	}
 	biz.config = bootstrap.Config
 	biz.usage = usageStore
 	biz.metrics = metrics
@@ -90,6 +99,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicFeatureCatalog, biz.handleFeatureCatalog)
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureText, biz.handleExecuteFeatureText)
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureSearch, biz.handleExecuteFeatureSearch)
+	biz.SubscribeFunc(proxyevents.TopicListFeatureSearchHistory, biz.handleListFeatureSearchHistory)
+	biz.SubscribeFunc(proxyevents.TopicGetFeatureSearchHistory, biz.handleGetFeatureSearchHistory)
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureImage, biz.handleExecuteFeatureImage)
 	return biz, nil
 }
@@ -109,6 +120,8 @@ func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicFeatureCatalog)
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureText)
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureSearch)
+	s.UnsubscribeFunc(proxyevents.TopicListFeatureSearchHistory)
+	s.UnsubscribeFunc(proxyevents.TopicGetFeatureSearchHistory)
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureImage)
 	s.mu.Lock()
 	s.updater = nil
@@ -124,6 +137,10 @@ func (s *Proxy) Teardown(context.Context) {
 	s.usage = nil
 	s.metrics = nil
 	s.recorder = nil
+	if s.history != nil {
+		_ = s.history.Close()
+		s.history = nil
+	}
 }
 
 func (s *Proxy) BindFeatureExecutor(executor FeatureExecutor) {
@@ -190,6 +207,79 @@ func (s *Proxy) handleExecuteFeatureSearch(ev event.Event, result event.Result) 
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
+	}
+	if s.history == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "search history is unavailable"))
+		return
+	}
+	sources := make([]searchhistory.Source, 0, len(out.Sources))
+	for _, source := range out.Sources {
+		sources = append(sources, searchhistory.Source{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
+	}
+	persisted, historyErr := s.history.Record(searchhistory.Record{
+		OwnerID: cmd.OwnerID, Model: cmd.Model, ActualModel: out.ActualModel, Query: cmd.Query,
+		OutputText: out.Text, Provider: out.Provider, Sources: sources,
+	})
+	if historyErr != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "persist search history: "+historyErr.Error()))
+		return
+	}
+	out.HistoryID = persisted.ID
+	result.Set(out, nil)
+}
+
+func (s *Proxy) handleListFeatureSearchHistory(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(proxyevents.ListFeatureSearchHistoryCommand)
+	if !ok || cmd.OwnerID == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid feature search history list command"))
+		return
+	}
+	if s.history == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "search history is unavailable"))
+		return
+	}
+	items, err := s.history.List(cmd.OwnerID, cmd.Limit)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	out := proxyevents.ListFeatureSearchHistoryResult{Items: make([]proxyevents.FeatureSearchHistoryItem, 0, len(items))}
+	for _, item := range items {
+		out.Items = append(out.Items, proxyevents.FeatureSearchHistoryItem{
+			ID: item.ID, Model: item.Model, ActualModel: item.ActualModel, Query: item.Query, Provider: item.Provider,
+			CreatedAt: item.CreatedAt, ExpiresAt: item.ExpiresAt,
+		})
+	}
+	result.Set(out, nil)
+}
+
+func (s *Proxy) handleGetFeatureSearchHistory(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(proxyevents.GetFeatureSearchHistoryCommand)
+	if !ok || cmd.OwnerID == "" || cmd.ID == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid feature search history get command"))
+		return
+	}
+	if s.history == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "search history is unavailable"))
+		return
+	}
+	detail, err := s.history.Get(cmd.OwnerID, cmd.ID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.NotFound, err.Error()))
+		return
+	}
+	out := proxyevents.GetFeatureSearchHistoryResult{FeatureSearchHistoryItem: proxyevents.FeatureSearchHistoryItem{
+		ID: detail.ID, Model: detail.Model, ActualModel: detail.ActualModel, Query: detail.Query, Provider: detail.Provider,
+		CreatedAt: detail.CreatedAt, ExpiresAt: detail.ExpiresAt,
+	}, Text: detail.OutputText, Sources: make([]proxyevents.FeatureSearchSource, 0, len(detail.Sources))}
+	for _, source := range detail.Sources {
+		out.Sources = append(out.Sources, proxyevents.FeatureSearchSource{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
 	}
 	result.Set(out, nil)
 }

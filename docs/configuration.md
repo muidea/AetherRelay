@@ -128,7 +128,9 @@ state:
 
 `state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、不可迁移或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
 
-`state.database` 的业务表按 owner 划分：用量 owner 管理其用量表；ChatGPT 账号池管理 `chatgpt_accounts`；Codex OAuth 账号池管理 `codex_oauth_accounts`；图片任务管理 `chatgpt_image_tasks`；图片库管理 `chatgpt_images` 与 `chatgpt_image_tags`。不使用通用 JSON 文档表。图片元数据保留 JSON 扩展列，但账号、任务和图片的归属主键及图片查询字段均为独立列。
+`state.database` 的业务表按 owner 划分：用量 owner 管理其用量表；ChatGPT 账号池管理 `chatgpt_accounts`；Codex OAuth 账号池管理 `codex_oauth_accounts`；图片任务管理 `chatgpt_image_tasks`；图片库管理 `chatgpt_images` 与 `chatgpt_image_tags`；Proxy 的 Admin 在线搜索管理 `chatgpt_web_search_history`。不使用通用 JSON 文档表。图片元数据和搜索来源保留 JSON 扩展列，但账号、任务、图片和搜索历史的归属主键及查询字段均为独立列。
+
+Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 
 工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 

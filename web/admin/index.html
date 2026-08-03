@@ -298,6 +298,10 @@
           </form>
         </section>
         <section class="card">
+          <div class="toolbar"><span class="toolbar-title">搜索历史</span><span class="toolbar-meta">按管理员账号隔离，最多保留 30 天</span><button type="button" class="btn" id="cgSearchHistoryReload" style="margin-left:auto">重新加载</button></div>
+          <div id="cgSearchHistory" class="tc-list-body"><div class="tc-empty">正在加载搜索历史…</div></div>
+        </section>
+        <section class="card">
           <div class="toolbar"><span class="toolbar-title">搜索结果</span><span class="toolbar-meta" id="cgSearchMeta"></span></div>
           <div id="cgSearchResult" class="muted-box">尚未执行搜索。</div>
         </section>
@@ -572,6 +576,9 @@ const enUS={
   "查看并维护上游服务、模型路由模式和端点能力；来源按 Base URL 自动识别为内建 / 官方 / 第三方，保存后立即生效。":"View and maintain upstream services, model routing patterns, and endpoint capabilities. Source is identified from the base URL as built-in, official, or third party; changes apply immediately.","ChatGPT Web 的账号与功能服务。敏感凭据不会在页面展示，也不会保存到浏览器。":"ChatGPT Web account and feature services. Sensitive credentials are never displayed or saved in the browser.","ChatGPT Web 子页签":"ChatGPT Web tabs","ChatGPT Web 服务当前不可用。":"ChatGPT Web is currently unavailable.","此对话需要恢复：上一轮生成已中断，无法继续当前分支。请创建新对话。":"This conversation requires recovery: the previous generation was interrupted and this branch cannot continue. Create a new conversation.","输入消息，可附加图片。Enter 发送，Shift+Enter 换行":"Enter a message and optional images. Enter sends; Shift+Enter adds a line.","仅列出已验证且支持 chat_completions 的模型；research 专用模型不提供此功能。":"Only verified models that support chat_completions are listed; research-only models are unavailable here.","仅在首轮请求中发送":"Sent only with the first turn.","管理用于原生  的 Codex OAuth 账号，并查看账号级模型目录、凭据刷新与冷却状态。":"Manage Codex OAuth accounts for native Responses requests, including account model catalogs, credential refresh, and cooldown state.","Codex OAuth 服务当前不可用。":"Codex OAuth is currently unavailable.","正常账号":"Normal accounts","异常账号":"Abnormal accounts","禁用账号":"Disabled accounts","Codex 账号列表":"Codex accounts","搜索脱敏邮箱或本地 ID":"Search masked email or local ID","保存后名称会统一转为小写":"Names are normalized to lowercase when saved.","请立即复制 API Key":"Copy the API key now","关闭后无法再次查看。":"It cannot be viewed again after closing.","导入 Access Token":"Import access token","每行一个 access token，也可用逗号分隔；也支持 accounts.json":"One access token per line or comma-separated; accounts.json is also supported.","支持 token 文本，或 JSON 数组（字符串 / 含 access_token 的对象）。仅提交 access token 集合；不会显示或回显完整 token。":"Accepts token text or a JSON array (strings or objects with access_token). Only access tokens are submitted; full tokens are never displayed or echoed.","留空":"Leave empty","手工导入（web）":"Manual import (web)","编辑账号":"Edit account","账号 ID":"Account ID","出于安全设计，页面不展示或编辑 proxy / token。":"For security, proxies and tokens cannot be viewed or edited here.","点击开始后，在浏览器中完成上游登录，再把回调 URL/地址粘贴回来。授权 URL 与 session 仅保存在本页内存，不会写入浏览器存储。":"After starting, sign in upstream in the browser and paste the callback URL back here. The authorization URL and session remain only in this page's memory.","开始 OAuth":"Start OAuth","会话进行中。请完成上游登录后提交 callback；取消会销毁内存状态。":"Session in progress. Complete upstream sign-in and submit the callback; cancelling clears in-memory state.","粘贴完整 callback URL 或地址":"Paste the complete callback URL or address","完成导入":"Complete import","确认导出账号":"Confirm account export","将导出 ":"Exporting "," 个账号的敏感凭据（含 access/refresh token 等）。":" accounts' sensitive credentials (including access/refresh tokens).","导出内容不会在页面预览，也不会写入 localStorage/sessionStorage。下载完成后立即释放内存引用。":"Exported content is not previewed or stored in localStorage/sessionStorage. Memory references are released after download.","确认导出并下载":"Export and download","导入 Codex OAuth 凭据":"Import Codex OAuth credentials","仅接受 Codex OAuth 导出结构。凭据和代理仅在提交期间保留于页面内存，列表与后续页面都不会回显。":"Only Codex OAuth export data is accepted. Credentials and proxies remain in page memory only while submitting and are never echoed in later views.","账号代理（可选）":"Account proxy (optional)","此代理会同时用于授权换令牌、后续刷新和 Codex 请求，但不会在列表中显示。":"This proxy is used for authorization token exchange, later refreshes, and Codex requests; it is never shown in lists.","开始后会在新窗口打开 OpenAI 登录；请将最终的  完整 URL 粘贴回来。授权 URL 与会话不写入浏览器存储。":"Starting opens OpenAI sign-in in a new window; paste the final callback URL back here. Authorization URLs and sessions are not stored in the browser.","会话进行中。完成登录后提交 callback；关闭窗口会清除本页内存的会话引用。":"Session in progress. Submit the callback after sign-in; closing clears this page's in-memory session reference.","编辑标签":"Edit tags","tags（逗号或换行分隔）":"Tags (comma or newline separated)","预览图片":"Preview image"
 };
 Object.assign(enUS,{
+  "搜索历史":"Search history","按管理员账号隔离，最多保留 30 天":"Isolated per administrator; retained for up to 30 days","正在加载搜索历史…":"Loading search history…","暂无搜索历史":"No search history","无法加载搜索历史":"Could not load search history","未命名搜索":"Untitled search",
+});
+Object.assign(enUS,{
   "账号":"Account","类型 / 来源":"Type / source","额度":"Quota","在途":"In progress","模型目录":"Model catalog","选择当前筛选结果":"Select current filtered accounts",
   "模型路由":"Model routing","正在加载模型路由…":"Loading model routing…","搜索模型 / Provider / 操作":"Search model, provider, or operation","路由优先级":"Routing priority","路由策略":"Routing policy","数值越高越优先；同优先级按健康度和名称稳定排序。":"Higher values are preferred; equal priorities are ordered stably by health and name.","允许作为回退":"Allow fallback","仅在更高优先级候选失败且尚未写出响应时使用":"Use only after a higher-priority candidate fails before a response is committed.","优先":"Primary","回退":"Fallback","已排除":"Excluded","未启用回退":"Fallback disabled","健康度":"Health","样本 {count} · 成功率 {rate} · P95 {p95} ms":"{count} samples · {rate} success · P95 {p95} ms","熔断至 {time}":"Circuit open until {time}","已熔断":"Circuit open","半开":"Half open","正常":"Healthy","异常":"Unhealthy","Provider 候选":"Provider candidates","无模型路由":"No model routes","路由优先级必须在 -1000 到 1000 之间":"Routing priority must be an integer from -1000 to 1000",
   "同步模型":"Sync models","刷新凭据":"Refresh credentials","模型发现中":"Discovering models","模型目录同步暂不可用":"Model catalog synchronization is unavailable","模型发现失败：{error}；下次尝试 {time}":"Model discovery failed: {error}; next attempt {time}","等待模型同步":"Awaiting model synchronization","已发现 {count} 个模型":"Discovered {count} models","缓存有效至 {time}":"Cached until {time}","未发现模型":"No models discovered","观察到额度耗尽 · {model} · 恢复于 {time}":"Observed quota exhaustion · {model} · resets {time}","上游未提供恢复时间":"Upstream did not provide a reset time","模型同步完成：成功 {succeeded}，失败 {failed}，共 {total} 个账号":"Model synchronization complete: {succeeded} succeeded, {failed} failed, {total} accounts total","模型发现中：已处理 {processed}/{total}，成功 {succeeded}，失败 {failed}":"Discovering models: {processed}/{total} processed, {succeeded} succeeded, {failed} failed","最后错误：{error}":"Last error: {error}","模型同步进度查询失败：{error}。请重新加载账号列表。":"Could not retrieve model synchronization progress: {error}. Reload the account list.","不可用原因：{reason}":"Unavailable reason: {reason}","可路由账号 {count}":"Routable accounts {count}","模型 {count}":"Models {count}","最近发现 {time}":"Last discovered {time}"
@@ -590,7 +597,7 @@ const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[
     featureCatalog:null,
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
-    search:{busy:false,result:null},
+    search:{busy:false,result:null,items:[],currentID:"",historyBusy:false},
     chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}},
   codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,discovery:{progressId:"",timer:null,failures:0,done:true},usage:{progressId:"",timer:null,failures:0,done:true},oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
 const $=id=>document.getElementById(id);
@@ -865,7 +872,10 @@ function showChatGPTSub(sub){
   }else if(state.cg.sub==="chat"){
     loadTemporaryChatModels();
     loadTemporaryConversations(true);
-  }else if(state.cg.sub==="search")loadFeatureSearchModels();
+  }else if(state.cg.sub==="search"){
+    loadFeatureSearchModels();
+    loadFeatureSearchHistory();
+  }
   else loadChatGPTImages();
 }
 function setChatGPTUnavailable(msg){
@@ -2239,6 +2249,49 @@ function renderFeatureSearchResult(result){
   const provider=String(result.provider||"").trim();
   meta.textContent=[model,provider].filter(Boolean).join(" · ");
 }
+function renderFeatureSearchHistory(){
+  const box=$("cgSearchHistory");
+  if(!box)return;
+  const items=Array.isArray(state.cg.search.items)?state.cg.search.items:[];
+  if(!items.length){box.innerHTML=`<div class="tc-empty">${esc(t("暂无搜索历史"))}</div>`;return}
+  const currentID=String(state.cg.search.currentID||"");
+  box.innerHTML=items.map(item=>{
+    const id=String(item?.id||"");
+    const query=String(item?.query||"").trim();
+    const compactQuery=query.length>160?query.slice(0,160)+"…":query;
+    const model=String(item?.actual_model||item?.model||"").trim();
+    const created=String(item?.created_at||"").replace("T"," ").replace("Z","");
+    return `<button type="button" class="tc-item ${id===currentID?"active":""}" data-cg-search-history-id="${esc(id)}">
+      <div class="title">${esc(compactQuery||t("未命名搜索"))}</div>
+      <div class="meta"><span>${esc(model)}</span><span>${esc(created)}</span></div>
+    </button>`;
+  }).join("");
+  box.querySelectorAll("[data-cg-search-history-id]").forEach(button=>button.onclick=()=>openFeatureSearchHistory(button.dataset.cgSearchHistoryId));
+}
+async function loadFeatureSearchHistory(){
+  if(state.cg.search.historyBusy)return;
+  state.cg.search.historyBusy=true;
+  try{
+    const data=await request(apiURL("/api/features/search/history"));
+    state.cg.search.items=Array.isArray(data?.items)?data.items:[];
+    renderFeatureSearchHistory();
+  }catch(e){
+    state.cg.search.items=[];
+    const box=$("cgSearchHistory");
+    if(box)box.innerHTML=`<div class="notice">${esc(t("无法加载搜索历史"))}</div>`;
+  }finally{state.cg.search.historyBusy=false}
+}
+async function openFeatureSearchHistory(id){
+  id=String(id||"").trim();
+  if(!id||state.cg.search.busy)return;
+  try{
+    const result=await request(apiURL(`/api/features/search/history/${encodeURIComponent(id)}`));
+    state.cg.search.currentID=id;
+    state.cg.search.result=result;
+    renderFeatureSearchHistory();
+    renderFeatureSearchResult(result);
+  }catch(e){toast(e.message,"error")}
+}
 async function loadFeatureSearchModels(){
   const sel=$("cgSearchModel");
   if(!sel)return;
@@ -2271,8 +2324,10 @@ async function submitFeatureSearch(event){
   $("cgSearchResult").textContent=t("正在搜索…");
   try{
     const result=await request(apiURL("/api/features/search"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({model,query})});
+    state.cg.search.currentID=String(result.history_id||"");
     state.cg.search.result=result;
     renderFeatureSearchResult(result);
+    await loadFeatureSearchHistory();
   }catch(e){
     state.cg.search.result=null;
     $("cgSearchResult").className="notice";
@@ -2697,6 +2752,7 @@ $("cgTaskOwner").onchange=()=>{
 };
 $("cgTaskForm").onsubmit=submitTask;
 $("cgSearchForm").onsubmit=submitFeatureSearch;
+$("cgSearchHistoryReload").onclick=()=>loadFeatureSearchHistory();
 
 $("cgImgStart").onchange=e=>{state.cg.images.start=e.target.value||"";loadChatGPTImages()};
 $("cgImgEnd").onchange=e=>{state.cg.images.end=e.target.value||"";loadChatGPTImages()};

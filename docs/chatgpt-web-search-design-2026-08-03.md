@@ -36,4 +36,4 @@ OpenAI Chat / Responses / `POST /v1/search` 或 Admin 功能集 / 临时对话
 - Chat 非流式响应追加来源并提供 OpenAI `url_citation` annotations；流式响应在搜索完成后发送一个完整 delta 和 `[DONE]`，因此兼容 SSE 但不是增量上游流。
 - Responses 返回 `web_search_call` 与带 citations 的 `output_text`；流式依次发送 created、in_progress/searching/completed、output item 和 completed 事件。
 - Admin 临时对话提供逐轮“联网搜索”开关。它不会保存凭据或搜索会话，搜索轮不允许图片或文件附件，也不宣称支持深度研究、网页插件或持续工具循环。
-- Admin「功能集」提供独立的「在线搜索」页面，经 Admin 的 typed Proxy command 调用同一强制搜索能力；管理端不接触客户端 Key、账号 token、账号代理或上游 HTTP client。
+- Admin「功能集」提供独立的「在线搜索」页面，经 Admin 的 typed Proxy command 调用同一强制搜索能力；管理端不接触客户端 Key、账号 token、账号代理或上游 HTTP client。成功结果会由 Proxy 写入 owner-scoped DuckDB 历史，刷新页面后可回看；列表与详情均通过 typed Proxy command 读取。每个管理员作用域最多 200 条、保留最多 30 天，失败搜索不写入；`/v1/search` 与协议内搜索保持无状态。

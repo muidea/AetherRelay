@@ -110,6 +110,22 @@ type TemporaryMessageAttachmentRow struct {
 	Bytes          []byte
 }
 
+// WebSearchHistoryRow is one bounded, owner-scoped Admin web-search result.
+// The result body and sources are deliberately separate from the list query so
+// history navigation cannot accidentally return an unbounded result set.
+type WebSearchHistoryRow struct {
+	OwnerID     string
+	SearchID    string
+	Model       string
+	ActualModel string
+	Query       string
+	OutputText  string
+	Provider    string
+	Sources     json.RawMessage
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
 // Documents is a narrow state database handle. It intentionally exposes no
 // catch-all document-key API: each business owner writes only its own table.
 type Documents struct {
@@ -280,6 +296,19 @@ func migrate(db *sql.DB) error {
             bytes BLOB NOT NULL,
             PRIMARY KEY (owner_id, conversation_id, message_id, attachment_id)
         )`,
+		`CREATE TABLE IF NOT EXISTS chatgpt_web_search_history (
+            owner_id VARCHAR NOT NULL,
+            search_id VARCHAR NOT NULL,
+            model VARCHAR NOT NULL,
+            actual_model VARCHAR NOT NULL DEFAULT '',
+            query VARCHAR NOT NULL,
+            output_text VARCHAR NOT NULL,
+            provider VARCHAR NOT NULL,
+            sources JSON NOT NULL DEFAULT '[]',
+            created_at TIMESTAMP NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (owner_id, search_id)
+        )`,
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_conversations_owner_updated
             ON chatgpt_temporary_conversations(owner_id, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_messages_owner_conversation_sequence
@@ -288,6 +317,8 @@ func migrate(db *sql.DB) error {
             ON chatgpt_temporary_message_images(owner_id, conversation_id, message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_message_attachments_owner_conversation_message
             ON chatgpt_temporary_message_attachments(owner_id, conversation_id, message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_web_search_history_owner_created
+            ON chatgpt_web_search_history(owner_id, created_at DESC)`,
 		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
 		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS provider VARCHAR DEFAULT 'chatgptweb'`,
 		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
@@ -1019,6 +1050,122 @@ func (s *Documents) PurgeExpiredTemporaryConversations(now time.Time) (int, erro
 		return 0, err
 	}
 	return len(keys), nil
+}
+
+// CreateWebSearchHistory stores one already-bounded successful Admin search.
+// Callers must use the matching owner ID for every subsequent read.
+func (s *Documents) CreateWebSearchHistory(row WebSearchHistoryRow) error {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.shared.db.Exec(`INSERT INTO chatgpt_web_search_history(
+		owner_id, search_id, model, actual_model, query, output_text, provider, sources, created_at, expires_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.OwnerID, row.SearchID, row.Model, row.ActualModel, row.Query, row.OutputText, row.Provider, imageMetadata(row.Sources), row.CreatedAt, row.ExpiresAt,
+	)
+	return err
+}
+
+// ListWebSearchHistory returns metadata only. Full answers and source lists
+// are retrieved through LoadWebSearchHistory for one owner-scoped record.
+func (s *Documents) ListWebSearchHistory(ownerID string, limit int) ([]WebSearchHistoryRow, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return nil, fmt.Errorf("state database is unavailable")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.shared.db.Query(`SELECT owner_id, search_id, model, actual_model, query, provider, created_at, expires_at
+		FROM chatgpt_web_search_history
+		WHERE owner_id = ? AND expires_at > NOW()
+		ORDER BY created_at DESC, search_id DESC
+		LIMIT ?`, ownerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]WebSearchHistoryRow, 0)
+	for rows.Next() {
+		var item WebSearchHistoryRow
+		if err := rows.Scan(&item.OwnerID, &item.SearchID, &item.Model, &item.ActualModel, &item.Query, &item.Provider, &item.CreatedAt, &item.ExpiresAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Documents) LoadWebSearchHistory(ownerID, searchID string) (WebSearchHistoryRow, bool, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return WebSearchHistoryRow{}, false, fmt.Errorf("state database is unavailable")
+	}
+	var item WebSearchHistoryRow
+	var sources string
+	err := s.shared.db.QueryRow(`SELECT owner_id, search_id, model, actual_model, query, output_text, provider, CAST(sources AS VARCHAR), created_at, expires_at
+		FROM chatgpt_web_search_history
+		WHERE owner_id = ? AND search_id = ? AND expires_at > NOW()`, ownerID, searchID).Scan(
+		&item.OwnerID, &item.SearchID, &item.Model, &item.ActualModel, &item.Query, &item.OutputText, &item.Provider, &sources, &item.CreatedAt, &item.ExpiresAt,
+	)
+	if err == sql.ErrNoRows {
+		return WebSearchHistoryRow{}, false, nil
+	}
+	if err != nil {
+		return WebSearchHistoryRow{}, false, err
+	}
+	item.Sources = json.RawMessage(sources)
+	return item, true, nil
+}
+
+func (s *Documents) PurgeExpiredWebSearchHistory(now time.Time) (int, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return 0, fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.shared.db.Exec(`DELETE FROM chatgpt_web_search_history WHERE expires_at <= ?`, now)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	return int(count), err
+}
+
+// TrimWebSearchHistory drops the oldest entries for one owner after a new
+// record has been accepted. A non-positive maxItems intentionally removes all
+// matching rows so a caller never accidentally retains unbounded history.
+func (s *Documents) TrimWebSearchHistory(ownerID string, maxItems int) (int, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return 0, fmt.Errorf("state database is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.shared.db.Query(`SELECT search_id FROM chatgpt_web_search_history
+		WHERE owner_id = ?
+		ORDER BY created_at DESC, search_id DESC
+		OFFSET ?`, ownerID, max(0, maxItems))
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if _, err := s.shared.db.Exec(`DELETE FROM chatgpt_web_search_history WHERE owner_id = ? AND search_id = ?`, ownerID, id); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
 }
 
 type rowScanner interface {
