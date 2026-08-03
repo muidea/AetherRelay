@@ -39,6 +39,12 @@ func (s *Admin) ImportCodexAccounts(ctx context.Context, accounts []events.Crede
 	} else {
 		output.ModelDiscovery = &progress
 	}
+	usage, usageErr := s.StartCodexUsageRefresh(context.WithoutCancel(ctx), nil)
+	if usageErr != nil {
+		output.UsageRefreshError = usageErr.Error()
+	} else {
+		output.UsageRefresh = &usage
+	}
 	return output, nil
 }
 func (s *Admin) DeleteCodexAccounts(ctx context.Context, ids []string) (events.DeleteResult, error) {
@@ -79,6 +85,12 @@ func (s *Admin) RefreshCodexAccounts(ctx context.Context, ids []string) (codexma
 	} else {
 		output.ModelDiscovery = &progress
 	}
+	usage, usageErr := s.StartCodexUsageRefresh(context.WithoutCancel(ctx), ids)
+	if usageErr != nil {
+		output.UsageRefreshError = usageErr.Error()
+	} else {
+		output.UsageRefresh = &usage
+	}
 	return output, nil
 }
 func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy string) (events.OAuthStartResult, error) {
@@ -112,6 +124,12 @@ func (s *Admin) FinishCodexOAuth(ctx context.Context, sessionID, callback string
 	} else {
 		output.ModelDiscovery = &progress
 	}
+	usage, usageErr := s.StartCodexUsageRefresh(context.WithoutCancel(ctx), accountIDs)
+	if usageErr != nil {
+		output.UsageRefreshError = usageErr.Error()
+	} else {
+		output.UsageRefresh = &usage
+	}
 	return output, nil
 }
 
@@ -138,6 +156,33 @@ func (s *Admin) CodexModelDiscoveryProgress(ctx context.Context, progressID stri
 	result, ok := value.(proxyevents.CodexDiscoveryProgressResult)
 	if !ok || !result.Progress.Valid() {
 		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("invalid Codex model discovery progress result")
+	}
+	return result.Progress, nil
+}
+
+// StartCodexUsageRefresh asks proxyapi to fetch the redacted upstream usage
+// window projection. It stays separate from model discovery and does not
+// change routing eligibility or cooldown state.
+func (s *Admin) StartCodexUsageRefresh(ctx context.Context, accountIDs []string) (proxyevents.CodexUsageProgress, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicStartCodexUsageRefresh, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.StartCodexUsageRefreshCommand{AccountIDs: accountIDs})).Get()
+	if err != nil {
+		return proxyevents.CodexUsageProgress{}, fmt.Errorf("Codex usage refresh unavailable")
+	}
+	result, ok := value.(proxyevents.StartCodexUsageRefreshResult)
+	if !ok || !result.Progress.Valid() {
+		return proxyevents.CodexUsageProgress{}, fmt.Errorf("invalid Codex usage refresh result")
+	}
+	return result.Progress, nil
+}
+
+func (s *Admin) CodexUsageRefreshProgress(ctx context.Context, progressID string) (proxyevents.CodexUsageProgress, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicCodexUsageProgress, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.CodexUsageProgressCommand{ProgressID: progressID})).Get()
+	if err != nil {
+		return proxyevents.CodexUsageProgress{}, fmt.Errorf("Codex usage refresh progress unavailable")
+	}
+	result, ok := value.(proxyevents.CodexUsageProgressResult)
+	if !ok || !result.Progress.Valid() {
+		return proxyevents.CodexUsageProgress{}, fmt.Errorf("invalid Codex usage refresh progress result")
 	}
 	return result.Progress, nil
 }

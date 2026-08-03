@@ -60,6 +60,11 @@ type account struct {
 	ModelDiscoveryFailures  int                          `json:"model_discovery_failures,omitempty"`
 	ModelDiscoveryRetryAt   string                       `json:"model_discovery_retry_at,omitempty"`
 	ModelDiscoveryLastError string                       `json:"model_discovery_last_error,omitempty"`
+	// UsageSnapshot keeps only the allowlisted upstream usage projection. It
+	// deliberately excludes raw upstream JSON and all request credentials.
+	UsageSnapshot       *events.AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
+	UsageRefreshErrorAt string                       `json:"usage_refresh_error_at,omitempty"`
+	UsageRefreshError   string                       `json:"usage_refresh_error,omitempty"`
 }
 
 type Store struct {
@@ -206,11 +211,15 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 			existing.Status = events.StatusNormal
 		}
 		// An import may replace a credential for a different account. Do not
-		// route from a capability snapshot learned with the old credential.
+		// route from a capability snapshot or show a usage observation learned
+		// with the old credential.
 		existing.ModelSnapshot = nil
 		existing.ModelDiscoveryFailures = 0
 		existing.ModelDiscoveryRetryAt = ""
 		existing.ModelDiscoveryLastError = ""
+		existing.UsageSnapshot = nil
+		existing.UsageRefreshErrorAt = ""
+		existing.UsageRefreshError = ""
 	}
 	if err := s.saveLocked(); err != nil {
 		return 0, 0, 0, err
@@ -564,10 +573,16 @@ func toView(item *account, now time.Time) events.AccountView {
 		LastTokenRefreshErrorClass: item.LastRefreshErrClass,
 		ModelDiscoveryRetryAt:      item.ModelDiscoveryRetryAt,
 		ModelDiscoveryLastError:    item.ModelDiscoveryLastError,
+		UsageRefreshErrorAt:        item.UsageRefreshErrorAt,
+		UsageRefreshError:          item.UsageRefreshError,
 	}
 	if item.ModelSnapshot != nil {
 		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)
 		view.ModelSnapshot = &snapshot
+	}
+	if item.UsageSnapshot != nil {
+		snapshot := normalizeUsageSnapshot(*item.UsageSnapshot)
+		view.UsageSnapshot = &snapshot
 	}
 	for model, value := range item.Cooldowns {
 		if now.After(value.Until) {
@@ -664,6 +679,78 @@ func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, 
 		return "", false, err
 	}
 	return item.ModelDiscoveryRetryAt, true, nil
+}
+
+// ListUsageCandidates returns normal accounts selected by their local IDs.
+// Credential fields remain restricted to the account-pool/proxy EventHub path.
+func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandidatesResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	requested := make(map[string]struct{}, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if accountID = strings.TrimSpace(accountID); accountID != "" {
+			requested[accountID] = struct{}{}
+		}
+	}
+	result := events.ListUsageCandidatesResult{}
+	for _, id := range s.order {
+		item := s.items[id]
+		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" {
+			continue
+		}
+		if len(requested) > 0 {
+			if _, found := requested[item.ID]; !found {
+				continue
+			}
+		}
+		result.Candidates = append(result.Candidates, events.UsageCandidate{
+			AccountID:       item.ID,
+			AccessToken:     item.AccessToken,
+			AccountIDHeader: item.AccountIDHeader,
+			Proxy:           item.Proxy,
+		})
+	}
+	return result
+}
+
+// PutUsageSnapshot saves a sanitized, bounded usage observation. A successful
+// observation clears only its previous refresh error; it does not manipulate
+// routing cooldowns, which remain driven by real request outcomes.
+func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageSnapshot) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := s.items[strings.TrimSpace(accountID)]
+	if item == nil {
+		return false, nil
+	}
+	clean := normalizeUsageSnapshot(snapshot)
+	item.UsageSnapshot = &clean
+	item.UsageRefreshErrorAt = ""
+	item.UsageRefreshError = ""
+	if clean.PlanType != "" {
+		item.PlanType = clean.PlanType
+	}
+	if err := s.saveLocked(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RecordUsageFailure preserves the last successful usage snapshot. The
+// bounded error is only operational context for the Admin view.
+func (s *Store) RecordUsageFailure(accountID, message string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := s.items[strings.TrimSpace(accountID)]
+	if item == nil {
+		return false, nil
+	}
+	item.UsageRefreshErrorAt = time.Now().UTC().Format(time.RFC3339)
+	item.UsageRefreshError = bounded(message, 160)
+	if err := s.saveLocked(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CatalogSnapshot builds the deduplicated union across routable accounts and
@@ -788,6 +875,58 @@ func normalizeSnapshot(accountID string, snapshot events.AccountModelSnapshot) e
 	}
 	sort.Slice(out.Models, func(i, j int) bool { return out.Models[i].ID < out.Models[j].ID })
 	return out
+}
+
+func normalizeUsageSnapshot(snapshot events.AccountUsageSnapshot) events.AccountUsageSnapshot {
+	out := events.AccountUsageSnapshot{
+		PlanType:   bounded(snapshot.PlanType, 64),
+		ObservedAt: normalizeUsageTime(snapshot.ObservedAt, time.Now().UTC()),
+		ExpiresAt:  normalizeUsageTime(snapshot.ExpiresAt, time.Time{}),
+	}
+	seen := make(map[string]struct{}, len(snapshot.Windows))
+	for _, window := range snapshot.Windows {
+		window.ID = bounded(window.ID, 96)
+		if window.ID == "" {
+			continue
+		}
+		if _, exists := seen[window.ID]; exists {
+			continue
+		}
+		seen[window.ID] = struct{}{}
+		window.Label = bounded(window.Label, 128)
+		if window.UsedPercentKnown {
+			if window.UsedPercent != window.UsedPercent {
+				window.UsedPercent = 0
+				window.UsedPercentKnown = false
+			} else if window.UsedPercent < 0 {
+				window.UsedPercent = 0
+			} else if window.UsedPercent > 100 {
+				window.UsedPercent = 100
+			}
+		} else {
+			window.UsedPercent = 0
+		}
+		if window.WindowSeconds < 0 || window.WindowSeconds > 366*24*60*60 {
+			window.WindowSeconds = 0
+		}
+		window.ResetAt = normalizeUsageTime(window.ResetAt, time.Time{})
+		out.Windows = append(out.Windows, window)
+	}
+	sort.Slice(out.Windows, func(i, j int) bool { return out.Windows[i].ID < out.Windows[j].ID })
+	return out
+}
+
+func normalizeUsageTime(value string, fallback time.Time) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			return parsed.UTC().Format(time.RFC3339)
+		}
+	}
+	if !fallback.IsZero() {
+		return fallback.UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 func validSnapshotModelID(id string) bool {

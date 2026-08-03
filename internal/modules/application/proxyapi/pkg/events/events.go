@@ -17,6 +17,8 @@ const (
 	TopicEffectiveCatalog       = "aiproxy.proxy.query.effective_catalog"
 	TopicStartCodexDiscovery    = "aiproxy.proxy.command.start_codex_discovery"
 	TopicCodexDiscoveryProgress = "aiproxy.proxy.query.codex_discovery_progress"
+	TopicStartCodexUsageRefresh = "aiproxy.proxy.command.start_codex_usage_refresh"
+	TopicCodexUsageProgress     = "aiproxy.proxy.query.codex_usage_progress"
 )
 
 type UpdateConfigCommand struct{ Config config.Config }
@@ -53,7 +55,30 @@ type StartCodexDiscoveryResult struct{ Progress CodexDiscoveryProgress }
 type CodexDiscoveryProgressCommand struct{ ProgressID string }
 type CodexDiscoveryProgressResult struct{ Progress CodexDiscoveryProgress }
 
+// StartCodexUsageRefreshCommand refreshes an account-scoped, upstream-observed
+// usage projection. Empty AccountIDs means every normal Codex OAuth account.
+// It is intentionally separate from model discovery because usage windows do
+// not determine whether an account supports a model.
+type StartCodexUsageRefreshCommand struct{ AccountIDs []string }
+
+type CodexUsageProgress struct {
+	ProgressID  string `json:"progress_id"`
+	Total       int    `json:"total"`
+	Processed   int    `json:"processed"`
+	Succeeded   int    `json:"succeeded"`
+	Failed      int    `json:"failed"`
+	Done        bool   `json:"done"`
+	StartedAt   string `json:"started_at"`
+	CompletedAt string `json:"completed_at,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+}
+
+type StartCodexUsageRefreshResult struct{ Progress CodexUsageProgress }
+type CodexUsageProgressCommand struct{ ProgressID string }
+type CodexUsageProgressResult struct{ Progress CodexUsageProgress }
+
 func (s CodexDiscoveryProgress) Valid() bool { return strings.TrimSpace(s.ProgressID) != "" }
+func (s CodexUsageProgress) Valid() bool     { return strings.TrimSpace(s.ProgressID) != "" }
 
 func UpdateConfig(ctx context.Context, hub event.Hub, source string, cfg config.Config) error {
 	if hub == nil {

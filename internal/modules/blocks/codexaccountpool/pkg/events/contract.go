@@ -20,6 +20,12 @@ const (
 	TopicPutModelSnapshot            = "aiproxy.codex.accountpool.command.put_model_snapshot"
 	TopicRecordModelDiscoveryFailure = "aiproxy.codex.accountpool.command.record_model_discovery_failure"
 	TopicCatalogSnapshot             = "aiproxy.codex.accountpool.command.catalog_snapshot"
+	// Usage contracts preserve a redacted, bounded account-level projection of
+	// Codex's upstream usage windows. Credentials are available only to the
+	// proxyapi orchestration path and are never included in AccountView.
+	TopicListUsageCandidates = "aiproxy.codex.accountpool.command.list_usage_candidates"
+	TopicPutUsageSnapshot    = "aiproxy.codex.accountpool.command.put_usage_snapshot"
+	TopicRecordUsageFailure  = "aiproxy.codex.accountpool.command.record_usage_failure"
 )
 
 const (
@@ -56,6 +62,9 @@ type AccountView struct {
 	ModelSnapshot              *AccountModelSnapshot `json:"model_snapshot,omitempty"`
 	ModelDiscoveryRetryAt      string                `json:"model_discovery_retry_at,omitempty"`
 	ModelDiscoveryLastError    string                `json:"model_discovery_last_error,omitempty"`
+	UsageSnapshot              *AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
+	UsageRefreshErrorAt        string                `json:"usage_refresh_error_at,omitempty"`
+	UsageRefreshError          string                `json:"usage_refresh_error,omitempty"`
 }
 
 type CooldownView struct {
@@ -173,6 +182,31 @@ type AccountModelSnapshot struct {
 	ExpiresAt    string              `json:"expires_at,omitempty"`
 }
 
+// UsageWindow is a bounded projection of one upstream Codex usage window.
+// It conveys relative utilization, not token or request counts. ID and Label
+// are presentation metadata; no raw upstream payload crosses this contract.
+type UsageWindow struct {
+	ID               string  `json:"id"`
+	Label            string  `json:"label,omitempty"`
+	UsedPercent      float64 `json:"used_percent,omitempty"`
+	UsedPercentKnown bool    `json:"used_percent_known"`
+	WindowSeconds    int     `json:"window_seconds,omitempty"`
+	ResetAt          string  `json:"reset_at,omitempty"`
+	Allowed          bool    `json:"allowed"`
+	AllowedKnown     bool    `json:"allowed_known"`
+	LimitReached     bool    `json:"limit_reached"`
+}
+
+// AccountUsageSnapshot is the durable, redacted usage observation for a
+// single account. ExpiresAt only marks staleness for presentation; a failed
+// refresh keeps the prior snapshot so operators retain the last observation.
+type AccountUsageSnapshot struct {
+	PlanType   string        `json:"plan_type,omitempty"`
+	Windows    []UsageWindow `json:"windows,omitempty"`
+	ObservedAt string        `json:"observed_at"`
+	ExpiresAt  string        `json:"expires_at,omitempty"`
+}
+
 type DiscoveryCandidate struct {
 	AccountID       string
 	AccessToken     string
@@ -205,6 +239,32 @@ type RecordModelDiscoveryFailureResult struct {
 	RetryAt string
 	OK      bool
 }
+
+// UsageCandidate is credential-bearing only on the typed EventHub path.
+// The Admin HTTP API can never receive it.
+type UsageCandidate struct {
+	AccountID       string
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+}
+
+type ListUsageCandidatesCommand struct{ AccountIDs []string }
+type ListUsageCandidatesResult struct {
+	Candidates []UsageCandidate
+}
+
+type PutUsageSnapshotCommand struct {
+	AccountID string
+	Snapshot  AccountUsageSnapshot
+}
+type PutUsageSnapshotResult struct{ OK bool }
+
+type RecordUsageFailureCommand struct {
+	AccountID string
+	Error     string
+}
+type RecordUsageFailureResult struct{ OK bool }
 
 // CatalogModel is the deduplicated model union for healthy accounts. Account
 // IDs stay visible only to the proxy/account owners and are not an Admin API

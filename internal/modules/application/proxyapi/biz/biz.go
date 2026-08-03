@@ -41,12 +41,14 @@ type Proxy struct {
 	catalog            effectivecatalog.Snapshot
 	discoveryMu        sync.Mutex
 	codexDiscoveryMu   sync.Mutex
+	codexUsageMu       sync.Mutex
 	discoveryJobsMu    sync.RWMutex
 	codexDiscoveryJobs map[string]proxyevents.CodexDiscoveryProgress
+	codexUsageJobs     map[string]proxyevents.CodexUsageProgress
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {
-	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}}
+	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
 	bootstrap, err := configevents.RequestBootstrap(ctx, biz.EventHub(), biz.ID())
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
@@ -73,6 +75,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicEffectiveCatalog, biz.handleEffectiveCatalog)
 	biz.SubscribeFunc(proxyevents.TopicStartCodexDiscovery, biz.handleStartCodexDiscovery)
 	biz.SubscribeFunc(proxyevents.TopicCodexDiscoveryProgress, biz.handleCodexDiscoveryProgress)
+	biz.SubscribeFunc(proxyevents.TopicStartCodexUsageRefresh, biz.handleStartCodexUsageRefresh)
+	biz.SubscribeFunc(proxyevents.TopicCodexUsageProgress, biz.handleCodexUsageProgress)
 	return biz, nil
 }
 
@@ -86,6 +90,8 @@ func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicEffectiveCatalog)
 	s.UnsubscribeFunc(proxyevents.TopicStartCodexDiscovery)
 	s.UnsubscribeFunc(proxyevents.TopicCodexDiscoveryProgress)
+	s.UnsubscribeFunc(proxyevents.TopicStartCodexUsageRefresh)
+	s.UnsubscribeFunc(proxyevents.TopicCodexUsageProgress)
 	s.mu.Lock()
 	s.updater = nil
 	s.catalogPublisher = nil
@@ -93,6 +99,7 @@ func (s *Proxy) Teardown(context.Context) {
 	s.mu.Unlock()
 	s.discoveryJobsMu.Lock()
 	s.codexDiscoveryJobs = nil
+	s.codexUsageJobs = nil
 	s.discoveryJobsMu.Unlock()
 	s.config = config.Config{}
 	s.usage = nil
@@ -179,4 +186,38 @@ func (s *Proxy) handleCodexDiscoveryProgress(ev event.Event, result event.Result
 		return
 	}
 	result.Set(proxyevents.CodexDiscoveryProgressResult{Progress: progress}, nil)
+}
+
+func (s *Proxy) handleStartCodexUsageRefresh(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(proxyevents.StartCodexUsageRefreshCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage refresh command"))
+		return
+	}
+	progress, err := s.StartCodexUsageRefresh(context.WithoutCancel(ev.Context()), command.AccountIDs)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(proxyevents.StartCodexUsageRefreshResult{Progress: progress}, nil)
+}
+
+func (s *Proxy) handleCodexUsageProgress(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(proxyevents.CodexUsageProgressCommand)
+	if !ok || command.ProgressID == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage progress command"))
+		return
+	}
+	progress, found := s.CodexUsageRefreshProgress(command.ProgressID)
+	if !found {
+		result.Set(nil, cd.NewError(cd.NotFound, "Codex usage progress not found"))
+		return
+	}
+	result.Set(proxyevents.CodexUsageProgressResult{Progress: progress}, nil)
 }

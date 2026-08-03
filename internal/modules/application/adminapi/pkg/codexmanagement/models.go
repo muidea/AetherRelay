@@ -14,6 +14,8 @@ type ImportResult struct {
 	Skipped             int                                 `json:"skipped"`
 	ModelDiscovery      *proxyevents.CodexDiscoveryProgress `json:"model_discovery,omitempty"`
 	ModelDiscoveryError string                              `json:"model_discovery_error,omitempty"`
+	UsageRefresh        *proxyevents.CodexUsageProgress     `json:"usage_refresh,omitempty"`
+	UsageRefreshError   string                              `json:"usage_refresh_error,omitempty"`
 }
 
 type RefreshResult struct {
@@ -22,6 +24,8 @@ type RefreshResult struct {
 	Items               []codexevents.AccountView           `json:"items"`
 	ModelDiscovery      *proxyevents.CodexDiscoveryProgress `json:"model_discovery,omitempty"`
 	ModelDiscoveryError string                              `json:"model_discovery_error,omitempty"`
+	UsageRefresh        *proxyevents.CodexUsageProgress     `json:"usage_refresh,omitempty"`
+	UsageRefreshError   string                              `json:"usage_refresh_error,omitempty"`
 }
 
 type OAuthFinishResult struct {
@@ -29,4 +33,6 @@ type OAuthFinishResult struct {
 	Item                codexevents.AccountView             `json:"item"`
 	ModelDiscovery      *proxyevents.CodexDiscoveryProgress `json:"model_discovery,omitempty"`
 	ModelDiscoveryError string                              `json:"model_discovery_error,omitempty"`
+	UsageRefresh        *proxyevents.CodexUsageProgress     `json:"usage_refresh,omitempty"`
+	UsageRefreshError   string                              `json:"usage_refresh_error,omitempty"`
 }

@@ -7,6 +7,7 @@ const (
 	TopicPull       = "aiproxy.codex.upstream.command.pull"
 	TopicCancel     = "aiproxy.codex.upstream.command.cancel"
 	TopicListModels = "aiproxy.codex.upstream.command.list_models"
+	TopicGetUsage   = "aiproxy.codex.upstream.command.get_usage"
 )
 
 type Header struct {
@@ -97,3 +98,29 @@ type ModelDescriptor struct {
 }
 
 type ListModelsResult struct{ Models []ModelDescriptor }
+
+// GetUsageCommand is credential-bearing only within the EventHub path. The
+// result below is an allowlisted summary rather than the raw WHAM response.
+type GetUsageCommand struct {
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+}
+
+type UsageWindow struct {
+	ID               string
+	Label            string
+	UsedPercent      float64
+	UsedPercentKnown bool
+	WindowSeconds    int
+	ResetAt          string
+	Allowed          bool
+	AllowedKnown     bool
+	LimitReached     bool
+}
+
+type GetUsageResult struct {
+	PlanType   string
+	Windows    []UsageWindow
+	ErrorClass ErrorClass
+}

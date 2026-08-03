@@ -85,6 +85,8 @@ type CodexRuntime interface {
 	FinishCodexOAuth(context.Context, string, string) (codexmanagement.OAuthFinishResult, error)
 	StartCodexModelDiscovery(context.Context, []string) (proxyevents.CodexDiscoveryProgress, error)
 	CodexModelDiscoveryProgress(context.Context, string) (proxyevents.CodexDiscoveryProgress, error)
+	StartCodexUsageRefresh(context.Context, []string) (proxyevents.CodexUsageProgress, error)
+	CodexUsageRefreshProgress(context.Context, string) (proxyevents.CodexUsageProgress, error)
 }
 
 // chatGPTAvailability is intentionally optional to keep isolated HTTP tests
@@ -316,6 +318,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(rel, "/api/codex/accounts/discovery/progress/") && r.Method == http.MethodGet:
 		h.codexModelDiscoveryProgress(w, r, rel)
+	case rel == "/api/codex/accounts/usage" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.startCodexUsageRefresh(w, r)
+		}
+	case strings.HasPrefix(rel, "/api/codex/accounts/usage/progress/") && r.Method == http.MethodGet:
+		h.codexUsageRefreshProgress(w, r, rel)
 	case rel == "/api/codex/accounts/oauth/start" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.startCodexOAuth(w, r)

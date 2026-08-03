@@ -41,6 +41,10 @@ var responsesURL = "https://chatgpt.com/backend-api/codex/responses"
 // Codex identity detail, never an inbound request parameter.
 var modelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=0.135.0"
 
+// usageURL is the account-scoped Codex usage endpoint used by CLIProxyAPI's
+// management surface as well. It is intentionally not exposed to clients.
+var usageURL = "https://chatgpt.com/backend-api/wham/usage"
+
 type streamUpdate struct {
 	data              []byte
 	done              bool
@@ -63,12 +67,13 @@ type Upstream struct {
 
 func New(hub event.Hub, background task.BackgroundRoutine) *Upstream {
 	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}}
-	b.topics = []string{events.TopicComplete, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicListModels}
+	b.topics = []string{events.TopicComplete, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicListModels, events.TopicGetUsage}
 	b.SubscribeFunc(events.TopicComplete, b.handleComplete)
 	b.SubscribeFunc(events.TopicStart, b.handleStart)
 	b.SubscribeFunc(events.TopicPull, b.handlePull)
 	b.SubscribeFunc(events.TopicCancel, b.handleCancel)
 	b.SubscribeFunc(events.TopicListModels, b.handleListModels)
+	b.SubscribeFunc(events.TopicGetUsage, b.handleGetUsage)
 	return b
 }
 
@@ -228,6 +233,26 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 	result.Set(events.ListModelsResult{Models: models}, nil)
 }
 
+// handleGetUsage requests a bounded, allowlisted usage projection. Network,
+// authentication and upstream failures are returned as classified results so
+// proxyapi can persist safe operational context without raw response bodies.
+func (s *Upstream) handleGetUsage(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.GetUsageCommand)
+	if !ok || strings.TrimSpace(cmd.AccessToken) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage command"))
+		return
+	}
+	planType, windows, class, err := getUsage(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy)
+	if err != nil {
+		result.Set(events.GetUsageResult{ErrorClass: class}, nil)
+		return
+	}
+	result.Set(events.GetUsageResult{PlanType: planType, Windows: windows}, nil)
+}
+
 func (s *Upstream) runStream(ctx context.Context, streamID string, stream *responseStream, body io.ReadCloser, maxLine int64) {
 	defer body.Close()
 	defer close(stream.updates)
@@ -333,6 +358,256 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]ev
 		return nil, events.ErrorProtocol, err
 	}
 	return models, "", nil
+}
+
+func getUsage(ctx context.Context, accessToken, accountID, proxy string) (string, []events.UsageWindow, events.ErrorClass, error) {
+	client, err := newHTTPClient(proxy)
+	if err != nil {
+		return "", nil, events.ErrorProtocol, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
+	if err != nil {
+		return "", nil, events.ErrorProtocol, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
+	req.Header.Set("User-Agent", codexUserAgent)
+	req.Header.Set("Originator", codexOriginator)
+	if accountID = strings.TrimSpace(accountID); accountID != "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return "", nil, classifyTransport(err), err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return "", nil, classifyStatus(response.StatusCode), fmt.Errorf("Codex usage request returned %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	if err != nil {
+		return "", nil, classifyTransport(err), err
+	}
+	if len(body) > 1<<20 {
+		return "", nil, events.ErrorProtocol, fmt.Errorf("Codex usage response exceeds limit")
+	}
+	planType, windows, err := parseUsage(body, time.Now().UTC())
+	if err != nil {
+		return "", nil, events.ErrorProtocol, err
+	}
+	return planType, windows, "", nil
+}
+
+type usageResponse struct {
+	PlanType                  string            `json:"plan_type"`
+	PlanTypeCamel             string            `json:"planType"`
+	RateLimit                 *usageRateLimit   `json:"rate_limit"`
+	RateLimitCamel            *usageRateLimit   `json:"rateLimit"`
+	CodeReviewRateLimit       *usageRateLimit   `json:"code_review_rate_limit"`
+	CodeReviewRateLimitCamel  *usageRateLimit   `json:"codeReviewRateLimit"`
+	AdditionalRateLimits      []usageAdditional `json:"additional_rate_limits"`
+	AdditionalRateLimitsCamel []usageAdditional `json:"additionalRateLimits"`
+}
+
+type usageAdditional struct {
+	LimitName           string          `json:"limit_name"`
+	LimitNameCamel      string          `json:"limitName"`
+	MeteredFeature      string          `json:"metered_feature"`
+	MeteredFeatureCamel string          `json:"meteredFeature"`
+	RateLimit           *usageRateLimit `json:"rate_limit"`
+	RateLimitCamel      *usageRateLimit `json:"rateLimit"`
+}
+
+type usageRateLimit struct {
+	Allowed              json.RawMessage `json:"allowed"`
+	LimitReached         json.RawMessage `json:"limit_reached"`
+	LimitReachedCamel    json.RawMessage `json:"limitReached"`
+	PrimaryWindow        *usageRawWindow `json:"primary_window"`
+	PrimaryWindowCamel   *usageRawWindow `json:"primaryWindow"`
+	SecondaryWindow      *usageRawWindow `json:"secondary_window"`
+	SecondaryWindowCamel *usageRawWindow `json:"secondaryWindow"`
+}
+
+type usageRawWindow struct {
+	UsedPercent             json.RawMessage `json:"used_percent"`
+	UsedPercentCamel        json.RawMessage `json:"usedPercent"`
+	LimitWindowSeconds      json.RawMessage `json:"limit_window_seconds"`
+	LimitWindowSecondsCamel json.RawMessage `json:"limitWindowSeconds"`
+	ResetAfterSeconds       json.RawMessage `json:"reset_after_seconds"`
+	ResetAfterSecondsCamel  json.RawMessage `json:"resetAfterSeconds"`
+	ResetAt                 json.RawMessage `json:"reset_at"`
+	ResetAtCamel            json.RawMessage `json:"resetAt"`
+}
+
+func parseUsage(body []byte, now time.Time) (string, []events.UsageWindow, error) {
+	var payload usageResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", nil, fmt.Errorf("decode Codex usage: %w", err)
+	}
+	planType := strings.TrimSpace(payload.PlanType)
+	if planType == "" {
+		planType = strings.TrimSpace(payload.PlanTypeCamel)
+	}
+	windows := make([]events.UsageWindow, 0, 8)
+	appendUsageWindows(&windows, "standard", "", firstUsageRateLimit(payload.RateLimit, payload.RateLimitCamel), now)
+	appendUsageWindows(&windows, "code-review", "", firstUsageRateLimit(payload.CodeReviewRateLimit, payload.CodeReviewRateLimitCamel), now)
+	additional := payload.AdditionalRateLimits
+	if len(additional) == 0 {
+		additional = payload.AdditionalRateLimitsCamel
+	}
+	for index, item := range additional {
+		name := firstNonEmpty(item.LimitName, item.LimitNameCamel, item.MeteredFeature, item.MeteredFeatureCamel)
+		if name == "" {
+			name = fmt.Sprintf("additional-%d", index+1)
+		}
+		appendUsageWindows(&windows, "additional-"+usageIdentifier(name, index+1), name, firstUsageRateLimit(item.RateLimit, item.RateLimitCamel), now)
+	}
+	if len(windows) == 0 {
+		return "", nil, fmt.Errorf("Codex usage response has no usage windows")
+	}
+	sort.Slice(windows, func(i, j int) bool { return windows[i].ID < windows[j].ID })
+	return planType, windows, nil
+}
+
+func firstUsageRateLimit(values ...*usageRateLimit) *usageRateLimit {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstUsageWindow(values ...*usageRawWindow) *usageRawWindow {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func appendUsageWindows(target *[]events.UsageWindow, scope, label string, limit *usageRateLimit, now time.Time) {
+	if limit == nil {
+		return
+	}
+	allowed, allowedKnown := rawBool(limit.Allowed)
+	limitReached, _ := rawBool(firstRaw(limit.LimitReached, limit.LimitReachedCamel))
+	if allowedKnown && !allowed {
+		limitReached = true
+	}
+	for _, item := range []struct {
+		name   string
+		window *usageRawWindow
+	}{
+		{name: "primary", window: firstUsageWindow(limit.PrimaryWindow, limit.PrimaryWindowCamel)},
+		{name: "secondary", window: firstUsageWindow(limit.SecondaryWindow, limit.SecondaryWindowCamel)},
+	} {
+		if item.window == nil {
+			continue
+		}
+		usedPercent, usedKnown := rawFloat(firstRaw(item.window.UsedPercent, item.window.UsedPercentCamel))
+		resetAt := usageResetAt(item.window, now)
+		if !usedKnown && limitReached && resetAt != "" {
+			usedPercent, usedKnown = 100, true
+		}
+		windowSeconds, _ := rawPositiveInt(firstRaw(item.window.LimitWindowSeconds, item.window.LimitWindowSecondsCamel))
+		if windowSeconds > int64(366*24*60*60) {
+			windowSeconds = 0
+		}
+		*target = append(*target, events.UsageWindow{
+			ID:               scope + "-" + item.name,
+			Label:            label,
+			UsedPercent:      clampPercent(usedPercent),
+			UsedPercentKnown: usedKnown,
+			WindowSeconds:    int(windowSeconds),
+			ResetAt:          resetAt,
+			Allowed:          allowed,
+			AllowedKnown:     allowedKnown,
+			LimitReached:     limitReached,
+		})
+	}
+}
+
+func firstRaw(values ...json.RawMessage) json.RawMessage {
+	for _, value := range values {
+		if len(value) > 0 && string(value) != "null" {
+			return value
+		}
+	}
+	return nil
+}
+
+func rawBool(raw json.RawMessage) (bool, bool) {
+	value := strings.Trim(strings.TrimSpace(string(raw)), "\"")
+	if value == "true" || value == "1" {
+		return true, true
+	}
+	if value == "false" || value == "0" {
+		return false, true
+	}
+	return false, false
+}
+
+func rawFloat(raw json.RawMessage) (float64, bool) {
+	value := strings.Trim(strings.TrimSpace(string(raw)), "\"")
+	if value == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed != parsed || parsed < 0 || parsed > 100 {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func usageResetAt(window *usageRawWindow, now time.Time) string {
+	if window == nil {
+		return ""
+	}
+	if resetAt, ok := rawResetAt(firstRaw(window.ResetAt, window.ResetAtCamel), now); ok {
+		return resetAt.UTC().Format(time.RFC3339)
+	}
+	if seconds, ok := rawPositiveInt(firstRaw(window.ResetAfterSeconds, window.ResetAfterSecondsCamel)); ok && seconds <= int64(366*24*60*60) {
+		return now.Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339)
+	}
+	return ""
+}
+
+func clampPercent(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func usageIdentifier(value string, fallback int) string {
+	var out strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			out.WriteRune(r)
+		} else if out.Len() > 0 && !strings.HasSuffix(out.String(), "-") {
+			out.WriteByte('-')
+		}
+	}
+	result := strings.Trim(out.String(), "-")
+	if result == "" {
+		return strconv.Itoa(fallback)
+	}
+	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseModels(body []byte) ([]events.ModelDescriptor, error) {

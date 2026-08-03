@@ -15,7 +15,8 @@ import (
 )
 
 type codexAccountRuntimeStub struct {
-	started [][]string
+	started      [][]string
+	usageStarted [][]string
 }
 
 func (s *codexAccountRuntimeStub) CodexOAuthEnabled() bool { return true }
@@ -23,7 +24,7 @@ func (s *codexAccountRuntimeStub) ListCodexAccounts(context.Context) ([]codexeve
 	return nil, nil
 }
 func (s *codexAccountRuntimeStub) ImportCodexAccounts(context.Context, []codexevents.CredentialInput) (admincodex.ImportResult, error) {
-	return admincodex.ImportResult{Added: 1, ModelDiscovery: &proxyevents.CodexDiscoveryProgress{ProgressID: "discovery-1", StartedAt: "2026-08-03T12:00:00Z"}}, nil
+	return admincodex.ImportResult{Added: 1, ModelDiscovery: &proxyevents.CodexDiscoveryProgress{ProgressID: "discovery-1", StartedAt: "2026-08-03T12:00:00Z"}, UsageRefresh: &proxyevents.CodexUsageProgress{ProgressID: "usage-1", StartedAt: "2026-08-03T12:00:00Z"}}, nil
 }
 func (s *codexAccountRuntimeStub) DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error) {
 	return codexevents.DeleteResult{}, nil
@@ -47,6 +48,13 @@ func (s *codexAccountRuntimeStub) StartCodexModelDiscovery(_ context.Context, ac
 func (s *codexAccountRuntimeStub) CodexModelDiscoveryProgress(_ context.Context, progressID string) (proxyevents.CodexDiscoveryProgress, error) {
 	return proxyevents.CodexDiscoveryProgress{ProgressID: progressID, Total: 1, Processed: 1, Succeeded: 1, Done: true, StartedAt: "2026-08-03T12:00:00Z", CompletedAt: "2026-08-03T12:00:05Z"}, nil
 }
+func (s *codexAccountRuntimeStub) StartCodexUsageRefresh(_ context.Context, accountIDs []string) (proxyevents.CodexUsageProgress, error) {
+	s.usageStarted = append(s.usageStarted, append([]string(nil), accountIDs...))
+	return proxyevents.CodexUsageProgress{ProgressID: "usage-1", Total: len(accountIDs), StartedAt: "2026-08-03T12:00:00Z"}, nil
+}
+func (s *codexAccountRuntimeStub) CodexUsageRefreshProgress(_ context.Context, progressID string) (proxyevents.CodexUsageProgress, error) {
+	return proxyevents.CodexUsageProgress{ProgressID: progressID, Total: 1, Processed: 1, Succeeded: 1, Done: true, StartedAt: "2026-08-03T12:00:00Z", CompletedAt: "2026-08-03T12:00:05Z"}, nil
+}
 
 func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 	runtime := &codexAccountRuntimeStub{}
@@ -60,7 +68,7 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 		t.Fatalf("import status=%d started=%v body=%s", importRecorder.Code, runtime.started, importRecorder.Body.String())
 	}
 	var imported admincodex.ImportResult
-	if err := json.Unmarshal(importRecorder.Body.Bytes(), &imported); err != nil || imported.ModelDiscovery == nil || imported.ModelDiscovery.ProgressID != "discovery-1" {
+	if err := json.Unmarshal(importRecorder.Body.Bytes(), &imported); err != nil || imported.ModelDiscovery == nil || imported.ModelDiscovery.ProgressID != "discovery-1" || imported.UsageRefresh == nil || imported.UsageRefresh.ProgressID != "usage-1" {
 		t.Fatalf("import response=%s err=%v value=%+v", importRecorder.Body.String(), err, imported)
 	}
 
@@ -79,5 +87,22 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 	handler.ServeHTTP(progressRecorder, progressRequest)
 	if progressRecorder.Code != http.StatusOK || !strings.Contains(progressRecorder.Body.String(), `"done":true`) {
 		t.Fatalf("progress status=%d body=%s", progressRecorder.Code, progressRecorder.Body.String())
+	}
+
+	usageRequest := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/usage", strings.NewReader(`{"account_ids":["account-1"]}`))
+	usageRequest.RemoteAddr = "127.0.0.1:1234"
+	usageRequest.Header.Set("X-AI-Proxy-Admin", "1")
+	usageRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(usageRecorder, usageRequest)
+	if usageRecorder.Code != http.StatusAccepted || !reflect.DeepEqual(runtime.usageStarted, [][]string{{"account-1"}}) {
+		t.Fatalf("usage start status=%d started=%v body=%s", usageRecorder.Code, runtime.usageStarted, usageRecorder.Body.String())
+	}
+
+	usageProgressRequest := httptest.NewRequest(http.MethodGet, "/admin/api/codex/accounts/usage/progress/usage-1", nil)
+	usageProgressRequest.RemoteAddr = "127.0.0.1:1234"
+	usageProgressRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(usageProgressRecorder, usageProgressRequest)
+	if usageProgressRecorder.Code != http.StatusOK || !strings.Contains(usageProgressRecorder.Body.String(), `"done":true`) {
+		t.Fatalf("usage progress status=%d body=%s", usageProgressRecorder.Code, usageProgressRecorder.Body.String())
 	}
 }

@@ -83,7 +83,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot}
+	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
@@ -99,6 +99,9 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicPutModelSnapshot, b.handlePutModelSnapshot)
 	b.SubscribeFunc(events.TopicRecordModelDiscoveryFailure, b.handleRecordModelDiscoveryFailure)
 	b.SubscribeFunc(events.TopicCatalogSnapshot, b.handleCatalogSnapshot)
+	b.SubscribeFunc(events.TopicListUsageCandidates, b.handleListUsageCandidates)
+	b.SubscribeFunc(events.TopicPutUsageSnapshot, b.handlePutUsageSnapshot)
+	b.SubscribeFunc(events.TopicRecordUsageFailure, b.handleRecordUsageFailure)
 	return b
 }
 
@@ -322,6 +325,52 @@ func (s *Account) handleCatalogSnapshot(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(s.store.CatalogSnapshot(), nil)
+}
+
+func (s *Account) handleListUsageCandidates(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(events.ListUsageCandidatesCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage candidate command"))
+		return
+	}
+	result.Set(s.store.ListUsageCandidates(command.AccountIDs), nil)
+}
+
+func (s *Account) handlePutUsageSnapshot(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(events.PutUsageSnapshotCommand)
+	if !ok || strings.TrimSpace(command.AccountID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage snapshot command"))
+		return
+	}
+	updated, err := s.store.PutUsageSnapshot(command.AccountID, command.Snapshot)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.PutUsageSnapshotResult{OK: updated}, nil)
+}
+
+func (s *Account) handleRecordUsageFailure(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(events.RecordUsageFailureCommand)
+	if !ok || strings.TrimSpace(command.AccountID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage failure command"))
+		return
+	}
+	updated, err := s.store.RecordUsageFailure(command.AccountID, command.Error)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.RecordUsageFailureResult{OK: updated}, nil)
 }
 
 func (s *Account) handleOAuthStart(ev event.Event, result event.Result) {

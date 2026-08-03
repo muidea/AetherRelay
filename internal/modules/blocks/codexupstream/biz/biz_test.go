@@ -126,3 +126,46 @@ func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 		t.Fatalf("models=%+v", models)
 	}
 }
+
+func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/usage" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.String())
+		}
+		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
+			t.Fatalf("account headers=%v", r.Header)
+		}
+		if r.Header.Get("User-Agent") != codexUserAgent || r.Header.Get("Originator") != codexOriginator || r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("Codex usage headers=%v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+          "plan_type":"pro",
+          "rate_limit":{"allowed":true,"primary_window":{"used_percent":25,"limit_window_seconds":18000,"reset_after_seconds":60},"secondary_window":{"used_percent":"80","limit_window_seconds":604800,"reset_at":2000000000}},
+          "code_review_rate_limit":{"allowed":false,"primary_window":{"limit_window_seconds":18000,"reset_after_seconds":120}},
+          "additional_rate_limits":[{"limit_name":"extra credits","rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000}}}]
+        }`))
+	}))
+	defer server.Close()
+	previousURL := usageURL
+	usageURL = server.URL + "/usage"
+	t.Cleanup(func() { usageURL = previousURL })
+
+	plan, windows, class, err := getUsage(context.Background(), "access-token", "account-header", "")
+	if err != nil || class != "" || plan != "pro" || len(windows) != 4 {
+		t.Fatalf("usage plan=%q windows=%+v class=%q err=%v", plan, windows, class, err)
+	}
+	byID := map[string]events.UsageWindow{}
+	for _, window := range windows {
+		byID[window.ID] = window
+	}
+	if window := byID["standard-primary"]; !window.UsedPercentKnown || window.UsedPercent != 25 || window.WindowSeconds != 18000 || window.ResetAt == "" || !window.AllowedKnown || !window.Allowed {
+		t.Fatalf("standard primary=%+v", window)
+	}
+	if window := byID["code-review-primary"]; !window.LimitReached || !window.UsedPercentKnown || window.UsedPercent != 100 || window.Allowed {
+		t.Fatalf("code-review primary=%+v", window)
+	}
+	if window := byID["additional-extra-credits-primary"]; window.Label != "extra credits" || !window.UsedPercentKnown || window.UsedPercent != 10 {
+		t.Fatalf("additional window=%+v", window)
+	}
+}

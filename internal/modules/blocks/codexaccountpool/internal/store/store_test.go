@@ -188,6 +188,46 @@ func TestExpiredModelSnapshotIsNotPublishedAndFailureIsScoped(t *testing.T) {
 	}
 }
 
+func TestUsageSnapshotIsRedactedAndRetainedAfterRefreshFailure(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{
+		AccessToken: "access-secret", RefreshToken: "refresh-secret", AccountID: "account-secret", Proxy: "http://127.0.0.1:8080",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	now := time.Now().UTC()
+	ok, err := store.PutUsageSnapshot(id, events.AccountUsageSnapshot{
+		PlanType:   "pro",
+		ObservedAt: now.Format(time.RFC3339),
+		ExpiresAt:  now.Add(15 * time.Minute).Format(time.RFC3339),
+		Windows: []events.UsageWindow{{
+			ID: "standard-primary", UsedPercent: 37.5, UsedPercentKnown: true, WindowSeconds: 18000, ResetAt: now.Add(time.Hour).Format(time.RFC3339), Allowed: true, AllowedKnown: true,
+		}},
+	})
+	if err != nil || !ok {
+		t.Fatalf("put usage snapshot ok=%v err=%v", ok, err)
+	}
+	ok, err = store.RecordUsageFailure(id, "network")
+	if err != nil || !ok {
+		t.Fatalf("record usage failure ok=%v err=%v", ok, err)
+	}
+	view, found := store.View(id)
+	if !found || view.UsageSnapshot == nil || view.UsageSnapshot.PlanType != "pro" || len(view.UsageSnapshot.Windows) != 1 || view.UsageRefreshError != "network" {
+		t.Fatalf("usage view=%+v found=%v", view, found)
+	}
+	payload, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"access-secret", "refresh-secret", "account-secret", "127.0.0.1:8080"} {
+		if contains(string(payload), secret) {
+			t.Fatalf("usage projection leaked secret %q: %s", secret, payload)
+		}
+	}
+}
+
 func contains(value, needle string) bool {
 	for index := 0; index+len(needle) <= len(value); index++ {
 		if value[index:index+len(needle)] == needle {
