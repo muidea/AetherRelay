@@ -124,7 +124,8 @@ type providerView struct {
 	Source string `json:"source"`
 	// Builtin marks an account-pool provider that is not represented in the
 	// static providers mapping. Admin permits only its route enablement and
-	// priority policy; protocol, credentials, probe, and deletion stay managed.
+	// priority policy; protocol, credentials, catalog discovery, and deletion
+	// stay managed by the corresponding account pool.
 	Builtin           bool     `json:"builtin,omitempty"`
 	ModelCount        int      `json:"model_count,omitempty"`
 	AvailableAccounts int      `json:"available_accounts,omitempty"`
@@ -611,6 +612,10 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request, rel stri
 		writeError(w, http.StatusBadRequest, "provider name is required")
 		return
 	}
+	if isBuiltinProviderID(name) {
+		h.probeBuiltinProvider(w, name)
+		return
+	}
 	result, err := probe.Check(r.Context(), h.runtime.ConfigSnapshot(), name)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -620,6 +625,62 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request, rel stri
 		h.metricsRegistry.RecordRequestPlan(name, result.Model, result.Capability, result.Status, time.Duration(result.DurationMS)*time.Millisecond, mapProbeOutcome(result.Conclusion), "", result.Protocol, result.UpstreamPath, "probe")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"provider": name, "status": result.Status, "duration_ms": result.DurationMS, "conclusion": result.Conclusion, "summary": result.Summary})
+}
+
+// probeBuiltinProvider intentionally reads the account-pool catalog projection
+// instead of sending an artificial model request. An artificial request could
+// consume quota, start a ChatGPT Web conversation, or contaminate the rolling
+// health window with an operator action. The response shares the static probe
+// shape so the Provider page can use one consistent Check action.
+func (h *Handler) probeBuiltinProvider(w http.ResponseWriter, id string) {
+	cfg := h.runtime.ConfigSnapshot()
+	view := h.builtinChatGPTProviderView(cfg)
+	if id == effectivecatalog.CodexOAuthProviderID {
+		view = h.builtinCodexProviderView(cfg)
+	}
+	conclusion, status, summary := builtinProviderProbeResult(view)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider":    id,
+		"status":      status,
+		"duration_ms": 0,
+		"conclusion":  conclusion,
+		"summary":     summary,
+	})
+}
+
+func isBuiltinProviderID(id string) bool {
+	return id == effectivecatalog.BuiltinProviderID || id == effectivecatalog.CodexOAuthProviderID
+}
+
+func builtinProviderProbeResult(view providerView) (conclusion string, status int, summary string) {
+	availability := strings.TrimSpace(view.Availability.Status)
+	switch availability {
+	case "healthy":
+		conclusion, status = "success", http.StatusOK
+	case "degraded":
+		conclusion, status = "degraded", http.StatusPartialContent
+	case "disabled":
+		conclusion, status = "disabled", http.StatusServiceUnavailable
+	case "unavailable":
+		conclusion, status = "unavailable", http.StatusServiceUnavailable
+	case "credential_error", "unhealthy":
+		conclusion, status = "unhealthy", http.StatusBadGateway
+	case "capability_drift":
+		conclusion, status = "capability_drift", http.StatusConflict
+	default:
+		conclusion, status = "unknown", http.StatusAccepted
+	}
+
+	parts := []string{fmt.Sprintf("catalog projection: %s", availability)}
+	if reason := strings.TrimSpace(view.UnavailableReason); reason != "" {
+		parts = append(parts, reason)
+	} else {
+		parts = append(parts, fmt.Sprintf("%d routable account(s), %d discovered model(s)", view.AvailableAccounts, view.ModelCount))
+	}
+	if view.UpdatedAt != "" {
+		parts = append(parts, "last discovery "+view.UpdatedAt)
+	}
+	return conclusion, status, strings.Join(parts, "; ")
 }
 
 func mapProbeOutcome(conclusion string) string {

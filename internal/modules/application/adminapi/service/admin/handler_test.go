@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetrics"
 )
@@ -24,6 +26,18 @@ type testRuntime struct {
 }
 
 type rejectingRuntime struct{ cfg config.Config }
+
+// catalogChatGPTRuntimeStub supplies an account-pool catalog without making a
+// network call. Embedding the existing complete Admin runtime stub keeps this
+// focused test aligned with the production ChatGPTRuntime contract.
+type catalogChatGPTRuntimeStub struct {
+	*chatGPTAccountRuntimeStub
+	snapshot effectivecatalog.Snapshot
+}
+
+func (s *catalogChatGPTRuntimeStub) ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error) {
+	return s.snapshot, nil
+}
 
 func (r *rejectingRuntime) ConfigSnapshot() config.Config { return r.cfg }
 func (r *rejectingRuntime) UpdateConfig(config.Config) error {
@@ -87,13 +101,13 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "data-builtin-priority-save", "builtin-providers",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
 	}
-	for _, removed := range []string{"routingContent", "routingSearch", "/api/routing/models"} {
+	for _, removed := range []string{"routingContent", "routingSearch", "/api/routing/models", "data-builtin-priority-save", "builtin-policy"} {
 		if strings.Contains(rec.Body.String(), removed) {
 			t.Fatalf("admin page still exposes model routing marker %q", removed)
 		}
@@ -288,6 +302,32 @@ func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 	availability := handler.providerHealth(cfg)["openai"]
 	if availability.Status != "unknown" || availability.LastOutcome != "success" || availability.SampleCount != 1 || availability.Score != 100 {
 		t.Fatalf("availability = %#v", availability)
+	}
+}
+
+func TestHandlerProbesBuiltinProviderFromCatalogWithoutRecordingMetrics(t *testing.T) {
+	cfg := config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}
+	snapshot := effectivecatalog.Build(cfg, 1, 2, []effectivecatalog.PoolModel{{
+		ID:         "gpt-5",
+		Operations: []string{config.EndpointCapabilityChatCompletions},
+	}}, "2026-08-03T12:00:00Z")
+	runtime := &catalogChatGPTRuntimeStub{
+		chatGPTAccountRuntimeStub: &chatGPTAccountRuntimeStub{},
+		snapshot:                  snapshot,
+	}
+	registry := metrics.NewRegistry()
+	handler := NewHandler("", &testRuntime{cfg: cfg}).WithChatGPTRuntime(runtime).WithMetrics(registry)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers/chatgptweb/probe", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"conclusion":"success"`) || !strings.Contains(rec.Body.String(), `"status":200`) {
+		t.Fatalf("builtin probe = %d %s", rec.Code, rec.Body.String())
+	}
+	if health := registry.ProviderHealthSnapshot(); len(health) != 0 {
+		t.Fatalf("builtin catalog check must not record health samples: %#v", health)
 	}
 }
 
