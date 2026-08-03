@@ -70,20 +70,21 @@ type TemporaryConversationRow struct {
 
 // TemporaryMessageRow is one bounded message inside a temporary conversation.
 type TemporaryMessageRow struct {
-	OwnerID           string
-	ConversationID    string
-	Sequence          int64
-	MessageID         string
-	Role              string
-	Content           string
-	ImageMetadata     json.RawMessage
-	UpstreamMessageID string
-	ActualModel       string
-	Status            string
-	ErrorClass        string
-	ErrorMessage      string
-	CreatedAt         time.Time
-	CompletedAt       *time.Time
+	OwnerID            string
+	ConversationID     string
+	Sequence           int64
+	MessageID          string
+	Role               string
+	Content            string
+	ImageMetadata      json.RawMessage
+	AttachmentMetadata json.RawMessage
+	UpstreamMessageID  string
+	ActualModel        string
+	Status             string
+	ErrorClass         string
+	ErrorMessage       string
+	CreatedAt          time.Time
+	CompletedAt        *time.Time
 }
 
 // TemporaryMessageImageRow keeps temporary-chat attachment bytes separate
@@ -95,6 +96,16 @@ type TemporaryMessageImageRow struct {
 	ConversationID string
 	MessageID      string
 	ImageID        string
+	ContentType    string
+	Bytes          []byte
+}
+
+type TemporaryMessageAttachmentRow struct {
+	OwnerID        string
+	ConversationID string
+	MessageID      string
+	AttachmentID   string
+	FileName       string
 	ContentType    string
 	Bytes          []byte
 }
@@ -258,6 +269,16 @@ func migrate(db *sql.DB) error {
             content_type VARCHAR NOT NULL,
             bytes BLOB NOT NULL,
             PRIMARY KEY (owner_id, conversation_id, message_id, image_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS chatgpt_temporary_message_attachments (
+            owner_id VARCHAR NOT NULL,
+            conversation_id VARCHAR NOT NULL,
+            message_id VARCHAR NOT NULL,
+            attachment_id VARCHAR NOT NULL,
+            file_name VARCHAR NOT NULL,
+            content_type VARCHAR NOT NULL,
+            bytes BLOB NOT NULL,
+            PRIMARY KEY (owner_id, conversation_id, message_id, attachment_id)
         )`,
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_conversations_owner_updated
             ON chatgpt_temporary_conversations(owner_id, updated_at DESC)`,
@@ -265,10 +286,13 @@ func migrate(db *sql.DB) error {
             ON chatgpt_temporary_messages(owner_id, conversation_id, sequence)`,
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_message_images_owner_conversation_message
             ON chatgpt_temporary_message_images(owner_id, conversation_id, message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_temporary_message_attachments_owner_conversation_message
+            ON chatgpt_temporary_message_attachments(owner_id, conversation_id, message_id)`,
 		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
 		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS provider VARCHAR DEFAULT 'chatgptweb'`,
 		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
 		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS image_metadata JSON DEFAULT '[]'`,
+		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS attachment_metadata JSON DEFAULT '[]'`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -590,7 +614,7 @@ func (s *Documents) UpdateTemporaryConversation(row TemporaryConversationRow) er
 // StartTemporaryTurn persists the two local messages and the streaming
 // conversation state as one transaction. A process crash must never expose a
 // half-created turn as an apparently usable conversation.
-func (s *Documents) StartTemporaryTurn(conversation TemporaryConversationRow, user, assistant TemporaryMessageRow, images []TemporaryMessageImageRow) error {
+func (s *Documents) StartTemporaryTurn(conversation TemporaryConversationRow, user, assistant TemporaryMessageRow, images []TemporaryMessageImageRow, attachments []TemporaryMessageAttachmentRow) error {
 	if s == nil || s.shared == nil || s.shared.db == nil {
 		return fmt.Errorf("state database is unavailable")
 	}
@@ -603,12 +627,19 @@ func (s *Documents) StartTemporaryTurn(conversation TemporaryConversationRow, us
 	defer func() { _ = tx.Rollback() }()
 	for _, message := range []TemporaryMessageRow{user, assistant} {
 		if _, err := tx.Exec(`INSERT INTO chatgpt_temporary_messages(
-			owner_id, conversation_id, sequence, message_id, role, content, image_metadata, upstream_message_id, actual_model,
+			owner_id, conversation_id, sequence, message_id, role, content, image_metadata, attachment_metadata, upstream_message_id, actual_model,
 			status, error_class, error_message, created_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			message.OwnerID, message.ConversationID, message.Sequence, message.MessageID, message.Role, message.Content, imageMetadata(message.ImageMetadata), message.UpstreamMessageID, message.ActualModel,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			message.OwnerID, message.ConversationID, message.Sequence, message.MessageID, message.Role, message.Content, imageMetadata(message.ImageMetadata), imageMetadata(message.AttachmentMetadata), message.UpstreamMessageID, message.ActualModel,
 			message.Status, message.ErrorClass, message.ErrorMessage, message.CreatedAt, message.CompletedAt,
 		); err != nil {
+			return err
+		}
+	}
+	for _, attachment := range attachments {
+		if _, err := tx.Exec(`INSERT INTO chatgpt_temporary_message_attachments(
+			owner_id, conversation_id, message_id, attachment_id, file_name, content_type, bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`, attachment.OwnerID, attachment.ConversationID, attachment.MessageID, attachment.AttachmentID, attachment.FileName, attachment.ContentType, attachment.Bytes); err != nil {
 			return err
 		}
 	}
@@ -760,6 +791,9 @@ func (s *Documents) DeleteTemporaryConversation(ownerID, conversationID string) 
 	if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_message_images WHERE owner_id = ? AND conversation_id = ?`, ownerID, conversationID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_message_attachments WHERE owner_id = ? AND conversation_id = ?`, ownerID, conversationID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_messages WHERE owner_id = ? AND conversation_id = ?`, ownerID, conversationID); err != nil {
 		return err
 	}
@@ -776,10 +810,10 @@ func (s *Documents) AppendTemporaryMessage(row TemporaryMessageRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.shared.db.Exec(`INSERT INTO chatgpt_temporary_messages(
-		owner_id, conversation_id, sequence, message_id, role, content, image_metadata, upstream_message_id, actual_model,
+		owner_id, conversation_id, sequence, message_id, role, content, image_metadata, attachment_metadata, upstream_message_id, actual_model,
 		status, error_class, error_message, created_at, completed_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.OwnerID, row.ConversationID, row.Sequence, row.MessageID, row.Role, row.Content, imageMetadata(row.ImageMetadata), row.UpstreamMessageID, row.ActualModel,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.OwnerID, row.ConversationID, row.Sequence, row.MessageID, row.Role, row.Content, imageMetadata(row.ImageMetadata), imageMetadata(row.AttachmentMetadata), row.UpstreamMessageID, row.ActualModel,
 		row.Status, row.ErrorClass, row.ErrorMessage, row.CreatedAt, row.CompletedAt,
 	)
 	return err
@@ -831,6 +865,23 @@ func (s *Documents) GetTemporaryMessageImage(ownerID, conversationID, messageID,
 	return row, true, nil
 }
 
+func (s *Documents) GetTemporaryMessageAttachment(ownerID, conversationID, messageID, attachmentID string) (TemporaryMessageAttachmentRow, bool, error) {
+	if s == nil || s.shared == nil || s.shared.db == nil {
+		return TemporaryMessageAttachmentRow{}, false, fmt.Errorf("state database is unavailable")
+	}
+	row := TemporaryMessageAttachmentRow{OwnerID: ownerID, ConversationID: conversationID, MessageID: messageID, AttachmentID: attachmentID}
+	err := s.shared.db.QueryRow(`SELECT file_name, content_type, bytes
+		FROM chatgpt_temporary_message_attachments
+		WHERE owner_id = ? AND conversation_id = ? AND message_id = ? AND attachment_id = ?`, ownerID, conversationID, messageID, attachmentID).Scan(&row.FileName, &row.ContentType, &row.Bytes)
+	if err == sql.ErrNoRows {
+		return TemporaryMessageAttachmentRow{}, false, nil
+	}
+	if err != nil {
+		return TemporaryMessageAttachmentRow{}, false, err
+	}
+	return row, true, nil
+}
+
 func (s *Documents) ListTemporaryMessages(ownerID, conversationID string, beforeSequence *int64, limit int) ([]TemporaryMessageRow, error) {
 	if s == nil || s.shared == nil || s.shared.db == nil {
 		return nil, fmt.Errorf("state database is unavailable")
@@ -843,14 +894,14 @@ func (s *Documents) ListTemporaryMessages(ownerID, conversationID string, before
 		err  error
 	)
 	if beforeSequence == nil {
-		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, COALESCE(CAST(image_metadata AS VARCHAR), '[]'), upstream_message_id, actual_model,
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, COALESCE(CAST(image_metadata AS VARCHAR), '[]'), COALESCE(CAST(attachment_metadata AS VARCHAR), '[]'), upstream_message_id, actual_model,
 			status, error_class, error_message, created_at, completed_at
 			FROM chatgpt_temporary_messages
 			WHERE owner_id = ? AND conversation_id = ?
 			ORDER BY sequence ASC
 			LIMIT ?`, ownerID, conversationID, limit)
 	} else {
-		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, COALESCE(CAST(image_metadata AS VARCHAR), '[]'), upstream_message_id, actual_model,
+		rows, err = s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, COALESCE(CAST(image_metadata AS VARCHAR), '[]'), COALESCE(CAST(attachment_metadata AS VARCHAR), '[]'), upstream_message_id, actual_model,
 			status, error_class, error_message, created_at, completed_at
 			FROM chatgpt_temporary_messages
 			WHERE owner_id = ? AND conversation_id = ? AND sequence < ?
@@ -908,7 +959,7 @@ func (s *Documents) ListStreamingTemporaryMessages(ownerID, conversationID strin
 	if s == nil || s.shared == nil || s.shared.db == nil {
 		return nil, fmt.Errorf("state database is unavailable")
 	}
-	rows, err := s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, COALESCE(CAST(image_metadata AS VARCHAR), '[]'), upstream_message_id, actual_model,
+	rows, err := s.shared.db.Query(`SELECT owner_id, conversation_id, sequence, message_id, role, content, COALESCE(CAST(image_metadata AS VARCHAR), '[]'), COALESCE(CAST(attachment_metadata AS VARCHAR), '[]'), upstream_message_id, actual_model,
 		status, error_class, error_message, created_at, completed_at
 		FROM chatgpt_temporary_messages
 		WHERE owner_id = ? AND conversation_id = ? AND status = 'streaming'
@@ -954,6 +1005,9 @@ func (s *Documents) PurgeExpiredTemporaryConversations(now time.Time) (int, erro
 		if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_message_images WHERE owner_id = ? AND conversation_id = ?`, item.ownerID, item.conversationID); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_message_attachments WHERE owner_id = ? AND conversation_id = ?`, item.ownerID, item.conversationID); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(`DELETE FROM chatgpt_temporary_messages WHERE owner_id = ? AND conversation_id = ?`, item.ownerID, item.conversationID); err != nil {
 			return 0, err
 		}
@@ -995,9 +1049,9 @@ func scanTemporaryConversations(rows *sql.Rows) ([]TemporaryConversationRow, err
 func scanTemporaryMessage(scanner rowScanner) (TemporaryMessageRow, error) {
 	var row TemporaryMessageRow
 	var completedAt sql.NullTime
-	var imageMetadata string
+	var imageMetadata, attachmentMetadata string
 	err := scanner.Scan(
-		&row.OwnerID, &row.ConversationID, &row.Sequence, &row.MessageID, &row.Role, &row.Content, &imageMetadata, &row.UpstreamMessageID, &row.ActualModel,
+		&row.OwnerID, &row.ConversationID, &row.Sequence, &row.MessageID, &row.Role, &row.Content, &imageMetadata, &attachmentMetadata, &row.UpstreamMessageID, &row.ActualModel,
 		&row.Status, &row.ErrorClass, &row.ErrorMessage, &row.CreatedAt, &completedAt,
 	)
 	if err != nil {
@@ -1008,6 +1062,7 @@ func scanTemporaryMessage(scanner rowScanner) (TemporaryMessageRow, error) {
 		row.CompletedAt = &ts
 	}
 	row.ImageMetadata = json.RawMessage(imageMetadata)
+	row.AttachmentMetadata = json.RawMessage(attachmentMetadata)
 	return row, nil
 }
 

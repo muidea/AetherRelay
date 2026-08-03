@@ -1,6 +1,7 @@
 package client
 
 import (
+	"ai-proxy/internal/pkg/chatattachment"
 	"bytes"
 	"context"
 	"fmt"
@@ -267,6 +268,21 @@ func TestUploadImageRunsFileServiceProtocol(t *testing.T) {
 func TestUploadImageRejectsUnsupportedContent(t *testing.T) {
 	if _, err := inspectUploadImage([]byte("not an image"), "broken.bin"); err == nil {
 		t.Fatal("inspectUploadImage succeeded for invalid image")
+	}
+}
+
+func TestUploadAttachmentRunsFileServiceProtocol(t *testing.T) {
+	doer := &uploadDoer{}
+	client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", doer)
+	reference, err := client.UploadAttachment(chatattachment.File{Name: "notes.md", ContentType: "text/markdown", Bytes: []byte("# hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reference.FileID != "file_123" || reference.FileName != "notes.md" || reference.MIMEType != "text/markdown" || reference.FileSize != 7 || reference.Width != 0 || reference.Height != 0 {
+		t.Fatalf("reference=%+v", reference)
+	}
+	if len(doer.requests) != 3 || doer.requests[1].Header.Get("Content-Type") != "text/markdown" {
+		t.Fatalf("requests=%v", doer.requests)
 	}
 }
 

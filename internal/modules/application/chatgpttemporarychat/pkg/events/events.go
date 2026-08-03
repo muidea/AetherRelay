@@ -1,17 +1,21 @@
 // Package events defines the temporary chat Module's typed EventHub contract.
 package events
 
-import "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
+import (
+	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
+	"ai-proxy/internal/pkg/chatattachment"
+)
 
 const (
-	TopicCreate     = "aiproxy.chatgpt.temporarychat.command.create"
-	TopicList       = "aiproxy.chatgpt.temporarychat.command.list"
-	TopicGet        = "aiproxy.chatgpt.temporarychat.command.get"
-	TopicStartTurn  = "aiproxy.chatgpt.temporarychat.command.start_turn"
-	TopicPullTurn   = "aiproxy.chatgpt.temporarychat.command.pull_turn"
-	TopicCancelTurn = "aiproxy.chatgpt.temporarychat.command.cancel_turn"
-	TopicDelete     = "aiproxy.chatgpt.temporarychat.command.delete"
-	TopicGetImage   = "aiproxy.chatgpt.temporarychat.command.get_image"
+	TopicCreate        = "aiproxy.chatgpt.temporarychat.command.create"
+	TopicList          = "aiproxy.chatgpt.temporarychat.command.list"
+	TopicGet           = "aiproxy.chatgpt.temporarychat.command.get"
+	TopicStartTurn     = "aiproxy.chatgpt.temporarychat.command.start_turn"
+	TopicPullTurn      = "aiproxy.chatgpt.temporarychat.command.pull_turn"
+	TopicCancelTurn    = "aiproxy.chatgpt.temporarychat.command.cancel_turn"
+	TopicDelete        = "aiproxy.chatgpt.temporarychat.command.delete"
+	TopicGetImage      = "aiproxy.chatgpt.temporarychat.command.get_image"
+	TopicGetAttachment = "aiproxy.chatgpt.temporarychat.command.get_attachment"
 )
 
 const (
@@ -54,18 +58,26 @@ type ConversationView struct {
 
 // MessageView is one bounded message projection for Admin clients.
 type MessageView struct {
-	ID           string             `json:"id"`
-	Sequence     int64              `json:"sequence"`
-	Role         string             `json:"role"`
-	Content      string             `json:"content"`
-	Images       []MessageImageView `json:"images,omitempty"`
-	ActualModel  string             `json:"actual_model,omitempty"`
-	Status       string             `json:"status"`
-	ErrorClass   string             `json:"error_class,omitempty"`
-	ErrorMessage string             `json:"error_message,omitempty"`
-	CreatedAt    string             `json:"created_at"`
-	CompletedAt  string             `json:"completed_at,omitempty"`
-	TurnID       string             `json:"turn_id,omitempty"`
+	ID           string                  `json:"id"`
+	Sequence     int64                   `json:"sequence"`
+	Role         string                  `json:"role"`
+	Content      string                  `json:"content"`
+	Images       []MessageImageView      `json:"images,omitempty"`
+	Attachments  []MessageAttachmentView `json:"attachments,omitempty"`
+	ActualModel  string                  `json:"actual_model,omitempty"`
+	Status       string                  `json:"status"`
+	ErrorClass   string                  `json:"error_class,omitempty"`
+	ErrorMessage string                  `json:"error_message,omitempty"`
+	CreatedAt    string                  `json:"created_at"`
+	CompletedAt  string                  `json:"completed_at,omitempty"`
+	TurnID       string                  `json:"turn_id,omitempty"`
+}
+
+type MessageAttachmentView struct {
+	ID          string `json:"id"`
+	FileName    string `json:"file_name"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
 }
 
 // MessageImageView deliberately contains only display metadata. Image bytes
@@ -125,6 +137,7 @@ type StartTurnCommand struct {
 	ConversationID string
 	Content        string
 	Images         []ImageInput
+	Attachments    []chatattachment.File
 }
 
 type StartTurnResult struct {
@@ -178,5 +191,18 @@ type GetMessageImageCommand struct {
 
 type GetMessageImageResult struct {
 	Bytes       []byte
+	ContentType string
+}
+
+type GetMessageAttachmentCommand struct {
+	OwnerID        string
+	ConversationID string
+	MessageID      string
+	AttachmentID   string
+}
+
+type GetMessageAttachmentResult struct {
+	Bytes       []byte
+	FileName    string
 	ContentType string
 }

@@ -28,6 +28,7 @@ type featureExecutionTrace struct {
 	usage          *tokenusage.Usage
 }
 type featureExecutionTraceKey struct{}
+type featureFileAttachmentsKey struct{}
 
 func newFeatureResponse() *featureResponse     { return &featureResponse{header: make(http.Header)} }
 func (w *featureResponse) Header() http.Header { return w.header }
@@ -69,7 +70,7 @@ func (h *Handler) FeatureCatalog(ctx context.Context) proxyevents.FeatureCatalog
 }
 
 func (h *Handler) featureProvidersFor(ctx context.Context, model string, paths []string) []proxyevents.FeatureProvider {
-	seen := map[string]struct{}{}
+	positions := map[string]int{}
 	providers := []proxyevents.FeatureProvider{}
 	for _, path := range paths {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, path, nil)
@@ -78,11 +79,13 @@ func (h *Handler) featureProvidersFor(ctx context.Context, model string, paths [
 			continue
 		}
 		for _, plan := range plans {
-			if _, ok := seen[plan.RouteOwner]; ok {
+			supportsFiles := path == "/v1/responses" && transportSupportsFileAttachments(plan)
+			if index, ok := positions[plan.RouteOwner]; ok {
+				providers[index].SupportsFiles = providers[index].SupportsFiles || supportsFiles
 				continue
 			}
-			seen[plan.RouteOwner] = struct{}{}
-			providers = append(providers, proxyevents.FeatureProvider{Name: plan.RouteOwner, Protocol: plan.UpstreamProtocol, Priority: plan.Priority})
+			positions[plan.RouteOwner] = len(providers)
+			providers = append(providers, proxyevents.FeatureProvider{Name: plan.RouteOwner, Protocol: plan.UpstreamProtocol, Priority: plan.Priority, SupportsFiles: supportsFiles})
 		}
 	}
 	sort.SliceStable(providers, func(i, j int) bool {
@@ -94,15 +97,37 @@ func (h *Handler) featureProvidersFor(ctx context.Context, model string, paths [
 	return providers
 }
 
+func transportSupportsFileAttachments(plan TransportPlan) bool {
+	// Codex OAuth and protocol-converted providers are excluded until their
+	// upstream contracts are verified for Responses input_file payloads.
+	switch strings.ToLower(strings.TrimSpace(plan.UpstreamProtocol)) {
+	case "openai", "chatgptweb":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.ExecuteFeatureTextCommand) (proxyevents.ExecuteFeatureTextResult, error) {
 	model := strings.TrimSpace(command.Model)
 	if model == "" || len(command.Messages) == 0 {
 		return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("feature text model and messages are required")
 	}
+	hasFiles := false
+	for _, message := range command.Messages {
+		if len(message.Files) > 0 {
+			hasFiles = true
+			break
+		}
+	}
 	endpoint := "/v1/chat/completions"
+	if hasFiles {
+		endpoint = "/v1/responses"
+		ctx = context.WithValue(ctx, featureFileAttachmentsKey{}, true)
+	}
 	probe, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	plans, apiErr := h.resolveTransportPlans(probe, model)
-	if apiErr != nil || len(plans) == 0 {
+	if !hasFiles && (apiErr != nil || len(plans) == 0) {
 		endpoint = "/v1/responses"
 		probe, _ = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 		plans, apiErr = h.resolveTransportPlans(probe, model)
@@ -114,7 +139,7 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 	messages := make([]any, 0, len(command.Messages))
 	for _, message := range command.Messages {
 		content := any(message.Content)
-		if len(message.Images) > 0 {
+		if len(message.Images) > 0 || len(message.Files) > 0 {
 			parts := []any{}
 			if message.Content != "" {
 				partType := "text"
@@ -131,6 +156,13 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 				} else {
 					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL}})
 				}
+			}
+			for _, file := range message.Files {
+				if endpoint != "/v1/responses" {
+					return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("file attachments require a Responses-compatible provider")
+				}
+				dataURL := "data:" + file.ContentType + ";base64," + base64.StdEncoding.EncodeToString(file.Bytes)
+				parts = append(parts, map[string]any{"type": "input_file", "filename": file.Name, "file_data": dataURL})
 			}
 			content = parts
 		}

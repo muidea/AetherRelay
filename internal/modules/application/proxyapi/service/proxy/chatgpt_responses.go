@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"ai-proxy/internal/pkg/chatattachment"
 	"ai-proxy/internal/pkg/chatgptimageinput"
 )
 
@@ -198,7 +200,7 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 		return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "input is required", Feature: "input"}
 	}
 	images, imageBytes := 0, 0
-	appendMessage := func(role, content string, attachments [][]byte) *APIError {
+	appendMessage := func(role, content string, attachments [][]byte, files []chatattachment.File) *APIError {
 		role = strings.ToLower(strings.TrimSpace(role))
 		if role == "developer" {
 			role = "system"
@@ -206,8 +208,8 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 		if role != "system" && role != "user" && role != "assistant" {
 			return &APIError{Code: ErrorCodeInvalidRequest, Message: "input message role is unsupported", Feature: "input.role"}
 		}
-		if len(attachments) > 0 && role != "user" {
-			return &APIError{Code: ErrorCodeInvalidRequest, Message: "input images are only supported for user messages", Feature: "input.content"}
+		if (len(attachments) > 0 || len(files) > 0) && role != "user" {
+			return &APIError{Code: ErrorCodeInvalidRequest, Message: "input attachments are only supported for user messages", Feature: "input.content"}
 		}
 		for _, attachment := range attachments {
 			images++
@@ -219,15 +221,15 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 				return &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("images exceed %d MiB per request", imageinput.MaxChatImageBytes>>20), Feature: "input.content"}
 			}
 		}
-		if strings.TrimSpace(content) == "" && len(attachments) == 0 {
+		if strings.TrimSpace(content) == "" && len(attachments) == 0 && len(files) == 0 {
 			return &APIError{Code: ErrorCodeInvalidRequest, Message: "input message requires content", Feature: "input.content"}
 		}
-		request.Messages = append(request.Messages, chatgpttext.Message{Role: role, Content: content, Images: attachments})
+		request.Messages = append(request.Messages, chatgpttext.Message{Role: role, Content: content, Images: attachments, Files: files})
 		return nil
 	}
 	switch value := input.(type) {
 	case string:
-		if err := appendMessage("user", value, nil); err != nil {
+		if err := appendMessage("user", value, nil, nil); err != nil {
 			return chatgpttext.Request{}, nil, err
 		}
 	case []any:
@@ -240,11 +242,11 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 				return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].type", index))
 			}
 			role, _ := item["role"].(string)
-			content, attachments, err := chatGPTResponsesContent(index, item["content"])
+			content, attachments, files, err := chatGPTResponsesContent(index, item["content"])
 			if err != nil {
 				return chatgpttext.Request{}, nil, err
 			}
-			if err := appendMessage(role, content, attachments); err != nil {
+			if err := appendMessage(role, content, attachments, files); err != nil {
 				return chatgpttext.Request{}, nil, err
 			}
 		}
@@ -272,44 +274,72 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 	return request, uniqueSortedFeatures(ignored), nil
 }
 
-func chatGPTResponsesContent(messageIndex int, raw any) (string, [][]byte, *APIError) {
+func chatGPTResponsesContent(messageIndex int, raw any) (string, [][]byte, []chatattachment.File, *APIError) {
 	if content, ok := raw.(string); ok {
-		return content, nil, nil
+		return content, nil, nil, nil
 	}
 	parts, ok := raw.([]any)
 	if !ok {
-		return "", nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content must be a string or content-part array", messageIndex), Feature: "input.content"}
+		return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content must be a string or content-part array", messageIndex), Feature: "input.content"}
 	}
 	var text strings.Builder
 	images := make([][]byte, 0)
+	files := make([]chatattachment.File, 0)
 	for partIndex, rawPart := range parts {
 		part, ok := rawPart.(map[string]any)
 		if !ok {
-			return "", nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d] is invalid", messageIndex, partIndex), Feature: "input.content"}
+			return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d] is invalid", messageIndex, partIndex), Feature: "input.content"}
 		}
 		typ, _ := part["type"].(string)
 		switch strings.TrimSpace(typ) {
 		case "input_text", "output_text":
 			value, ok := part["text"].(string)
 			if !ok {
-				return "", nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d].text is required", messageIndex, partIndex), Feature: "input.content"}
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d].text is required", messageIndex, partIndex), Feature: "input.content"}
 			}
 			text.WriteString(value)
 		case "input_image":
 			value, ok := part["image_url"].(string)
 			if !ok {
-				return "", nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].content[%d].image_url", messageIndex, partIndex))
+				return "", nil, nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].content[%d].image_url", messageIndex, partIndex))
 			}
 			image, err := imageinput.DecodeDataURLImage(value)
 			if err != nil {
-				return "", nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d]: %v", messageIndex, partIndex, err), Feature: "input.content"}
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d]: %v", messageIndex, partIndex, err), Feature: "input.content"}
 			}
 			images = append(images, image.Bytes)
+		case "input_file":
+			name, _ := part["filename"].(string)
+			value, _ := part["file_data"].(string)
+			comma := strings.IndexByte(value, ',')
+			if comma < 0 || !strings.Contains(value[:comma], ";base64") {
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d].file_data must be a base64 data URL", messageIndex, partIndex), Feature: "input.content"}
+			}
+			data, err := base64.StdEncoding.DecodeString(value[comma+1:])
+			if err != nil {
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d].file_data is invalid", messageIndex, partIndex), Feature: "input.content"}
+			}
+			declared := strings.TrimPrefix(strings.Split(value[:comma], ";")[0], "data:")
+			file, err := chatattachment.Validate(data, name, declared)
+			if err != nil {
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d]: %v", messageIndex, partIndex, err), Feature: "input.content"}
+			}
+			files = append(files, file)
+			if len(files) > chatattachment.MaxFileCount {
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("at most %d files are supported per request", chatattachment.MaxFileCount), Feature: "input.content"}
+			}
+			fileBytes := 0
+			for _, item := range files {
+				fileBytes += len(item.Bytes)
+			}
+			if fileBytes > chatattachment.MaxFileBytes {
+				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("files exceed %d MiB per request", chatattachment.MaxFileBytes>>20), Feature: "input.content"}
+			}
 		default:
-			return "", nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].content[%d].type", messageIndex, partIndex))
+			return "", nil, nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].content[%d].type", messageIndex, partIndex))
 		}
 	}
-	return text.String(), images, nil
+	return text.String(), images, files, nil
 }
 
 func responseIdentifier(conversationID string) string {

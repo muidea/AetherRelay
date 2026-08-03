@@ -8,6 +8,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/common"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyconfig"
+	"ai-proxy/internal/pkg/chatattachment"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 
 	"github.com/muidea/magicCommon/event"
@@ -40,9 +41,10 @@ type EffectiveCatalogResult struct{ Snapshot effectivecatalog.Snapshot }
 type FeatureCatalogCommand struct{}
 
 type FeatureProvider struct {
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Priority int    `json:"priority"`
+	Name          string `json:"name"`
+	Protocol      string `json:"protocol"`
+	Priority      int    `json:"priority"`
+	SupportsFiles bool   `json:"supports_files,omitempty"`
 }
 
 type FeatureModel struct {
@@ -60,6 +62,7 @@ type FeatureTextMessage struct {
 	Role    string
 	Content string
 	Images  [][]byte
+	Files   []chatattachment.File
 }
 
 type ExecuteFeatureTextCommand struct {

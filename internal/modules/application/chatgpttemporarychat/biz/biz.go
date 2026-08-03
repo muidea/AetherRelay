@@ -122,6 +122,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicCancelTurn,
 		events.TopicDelete,
 		events.TopicGetImage,
+		events.TopicGetAttachment,
 	}
 	b.SubscribeFunc(events.TopicCreate, b.handleCreate)
 	b.SubscribeFunc(events.TopicList, b.handleList)
@@ -131,6 +132,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b.SubscribeFunc(events.TopicCancelTurn, b.handleCancelTurn)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
 	b.SubscribeFunc(events.TopicGetImage, b.handleGetImage)
+	b.SubscribeFunc(events.TopicGetAttachment, b.handleGetAttachment)
 	b.purgeWG.Add(1)
 	b.AsyncTask(func() {
 		defer b.purgeWG.Done()
@@ -303,7 +305,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
 		return
 	}
-	started, err := s.store.StartTurn(cmd.OwnerID, cmd.ConversationID, cmd.Content, cmd.Images)
+	started, err := s.store.StartTurnWithAttachments(cmd.OwnerID, cmd.ConversationID, cmd.Content, cmd.Images, cmd.Attachments)
 	if err != nil {
 		if strings.Contains(err.Error(), "streaming") || strings.Contains(err.Error(), "recovery") {
 			result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
@@ -333,6 +335,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		item := proxyevents.FeatureTextMessage{Role: message.Role, Content: message.Content}
 		if message.ID == started.UserMessage.ID {
 			item.Images = started.Images
+			item.Files = started.Files
 		}
 		messages = append(messages, item)
 	}
@@ -400,7 +403,7 @@ func (s *TemporaryChat) startLegacyTurn(cmd events.StartTurnCommand, started sto
 	if firstTurn && strings.TrimSpace(started.SystemPrompt) != "" {
 		messages = append(messages, upevents.TextMessage{Role: "system", Content: started.SystemPrompt})
 	}
-	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content, Images: started.Images})
+	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content, Images: started.Images, Files: started.Files})
 	startCommand := upevents.StartTextCommand{
 		AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Model: started.Model, Messages: messages,
 		ThinkingEffort: started.ThinkingEffort, ConversationID: started.UpstreamConversationID, ParentMessageID: started.ParentMessageID,
@@ -851,6 +854,31 @@ func (s *TemporaryChat) handleGetImage(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.GetMessageImageResult{Bytes: image.Bytes, ContentType: image.ContentType}, nil)
+}
+
+func (s *TemporaryChat) handleGetAttachment(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	if s.store == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
+		return
+	}
+	cmd, ok := ev.Data().(events.GetMessageAttachmentCommand)
+	if !ok || strings.TrimSpace(cmd.OwnerID) == "" || strings.TrimSpace(cmd.ConversationID) == "" || strings.TrimSpace(cmd.MessageID) == "" || strings.TrimSpace(cmd.AttachmentID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid temporary message attachment command"))
+		return
+	}
+	attachment, found, err := s.store.GetMessageAttachment(cmd.OwnerID, cmd.ConversationID, cmd.MessageID, cmd.AttachmentID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	if !found {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "temporary message attachment not found"))
+		return
+	}
+	result.Set(events.GetMessageAttachmentResult{Bytes: attachment.Bytes, FileName: attachment.FileName, ContentType: attachment.ContentType}, nil)
 }
 
 func (s *TemporaryChat) acquireTextAccount(accountID, model string) (accevents.AcquireTextAccountResult, error) {

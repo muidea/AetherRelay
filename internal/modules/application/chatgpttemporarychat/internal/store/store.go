@@ -12,6 +12,7 @@ import (
 	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
 	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
 	"ai-proxy/internal/pkg/aiproxystate"
+	"ai-proxy/internal/pkg/chatattachment"
 	"ai-proxy/internal/pkg/chatgptimageinput"
 
 	"github.com/google/uuid"
@@ -210,15 +211,24 @@ type TurnStart struct {
 	ThinkingEffort         string
 	SystemPrompt           string
 	Images                 [][]byte
+	Files                  []chatattachment.File
 }
 
 func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs ...[]events.ImageInput) (TurnStart, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var inputs []events.ImageInput
 	if len(imageInputs) > 0 {
 		inputs = imageInputs[0]
 	}
+	return s.startTurn(ownerID, conversationID, content, inputs, nil)
+}
+
+func (s *Store) StartTurnWithAttachments(ownerID, conversationID, content string, imageInputs []events.ImageInput, attachmentInputs []chatattachment.File) (TurnStart, error) {
+	return s.startTurn(ownerID, conversationID, content, imageInputs, attachmentInputs)
+}
+
+func (s *Store) startTurn(ownerID, conversationID, content string, inputs []events.ImageInput, attachmentInputs []chatattachment.File) (TurnStart, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	content = strings.TrimSpace(content)
 	if len(content) > s.cfg.MaxMessageBytes {
 		return TurnStart{}, fmt.Errorf("message exceeds max size")
@@ -227,8 +237,25 @@ func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs .
 	if err != nil {
 		return TurnStart{}, err
 	}
-	if content == "" && len(images) == 0 {
-		return TurnStart{}, fmt.Errorf("content or image is required")
+	attachments, err := validateAttachments(attachmentInputs)
+	if err != nil {
+		return TurnStart{}, err
+	}
+	if len(images)+len(attachments) > chatattachment.MaxFileCount {
+		return TurnStart{}, fmt.Errorf("at most %d attachments are supported per turn", chatattachment.MaxFileCount)
+	}
+	totalBytes := 0
+	for _, image := range images {
+		totalBytes += len(image.Bytes)
+	}
+	for _, attachment := range attachments {
+		totalBytes += len(attachment.Bytes)
+	}
+	if totalBytes > chatattachment.MaxFileBytes {
+		return TurnStart{}, fmt.Errorf("attachments exceed %d MiB per turn", chatattachment.MaxFileBytes>>20)
+	}
+	if content == "" && len(images) == 0 && len(attachments) == 0 {
+		return TurnStart{}, fmt.Errorf("content or attachment is required")
 	}
 	row, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
 	if err != nil {
@@ -271,16 +298,28 @@ func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs .
 	if err != nil {
 		return TurnStart{}, fmt.Errorf("encode image metadata: %w", err)
 	}
+	attachmentMetadata := make([]temporaryAttachmentMetadata, 0, len(attachments))
+	attachmentRows := make([]aiproxystate.TemporaryMessageAttachmentRow, 0, len(attachments))
+	for _, attachment := range attachments {
+		attachmentID := uuid.NewString()
+		attachmentMetadata = append(attachmentMetadata, temporaryAttachmentMetadata{ID: attachmentID, FileName: attachment.Name, ContentType: attachment.ContentType, SizeBytes: int64(len(attachment.Bytes))})
+		attachmentRows = append(attachmentRows, aiproxystate.TemporaryMessageAttachmentRow{OwnerID: ownerID, ConversationID: conversationID, MessageID: userID, AttachmentID: attachmentID, FileName: attachment.Name, ContentType: attachment.ContentType, Bytes: attachment.Bytes})
+	}
+	encodedAttachments, err := json.Marshal(attachmentMetadata)
+	if err != nil {
+		return TurnStart{}, fmt.Errorf("encode attachment metadata: %w", err)
+	}
 	user := aiproxystate.TemporaryMessageRow{
-		OwnerID:        ownerID,
-		ConversationID: conversationID,
-		Sequence:       next,
-		MessageID:      userID,
-		Role:           common.RoleUser,
-		Content:        content,
-		ImageMetadata:  imageMetadata,
-		Status:         common.MessageStatusStreaming,
-		CreatedAt:      now,
+		OwnerID:            ownerID,
+		ConversationID:     conversationID,
+		Sequence:           next,
+		MessageID:          userID,
+		Role:               common.RoleUser,
+		Content:            content,
+		ImageMetadata:      imageMetadata,
+		AttachmentMetadata: encodedAttachments,
+		Status:             common.MessageStatusStreaming,
+		CreatedAt:          now,
 	}
 	assistant := aiproxystate.TemporaryMessageRow{
 		OwnerID:        ownerID,
@@ -295,13 +334,15 @@ func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs .
 	if row.Title == "新对话" || strings.TrimSpace(row.Title) == "" {
 		if content != "" {
 			row.Title = truncateTitle(content)
-		} else {
+		} else if len(images) > 0 && len(attachments) == 0 {
 			row.Title = "图片对话"
+		} else {
+			row.Title = "附件对话"
 		}
 	}
 	row.Status = common.StatusStreaming
 	row.UpdatedAt = now
-	if err := s.docs.StartTemporaryTurn(row, user, assistant, imageRows); err != nil {
+	if err := s.docs.StartTemporaryTurn(row, user, assistant, imageRows, attachmentRows); err != nil {
 		return TurnStart{}, err
 	}
 	return TurnStart{
@@ -319,6 +360,7 @@ func (s *Store) StartTurn(ownerID, conversationID, content string, imageInputs .
 		ThinkingEffort:         row.ThinkingEffort,
 		SystemPrompt:           row.SystemPrompt,
 		Images:                 imageBytes(images),
+		Files:                  attachments,
 	}, nil
 }
 
@@ -326,6 +368,28 @@ type temporaryImageMetadata struct {
 	ID          string `json:"id"`
 	ContentType string `json:"content_type"`
 	SizeBytes   int64  `json:"size_bytes"`
+}
+
+type temporaryAttachmentMetadata struct {
+	ID          string `json:"id"`
+	FileName    string `json:"file_name"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
+func validateAttachments(inputs []chatattachment.File) ([]chatattachment.File, error) {
+	if len(inputs) > chatattachment.MaxFileCount {
+		return nil, fmt.Errorf("at most %d files are supported per turn", chatattachment.MaxFileCount)
+	}
+	result := make([]chatattachment.File, 0, len(inputs))
+	for index, input := range inputs {
+		file, err := chatattachment.Validate(input.Bytes, input.Name, input.ContentType)
+		if err != nil {
+			return nil, fmt.Errorf("attachment %d: %w", index+1, err)
+		}
+		result = append(result, file)
+	}
+	return result, nil
 }
 
 func validateImages(inputs []events.ImageInput) ([]events.ImageInput, error) {
@@ -527,6 +591,22 @@ func (s *Store) GetMessageImage(ownerID, conversationID, messageID, imageID stri
 	return s.docs.GetTemporaryMessageImage(ownerID, conversationID, messageID, imageID)
 }
 
+func (s *Store) GetMessageAttachment(ownerID, conversationID, messageID, attachmentID string) (aiproxystate.TemporaryMessageAttachmentRow, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(messageID) == "" || strings.TrimSpace(attachmentID) == "" {
+		return aiproxystate.TemporaryMessageAttachmentRow{}, false, fmt.Errorf("invalid attachment reference")
+	}
+	conversation, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
+	if err != nil {
+		return aiproxystate.TemporaryMessageAttachmentRow{}, false, err
+	}
+	if !found || !time.Now().UTC().Before(conversation.ExpiresAt) {
+		return aiproxystate.TemporaryMessageAttachmentRow{}, false, nil
+	}
+	return s.docs.GetTemporaryMessageAttachment(ownerID, conversationID, messageID, attachmentID)
+}
+
 func (s *Store) PurgeExpired(now time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -585,6 +665,16 @@ func messageView(row aiproxystate.TemporaryMessageRow) events.MessageView {
 				continue
 			}
 			view.Images = append(view.Images, events.MessageImageView{ID: image.ID, ContentType: image.ContentType, SizeBytes: image.SizeBytes})
+		}
+	}
+	var attachments []temporaryAttachmentMetadata
+	if len(row.AttachmentMetadata) > 0 && json.Unmarshal(row.AttachmentMetadata, &attachments) == nil {
+		view.Attachments = make([]events.MessageAttachmentView, 0, len(attachments))
+		for _, attachment := range attachments {
+			if attachment.ID == "" || attachment.FileName == "" || attachment.ContentType == "" || attachment.SizeBytes <= 0 {
+				continue
+			}
+			view.Attachments = append(view.Attachments, events.MessageAttachmentView{ID: attachment.ID, FileName: attachment.FileName, ContentType: attachment.ContentType, SizeBytes: attachment.SizeBytes})
 		}
 	}
 	if row.CompletedAt != nil {

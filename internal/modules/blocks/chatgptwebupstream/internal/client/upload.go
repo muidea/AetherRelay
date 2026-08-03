@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 
+	"ai-proxy/internal/pkg/chatattachment"
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/gabriel-vasile/mimetype"
 )
@@ -59,6 +60,42 @@ func (c *Client) UploadImage(data []byte, fileName string) (ImageReference, erro
 	}
 	metadata.FileID = created.FileID
 	return metadata, nil
+}
+
+func (c *Client) UploadAttachment(file chatattachment.File) (ImageReference, error) {
+	validated, err := chatattachment.Validate(file.Bytes, file.Name, file.ContentType)
+	if err != nil {
+		return ImageReference{}, fmt.Errorf("file upload: %w", err)
+	}
+	createPayload, err := json.Marshal(map[string]any{
+		"file_name": validated.Name,
+		"file_size": len(validated.Bytes),
+		"use_case":  "multimodal",
+	})
+	if err != nil {
+		return ImageReference{}, fmt.Errorf("encode file upload create: %w", err)
+	}
+	createBody, err := c.postJSON("/backend-api/files", string(createPayload), "file_upload_create")
+	if err != nil {
+		return ImageReference{}, err
+	}
+	var created struct {
+		FileID    string `json:"file_id"`
+		UploadURL string `json:"upload_url"`
+	}
+	if err := json.Unmarshal(createBody, &created); err != nil {
+		return ImageReference{}, fmt.Errorf("decode file upload create: %w", err)
+	}
+	if strings.TrimSpace(created.FileID) == "" || !isHTTPURL(created.UploadURL) {
+		return ImageReference{}, fmt.Errorf("file upload create: missing file_id or upload_url")
+	}
+	if err := c.putUpload(created.UploadURL, validated.Bytes, validated.ContentType); err != nil {
+		return ImageReference{}, err
+	}
+	if _, err := c.postJSON("/backend-api/files/"+created.FileID+"/uploaded", "{}", "file_upload_confirm"); err != nil {
+		return ImageReference{}, err
+	}
+	return ImageReference{FileID: created.FileID, FileName: validated.Name, FileSize: int64(len(validated.Bytes)), MIMEType: validated.ContentType}, nil
 }
 
 func (c *Client) putUpload(uploadURL string, data []byte, mimeType string) error {

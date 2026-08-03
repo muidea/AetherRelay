@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-proxy/internal/pkg/chatattachment"
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/google/uuid"
 )
@@ -27,6 +28,7 @@ type TextMessage struct {
 	Role    string
 	Content string
 	Images  [][]byte
+	Files   []chatattachment.File
 }
 
 type TextRequest struct {
@@ -118,17 +120,25 @@ func validateTextRequest(request TextRequest) error {
 	if len(request.Messages) == 0 || len(request.Messages) > maxTextMessages {
 		return fmt.Errorf("messages must contain between 1 and %d items", maxTextMessages)
 	}
+	fileCount, fileBytes := 0, 0
 	for index, message := range request.Messages {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
 		if role != "system" && role != "user" && role != "assistant" {
 			return fmt.Errorf("message %d has unsupported role", index+1)
 		}
 		content := strings.TrimSpace(message.Content)
-		if content == "" && len(message.Images) == 0 {
+		if content == "" && len(message.Images) == 0 && len(message.Files) == 0 {
 			return fmt.Errorf("message %d content is required", index+1)
 		}
 		if len(content) > maxTextContentBytes {
 			return fmt.Errorf("message %d content exceeds %d KiB", index+1, maxTextContentBytes>>10)
+		}
+		for _, file := range message.Files {
+			fileCount++
+			fileBytes += len(file.Bytes)
+			if fileCount > chatattachment.MaxFileCount || fileBytes > chatattachment.MaxFileBytes {
+				return fmt.Errorf("file attachments exceed request limits")
+			}
 		}
 	}
 	return nil
@@ -150,6 +160,13 @@ func (c *Client) prepareTextMessages(messages []TextMessage) ([]preparedTextMess
 			}
 			item.References = append(item.References, reference)
 		}
+		for fileIndex, file := range message.Files {
+			reference, err := c.UploadAttachment(file)
+			if err != nil {
+				return nil, fmt.Errorf("upload chat attachment %d/%d: %w", index+1, fileIndex+1, err)
+			}
+			item.References = append(item.References, reference)
+		}
 		prepared = append(prepared, item)
 	}
 	return prepared, nil
@@ -166,7 +183,11 @@ func textConversationPayload(request TextRequest, inputs []preparedTextMessage) 
 			parts := make([]any, 0, len(input.References)+1)
 			attachments := make([]textAttachment, 0, len(input.References))
 			for _, ref := range input.References {
-				parts = append(parts, textImagePart{ContentType: "image_asset_pointer", AssetPointer: "file-service://" + ref.FileID, Width: ref.Width, Height: ref.Height, SizeBytes: ref.FileSize})
+				if ref.Width > 0 && ref.Height > 0 {
+					parts = append(parts, textImagePart{ContentType: "image_asset_pointer", AssetPointer: "file-service://" + ref.FileID, Width: ref.Width, Height: ref.Height, SizeBytes: ref.FileSize})
+				} else {
+					parts = append(parts, textFilePart{ContentType: "file_asset_pointer", AssetPointer: "file-service://" + ref.FileID, Name: ref.FileName, MIMEType: ref.MIMEType, SizeBytes: ref.FileSize})
+				}
 				attachments = append(attachments, textAttachment{ID: ref.FileID, MIMEType: ref.MIMEType, Name: ref.FileName, Size: ref.FileSize, Width: ref.Width, Height: ref.Height})
 			}
 			if input.Content != "" {
@@ -225,6 +246,13 @@ type textImagePart struct {
 	AssetPointer string `json:"asset_pointer"`
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
+	SizeBytes    int64  `json:"size_bytes"`
+}
+type textFilePart struct {
+	ContentType  string `json:"content_type"`
+	AssetPointer string `json:"asset_pointer"`
+	Name         string `json:"name"`
+	MIMEType     string `json:"mime_type"`
 	SizeBytes    int64  `json:"size_bytes"`
 }
 type textAttachment struct {

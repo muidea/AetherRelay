@@ -90,13 +90,13 @@ func TestParseTextSSEEmitsSnapshotDeltas(t *testing.T) {
 }
 
 func TestTextConversationPayloadUsesFileServicePointers(t *testing.T) {
-	payload := textConversationPayload(TextRequest{Model: "auto"}, []preparedTextMessage{{Role: "user", Content: "describe", References: []ImageReference{{FileID: "file_123", FileName: "source.png", FileSize: 10, MIMEType: "image/png", Width: 2, Height: 3}}}})
+	payload := textConversationPayload(TextRequest{Model: "auto"}, []preparedTextMessage{{Role: "user", Content: "describe", References: []ImageReference{{FileID: "file_123", FileName: "source.png", FileSize: 10, MIMEType: "image/png", Width: 2, Height: 3}, {FileID: "file_456", FileName: "notes.md", FileSize: 7, MIMEType: "text/markdown"}}}})
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	encoded := string(body)
-	if !strings.Contains(encoded, `"content_type":"multimodal_text"`) || !strings.Contains(encoded, `"asset_pointer":"file-service://file_123"`) || !strings.Contains(encoded, `"attachments":[`) || !strings.Contains(encoded, `"describe"`) {
+	if !strings.Contains(encoded, `"content_type":"multimodal_text"`) || !strings.Contains(encoded, `"asset_pointer":"file-service://file_123"`) || !strings.Contains(encoded, `"content_type":"file_asset_pointer"`) || !strings.Contains(encoded, `"asset_pointer":"file-service://file_456"`) || !strings.Contains(encoded, `"attachments":[`) || !strings.Contains(encoded, `"describe"`) {
 		t.Fatalf("payload=%s", encoded)
 	}
 }

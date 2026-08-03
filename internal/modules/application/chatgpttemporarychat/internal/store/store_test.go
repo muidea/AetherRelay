@@ -8,6 +8,7 @@ import (
 
 	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
 	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"ai-proxy/internal/pkg/chatattachment"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -24,6 +25,35 @@ func openTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+func TestStartTurnPersistsAndOwnerScopesFileAttachments(t *testing.T) {
+	s := openTestStore(t)
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := s.StartTurnWithAttachments("admin", created.ID, "", nil, []chatattachment.File{{Name: "notes.md", ContentType: "text/markdown", Bytes: []byte("# hello")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Conversation.Title != "附件对话" || len(started.Files) != 1 || len(started.UserMessage.Attachments) != 1 {
+		t.Fatalf("started=%+v", started)
+	}
+	attachmentID := started.UserMessage.Attachments[0].ID
+	stored, found, err := s.GetMessageAttachment("admin", created.ID, started.UserMessage.ID, attachmentID)
+	if err != nil || !found || stored.FileName != "notes.md" || stored.ContentType != "text/markdown" || string(stored.Bytes) != "# hello" {
+		t.Fatalf("attachment=%+v found=%v err=%v", stored, found, err)
+	}
+	if _, found, err := s.GetMessageAttachment("other-admin", created.ID, started.UserMessage.ID, attachmentID); err != nil || found {
+		t.Fatalf("cross-owner attachment access found=%v err=%v", found, err)
+	}
+	if err := s.DeleteConversation("admin", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := s.GetMessageAttachment("admin", created.ID, started.UserMessage.ID, attachmentID); err != nil || found {
+		t.Fatalf("deleted attachment found=%v err=%v", found, err)
+	}
 }
 
 func TestCreateListGetAndDeleteConversation(t *testing.T) {

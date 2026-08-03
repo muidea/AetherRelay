@@ -17,3 +17,11 @@ func TestSanitizeArchiveBodyRedactsImageDataAndB64JSON(t *testing.T) {
 		t.Fatalf("sanitized SSE=%s", got)
 	}
 }
+
+func TestSanitizeArchiveBodyRedactsFileData(t *testing.T) {
+	body := []byte(`{"input":[{"content":[{"type":"input_file","filename":"notes.md","file_data":"data:text/markdown;base64,IyBzZWNyZXQ="}]}]}`)
+	sanitized := string(sanitizeArchiveBody(body))
+	if strings.Contains(sanitized, "IyBzZWNyZXQ=") || !strings.Contains(sanitized, `"redacted_attachment":true`) || !strings.Contains(sanitized, `"mime_type":"text/markdown"`) {
+		t.Fatalf("sanitized=%s", sanitized)
+	}
+}

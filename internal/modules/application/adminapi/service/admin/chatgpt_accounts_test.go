@@ -166,6 +166,9 @@ func (s *chatGPTAccountRuntimeStub) GetTemporaryConversation(_ context.Context, 
 func (s *chatGPTAccountRuntimeStub) GetTemporaryMessageImage(context.Context, tempevents.GetMessageImageCommand) (tempevents.GetMessageImageResult, error) {
 	return tempevents.GetMessageImageResult{Bytes: []byte{0x89, 0x50, 0x4e, 0x47}, ContentType: "image/png"}, nil
 }
+func (s *chatGPTAccountRuntimeStub) GetTemporaryMessageAttachment(context.Context, tempevents.GetMessageAttachmentCommand) (tempevents.GetMessageAttachmentResult, error) {
+	return tempevents.GetMessageAttachmentResult{}, nil
+}
 func (s *chatGPTAccountRuntimeStub) StartTemporaryTurn(_ context.Context, command tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
 	s.temporaryTurn = command
 	return tempevents.StartTurnResult{Conversation: tempevents.ConversationView{ID: command.ConversationID}, UserMessage: tempevents.MessageView{ID: "message-1", Content: command.Content}, AssistantMessage: tempevents.MessageView{ID: "turn-1"}, TurnID: "turn-1"}, nil

@@ -1950,6 +1950,20 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 	if apiErr != nil {
 		return nil, apiErr
 	}
+	if r != nil {
+		if requireFiles, _ := r.Context().Value(featureFileAttachmentsKey{}).(bool); requireFiles {
+			filtered := plans[:0]
+			for _, plan := range plans {
+				if transportSupportsFileAttachments(plan) {
+					filtered = append(filtered, plan)
+				}
+			}
+			plans = filtered
+			if len(plans) == 0 {
+				return nil, &APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("model %q has no provider supporting file attachments", model), Model: model, ClientEndpoint: path}
+			}
+		}
+	}
 	if h.metricsRegistry == nil {
 		return plans, nil
 	}

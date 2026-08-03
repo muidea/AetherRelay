@@ -163,6 +163,14 @@ func TestChatGPTWebResponsesProjectsBoundedInputAndSSE(t *testing.T) {
 		t.Fatalf("request=%+v", received)
 	}
 
+	req = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":[{"type":"message","role":"user","content":[{"type":"input_file","filename":"notes.md","file_data":"data:text/markdown;base64,IyBoZWxsbw=="}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-client-key")
+	resp = httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || len(received.Messages) != 1 || len(received.Messages[0].Files) != 1 || received.Messages[0].Files[0].Name != "notes.md" || string(received.Messages[0].Files[0].Bytes) != "# hello" {
+		t.Fatalf("status=%d request=%+v body=%s", resp.Code, received, resp.Body.String())
+	}
+
 	req = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","stream":true,"input":"say hello"}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp = httptest.NewRecorder()
@@ -172,7 +180,7 @@ func TestChatGPTWebResponsesProjectsBoundedInputAndSSE(t *testing.T) {
 			t.Fatalf("missing %s in %s", eventType, resp.Body.String())
 		}
 	}
-	if events := usageEvents(t, store); len(events) != 2 {
+	if events := usageEvents(t, store); len(events) != 3 {
 		t.Fatalf("usage=%+v", events)
 	} else {
 		foundStream := false

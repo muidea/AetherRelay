@@ -137,6 +137,9 @@ func sanitizeArchiveValue(value any, key string) (any, bool) {
 		if summary, ok := summarizeDataImageURL(typed); ok {
 			return summary, true
 		}
+		if summary, ok := summarizeDataAttachmentURL(typed); ok {
+			return summary, true
+		}
 		if isRawImageField(key) {
 			if summary, ok := summarizeRawImageBase64(typed); ok {
 				return summary, true
@@ -144,6 +147,30 @@ func sanitizeArchiveValue(value any, key string) (any, bool) {
 		}
 	}
 	return value, false
+}
+
+func summarizeDataAttachmentURL(value string) (map[string]any, bool) {
+	trimmed := strings.TrimSpace(value)
+	header, encoded, ok := strings.Cut(trimmed, ",")
+	lowerHeader := strings.ToLower(header)
+	if !ok || !strings.HasPrefix(lowerHeader, "data:") || !strings.Contains(lowerHeader, ";base64") {
+		return nil, false
+	}
+	mimeType := strings.TrimPrefix(strings.Split(lowerHeader, ";")[0], "data:")
+	decoded, err := decodeArchiveBase64(encoded)
+	valueBytes := decoded
+	if err != nil {
+		valueBytes = []byte(trimmed)
+	}
+	digest := sha256.Sum256(valueBytes)
+	summary := map[string]any{"redacted_attachment": true, "mime_type": mimeType, "sha256": hex.EncodeToString(digest[:])}
+	if err == nil {
+		summary["byte_count"] = len(decoded)
+	} else {
+		summary["encoded_byte_count"] = len(trimmed)
+		summary["decode_error"] = "invalid_base64"
+	}
+	return summary, true
 }
 
 func isRawImageField(key string) bool {

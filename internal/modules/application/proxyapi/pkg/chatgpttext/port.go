@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"ai-proxy/internal/pkg/chatattachment"
 )
 
 type Message struct {
@@ -16,6 +17,7 @@ type Message struct {
 	// Images contains validated, decoded image bytes from OpenAI-compatible
 	// image_url data-URI parts. The HTTP boundary never fetches remote URLs.
 	Images [][]byte
+	Files  []chatattachment.File
 }
 
 type Request struct {

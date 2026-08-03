@@ -251,7 +251,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 	}
 	messages := make([]upclient.TextMessage, 0, len(cmd.Messages))
 	for _, message := range cmd.Messages {
-		messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images})
+		messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images, Files: message.Files})
 	}
 	completed, err := s.completeText(client, upclient.TextRequest{
 		Model:           cmd.Model,
@@ -324,7 +324,7 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 	if err == nil {
 		messages := make([]upclient.TextMessage, 0, len(cmd.Messages))
 		for _, message := range cmd.Messages {
-			messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images})
+			messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images, Files: message.Files})
 		}
 		final, err = client.StreamText(ctx, upclient.TextRequest{
 			Model:           cmd.Model,

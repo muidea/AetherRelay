@@ -353,6 +353,18 @@ func (s *Admin) GetTemporaryMessageImage(ctx context.Context, cmd tempevents.Get
 	return result, nil
 }
 
+func (s *Admin) GetTemporaryMessageAttachment(ctx context.Context, cmd tempevents.GetMessageAttachmentCommand) (tempevents.GetMessageAttachmentResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicGetAttachment, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
+	if err != nil {
+		return tempevents.GetMessageAttachmentResult{}, fmt.Errorf("%s", errMessage(err, "temporary message attachment unavailable"))
+	}
+	out, ok := value.(tempevents.GetMessageAttachmentResult)
+	if !ok {
+		return tempevents.GetMessageAttachmentResult{}, fmt.Errorf("invalid temporary message attachment result")
+	}
+	return out, nil
+}
+
 func (s *Admin) StartTemporaryTurn(ctx context.Context, cmd tempevents.StartTurnCommand) (tempevents.StartTurnResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(tempevents.TopicStartTurn, s.ID(), tempcommon.UnitID, event.NewHeader(), ctx, cmd)).Get()
 	if err != nil {

@@ -1,7 +1,10 @@
 // Package events defines the ChatGPT Web upstream owner's typed EventHub contract.
 package events
 
-import "ai-proxy/internal/pkg/chatgpttokenusage"
+import (
+	"ai-proxy/internal/pkg/chatattachment"
+	"ai-proxy/internal/pkg/chatgpttokenusage"
+)
 
 const (
 	TopicGetUserInfo   = "aiproxy.chatgpt.webupstream.command.get_user_info"
@@ -127,6 +130,7 @@ type TextMessage struct {
 	Role    string
 	Content string
 	Images  [][]byte
+	Files   []chatattachment.File
 }
 
 type CompleteTextCommand struct {

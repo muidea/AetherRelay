@@ -7,9 +7,11 @@ import (
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxyusage"
+	"ai-proxy/internal/pkg/chatattachment"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 )
 
@@ -58,6 +60,23 @@ func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
 	}
 	if len(catalog.ImageEditModels) != 1 || catalog.ImageEditModels[0].ID != "image-model" {
 		t.Fatalf("image edit models=%+v", catalog.ImageEditModels)
+	}
+}
+
+func TestExecuteFeatureTextSendsFilesThroughResponses(t *testing.T) {
+	var received chatgpttext.Request
+	exec := chatGPTTextExecutorStub{complete: func(_ context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
+		received = request
+		return chatgpttext.Result{Text: "done", ActualModel: "gpt-5"}, nil
+	}}
+	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), exec)
+	catalog := h.FeatureCatalog(context.Background())
+	if len(catalog.TextModels) != 1 || len(catalog.TextModels[0].Providers) != 1 || !catalog.TextModels[0].Providers[0].SupportsFiles {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+	out, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{OwnerID: "owner", Model: "gpt-5", Messages: []proxyevents.FeatureTextMessage{{Role: "user", Files: []chatattachment.File{{Name: "notes.md", ContentType: "text/markdown", Bytes: []byte("# hello")}}}}})
+	if err != nil || out.Text != "done" || len(received.Messages) != 1 || len(received.Messages[0].Files) != 1 || received.Messages[0].Files[0].Name != "notes.md" {
+		t.Fatalf("out=%+v received=%+v err=%v", out, received, err)
 	}
 }
 
