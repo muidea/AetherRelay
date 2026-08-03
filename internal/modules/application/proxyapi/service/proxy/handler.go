@@ -118,7 +118,6 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	for id, key := range h.cfg.ClientAPIKeys {
 		cfg.ClientAPIKeys[id] = key
 	}
-	cfg.CodexOAuth.Models = append([]string(nil), h.cfg.CodexOAuth.Models...)
 	return cfg
 }
 

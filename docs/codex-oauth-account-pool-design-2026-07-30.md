@@ -33,6 +33,6 @@ Admin / Proxy HTTP adapter
 ## 配置与运维
 
 - `codex_oauth.enabled`、`refresh_account_interval_minute` 在启动期决定 Block 生命周期，修改后重启。
-- `models` 是可选精确 allowlist；留空时有效目录由健康账号的模型快照并集生成，设置时仅发布命中 allowlist 的已发现模型。静态 Provider 的同名模型优先。
+- 有效目录始终由健康账号的模型快照并集生成；静态 Provider 的同名模型优先。
 - 定时 refresh 只处理已有可解析到期时间、且将在 5 分钟内过期的正常账号；无 expiry 的导入凭据由实际 401 驱动刷新。
 - Admin 的 `/api/codex/**` 和「账号池 / Codex OAuth」页面支持脱敏列表、模型缓存/发现进度、额度观察、JSON 导入、批量 refresh/delete 与 PKCE OAuth。内建 Provider 的可用性单元直接显示不可用原因、可路由账号数和模型数。图片任务、图片库和历史对话归入「功能集」。callback、token、account ID、proxy 不会回显或写入 Web Storage。

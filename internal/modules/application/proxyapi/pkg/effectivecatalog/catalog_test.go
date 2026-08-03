@@ -88,7 +88,7 @@ func TestBuiltinProviderViewCapabilities(t *testing.T) {
 
 func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) {
 	cfg := config.Config{
-		CodexOAuth: config.CodexOAuthConfig{Enabled: true, Models: []string{"gpt-5.2", "gpt-5.2-codex"}},
+		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-5.2": {ID: "gpt-5.2", RouteOwner: "static", Operations: []string{config.ModelOperationChatCompletions}},
 		},
@@ -109,13 +109,16 @@ func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) 
 	}
 }
 
-func TestBuildCodexOAuthPublishesDiscoveredUnionWithoutAllowlist(t *testing.T) {
+func TestBuildCodexOAuthPublishesAllDiscoveredModels(t *testing.T) {
 	cfg := config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}
-	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 4, AvailableAccounts: 2, UpdatedAt: "2026-07-30T00:00:00Z", Models: []PoolModel{{ID: "gpt-5.3-codex", OwnedBy: "openai"}}})
-	if snap.CodexOAuthProvider.Status != StatusReady || snap.CodexOAuthProvider.ModelCount != 1 || snap.CodexOAuthVersion != 4 {
+	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 4, AvailableAccounts: 2, UpdatedAt: "2026-07-30T00:00:00Z", Models: []PoolModel{{ID: "gpt-5.3-codex", OwnedBy: "openai"}, {ID: "gpt-5.3-codex-mini", OwnedBy: "openai"}}})
+	if snap.CodexOAuthProvider.Status != StatusReady || snap.CodexOAuthProvider.ModelCount != 2 || snap.CodexOAuthVersion != 4 {
 		t.Fatalf("Codex provider=%+v version=%d", snap.CodexOAuthProvider, snap.CodexOAuthVersion)
 	}
 	if route, ok := snap.Lookup("gpt-5.3-codex"); !ok || route.RouteOwner != CodexOAuthProviderID || route.OwnedBy != "openai" {
+		t.Fatalf("Codex discovered route=%+v ok=%v", route, ok)
+	}
+	if route, ok := snap.Lookup("gpt-5.3-codex-mini"); !ok || route.RouteOwner != CodexOAuthProviderID || route.OwnedBy != "openai" {
 		t.Fatalf("Codex discovered route=%+v ok=%v", route, ok)
 	}
 }

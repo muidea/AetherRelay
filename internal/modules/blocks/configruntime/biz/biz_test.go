@@ -20,12 +20,3 @@ func TestValidateHotReloadRejectsLifecycleChanges(t *testing.T) {
 		t.Fatalf("ChatGPT enable transition error = %v", err)
 	}
 }
-
-func TestValidateHotReloadAllowsCodexModelCatalogChange(t *testing.T) {
-	current := config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true, Models: []string{"gpt-5.2"}}}
-	next := current
-	next.CodexOAuth.Models = []string{"gpt-5.2", "gpt-5.2-codex"}
-	if err := validateHotReload(current, next); err != nil {
-		t.Fatalf("model list should be hot-reloadable: %v", err)
-	}
-}

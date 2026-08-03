@@ -64,7 +64,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 路由与协议合同（核心）
 
-`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效目录 = 静态 `model_catalog` ∪ 两个账号池各自的有效模型快照并集；静态同名 exact 冲突时优先。Codex 的 `models` 配置是可选 allowlist，不是上游模型事实来源。`/v1/models` 与 `ResolveTransportPlan` 必须读同一 `effectivecatalog.Snapshot`。
+`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效目录 = 静态 `model_catalog` ∪ 两个账号池各自的有效模型快照并集；静态同名 exact 冲突时优先。Codex 不提供模型 allowlist，账号发现快照是其唯一模型权威。`/v1/models` 与 `ResolveTransportPlan` 必须读同一 `effectivecatalog.Snapshot`。
 
 
 

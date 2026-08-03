@@ -57,8 +57,7 @@ type Snapshot struct {
 	BuiltinProvider BuiltinProvider
 	BuiltinModels   map[string]BuiltinModel
 	// Codex OAuth models are discovered and cached by the independent Codex
-	// account-pool owner. Configured codex_oauth.models, when present, is an
-	// optional allowlist rather than a second model authority.
+	// account-pool owner; the account-level snapshot is their only authority.
 	CodexOAuthProvider BuiltinProvider
 	CodexOAuthModels   map[string]BuiltinModel
 	// Version is the account-pool catalog generation used to build this snapshot.
@@ -177,22 +176,11 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		provider.UnavailableReason = "codex_oauth is not enabled"
 		return
 	}
-	allowlist := make(map[string]struct{}, len(cfg.CodexOAuth.Models))
-	for _, id := range cfg.CodexOAuth.Models {
-		if id = strings.TrimSpace(id); id != "" {
-			allowlist[id] = struct{}{}
-		}
-	}
 	conflicts := make([]string, 0)
 	for _, model := range catalog.Models {
 		id := strings.TrimSpace(model.ID)
 		if id == "" {
 			continue
-		}
-		if len(allowlist) > 0 {
-			if _, allowed := allowlist[id]; !allowed {
-				continue
-			}
 		}
 		entry := BuiltinModel{ID: id, Operations: []string{config.ModelOperationChatCompletions}, CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
 		if entry.OwnedBy == "" {
@@ -225,11 +213,7 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		provider.UnavailableReason = "model discovery has not completed"
 	case len(snap.CodexOAuthModels) == 0:
 		provider.Status = StatusEmpty
-		if len(allowlist) > 0 {
-			provider.UnavailableReason = "no discovered Codex models match the configured allowlist"
-		} else {
-			provider.UnavailableReason = "no discoverable Codex models"
-		}
+		provider.UnavailableReason = "no discoverable Codex models"
 	case provider.ConflictCount > 0:
 		provider.Status = StatusDegraded
 	default:

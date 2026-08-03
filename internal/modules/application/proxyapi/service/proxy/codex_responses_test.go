@@ -42,7 +42,7 @@ func (s codexResponsesExecutorStub) StreamCodexResponses(ctx context.Context, re
 
 func newCodexResponsesHandler(t *testing.T, store usage.Store, executor codexresponses.Executor) *Handler {
 	t.Helper()
-	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true, Models: []string{"gpt-5.2-codex"}}})
+	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}})
 	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(executor)
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
 	return handler

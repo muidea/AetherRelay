@@ -150,12 +150,10 @@ type ChatGPTWebConfig struct {
 	TemporaryChat                TemporaryChatConfig
 }
 
-// CodexOAuthConfig enables the native Codex Responses account pool. Models is
-// optional: when set it restricts the discovered account-model union; when
-// empty every validated model discovered for a healthy account is eligible.
+// CodexOAuthConfig enables the native Codex Responses account pool. Its
+// routable model catalog is always derived from account-level discovery.
 type CodexOAuthConfig struct {
 	Enabled                      bool
-	Models                       []string
 	RefreshAccountIntervalMinute int
 }
 
@@ -593,8 +591,6 @@ func setCodexOAuth(cfg *Config, key, value string) error {
 			return fmt.Errorf("codex_oauth.enabled: %w", err)
 		}
 		cfg.CodexOAuth.Enabled = b
-	case "models":
-		cfg.CodexOAuth.Models = parseCSVList(value, false)
 	case "refresh_account_interval_minute":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -849,9 +845,6 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.CodexOAuth.Enabled = b
 	}
-	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_MODELS"); value != "" {
-		cfg.CodexOAuth.Models = parseCSVList(value, false)
-	}
 	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_REFRESH_ACCOUNT_INTERVAL_MINUTE"); value != "" {
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -968,7 +961,6 @@ func normalize(cfg *Config, configPath string) error {
 	cfg.InteractionDir = cfg.State.InteractionsDir()
 	cfg.InteractionRetention = cfg.State.InteractionRetention
 	cfg.ChatGPTWeb.DataDir = cfg.State.Dir
-	cfg.CodexOAuth.Models = normalizeModelPatterns(cfg.CodexOAuth.Models)
 	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
 	if err := normalizeClientAPIKeys(cfg); err != nil {
 		return err
@@ -2110,17 +2102,6 @@ func validateChatGPTWeb(web ChatGPTWebConfig) error {
 func validateCodexOAuth(codex CodexOAuthConfig) error {
 	if codex.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("codex_oauth.refresh_account_interval_minute must be >= 0")
-	}
-	if !codex.Enabled {
-		return nil
-	}
-	for _, model := range codex.Models {
-		if strings.TrimSpace(model) == "" || strings.Contains(model, "*") {
-			return fmt.Errorf("codex_oauth.models must contain exact model ids")
-		}
-		if err := validateModelCatalogID(model); err != nil {
-			return fmt.Errorf("codex_oauth.models: %w", err)
-		}
 	}
 	return nil
 }

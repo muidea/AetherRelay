@@ -129,7 +129,6 @@ func TestLoadAllowsCodexOAuthAsOnlyProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 codex_oauth:
   enabled: true
-  models: gpt-5.2, gpt-5.2-codex
   refresh_account_interval_minute: 15
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -138,7 +137,7 @@ codex_oauth:
 	if err != nil {
 		t.Fatalf("Load codex-oauth-only config: %v", err)
 	}
-	if !cfg.CodexOAuth.Enabled || cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || len(cfg.CodexOAuth.Models) != 2 || len(cfg.Providers) != 0 {
+	if !cfg.CodexOAuth.Enabled || cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || len(cfg.Providers) != 0 {
 		t.Fatalf("config=%+v", cfg)
 	}
 }
@@ -155,8 +154,23 @@ codex_oauth:
 	if err != nil {
 		t.Fatalf("Load Codex OAuth discovery config: %v", err)
 	}
-	if !cfg.CodexOAuth.Enabled || len(cfg.CodexOAuth.Models) != 0 || len(cfg.Providers) != 0 {
+	if !cfg.CodexOAuth.Enabled || len(cfg.Providers) != 0 {
 		t.Fatalf("config=%+v", cfg)
+	}
+}
+
+func TestLoadRejectsRemovedCodexOAuthModelsConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+codex_oauth:
+  enabled: true
+  models: gpt-5.2-codex
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), `codex_oauth: unknown key "models"`) {
+		t.Fatalf("Load error=%v, want removed models config rejection", err)
 	}
 }
 
