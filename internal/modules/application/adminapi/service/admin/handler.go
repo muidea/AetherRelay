@@ -112,6 +112,11 @@ type featureSearchHistoryRuntime interface {
 
 type codexAvailability interface{ CodexOAuthEnabled() bool }
 
+type systemMetadataRuntime interface {
+	SystemVersion() string
+	SystemStartedAt() time.Time
+}
+
 type Handler struct {
 	configPath      string
 	runtime         RuntimeConfig
@@ -120,6 +125,7 @@ type Handler struct {
 	auth            *authState
 	chatGPT         ChatGPTRuntime
 	codex           CodexRuntime
+	startedAt       time.Time
 	updateMu        sync.Mutex
 }
 
@@ -189,7 +195,7 @@ type updateRequest struct {
 }
 
 func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
-	h := &Handler{configPath: configPath, runtime: runtime}
+	h := &Handler{configPath: configPath, runtime: runtime, startedAt: time.Now().UTC()}
 	if runtime != nil {
 		h.auth = newAuthState(runtime.ConfigSnapshot().AdminAuth)
 	} else {
@@ -270,6 +276,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case rel == "/api/system/info" && r.Method == http.MethodGet:
+		h.systemInfo(w)
 	case rel == "/api/features/models" && r.Method == http.MethodGet:
 		h.featureCatalog(w, r)
 	case rel == "/api/features/search/history" && r.Method == http.MethodGet:

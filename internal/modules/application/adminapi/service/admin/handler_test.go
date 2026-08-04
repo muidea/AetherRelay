@@ -20,9 +20,11 @@ import (
 )
 
 type testRuntime struct {
-	mu      sync.Mutex
-	cfg     config.Config
-	updates int
+	mu        sync.Mutex
+	cfg       config.Config
+	updates   int
+	version   string
+	startedAt time.Time
 }
 
 type rejectingRuntime struct{ cfg config.Config }
@@ -57,6 +59,9 @@ func (r *testRuntime) UpdateConfig(cfg config.Config) error {
 	r.updates++
 	return nil
 }
+
+func (r *testRuntime) SystemVersion() string      { return r.version }
+func (r *testRuntime) SystemStartedAt() time.Time { return r.startedAt }
 
 func writeAdminTestConfig(t *testing.T) string {
 	t.Helper()
@@ -102,11 +107,19 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)",
-		`id="featureSubChat" data-feature-sub="chat">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)",
+		`id="featureSubChat" data-feature-sub="chat" class="active">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)", `id="navSystem"`, `id="panelSystem"`, "function loadSystemInfo()", "/api/system/info",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
+	}
+	page := rec.Body.String()
+	chatIndex := strings.Index(page, `id="featureSubChat"`)
+	searchIndex := strings.Index(page, `id="featureSubSearch"`)
+	tasksIndex := strings.Index(page, `id="featureSubTasks"`)
+	imagesIndex := strings.Index(page, `id="featureSubImages"`)
+	if chatIndex < 0 || !(chatIndex < searchIndex && searchIndex < tasksIndex && tasksIndex < imagesIndex) {
+		t.Fatalf("feature tabs are not ordered chat, search, tasks, images")
 	}
 	for _, removed := range []string{"routingContent", "routingSearch", "/api/routing/models", "data-builtin-priority-save", "builtin-policy", "<th>Base URL</th>", "<th>路由策略</th>", "历史对话", "历史会话"} {
 		if strings.Contains(rec.Body.String(), removed) {
@@ -129,6 +142,41 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"source":"official"`) {
 		t.Fatalf("provider response missing official source from base_url: %s", rec.Body.String())
+	}
+}
+
+func TestSystemInfoReportsVersionRuntimeAndRegisteredEndpoints(t *testing.T) {
+	startedAt := time.Now().UTC().Add(-2 * time.Hour)
+	runtime := &testRuntime{cfg: config.Config{}, version: "v1.2.3", startedAt: startedAt}
+	handler := NewHandler("", runtime)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/system/info", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("system info status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response systemInfoResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Service.Version != "v1.2.3" || response.Runtime.UptimeSeconds < 7100 || response.Runtime.StartedAt != startedAt.Format(time.RFC3339) {
+		t.Fatalf("response=%+v", response)
+	}
+	if len(response.AccessMethods) != 3 || len(response.Endpoints) < 10 {
+		t.Fatalf("response=%+v", response)
+	}
+	foundHealth, foundResponses := false, false
+	for _, endpoint := range response.Endpoints {
+		if endpoint.Method == http.MethodGet && endpoint.Path == "/healthz" && endpoint.Authentication == "none" {
+			foundHealth = true
+		}
+		if endpoint.Method == http.MethodPost && endpoint.Path == "/v1/responses" && endpoint.Authentication == "client_api_key" {
+			foundResponses = true
+		}
+	}
+	if !foundHealth || !foundResponses {
+		t.Fatalf("endpoints=%+v", response.Endpoints)
 	}
 }
 

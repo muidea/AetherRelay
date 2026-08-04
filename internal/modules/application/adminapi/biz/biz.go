@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"time"
 
 	admincommon "ai-proxy/internal/modules/application/adminapi/pkg/common"
 	basebiz "ai-proxy/internal/modules/base/biz"
@@ -55,10 +56,12 @@ func (s *Admin) Teardown(context.Context) {
 	s.metrics = nil
 }
 
-func (s *Admin) ConfigPath() string        { return s.bootstrap.ConfigPath }
-func (s *Admin) Config() config.Config     { return s.bootstrap.Config }
-func (s *Admin) UsageStore() usage.Store   { return s.usage }
-func (s *Admin) Metrics() metricsport.Port { return s.metrics }
+func (s *Admin) ConfigPath() string         { return s.bootstrap.ConfigPath }
+func (s *Admin) Config() config.Config      { return s.bootstrap.Config }
+func (s *Admin) UsageStore() usage.Store    { return s.usage }
+func (s *Admin) Metrics() metricsport.Port  { return s.metrics }
+func (s *Admin) SystemVersion() string      { return s.bootstrap.Version }
+func (s *Admin) SystemStartedAt() time.Time { return s.bootstrap.StartedAt }
 
 func (s *Admin) ConfigSnapshot() config.Config {
 	bootstrap, err := configevents.RequestBootstrap(context.Background(), s.EventHub(), s.ID())

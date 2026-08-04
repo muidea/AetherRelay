@@ -35,7 +35,7 @@ func New(hub event.Hub, background task.BackgroundRoutine) (*ConfigRuntime, *cd.
 
 	biz := &ConfigRuntime{
 		Base:      basebiz.New(common.UnitID, hub, background),
-		bootstrap: configevents.Bootstrap{Config: bootstrap.Config, ConfigPath: bootstrap.ConfigPath},
+		bootstrap: configevents.Bootstrap{Config: bootstrap.Config, ConfigPath: bootstrap.ConfigPath, Version: bootstrap.Version, StartedAt: bootstrap.StartedAt},
 	}
 	biz.SubscribeFunc(configevents.TopicBootstrap, biz.handleBootstrap)
 	biz.SubscribeFunc(configevents.TopicActivate, biz.handleActivate)

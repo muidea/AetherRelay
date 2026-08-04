@@ -44,7 +44,7 @@ func Run(version string) int {
 	}
 	logging.ConfigureLogger(cfg.LogFormat, cfg.DebugLog)
 
-	runtime := NewRuntime(configevents.Bootstrap{Config: cfg, ConfigPath: resolvedConfigPath})
+	runtime := NewRuntime(configevents.Bootstrap{Config: cfg, ConfigPath: resolvedConfigPath, Version: version, StartedAt: time.Now().UTC()})
 	serviceCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := runtime.Startup(serviceCtx); err != nil {

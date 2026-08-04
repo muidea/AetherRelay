@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"ai-proxy/internal/modules/blocks/configruntime/pkg/common"
 	"ai-proxy/internal/pkg/aiproxyconfig"
@@ -18,6 +19,8 @@ const (
 type Bootstrap struct {
 	Config     config.Config
 	ConfigPath string
+	Version    string
+	StartedAt  time.Time
 }
 
 type BootstrapCommand struct{}

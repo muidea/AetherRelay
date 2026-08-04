@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	registrycommon "ai-proxy/internal/initiators/routeregistry/pkg/common"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
@@ -15,7 +17,7 @@ import (
 )
 
 func TestRuntimeNeedsRegisteredFrameworkComponents(t *testing.T) {
-	runtime := NewRuntime(configevents.Bootstrap{Config: testConfig(t.TempDir())})
+	runtime := NewRuntime(configevents.Bootstrap{Config: testConfig(t.TempDir()), Version: "test-version", StartedAt: time.Now().UTC().Add(-time.Minute)})
 	if err := runtime.Startup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -55,6 +57,7 @@ func assertGatewayRoutes(t *testing.T) {
 		{method: http.MethodGet, path: "/healthz", status: http.StatusOK},
 		{method: http.MethodGet, path: "/metrics", status: http.StatusOK},
 		{method: http.MethodGet, path: "/admin/", status: http.StatusOK},
+		{method: http.MethodGet, path: "/admin/api/system/info", status: http.StatusOK},
 		{method: http.MethodGet, path: "/v1/models", status: http.StatusOK},
 		{method: http.MethodPost, path: "/v1/unknown", status: http.StatusNotFound},
 	} {
@@ -66,6 +69,13 @@ func assertGatewayRoutes(t *testing.T) {
 		if rec.Code != tc.status {
 			t.Fatalf("%s %s status = %d, want %d; body=%s", tc.method, tc.path, rec.Code, tc.status, rec.Body.String())
 		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/system/info", nil)
+	req.RemoteAddr = "127.0.0.1:3000"
+	rec := httptest.NewRecorder()
+	routes.Handle(context.Background(), enginehttp.NewResponseWriter(rec), req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"version":"test-version"`) {
+		t.Fatalf("system info status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
