@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
@@ -90,6 +91,36 @@ func TestExecuteFeatureSearchUsesDedicatedSearchEndpoint(t *testing.T) {
 	out, err := h.ExecuteFeatureSearch(context.Background(), proxyevents.ExecuteFeatureSearchCommand{OwnerID: "admin", Model: "gpt-5", Query: "latest news"})
 	if err != nil || out.Provider != "chatgptweb" || out.ActualModel != "gpt-5-search" || out.Text != "Answer" || len(out.Sources) != 1 || received.Query != "latest news" {
 		t.Fatalf("out=%+v received=%+v err=%v", out, received, err)
+	}
+}
+
+func TestExecuteFeatureTextSearchIgnoresHistoricalAttachments(t *testing.T) {
+	var received chatgptsearch.Request
+	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
+		received = request
+		return chatgptsearch.Result{ActualModel: "gpt-5-search", Text: "Answer"}, nil
+	}})
+	out, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{
+		OwnerID: "admin", Model: "gpt-5", WebSearch: true,
+		Messages: []proxyevents.FeatureTextMessage{
+			{Role: "user", Content: "read this", Files: []chatattachment.File{{Name: "notes.md", ContentType: "text/markdown", Bytes: []byte("# notes")}}},
+			{Role: "assistant", Content: "Earlier answer"},
+			{Role: "user", Content: "latest news"},
+		},
+	})
+	if err != nil || out.Provider != "chatgptweb" || out.ActualModel != "gpt-5-search" || received.Query != "latest news" {
+		t.Fatalf("out=%+v received=%+v err=%v", out, received, err)
+	}
+}
+
+func TestExecuteFeatureTextSearchRejectsAttachmentsOnCurrentQuery(t *testing.T) {
+	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{})
+	_, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{
+		OwnerID: "admin", Model: "gpt-5", WebSearch: true,
+		Messages: []proxyevents.FeatureTextMessage{{Role: "user", Content: "latest news", Files: []chatattachment.File{{Name: "notes.md", ContentType: "text/markdown", Bytes: []byte("# notes")}}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "query message") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

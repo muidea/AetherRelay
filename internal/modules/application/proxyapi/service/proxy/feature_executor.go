@@ -124,26 +124,21 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 			break
 		}
 	}
-	if command.WebSearch && hasFiles {
-		return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search does not support file attachments")
-	}
 	if command.WebSearch {
-		for _, message := range command.Messages {
-			if len(message.Images) > 0 {
-				return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search does not support image attachments")
-			}
-		}
-		query := ""
+		var queryMessage *proxyevents.FeatureTextMessage
 		for index := len(command.Messages) - 1; index >= 0; index-- {
-			message := command.Messages[index]
-			if strings.EqualFold(strings.TrimSpace(message.Role), "user") && strings.TrimSpace(message.Content) != "" {
-				query = strings.TrimSpace(message.Content)
+			if strings.EqualFold(strings.TrimSpace(command.Messages[index].Role), "user") {
+				queryMessage = &command.Messages[index]
 				break
 			}
 		}
-		if query == "" {
+		if queryMessage == nil || strings.TrimSpace(queryMessage.Content) == "" {
 			return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search requires a non-empty user message")
 		}
+		if len(queryMessage.Images) > 0 || len(queryMessage.Files) > 0 {
+			return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("web search does not support attachments on the query message")
+		}
+		query := strings.TrimSpace(queryMessage.Content)
 		search, err := h.ExecuteFeatureSearch(ctx, proxyevents.ExecuteFeatureSearchCommand{OwnerID: command.OwnerID, Model: model, Query: query})
 		if err != nil {
 			return proxyevents.ExecuteFeatureTextResult{Provider: search.Provider, ActualModel: search.ActualModel}, err

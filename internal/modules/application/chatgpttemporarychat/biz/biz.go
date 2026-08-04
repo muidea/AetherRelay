@@ -329,25 +329,24 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		s.startLegacyTurn(cmd, started, result)
 		return
 	}
-	detail, err := s.store.GetConversation(cmd.OwnerID, cmd.ConversationID, nil, 200)
-	if err != nil {
-		_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "store", "failed to load conversation history")
-		result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation history"))
-		return
-	}
-	messages, err := s.buildFeatureMessages(cmd.OwnerID, cmd.ConversationID, detail, started)
-	if err != nil {
-		_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "store", "failed to load conversation attachments")
-		result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation attachments"))
-		return
-	}
+	var messages []proxyevents.FeatureTextMessage
 	if cmd.WebSearch {
-		for _, message := range messages {
-			if len(message.Images) > 0 || len(message.Files) > 0 {
-				_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "conversion_unsupported", "web search does not support image or file attachments in this conversation")
-				result.Set(nil, cd.NewError(cd.IllegalParam, "web search does not support image or file attachments in this conversation"))
-				return
-			}
+		// Forced Web search is intentionally an isolated query. Earlier temporary
+		// chat messages (including attachments) remain visible in history but are
+		// not sent to the dedicated search endpoint.
+		messages = []proxyevents.FeatureTextMessage{{Role: "user", Content: cmd.Content}}
+	} else {
+		detail, err := s.store.GetConversation(cmd.OwnerID, cmd.ConversationID, nil, 200)
+		if err != nil {
+			_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "store", "failed to load conversation history")
+			result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation history"))
+			return
+		}
+		messages, err = s.buildFeatureMessages(cmd.OwnerID, cmd.ConversationID, detail, started)
+		if err != nil {
+			_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "store", "failed to load conversation attachments")
+			result.Set(nil, cd.NewError(cd.Unexpected, "failed to load conversation attachments"))
+			return
 		}
 	}
 	timeout := s.turnTimeout
