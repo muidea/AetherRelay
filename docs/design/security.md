@@ -59,7 +59,14 @@
 - **默认 loopback-only**：`/admin`、`/metrics`、`/stats` 在认证关闭时仅 loopback；远程访问分别由 `admin_auth_enabled` 与 `metrics_remote_access` + `metrics_allowed_cidrs` 控制。
 - 未登录写接口仍需 `X-AI-Proxy-Admin: 1` 意图头；它只是浏览器请求意图的表达，可被本机进程伪造，不作身份凭据。
 - **不信任任何 forwarded header**（`X-Forwarded-For` / `X-Forwarded-Proto` 等）作身份或协议判断；不基于 RemoteAddr/CIDR 跳过认证；反向代理部署须保留外部 `Host`。
-- Provider Key 只显示"已配置"，不回显明文；日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header。
+- Provider Key 只显示“已配置”，不回显明文；日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header。
+
+## 可恢复凭据存储
+
+- Provider 完整目录、ChatGPT Web 账号和 Codex OAuth 账号以 owner-scoped 安全文档保存到 DuckDB；access token 不再作为数据库主键。
+- 安全文档使用 AES-256-GCM 和随机 nonce 加密，并将 scope 与稳定记录 ID 作为附加认证数据，防止密文跨记录替换。
+- 主密钥 `AI_PROXY_CREDENTIAL_KEY` 必须是 Base64 编码的 32 字节随机值，只从进程环境或编排 secret 注入。它不得写入 `config.yaml`、DuckDB、日志或版本库。
+- 主密钥缺失时账号池启动失败；尚无 Provider 目录的新实例只读，已有 Provider 密文的实例启动失败。密钥错误时解密明确失败，不得回退为空目录或读取明文。
 
 ## 演进记录
 

@@ -64,7 +64,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 路由与协议合同（核心）
 
-`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效模型 ID 来自 enabled Provider 的精确 `models` 与两个账号池的发现快照；同名来源保留为按优先级排序的候选。`model_metadata` 只在有效目录构建时按 exact ID 覆盖可选容量，不改变模型成员资格和候选链。`/v1/models` 与 `ResolveTransportPlans` 必须读同一 `effectivecatalog.Snapshot`。
+ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可由管理型 Provider 目录创建、不写入 YAML）；各自的 `provider_enabled` 只控制是否参与路由。有效模型 ID 来自 enabled 管理型 Provider 的精确 `models` 与两个账号池的发现快照；同名来源保留为按优先级排序的候选。`model_metadata` 只在有效目录构建时按 exact ID 覆盖可选容量，不改变模型成员资格和候选链。`/v1/models` 与 `ResolveTransportPlans` 必须读同一 `effectivecatalog.Snapshot`。
 
 
 
@@ -121,7 +121,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 可观测与落盘
 
-- `state.database`（通常为 `state.dir/state.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
+- `state.database`（通常为 `state.dir/ai-proxy.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
 - `state.dir/interactions/{round_id}/`：request/upstream/response/metadata；默认保留最近 N 轮；`archive_full_content` 可关正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
 - Prometheus 指标前缀 `ai_proxy_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
 

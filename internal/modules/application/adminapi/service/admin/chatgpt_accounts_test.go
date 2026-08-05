@@ -21,6 +21,7 @@ import (
 
 type chatGPTAccountRuntimeStub struct {
 	addedTokens        []string
+	addedAccounts      []accevents.ExportItem
 	deletedIDs         []string
 	updated            accevents.UpdateByIDCommand
 	imageBytes         []string
@@ -48,10 +49,6 @@ type chatGPTAccountRuntimeStub struct {
 	searchHistoryErr   error
 }
 
-type unavailableChatGPTRuntimeStub struct{ *chatGPTAccountRuntimeStub }
-
-func (unavailableChatGPTRuntimeStub) ChatGPTWebEnabled() bool { return false }
-
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
 	return []accevents.AccountView{{
 		ID:                         "account-1",
@@ -72,9 +69,10 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]acce
 		Proxy:                      "http://private.invalid",
 	}}, nil
 }
-func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, _ string) (accevents.AddResult, error) {
+func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, accounts []accevents.ExportItem, _ string) (accevents.AddResult, error) {
 	s.addedTokens = append([]string(nil), tokens...)
-	return accevents.AddResult{Added: len(tokens)}, nil
+	s.addedAccounts = append([]accevents.ExportItem(nil), accounts...)
+	return accevents.AddResult{Added: len(tokens) + len(accounts)}, nil
 }
 func (s *chatGPTAccountRuntimeStub) DeleteChatGPTAccounts(_ context.Context, ids []string) (accevents.DeleteResult, error) {
 	s.deletedIDs = append([]string(nil), ids...)
@@ -306,7 +304,7 @@ func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
 	}
 }
 
-func TestChatGPTAccountExportUsesCompatiblePayloadShape(t *testing.T) {
+func TestChatGPTAccountExportIsNoStoreAndImportable(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{exportedItems: []accevents.ExportItem{{
 		Type: "codex", Email: "export@example.invalid", AccountID: "account-export",
 		AccessToken: "access-export", RefreshToken: "refresh-export", IDToken: "id-export",
@@ -317,12 +315,22 @@ func TestChatGPTAccountExportUsesCompatiblePayloadShape(t *testing.T) {
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Header().Get("Content-Disposition"), "codex-accounts.json") || len(runtime.exportedIDs) != 1 || runtime.exportedIDs[0] != "account-export" {
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Header().Get("Content-Disposition"), "chatgpt-web-accounts.json") || len(runtime.exportedIDs) != 1 || runtime.exportedIDs[0] != "account-export" {
 		t.Fatalf("export status=%d headers=%v ids=%v body=%s", rec.Code, rec.Header(), runtime.exportedIDs, rec.Body.String())
 	}
-	var item accevents.ExportItem
-	if err := json.Unmarshal(rec.Body.Bytes(), &item); err != nil || item.AccessToken != "access-export" || strings.Contains(rec.Body.String(), `"items"`) {
-		t.Fatalf("export payload=%s err=%v item=%+v", rec.Body.String(), err, item)
+	var items []accevents.ExportItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil || len(items) != 1 || items[0].AccessToken != "access-export" || strings.Contains(rec.Body.String(), `"items"`) {
+		t.Fatalf("export payload=%s err=%v items=%+v", rec.Body.String(), err, items)
+	}
+
+	// The HTTP import contract uses an accounts wrapper, matching Codex.
+	importReq := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(`{"accounts":`+strings.TrimSpace(rec.Body.String())+`}`))
+	importReq.RemoteAddr = "127.0.0.1:1234"
+	importReq.Header.Set("X-AI-Proxy-Admin", "1")
+	importRec := httptest.NewRecorder()
+	handler.ServeHTTP(importRec, importReq)
+	if importRec.Code != http.StatusCreated || len(runtime.addedAccounts) != 1 || runtime.addedAccounts[0].RefreshToken != "refresh-export" || runtime.addedAccounts[0].IDToken != "id-export" {
+		t.Fatalf("import status=%d accounts=%+v body=%s", importRec.Code, runtime.addedAccounts, importRec.Body.String())
 	}
 
 	emptyHandler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(&chatGPTAccountRuntimeStub{})
@@ -333,6 +341,24 @@ func TestChatGPTAccountExportUsesCompatiblePayloadShape(t *testing.T) {
 	emptyHandler.ServeHTTP(emptyRec, emptyReq)
 	if emptyRec.Code != http.StatusBadRequest || !strings.Contains(emptyRec.Body.String(), "no complete accounts") {
 		t.Fatalf("empty export status=%d body=%s", emptyRec.Code, emptyRec.Body.String())
+	}
+}
+
+func TestChatGPTAccountImportRejectsMoreThanLimit(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	accounts := make([]accevents.ExportItem, maxAccountImportItems+1)
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(map[string]any{"accounts": accounts}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", &body)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 1000") || len(runtime.addedAccounts) != 0 {
+		t.Fatalf("status=%d accounts=%d body=%s", rec.Code, len(runtime.addedAccounts), rec.Body.String())
 	}
 }
 
@@ -402,18 +428,6 @@ func TestChatGPTImageContentEndpoint(t *testing.T) {
 	nilHandler.ServeHTTP(unavailRec, unavail)
 	if unavailRec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("nil runtime should 503, got %d %s", unavailRec.Code, unavailRec.Body.String())
-	}
-}
-
-func TestChatGPTAdminReturnsUnavailableWhenFeatureDisabled(t *testing.T) {
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(unavailableChatGPTRuntimeStub{&chatGPTAccountRuntimeStub{}})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(`{"tokens":["redacted"]}`))
-	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "chatgpt web is not enabled") {
-		t.Fatalf("disabled feature should return 503, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

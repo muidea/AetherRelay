@@ -43,7 +43,7 @@ func (s codexResponsesExecutorStub) StreamCodexResponses(ctx context.Context, re
 
 func newCodexResponsesHandler(t *testing.T, store usage.Store, executor codexresponses.Executor) *Handler {
 	t.Helper()
-	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}})
+	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{}})
 	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(executor)
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
 	return handler
@@ -90,7 +90,7 @@ func TestCodexOAuthResponsesDoesNotServeChatCompletions(t *testing.T) {
 
 func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{
-		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
+		CodexOAuth: config.CodexOAuthConfig{},
 		Providers: map[string]config.Provider{
 			"primary": {
 				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 200,
@@ -130,7 +130,7 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 
 func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{
-		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
+		CodexOAuth: config.CodexOAuthConfig{},
 		Providers: map[string]config.Provider{
 			"backup": {
 				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 20,

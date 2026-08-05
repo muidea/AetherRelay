@@ -17,6 +17,7 @@ import (
 )
 
 func TestRuntimeNeedsRegisteredFrameworkComponents(t *testing.T) {
+	t.Setenv("AI_PROXY_CREDENTIAL_KEY", "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=")
 	runtime := NewRuntime(configevents.Bootstrap{Config: testConfig(t.TempDir()), Version: "test-version", StartedAt: time.Now().UTC().Add(-time.Minute)})
 	if err := runtime.Startup(context.Background()); err != nil {
 		t.Fatal(err)
@@ -80,5 +81,6 @@ func assertGatewayRoutes(t *testing.T) {
 }
 
 func testConfig(dir string) config.Config {
-	return config.Config{ListenAddr: "127.0.0.1:0", UsageStore: config.UsageStoreConfig{Path: filepath.Join(dir, "usage.duckdb"), MemoryLimit: "256MB", Threads: 2}, InteractionDir: filepath.Join(dir, "interactions"), InteractionRetention: 2, ClientAPIKeys: map[string]config.ClientAPIKey{"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true}}, Providers: map[string]config.Provider{}, ModelMetadata: map[string]config.ModelMetadata{}}
+	database := filepath.Join(dir, "ai-proxy.duckdb")
+	return config.Config{ListenAddr: "127.0.0.1:0", State: config.StateConfig{Dir: dir, Database: database, MemoryLimit: "256MB", Threads: 2}, UsageStore: config.UsageStoreConfig{Path: database, MemoryLimit: "256MB", Threads: 2}, InteractionDir: filepath.Join(dir, "interactions"), InteractionRetention: 2, ClientAPIKeys: map[string]config.ClientAPIKey{"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true}}, Providers: map[string]config.Provider{}, ModelMetadata: map[string]config.ModelMetadata{}}
 }

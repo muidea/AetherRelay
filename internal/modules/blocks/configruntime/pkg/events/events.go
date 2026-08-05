@@ -12,20 +12,23 @@ import (
 )
 
 const (
-	TopicBootstrap = "aiproxy.config.command.bootstrap"
-	TopicActivate  = "aiproxy.config.command.activate"
+	TopicBootstrap        = "aiproxy.config.command.bootstrap"
+	TopicActivate         = "aiproxy.config.command.activate"
+	TopicReplaceProviders = "aiproxy.config.command.replace-providers"
 )
 
 type Bootstrap struct {
-	Config     config.Config
-	ConfigPath string
-	Version    string
-	StartedAt  time.Time
+	Config                   config.Config
+	ConfigPath               string
+	Version                  string
+	StartedAt                time.Time
+	ProviderStorageAvailable bool
 }
 
 type BootstrapCommand struct{}
 type BootstrapResult struct{ Bootstrap Bootstrap }
 type ActivateCommand struct{ Config config.Config }
+type ReplaceProvidersCommand struct{ Providers map[string]config.Provider }
 
 func RequestBootstrap(ctx context.Context, hub event.Hub, source string) (Bootstrap, error) {
 	ev := event.NewEventWithContext(TopicBootstrap, source, common.UnitID, event.NewHeader(), ctx, BootstrapCommand{})
@@ -47,6 +50,12 @@ func RequestBootstrap(ctx context.Context, hub event.Hub, source string) (Bootst
 func Activate(ctx context.Context, hub event.Hub, source string, cfg config.Config) error {
 	ev := event.NewEventWithContext(TopicActivate, source, common.UnitID, event.NewHeader(), ctx, ActivateCommand{Config: cfg})
 	_, err := send(hub, ev, "config activate")
+	return err
+}
+
+func ReplaceProviders(ctx context.Context, hub event.Hub, source string, providers map[string]config.Provider) error {
+	ev := event.NewEventWithContext(TopicReplaceProviders, source, common.UnitID, event.NewHeader(), ctx, ReplaceProvidersCommand{Providers: providers})
+	_, err := send(hub, ev, "replace providers")
 	return err
 }
 

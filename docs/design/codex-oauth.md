@@ -10,10 +10,11 @@
 
 ## 账号池与模型发现
 
-- 启用 `codex_oauth.enabled`（启动期装配开关，修改需重启）后注入只读内建 Provider `codexoauth`；`codexaccountpool` 是单一凭据与模型快照 owner（`codex_oauth_accounts` 表）。
+- 进程始终注入只读内建 Provider `codexoauth`；`codexaccountpool` 是单一凭据与模型快照 owner（安全文档 scope `codex_oauth_accounts`）。
 - 模型按账号从 `GET /backend-api/codex/models` 自动发现，快照 6 小时有效；失败按账号独立指数退避（30 秒 ~ 5 分钟），仅持有有效快照的账号可被调度；可路由模型是全部健康账号快照的并集，不提供 allowlist 筛选项。
 - 每账号代理同时用于授权码换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致；管理读模型从不返回代理值。
 - 导入凭据、刷新凭据或完成 OAuth 后立即提交一次模型同步；管理页可对选中账号或全部账号执行「同步模型」并轮询进度（有界进度任务，当前进程保留 30 分钟，持久化快照才是重启后权威）。
+- 管理页可按稳定本地 ID 导出选中账号的完整凭据；导出固定返回可直接作为 `accounts` 重新导入的 JSON 数组，响应 `Cache-Control: no-store`，不进入列表、日志或浏览器持久化存储。该交互与 ChatGPT Web 账号导入/导出一致。
 
 ## 原生 Responses 代理
 
@@ -28,7 +29,7 @@
 - **额度观察**：仅上游明确 `usage_limit_reached` 才记录账号/模型级额度耗尽与上游提供的恢复时间，并驱动模型冷却；普通 429 不伪装为套餐额度。
 - 用量窗口（`GET /backend-api/wham/usage`）只保存计划类型、`used_percent`、窗口长度、恢复时间与 `allowed` / `limit_reached`，快照 15 分钟过期、刷新失败保留最后成功值；它是额度窗口观测，不改变模型路由或冷却。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 401 时刷新。
-- 静态 Provider 与 Codex 自动模型同名时都进入候选链：静态默认 `priority=100`，Codex 默认 `90`，可在安全的原生 Responses 失败场景回退。
+- 管理型 Provider 与 Codex 自动模型同名时都进入候选链：管理型默认 `priority=100`，Codex 默认 `90`，可在安全的原生 Responses 失败场景回退。
 
 ## 演进记录
 

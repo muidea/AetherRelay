@@ -10,6 +10,7 @@ const (
 	TopicRecordResult = "aiproxy.codex.accountpool.command.record_result"
 	TopicRefreshToken = "aiproxy.codex.accountpool.command.refresh_token"
 	TopicRefreshByID  = "aiproxy.codex.accountpool.command.refresh_by_id"
+	TopicExportByID   = "aiproxy.codex.accountpool.command.export_by_id"
 	TopicHealth       = "aiproxy.codex.accountpool.command.health"
 	TopicOAuthStart   = "aiproxy.codex.accountpool.command.oauth_start"
 	TopicOAuthFinish  = "aiproxy.codex.accountpool.command.oauth_finish"
@@ -161,6 +162,13 @@ type RefreshByIDResult struct {
 	Refreshed int           `json:"refreshed"`
 	Failed    int           `json:"failed"`
 	Items     []AccountView `json:"items"`
+}
+
+// ExportByID is the only deliberate secret-bearing management projection.
+// It is selected by stable local IDs and must never be used by list APIs.
+type ExportByIDCommand struct{ IDs []string }
+type ExportByIDResult struct {
+	Items []CredentialInput `json:"items"`
 }
 
 // AccountModelEntry is one authoritative model ID returned by the Codex

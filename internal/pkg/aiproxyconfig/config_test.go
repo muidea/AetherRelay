@@ -20,7 +20,7 @@ server:
   stream_idle_timeout_seconds: 900
 state:
   dir: test-state
-  database: state.duckdb
+  database: ai-proxy.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
@@ -108,11 +108,11 @@ providers:
 	}
 }
 
-func TestLoadAllowsChatGPTWebAsOnlyProvider(t *testing.T) {
+func TestLoadAllowsChatGPTWebSettingsWithoutManagedProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 chatgpt_web:
-  enabled: true
+  provider_enabled: true
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ chatgpt_web:
 	if err != nil {
 		t.Fatalf("Load chatgpt-web-only config: %v", err)
 	}
-	if !cfg.ChatGPTWeb.Enabled || len(cfg.Providers) != 0 {
+	if !EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb) || len(cfg.Providers) != 0 {
 		t.Fatalf("config=%+v", cfg)
 	}
 }
@@ -129,7 +129,6 @@ func TestLoadAllowsCodexOAuthAsOnlyProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 codex_oauth:
-  enabled: true
   refresh_account_interval_minute: 15
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -138,8 +137,22 @@ codex_oauth:
 	if err != nil {
 		t.Fatalf("Load codex-oauth-only config: %v", err)
 	}
-	if !cfg.CodexOAuth.Enabled || cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || len(cfg.Providers) != 0 {
+	if cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || len(cfg.Providers) != 0 {
 		t.Fatalf("config=%+v", cfg)
+	}
+}
+
+func TestLoadRejectsAccountPoolLifecycleSwitches(t *testing.T) {
+	for _, section := range []string{"chatgpt_web", "codex_oauth"} {
+		t.Run(section, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(section+":\n  enabled: false\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil || !strings.Contains(err.Error(), `unknown key "enabled"`) {
+				t.Fatalf("Load error=%v", err)
+			}
+		})
 	}
 }
 
@@ -147,11 +160,9 @@ func TestLoadBuiltinProviderPriorities(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 chatgpt_web:
-  enabled: true
   provider_enabled: false
   priority: 0
 codex_oauth:
-  enabled: true
   provider_enabled: true
   priority: 135
 `), 0o644); err != nil {
@@ -179,7 +190,6 @@ func TestLoadRejectsBuiltinProviderPriorityOutOfRange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 chatgpt_web:
-  enabled: true
   priority: 1001
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -193,7 +203,7 @@ func TestLoadAllowsCodexOAuthDiscoveryWithoutConfiguredModels(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 codex_oauth:
-  enabled: true
+  provider_enabled: true
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +211,7 @@ codex_oauth:
 	if err != nil {
 		t.Fatalf("Load Codex OAuth discovery config: %v", err)
 	}
-	if !cfg.CodexOAuth.Enabled || len(cfg.Providers) != 0 {
+	if !EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth) || len(cfg.Providers) != 0 {
 		t.Fatalf("config=%+v", cfg)
 	}
 }
@@ -210,7 +220,6 @@ func TestLoadRejectsRemovedCodexOAuthModelsConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 codex_oauth:
-  enabled: true
   models: gpt-5.2-codex
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1614,7 +1623,6 @@ state:
   database: proxy.duckdb
   interaction_retention: 15
 chatgpt_web:
-  enabled: true
 providers:
   local:
     protocol: openai
@@ -1628,9 +1636,6 @@ providers:
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !cfg.ChatGPTWeb.Enabled {
-		t.Fatal("chatgpt web should be enabled")
 	}
 	if got, want := cfg.State.Dir, filepath.Join(configDir, "runtime"); got != want {
 		t.Fatalf("state dir = %q, want %q", got, want)
@@ -1718,7 +1723,7 @@ func TestLoadTemporaryChatDefaultsAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	// chatgpt_web without temporary_chat block still gets design defaults.
-	if err := os.WriteFile(path, []byte("chatgpt_web:\n  enabled: true\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("chatgpt_web:\n  provider_enabled: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -1732,7 +1737,6 @@ func TestLoadTemporaryChatDefaultsAndOverrides(t *testing.T) {
 
 	path2 := filepath.Join(dir, "config2.yaml")
 	body := `chatgpt_web:
-  enabled: true
   temporary_chat:
     enabled: false
     retention_days: 7
@@ -1758,7 +1762,6 @@ func TestLoadRejectsInvalidTemporaryChatRetention(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `chatgpt_web:
-  enabled: true
   temporary_chat:
     retention_days: 0
 `

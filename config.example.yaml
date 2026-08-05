@@ -70,18 +70,17 @@ server:
 # 原始图片、缩略图和交互归档保存在固定子目录。每个实例必须独占该目录。
 state:
   dir: var
-  database: state.duckdb
+  database: ai-proxy.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
   interaction_retention: 500
 
-# ChatGPT Web 账号池与图片能力。默认启用；账号凭据不写入本配置，
-# 由 Admin 管理台导入（账号池 → ChatGPT Web）。改为 false 可整体关闭。
+# ChatGPT Web 账号池与图片能力始终启用；账号凭据不写入本配置，
+# 由 Admin 管理台导入（账号池 → ChatGPT Web）。
 chatgpt_web:
-  enabled: true
   # 控制内建 Provider 是否参与模型路由；不影响账号池、图片与临时对话。
-  # 省略时跟随 enabled；Provider 管理页可热更新此项。
+  # 省略时为 true；Provider 管理页可热更新此项。
   provider_enabled: true
   # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 10。
   priority: 10
@@ -96,45 +95,27 @@ chatgpt_web:
     max_message_bytes: 262144
     turn_timeout_seconds: 300
 
-# 独立 Codex CLI OAuth 账号池。默认启用；凭据仅保存于 state.database，
+# 独立 Codex CLI OAuth 账号池始终启用；凭据仅保存于 state.database，
 # 不写入 YAML。模型按账号自动发现并缓存，健康账号快照的并集会对外发布；
-# 它们仅服务原生 POST /v1/responses。改为 false 可整体关闭。
+# 它们仅服务原生 POST /v1/responses。
 codex_oauth:
-  enabled: true
   # 控制内建 Provider 是否参与模型路由；不影响 Codex 账号池维护。
-  # 省略时跟随 enabled；Provider 管理页可热更新此项。
+  # 省略时为 true；Provider 管理页可热更新此项。
   provider_enabled: true
   # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 90。
   priority: 90
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
   refresh_account_interval_minute: 0
 
-# 静态 Provider。默认不内置任何占位 Provider：模型由 ChatGPT Web 与
-# Codex OAuth 账号池自动发现。需要直连 API 服务商时，取消注释并按需填写：
-#   - 每个 enabled provider 必须显式声明 protocol、base_url、endpoints。
-#   - 远程空 api_key 启动失败；仅 loopback 上游可设 allow_unauthenticated: true
-#     （此时不得同时配置 api_key）。
-#   - models 大小写敏感；精确条目发布模型，后缀 * pattern 只匹配由其他
-#     Provider 精确条目或账号池发现提供的具体模型 ID。
-# openai:
-#   enabled: true
-#   protocol: openai
-#   base_url: https://api.example.com/v1   # 可带或不带 /v1，代理自动去重拼接
-#   api_key: ${OPENAI_API_KEY}
-#   priority: 100                          # 范围 -1000~1000，数值越大优先级越高
-#   fallback: true                         # 是否允许作为低优先级候选的安全回退
-#   endpoints: chat_completions, responses, completions
-#   models: gpt-5.5
-# 如需 Anthropic 协议转换（/v1/messages ↔ openai chat），添加 protocol: anthropic
-# 的 provider；无需为路由额外登记 metadata。
-# chatgptweb 与 codexoauth 是保留的内建 Provider ID，禁止在 providers 中声明；
-# 分别由 chatgpt_web / codex_oauth 在运行时注入，模型来自账号池发现结果。
+# 直连 Provider 通过管理台创建；定义与 API Key 使用 AI_PROXY_CREDENTIAL_KEY
+# 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth
+# 是账号池注入的内建 Provider，模型来自账号池发现结果。
 
-# 可选模型元数据目录（静态 Provider 共用）。model ID 严格区分大小写（exact match）。
+# 可选模型元数据目录（所有 Provider 共用）。model ID 严格区分大小写（exact match）。
 # enabled provider 的精确 models 与账号池发现结果决定模型是否存在；
 # metadata 只按 exact ID 补充容量，不发布模型、不创建路由，也允许暂时未被使用。
 model_metadata:
-  # 同一份 metadata 会覆盖所有同 ID 的静态与内建候选。
+  # 同一份 metadata 会覆盖所有同 ID 的管理型与内建候选。
   DeepSeek-V4-Flash:
     context_window_tokens: 1000000
     max_output_tokens: 65536

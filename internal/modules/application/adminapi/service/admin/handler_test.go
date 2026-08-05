@@ -60,6 +60,20 @@ func (r *testRuntime) UpdateConfig(cfg config.Config) error {
 	return nil
 }
 
+func (r *testRuntime) ProviderStorageAvailable() bool { return true }
+
+func (r *testRuntime) ReplaceProviders(providers map[string]config.Provider) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next, err := config.ReplaceProviders(r.cfg, providers)
+	if err != nil {
+		return err
+	}
+	r.cfg = next
+	r.updates++
+	return nil
+}
+
 func (r *testRuntime) SystemVersion() string      { return r.version }
 func (r *testRuntime) SystemStartedAt() time.Time { return r.startedAt }
 
@@ -105,11 +119,16 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)", `id="codexAccExport"`, "/api/codex/accounts/export", "if(state.codex.busy)return;", `id="codexAccNormal"`, `id="codexAccAbnormal"`, `id="codexAccRoutable"`, "`${counts.abnormal} / ${counts.disabled}`", `id="cgImportFile"`, `id="codexImportFile"`, `accept=".json,application/json"`, "async function readAccountImport(fileID,textID)", "accountImportMaxBytes=1<<20", "accountImportMaxItems=1000",
 		`id="featureSubChat" data-feature-sub="chat" class="active">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)", `id="navSystem"`, `id="panelSystem"`, "function loadSystemInfo()", "/api/system/info",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
+		}
+	}
+	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`} {
+		if strings.Contains(rec.Body.String(), obsolete) {
+			t.Fatalf("admin page still exposes obsolete Codex statistic %q", obsolete)
 		}
 	}
 	page := rec.Body.String()
@@ -150,6 +169,9 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"source":"official"`) {
 		t.Fatalf("provider response missing official source from base_url: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"provider_writable":true`) || !strings.Contains(rec.Body.String(), `"config_writable":true`) {
+		t.Fatalf("provider response missing independent writable states: %s", rec.Body.String())
 	}
 }
 
@@ -201,7 +223,7 @@ func TestHandlerDoesNotExposeRoutingModels(t *testing.T) {
 
 func TestHandlerClassifiesProviderSources(t *testing.T) {
 	cfg := config.Config{
-		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
+		ChatGPTWeb: config.ChatGPTWebConfig{},
 		Providers: map[string]config.Provider{
 			"deepseek": {
 				Name:      "deepseek",
@@ -363,7 +385,7 @@ func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 }
 
 func TestHandlerProbesBuiltinProviderFromCatalogWithoutRecordingMetrics(t *testing.T) {
-	cfg := config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}
+	cfg := config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}
 	snapshot := effectivecatalog.Build(cfg, 1, 2, []effectivecatalog.PoolModel{{
 		ID: "gpt-5",
 	}}, "2026-08-03T12:00:00Z")
@@ -387,7 +409,7 @@ func TestHandlerProbesBuiltinProviderFromCatalogWithoutRecordingMetrics(t *testi
 	}
 }
 
-func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
+func TestHandlerUpdatesProvidersWithoutRewritingConfigAndHotReloads(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
 	cfg, err := config.Load(path)
@@ -423,11 +445,8 @@ func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "${ADMIN_TEST_API_KEY}") {
-		t.Fatalf("raw API key expression was not preserved:\n%s", raw)
-	}
-	if !strings.Contains(string(raw), "priority: 0") {
-		t.Fatalf("explicit zero priority was not persisted:\n%s", raw)
+	if !strings.Contains(string(raw), "${ADMIN_TEST_API_KEY}") || strings.Contains(string(raw), "gateway.example.com") || strings.Contains(string(raw), "priority: 0") {
+		t.Fatalf("Provider update unexpectedly rewrote config.yaml:\n%s", raw)
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
@@ -449,11 +468,9 @@ func TestHandlerUpdatesBuiltinProviderRoutingPolicy(t *testing.T) {
 	}
 	raw = append(raw, []byte(`
 chatgpt_web:
-  enabled: true
   provider_enabled: true
   priority: 10
 codex_oauth:
-  enabled: true
   provider_enabled: true
   priority: 90
 `)...)
@@ -497,7 +514,7 @@ codex_oauth:
 	}
 }
 
-func TestHandlerListsDisabledBuiltinProviders(t *testing.T) {
+func TestHandlerListsAlwaysAssembledBuiltinProviders(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
 	cfg, err := config.Load(path)
@@ -524,7 +541,7 @@ func TestHandlerListsDisabledBuiltinProviders(t *testing.T) {
 	}
 	for _, id := range []string{"chatgptweb", "codexoauth"} {
 		provider, ok := got[id]
-		if !ok || !provider.Builtin || provider.Enabled || provider.Availability.Status != "disabled" {
+		if !ok || !provider.Builtin || !provider.Enabled || provider.Availability.Status != "unavailable" {
 			t.Fatalf("builtin %s = %+v, present=%t", id, provider, ok)
 		}
 	}
@@ -710,7 +727,7 @@ func TestHandlerAllowsProviderChangeThatLeavesUnusedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(before, after) {
-		t.Fatal("valid update did not replace config file")
+	if !bytes.Equal(before, after) {
+		t.Fatal("managed Provider update rewrote config.yaml")
 	}
 }

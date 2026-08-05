@@ -8,7 +8,7 @@ import (
 )
 
 func TestImageTasksPersistInOwnerTable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.duckdb")
+	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
 	s := New(path)
 	defer s.Close()
 	if _, created, err := s.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "", "auto"); err != nil || !created {
@@ -26,7 +26,7 @@ func TestImageTasksPersistInOwnerTable(t *testing.T) {
 }
 
 func TestRetryGenerationResetsOnlyPreConversationGeneration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.duckdb")
+	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
 	s := New(path)
 	defer s.Close()
 	if _, created, err := s.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "1024x1024", "high"); err != nil || !created {
@@ -47,7 +47,7 @@ func TestRetryGenerationResetsOnlyPreConversationGeneration(t *testing.T) {
 }
 
 func TestListUsesStableNewestFirstOrder(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "state.duckdb"))
+	s := New(filepath.Join(t.TempDir(), "ai-proxy.duckdb"))
 	defer s.Close()
 	for _, id := range []string{"task-b", "task-a"} {
 		if _, created, err := s.GetOrCreateGeneration("owner", id, "prompt", "gpt-image-2", "", ""); err != nil || !created {

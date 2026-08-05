@@ -11,7 +11,7 @@ import (
 func TestModelSnapshotPersistenceAndCatalogUnion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "accounts.json")
-	s := New(path, 2)
+	s := New(path, 2, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-text", "token-image"}, "web"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestModelSnapshotPersistenceAndCatalogUnion(t *testing.T) {
 	}
 
 	// Reload from disk and ensure snapshots survive.
-	reloaded := New(path, 2)
+	reloaded := New(path, 2, encryptedTestCodec(t))
 	if reloaded.CatalogVersion() != 0 {
 		// version is process-local; only snapshots are durable.
 	}
@@ -81,7 +81,7 @@ func TestModelSnapshotPersistenceAndCatalogUnion(t *testing.T) {
 
 func TestAcquireFiltersByModelSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	s := New(filepath.Join(dir, "accounts.json"), 2)
+	s := New(filepath.Join(dir, "accounts.json"), 2, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a", "token-b"}, "web"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestAcquireFiltersByModelSnapshot(t *testing.T) {
 
 func TestExpiredSnapshotExcludedFromCatalogAndAcquire(t *testing.T) {
 	dir := t.TempDir()
-	s := New(filepath.Join(dir, "accounts.json"), 1)
+	s := New(filepath.Join(dir, "accounts.json"), 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-x"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestExpiredSnapshotExcludedFromCatalogAndAcquire(t *testing.T) {
 }
 
 func TestModelDiscoveryFailureBackoffOnlyDefersAffectedCandidate(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a", "token-b"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestModelDiscoveryRetryDelayIsBounded(t *testing.T) {
 }
 
 func TestCatalogVersionTracksRoutingAvailabilityChanges(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(context.Background())
 
-	tasks := store.New(filepath.Join(t.TempDir(), "state.duckdb"))
+	tasks := store.New(filepath.Join(t.TempDir(), "ai-proxy.duckdb"))
 	defer tasks.Close()
 	if _, created, err := tasks.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "", ""); err != nil || !created {
 		t.Fatalf("create task: created=%v err=%v", created, err)
@@ -59,7 +59,7 @@ func TestRunGenerationRecordsRecoveryMetadataOnFailure(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(context.Background())
 
-	tasks := store.New(filepath.Join(t.TempDir(), "state.duckdb"))
+	tasks := store.New(filepath.Join(t.TempDir(), "ai-proxy.duckdb"))
 	defer tasks.Close()
 	if _, created, err := tasks.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "", ""); err != nil || !created {
 		t.Fatalf("create task: created=%v err=%v", created, err)

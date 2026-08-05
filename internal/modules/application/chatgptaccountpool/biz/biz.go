@@ -14,6 +14,7 @@ import (
 	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
+	"ai-proxy/internal/pkg/aiproxycredential"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -58,13 +59,14 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}
-	if !bootstrap.Config.ChatGPTWeb.Enabled {
-		return newAccount(hub, background, nil, 0), nil
-	}
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "create chatgpt web data directory: "+err.Error())
 	}
-	state, err := store.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, 3)
+	credentialCodec, err := aiproxycredential.FromEnvironment()
+	if err != nil {
+		return nil, cd.NewError(cd.IllegalParam, err.Error())
+	}
+	state, err := store.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, 3, credentialCodec)
 	if err != nil {
 		return nil, cd.NewError(cd.Unexpected, "open chatgpt account state: "+err.Error())
 	}
@@ -329,12 +331,12 @@ func (s *Account) handleAdd(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid add command"))
 		return
 	}
-	added, skipped, err := s.store.Add(cmd.Tokens, cmd.SourceType)
+	added, updated, skipped, err := s.store.Import(cmd.Tokens, cmd.Accounts, cmd.SourceType)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
-	result.Set(events.AddResult{Added: added, Skipped: skipped}, nil)
+	result.Set(events.AddResult{Added: added, Updated: updated, Skipped: skipped}, nil)
 }
 
 func (s *Account) handleDelete(ev event.Event, result event.Result) {

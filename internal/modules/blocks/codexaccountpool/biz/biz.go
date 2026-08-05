@@ -19,6 +19,7 @@ import (
 	"ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
 	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
+	"ai-proxy/internal/pkg/aiproxycredential"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -64,13 +65,14 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}
-	if !bootstrap.Config.CodexOAuth.Enabled {
-		return newAccount(hub, background, nil, 0, 0), nil
-	}
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "create Codex OAuth state directory: "+err.Error())
 	}
-	st, err := store.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads)
+	credentialCodec, err := aiproxycredential.FromEnvironment()
+	if err != nil {
+		return nil, cd.NewError(cd.IllegalParam, err.Error())
+	}
+	st, err := store.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, credentialCodec)
 	if err != nil {
 		return nil, cd.NewError(cd.Unexpected, "open Codex OAuth account state: "+err.Error())
 	}
@@ -83,7 +85,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
@@ -92,6 +94,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicRecordResult, b.handleRecordResult)
 	b.SubscribeFunc(events.TopicRefreshToken, b.handleRefreshToken)
 	b.SubscribeFunc(events.TopicRefreshByID, b.handleRefreshByID)
+	b.SubscribeFunc(events.TopicExportByID, b.handleExportByID)
 	b.SubscribeFunc(events.TopicHealth, b.handleHealth)
 	b.SubscribeFunc(events.TopicOAuthStart, b.handleOAuthStart)
 	b.SubscribeFunc(events.TopicOAuthFinish, b.handleOAuthFinish)
@@ -246,7 +249,16 @@ func (s *Account) handleRefreshByID(ev event.Event, result event.Result) {
 		return
 	}
 	out := events.RefreshByIDResult{}
+	seen := make(map[string]struct{}, len(cmd.IDs))
 	for _, id := range cmd.IDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
 		refreshed, err := s.refreshToken(ev.Context(), id)
 		if err != nil || !refreshed.Refreshed {
 			out.Failed++
@@ -258,6 +270,18 @@ func (s *Account) handleRefreshByID(ev event.Event, result event.Result) {
 		}
 	}
 	result.Set(out, nil)
+}
+
+func (s *Account) handleExportByID(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.ExportByIDCommand)
+	if !ok || len(cmd.IDs) == 0 || len(cmd.IDs) > 1000 {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account export command"))
+		return
+	}
+	result.Set(events.ExportByIDResult{Items: s.store.ExportByIDs(cmd.IDs)}, nil)
 }
 
 func (s *Account) handleHealth(ev event.Event, result event.Result) {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestStorePersistsOwnerScopedHistoryAndBoundsListProjection(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "state.duckdb"), "64MB", 1, Config{RetentionDays: 30, MaxItems: 2})
+	store, err := Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "64MB", 1, Config{RetentionDays: 30, MaxItems: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestStorePersistsOwnerScopedHistoryAndBoundsListProjection(t *testing.T) {
 }
 
 func TestStoreEnforcesPerOwnerCapacity(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "state.duckdb"), "64MB", 1, Config{RetentionDays: 30, MaxItems: 1})
+	store, err := Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "64MB", 1, Config{RetentionDays: 30, MaxItems: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

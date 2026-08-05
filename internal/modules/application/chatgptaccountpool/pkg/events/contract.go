@@ -94,10 +94,12 @@ type ListResult struct {
 
 type AddCommand struct {
 	Tokens     []string
+	Accounts   []ExportItem
 	SourceType string
 }
 type AddResult struct {
 	Added   int `json:"added"`
+	Updated int `json:"updated"`
 	Skipped int `json:"skipped"`
 }
 
@@ -314,6 +316,7 @@ type ExportItem struct {
 	Expired      string `json:"expired"`
 	LastRefresh  string `json:"last_refresh"`
 	Password     string `json:"password,omitempty"`
+	Proxy        string `json:"proxy,omitempty"`
 }
 type ExportCommand struct{ AccessTokens []string }
 type ExportResult struct {

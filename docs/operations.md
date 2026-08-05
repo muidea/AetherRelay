@@ -28,7 +28,7 @@ curl http://127.0.0.1:8080/stats
 
 - 镜像发布到 GitHub Container Registry：`ghcr.io/muidea/ai-proxy`。`main` 成功构建后更新 `latest` 与 `main`，发布 `vX.Y.Z` tag 后会推送对应的 `X.Y.Z`、`X.Y` 与 Git SHA 标签；生产部署应固定到完整版本或 SHA，不要仅依赖 `latest`。每个标签同时提供 Linux `amd64` 与 `arm64` 镜像。
 - 容器内程序最终以 UID/GID `10001`（`ai-proxy`）运行。入口程序只在启动时以 root 初始化 `/var/lib/ai-proxy` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。
-- 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除该目录。配置目录包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与数据目录一起纳入主机备份策略。
+- 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图与交互归档；DuckDB 内的 Provider、ChatGPT Web 和 Codex OAuth 可恢复凭据均由外部主密钥加密。`deploy/.env` 中的 `AI_PROXY_CREDENTIAL_KEY` 必须与数据目录一起安全备份，任一丢失都无法恢复凭据。
 - 先按[备份与维护](#备份与维护)停止写入并备份，再进行跨大版本升级或迁移宿主机。不要并发运行两个容器指向同一个数据目录。
 
 ## Admin 登录安全（可选）
@@ -57,7 +57,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 - 修改密码哈希、账号或开关并成功热更新后，全部内存会话立即失效。
 - `admin_base_path` 是启动期路由；变更后必须重启进程，并同步反向代理路径规则。
 - 连续 5 次登录失败会按对端 IP 锁定 15 分钟（不信任 forwarded IP）。
-- Provider Key、客户端 Key 哈希、Admin 密码哈希与 DuckDB 文件仍需主机权限保护。
+- `AI_PROXY_CREDENTIAL_KEY`、客户端 Key 哈希、Admin 密码哈希与 DuckDB 文件仍需主机权限保护；不要把主密钥写入 `config.yaml`、数据库、日志或版本库。
 
 设计细节见[安全与认证设计](design/security.md#admin-登录可选)。
 
@@ -79,7 +79,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 
 ## Codex OAuth 用量与账号池
 
-启用 `codex_oauth.enabled` 后，进程注入只读内建 Provider `codexoauth`。它与 `chatgptweb` 是两个独立账号域：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
+进程始终注入只读内建 Provider `codexoauth`。它与 `chatgptweb` 是两个独立账号域：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
 
 | 路径 | `provider` | `api_key_id` | token |
 | --- | --- | --- | --- |
@@ -89,11 +89,11 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 - 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。导入、刷新凭据和完成 OAuth 都会提交一次立即同步；管理员也可在账号页对选中账号或全部账号执行“同步模型”，并轮询其进度。管理 API 与 Web 表格只返回稳定本地 ID、脱敏邮箱、状态、结果计数、模型缓存、模型冷却、额度观察与最近刷新状态，绝不返回 token、account ID 或代理。
 - 401 触发单飞 refresh 后只重试一次；429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。若上游明确返回 `usage_limit_reached`，账号表会记录该模型“额度耗尽”及上游提供的恢复时间；这只是运行期观察，不能当作官方剩余额度。
 - `/v1/responses` 的非流式请求在内部要求上游 SSE，并仅在 `response.completed` 事件返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。P0 不提供 realtime/WebSocket、`responses/compact` 或网页会话能力。
-- `codex_oauth.enabled`、账号定时刷新间隔是启动期 Block 生命周期设置。修改它们后重启；不要把 YAML 热更新视作账号池已装配。
+- 账号定时刷新间隔是启动期设置，修改后需重启；账号池本身始终装配。
 
 ## ChatGPT Web 内建 Provider
 
-启用 `chatgpt_web.enabled` 后，进程自动注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。禁止在 `providers` 中再声明 `protocol: chatgptweb`。
+进程始终注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。`config.yaml` 不声明任何 Provider。
 
 `chatgptweb` 的公开 `POST /v1/chat/completions` 支持纯文本 `messages[].content`，以及 OpenAI content-part 数组中的 `text` 与 `image_url`。`image_url.url` 仅接受 PNG、JPEG、GIF、WebP 的 Base64 data URI；每个请求最多 4 张、合计不超过 20 MiB，且单图像素不得超过 4000 万。代理不会下载远程 URL，因此不会为该字段打开 SSRF 通道。图片仅可用于 `user` 消息；`input_audio`、`file`、工具调用和其他未列出的 content part 会返回 `invalid_request`。
 
@@ -115,12 +115,12 @@ Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图
 - 备份/恢复 `state.database` 即包含临时对话正文；共享或外发该文件等同于泄露管理员调试输入输出，需按主机权限与备份策略保护。
 - research / deep_research 专用模型不会进入临时对话模型选择器或公开 `/v1/models`。
 
-- **账号导出**：`POST .../api/chatgpt/accounts/export` 是唯一有意返回明文 token 的接口。必须二次确认；响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图。下载后立即销毁本地副本。
+- **账号导入/导出**：ChatGPT Web 与 Codex OAuth 均可直接选择导出的 JSON 文件重新导入，也支持粘贴 `accounts` 对象数组；ChatGPT Web 另支持纯 access token 文本。文件和粘贴内容不能同时使用，限制 1 MiB、单次 1000 个账号，提交或关闭后页面会清空输入。两个导出接口是仅有的明文凭据出口，必须二次确认且响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图，下载后立即销毁本地副本。
 - **OAuth 导入**：授权 URL、callback 与 session id 只应停留在管理员当前浏览器会话的内存中；不要把它们写进 URL 书签、共享剪贴板记录或监控日志。
 - **图片删除**：图片库删除不可恢复；批量删除前确认路径列表。图片内容通过 Admin 鉴权同源端点 `GET .../api/chatgpt/images/content?path=` 读取（可选 `thumb=1`），路径经严格校验，不提供通用 `/files/**`。
 - **owner_id**：图片任务以 `owner_id` 为隔离边界。运维代提任务时必须显式指定，不要共用一个长期固定 owner 混放不同业务方的任务。
 - **失败处理**：失败任务已有 `conversation_id` 时，可使用“恢复轮询”继续读取同一上游任务；该操作不会重新提交生成，适用于轮询超时及历史版本误记为 `"<nil>"` 的记录。`bootstrap` 阶段的 TLS/超时失败尚未建立上游会话，页面会有限退避重试一次；仍失败时显示“重新提交”，以原任务参数重新发起。其它失败不提供盲目重试，避免重复生成或重复扣除额度。
-- 组件未装配时相关 API 返回 `503`；页面会显示不可用状态，这不代表“没有账号/图片”。
+- 账号池组件始终装配；若管理 API 返回 `503`，应检查模块启动错误和 DuckDB/主密钥状态，而不是通过配置开关启用。
 
 设计与页面合同见[ChatGPT Web 能力设计](design/chatgpt-web.md)。
 
@@ -170,11 +170,11 @@ Prometheus 指标均以 `ai_proxy_` 为前缀：
 ```bash
 go run ./cmd/ai-proxy-usage-import \
   -source usage.csv \
-  -database var/state.duckdb \
+  -database var/ai-proxy.duckdb \
   -api-key-id default
 ```
 
-将示例中的 `var/state.duckdb` 替换为实际的 `state.database` 完整路径。交互归档位于 `state.dir/interactions/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
+将示例中的 `var/ai-proxy.duckdb` 替换为实际的 `state.database` 完整路径。交互归档位于 `state.dir/interactions/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
 
 ## 备份与维护
 

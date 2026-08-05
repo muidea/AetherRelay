@@ -35,6 +35,10 @@ func (h *Handler) importCodexAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "accounts is required")
 		return
 	}
+	if len(body.Accounts) > maxAccountImportItems {
+		writeError(w, http.StatusBadRequest, "at most 1000 accounts may be imported at once")
+		return
+	}
 	result, err := h.codex.ImportCodexAccounts(r.Context(), body.Accounts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -116,6 +120,35 @@ func (h *Handler) refreshCodexAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) exportCodexAccounts(w http.ResponseWriter, r *http.Request) {
+	if h.codex == nil {
+		writeError(w, http.StatusServiceUnavailable, "Codex account pool is unavailable")
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if !decodeAdminBody(w, r, &body) {
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	result, err := h.codex.ExportCodexAccounts(r.Context(), body.IDs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(result.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "no complete Codex OAuth accounts to export")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", `attachment; filename="codex-oauth-accounts.json"`)
+	writeJSON(w, http.StatusOK, result.Items)
 }
 
 func (h *Handler) startCodexModelDiscovery(w http.ResponseWriter, r *http.Request) {

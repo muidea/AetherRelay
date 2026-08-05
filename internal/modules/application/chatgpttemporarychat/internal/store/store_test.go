@@ -13,7 +13,7 @@ import (
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "state.duckdb")
+	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
 	s, err := Open(path, "64MB", 1, Config{
 		RetentionDays:              30,
 		MaxConversations:           2,

@@ -40,11 +40,6 @@ func (h *Handler) updateBuiltinProvider(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("priority must be in [%d,%d]", config.MinProviderPriority, config.MaxProviderPriority))
 		return
 	}
-	if input.Enabled != nil && *input.Enabled && !builtinProviderRuntimeEnabled(id, h.runtime.ConfigSnapshot()) {
-		writeError(w, http.StatusConflict, "account-pool runtime is disabled; set its enabled setting and restart ai-proxy before enabling provider routing")
-		return
-	}
-
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
 	rewrite, err := prepareConfigRewrite(h.configPath, h.adminBasePath(), func(root *yaml.Node) error {
@@ -79,17 +74,6 @@ func (h *Handler) updateBuiltinProvider(w http.ResponseWriter, r *http.Request, 
 		view = h.builtinCodexProviderView(cfg)
 	}
 	writeJSON(w, http.StatusOK, view)
-}
-
-func builtinProviderRuntimeEnabled(id string, cfg config.Config) bool {
-	switch id {
-	case effectivecatalog.BuiltinProviderID:
-		return cfg.ChatGPTWeb.Enabled
-	case effectivecatalog.CodexOAuthProviderID:
-		return cfg.CodexOAuth.Enabled
-	default:
-		return false
-	}
 }
 
 func builtinProviderSection(id string) (string, error) {

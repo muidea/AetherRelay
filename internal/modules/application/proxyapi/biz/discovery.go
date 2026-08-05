@@ -53,28 +53,16 @@ func (s *Proxy) BindCatalogPublisher(publisher CatalogPublisher) {
 }
 
 func (s *Proxy) startModelDiscovery(ctx context.Context) {
-	if !s.config.ChatGPTWeb.Enabled && !s.config.CodexOAuth.Enabled {
-		s.publishCatalog(effectivecatalog.FromStatic(s.config))
-		return
-	}
 	// Initial empty-but-enabled snapshot so the service can start before the
 	// first successful account-scoped discovery round completes.
 	s.publishCatalog(effectivecatalog.BuildWithCodex(s.config, effectivecatalog.CatalogInput{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}, effectivecatalog.CatalogInput{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}))
-	// Kick immediate discovery for each enabled OAuth domain, then schedule
+	// Kick immediate discovery for both account domains, then schedule
 	// periodic full scans and a faster retry watch.
-	if s.config.ChatGPTWeb.Enabled {
-		_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })
-	}
-	if s.config.CodexOAuth.Enabled {
-		_ = s.BackgroundRoutine().AsyncFunction(func() { s.runCodexDiscoveryRound(ctx, false) })
-	}
+	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })
+	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runCodexDiscoveryRound(ctx, false) })
 	s.Timer(ctx, discoveryInterval, 0, func() {
-		if s.config.ChatGPTWeb.Enabled {
-			s.runDiscoveryRound(ctx, false)
-		}
-		if s.config.CodexOAuth.Enabled {
-			s.runCodexDiscoveryRound(ctx, false)
-		}
+		s.runDiscoveryRound(ctx, false)
+		s.runCodexDiscoveryRound(ctx, false)
 	})
 	s.Timer(ctx, discoveryWatchInterval, discoveryWatchInterval, func() {
 		s.watchDiscovery(ctx)
@@ -85,25 +73,21 @@ func (s *Proxy) watchDiscovery(ctx context.Context) {
 	// Always rebuild from durable snapshots so Admin/import races converge even
 	// when no upstream round is needed.
 	s.refreshEffectiveCatalog(ctx)
-	if s.config.ChatGPTWeb.Enabled {
-		candidates, err := s.listDiscoveryCandidates(ctx)
-		if err == nil {
-			for _, candidate := range candidates.Candidates {
-				if candidate.DiscoveryDue {
-					_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, true) })
-					break
-				}
+	candidates, err := s.listDiscoveryCandidates(ctx)
+	if err == nil {
+		for _, candidate := range candidates.Candidates {
+			if candidate.DiscoveryDue {
+				_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, true) })
+				break
 			}
 		}
 	}
-	if s.config.CodexOAuth.Enabled {
-		candidates, err := s.listCodexDiscoveryCandidates(ctx)
-		if err == nil {
-			for _, candidate := range candidates.Candidates {
-				if candidate.DiscoveryDue {
-					_ = s.BackgroundRoutine().AsyncFunction(func() { s.runCodexDiscoveryRound(ctx, true) })
-					break
-				}
+	codexCandidates, err := s.listCodexDiscoveryCandidates(ctx)
+	if err == nil {
+		for _, candidate := range codexCandidates.Candidates {
+			if candidate.DiscoveryDue {
+				_ = s.BackgroundRoutine().AsyncFunction(func() { s.runCodexDiscoveryRound(ctx, true) })
+				break
 			}
 		}
 	}
@@ -131,9 +115,6 @@ func (s *Proxy) EffectiveCatalog() effectivecatalog.Snapshot {
 }
 
 func (s *Proxy) runDiscoveryRound(ctx context.Context, dueOnly bool) {
-	if !s.config.ChatGPTWeb.Enabled {
-		return
-	}
 	// One discovery generation at a time for the process.
 	if !s.discoveryMu.TryLock() {
 		return
@@ -219,9 +200,6 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 }
 
 func (s *Proxy) runCodexDiscoveryRound(ctx context.Context, dueOnly bool) {
-	if !s.config.CodexOAuth.Enabled {
-		return
-	}
 	if !s.codexDiscoveryMu.TryLock() {
 		return
 	}
@@ -234,9 +212,6 @@ func (s *Proxy) runCodexDiscoveryRound(ctx context.Context, dueOnly bool) {
 // snapshots while codexupstream owns HTTP, and only proxyapi may coordinate the
 // two. The returned progress survives only for a bounded time in this process.
 func (s *Proxy) StartCodexModelDiscovery(ctx context.Context, accountIDs []string) (proxyevents.CodexDiscoveryProgress, error) {
-	if !s.config.CodexOAuth.Enabled {
-		return proxyevents.CodexDiscoveryProgress{}, fmt.Errorf("Codex OAuth is not enabled")
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -526,22 +501,18 @@ func (s *Proxy) listCodexDiscoveryCandidates(ctx context.Context) (codexevents.L
 
 func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
 	chatGPTResult := accevents.CatalogSnapshotResult{}
-	if s.config.ChatGPTWeb.Enabled {
-		value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicCatalogSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.CatalogSnapshotCommand{})).Get()
-		if err != nil {
-			slog.Warn("chatgpt model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
-		} else if snapshot, ok := value.(accevents.CatalogSnapshotResult); ok {
-			chatGPTResult = snapshot
-		}
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicCatalogSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.CatalogSnapshotCommand{})).Get()
+	if err != nil {
+		slog.Warn("chatgpt model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
+	} else if snapshot, ok := value.(accevents.CatalogSnapshotResult); ok {
+		chatGPTResult = snapshot
 	}
 	codexResult := codexevents.CatalogSnapshotResult{}
-	if s.config.CodexOAuth.Enabled {
-		value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicCatalogSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.CatalogSnapshotCommand{})).Get()
-		if err != nil {
-			slog.Warn("Codex model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
-		} else if snapshot, ok := value.(codexevents.CatalogSnapshotResult); ok {
-			codexResult = snapshot
-		}
+	value, err = s.SendEvent(event.NewEventWithContext(codexevents.TopicCatalogSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.CatalogSnapshotCommand{})).Get()
+	if err != nil {
+		slog.Warn("Codex model discovery failed", "stage", "catalog_snapshot", "error", err.Error())
+	} else if snapshot, ok := value.(codexevents.CatalogSnapshotResult); ok {
+		codexResult = snapshot
 	}
 	chatGPTModels := make([]effectivecatalog.PoolModel, 0, len(chatGPTResult.Models))
 	for _, model := range chatGPTResult.Models {

@@ -49,14 +49,15 @@ make build              # 产出 ./ai-proxy；可用 BINARY=bin/ai-proxy 指定�
 
 ```bash
 cp config.example.yaml config.yaml
+export AI_PROXY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
 ${EDITOR:-vi} config.yaml
 ```
 
 配置要点（完整说明见[配置参考](configuration.md)）：
 
-- **Provider 条目必须显式写在配置文件中**，不能靠环境变量创建 provider。示例默认不内置静态 Provider（模型由 ChatGPT Web / Codex OAuth 账号池自动发现，凭据经管理台导入）；需要直连 API 服务商时取消 `providers` 注释并按需填写，所有启用的远程 Provider 都必须有可用凭据。
-- 密钥用 `${ENV}` 展开：`api_key: ${OPENAI_API_KEY}`，运行时由环境变量填充。
-- 每个 enabled Provider 必须显式声明 `protocol`、`base_url`、`endpoints` 与 `models`。
+- Provider 通过管理台创建；完整定义与 API Key 使用 `AI_PROXY_CREDENTIAL_KEY` 加密后保存到 DuckDB，不写回 `config.yaml`。
+- `AI_PROXY_CREDENTIAL_KEY` 必须是 Base64 编码的 32 字节随机值。一键部署自动生成并保存在私有 `.env`；手动部署必须自行生成并注入，丢失后无法解密 Provider 和账号池凭据。
+- 每个 enabled Provider 仍必须显式声明 `protocol`、`base_url`、`endpoints` 与 `models`，但这些字段由管理页提交到运行期 Provider 存储。
 - `model_metadata` 只登记可选模型元数据，模型 ID exact 且严格区分大小写；它不发布模型或创建路由。Provider 的精确 `models` 与账号池发现结果决定实际模型，通配 pattern 只参与候选匹配。
 - `state.dir` 是单实例唯一的持久化工作区（DuckDB 用量、账号池、图片元数据与交互归档都在其中），多实例不得共享。
 - `client_api_keys` 是数据端点的必需认证；不配置任何 Key 时所有数据请求都会 401。
@@ -67,16 +68,7 @@ server:
 
 state:
   dir: var
-  database: state.duckdb
-
-providers:
-  openai:
-    enabled: true
-    protocol: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
-    endpoints: chat_completions
-    models: gpt-5.5
+  database: ai-proxy.duckdb
 
 model_metadata:
   gpt-5.5:
@@ -89,11 +81,12 @@ client_api_keys:
     enabled: true
 ```
 
+Provider 不在启动配置中声明；服务启动后通过管理台创建，并加密保存到 DuckDB。
+
 ## 首次启动与验证
 
 ```bash
-export OPENAI_API_KEY=sk-...     # 供 config.yaml 中的 ${OPENAI_API_KEY} 展开
-make run                         # 或直接运行发布二进制：./ai-proxy
+make run # 或直接运行发布二进制：./ai-proxy
 ```
 
 启动后验证：
@@ -128,7 +121,7 @@ After=network-online.target
 
 [Service]
 ExecStart=/opt/ai-proxy/ai-proxy
-EnvironmentFile=/etc/ai-proxy/ai-proxy.env    # 存放 Provider Key 等变量
+EnvironmentFile=/etc/ai-proxy/ai-proxy.env    # 存放凭据主密钥与 Admin 哈希等私有变量
 WorkingDirectory=/opt/ai-proxy
 User=ai-proxy
 Group=ai-proxy
@@ -188,19 +181,23 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 要点：
 
 - **Admin 凭据初始化**：密码提示直接显示在当前 TTY，输入不回显；`password-hash` 在容器内运行，密码不进入参数、环境变量或日志。其 stdout 通过临时挂载文件回传哈希，随即写入 `.env` 的 `AI_PROXY_ADMIN_PASSWORD_HASH` 并删除临时文件；`config.yaml` 中仅以 `${AI_PROXY_ADMIN_PASSWORD_HASH}` 引用。
-- **Provider 配置**：默认配置不内置静态 Provider，因此脚本不询问任何固定厂商 Key。部署完成后从管理台添加任意 Provider，或在账号池页面导入 ChatGPT Web / Codex OAuth 凭据。
+- **凭据加密**：脚本首次运行自动生成 `AI_PROXY_CREDENTIAL_KEY`；Provider 与两类账号池凭据均以该密钥加密写入 DuckDB。重复运行保留原密钥，禁止随意重置。
+- **Provider 配置**：默认配置不内置 Provider，因此脚本不询问任何固定厂商 Key。部署完成后从管理台添加任意 Provider，或在账号池页面导入 ChatGPT Web / Codex OAuth 凭据。
 - 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
-- `.env` 生成后为 `chmod 600`，含 Admin 哈希，务必保持私有、不入版本库。
+- `.env` 生成后为 `chmod 600`，包含凭据主密钥与 Admin 哈希，务必保持私有、不入版本库。
 - 重复运行时保留已有 `config.yaml` 不覆盖；`.env` 中已配置的值保留为默认。
-- 脚本创建 `config/` 与 `data/`，并尽力将两者设为 UID/GID `10001:10001`；权限不足时会提示手动修正。配置目录不可写时管理页只读，数据目录不可写时服务无法保存运行数据。
+- 脚本创建 `config/` 与 `data/`，并尽力将两者设为 UID/GID `10001:10001`；权限不足时会提示手动修正。配置目录不可写时，内建 Provider 路由策略、客户端 Key 与管理偏好只读；Provider 目录仍由 DuckDB 安全存储负责。数据目录不可写时服务无法保存运行数据。
 
 ### Docker Compose（手动）
 
-仓库中的 [`compose.yaml`](../compose.yaml) 是推荐起点。先建立一个可原子替换的**目录**挂载，而不是只挂载单个 `config.yaml` 文件：管理页保存 Provider、客户端 Key 与实例默认语言时会通过临时文件和 `rename` 更新配置。
+仓库中的 [`compose.yaml`](../compose.yaml) 是推荐起点。先建立一个可原子替换的**目录**挂载，而不是只挂载单个 `config.yaml` 文件：管理页保存客户端 Key 与实例默认语言时会通过临时文件和 `rename` 更新配置；Provider 直接写入 DuckDB。
 
 ```bash
 mkdir -p deploy/config deploy/data
 cp config.example.yaml deploy/config/config.yaml
+credential_key="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
+printf 'AI_PROXY_CREDENTIAL_KEY=%s\n' "$credential_key" >> .env
+chmod 600 .env
 
 # 容器内需要监听全部网卡，且状态必须落到宿主机数据目录映射点。
 ${EDITOR:-vi} deploy/config/config.yaml
@@ -220,7 +217,7 @@ server:
 
 state:
   dir: /var/lib/ai-proxy
-  database: state.duckdb
+  database: ai-proxy.duckdb
 ```
 
 生成 Admin 密码哈希时不会启动网关，也不会读取配置：
@@ -229,10 +226,10 @@ state:
 docker run --rm ghcr.io/muidea/ai-proxy:latest ai-proxy admin password-hash
 ```
 
-在未纳入版本控制的 `.env` 或容器编排的 secret 中保存实际使用的 Provider Key 和哈希。例如：
+在未纳入版本控制的 `.env` 或容器编排的 secret 中保存凭据主密钥与 Admin 哈希。例如：
 
 ```dotenv
-OPENAI_API_KEY=sk-...
+AI_PROXY_CREDENTIAL_KEY=<base64-encoded-32-byte-key>
 AI_PROXY_ADMIN_PASSWORD_HASH=$argon2id$...
 ```
 
@@ -246,7 +243,7 @@ docker compose up -d
 docker compose logs -f ai-proxy
 ```
 
-只需要只读配置时，可将 Compose 的配置卷改为 `:ro`；管理页会明确显示不可写，而数据代理与账号池仍可运行。容器的数据面默认仅发布到宿主机 `127.0.0.1:8080`。需要远程访问时，优先通过 HTTPS 反向代理转发，并保留原始 `Host`；不要直接把端口公开到不受控网络。启用登录后还应保留 `admin_session_cookie_secure: true`。
+只需要只读启动配置时，可将 Compose 的配置卷改为 `:ro`；管理页会禁用依赖 YAML 写入的设置，DuckDB 中的 Provider 与账号池仍可管理。容器的数据面默认仅发布到宿主机 `127.0.0.1:8080`。需要远程访问时，优先通过 HTTPS 反向代理转发，并保留原始 `Host`；不要直接把端口公开到不受控网络。启用登录后还应保留 `admin_session_cookie_secure: true`。
 
 检查状态：
 
@@ -255,7 +252,7 @@ docker compose ps
 docker compose exec ai-proxy curl --fail http://127.0.0.1:8080/healthz
 ```
 
-宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除该目录。`deploy/config/` 包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与 `deploy/data/` 一起纳入主机备份策略。
+宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图、交互归档与加密凭据；删除或重建容器不会清除该目录。`deploy/.env` 中的 `AI_PROXY_CREDENTIAL_KEY` 是解密 Provider 与账号池凭据的唯一主密钥，必须与 `deploy/config/`、`deploy/data/` 一起安全备份，但不得复制进数据库或配置文件。
 
 ### 直接运行镜像
 
@@ -294,19 +291,18 @@ docker image inspect ghcr.io/muidea/ai-proxy:latest --format '{{index .RepoDiges
 
 跨大版本升级或迁移宿主机前，必须先停止写入并完整备份 `deploy/config/` 与 `deploy/data/`。**不要并发运行两个实例指向同一个数据目录**；DuckDB 用量与账号状态不允许多实例共享。
 
-回滚：用旧版本二进制或旧镜像 tag 重复上述流程即可；DuckDB 文件保持原样，不会因启动而被旧版本改写（无法打开的数据库会使启用对应能力的模块在启动期失败，不会降级为空状态）。
-
 ## 常见问题
 
 | 现象 | 处理 |
 | --- | --- |
-| 启动即失败，提示配置校验错误 | Provider 必须显式声明 `protocol` / `base_url` / `endpoints` / `models`；metadata ID 与容量必须合法，但允许暂时没有对应运行期模型 |
+| 启动即失败，提示配置校验错误 | `model_metadata` ID 与容量、状态目录及启动期开关必须合法；Provider 字段在管理页保存时独立校验 |
 | 所有数据请求返回 401 | 未配置 `client_api_keys` 或 Key 缺失/未知/禁用；Key 是必需的应用层认证 |
 | 容器内 `/admin` 打不开 | Docker 转发连接在容器内不是 loopback；必须开启 `admin_auth_enabled` 登录保护 |
-| 管理页提示配置不可写 | 挂载的配置目录需要 UID `10001` 可写（`chown -R 10001:10001`）；只读挂载时管理页仅展示 |
+| 管理页提示配置不可写 | 挂载的配置目录需要 UID `10001` 可写（`chown -R 10001:10001`）；这只影响 YAML 管理项，不影响由 DuckDB 承载的 Provider 目录 |
+| Provider 管理提示安全存储不可写 | 注入合法的 `AI_PROXY_CREDENTIAL_KEY`，并确保 `state.database` 所在数据目录可写 |
 | 端口被占用 | 修改 `server.listen_addr`（或 `AI_PROXY_PORT` 仅替换端口） |
 | 容器升级后数据还在吗 | 宿主机 `deploy/data/` 持久化；重建容器不清除。前提是仍映射同一目录且不与其他实例共享 |
 | 需要远程访问 /metrics | `metrics_remote_access: true`，并设置 `metrics_allowed_cidrs` 限制采集端来源 |
-| 修改了 `chatgpt_web.enabled` / `codex_oauth.enabled` 后不生效 | 这两个开关是启动期 Block 装配设置，修改后必须重启进程 |
+| 修改账号定时刷新间隔后不生效 | 刷新定时器在启动期创建，修改后必须重启进程 |
 
 更多运行期问题排查见[运维与发布](operations.md)。

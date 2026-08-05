@@ -1,4 +1,4 @@
-// Package store tests account-pool persistence compatibility.
+// Package store tests account-pool persistence.
 package store
 
 import (
@@ -7,13 +7,13 @@ import (
 )
 
 func TestAccountsPersistInStateDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.duckdb")
-	s := New(path, 1)
+	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	s := New(path, 1, encryptedTestCodec(t))
 	defer s.Close()
 	if _, _, err := s.Add([]string{"token"}, "oauth_login"); err != nil {
 		t.Fatal(err)
 	}
-	reloaded := New(path, 1)
+	reloaded := New(path, 1, encryptedTestCodec(t))
 	defer reloaded.Close()
 	items := reloaded.List()
 	if len(items) != 1 || items[0].SourceType != "oauth_login" {

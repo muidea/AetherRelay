@@ -19,10 +19,11 @@
 
 ```bash
 cp config.example.yaml config.yaml
+export AI_PROXY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
 make run
 ```
 
-示例默认启用 ChatGPT Web 与 Codex OAuth 账号池（模型由账号池自动发现，凭据经管理台导入）；需要直连 API 服务商时，取消 `config.example.yaml` 中 `providers` 注释并按需填写。
+ChatGPT Web 与 Codex OAuth 账号池始终启用。启动后通过管理台导入账号或添加直连 Provider；Provider 定义和三类可恢复凭据均加密保存在 DuckDB，不写入 `config.yaml`。
 
 默认地址为 `http://127.0.0.1:8080`。启动后可访问：
 
@@ -95,4 +96,4 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创�
 
 带日期的计划、审计和现场记录是历史材料，不是运行时合同；当前行为以本 README、配置参考、运维说明、代码结构以及自动化测试为准。已完成的中间过程与失效文档归档在 [`docs/archive/`](docs/archive/)。
 
-`config.example.yaml` 是可复制的完整配置起点；所有 Provider 必须显式写入配置文件，不能由环境变量创建。
+`config.example.yaml` 是可复制的启动配置；运行期 Provider 通过管理台创建并加密保存在 DuckDB。

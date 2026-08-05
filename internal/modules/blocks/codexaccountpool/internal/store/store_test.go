@@ -11,7 +11,7 @@ import (
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(filepath.Join(t.TempDir(), "state.duckdb"), "256MB", 1)
+	store, err := Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "256MB", 1, encryptedTestCodec(t))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -50,6 +50,23 @@ func TestImportValidatesWholeBatchAndRedactsView(t *testing.T) {
 		if string(payload) != "" && contains(string(payload), secret) {
 			t.Fatalf("management projection leaked secret %q: %s", secret, payload)
 		}
+	}
+}
+
+func TestExportByIDsReturnsOnlySelectedCredentials(t *testing.T) {
+	store := openTestStore(t)
+	first := events.CredentialInput{AccessToken: "access-one", RefreshToken: "refresh-one", IDToken: "id-one", AccountID: "account-one", Proxy: "http://127.0.0.1:8080"}
+	second := events.CredentialInput{AccessToken: "access-two", RefreshToken: "refresh-two"}
+	if added, _, _, err := store.Import([]events.CredentialInput{first, second}); err != nil || added != 2 {
+		t.Fatalf("import added=%d err=%v", added, err)
+	}
+	items := store.List()
+	if len(items) != 2 {
+		t.Fatalf("items=%+v", items)
+	}
+	exported := store.ExportByIDs([]string{items[0].ID, items[0].ID, "missing"})
+	if len(exported) != 1 || exported[0].AccessToken != first.AccessToken || exported[0].RefreshToken != first.RefreshToken || exported[0].Proxy != first.Proxy {
+		t.Fatalf("exported=%+v", exported)
 	}
 }
 

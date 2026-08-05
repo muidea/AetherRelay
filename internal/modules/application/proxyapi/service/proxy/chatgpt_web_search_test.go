@@ -81,7 +81,7 @@ func TestChatGPTWebSearchResponsesEmitsSearchLifecycle(t *testing.T) {
 func TestChatGPTWebSearchEndpointForcesBuiltinProviderDespiteModelConflict(t *testing.T) {
 	var received chatgptsearch.Request
 	cfg := mustHandlerConfig(config.Config{
-		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
+		ChatGPTWeb: config.ChatGPTWebConfig{},
 		Providers: map[string]config.Provider{
 			"preferred-static": {
 				Name: "preferred-static", Protocol: "openai", Models: []string{"gpt-5"}, Priority: 1000,
@@ -126,7 +126,7 @@ func TestChatGPTWebSearchEndpointRejectsUnsupportedFields(t *testing.T) {
 }
 
 func TestChatGPTWebSearchEndpointReportsUnavailableAccountPool(t *testing.T) {
-	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}})
+	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}})
 	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{})
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 0, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-08-03T00:00:00Z"))
 	req := httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))

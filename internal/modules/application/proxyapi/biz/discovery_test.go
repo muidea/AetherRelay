@@ -64,7 +64,7 @@ func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
 
 	proxy := &Proxy{
 		Base:   basebiz.New(proxycommon.UnitID, hub, background),
-		config: config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}},
+		config: config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}},
 	}
 	proxy.runDiscoveryRound(context.Background(), true)
 	mu.Lock()
@@ -128,7 +128,7 @@ func TestCodexDiscoveryUsesAccountScopedCredentialsAndSkipsBackoff(t *testing.T)
 		result.Set(codexupevents.ListModelsResult{Models: []codexupevents.ModelDescriptor{{ID: "gpt-5.2-codex", OwnedBy: "openai"}}}, nil)
 	})
 
-	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}}
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}}
 	proxy.runCodexDiscoveryRound(context.Background(), true)
 	mu.Lock()
 	if requests != 1 || len(stored) != 1 || stored[0].AccountID != "due" || len(stored[0].Snapshot.Models) != 1 {
@@ -167,7 +167,7 @@ func TestManualCodexDiscoveryReportsAccountScopedProgress(t *testing.T) {
 	upstream.Subscribe(codexupevents.TopicListModels, func(_ event.Event, result event.Result) {
 		result.Set(codexupevents.ListModelsResult{Models: []codexupevents.ModelDescriptor{{ID: "gpt-5.2-codex"}}}, nil)
 	})
-	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}}
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}}
 	started, err := proxy.StartCodexModelDiscovery(context.Background(), []string{"account-1", "account-1"})
 	if err != nil || started.ProgressID == "" || started.Done {
 		t.Fatalf("start=%+v err=%v", started, err)
@@ -230,7 +230,7 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 			ID: "standard-primary", UsedPercent: 40, UsedPercentKnown: true, WindowSeconds: 18000, Allowed: true, AllowedKnown: true,
 		}}}, nil)
 	})
-	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
 	started, err := proxy.StartCodexUsageRefresh(context.Background(), []string{"account-1", "account-1"})
 	if err != nil || started.ProgressID == "" || started.Done {
 		t.Fatalf("start=%+v err=%v", started, err)
@@ -306,7 +306,7 @@ func TestCodexUsageRefreshRetriesOnceAfterCredentialRefresh(t *testing.T) {
 			t.Fatalf("unexpected usage request count=%d", requests)
 		}
 	})
-	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
 	started, err := proxy.StartCodexUsageRefresh(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)

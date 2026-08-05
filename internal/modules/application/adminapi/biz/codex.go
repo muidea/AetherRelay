@@ -93,6 +93,17 @@ func (s *Admin) RefreshCodexAccounts(ctx context.Context, ids []string) (codexma
 	}
 	return output, nil
 }
+func (s *Admin) ExportCodexAccounts(ctx context.Context, ids []string) (events.ExportByIDResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(events.TopicExportByID, s.ID(), common.UnitID, event.NewHeader(), ctx, events.ExportByIDCommand{IDs: ids})).Get()
+	if err != nil {
+		return events.ExportByIDResult{}, fmt.Errorf("Codex account export failed")
+	}
+	result, ok := value.(events.ExportByIDResult)
+	if !ok {
+		return events.ExportByIDResult{}, fmt.Errorf("invalid Codex account export result")
+	}
+	return result, nil
+}
 func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy string) (events.OAuthStartResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(events.TopicOAuthStart, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthStartCommand{EmailHint: hint, Proxy: proxy})).Get()
 	if err != nil {

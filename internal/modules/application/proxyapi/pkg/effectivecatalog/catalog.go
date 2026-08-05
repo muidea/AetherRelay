@@ -131,11 +131,7 @@ func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 	}
 	if !config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb) {
 		snap.BuiltinProvider.Status = StatusDisabled
-		if !cfg.ChatGPTWeb.Enabled {
-			snap.BuiltinProvider.UnavailableReason = "chatgpt web account-pool runtime is disabled"
-		} else {
-			snap.BuiltinProvider.UnavailableReason = "chatgpt web provider routing is disabled"
-		}
+		snap.BuiltinProvider.UnavailableReason = "chatgpt web provider routing is disabled"
 	} else {
 		var conflicts []string
 		for _, model := range chatGPT.Models {
@@ -186,11 +182,7 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 	provider := &snap.CodexOAuthProvider
 	if !config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth) {
 		provider.Status = StatusDisabled
-		if !cfg.CodexOAuth.Enabled {
-			provider.UnavailableReason = "Codex OAuth account-pool runtime is disabled"
-		} else {
-			provider.UnavailableReason = "Codex OAuth provider routing is disabled"
-		}
+		provider.UnavailableReason = "Codex OAuth provider routing is disabled"
 		return
 	}
 	conflicts := make([]string, 0)

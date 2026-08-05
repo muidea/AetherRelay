@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -17,9 +18,10 @@ import (
 type codexAccountRuntimeStub struct {
 	started      [][]string
 	usageStarted [][]string
+	exportedIDs  []string
+	exported     []codexevents.CredentialInput
 }
 
-func (s *codexAccountRuntimeStub) CodexOAuthEnabled() bool { return true }
 func (s *codexAccountRuntimeStub) ListCodexAccounts(context.Context) ([]codexevents.AccountView, error) {
 	return nil, nil
 }
@@ -35,8 +37,29 @@ func (s *codexAccountRuntimeStub) UpdateCodexAccount(context.Context, codexevent
 func (s *codexAccountRuntimeStub) RefreshCodexAccounts(context.Context, []string) (admincodex.RefreshResult, error) {
 	return admincodex.RefreshResult{}, nil
 }
+func (s *codexAccountRuntimeStub) ExportCodexAccounts(_ context.Context, ids []string) (codexevents.ExportByIDResult, error) {
+	s.exportedIDs = append([]string(nil), ids...)
+	return codexevents.ExportByIDResult{Items: append([]codexevents.CredentialInput(nil), s.exported...)}, nil
+}
 func (s *codexAccountRuntimeStub) StartCodexOAuth(context.Context, string, string) (codexevents.OAuthStartResult, error) {
 	return codexevents.OAuthStartResult{}, nil
+}
+
+func TestCodexAccountExportIsNoStoreAndImportable(t *testing.T) {
+	runtime := &codexAccountRuntimeStub{exported: []codexevents.CredentialInput{{AccessToken: "access-secret", RefreshToken: "refresh-secret", IDToken: "id-secret", AccountID: "account-header", Proxy: "http://127.0.0.1:8080"}}}
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/export", strings.NewReader(`{"ids":["account-1"]}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Header().Get("Content-Disposition"), "codex-oauth-accounts.json") {
+		t.Fatalf("export status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	var items []codexevents.CredentialInput
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil || len(items) != 1 || items[0].RefreshToken != "refresh-secret" || !reflect.DeepEqual(runtime.exportedIDs, []string{"account-1"}) {
+		t.Fatalf("export body=%s ids=%v items=%+v err=%v", rec.Body.String(), runtime.exportedIDs, items, err)
+	}
 }
 func (s *codexAccountRuntimeStub) FinishCodexOAuth(context.Context, string, string) (admincodex.OAuthFinishResult, error) {
 	return admincodex.OAuthFinishResult{}, nil
@@ -104,5 +127,23 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 	handler.ServeHTTP(usageProgressRecorder, usageProgressRequest)
 	if usageProgressRecorder.Code != http.StatusOK || !strings.Contains(usageProgressRecorder.Body.String(), `"done":true`) {
 		t.Fatalf("usage progress status=%d body=%s", usageProgressRecorder.Code, usageProgressRecorder.Body.String())
+	}
+}
+
+func TestCodexAccountImportRejectsMoreThanLimit(t *testing.T) {
+	runtime := &codexAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	accounts := make([]codexevents.CredentialInput, maxAccountImportItems+1)
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(map[string]any{"accounts": accounts}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts", &body)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 1000") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

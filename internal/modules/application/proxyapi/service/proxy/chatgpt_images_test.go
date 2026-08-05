@@ -87,7 +87,7 @@ func (s chatGPTImageExecutorStub) EditImage(ctx context.Context, req chatgptimag
 
 func newChatGPTImageHandler(t *testing.T, store usage.Store, exec chatgptimage.Executor) *Handler {
 	t.Helper()
-	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}})
+	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}})
 	h := NewHandler(cfg, store, nil, metrics.NewRegistry()).WithChatGPTImageExecutor(exec)
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{
 		ID: "gpt-image-2",

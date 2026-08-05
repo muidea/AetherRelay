@@ -26,7 +26,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 | `protocol` | 仅 `openai` / `anthropic`；必须显式声明，不得按 provider 名推断 |
 | `endpoints` | 仅表示上游 native endpoint（`chat_completions` / `messages` / `responses` / `completions` / `embeddings` / `images`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
 
-`chatgptweb` 与 `codexoauth` 是保留的内建 Provider ID，禁止写入 `providers`；分别由 `chatgpt_web.enabled` / `codex_oauth.enabled` 在运行时注入。
+`chatgptweb` 与 `codexoauth` 是保留且始终注入的内建 Provider ID，不能由管理型 Provider 目录创建。
 
 ## 模型路由与候选链
 

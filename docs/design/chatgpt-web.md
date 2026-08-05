@@ -5,15 +5,15 @@
 ## 设计目标
 
 - 无需官方 API Key：通过 ChatGPT 网页账号凭据提供文本对话、图片生成与联网搜索。
-- 账号池是内建 Provider 的唯一模型权威；账号凭据只存 `state.database`，绝不进入 YAML、日志、错误或管理 API。
-- 全部能力以 Admin 管理页为运维入口，组件未装配时明确 503，不降级为空状态。
+- 账号池是内建 Provider 的唯一模型权威；账号凭据经统一主密钥加密后只存 `state.database`，绝不进入 YAML、日志、错误或管理 API。
+- 全部能力以 Admin 管理页为运维入口，账号池与相关组件始终装配。
 
 ## 账号池与内建 Provider
 
-- 启用 `chatgpt_web.enabled`（启动期装配开关，修改需重启）后注入只读内建 Provider `chatgptweb`；禁止在 `providers` 中声明 `protocol: chatgptweb`。
+- 进程始终注入只读内建 Provider `chatgptweb`；`config.yaml` 不声明任何 Provider。
 - 模型来自账号池对 `/backend-api/models` 的枚举并集，并与 Provider 精确模型合成同一有效目录；`model_metadata` 只为同 ID 模型补充容量。同名来源保留全部候选，`priority` 默认 `10` 且不作为回退候选。
 - 账号列表严格脱敏：只返回稳定本地 ID、脱敏邮箱、状态、结果计数、冷却与最近刷新状态；token、账号代理与原始 OAuth 错误绝不返回。
-- 账号导出是唯一有意返回明文 token 的接口：二次确认、`Cache-Control: no-store`、不写 Web Storage、Blob 即用即销。OAuth 授权 URL、callback 与 session 仅存页面内存态，完成或取消后销毁。
+- 账号导出是唯一有意返回明文 token 的接口：固定返回可直接作为 `accounts` 重新导入的 JSON 数组，二次确认、`Cache-Control: no-store`、不写 Web Storage、Blob 即用即销。导入同时支持纯 access token 和完整 OAuth 对象；完整对象保留 refresh/id token 与账号代理，不会退化为单 token。OAuth 授权 URL、callback 与 session 仅存页面内存态，完成或取消后销毁。
 - `provider_enabled` 只控制内建 Provider 是否参与路由（可热更新）；不影响账号刷新、图片或临时对话。
 
 ## 文本与图片代理
@@ -41,12 +41,12 @@
 - **请求边界**：Chat/Responses 仅接受唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具（或 `web_search_options`）；只取最后一条纯文本 user 消息为 query；图片、文件、function、混合工具与工具循环一律 `conversion_unsupported`；`web_search_options` 调优字段仅记受限降级。
 - **上游执行**：prepare → `force_use_search=true` conversation → 有界 poll；全链路共用账号级 TLS client；结果仅投影受限答案、实际模型与去重来源（标题/URL/摘要），均有大小上限；429/网络/超时/上游失败触发模型级冷却，首个 401 单飞刷新后仅重试一次。
 - **响应形态**：Chat 非流式追加来源与 OpenAI `url_citation` annotations；流式在搜索完成后发送单个完整 delta 与 `[DONE]`（兼容 SSE，不是增量搜索流）；Responses 返回 `web_search_call` 与带 citations 的 `output_text`。
-- **`POST /v1/search`**：非流式简化入口，请求体仅 `model` 与纯文本 `query`；只保留 ChatGPT Web 候选，静态 Provider 同名模型不参与；无可用搜索能力时返回明确错误，不降级为普通文本生成。
+- **`POST /v1/search`**：非流式简化入口，请求体仅 `model` 与纯文本 `query`；只保留 ChatGPT Web 候选，管理型 Provider 同名模型不参与；无可用搜索能力时返回明确错误，不降级为普通文本生成。
 - **管理页「功能集 → 在线搜索」**：经 typed Proxy command 调用；成功结果写 owner-scoped DuckDB 历史（`chatgpt_web_search_history`），每管理员最多 200 条、保留 30 天，失败不写入；未启用 Admin 登录时使用稳定本地 `admin` 作用域。`POST /v1/search` 与协议内单次搜索保持无状态，不写历史。
 
 ## 管理页信息架构
 
-「Provider / 客户端 Key / 使用统计 / 系统信息」页签不变；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」含临时对话、在线搜索、图片任务、图片库。只消费既有 `/admin/api/chatgpt/**` 管理 API；组件未装配时返回 503，页面显示不可用状态而非空数据。
+「Provider / 客户端 Key / 使用统计 / 系统信息」页签不变；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」含临时对话、在线搜索、图片任务、图片库。只消费既有 `/admin/api/chatgpt/**` 管理 API；没有账号时展示明确的空池状态。
 
 ## 演进记录
 

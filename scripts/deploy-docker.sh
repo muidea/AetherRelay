@@ -117,15 +117,50 @@ COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 
-# 已有 .env 先载入作为默认值（值为我们生成时加引号的形式，source 安全）。
+# 只读取脚本自己管理的白名单字段；不得 source 可被外部修改的 .env。
+read_env_value() {
+  local wanted="$1" line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    [[ "$key" == "$wanted" ]] || continue
+    value="${line#*=}"
+    if [[ ${#value} -ge 2 && "$value" == \'*\' ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ ${#value} -ge 2 && "$value" == \"*\" ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    printf '%s' "$value"
+    return 0
+  done <"$ENV_FILE"
+  return 1
+}
+
 if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  set -a; source "$ENV_FILE"; set +a
+  stored_credential_key="$(read_env_value AI_PROXY_CREDENTIAL_KEY || true)"
+  if [[ -n "$stored_credential_key" ]]; then
+    AI_PROXY_CREDENTIAL_KEY="$stored_credential_key"
+  fi
+  if [[ -z "$ADMIN_PASSWORD_HASH" && "$SKIP_ADMIN" != 1 ]]; then
+    ADMIN_PASSWORD_HASH="$(read_env_value AI_PROXY_ADMIN_PASSWORD_HASH || true)"
+  fi
+fi
+if [[ -n "$ADMIN_PASSWORD_HASH" ]]; then
+  [[ "$ADMIN_PASSWORD_HASH" =~ ^\$argon2id\$ ]] || die "$ENV_FILE 中的 AI_PROXY_ADMIN_PASSWORD_HASH 不是有效的 Argon2id PHC 哈希"
 fi
 
 echo "==> 部署目录: $DEPLOY_DIR"
 echo "==> 数据目录: $DATA_DIR"
 echo "==> 镜像: $IMAGE"
+
+# Provider 与账号池凭据使用该外部主密钥加密后写入 DuckDB。已有部署保留
+# .env 中的密钥；新部署只生成一次，密钥本身不进入 config.yaml 或数据库。
+if [[ -z "${AI_PROXY_CREDENTIAL_KEY:-}" ]]; then
+  command -v base64 >/dev/null 2>&1 || die "生成凭据主密钥需要 base64 命令"
+  AI_PROXY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
+  [[ -n "$AI_PROXY_CREDENTIAL_KEY" ]] || die "生成凭据主密钥失败"
+  echo "    -> 已生成 DuckDB 凭据加密主密钥"
+fi
 
 # 1. 生成 config.yaml（已有则保留，不覆盖用户改动）
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -182,9 +217,10 @@ if [[ "$SKIP_ADMIN" != 1 && -z "$ADMIN_PASSWORD_HASH" ]]; then
   fi
 fi
 
-# 3. 写入 .env（chmod 600；值加单引号，source 与 compose 插值均安全）
+# 3. 写入 .env（chmod 600；值加单引号供 Compose 插值读取）
 {
   echo "AI_PROXY_IMAGE='$IMAGE'"
+  echo "AI_PROXY_CREDENTIAL_KEY='$AI_PROXY_CREDENTIAL_KEY'"
   if [[ "$SKIP_ADMIN" != 1 ]]; then
     echo "AI_PROXY_ADMIN_PASSWORD_HASH='$ADMIN_PASSWORD_HASH'"
   fi
@@ -210,6 +246,7 @@ services:
       - "$BIND"
     environment:
       AI_PROXY_CONFIG: /etc/ai-proxy/config.yaml
+      AI_PROXY_CREDENTIAL_KEY: \${AI_PROXY_CREDENTIAL_KEY:?set AI_PROXY_CREDENTIAL_KEY in .env}
       AI_PROXY_ADMIN_PASSWORD_HASH: \${AI_PROXY_ADMIN_PASSWORD_HASH:-}
     volumes:
       # 目录挂载（而非单文件）：管理页保存配置时通过临时文件原子替换。

@@ -32,7 +32,10 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-const maxRequestBodyBytes = 1 << 20
+const (
+	maxRequestBodyBytes   = 1 << 20
+	maxAccountImportItems = 1000
+)
 
 // RuntimeConfig 由代理处理器实现，用于读取和原子切换当前运行配置。
 type RuntimeConfig interface {
@@ -40,9 +43,14 @@ type RuntimeConfig interface {
 	UpdateConfig(config.Config) error
 }
 
+type managedProviderRuntime interface {
+	ReplaceProviders(map[string]config.Provider) error
+	ProviderStorageAvailable() bool
+}
+
 type ChatGPTRuntime interface {
 	ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error)
-	AddChatGPTAccounts(context.Context, []string, string) (accevents.AddResult, error)
+	AddChatGPTAccounts(context.Context, []string, []accevents.ExportItem, string) (accevents.AddResult, error)
 	DeleteChatGPTAccounts(context.Context, []string) (accevents.DeleteResult, error)
 	UpdateChatGPTAccount(context.Context, accevents.UpdateByIDCommand) (accevents.UpdateResult, error)
 	ExportChatGPTAccounts(context.Context, []string) (accevents.ExportResult, error)
@@ -82,19 +90,13 @@ type CodexRuntime interface {
 	DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error)
 	UpdateCodexAccount(context.Context, codexevents.UpdateCommand) (codexevents.UpdateResult, error)
 	RefreshCodexAccounts(context.Context, []string) (codexmanagement.RefreshResult, error)
+	ExportCodexAccounts(context.Context, []string) (codexevents.ExportByIDResult, error)
 	StartCodexOAuth(context.Context, string, string) (codexevents.OAuthStartResult, error)
 	FinishCodexOAuth(context.Context, string, string) (codexmanagement.OAuthFinishResult, error)
 	StartCodexModelDiscovery(context.Context, []string) (proxyevents.CodexDiscoveryProgress, error)
 	CodexModelDiscoveryProgress(context.Context, string) (proxyevents.CodexDiscoveryProgress, error)
 	StartCodexUsageRefresh(context.Context, []string) (proxyevents.CodexUsageProgress, error)
 	CodexUsageRefreshProgress(context.Context, string) (proxyevents.CodexUsageProgress, error)
-}
-
-// chatGPTAvailability is intentionally optional to keep isolated HTTP tests
-// focused on the transport contract. The production Admin runtime implements
-// it and reports whether ChatGPT Web was enabled at process start.
-type chatGPTAvailability interface {
-	ChatGPTWebEnabled() bool
 }
 
 type featureCatalogRuntime interface {
@@ -109,8 +111,6 @@ type featureSearchHistoryRuntime interface {
 	ListFeatureSearchHistory(context.Context, proxyevents.ListFeatureSearchHistoryCommand) (proxyevents.ListFeatureSearchHistoryResult, error)
 	GetFeatureSearchHistory(context.Context, proxyevents.GetFeatureSearchHistoryCommand) (proxyevents.GetFeatureSearchHistoryResult, error)
 }
-
-type codexAvailability interface{ CodexOAuthEnabled() bool }
 
 type systemMetadataRuntime interface {
 	SystemVersion() string
@@ -288,10 +288,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.requireAdminMutation(w, r) {
 			h.executeFeatureSearch(w, r)
 		}
-	case strings.HasPrefix(rel, "/api/chatgpt/accounts") && !h.chatGPTWebAvailable():
-		writeError(w, http.StatusServiceUnavailable, "chatgpt web is not enabled")
-	case strings.HasPrefix(rel, "/api/codex/") && !h.codexOAuthAvailable():
-		writeError(w, http.StatusServiceUnavailable, "Codex OAuth is not enabled")
 	case (rel == "/" || rel == "") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
@@ -343,6 +339,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case rel == "/api/codex/accounts/refresh" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.refreshCodexAccounts(w, r)
+		}
+	case rel == "/api/codex/accounts/export" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.exportCodexAccounts(w, r)
 		}
 	case rel == "/api/codex/accounts/discovery" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
@@ -473,22 +473,6 @@ func (h *Handler) featureCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) chatGPTWebAvailable() bool {
-	if h.chatGPT == nil {
-		return false
-	}
-	availability, ok := h.chatGPT.(chatGPTAvailability)
-	return !ok || availability.ChatGPTWebEnabled()
-}
-
-func (h *Handler) codexOAuthAvailable() bool {
-	if h.codex == nil {
-		return false
-	}
-	availability, ok := h.codex.(codexAvailability)
-	return !ok || availability.CodexOAuthEnabled()
 }
 
 func (h *Handler) listChatGPTImages(w http.ResponseWriter, r *http.Request) {
@@ -816,10 +800,16 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	)
 	sort.SliceStable(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
 	writeJSON(w, http.StatusOK, map[string]any{
-		"providers":  providers,
-		"writable":   strings.TrimSpace(h.configPath) != "",
-		"hot_reload": true,
+		"providers":         providers,
+		"provider_writable": h.providerStorageAvailable(),
+		"config_writable":   strings.TrimSpace(h.configPath) != "",
+		"hot_reload":        true,
 	})
+}
+
+func (h *Handler) providerStorageAvailable() bool {
+	runtime, ok := h.runtime.(managedProviderRuntime)
+	return ok && runtime.ProviderStorageAvailable()
 }
 
 func (h *Handler) builtinCodexProviderView(cfg config.Config) providerView {
@@ -884,7 +874,7 @@ func (h *Handler) builtinChatGPTProviderView(cfg config.Config) providerView {
 		Builtin:          true,
 		Availability:     providerAvailability{Status: "unknown"},
 	}
-	if h.chatGPT == nil || !h.chatGPTWebAvailable() {
+	if h.chatGPT == nil {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "chatgpt web is not available"
 		if !view.Enabled {
@@ -938,17 +928,11 @@ func (h *Handler) builtinChatGPTProviderView(cfg config.Config) providerView {
 	return view
 }
 
-func chatGPTBuiltinDisabledReason(cfg config.Config) string {
-	if !cfg.ChatGPTWeb.Enabled {
-		return "chatgpt web account-pool runtime is disabled; enable it and restart ai-proxy"
-	}
+func chatGPTBuiltinDisabledReason(config.Config) string {
 	return "chatgpt web provider routing is disabled"
 }
 
-func codexBuiltinDisabledReason(cfg config.Config) string {
-	if !cfg.CodexOAuth.Enabled {
-		return "Codex OAuth account-pool runtime is disabled; enable it and restart ai-proxy"
-	}
+func codexBuiltinDisabledReason(config.Config) string {
 	return "Codex OAuth provider routing is disabled"
 }
 
@@ -1041,8 +1025,9 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
 
-	if strings.TrimSpace(h.configPath) == "" {
-		writeError(w, http.StatusConflict, "no writable config file is active")
+	providerRuntime, ok := h.runtime.(managedProviderRuntime)
+	if !ok || !providerRuntime.ProviderStorageAvailable() {
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
@@ -1064,29 +1049,46 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	current := h.runtime.ConfigSnapshot()
-	if len(request.Providers) == 0 && !config.EffectiveChatGPTWebProviderEnabled(current.ChatGPTWeb) && !config.EffectiveCodexOAuthProviderEnabled(current.CodexOAuth) {
-		writeError(w, http.StatusBadRequest, "at least one provider is required")
-		return
-	}
 
-	rewrite, err := prepareConfigRewrite(h.configPath, h.adminBasePath(), func(root *yaml.Node) error {
-		existingSecrets := providerSecrets(root)
-		providersNode, buildErr := buildProvidersNode(request.Providers, existingSecrets)
-		if buildErr != nil {
-			return buildErr
-		}
-		setMappingValue(root, "providers", providersNode)
-		return nil
-	})
+	providers, err := buildManagedProviders(request.Providers, current.Providers)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.activateAndCommitConfig(rewrite); err != nil {
-		writeError(w, http.StatusInternalServerError, "activate config: "+err.Error())
+	if err := providerRuntime.ReplaceProviders(providers); err != nil {
+		writeError(w, http.StatusInternalServerError, "replace providers: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "provider configuration saved and activated"})
+}
+
+func buildManagedProviders(inputs []providerInput, existing map[string]config.Provider) (map[string]config.Provider, error) {
+	providers := make(map[string]config.Provider, len(inputs))
+	for _, input := range inputs {
+		name := strings.ToLower(strings.TrimSpace(input.Name))
+		if name == "" {
+			return nil, errors.New("provider name is required")
+		}
+		if _, duplicate := providers[name]; duplicate {
+			return nil, fmt.Errorf("duplicate provider %q", name)
+		}
+		apiKey := strings.TrimSpace(input.APIKey)
+		if apiKey == "" && !input.ClearAPIKey {
+			apiKey = existing[name].APIKey
+		}
+		priority := config.DefaultProviderPriority
+		if input.Priority != nil {
+			priority = *input.Priority
+		}
+		fallback := true
+		if input.Fallback != nil {
+			fallback = *input.Fallback
+		}
+		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)), BaseURL: strings.TrimSpace(input.BaseURL), APIKey: apiKey, Models: append([]string(nil), input.Models...), Endpoints: append([]string(nil), input.Endpoints...), AllowUnauthenticated: input.AllowUnauthenticated, Disabled: !input.Enabled}
+		config.ConfigureProviderPolicy(&provider, priority, fallback)
+		providers[name] = provider
+	}
+	return providers, nil
 }
 
 func documentRoot(document *yaml.Node) (*yaml.Node, error) {
@@ -1098,73 +1100,6 @@ func documentRoot(document *yaml.Node) (*yaml.Node, error) {
 		return nil, errors.New("config root must be a mapping")
 	}
 	return root, nil
-}
-
-func providerSecrets(root *yaml.Node) map[string]string {
-	providers := mappingValue(root, "providers")
-	secrets := map[string]string{}
-	if providers == nil || providers.Kind != yaml.MappingNode {
-		return secrets
-	}
-	for i := 0; i+1 < len(providers.Content); i += 2 {
-		name := strings.ToLower(strings.TrimSpace(providers.Content[i].Value))
-		provider := providers.Content[i+1]
-		if secret := mappingValue(provider, "api_key"); secret != nil {
-			secrets[name] = secret.Value
-		}
-	}
-	return secrets
-}
-
-func buildProvidersNode(inputs []providerInput, existingSecrets map[string]string) (*yaml.Node, error) {
-	byName := make(map[string]providerInput, len(inputs))
-	for _, input := range inputs {
-		name := strings.ToLower(strings.TrimSpace(input.Name))
-		if name == "" {
-			return nil, errors.New("provider name is required")
-		}
-		if _, exists := byName[name]; exists {
-			return nil, fmt.Errorf("duplicate provider %q", name)
-		}
-		input.Name = name
-		byName[name] = input
-	}
-	names := make([]string, 0, len(byName))
-	for name := range byName {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, name := range names {
-		input := byName[name]
-		secret := strings.TrimSpace(input.APIKey)
-		if secret == "" && !input.ClearAPIKey {
-			secret = existingSecrets[name]
-		}
-		provider := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		appendScalar(provider, "enabled", fmt.Sprintf("%t", input.Enabled), "!!bool")
-		appendScalar(provider, "protocol", strings.ToLower(strings.TrimSpace(input.Protocol)), "!!str")
-		appendScalar(provider, "base_url", strings.TrimSpace(input.BaseURL), "!!str")
-		appendScalar(provider, "api_key", secret, "!!str")
-		priority := config.DefaultProviderPriority
-		if input.Priority != nil {
-			priority = *input.Priority
-		}
-		fallback := true
-		if input.Fallback != nil {
-			fallback = *input.Fallback
-		}
-		appendScalar(provider, "priority", fmt.Sprintf("%d", priority), "!!int")
-		appendScalar(provider, "fallback", fmt.Sprintf("%t", fallback), "!!bool")
-		appendScalar(provider, "endpoints", strings.Join(input.Endpoints, ", "), "!!str")
-		appendScalar(provider, "models", strings.Join(input.Models, ", "), "!!str")
-		if input.AllowUnauthenticated {
-			appendScalar(provider, "allow_unauthenticated", "true", "!!bool")
-		}
-		node.Content = append(node.Content, mappingKey(name), provider)
-	}
-	return node, nil
 }
 
 func appendScalar(mapping *yaml.Node, key, value, tag string) {

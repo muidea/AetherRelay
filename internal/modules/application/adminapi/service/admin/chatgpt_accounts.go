@@ -34,17 +34,22 @@ func (h *Handler) addChatGPTAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Tokens     []string `json:"tokens"`
-		SourceType string   `json:"source_type"`
+		Tokens     []string               `json:"tokens"`
+		Accounts   []accevents.ExportItem `json:"accounts"`
+		SourceType string                 `json:"source_type"`
 	}
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	if len(body.Tokens) == 0 {
-		writeError(w, http.StatusBadRequest, "tokens is required")
+	if len(body.Tokens) == 0 && len(body.Accounts) == 0 {
+		writeError(w, http.StatusBadRequest, "tokens or accounts is required")
 		return
 	}
-	result, err := h.chatGPT.AddChatGPTAccounts(r.Context(), body.Tokens, body.SourceType)
+	if len(body.Tokens)+len(body.Accounts) > maxAccountImportItems {
+		writeError(w, http.StatusBadRequest, "at most 1000 accounts may be imported at once")
+		return
+	}
+	result, err := h.chatGPT.AddChatGPTAccounts(r.Context(), body.Tokens, body.Accounts, body.SourceType)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -129,19 +134,15 @@ func (h *Handler) exportChatGPTAccounts(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if len(result.Items) == 0 {
-		writeError(w, http.StatusBadRequest, "no complete accounts to export; access_token, refresh_token, and id_token are required")
+		writeError(w, http.StatusBadRequest, "no complete accounts to export; access_token and refresh_token are required")
 		return
 	}
 	// Export is an intentional secret-bearing response: prevent intermediary
 	// storage, and never log response bodies in this handler. Keep the
-	// chatgpt2api-compatible payload shape: one item is an object, multiple
-	// items are an array. Do not wrap it in an Admin-specific result object.
+	// Both account pools always export an array that can be submitted back to
+	// the corresponding import endpoint. Do not wrap it in an Admin result.
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Disposition", `attachment; filename="codex-accounts.json"`)
-	if len(result.Items) == 1 {
-		writeJSON(w, http.StatusOK, result.Items[0])
-		return
-	}
+	w.Header().Set("Content-Disposition", `attachment; filename="chatgpt-web-accounts.json"`)
 	writeJSON(w, http.StatusOK, result.Items)
 }
 func (h *Handler) chatGPTAccountRefreshProgress(w http.ResponseWriter, r *http.Request, rel string) {

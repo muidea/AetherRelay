@@ -15,20 +15,12 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-// AccountRow is the persisted account-pool record. Position preserves the
-// account owner's round-robin ordering without making it part of JSON.
-type AccountRow struct {
-	AccessToken string
-	Position    int
-	Payload     json.RawMessage
-}
-
-// CodexOAuthAccountRow is a Codex OAuth credential record. Its primary key is
-// the stable local account ID rather than a rotating access token.
-type CodexOAuthAccountRow struct {
+// SecureDocumentRow is an encrypted owner-scoped record. Payload must already
+// be an authenticated encryption envelope; Documents never sees plaintext.
+type SecureDocumentRow struct {
 	ID       string
 	Position int
-	Payload  json.RawMessage
+	Payload  []byte
 }
 
 // ImageTaskRow is a task record scoped by its owner and client task ID.
@@ -210,17 +202,15 @@ func openDatabase(path, memoryLimit string, threads int) (*sql.DB, error) {
 
 func migrate(db *sql.DB) error {
 	statements := []string{
-		`CREATE TABLE IF NOT EXISTS chatgpt_accounts (
-            access_token VARCHAR PRIMARY KEY,
+		`DROP TABLE IF EXISTS chatgpt_accounts`,
+		`DROP TABLE IF EXISTS codex_oauth_accounts`,
+		`CREATE TABLE IF NOT EXISTS secure_documents (
+            scope VARCHAR NOT NULL,
+            id VARCHAR NOT NULL,
             position BIGINT NOT NULL,
-            payload JSON NOT NULL,
-            updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
-        )`,
-		`CREATE TABLE IF NOT EXISTS codex_oauth_accounts (
-            id VARCHAR PRIMARY KEY,
-            position BIGINT NOT NULL,
-            payload JSON NOT NULL,
-            updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+            payload BLOB NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+            PRIMARY KEY (scope, id)
         )`,
 		`CREATE TABLE IF NOT EXISTS chatgpt_image_tasks (
             owner_id VARCHAR NOT NULL,
@@ -333,6 +323,51 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
+func (s *Documents) LoadSecureDocuments(scope string) ([]SecureDocumentRow, error) {
+	if s == nil || s.shared == nil || strings.TrimSpace(scope) == "" {
+		return nil, fmt.Errorf("secure document scope is required")
+	}
+	rows, err := s.shared.db.Query(`SELECT id, position, payload FROM secure_documents WHERE scope = ? ORDER BY position, id`, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []SecureDocumentRow
+	for rows.Next() {
+		var row SecureDocumentRow
+		if err := rows.Scan(&row.ID, &row.Position, &row.Payload); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *Documents) ReplaceSecureDocuments(scope string, values []SecureDocumentRow) error {
+	if s == nil || s.shared == nil || strings.TrimSpace(scope) == "" {
+		return fmt.Errorf("secure document scope is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM secure_documents WHERE scope = ?`, scope); err != nil {
+		return err
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value.ID) == "" || len(value.Payload) == 0 {
+			return fmt.Errorf("secure document id and payload are required")
+		}
+		if _, err := tx.Exec(`INSERT INTO secure_documents(scope, id, position, payload, updated_at) VALUES (?, ?, ?, ?, NOW())`, scope, value.ID, value.Position, value.Payload); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Documents) Close() error {
 	if s == nil || s.shared == nil {
 		return nil
@@ -353,66 +388,6 @@ func (s *Documents) Close() error {
 		}
 	})
 	return err
-}
-
-func (s *Documents) LoadAccounts() ([]AccountRow, error) {
-	rows, err := s.queryRows(`SELECT access_token, position, CAST(payload AS VARCHAR) FROM chatgpt_accounts ORDER BY position, access_token`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []AccountRow
-	for rows.Next() {
-		var row AccountRow
-		var payload string
-		if err := rows.Scan(&row.AccessToken, &row.Position, &payload); err != nil {
-			return nil, err
-		}
-		row.Payload = json.RawMessage(payload)
-		result = append(result, row)
-	}
-	return result, rows.Err()
-}
-
-func (s *Documents) ReplaceAccounts(values []AccountRow) error {
-	return s.replace("DELETE FROM chatgpt_accounts", func(tx *sql.Tx) error {
-		for _, value := range values {
-			if _, err := tx.Exec(`INSERT INTO chatgpt_accounts(access_token, position, payload, updated_at) VALUES (?, ?, CAST(? AS JSON), NOW())`, value.AccessToken, value.Position, string(value.Payload)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func (s *Documents) LoadCodexOAuthAccounts() ([]CodexOAuthAccountRow, error) {
-	rows, err := s.queryRows(`SELECT id, position, CAST(payload AS VARCHAR) FROM codex_oauth_accounts ORDER BY position, id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []CodexOAuthAccountRow
-	for rows.Next() {
-		var row CodexOAuthAccountRow
-		var payload string
-		if err := rows.Scan(&row.ID, &row.Position, &payload); err != nil {
-			return nil, err
-		}
-		row.Payload = json.RawMessage(payload)
-		result = append(result, row)
-	}
-	return result, rows.Err()
-}
-
-func (s *Documents) ReplaceCodexOAuthAccounts(values []CodexOAuthAccountRow) error {
-	return s.replace("DELETE FROM codex_oauth_accounts", func(tx *sql.Tx) error {
-		for _, value := range values {
-			if _, err := tx.Exec(`INSERT INTO codex_oauth_accounts(id, position, payload, updated_at) VALUES (?, ?, CAST(? AS JSON), NOW())`, value.ID, value.Position, string(value.Payload)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }
 
 func (s *Documents) LoadImageTasks() ([]ImageTaskRow, error) {

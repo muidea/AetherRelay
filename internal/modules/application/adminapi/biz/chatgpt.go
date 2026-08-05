@@ -31,8 +31,8 @@ func (s *Admin) ListChatGPTAccounts(ctx context.Context) ([]accevents.AccountVie
 	return result.Items, nil
 }
 
-func (s *Admin) AddChatGPTAccounts(ctx context.Context, tokens []string, sourceType string) (accevents.AddResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAdd, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AddCommand{Tokens: tokens, SourceType: sourceType})).Get()
+func (s *Admin) AddChatGPTAccounts(ctx context.Context, tokens []string, accounts []accevents.ExportItem, sourceType string) (accevents.AddResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAdd, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AddCommand{Tokens: tokens, Accounts: accounts, SourceType: sourceType})).Get()
 	if err != nil {
 		return accevents.AddResult{}, fmt.Errorf("chatgpt account add failed")
 	}

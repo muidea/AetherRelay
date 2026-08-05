@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	"ai-proxy/internal/pkg/aiproxycredential"
 	"ai-proxy/internal/pkg/aiproxystate"
 )
 
@@ -33,6 +35,7 @@ const (
 	textTransientCooldown  = time.Minute
 	imageRateLimitCooldown = time.Minute
 	imageTransientCooldown = time.Minute
+	secureDocumentScope    = "chatgpt_web_accounts"
 )
 
 type Account struct {
@@ -60,6 +63,7 @@ type Account struct {
 type Store struct {
 	mu            sync.Mutex
 	documents     *aiproxystate.Documents
+	credentials   *aiproxycredential.Codec
 	items         map[string]*Account // access_token -> account
 	aliases       map[string]string   // retired access token -> current token
 	order         []string
@@ -73,7 +77,10 @@ type Store struct {
 
 // Open creates the account owner's state store and reports every DuckDB
 // failure to the module startup path.
-func Open(databasePath, memoryLimit string, threads, concurrency int) (*Store, error) {
+func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aiproxycredential.Codec) (*Store, error) {
+	if codec == nil {
+		return nil, fmt.Errorf("account credential codec is required")
+	}
 	if concurrency < 1 {
 		concurrency = 3
 	}
@@ -83,6 +90,7 @@ func Open(databasePath, memoryLimit string, threads, concurrency int) (*Store, e
 		imageInflight: map[string]int{},
 		concurrency:   concurrency,
 	}
+	s.credentials = codec
 	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
@@ -97,8 +105,8 @@ func Open(databasePath, memoryLimit string, threads, concurrency int) (*Store, e
 
 // New is retained for direct package tests. Production startup must call Open
 // so a state failure is returned to the module lifecycle instead of hidden.
-func New(databasePath string, concurrency int) *Store {
-	s, err := Open(databasePath, "128MB", 1, concurrency)
+func New(databasePath string, concurrency int, codec *aiproxycredential.Codec) *Store {
+	s, err := Open(databasePath, "128MB", 1, concurrency, codec)
 	if err != nil {
 		panic(err)
 	}
@@ -139,18 +147,26 @@ func (s *Store) load() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	rows, err := s.documents.LoadAccounts()
+	return s.loadEncrypted()
+}
+
+func (s *Store) loadEncrypted() error {
+	rows, err := s.documents.LoadSecureDocuments(secureDocumentScope)
 	if err != nil {
 		return err
 	}
 	for _, row := range rows {
+		payload, err := s.credentials.Open(secureDocumentScope, row.ID, row.Payload)
+		if err != nil {
+			return fmt.Errorf("decrypt account %q: %w", row.ID, err)
+		}
 		var item map[string]any
-		if err := json.Unmarshal(row.Payload, &item); err != nil {
-			return fmt.Errorf("decode account %q: %w", row.AccessToken, err)
+		if err := json.Unmarshal(payload, &item); err != nil {
+			return fmt.Errorf("decode account %q: %w", row.ID, err)
 		}
 		acc := mapToAccount(item)
-		if acc.AccessToken == "" {
-			acc.AccessToken = row.AccessToken
+		if acc.ID == "" {
+			acc.ID = row.ID
 		}
 		if acc.AccessToken == "" {
 			continue
@@ -194,17 +210,30 @@ func (s *Store) saveLocked() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	rows := make([]aiproxystate.AccountRow, 0, len(s.order))
+	return s.saveEncryptedLocked()
+}
+
+func (s *Store) saveEncryptedLocked() error {
+	rows := make([]aiproxystate.SecureDocumentRow, 0, len(s.order))
 	for position, token := range s.order {
-		if acc, ok := s.items[token]; ok {
-			payload, err := json.Marshal(accountToMap(acc))
-			if err != nil {
-				return err
-			}
-			rows = append(rows, aiproxystate.AccountRow{AccessToken: token, Position: position, Payload: payload})
+		acc := s.items[token]
+		if acc == nil {
+			continue
 		}
+		if strings.TrimSpace(acc.ID) == "" {
+			acc.ID = shortID(acc.AccessToken)
+		}
+		payload, err := json.Marshal(accountToMap(acc))
+		if err != nil {
+			return err
+		}
+		sealed, err := s.credentials.Seal(secureDocumentScope, acc.ID, payload)
+		if err != nil {
+			return err
+		}
+		rows = append(rows, aiproxystate.SecureDocumentRow{ID: acc.ID, Position: position, Payload: sealed})
 	}
-	return s.documents.ReplaceAccounts(rows)
+	return s.documents.ReplaceSecureDocuments(secureDocumentScope, rows)
 }
 
 func (s *Store) Close() error {
@@ -286,7 +315,7 @@ func (s *Store) exportLocked(tokens []string) []events.ExportItem {
 			continue
 		}
 		idToken := extraString(acc, "id_token")
-		if acc.AccessToken != "" && acc.RefreshToken != "" && idToken != "" {
+		if acc.AccessToken != "" && acc.RefreshToken != "" {
 			accessClaims := jwtClaims(acc.AccessToken)
 			idClaims := jwtClaims(idToken)
 			authClaims := mapValue(accessClaims["https://api.openai.com/auth"])
@@ -300,9 +329,10 @@ func (s *Store) exportLocked(tokens []string) []events.ExportItem {
 				AccessToken:  acc.AccessToken,
 				RefreshToken: acc.RefreshToken,
 				IDToken:      idToken,
-				Expired:      jwtTimestamp(accessClaims, "exp"),
-				LastRefresh:  jwtTimestamp(accessClaims, "iat"),
+				Expired:      firstNonEmpty(jwtTimestamp(accessClaims, "exp"), extraString(acc, "expired")),
+				LastRefresh:  firstNonEmpty(jwtTimestamp(accessClaims, "iat"), extraString(acc, "last_refresh")),
 				Password:     acc.Password,
+				Proxy:        acc.Proxy,
 			})
 		}
 	}
@@ -788,6 +818,114 @@ func (s *Store) Add(tokens []string, sourceType string) (added, skipped int, err
 		err = s.saveLocked()
 	}
 	return
+}
+
+// Import accepts both convenient access-token inputs and complete OAuth
+// exports. Complete OAuth objects retain every credential required for a
+// later refresh, so an exported account can be imported without loss.
+func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType string) (added, updated, skipped int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sourceType == "" {
+		sourceType = "web"
+	}
+	type input struct {
+		token   string
+		account *events.ExportItem
+	}
+	inputs := make([]input, 0, len(tokens)+len(accounts))
+	for i := range accounts {
+		account := accounts[i]
+		account.AccessToken = trim(account.AccessToken)
+		account.RefreshToken = trim(account.RefreshToken)
+		account.IDToken = trim(account.IDToken)
+		if account.AccessToken == "" {
+			return 0, 0, 0, fmt.Errorf("account access_token is required")
+		}
+		if account.RefreshToken == "" && account.IDToken != "" {
+			return 0, 0, 0, fmt.Errorf("account refresh_token is required when id_token is provided")
+		}
+		if err := validateProxy(account.Proxy); err != nil {
+			return 0, 0, 0, err
+		}
+		inputs = append(inputs, input{token: account.AccessToken, account: &account})
+	}
+	// Complete objects take precedence if the same access token also appears
+	// in the convenience token list.
+	for _, token := range tokens {
+		if token = trim(token); token != "" {
+			inputs = append(inputs, input{token: token})
+		}
+	}
+
+	seen := make(map[string]struct{}, len(inputs))
+	now := time.Now().UTC().Format(time.RFC3339)
+	changed := false
+	for _, entry := range inputs {
+		if _, exists := seen[entry.token]; exists {
+			skipped++
+			continue
+		}
+		seen[entry.token] = struct{}{}
+		acc, exists := s.items[entry.token]
+		if entry.account == nil || entry.account.RefreshToken == "" {
+			if exists {
+				skipped++
+				continue
+			}
+			s.items[entry.token] = &Account{ID: shortID(entry.token), AccessToken: entry.token, SourceType: sourceType, Status: StatusNormal, CreatedAt: now}
+			s.order = append(s.order, entry.token)
+			added++
+			changed = true
+			continue
+		}
+
+		item := entry.account
+		if !exists {
+			acc = &Account{ID: shortID(entry.token), AccessToken: entry.token, Status: StatusNormal, CreatedAt: now, Extra: map[string]any{}}
+			s.items[entry.token] = acc
+			s.order = append(s.order, entry.token)
+			added++
+		} else {
+			updated++
+		}
+		acc.RefreshToken = item.RefreshToken
+		acc.Email = trim(item.Email)
+		acc.Password = item.Password
+		acc.Proxy = trim(item.Proxy)
+		acc.SourceType = "oauth_import"
+		if acc.Extra == nil {
+			acc.Extra = map[string]any{}
+		}
+		acc.Extra["id_token"] = item.IDToken
+		acc.Extra["account_id"] = trim(item.AccountID)
+		acc.Extra["export_type"] = trim(item.Type)
+		acc.Extra["expired"] = trim(item.Expired)
+		acc.Extra["last_refresh"] = trim(item.LastRefresh)
+		changed = true
+	}
+	if !changed {
+		return added, updated, skipped, nil
+	}
+	if err = s.saveLocked(); err != nil {
+		return 0, 0, 0, err
+	}
+	if added > 0 {
+		s.bumpCatalogLocked()
+	}
+	return added, updated, skipped, nil
+}
+
+func validateProxy(value string) error {
+	value = trim(value)
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("invalid account proxy URL")
+	}
+	return nil
 }
 
 // AddOAuth persists the complete OAuth token set. Refresh/id tokens never

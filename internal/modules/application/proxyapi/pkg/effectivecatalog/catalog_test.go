@@ -12,7 +12,6 @@ func TestBuildOmitsRoutingDisabledBuiltinProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := `
 chatgpt_web:
-  enabled: true
   provider_enabled: false
   priority: 240
 providers:
@@ -48,7 +47,6 @@ func TestBuildUsesConfiguredBuiltinPriority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := `
 codex_oauth:
-  enabled: true
   provider_enabled: true
   priority: 240
 providers:
@@ -80,7 +78,7 @@ model_metadata:
 
 func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 	cfg := config.Config{
-		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
+		ChatGPTWeb: config.ChatGPTWebConfig{},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-4o": {
 				ID:                  "gpt-4o",
@@ -144,7 +142,7 @@ func TestMetadataDoesNotPublishModel(t *testing.T) {
 
 func TestMetadataEnrichesDiscoveredModelWithoutCreatingStaticCandidate(t *testing.T) {
 	cfg := config.Config{
-		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
+		ChatGPTWeb: config.ChatGPTWebConfig{},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 400000, MaxOutputTokens: 128000},
 		},
@@ -163,11 +161,11 @@ func TestMetadataEnrichesDiscoveredModelWithoutCreatingStaticCandidate(t *testin
 }
 
 func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T) {
-	initial := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 4, 1, []PoolModel{{
+	initial := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}, 4, 1, []PoolModel{{
 		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z")
 	updated := Reconfigure(config.Config{
-		ChatGPTWeb:    config.ChatGPTWebConfig{Enabled: true},
+		ChatGPTWeb:    config.ChatGPTWebConfig{},
 		ModelMetadata: map[string]config.ModelMetadata{"gpt-5": {ID: "gpt-5"}},
 		Providers: map[string]config.Provider{
 			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-5"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
@@ -185,20 +183,16 @@ func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T)
 	}
 }
 
-func TestBuildDisabledAndEmptyStates(t *testing.T) {
-	off := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: false}}, 0, 0, nil, "")
-	if off.BuiltinProvider.Status != StatusDisabled {
-		t.Fatalf("disabled status=%s", off.BuiltinProvider.Status)
-	}
-	onEmpty := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 0, 0, nil, "")
+func TestBuildEmptyStates(t *testing.T) {
+	onEmpty := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}, 0, 0, nil, "")
 	if onEmpty.BuiltinProvider.Status != StatusEmpty && onEmpty.BuiltinProvider.Status != StatusDiscovering {
 		t.Fatalf("empty status=%s", onEmpty.BuiltinProvider.Status)
 	}
-	discovering := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 0, 1, nil, "")
+	discovering := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}, 0, 1, nil, "")
 	if discovering.BuiltinProvider.Status != StatusDiscovering {
 		t.Fatalf("discovering status=%s", discovering.BuiltinProvider.Status)
 	}
-	emptyWithStaleModel := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 3, 0, []PoolModel{{ID: "stale"}}, "")
+	emptyWithStaleModel := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}, 3, 0, []PoolModel{{ID: "stale"}}, "")
 	if _, ok := emptyWithStaleModel.Lookup("stale"); ok || len(emptyWithStaleModel.CandidatesFor("stale")) != 0 {
 		t.Fatalf("unavailable account-pool models must not be routable: %+v", emptyWithStaleModel)
 	}
@@ -213,7 +207,7 @@ func TestBuiltinProviderViewEndpoints(t *testing.T) {
 
 func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) {
 	cfg := config.Config{
-		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
+		CodexOAuth: config.CodexOAuthConfig{},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-5.2": {ID: "gpt-5.2"},
 		},
@@ -242,7 +236,7 @@ func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) 
 }
 
 func TestBuildCodexOAuthPublishesAllDiscoveredModels(t *testing.T) {
-	cfg := config.Config{CodexOAuth: config.CodexOAuthConfig{Enabled: true}}
+	cfg := config.Config{CodexOAuth: config.CodexOAuthConfig{}}
 	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 4, AvailableAccounts: 2, UpdatedAt: "2026-07-30T00:00:00Z", Models: []PoolModel{{ID: "gpt-5.3-codex", OwnedBy: "openai"}, {ID: "gpt-5.3-codex-mini", OwnedBy: "openai"}}})
 	if snap.CodexOAuthProvider.Status != StatusReady || snap.CodexOAuthProvider.ModelCount != 2 || snap.CodexOAuthVersion != 4 {
 		t.Fatalf("Codex provider=%+v version=%d", snap.CodexOAuthProvider, snap.CodexOAuthVersion)

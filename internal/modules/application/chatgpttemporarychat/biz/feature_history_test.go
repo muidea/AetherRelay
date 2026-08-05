@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuildFeatureMessagesSkipsFailedTurnsAndReloadsHistoricalFiles(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "state.duckdb"), "64MB", 1, store.Config{RetentionDays: 30, MaxConversations: 10, MaxMessagesPerConversation: 50, MaxMessageBytes: 8192})
+	s, err := store.Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "64MB", 1, store.Config{RetentionDays: 30, MaxConversations: 10, MaxMessagesPerConversation: 50, MaxMessageBytes: 8192})
 	if err != nil {
 		t.Fatal(err)
 	}

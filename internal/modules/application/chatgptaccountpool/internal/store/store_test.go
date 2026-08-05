@@ -16,7 +16,7 @@ import (
 func TestAccountPoolAcquireAndMark(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 
 	added, skipped, err := s.Add([]string{"token-a", "token-b", "token-a"}, "web")
 	if err != nil {
@@ -63,7 +63,7 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 
 func TestListProjectsLegacyAccountCapabilitiesFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestListProjectsLegacyAccountCapabilitiesFields(t *testing.T) {
 
 func TestAcquireImageAccountUsesStableAccountID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestAcquireImageAccountUsesStableAccountID(t *testing.T) {
 
 func TestStableIDManagementDoesNotRequireAccessTokenSelector(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a", "token-b"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestStableIDManagementDoesNotRequireAccessTokenSelector(t *testing.T) {
 }
 
 func TestExportByIDsSelectsOnlyRequestedOAuthAccount(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	first, _, err := s.AddOAuth("access-first", "refresh-first", "id-first")
 	if err != nil {
 		t.Fatal(err)
@@ -151,9 +151,46 @@ func TestExportByIDsSelectsOnlyRequestedOAuthAccount(t *testing.T) {
 	}
 }
 
+func TestImportRestoresCompleteOAuthExport(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
+	input := events.ExportItem{
+		Type: "codex", Email: "operator@example.invalid", AccountID: "account-header",
+		AccessToken: "access-import", RefreshToken: "refresh-import", IDToken: "id-import",
+		Expired: "2026-08-06T00:00:00Z", LastRefresh: "2026-08-05T00:00:00Z",
+		Password: "password-import", Proxy: "http://127.0.0.1:8080",
+	}
+	added, updated, skipped, err := s.Import(nil, []events.ExportItem{input}, "")
+	if err != nil || added != 1 || updated != 0 || skipped != 0 {
+		t.Fatalf("import result added=%d updated=%d skipped=%d err=%v", added, updated, skipped, err)
+	}
+	items := s.ExportByIDs([]string{shortID(input.AccessToken)})
+	if len(items) != 1 || items[0].AccessToken != input.AccessToken || items[0].RefreshToken != input.RefreshToken || items[0].IDToken != input.IDToken || items[0].Proxy != input.Proxy || items[0].AccountID != input.AccountID || items[0].Password != input.Password {
+		t.Fatalf("exported=%+v", items)
+	}
+}
+
+func TestImportRejectsPartialOAuthCredential(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
+	_, _, _, err := s.Import(nil, []events.ExportItem{{AccessToken: "access", IDToken: "id-without-refresh"}}, "")
+	if err == nil || len(s.List()) != 0 {
+		t.Fatalf("partial OAuth import err=%v items=%+v", err, s.List())
+	}
+}
+
+func TestImportValidatesCompleteBatchBeforeMutation(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
+	_, _, _, err := s.Import(nil, []events.ExportItem{
+		{AccessToken: "valid-access", RefreshToken: "valid-refresh"},
+		{AccessToken: "invalid-access", RefreshToken: "invalid-refresh", Proxy: "file:///tmp/proxy"},
+	}, "")
+	if err == nil || len(s.List()) != 0 {
+		t.Fatalf("batch validation err=%v items=%+v", err, s.List())
+	}
+}
+
 func TestRefreshProjectionRestoresLimitedAccountAndPreservesOperatorStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a", "token-b"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +208,7 @@ func TestRefreshProjectionRestoresLimitedAccountAndPreservesOperatorStatus(t *te
 		t.Fatalf("disabled account changed: updated=%v err=%v", updated, err)
 	}
 
-	reloaded := New(path, 1)
+	reloaded := New(path, 1, encryptedTestCodec(t))
 	first := reloaded.items["token-a"]
 	if first == nil || first.Status != StatusNormal || first.Quota != 4 || first.Type != "plus" || first.Email != "account@example.invalid" || first.Extra["restore_at"] != "2027-01-01T00:00:00Z" {
 		t.Fatalf("refreshed account=%+v", first)
@@ -182,7 +219,7 @@ func TestRefreshProjectionRestoresLimitedAccountAndPreservesOperatorStatus(t *te
 }
 
 func TestRefreshCandidatesForDoesNotTreatUnknownSelectionAsAllAccounts(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a", "token-b"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +233,7 @@ func TestRefreshCandidatesForDoesNotTreatUnknownSelectionAsAllAccounts(t *testin
 
 func TestRefreshCandidatesIncludeAllChatGPTWebCredentialSources(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	accounts := New(path, 3)
+	accounts := New(path, 3, encryptedTestCodec(t))
 	for _, item := range []struct{ token, source string }{{"token-web", "web"}, {"token-oauth", "oauth_login"}, {"token-password", "password"}, {"token-other", "api"}} {
 		if _, _, err := accounts.Add([]string{item.token}, item.source); err != nil {
 			t.Fatal(err)
@@ -215,7 +252,7 @@ func TestRefreshCandidatesIncludeAllChatGPTWebCredentialSources(t *testing.T) {
 
 func TestApplyRefreshedTokenCarriesImageSlotAndAliasesOldToken(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	oldToken := testJWT(time.Now().Add(30*time.Minute), time.Now().Add(-time.Hour))
 	newToken := testJWT(time.Now().Add(24*time.Hour), time.Now())
 	if _, _, err := s.Add([]string{oldToken}, "web"); err != nil {
@@ -236,7 +273,7 @@ func TestApplyRefreshedTokenCarriesImageSlotAndAliasesOldToken(t *testing.T) {
 		t.Fatalf("old token alias did not release slot: account=%+v ok=%v", acquired, ok)
 	}
 	s.ReleaseImageSlot(newToken)
-	reloaded := New(path, 1)
+	reloaded := New(path, 1, encryptedTestCodec(t))
 	account := reloaded.items[newToken]
 	if account == nil || account.RefreshToken != "refresh-new" || account.Extra["id_token"] != "id-new" || account.Extra["last_token_refresh_at"] == nil {
 		t.Fatalf("refreshed account=%+v", account)
@@ -245,7 +282,7 @@ func TestApplyRefreshedTokenCarriesImageSlotAndAliasesOldToken(t *testing.T) {
 
 func TestTokenRefreshFailureProjectionIsSafeAndClearedOnSuccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.AddOAuth("access-old", "refresh-old", "id-old"); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +317,7 @@ func TestTokenRefreshFailureProjectionIsSafeAndClearedOnSuccess(t *testing.T) {
 
 func TestTokenRefreshCandidatesPreferExpiringAndBoundKeepalive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	now := time.Now().UTC()
 	expiring := testJWT(now.Add(time.Hour), now.Add(-time.Hour))
 	keepaliveOne := testJWT(now.Add(10*24*time.Hour), now.Add(-4*24*time.Hour))
@@ -299,7 +336,7 @@ func TestTokenRefreshCandidatesPreferExpiringAndBoundKeepalive(t *testing.T) {
 
 func TestAddOAuthPersistsRefreshAndIDTokenWithoutPublicLeak(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	item, added, err := s.AddOAuth("access-oauth", "refresh-oauth", "id-oauth")
 	if err != nil || !added || item.AccessToken != "access-oauth" {
 		t.Fatalf("item=%#v added=%v err=%v", item, added, err)
@@ -308,7 +345,7 @@ func TestAddOAuthPersistsRefreshAndIDTokenWithoutPublicLeak(t *testing.T) {
 	if err != nil || added {
 		t.Fatalf("duplicate item=%#v added=%v err=%v", item, added, err)
 	}
-	reloaded := New(path, 1)
+	reloaded := New(path, 1, encryptedTestCodec(t))
 	account := reloaded.items["access-oauth"]
 	if account == nil || account.RefreshToken != "refresh-new" || account.Extra["id_token"] != "id-new" || account.SourceType != "oauth_login" {
 		t.Fatalf("account=%#v", account)
@@ -316,7 +353,7 @@ func TestAddOAuthPersistsRefreshAndIDTokenWithoutPublicLeak(t *testing.T) {
 }
 
 func TestExportReturnsOnlyCompleteOAuthAccounts(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	if _, _, err := s.AddOAuth("access-complete", "refresh-complete", "id-complete"); err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +366,7 @@ func TestExportReturnsOnlyCompleteOAuthAccounts(t *testing.T) {
 }
 
 func TestExportBuildsCodexShapeFromJWTClaims(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	accessToken := testJWTWithClaims(map[string]any{
 		"exp":                            float64(0),
 		"iat":                            float64(3600),
@@ -367,7 +404,7 @@ func testJWTWithClaims(claims map[string]any) string {
 
 func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +442,7 @@ func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
 
 func TestTextCooldownIsModelScopedAndExpires(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +498,7 @@ func TestTextCooldownIsModelScopedAndExpires(t *testing.T) {
 
 func TestImageCooldownIsModelScopedAndClearsOnSuccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
-	s := New(path, 1)
+	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
 		t.Fatal(err)
 	}

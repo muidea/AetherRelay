@@ -9,11 +9,12 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       AI_PROXY_CONFIG: /etc/ai-proxy/config.yaml
-      # Provider secrets are expanded from the mounted configuration at
-      # startup. Put them in an untracked .env file or an orchestrator secret.
+      # Bootstrap environment references remain supported. Admin-managed
+      # Provider and account-pool credentials are encrypted in DuckDB.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_PROXY_CREDENTIAL_KEY: ${AI_PROXY_CREDENTIAL_KEY:?set AI_PROXY_CREDENTIAL_KEY in .env}
       AI_PROXY_ADMIN_PASSWORD_HASH: ${AI_PROXY_ADMIN_PASSWORD_HASH:-}
     volumes:
       # Mount the directory (rather than a single file): Admin writes replace

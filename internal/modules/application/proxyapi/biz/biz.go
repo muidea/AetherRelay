@@ -79,13 +79,11 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.Unexpected, "init interaction archive: "+err.Error())
 	}
-	if bootstrap.Config.ChatGPTWeb.Enabled {
-		history, openErr := searchhistory.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, searchhistory.Config{})
-		if openErr != nil {
-			return nil, cd.NewError(cd.Unexpected, "open web search history: "+openErr.Error())
-		}
-		biz.history = history
+	history, openErr := searchhistory.Open(bootstrap.Config.State.Database, bootstrap.Config.State.MemoryLimit, bootstrap.Config.State.Threads, searchhistory.Config{})
+	if openErr != nil {
+		return nil, cd.NewError(cd.Unexpected, "open web search history: "+openErr.Error())
 	}
+	biz.history = history
 	biz.config = bootstrap.Config
 	biz.usage = usageStore
 	biz.metrics = metrics
@@ -341,9 +339,7 @@ func (s *Proxy) handleUpdate(ev event.Event, result event.Result) {
 	// Keep the constrained auto-discovered projection while the account-pool
 	// query runs, so a hot reload never makes ChatGPT Web models disappear.
 	s.publishCatalog(effectivecatalog.Reconfigure(command.Config, previous))
-	if command.Config.ChatGPTWeb.Enabled || command.Config.CodexOAuth.Enabled {
-		s.refreshEffectiveCatalog(ev.Context())
-	}
+	s.refreshEffectiveCatalog(ev.Context())
 	result.Set(struct{}{}, nil)
 }
 

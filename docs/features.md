@@ -6,7 +6,7 @@
 
 | 功能域 | 入口 | 启用条件 |
 | --- | --- | --- |
-| OpenAI / Anthropic 标准代理 | `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/completions`、`/v1/embeddings`、`/v1/models` | 配置静态 Provider |
+| OpenAI / Anthropic 标准代理 | `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/completions`、`/v1/embeddings`、`/v1/models` | 管理页配置 Provider |
 | 模型路由候选链 | 请求体 exact `model` → 有序候选 | Provider 精确模型 / 账号池发现 + Provider pattern |
 | 协议转换 | OpenAI ↔ Anthropic 基础文本 | 候选链中跨协议 Provider 且语义可保留 |
 | 客户端 API Key | 全部数据端点认证 | `client_api_keys` 或 Admin 管理端创建 |
@@ -15,11 +15,11 @@
 | — Provider 管理与健康检查 | Admin「Provider」 | — |
 | — 客户端 Key 管理 | Admin「客户端 Key」 | — |
 | — 系统信息 | Admin「系统信息」 | 默认启用 |
-| — 账号池（ChatGPT Web / Codex OAuth） | Admin「账号池」 | `chatgpt_web.enabled` / `codex_oauth.enabled` |
-| — 功能集：临时对话 / 在线搜索 / 图片任务 / 图片库 | Admin「功能集」 | `chatgpt_web.enabled`（部分能力可单独关闭） |
-| ChatGPT Web 文本与图片代理 | 同上标准端点路由到内建 `chatgptweb` | `chatgpt_web.enabled` + `provider_enabled` |
-| ChatGPT Web 在线搜索 | `/v1/search`、协议内 `web_search` 工具 | `chatgpt_web.enabled` |
-| Codex OAuth 原生 Responses | `/v1/responses` 路由到内建 `codexoauth` | `codex_oauth.enabled` + `provider_enabled` |
+| — 账号池（ChatGPT Web / Codex OAuth） | Admin「账号池」 | 始终启用 |
+| — 功能集：临时对话 / 在线搜索 / 图片任务 / 图片库 | Admin「功能集」 | 始终装配（临时对话可单独关闭） |
+| ChatGPT Web 文本与图片代理 | 同上标准端点路由到内建 `chatgptweb` | `chatgpt_web.provider_enabled` |
+| ChatGPT Web 在线搜索 | `/v1/search`、协议内 `web_search` 工具 | 始终装配，需可用账号与模型 |
+| Codex OAuth 原生 Responses | `/v1/responses` 路由到内建 `codexoauth` | `codex_oauth.provider_enabled` |
 | Prometheus 指标 / 统计快照 | `/metrics`、`/stats`、`/stats/stream` | 默认 loopback-only |
 | SLO 违规 webhook | 状态变化时异步 POST | `slo_violation_webhook` 配置 |
 | 交互归档 | `state.dir/interactions/{round_id}/` | 默认启用 |
@@ -58,10 +58,10 @@
 
 - enabled Provider 的精确 `models` 与账号池发现结果决定模型成员资格；所有 Provider pattern 为这些具体 ID 生成候选，并按 `priority` 降序排序。
 - `model_metadata` 只按 exact ID 补充容量信息；它不发布模型、不创建候选，未匹配条目保持未使用状态。
-- 启用 `chatgpt_web.enabled` / `codex_oauth.enabled` 后，有效目录还会合成内建模型并参与同一候选链；同名模型保留全部候选，不相互覆盖。静态默认 `priority=100`，Codex OAuth 默认 `90`（可作原生 Responses 回退），ChatGPT Web 默认 `10` 且不作为回退候选。
+- 有效目录始终合成两个账号池的内建模型并参与同一候选链；同名模型保留全部候选，不相互覆盖。管理型 Provider 默认 `priority=100`，Codex OAuth 默认 `90`（可作原生 Responses 回退），ChatGPT Web 默认 `10` 且不作为回退候选。
 - 健康度与熔断：5 分钟有界样本窗口，少于 3 个样本显示 `unknown`；连续 3 次可重试失败打开 30 秒熔断，路由跳过熔断 / `unhealthy` / `credential_error` 候选。不替代账号池真实可用性判断。
 - 回退仅发生在客户端响应未提交时，且只针对网络错误、`408`、`429`、`5xx` 或流式首事件探测失败；一次已写出的 SSE/HTTP 响应绝不切换 Provider。图片任务一旦提交不回退，避免重复创建。
-- 热更新：管理页保存后经与启动期相同的完整校验激活；`client_api_keys` 索引同步重建；`state.database` 资源参数与 `chatgpt_web.enabled` / `codex_oauth.enabled` 装配开关不热切换。
+- 热更新：管理页保存后经与启动期相同的完整校验激活；`client_api_keys` 索引同步重建；`state.database` 资源参数与账号定时刷新间隔不热切换。
 
 ## 协议转换
 
@@ -91,7 +91,7 @@
 
 ### Provider
 
-- 静态 Provider：编辑、启停、优先级（`-1000`~`1000`）与回退开关，保存后热更新。
+- 管理型 Provider：编辑、启停、优先级（`-1000`~`1000`）与回退开关，保存后加密写入 DuckDB 并热更新。
 - 内建 Provider（`chatgptweb` / `codexoauth`）：展示路由启停与优先级控制、可路由账号数和模型数、不可用原因；不可删除。
 - 运行期可用性：「检查」按钮对当前 Provider 执行一次最小非流式探测，不改写配置；状态合并账号池可用性与请求健康度（`disabled` / `unknown` / `healthy` / `degraded` / `unavailable` / `credential_error` / `endpoint_drift`）。
 - 来源列仅作展示：`builtin` / `official` / `third_party`，不参与路由或安全判断。
@@ -112,8 +112,9 @@
 
 按 **ChatGPT Web** 与 **Codex OAuth** 分组，两个独立账号域，不共享任何凭据或会话：
 
-- ChatGPT Web：导入 token、批量刷新、删除、导出、OAuth 导入；只读展示文本/生图模型冷却、最近凭据刷新状态；支持「同步模型」。
-- Codex OAuth：导入凭据、刷新、删除、PKCE OAuth 导入、批量刷新所选用量、同步模型并轮询进度；展示模型缓存、发现进度/退避、上游用量窗口（套餐、`used_percent`、恢复时间）、模型冷却与额度耗尽状态。
+- ChatGPT Web：导入纯 access token 或完整 OAuth 凭据、批量刷新、删除、导出、OAuth 导入；只读展示文本/生图模型冷却、最近凭据刷新状态；支持「同步模型」。
+- Codex OAuth：导入/导出完整凭据、刷新、删除、PKCE OAuth 导入、批量刷新所选用量、同步模型并轮询进度；账号统计与 ChatGPT Web 统一为四列（总数、正常、异常/禁用、可路由），具体用量限制保留在账号行展示；同时展示模型缓存、发现进度/退避、上游用量窗口（套餐、`used_percent`、恢复时间）、模型冷却与额度耗尽状态。两类账号导出均为可直接回导的 JSON 数组。
+- 两类账号池都支持直接选择各自导出的 JSON 文件重新导入，也保留粘贴 JSON 的辅助入口；ChatGPT Web 额外支持粘贴纯 access token。文件与粘贴内容不能同时使用，单次限制 1 MiB、1000 个账号，提交或关闭弹窗后立即清除浏览器内存引用。
 - 所有列表严格脱敏：只返回稳定本地 ID、脱敏邮箱、状态与结果计数，绝不返回 token、account ID 或代理。导出接口是唯一有意返回明文 token 的接口，需二次确认且 `Cache-Control: no-store`。
 
 ### 功能集
@@ -123,11 +124,11 @@
 - **图片任务**：文生图 / 图生图任务提交与轮询；按 `owner_id` 隔离；失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
 - **图片库**：图片列表、标签、删除（不可恢复）与缩略图；内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。
 
-组件未装配时相关 API 返回 `503`，页面显示不可用状态而非空数据。`chatgpt_web.enabled` 是启动期装配开关，修改后必须重启。
+两个账号池始终装配；没有可用账号时，页面显示空池状态，数据面返回明确的无可用账号或模型错误。
 
 ## ChatGPT Web 能力
 
-启用 `chatgpt_web.enabled` 后自动注入只读内建 Provider `chatgptweb`（禁止在 `providers` 中声明 `protocol: chatgptweb`）。模型来自账号池对 `/backend-api/models` 的枚举并集，是 `/v1/models` 与路由的唯一模型权威。
+进程自动注入只读内建 Provider `chatgptweb`，该 ID 不能由管理型 Provider 目录创建。模型来自账号池对 `/backend-api/models` 的枚举并集，是 `/v1/models` 与路由的唯一模型权威。
 
 - **文本代理**：`/v1/chat/completions` 支持纯文本与 `text` / `image_url` content parts（仅 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图 ≤4000 万像素；不下载远程 URL，无 SSRF 通道；图片仅限 `user` 消息）。
 - **受限 Responses 投影**：`/v1/responses` 无状态投影，支持字符串/message-array `input`、`instructions`、`reasoning.effort`、`input_text`、data-URI `input_image` 与基础 buffered/SSE；不保存会话，不支持 tools（除 web_search）、JSON Schema、`previous_response_id`、realtime、远程图片 URL、file ID。可兼容忽略的字段在 `ignored_features` 中可审计；改变语义的字段返回 `conversion_unsupported`。
@@ -136,13 +137,14 @@
 
 ## Codex OAuth 账号池
 
-启用 `codex_oauth.enabled` 后注入只读内建 Provider `codexoauth`，**只服务原生 `POST /v1/responses`**（`/v1/chat/completions` 不能路由到它）：
+进程自动注入只读内建 Provider `codexoauth`，**只服务原生 `POST /v1/responses`**（`/v1/chat/completions` 不能路由到它）：
 
 - 模型按账号从 `/backend-api/codex/models` 自动发现并缓存 6 小时，失败指数退避；可路由模型是全部健康账号模型快照的并集，不提供 allowlist。
 - 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；`429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE 输出后不切换账号；明确 `usage_limit_reached` 记录账号/模型额度耗尽与上游恢复时间（运行期观察，非官方额度）。
 - 非流式 `/v1/responses` 在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象。
 - P0 不支持 realtime/WebSocket、`responses/compact`、网页会话或插件；`/v1/search` 与临时对话不经过 Codex 账号域。
 - 账号凭据、代理与到期时间只写 `state.database`；管理 API 严格脱敏。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。
+- 管理页可按稳定本地 ID 导出选中账号的完整凭据；该接口显式返回 `Cache-Control: no-store`，页面不预览且仅用短生命周期 Blob 触发下载。
 
 ## 可观测性
 
@@ -166,4 +168,4 @@
 - 不提供 WebSocket / OpenAI Realtime 代理、`responses/compact`；`/v1/search` 不是 OpenAI 官方端点别名。
 - 不提供请求侧 Provider 覆盖；候选顺序只由配置的 `priority` / `fallback` 决定。
 - ChatGPT Web 不提供通用 function/tool calling、工具循环、深度研究、网页插件；Codex 不提供网页会话与插件能力。
-- 单进程单工作区：`state.database` 不可多实例共享；`chatgpt_web.enabled` / `codex_oauth.enabled` 等装配开关修改后必须重启。
+- 单进程单工作区：`state.database` 不可多实例共享；账号定时刷新间隔修改后必须重启。

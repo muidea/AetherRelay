@@ -23,9 +23,6 @@ const codexUsageSnapshotTTL = 15 * time.Minute
 // background poll: the upstream observation is operator-facing and independent
 // from request routing.
 func (s *Proxy) StartCodexUsageRefresh(ctx context.Context, accountIDs []string) (proxyevents.CodexUsageProgress, error) {
-	if !s.config.CodexOAuth.Enabled {
-		return proxyevents.CodexUsageProgress{}, fmt.Errorf("Codex OAuth is not enabled")
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

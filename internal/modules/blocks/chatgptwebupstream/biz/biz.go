@@ -12,7 +12,6 @@ import (
 	upclient "ai-proxy/internal/modules/blocks/chatgptwebupstream/internal/client"
 	"ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	events "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -48,13 +47,6 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b := &Upstream{
 		Base:    basebiz.New(common.UnitID, hub, background),
 		streams: map[string]*textStream{},
-	}
-	bootstrap, err := configevents.RequestBootstrap(ctx, b.EventHub(), b.ID())
-	if err != nil {
-		return nil, cd.NewError(cd.IllegalParam, err.Error())
-	}
-	if !bootstrap.Config.ChatGPTWeb.Enabled {
-		return b, nil
 	}
 	b.topics = []string{
 		events.TopicGetUserInfo,

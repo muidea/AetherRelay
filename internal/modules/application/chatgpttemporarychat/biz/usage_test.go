@@ -82,13 +82,12 @@ func TestCompleteTurnUsageWritesEstimatedAdminEvent(t *testing.T) {
 
 func wireBootstrap(hub event.Hub, t *testing.T) (dbPath string) {
 	t.Helper()
-	dbPath = filepath.Join(t.TempDir(), "state.duckdb")
+	dbPath = filepath.Join(t.TempDir(), "ai-proxy.duckdb")
 	stateDir := t.TempDir()
 	cfgObs := event.NewSimpleObserver(configcommon.UnitID, hub)
 	cfgObs.Subscribe(configevents.TopicBootstrap, func(_ event.Event, result event.Result) {
 		result.Set(configevents.BootstrapResult{Bootstrap: configevents.Bootstrap{Config: config.Config{
 			ChatGPTWeb: config.ChatGPTWebConfig{
-				Enabled: true,
 				TemporaryChat: config.TemporaryChatConfig{
 					Enabled: true, RetentionDays: 30, MaxConversations: 20,
 					MaxMessagesPerConversation: 50, MaxMessageBytes: 8192, TurnTimeoutSeconds: 30,

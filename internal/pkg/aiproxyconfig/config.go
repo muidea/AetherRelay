@@ -145,11 +145,8 @@ type UsageStoreConfig struct {
 // DataDir is derived from state.dir and cannot be configured separately.
 // 启用后，ChatGPT Web 模型由内建 Provider 自动发现并与静态目录合成。
 type ChatGPTWebConfig struct {
-	Enabled bool
 	// ProviderEnabled controls whether the already configured account pool
-	// participates in request routing. It is deliberately separate from
-	// Enabled: the latter owns process-start lifecycle and storage setup.
-	// An omitted value follows Enabled for backwards compatibility.
+	// participates in request routing. The account pool itself is always active.
 	ProviderEnabled           bool
 	providerEnabledConfigured bool
 	// Priority controls the builtin ChatGPT Web candidate position. An omitted
@@ -164,10 +161,7 @@ type ChatGPTWebConfig struct {
 // CodexOAuthConfig enables the native Codex Responses account pool. Its
 // routable model catalog is always derived from account-level discovery.
 type CodexOAuthConfig struct {
-	Enabled bool
-	// ProviderEnabled controls routing only. It does not create or destroy the
-	// Codex OAuth account-pool runtime, so Admin can safely hot-update it.
-	// An omitted value follows Enabled for backwards compatibility.
+	// ProviderEnabled controls routing only. The account pool itself is always active.
 	ProviderEnabled           bool
 	providerEnabledConfigured bool
 	// Priority controls the builtin Codex OAuth candidate position. An omitted
@@ -279,14 +273,13 @@ func Load(path string) (Config, error) {
 		ClientAPIKeys: map[string]ClientAPIKey{},
 		State: StateConfig{
 			Dir:                  "var",
-			Database:             "state.duckdb",
+			Database:             "ai-proxy.duckdb",
 			MemoryLimit:          "256MB",
 			Threads:              2,
 			QueryCacheSeconds:    15,
 			InteractionRetention: 500,
 		},
 		ChatGPTWeb: ChatGPTWebConfig{
-			Enabled: false,
 			TemporaryChat: TemporaryChatConfig{
 				Enabled:                    true,
 				RetentionDays:              30,
@@ -296,7 +289,7 @@ func Load(path string) (Config, error) {
 				TurnTimeoutSeconds:         300,
 			},
 		},
-		CodexOAuth:    CodexOAuthConfig{Enabled: false},
+		CodexOAuth:    CodexOAuthConfig{},
 		Providers:     map[string]Provider{},
 		ModelMetadata: map[string]ModelMetadata{},
 	}
@@ -598,12 +591,6 @@ func setState(cfg *Config, key, value string) error {
 
 func setChatGPTWeb(cfg *Config, key, value string) error {
 	switch key {
-	case "enabled":
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("chatgpt_web.enabled: %w", err)
-		}
-		cfg.ChatGPTWeb.Enabled = b
 	case "provider_enabled":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -632,12 +619,6 @@ func setChatGPTWeb(cfg *Config, key, value string) error {
 
 func setCodexOAuth(cfg *Config, key, value string) error {
 	switch key {
-	case "enabled":
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("codex_oauth.enabled: %w", err)
-		}
-		cfg.CodexOAuth.Enabled = b
 	case "provider_enabled":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -894,11 +875,7 @@ func applyEnv(cfg *Config) error {
 		cfg.ArchiveFullContent = b
 	}
 	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_ENABLED"); value != "" {
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("AI_PROXY_CHATGPT_WEB_ENABLED: %w", err)
-		}
-		cfg.ChatGPTWeb.Enabled = b
+		return fmt.Errorf("AI_PROXY_CHATGPT_WEB_ENABLED is not supported; the ChatGPT Web account pool is always enabled")
 	}
 	if value := os.Getenv("AI_PROXY_CHATGPT_WEB_PROVIDER_ENABLED"); value != "" {
 		b, err := parseStrictBool(value)
@@ -924,11 +901,7 @@ func applyEnv(cfg *Config) error {
 		cfg.ChatGPTWeb.RefreshAccountIntervalMinute = n
 	}
 	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_ENABLED"); value != "" {
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("AI_PROXY_CODEX_OAUTH_ENABLED: %w", err)
-		}
-		cfg.CodexOAuth.Enabled = b
+		return fmt.Errorf("AI_PROXY_CODEX_OAUTH_ENABLED is not supported; the Codex OAuth account pool is always enabled")
 	}
 	if value := os.Getenv("AI_PROXY_CODEX_OAUTH_PROVIDER_ENABLED"); value != "" {
 		b, err := parseStrictBool(value)
@@ -1063,7 +1036,7 @@ func normalize(cfg *Config, configPath string) error {
 	cfg.InteractionRetention = cfg.State.InteractionRetention
 	cfg.ChatGPTWeb.DataDir = cfg.State.Dir
 	if !cfg.ChatGPTWeb.providerEnabledConfigured {
-		cfg.ChatGPTWeb.ProviderEnabled = cfg.ChatGPTWeb.Enabled
+		cfg.ChatGPTWeb.ProviderEnabled = true
 	}
 	if !cfg.ChatGPTWeb.priorityConfigured {
 		cfg.ChatGPTWeb.Priority = DefaultChatGPTWebProviderPriority
@@ -1072,41 +1045,17 @@ func normalize(cfg *Config, configPath string) error {
 		cfg.CodexOAuth.Priority = DefaultCodexOAuthProviderPriority
 	}
 	if !cfg.CodexOAuth.providerEnabledConfigured {
-		cfg.CodexOAuth.ProviderEnabled = cfg.CodexOAuth.Enabled
+		cfg.CodexOAuth.ProviderEnabled = true
 	}
 	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
 	if err := normalizeClientAPIKeys(cfg); err != nil {
 		return err
 	}
 	normalized := make(map[string]Provider, len(cfg.Providers))
-	for name, provider := range cfg.Providers {
-		key := strings.ToLower(strings.TrimSpace(name))
-		if key == "" {
-			return fmt.Errorf("provider name is empty")
-		}
-		if existing, ok := normalized[key]; ok {
-			return fmt.Errorf("duplicate provider name after case fold: %q and %q both map to %q", existing.Name, name, key)
-		}
-		provider.Name = key
-		// protocol 必须显式配置;空值留给 validate fail-fast,不按 provider 名推断。
-		if provider.Protocol != "" {
-			provider.Protocol = strings.ToLower(provider.Protocol)
-		}
-		provider.BaseURL = strings.TrimRight(provider.BaseURL, "/")
-		if !provider.priorityConfigured {
-			provider.Priority = DefaultProviderPriority
-		}
-		if !provider.fallbackConfigured {
-			provider.Fallback = true
-		}
-		// models 严格区分大小写,与请求 body.model 原文匹配。
-		provider.Models = normalizeModelPatterns(provider.Models)
-		endpoints, err := normalizeProviderEndpoints(provider.Endpoints)
-		if err != nil {
-			return fmt.Errorf("provider %q endpoints: %w", key, err)
-		}
-		provider.Endpoints = endpoints
-		normalized[key] = provider
+	var err error
+	normalized, err = normalizeProviders(cfg.Providers)
+	if err != nil {
+		return err
 	}
 	cfg.Providers = normalized
 
@@ -1140,6 +1089,66 @@ func normalize(cfg *Config, configPath string) error {
 	return nil
 }
 
+func normalizeProviders(providers map[string]Provider) (map[string]Provider, error) {
+	normalized := make(map[string]Provider, len(providers))
+	for name, provider := range providers {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			return nil, fmt.Errorf("provider name is empty")
+		}
+		if existing, ok := normalized[key]; ok {
+			return nil, fmt.Errorf("duplicate provider name after case fold: %q and %q both map to %q", existing.Name, name, key)
+		}
+		provider.Name = key
+		// protocol 必须显式配置;空值留给 validate fail-fast,不按 provider 名推断。
+		if provider.Protocol != "" {
+			provider.Protocol = strings.ToLower(provider.Protocol)
+		}
+		provider.BaseURL = strings.TrimRight(provider.BaseURL, "/")
+		if !provider.priorityConfigured {
+			provider.Priority = DefaultProviderPriority
+		}
+		if !provider.fallbackConfigured {
+			provider.Fallback = true
+		}
+		// models 严格区分大小写,与请求 body.model 原文匹配。
+		provider.Models = normalizeModelPatterns(provider.Models)
+		endpoints, err := normalizeProviderEndpoints(provider.Endpoints)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q endpoints: %w", key, err)
+		}
+		provider.Endpoints = endpoints
+		normalized[key] = provider
+	}
+	return normalized, nil
+}
+
+// ConfigureProviderPolicy marks explicit managed values so zero priority and
+// false fallback survive normalization.
+func ConfigureProviderPolicy(provider *Provider, priority int, fallback bool) {
+	if provider == nil {
+		return
+	}
+	provider.Priority = priority
+	provider.priorityConfigured = true
+	provider.Fallback = fallback
+	provider.fallbackConfigured = true
+}
+
+// ReplaceProviders validates a dynamically managed Provider snapshot against
+// the same contracts used for startup configuration.
+func ReplaceProviders(cfg Config, providers map[string]Provider) (Config, error) {
+	normalized, err := normalizeProviders(providers)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Providers = normalized
+	if err := validate(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
 // validate 在启动期做完整校验,把配置错误尽早暴露。
 
 func validateMetricsCIDRs(cidrs []string) error {
@@ -1159,14 +1168,6 @@ func validateMetricsCIDRs(cidrs []string) error {
 }
 
 func validate(cfg Config) error {
-	chatGPTProviderEnabled := EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb)
-	codexProviderEnabled := EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth)
-	if len(cfg.Providers) == 0 && !chatGPTProviderEnabled && !codexProviderEnabled {
-		return fmt.Errorf("no providers configured; declare providers in config.yaml")
-	}
-	if !hasEnabledProvider(cfg.Providers) && !chatGPTProviderEnabled && !codexProviderEnabled {
-		return fmt.Errorf("no enabled providers configured")
-	}
 	// client_api_keys 是归属机制而非强制登录;非 loopback 监听不再要求 inbound key。
 	// 生产环境需由防火墙/反代等独立接入层保护(见闭包方案 §7.5)。
 	if err := validateClientAPIKeys(cfg); err != nil {
@@ -1242,9 +1243,8 @@ func validateHTTPBaseURL(raw string) error {
 
 func validateProviders(cfg Config) error {
 	for name, provider := range cfg.Providers {
-		// chatgptweb is a reserved builtin provider when chatgpt_web.enabled is
-		// true. Explicit YAML entries are a hard configuration error — there is
-		// no compatibility bridge or silent migration.
+		// chatgptweb is a reserved, always-assembled builtin provider. Managed
+		// entries using its ID or protocol are a hard configuration error.
 		if strings.EqualFold(strings.TrimSpace(name), "chatgptweb") || strings.TrimSpace(provider.Protocol) == "chatgptweb" {
 			return fmt.Errorf("provider %q: protocol chatgptweb is reserved for the builtin provider; remove providers.%s and enable chatgpt_web instead", name, name)
 		}
@@ -1365,15 +1365,6 @@ func normalizeLogFormat(value string) string {
 	default:
 		return "json"
 	}
-}
-
-func hasEnabledProvider(providers map[string]Provider) bool {
-	for _, provider := range providers {
-		if !provider.Disabled {
-			return true
-		}
-	}
-	return false
 }
 
 func stripComment(line string) string {
@@ -1656,10 +1647,9 @@ func EffectiveChatGPTWebProviderPriority(web ChatGPTWebConfig) int {
 }
 
 // EffectiveChatGPTWebProviderEnabled returns the route-level enablement for
-// the builtin provider. In-memory fixtures and legacy YAML without an
-// explicit provider_enabled key preserve the lifecycle Enabled value.
+// the builtin provider. An omitted provider_enabled key defaults to true.
 func EffectiveChatGPTWebProviderEnabled(web ChatGPTWebConfig) bool {
-	return web.Enabled && (!web.providerEnabledConfigured || web.ProviderEnabled)
+	return !web.providerEnabledConfigured || web.ProviderEnabled
 }
 
 // EffectiveCodexOAuthProviderPriority returns the persisted builtin priority
@@ -1674,7 +1664,7 @@ func EffectiveCodexOAuthProviderPriority(codex CodexOAuthConfig) int {
 // EffectiveCodexOAuthProviderEnabled is the Codex counterpart of
 // EffectiveChatGPTWebProviderEnabled.
 func EffectiveCodexOAuthProviderEnabled(codex CodexOAuthConfig) bool {
-	return codex.Enabled && (!codex.providerEnabledConfigured || codex.ProviderEnabled)
+	return !codex.providerEnabledConfigured || codex.ProviderEnabled
 }
 
 // ProviderMatchesModel 判断 provider 的 models 模式是否匹配 model(区分大小写,仅 trim)。
@@ -1936,7 +1926,7 @@ func normalizeState(state *StateConfig, configPath string) error {
 	state.Dir = filepath.Clean(state.Dir)
 	state.Database = strings.TrimSpace(state.Database)
 	if state.Database == "" {
-		state.Database = "state.duckdb"
+		state.Database = "ai-proxy.duckdb"
 	}
 	if filepath.IsAbs(state.Database) || strings.Contains(state.Database, "://") || strings.Contains(filepath.Clean(state.Database), "..") {
 		return fmt.Errorf("state.database must be a file beneath state.dir")

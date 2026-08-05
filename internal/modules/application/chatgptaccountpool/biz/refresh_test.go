@@ -1,7 +1,9 @@
 package biz
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -15,9 +17,19 @@ import (
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	"ai-proxy/internal/pkg/aiproxycredential"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
+
+func refreshTestCodec(t *testing.T) *aiproxycredential.Codec {
+	t.Helper()
+	codec, err := aiproxycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codec
+}
 
 type refreshTestOAuthClient struct {
 	calls atomic.Int32
@@ -55,7 +67,7 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(nil)
 
-	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
 	if _, _, err := accounts.Add([]string{"account-token"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +122,7 @@ func TestManualRefreshInFlightDuringTeardownExitsSafely(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	background := task.NewBackgroundRoutine(8)
 
-	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
 	if _, _, err := accounts.Add([]string{"account-token"}, "web"); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +166,7 @@ func TestRequestTextTokenRefreshCoalescesAndRotates(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(nil)
 
-	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
 	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +220,7 @@ func TestRequestTextTokenRefreshUsesAccountProxy(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(nil)
 
-	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
 	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +248,7 @@ func TestTransientOAuthRefreshFailureRetainsAccount(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(nil)
 
-	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1)
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
 	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
 		t.Fatal(err)
 	}

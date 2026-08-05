@@ -12,6 +12,7 @@ import (
 	"time"
 
 	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	"ai-proxy/internal/pkg/aiproxycredential"
 	"ai-proxy/internal/pkg/aiproxystate"
 	"github.com/google/uuid"
 )
@@ -21,6 +22,7 @@ const (
 	defaultTransientCooldown = 30 * time.Second
 	modelDiscoveryRetryBase  = 30 * time.Second
 	modelDiscoveryRetryMax   = 5 * time.Minute
+	secureDocumentScope      = "codex_oauth_accounts"
 )
 
 type cooldown struct {
@@ -68,22 +70,26 @@ type account struct {
 }
 
 type Store struct {
-	mu        sync.Mutex
-	documents *aiproxystate.Documents
-	items     map[string]*account
-	order     []string
-	index     int
+	mu          sync.Mutex
+	documents   *aiproxystate.Documents
+	credentials *aiproxycredential.Codec
+	items       map[string]*account
+	order       []string
+	index       int
 	// catalogVersion increments whenever an account's routing eligibility or
 	// cached model capability changes.
 	catalogVersion uint64
 }
 
-func Open(databasePath, memoryLimit string, threads int) (*Store, error) {
+func Open(databasePath, memoryLimit string, threads int, codec *aiproxycredential.Codec) (*Store, error) {
+	if codec == nil {
+		return nil, fmt.Errorf("account credential codec is required")
+	}
 	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{documents: documents, items: map[string]*account{}}
+	s := &Store{documents: documents, credentials: codec, items: map[string]*account{}}
 	if err := s.load(); err != nil {
 		_ = documents.Close()
 		return nil, fmt.Errorf("load codex OAuth account state: %w", err)
@@ -99,13 +105,21 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) load() error {
-	rows, err := s.documents.LoadCodexOAuthAccounts()
+	return s.loadEncrypted()
+}
+
+func (s *Store) loadEncrypted() error {
+	rows, err := s.documents.LoadSecureDocuments(secureDocumentScope)
 	if err != nil {
 		return err
 	}
 	for _, row := range rows {
+		payload, err := s.credentials.Open(secureDocumentScope, row.ID, row.Payload)
+		if err != nil {
+			return fmt.Errorf("decrypt account %q: %w", row.ID, err)
+		}
 		var item account
-		if err := json.Unmarshal(row.Payload, &item); err != nil {
+		if err := json.Unmarshal(payload, &item); err != nil {
 			return fmt.Errorf("decode account %q: %w", row.ID, err)
 		}
 		if item.ID == "" {
@@ -124,7 +138,11 @@ func (s *Store) load() error {
 }
 
 func (s *Store) saveLocked() error {
-	rows := make([]aiproxystate.CodexOAuthAccountRow, 0, len(s.order))
+	return s.saveEncryptedLocked()
+}
+
+func (s *Store) saveEncryptedLocked() error {
+	rows := make([]aiproxystate.SecureDocumentRow, 0, len(s.order))
 	for position, id := range s.order {
 		item := s.items[id]
 		if item == nil {
@@ -134,9 +152,13 @@ func (s *Store) saveLocked() error {
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aiproxystate.CodexOAuthAccountRow{ID: id, Position: position, Payload: payload})
+		sealed, err := s.credentials.Seal(secureDocumentScope, id, payload)
+		if err != nil {
+			return err
+		}
+		rows = append(rows, aiproxystate.SecureDocumentRow{ID: id, Position: position, Payload: sealed})
 	}
-	return s.documents.ReplaceCodexOAuthAccounts(rows)
+	return s.documents.ReplaceSecureDocuments(secureDocumentScope, rows)
 }
 
 func (s *Store) List() []events.AccountView {
@@ -326,6 +348,29 @@ func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
 		return events.CredentialInput{}, false
 	}
 	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy}, true
+}
+
+func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]events.CredentialInput, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		item := s.items[id]
+		if item == nil || strings.TrimSpace(item.AccessToken) == "" || strings.TrimSpace(item.RefreshToken) == "" {
+			continue
+		}
+		result = append(result, events.CredentialInput{
+			AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken,
+			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy,
+		})
+	}
+	return result
 }
 
 func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.RefreshTokenResult, error) {

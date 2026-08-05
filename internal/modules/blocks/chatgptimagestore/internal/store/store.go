@@ -63,7 +63,7 @@ func Open(root, databasePath, memoryLimit string, threads int) (*Store, error) {
 
 // New is retained for direct package tests. Production startup must call Open.
 func New(root string) *Store {
-	s, err := Open(root, filepath.Join(root, "state.duckdb"), "128MB", 1)
+	s, err := Open(root, filepath.Join(root, "ai-proxy.duckdb"), "128MB", 1)
 	if err != nil {
 		panic(err)
 	}

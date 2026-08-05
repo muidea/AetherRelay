@@ -71,17 +71,15 @@ func (s *Admin) ConfigSnapshot() config.Config {
 	return bootstrap.Config
 }
 
-// ChatGPTWebEnabled reports whether this Admin runtime was configured with the
-// ChatGPT Web component enabled. The component is assembled at process start,
-// so changing this setting requires a restart before its EventHub subscribers
-// can serve management requests.
-func (s *Admin) ChatGPTWebEnabled() bool {
-	return s.ConfigSnapshot().ChatGPTWeb.Enabled
-}
-
-// CodexOAuthEnabled reports the separately assembled Codex OAuth component.
-func (s *Admin) CodexOAuthEnabled() bool { return s.ConfigSnapshot().CodexOAuth.Enabled }
-
 func (s *Admin) UpdateConfig(cfg config.Config) error {
 	return configevents.Activate(context.Background(), s.EventHub(), s.ID(), cfg)
+}
+
+func (s *Admin) ReplaceProviders(providers map[string]config.Provider) error {
+	return configevents.ReplaceProviders(context.Background(), s.EventHub(), s.ID(), providers)
+}
+
+func (s *Admin) ProviderStorageAvailable() bool {
+	bootstrap, err := configevents.RequestBootstrap(context.Background(), s.EventHub(), s.ID())
+	return err == nil && bootstrap.ProviderStorageAvailable
 }
