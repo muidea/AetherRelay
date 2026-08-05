@@ -163,7 +163,38 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 ## 容器部署
 
-### Docker Compose（推荐）
+### 一键部署脚本（推荐）
+
+仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：生成配置（含容器适配）、收集 Provider 密钥、初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、启动容器并等待就绪。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略）。
+
+```bash
+# 交互式：按提示输入 Provider 密钥，并在容器内交互生成 Admin 密码哈希
+./scripts/deploy-docker.sh
+
+# 无交互（CI / 无人值守）：预先用 `ai-proxy admin password-hash` 生成哈希
+./scripts/deploy-docker.sh --admin-password-hash '$argon2id$v=19$...'
+```
+
+常用参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--dir <path>` | 部署目录，默认 `./deploy` |
+| `--image <image>` | 镜像引用，默认 `ghcr.io/muidea/ai-proxy:latest`（也可用 `AI_PROXY_IMAGE`） |
+| `--admin-username <name>` | Admin 用户名，默认 `ops-admin`（仅限 `[A-Za-z0-9._-]`） |
+| `--admin-password-hash <phc>` | 直接注入 Argon2id PHC 哈希（跳过交互生成） |
+| `--skip-admin` | 不启用 Admin 登录（仅本机访问） |
+| `--listen <addr>` | 宿主机端口绑定，默认 `127.0.0.1:8080`；改 `0.0.0.0:8080` 会放开到所有网卡并打印安全警告 |
+
+要点：
+
+- **Admin 凭据初始化**：密码哈希只经交互式 TTY 生成（`password-hash` 在容器内运行，密码不进入参数/环境变量/日志），写入 `.env` 的 `AI_PROXY_ADMIN_PASSWORD_HASH`，`config.yaml` 中以 `${AI_PROXY_ADMIN_PASSWORD_HASH}` 引用，哈希不落配置明文。
+- 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
+- `.env` 生成后为 `chmod 600`，含 Provider 密钥与 Admin 哈希，务必保持私有、不入版本库。
+- 重复运行时保留已有 `config.yaml` 不覆盖；`.env` 中已配置的值保留为默认。
+- 部署目录缺省 `chown 10001:10001`（尽力而为，需 root/sudo）；若配置目录不可写，管理页只读但容器可正常运行。
+
+### Docker Compose（手动）
 
 仓库中的 [`compose.yaml`](../compose.yaml) 是推荐起点。先建立一个可原子替换的**目录**挂载，而不是只挂载单个 `config.yaml` 文件：管理页保存 Provider、客户端 Key 与实例默认语言时会通过临时文件和 `rename` 更新配置。
 
