@@ -49,7 +49,7 @@ internal/modules/application/proxyapi  OpenAI/Anthropic Application Module：Pro
 internal/modules/application/adminapi  Provider 管理与 usage Application Module
 internal/initiators/routeregistry  magicEngine RouteRegistry 与 HTTP listener Initiator
 
-internal/pkg/aiproxyconfig       配置加载、规范化、启动期校验；解析 model_catalog → 有序 RouteOwners
+internal/pkg/aiproxyconfig       配置加载、规范化、启动期校验；model_metadata 仅保存可选补充信息
 internal/pkg/aiproxyarchive      interactions/{round_id}/ 轮次归档与保留策略
 internal/pkg/aiproxyclientauth   客户端 API Key 身份解析（SHA-256 索引，仅内存）
 internal/pkg/aiproxyusage        DuckDB 用量 Store（Start/Complete/Dashboard/Events/导出）
@@ -64,13 +64,13 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 ## 路由与协议合同（核心）
 
-`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效目录 = 静态 `model_catalog` ∪ 两个账号池各自的有效模型快照并集；同名来源保留为按优先级排序的候选，而非相互覆盖。Codex 不提供模型 allowlist，账号发现快照是其唯一模型权威。`/v1/models` 与 `ResolveTransportPlans` 必须读同一 `effectivecatalog.Snapshot`。
+`chatgpt_web.enabled` 与 `codex_oauth.enabled` 分别自动注入内建 Provider `chatgptweb` / `codexoauth`（不可配置、不写 YAML）。有效模型 ID 来自 enabled Provider 的精确 `models` 与两个账号池的发现快照；同名来源保留为按优先级排序的候选。`model_metadata` 只在有效目录构建时按 exact ID 覆盖可选容量，不改变模型成员资格和候选链。`/v1/models` 与 `ResolveTransportPlans` 必须读同一 `effectivecatalog.Snapshot`。
 
 
 
 两阶段权威，不要绕过：
 
-1. **启动期** `config.Load`：每个静态 `model_catalog` 条目必须 **exact、大小写敏感** 地匹配至少一个 enabled provider 的 `models` pattern，按 `priority` 降序写入 `ModelInfo.RouteOwners` / `ResolvedModelRoute`（`RouteOwner` 保留首候选兼容投影）。`model_catalog` 只保存容量元数据；enabled provider 必须显式配置 `endpoints`（不得从 protocol 推断），它是接口支持的唯一配置声明。ChatGPT Web 模型不写入 YAML，由运行时发现。
+1. **启动期** `config.Load`：校验 Provider、精确模型 ID 与可选 `model_metadata`；metadata 条目允许暂时没有对应模型。`effectivecatalog` 再合并 Provider 精确模型和账号池发现模型，以所有 Provider pattern 生成候选并按 `priority` 排序，最后按 exact ID 覆盖 metadata。enabled provider 必须显式配置 `endpoints`（不得从 protocol 推断），它是接口支持的唯一配置声明。
 2. **请求期** `ResolveTransportPlans(cfg, snap, method, path, model)`（`internal/modules/application/proxyapi/service/proxy/route.go`）：从同一 `effectivecatalog.Snapshot` 查找 exact model（静态或内建），再套固定转发矩阵生成候选 `TransportPlan`。请求不能用 `default_provider`、旧 `fallbacks` 列表、`X-AI-Provider` / `?provider=` / `provider/model` 前缀覆盖顺序。仅限 response 未写出时，按每候选 `fallback` 策略尝试可重试失败的下一项。禁止在 YAML 中声明 `protocol: chatgptweb`。
 
 入站白名单：
@@ -108,7 +108,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
-热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 候选链或 Provider endpoint 合同。
+热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 Provider 模型来源、候选链或 endpoint 合同。
 
 ## 安全与资源边界
 

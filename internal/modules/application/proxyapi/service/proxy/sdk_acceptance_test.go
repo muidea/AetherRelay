@@ -74,14 +74,12 @@ func TestOpenAISDKModelsChatEmbeddingsAndTypedError(t *testing.T) {
 				},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				RouteOwner: "openai",
 			},
 			"text-embedding-3-large": {
 				ID: "text-embedding-3-large", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				RouteOwner: "openai",
 			},
 		},
 	}, upstream)
@@ -166,10 +164,9 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 				Endpoints: []string{config.ProviderEndpointMessages},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"claude-test": {
 				ID: "claude-test", ContextWindowTokens: 200000, MaxOutputTokens: 8192,
-				RouteOwner: "anthropic",
 			},
 		},
 	}, nativeUpstream)
@@ -214,10 +211,9 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				RouteOwner: "openai",
 			},
 		},
 	}, convUpstream)
@@ -287,10 +283,9 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				RouteOwner: "openai",
 			},
 		},
 	}, errUpstream)

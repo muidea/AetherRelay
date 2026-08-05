@@ -88,8 +88,8 @@ func TestChatGPTWebSearchEndpointForcesBuiltinProviderDespiteModelConflict(t *te
 				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "preferred-static"},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
 		},
 	})
 	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {

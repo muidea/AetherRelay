@@ -17,7 +17,7 @@ func testRouteConfig() config.Config {
 				Protocol: "openai",
 				BaseURL:  "https://openai.test/v1",
 				APIKey:   "k",
-				Models:   []string{"gpt-*", "text-embedding-*"},
+				Models:   []string{"gpt-*", "gpt-test", "text-embedding-*", "text-embedding-test"},
 				Endpoints: []string{
 					config.ProviderEndpointChatCompletions,
 					config.ProviderEndpointResponses,
@@ -30,7 +30,7 @@ func testRouteConfig() config.Config {
 				Protocol:  "openai",
 				BaseURL:   "https://openai-chat.test/v1",
 				APIKey:    "k",
-				Models:    []string{"chat-only-*"},
+				Models:    []string{"chat-only-*", "chat-only-model"},
 				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 			"anthropic": {
@@ -38,26 +38,22 @@ func testRouteConfig() config.Config {
 				Protocol:  "anthropic",
 				BaseURL:   "https://anthropic.test",
 				APIKey:    "k",
-				Models:    []string{"claude-*"},
+				Models:    []string{"claude-*", "claude-test"},
 				Endpoints: []string{config.ProviderEndpointMessages},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				RouteOwner: "openai-full",
 			},
 			"text-embedding-test": {
 				ID: "text-embedding-test", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				RouteOwner: "openai-full",
 			},
 			"chat-only-model": {
 				ID: "chat-only-model", ContextWindowTokens: 32000, MaxOutputTokens: 4096,
-				RouteOwner: "openai-chat-only",
 			},
 			"claude-test": {
 				ID: "claude-test", ContextWindowTokens: 200000, MaxOutputTokens: 8192,
-				RouteOwner: "anthropic",
 			},
 		},
 	}
@@ -197,10 +193,9 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"shared": {
 				ID: "shared", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				RouteOwner: "primary", RouteOwners: []string{"standby-disabled", "backup", "primary"},
 			},
 		},
 	}
@@ -224,9 +219,9 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 func TestValidateConversionRequestRejectsFeatures(t *testing.T) {
 	plan := TransportPlan{
 		ModelID:          "claude-test",
+		RouteOwner:       "anthropic",
 		ClientProtocol:   ClientProtocolOpenAI,
 		ClientEndpoint:   "/v1/chat/completions",
-		RouteOwner:       "anthropic",
 		UpstreamProtocol: "anthropic",
 		UpstreamEndpoint: "/v1/messages",
 		Mode:             TransportModeOpenAIToAnthropic,

@@ -378,15 +378,17 @@ func mergeFilterOptions(cfg config.Config, usageRes usage.FilterOptionsResult) (
 		modelMap[id] = o
 		return o
 	}
-	for id, info := range cfg.ModelCatalog {
-		mid := id
-		if info.ID != "" {
-			mid = info.ID
-		}
-		if mid == "" {
+	for _, provider := range cfg.Providers {
+		if provider.Disabled {
 			continue
 		}
-		ensureModel(mid).InConfig = true
+		for _, pattern := range provider.Models {
+			mid := strings.TrimSpace(pattern)
+			if mid == "" || mid == "*" || strings.HasSuffix(mid, "*") {
+				continue
+			}
+			ensureModel(mid).InConfig = true
+		}
 	}
 	for _, id := range usageRes.Models {
 		if id == "" {

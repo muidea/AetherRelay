@@ -7,7 +7,7 @@
 | 功能域 | 入口 | 启用条件 |
 | --- | --- | --- |
 | OpenAI / Anthropic 标准代理 | `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/completions`、`/v1/embeddings`、`/v1/models` | 配置静态 Provider |
-| 模型路由候选链 | 请求体 exact `model` → 有序候选 | `model_catalog` + enabled Provider |
+| 模型路由候选链 | 请求体 exact `model` → 有序候选 | Provider 精确模型 / 账号池发现 + Provider pattern |
 | 协议转换 | OpenAI ↔ Anthropic 基础文本 | 候选链中跨协议 Provider 且语义可保留 |
 | 客户端 API Key | 全部数据端点认证 | `client_api_keys` 或 Admin 管理端创建 |
 | 用量统计与 DuckDB 持久化 | Admin「使用统计」、`/admin/api/usage/export.csv` | 默认启用（`state.database`） |
@@ -56,7 +56,8 @@
 
 路由只按请求体中的 exact `model`（严格区分大小写）解析。**不存在** `default_provider`、旧 `fallbacks` 列表、`X-AI-Provider` / `?provider=` / `provider/model` 前缀等请求侧覆盖手段。
 
-- `model_catalog` 是静态模型的权威：每个条目精确匹配至少一个 enabled Provider 的 `models` pattern，按 `priority` 降序写入候选链。
+- enabled Provider 的精确 `models` 与账号池发现结果决定模型成员资格；所有 Provider pattern 为这些具体 ID 生成候选，并按 `priority` 降序排序。
+- `model_metadata` 只按 exact ID 补充容量信息；它不发布模型、不创建候选，未匹配条目保持未使用状态。
 - 启用 `chatgpt_web.enabled` / `codex_oauth.enabled` 后，有效目录还会合成内建模型并参与同一候选链；同名模型保留全部候选，不相互覆盖。静态默认 `priority=100`，Codex OAuth 默认 `90`（可作原生 Responses 回退），ChatGPT Web 默认 `10` 且不作为回退候选。
 - 健康度与熔断：5 分钟有界样本窗口，少于 3 个样本显示 `unknown`；连续 3 次可重试失败打开 30 秒熔断，路由跳过熔断 / `unhealthy` / `credential_error` 候选。不替代账号池真实可用性判断。
 - 回退仅发生在客户端响应未提交时，且只针对网络错误、`408`、`429`、`5xx` 或流式首事件探测失败；一次已写出的 SSE/HTTP 响应绝不切换 Provider。图片任务一旦提交不回退，避免重复创建。

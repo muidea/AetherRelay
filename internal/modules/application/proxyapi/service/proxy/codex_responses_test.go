@@ -97,8 +97,8 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "primary"},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
 		},
 	})
 	store := usage.NewMemoryStore()
@@ -137,8 +137,8 @@ func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "backup"},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
 		},
 	})
 	store := usage.NewMemoryStore()

@@ -21,9 +21,9 @@ import (
 // Main 保持既有 CLI 行为；cmd/ai-proxy-probe 只负责调用该进程服务。
 func Main() {
 	configPath := flag.String("config", os.Getenv("AI_PROXY_CONFIG"), "config file path")
-	providerName := flag.String("provider", "", "RouteOwner provider name")
+	providerName := flag.String("provider", "", "provider name")
 	endpoint := flag.String("endpoint", "", "direct endpoint (chat_completions|messages|responses|completions|embeddings)")
-	model := flag.String("model", "", "catalog model id (exact)")
+	model := flag.String("model", "", "model id (exact)")
 	timeout := flag.Duration("timeout", 30*time.Second, "request timeout")
 	stream := flag.Bool("stream", false, "also probe streaming when endpoint supports it")
 	flag.Parse()
@@ -50,13 +50,8 @@ func Main() {
 		fmt.Fprintf(os.Stderr, "provider %q does not declare direct endpoint %q\n", *providerName, *endpoint)
 		os.Exit(1)
 	}
-	info, ok := config.LookupModel(cfg, *model)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "model %q not in model_catalog\n", *model)
-		os.Exit(1)
-	}
-	if info.RouteOwner != *providerName {
-		fmt.Fprintf(os.Stderr, "model %q RouteOwner=%q, not %q\n", *model, info.RouteOwner, *providerName)
+	if !config.ProviderMatchesModel(*providerName, provider, *model) {
+		fmt.Fprintf(os.Stderr, "provider %q does not match model %q\n", *providerName, *model)
 		os.Exit(1)
 	}
 
@@ -98,8 +93,8 @@ type Result struct {
 	Conclusion   string
 }
 
-// Check 对已解析配置执行一次最小、非流式 direct probe。调用方只能使用配置中的
-// RouteOwner、已声明 endpoint 和归属该 Provider 的 catalog model。
+// Check 对已解析配置执行一次最小、非流式 direct probe。自动模式只使用
+// Provider 显式声明的 exact model；通配模型必须由 CLI 显式指定。
 func Check(ctx context.Context, cfg config.Config, providerName string) (Result, error) {
 	provider, ok := cfg.Providers[providerName]
 	if !ok || provider.Disabled {
@@ -108,14 +103,15 @@ func Check(ctx context.Context, cfg config.Config, providerName string) (Result,
 	if len(provider.Endpoints) == 0 {
 		return Result{}, fmt.Errorf("provider %q has no direct endpoint", providerName)
 	}
-	models := make([]string, 0)
-	for id, info := range cfg.ModelCatalog {
-		if info.RouteOwner == providerName {
+	models := make([]string, 0, len(provider.Models))
+	for _, pattern := range provider.Models {
+		id := strings.TrimSpace(pattern)
+		if id != "" && id != "*" && !strings.HasSuffix(id, "*") {
 			models = append(models, id)
 		}
 	}
 	if len(models) == 0 {
-		return Result{}, fmt.Errorf("provider %q has no catalog model", providerName)
+		return Result{}, fmt.Errorf("provider %q has no exact model for automatic probe", providerName)
 	}
 	sort.Strings(models)
 	model := models[0]

@@ -3,8 +3,6 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
-	"sort"
-	"strings"
 	"time"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -27,8 +25,9 @@ type ModelRecord struct {
 	MaxOutputTokens     int    `json:"maxOutputTokens,omitempty"`
 }
 
-// handleModels returns the effective catalog (static model_catalog plus
-// auto-discovered ChatGPT Web models) as an OpenAI-compatible model list.
+// handleModels returns the effective catalog (exact provider models, optional
+// static metadata, and auto-discovered account-pool models) as an
+// OpenAI-compatible model list.
 // 不转发上游;字段 contextWindowTokens / maxOutputTokens 为扩展元数据。
 // RouteOwner 仅用于内部路由、归档与观测，不作为客户端发现接口的一部分。
 func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID string) {
@@ -95,8 +94,7 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 			ID:     route.ModelID,
 			Object: "model",
 		}
-		// Auto-discovered models omit capacity when unknown; static catalog keeps
-		// its required capacity fields when present.
+		// Every source omits optional capacity metadata when unknown or not applicable.
 		if route.ContextWindowTokens > 0 {
 			rec.ContextWindowTokens = route.ContextWindowTokens
 		}
@@ -108,9 +106,7 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 	return ModelsListResponse{Object: "list", Data: data}
 }
 
-// ReserveMetricsModels 为 metrics 预占 model label 槽位。
-// 1) 各 provider 的精确 models(不含通配);
-// 2) model_catalog 中已确定 RouteOwner 的 ID。
+// ReserveMetricsModels 为 metrics 预占各 Provider 精确 models 的 label 槽位。
 func ReserveMetricsModels(reg metricsport.Reporter, cfg config.Config) {
 	if reg == nil {
 		return
@@ -120,19 +116,5 @@ func ReserveMetricsModels(reg metricsport.Reporter, cfg config.Config) {
 			continue
 		}
 		reg.ReserveModels(name, provider.Models)
-	}
-	catalogIDs := make([]string, 0, len(cfg.ModelCatalog))
-	for _, info := range cfg.ModelCatalog {
-		if id := strings.TrimSpace(info.ID); id != "" {
-			catalogIDs = append(catalogIDs, id)
-		}
-	}
-	sort.Strings(catalogIDs)
-	for _, id := range catalogIDs {
-		info, ok := cfg.ModelCatalog[id]
-		if !ok || strings.TrimSpace(info.RouteOwner) == "" {
-			continue
-		}
-		reg.ReserveModels(info.RouteOwner, []string{id})
 	}
 }

@@ -80,5 +80,5 @@ func assertGatewayRoutes(t *testing.T) {
 }
 
 func testConfig(dir string) config.Config {
-	return config.Config{ListenAddr: "127.0.0.1:0", UsageStore: config.UsageStoreConfig{Path: filepath.Join(dir, "usage.duckdb"), MemoryLimit: "256MB", Threads: 2}, InteractionDir: filepath.Join(dir, "interactions"), InteractionRetention: 2, ClientAPIKeys: map[string]config.ClientAPIKey{"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true}}, Providers: map[string]config.Provider{}, ModelCatalog: map[string]config.ModelInfo{}}
+	return config.Config{ListenAddr: "127.0.0.1:0", UsageStore: config.UsageStoreConfig{Path: filepath.Join(dir, "usage.duckdb"), MemoryLimit: "256MB", Threads: 2}, InteractionDir: filepath.Join(dir, "interactions"), InteractionRetention: 2, ClientAPIKeys: map[string]config.ClientAPIKey{"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true}}, Providers: map[string]config.Provider{}, ModelMetadata: map[string]config.ModelMetadata{}}
 }

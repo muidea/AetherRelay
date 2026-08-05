@@ -154,11 +154,11 @@ func TestCheckUsesStableFirstCatalogModel(t *testing.T) {
 	defer upstream.Close()
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"route": {Protocol: "openai", BaseURL: upstream.URL, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"route": {Protocol: "openai", BaseURL: upstream.URL, Models: []string{"z-model", "a-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
-			"z-model": {RouteOwner: "route"},
-			"a-model": {RouteOwner: "route"},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"z-model": {},
+			"a-model": {},
 		},
 	}
 	result, err := Check(t.Context(), cfg, "route")

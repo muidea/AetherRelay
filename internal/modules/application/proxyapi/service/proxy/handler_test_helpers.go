@@ -13,8 +13,8 @@ import (
 	"ai-proxy/internal/pkg/aiproxyusage"
 )
 
-// mustHandlerConfig 为测试构造已解析 Config:补齐 endpoints 与 catalog RouteOwner。
-// 生产路径必须走 config.Load;Handler 不再 materialize。
+// mustHandlerConfig 为测试构造已解析 Config:补齐 endpoints，并将历史夹具中的
+// metadata ID 显式加入匹配 Provider，避免 metadata 在测试中充当模型来源。
 func mustHandlerConfig(cfg config.Config) config.Config {
 	// 所有业务请求均需有效客户端 Key。未专门覆盖认证场景的测试统一使用此默认凭据；
 	// 认证测试可显式替换或删除它。
@@ -27,10 +27,10 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
-	if cfg.ModelCatalog == nil {
-		cfg.ModelCatalog = map[string]config.ModelInfo{}
+	if cfg.ModelMetadata == nil {
+		cfg.ModelMetadata = map[string]config.ModelMetadata{}
 	}
-	seedCommonModels := len(cfg.ModelCatalog) == 0
+	seedCommonModels := len(cfg.ModelMetadata) == 0
 	enabledProviders := 0
 	for _, provider := range cfg.Providers {
 		if !provider.Disabled {
@@ -68,83 +68,55 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 		}
 		cfg.Providers[name] = provider
 	}
-	// 测试 helper:仅空 catalog 时从精确 models 合成条目。
-	if seedCommonModels {
-		for name, provider := range cfg.Providers {
-			if provider.Disabled {
-				continue
-			}
-			for _, pattern := range provider.Models {
-				if pattern == "" || containsStar(pattern) {
-					continue
-				}
-				if _, ok := cfg.ModelCatalog[pattern]; ok {
-					continue
-				}
-				cfg.ModelCatalog[pattern] = config.ModelInfo{
-					ID:                  pattern,
-					ContextWindowTokens: 128000,
-					MaxOutputTokens:     16384,
-					RouteOwner:          name,
-				}
+	modelIDs := make([]string, 0, len(cfg.ModelMetadata))
+	for id := range cfg.ModelMetadata {
+		modelIDs = append(modelIDs, id)
+	}
+	for _, modelID := range modelIDs {
+		for _, owner := range matchingEnabled(cfg.Providers, modelID) {
+			provider := cfg.Providers[owner]
+			if !hasExactModel(provider.Models, modelID) {
+				provider.Models = append(provider.Models, modelID)
+				cfg.Providers[owner] = provider
 			}
 		}
+	}
+	if seedCommonModels {
 		for _, modelID := range []string{
 			"gpt-test", "deepseek-chat", "claude-test", "gpt-5.4", "kimi-k2",
 			"healthcheck", "gpt-4o", "shared-model",
 		} {
-			if _, ok := cfg.ModelCatalog[modelID]; ok {
-				continue
-			}
 			matches := matchingEnabled(cfg.Providers, modelID)
 			if len(matches) != 1 {
 				continue
 			}
 			owner := matches[0]
-			cfg.ModelCatalog[modelID] = config.ModelInfo{
-				ID:                  modelID,
-				ContextWindowTokens: 128000,
-				MaxOutputTokens:     16384,
-				RouteOwner:          owner,
-			}
-		}
-	} else {
-		// 显式 catalog:仅重绑已有条目失效的 RouteOwner,不新增 model。
-		for modelID, info := range cfg.ModelCatalog {
-			if info.RouteOwner != "" {
-				if p, ok := cfg.Providers[info.RouteOwner]; ok && !p.Disabled && config.ProviderMatchesModel(info.RouteOwner, p, info.ID) {
-					continue
-				}
-			}
-			matches := matchingEnabled(cfg.Providers, info.ID)
-			if len(matches) == 1 {
-				info.RouteOwner = matches[0]
-				cfg.ModelCatalog[modelID] = info
+			provider := cfg.Providers[owner]
+			if !hasExactModel(provider.Models, modelID) {
+				provider.Models = append(provider.Models, modelID)
+				cfg.Providers[owner] = provider
 			}
 		}
 	}
-	for id, info := range cfg.ModelCatalog {
+	for id, info := range cfg.ModelMetadata {
 		if info.ID == "" {
 			info.ID = id
 		}
-		if info.RouteOwner == "" {
-			matches := matchingEnabled(cfg.Providers, info.ID)
-			if len(matches) == 1 {
-				info.RouteOwner = matches[0]
-			}
-		}
-		if info.ContextWindowTokens <= 0 {
-			info.ContextWindowTokens = 128000
-		}
-		if info.MaxOutputTokens <= 0 {
-			info.MaxOutputTokens = 16384
-		}
-		if info.MaxOutputTokens >= info.ContextWindowTokens {
+		if info.ContextWindowTokens > 0 && info.MaxOutputTokens > 0 && info.MaxOutputTokens >= info.ContextWindowTokens {
 			info.MaxOutputTokens = info.ContextWindowTokens - 1
 		}
-		cfg.ModelCatalog[id] = info
+		cfg.ModelMetadata[id] = info
 	}
 	return cfg
+}
+
+func hasExactModel(patterns []string, modelID string) bool {
+	for _, pattern := range patterns {
+		if pattern == modelID && !containsStar(pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsStar(s string) bool {

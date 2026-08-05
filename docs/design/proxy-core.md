@@ -22,7 +22,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 | 字段 | 语义 |
 | --- | --- |
-| `model_catalog` | 静态模型元数据权威：模型 ID exact 且严格区分大小写，只声明容量 |
+| `model_metadata` | 可选静态模型元数据：模型 ID exact 且严格区分大小写；两个容量字段均可选，路由不依赖容量 |
 | `protocol` | 仅 `openai` / `anthropic`；必须显式声明，不得按 provider 名推断 |
 | `endpoints` | 仅表示上游 native endpoint（`chat_completions` / `messages` / `responses` / `completions` / `embeddings` / `images`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
 
@@ -30,7 +30,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 ## 模型路由与候选链
 
-- **两阶段解析**：启动期 `config.Load` 对每个 catalog 条目按 `models` pattern exact 匹配 enabled Provider，按 `priority` 降序写入 `ResolvedModelRoute.RouteOwners`。请求期 `ResolveTransportPlan` 再按请求 path、候选 Provider 的 `endpoints` 与固定矩阵生成 TransportPlan；模型目录不维护第二份能力枚举。
+- **两阶段解析**：启动期 `config.Load` 只规范化并校验配置；`effectivecatalog` 收集 enabled Provider 的精确 `models` 与账号池发现 ID，再按所有 Provider pattern 生成候选、按 `priority` 排序，最后按 exact ID 覆盖 `model_metadata`。metadata 与通配 pattern 都不能单独物化模型。请求期 `ResolveTransportPlan` 再按请求 path、候选 Provider 的 `endpoints` 与固定矩阵生成 TransportPlan。
 - **候选链**：一个 exact model 可对应多个 enabled Provider，按 `priority`（`-1000`~`1000`，默认 `100`）降序排列，同优先级按 Provider 名稳定排序。内建 Provider 参与同一候选链：静态默认 `100`，Codex OAuth 默认 `90`，ChatGPT Web 默认 `10` 且不作为回退候选。同名模型保留全部候选，不相互覆盖。
 - **回退策略**：仅当客户端响应尚未提交时，对网络错误、`408`、`429`、`5xx` 与流式首事件探测失败，按候选 `fallback: true` 尝试下一项；一次已写出的 SSE/HTTP 响应绝不切换。图片任务一旦提交不回退。
 - **健康度与熔断**：5 分钟有界样本窗口；少于 3 个样本为 `unknown`；连续 3 次可重试失败打开 30 秒熔断；路由跳过熔断 / `unhealthy` / `credential_error` 候选。健康度不替代账号池的真实可用性判断。

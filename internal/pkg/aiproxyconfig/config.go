@@ -78,8 +78,9 @@ type Config struct {
 	// ChatGPT Web credentials, conversations, or account runtime state.
 	CodexOAuth CodexOAuthConfig
 	Providers  map[string]Provider
-	// ModelCatalog 是全局模型元数据目录,供 GET /v1/models 使用;是请求路由与 /v1/models 的共同 authority。
-	ModelCatalog map[string]ModelInfo
+	// ModelMetadata only enriches models supplied by providers or runtime discovery.
+	// Entries never publish models and never participate in route ownership.
+	ModelMetadata map[string]ModelMetadata
 }
 
 // StateConfig defines the single local workspace for durable ai-proxy state.
@@ -188,28 +189,15 @@ type TemporaryChatConfig struct {
 	TurnTimeoutSeconds         int
 }
 
-// ModelInfo describes client-visible model metadata and ordered static
-// provider candidates. RouteOwner remains the first candidate for focused
-// compatibility callers; request routing must use RouteOwners.
-type ModelInfo struct {
+// ModelMetadata describes optional client-visible metadata for an exact model ID.
+type ModelMetadata struct {
 	ID                  string
 	ContextWindowTokens int
 	MaxOutputTokens     int
-	RouteOwner          string
-	RouteOwners         []string
 }
 
-// ResolvedModelRoute 是启动期只读模型路由 authority 的请求侧视图。
-// 回答“这个具体模型有哪些有序 Provider 候选”,供 /v1/models 与请求路由共同消费。
-// 与 ModelInfo 同源:LookupResolvedModelRoute 从 ModelCatalog 投影,不单独持有第二份状态。
-type ResolvedModelRoute struct {
-	ModelID     string
-	RouteOwner  string
-	RouteOwners []string
-}
-
-// MaxModelCatalogIDLength 限制 model_catalog id 长度,避免异常配置与标签膨胀。
-const MaxModelCatalogIDLength = 256
+// MaxModelMetadataIDLength 限制 model_metadata id 长度,避免异常配置与标签膨胀。
+const MaxModelMetadataIDLength = 256
 
 const (
 	// DefaultProviderPriority preserves the existing behavior for configurations
@@ -308,9 +296,9 @@ func Load(path string) (Config, error) {
 				TurnTimeoutSeconds:         300,
 			},
 		},
-		CodexOAuth:   CodexOAuthConfig{Enabled: false},
-		Providers:    map[string]Provider{},
-		ModelCatalog: map[string]ModelInfo{},
+		CodexOAuth:    CodexOAuthConfig{Enabled: false},
+		Providers:     map[string]Provider{},
+		ModelMetadata: map[string]ModelMetadata{},
 	}
 
 	path = ResolvePath(path)
@@ -376,7 +364,7 @@ func loadFile(path string, cfg *Config) error {
 		switch {
 		case indent == 0 && !hasValue:
 			switch key {
-			case "server", "state", "providers", "model_catalog", "client_api_keys", "chatgpt_web", "codex_oauth":
+			case "server", "state", "providers", "model_metadata", "client_api_keys", "chatgpt_web", "codex_oauth":
 				section = key
 				providerName = ""
 				modelName = ""
@@ -426,13 +414,13 @@ func loadFile(path string, cfg *Config) error {
 			ensureProvider(cfg, providerName)
 		case section == "providers" && indent >= 4 && providerName != "":
 			setErr = setProvider(cfg, providerName, key, expand(value))
-		case section == "model_catalog" && indent == 2 && !hasValue:
+		case section == "model_metadata" && indent == 2 && !hasValue:
 			modelName = key
 			providerName = ""
 			clientKeyID = ""
-			ensureModelInfo(cfg, modelName)
-		case section == "model_catalog" && indent >= 4 && modelName != "":
-			setErr = setModelInfo(cfg, modelName, key, expand(value))
+			ensureModelMetadata(cfg, modelName)
+		case section == "model_metadata" && indent >= 4 && modelName != "":
+			setErr = setModelMetadata(cfg, modelName, key, expand(value))
 		default:
 			return fmt.Errorf("%s:%d: unsupported config shape", path, lineNo)
 		}
@@ -507,7 +495,7 @@ func setTopLevel(cfg *Config, key, value string) error {
 		}
 		cfg.StreamIdleTimeout = time.Duration(n) * time.Second
 	case "default_provider":
-		return fmt.Errorf("default_provider is not supported; routing uses model_catalog RouteOwner only")
+		return fmt.Errorf("default_provider is not supported; routing uses effective model candidates only")
 	case "metrics_remote_access":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -820,40 +808,40 @@ func ensureProvider(cfg *Config, name string) Provider {
 	return provider
 }
 
-func ensureModelInfo(cfg *Config, id string) ModelInfo {
-	if cfg.ModelCatalog == nil {
-		cfg.ModelCatalog = map[string]ModelInfo{}
+func ensureModelMetadata(cfg *Config, id string) ModelMetadata {
+	if cfg.ModelMetadata == nil {
+		cfg.ModelMetadata = map[string]ModelMetadata{}
 	}
-	info, ok := cfg.ModelCatalog[id]
+	info, ok := cfg.ModelMetadata[id]
 	if !ok {
-		info = ModelInfo{ID: id}
+		info = ModelMetadata{ID: id}
 	}
 	if info.ID == "" {
 		info.ID = id
 	}
-	cfg.ModelCatalog[id] = info
+	cfg.ModelMetadata[id] = info
 	return info
 }
 
-func setModelInfo(cfg *Config, id, key, value string) error {
-	info := ensureModelInfo(cfg, id)
+func setModelMetadata(cfg *Config, id, key, value string) error {
+	info := ensureModelMetadata(cfg, id)
 	switch strings.ToLower(key) {
 	case "context_window_tokens", "contextwindowtokens", "context_window":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
-			return fmt.Errorf("model_catalog.%s.%s: %w", id, key, err)
+			return fmt.Errorf("model_metadata.%s.%s: %w", id, key, err)
 		}
 		info.ContextWindowTokens = n
 	case "max_output_tokens", "maxoutputtokens":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
-			return fmt.Errorf("model_catalog.%s.%s: %w", id, key, err)
+			return fmt.Errorf("model_metadata.%s.%s: %w", id, key, err)
 		}
 		info.MaxOutputTokens = n
 	default:
-		return fmt.Errorf("model_catalog.%s: unknown key %q", id, key)
+		return fmt.Errorf("model_metadata.%s: unknown key %q", id, key)
 	}
-	cfg.ModelCatalog[id] = info
+	cfg.ModelMetadata[id] = info
 	return nil
 }
 
@@ -1122,11 +1110,11 @@ func normalize(cfg *Config, configPath string) error {
 	}
 	cfg.Providers = normalized
 
-	if cfg.ModelCatalog == nil {
-		cfg.ModelCatalog = map[string]ModelInfo{}
+	if cfg.ModelMetadata == nil {
+		cfg.ModelMetadata = map[string]ModelMetadata{}
 	}
-	catalog := make(map[string]ModelInfo, len(cfg.ModelCatalog))
-	for name, info := range cfg.ModelCatalog {
+	metadata := make(map[string]ModelMetadata, len(cfg.ModelMetadata))
+	for name, info := range cfg.ModelMetadata {
 		id := strings.TrimSpace(info.ID)
 		if id == "" {
 			id = strings.TrimSpace(name)
@@ -1134,26 +1122,18 @@ func normalize(cfg *Config, configPath string) error {
 		if id == "" {
 			continue
 		}
-		if err := validateModelCatalogID(id); err != nil {
-			return fmt.Errorf("model_catalog.%s: %w", id, err)
+		if err := validateModelMetadataID(id); err != nil {
+			return fmt.Errorf("model_metadata.%s: %w", id, err)
 		}
 		info.ID = id
-		if info.ContextWindowTokens < 0 {
-			info.ContextWindowTokens = 0
-		}
-		if info.MaxOutputTokens < 0 {
-			info.MaxOutputTokens = 0
-		}
 		// model ID 严格区分大小写:DeepSeek-V4-Flash 与 deepseek-v4-flash 是两个不同模型。
 		// 仅 exact id 唯一;不做 case-fold 去重。
-		if prev, ok := catalog[id]; ok {
-			return fmt.Errorf("duplicate model_catalog id: %q (also seen as %q)", id, prev.ID)
+		if prev, ok := metadata[id]; ok {
+			return fmt.Errorf("duplicate model_metadata id: %q (also seen as %q)", id, prev.ID)
 		}
-		info.RouteOwner = "" // filled in validateModelRoutes
-		info.RouteOwners = nil
-		catalog[id] = info
+		metadata[id] = info
 	}
-	cfg.ModelCatalog = catalog
+	cfg.ModelMetadata = metadata
 	if err := normalizeAdminAuth(&cfg.AdminAuth); err != nil {
 		return err
 	}
@@ -1204,7 +1184,7 @@ func validate(cfg Config) error {
 	if err := validateProviders(cfg); err != nil {
 		return err
 	}
-	if err := validateModelRoutes(cfg); err != nil {
+	if err := validateModelMetadata(cfg); err != nil {
 		return err
 	}
 	if err := validateSLO(cfg.SLO); err != nil {
@@ -1296,6 +1276,15 @@ func validateProviders(cfg Config) error {
 		}
 		if len(provider.Models) == 0 {
 			return fmt.Errorf("provider %q models is required (explicit; not inferred from provider name or protocol)", name)
+		}
+		for _, pattern := range provider.Models {
+			id := strings.TrimSpace(pattern)
+			if id == "" || id == "*" || strings.HasSuffix(id, "*") {
+				continue
+			}
+			if err := validateModelMetadataID(id); err != nil {
+				return fmt.Errorf("providers.%s.models exact model %q: %w", name, id, err)
+			}
 		}
 		if len(provider.Endpoints) == 0 {
 			return fmt.Errorf("provider %q endpoints is required (explicit; not inferred from protocol)", name)
@@ -1605,12 +1594,12 @@ func normalizeCSVList(values []string, foldCase bool) []string {
 	return normalized
 }
 
-func validateModelCatalogID(id string) error {
+func validateModelMetadataID(id string) error {
 	if id == "" {
 		return fmt.Errorf("id is empty")
 	}
-	if len(id) > MaxModelCatalogIDLength {
-		return fmt.Errorf("id exceeds max length %d", MaxModelCatalogIDLength)
+	if len(id) > MaxModelMetadataIDLength {
+		return fmt.Errorf("id exceeds max length %d", MaxModelMetadataIDLength)
 	}
 	for _, r := range id {
 		if r < 0x20 || r == 0x7f {
@@ -1620,59 +1609,21 @@ func validateModelCatalogID(id string) error {
 	return nil
 }
 
-// validateModelRoutes resolves every enabled matching provider into an ordered
-// candidate set. Endpoint compatibility is evaluated per request by the shared
-// transport matrix; model_catalog carries no endpoint policy.
-func validateModelRoutes(cfg Config) error {
-	// mutate via reassignment of map values
-	// caller holds cfg by value but map is reference — safe to update entries.
-	for id, info := range cfg.ModelCatalog {
-		if info.ContextWindowTokens <= 0 || info.MaxOutputTokens <= 0 {
-			return fmt.Errorf("model_catalog.%s: context_window_tokens and max_output_tokens must both be positive", id)
+// validateModelMetadata validates optional enrichment only. Entries need not
+// match a static provider because runtime-discovered models may consume them.
+func validateModelMetadata(cfg Config) error {
+	for id, info := range cfg.ModelMetadata {
+		if info.ContextWindowTokens < 0 {
+			return fmt.Errorf("model_metadata.%s: context_window_tokens must be zero or positive", id)
 		}
-		if info.MaxOutputTokens >= info.ContextWindowTokens {
-			return fmt.Errorf("model_catalog.%s: max_output_tokens must be less than context_window_tokens", id)
+		if info.MaxOutputTokens < 0 {
+			return fmt.Errorf("model_metadata.%s: max_output_tokens must be zero or positive", id)
 		}
-		matches := matchingEnabledProviders(cfg.Providers, id)
-		if len(matches) == 0 {
-			return fmt.Errorf("model_catalog.%s: no enabled provider matches model; configure providers.*.models", id)
+		if info.ContextWindowTokens > 0 && info.MaxOutputTokens > 0 && info.MaxOutputTokens >= info.ContextWindowTokens {
+			return fmt.Errorf("model_metadata.%s: max_output_tokens must be less than context_window_tokens", id)
 		}
-		sortProviderCandidates(cfg.Providers, matches)
-		info.RouteOwners = append([]string(nil), matches...)
-		info.RouteOwner = matches[0]
-		cfg.ModelCatalog[id] = info
 	}
 	return nil
-}
-
-// matchingEnabledProviders 返回匹配 model 的 enabled provider 名(稳定排序)。
-func matchingEnabledProviders(providers map[string]Provider, model string) []string {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return nil
-	}
-	matches := make([]string, 0, 1)
-	for name, provider := range providers {
-		if provider.Disabled {
-			continue
-		}
-		if ProviderMatchesModel(name, provider, model) {
-			matches = append(matches, name)
-		}
-	}
-	sort.Strings(matches)
-	return matches
-}
-
-func sortProviderCandidates(providers map[string]Provider, names []string) {
-	sort.SliceStable(names, func(i, j int) bool {
-		left := EffectiveProviderPriority(providers[names[i]])
-		right := EffectiveProviderPriority(providers[names[j]])
-		if left != right {
-			return left > right
-		}
-		return names[i] < names[j]
-	})
 }
 
 // EffectiveProviderPriority returns the compatibility default for an omitted
@@ -1950,50 +1901,6 @@ func providersShareServiceablePath(a, b Provider) bool {
 		}
 	}
 	return false
-}
-
-// LookupModel 按 exact id 查找 catalog 条目。
-func LookupModel(cfg Config, modelID string) (ModelInfo, bool) {
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		return ModelInfo{}, false
-	}
-	info, ok := cfg.ModelCatalog[modelID]
-	return info, ok
-}
-
-// LookupResolvedModelRoute 从启动期 ModelCatalog authority 投影 ResolvedModelRoute。
-// 与 LookupModel 同源,不持有第二份状态。
-func LookupResolvedModelRoute(cfg Config, modelID string) (ResolvedModelRoute, bool) {
-	info, ok := LookupModel(cfg, modelID)
-	if !ok {
-		return ResolvedModelRoute{}, false
-	}
-	return ResolvedModelRoute{
-		ModelID:     info.ID,
-		RouteOwner:  info.RouteOwner,
-		RouteOwners: append([]string(nil), info.RouteOwners...),
-	}, true
-}
-
-// CatalogModelsSorted 返回 catalog 模型列表;排序键为 case-fold 仅用于稳定展示,不改变 exact id 语义。
-func CatalogModelsSorted(catalog map[string]ModelInfo) []ModelInfo {
-	items := make([]ModelInfo, 0, len(catalog))
-	for _, info := range catalog {
-		if strings.TrimSpace(info.ID) == "" {
-			continue
-		}
-		items = append(items, info)
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		leftFold := strings.ToLower(items[i].ID)
-		rightFold := strings.ToLower(items[j].ID)
-		if leftFold != rightFold {
-			return leftFold < rightFold
-		}
-		return items[i].ID < items[j].ID
-	})
-	return items
 }
 
 // clientAPIKeyIDPattern: [a-z0-9][a-z0-9._-]{0,63}

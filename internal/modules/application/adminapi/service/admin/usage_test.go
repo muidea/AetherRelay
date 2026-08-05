@@ -101,9 +101,9 @@ func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 			"unused-key": {ID: "unused-key", APIKey: "y", Enabled: false},
 		},
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-*"}},
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-4o"}},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-4o":       {ID: "gpt-4o"},
 			"catalog-only": {ID: "catalog-only"},
 		},
@@ -194,8 +194,8 @@ func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 	if !modelByID["gpt-4o"].InConfig || !modelByID["gpt-4o"].InUsage {
 		t.Fatalf("gpt-4o = %#v", modelByID["gpt-4o"])
 	}
-	if !modelByID["catalog-only"].InConfig || modelByID["catalog-only"].InUsage {
-		t.Fatalf("catalog-only = %#v", modelByID["catalog-only"])
+	if _, ok := modelByID["catalog-only"]; ok {
+		t.Fatalf("metadata-only model must not be listed: %#v", modelByID["catalog-only"])
 	}
 	if modelByID["legacy-m"].InConfig || !modelByID["legacy-m"].InUsage {
 		t.Fatalf("legacy-m = %#v", modelByID["legacy-m"])
@@ -237,7 +237,7 @@ func TestUsageFilterOptionsStoreFailureDegrades(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"openai": {Name: "openai"},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-4o": {ID: "gpt-4o"},
 		},
 	}}

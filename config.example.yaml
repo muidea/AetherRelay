@@ -49,7 +49,7 @@ server:
   # 会话绝对有效期（秒），默认 28800（8h），范围 300~86400。
   # admin_session_ttl_seconds: 28800
 
-# 路由仅按 model_catalog exact model。一个模型可匹配多个 enabled Provider：
+# 路由仅按运行期有效目录中的 exact model。一个模型可匹配多个 enabled Provider：
 # 按 priority 降序选择；同优先级按 Provider 名稳定排序。仅在客户端尚未收到响应时，
 # 对网络错误、408、429、5xx 与首个流事件失败尝试 fallback: true 的下一候选。
 # 不支持 default_provider、fallbacks 列表或请求侧强制指定 Provider。
@@ -114,8 +114,8 @@ codex_oauth:
 #   - 每个 enabled provider 必须显式声明 protocol、base_url、endpoints。
 #   - 远程空 api_key 启动失败；仅 loopback 上游可设 allow_unauthenticated: true
 #     （此时不得同时配置 api_key）。
-#   - models 为大小写敏感的 glob；model_catalog 的每个条目必须被至少一个
-#     enabled provider 匹配（启动期校验）。
+#   - models 大小写敏感；精确条目发布模型，后缀 * pattern 只匹配由其他
+#     Provider 精确条目或账号池发现提供的具体模型 ID。
 # openai:
 #   enabled: true
 #   protocol: openai
@@ -124,18 +124,17 @@ codex_oauth:
 #   priority: 100                          # 范围 -1000~1000，数值越大优先级越高
 #   fallback: true                         # 是否允许作为低优先级候选的安全回退
 #   endpoints: chat_completions, responses, completions
-#   models: gpt-*, chatgpt-*, o*
+#   models: gpt-5.5
 # 如需 Anthropic 协议转换（/v1/messages ↔ openai chat），添加 protocol: anthropic
-# 的 provider 并在 model_catalog 登记对应模型。
+# 的 provider；无需为路由额外登记 metadata。
 # chatgptweb 与 codexoauth 是保留的内建 Provider ID，禁止在 providers 中声明；
 # 分别由 chatgpt_web / codex_oauth 在运行时注入，模型来自账号池发现结果。
 
-# 全局模型目录（静态 Provider 共用）。model ID 严格区分大小写（exact match）；
-# GET /v1/models 返回此处登记的模型与账号池自动发现的模型。
-# ChatGPT Web 与 Codex OAuth 自动发现的模型不需要登记；登记静态模型时，
-# 每个条目必须被至少一个 enabled provider 的 models pattern 匹配（示例）：
-model_catalog:
-  # 与 providers.models pattern 大小写敏感匹配；同名内建模型会共同构成候选链。
+# 可选模型元数据目录（静态 Provider 共用）。model ID 严格区分大小写（exact match）。
+# enabled provider 的精确 models 与账号池发现结果决定模型是否存在；
+# metadata 只按 exact ID 补充容量，不发布模型、不创建路由，也允许暂时未被使用。
+model_metadata:
+  # 同一份 metadata 会覆盖所有同 ID 的静态与内建候选。
   DeepSeek-V4-Flash:
     context_window_tokens: 1000000
     max_output_tokens: 65536
@@ -157,9 +156,6 @@ model_catalog:
   MiniMax-M2.7-highspeed:
     context_window_tokens: 204800
     max_output_tokens: 32768
-  intfloat/multilingual-e5-small:
-    context_window_tokens: 512
-    max_output_tokens: 1
 # 同名静态与自动模型会共同构成候选链：静态默认 priority=100，
 # Codex OAuth 固定为 90（可用于原生 /v1/responses 回退），
 # ChatGPT Web 固定为 10 且默认不作为回退。

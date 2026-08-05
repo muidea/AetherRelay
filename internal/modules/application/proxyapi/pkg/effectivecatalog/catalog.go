@@ -55,7 +55,7 @@ type BuiltinProvider struct {
 
 // Snapshot is the atomic read model shared by /v1/models and ResolveTransportPlan.
 type Snapshot struct {
-	StaticModels    map[string]config.ModelInfo
+	StaticModels    map[string]config.ModelMetadata
 	BuiltinProvider BuiltinProvider
 	BuiltinModels   map[string]BuiltinModel
 	// Codex OAuth models are discovered and cached by the independent Codex
@@ -113,10 +113,7 @@ type CatalogInput struct {
 // BuildWithCodex constructs both builtin projections from their separate,
 // account-scoped discovery caches. Same-ID sources remain ordered candidates.
 func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
-	static := map[string]config.ModelInfo{}
-	for id, info := range cfg.ModelCatalog {
-		static[id] = info
-	}
+	static := exactProviderModels(cfg)
 	snap := Snapshot{
 		StaticModels:  static,
 		Version:       chatGPT.Version,
@@ -182,7 +179,7 @@ func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 	return snap
 }
 
-func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config.ModelInfo, catalog CatalogInput) {
+func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config.ModelMetadata, catalog CatalogInput) {
 	if snap == nil {
 		return
 	}
@@ -240,51 +237,46 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 		return
 	}
 	snap.Candidates = map[string][]Candidate{}
-	for id, info := range snap.StaticModels {
-		names := append([]string(nil), info.RouteOwners...)
-		if len(names) == 0 && strings.TrimSpace(info.RouteOwner) != "" {
-			names = []string{info.RouteOwner}
-		}
-		for _, name := range names {
-			provider, ok := cfg.Providers[name]
-			if !ok {
-				// Focused catalog tests and read-only projections may carry an
-				// already-resolved static owner without its full provider object.
-				// Preserve that authority; request execution still fail-fast checks
-				// the provider before creating an upstream request.
-				snap.Candidates[id] = append(snap.Candidates[id], Candidate{
-					ModelID: id, RouteOwner: name,
-					Priority: config.DefaultProviderPriority, Fallback: true,
-					ContextWindowTokens: info.ContextWindowTokens, MaxOutputTokens: info.MaxOutputTokens,
-				})
-				continue
-			}
-			if provider.Disabled {
+	modelIDs := map[string]struct{}{}
+	for id := range snap.StaticModels {
+		modelIDs[id] = struct{}{}
+	}
+	for id := range snap.BuiltinModels {
+		modelIDs[id] = struct{}{}
+	}
+	for id := range snap.CodexOAuthModels {
+		modelIDs[id] = struct{}{}
+	}
+	for id := range modelIDs {
+		metadata := cfg.ModelMetadata[id]
+		for name, provider := range cfg.Providers {
+			if provider.Disabled || !config.ProviderMatchesModel(name, provider, id) {
 				continue
 			}
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
-				ModelID:             id,
-				RouteOwner:          name,
-				Priority:            config.EffectiveProviderPriority(provider),
-				Fallback:            config.EffectiveProviderFallback(provider),
-				ContextWindowTokens: info.ContextWindowTokens,
-				MaxOutputTokens:     info.MaxOutputTokens,
+				ModelID: id, RouteOwner: name,
+				Priority: config.EffectiveProviderPriority(provider), Fallback: config.EffectiveProviderFallback(provider),
+				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
 			})
 		}
 	}
 	if snap.CodexOAuthProvider.Status == StatusReady {
 		for id, model := range snap.CodexOAuthModels {
+			metadata := cfg.ModelMetadata[id]
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: CodexOAuthProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true,
+				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
 			})
 		}
 	}
 	if snap.BuiltinProvider.Status == StatusReady {
 		for id, model := range snap.BuiltinModels {
+			metadata := cfg.ModelMetadata[id]
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: BuiltinProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb), Fallback: false,
+				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
 			})
 		}
 	}
@@ -297,6 +289,25 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 		})
 		snap.Candidates[id] = candidates
 	}
+}
+
+func exactProviderModels(cfg config.Config) map[string]config.ModelMetadata {
+	models := map[string]config.ModelMetadata{}
+	for _, provider := range cfg.Providers {
+		if provider.Disabled {
+			continue
+		}
+		for _, pattern := range provider.Models {
+			id := strings.TrimSpace(pattern)
+			if id == "" || id == "*" || strings.HasSuffix(id, "*") {
+				continue
+			}
+			metadata := cfg.ModelMetadata[id]
+			metadata.ID = id
+			models[id] = metadata
+		}
+	}
+	return models
 }
 
 // Reconfigure rebuilds an existing auto-discovered catalog against a new
@@ -394,7 +405,7 @@ func BuiltinProviderViewFor(owner string) config.Provider {
 // Empty returns a disabled empty snapshot.
 func Empty() Snapshot {
 	return Snapshot{
-		StaticModels:     map[string]config.ModelInfo{},
+		StaticModels:     map[string]config.ModelMetadata{},
 		BuiltinModels:    map[string]BuiltinModel{},
 		CodexOAuthModels: map[string]BuiltinModel{},
 		Candidates:       map[string][]Candidate{},

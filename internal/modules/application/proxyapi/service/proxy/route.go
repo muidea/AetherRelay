@@ -28,7 +28,7 @@ const (
 )
 
 // TransportPlan 是请求期唯一转发计划:固定入站协议/path、上游协议/path 与转换方式。
-// 只在 ResolvedModelRoute 之上解析,不允许修改 RouteOwner。
+// 只在 EffectiveCatalog 候选之上解析，不允许请求侧修改 RouteOwner。
 type TransportPlan struct {
 	ModelID          string
 	ClientProtocol   string

@@ -76,8 +76,8 @@ providers:
     base_url: https://api.openai.com/v1
     api_key: ${ADMIN_TEST_API_KEY}
     endpoints: chat_completions
-    models: gpt-*
-model_catalog:
+    models: gpt-4o
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -676,7 +676,7 @@ func TestHandlerManagesHashedClientAPIKeys(t *testing.T) {
 	}
 }
 
-func TestHandlerRejectsInvalidProviderChangeWithoutReplacingConfig(t *testing.T) {
+func TestHandlerAllowsProviderChangeThatLeavesUnusedMetadata(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
 	cfg, err := config.Load(path)
@@ -694,14 +694,14 @@ func TestHandlerRejectsInvalidProviderChangeWithoutReplacingConfig(t *testing.T)
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("invalid update replaced config file")
+	if bytes.Equal(before, after) {
+		t.Fatal("valid update did not replace config file")
 	}
 }

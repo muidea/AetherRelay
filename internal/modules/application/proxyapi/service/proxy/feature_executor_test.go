@@ -33,14 +33,12 @@ func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
 				Endpoints: []string{config.ProviderEndpointImages},
 			},
 		},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"shared-text": {
 				ID: "shared-text", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				RouteOwner: "text-primary", RouteOwners: []string{"text-backup", "text-primary"},
 			},
 			"image-model": {
 				ID: "image-model", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				RouteOwner: "image", RouteOwners: []string{"image"},
 			},
 		},
 	}

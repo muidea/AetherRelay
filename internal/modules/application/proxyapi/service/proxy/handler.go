@@ -137,10 +137,9 @@ func (h *Handler) ConfigSnapshot() config.Config {
 		provider.Endpoints = append([]string(nil), provider.Endpoints...)
 		cfg.Providers[name] = provider
 	}
-	cfg.ModelCatalog = make(map[string]config.ModelInfo, len(h.cfg.ModelCatalog))
-	for id, info := range h.cfg.ModelCatalog {
-		info.RouteOwners = append([]string(nil), info.RouteOwners...)
-		cfg.ModelCatalog[id] = info
+	cfg.ModelMetadata = make(map[string]config.ModelMetadata, len(h.cfg.ModelMetadata))
+	for id, info := range h.cfg.ModelMetadata {
+		cfg.ModelMetadata[id] = info
 	}
 	cfg.ClientAPIKeys = make(map[string]config.ClientAPIKey, len(h.cfg.ClientAPIKeys))
 	for id, key := range h.cfg.ClientAPIKeys {
@@ -217,14 +216,14 @@ func buildClientKeyIndex(cfg config.Config) *clientauth.Index {
 }
 
 // requireResolvedConfig 要求 Config 已通过 config.Load 的 authority 合同。
-// Handler 不合成 model、不补默认容量、不猜测 RouteOwner。
+// Handler 不合成 model、不补默认容量、不从 metadata 推断路由。
 // 对绕过 Load 的调用方做 fail-fast 全量校验。
 func requireResolvedConfig(cfg config.Config) error {
 	if cfg.Providers == nil {
 		return fmt.Errorf("providers is nil")
 	}
-	if cfg.ModelCatalog == nil {
-		cfg.ModelCatalog = map[string]config.ModelInfo{}
+	if cfg.ModelMetadata == nil {
+		cfg.ModelMetadata = map[string]config.ModelMetadata{}
 	}
 	for name, provider := range cfg.Providers {
 		if provider.Disabled {
@@ -270,34 +269,21 @@ func requireResolvedConfig(cfg config.Config) error {
 			}
 		}
 	}
-	for id, info := range cfg.ModelCatalog {
+	for id, info := range cfg.ModelMetadata {
 		if strings.TrimSpace(info.ID) == "" {
-			return fmt.Errorf("model_catalog.%s: missing id", id)
+			return fmt.Errorf("model_metadata.%s: missing id", id)
 		}
 		if info.ID != id {
-			return fmt.Errorf("model_catalog.%s: id mismatch %q", id, info.ID)
+			return fmt.Errorf("model_metadata.%s: id mismatch %q", id, info.ID)
 		}
-		if info.ContextWindowTokens <= 0 || info.MaxOutputTokens <= 0 {
-			return fmt.Errorf("model_catalog.%s: capacity unresolved", id)
+		if info.ContextWindowTokens < 0 {
+			return fmt.Errorf("model_metadata.%s: context_window_tokens must be zero or positive", id)
 		}
-		if info.MaxOutputTokens >= info.ContextWindowTokens {
-			return fmt.Errorf("model_catalog.%s: max_output_tokens must be less than context_window_tokens", id)
+		if info.MaxOutputTokens < 0 {
+			return fmt.Errorf("model_metadata.%s: max_output_tokens must be zero or positive", id)
 		}
-		owners := append([]string(nil), info.RouteOwners...)
-		if len(owners) == 0 && strings.TrimSpace(info.RouteOwner) != "" {
-			owners = []string{info.RouteOwner}
-		}
-		if len(owners) == 0 {
-			return fmt.Errorf("model_catalog.%s: route candidates unresolved", id)
-		}
-		for _, owner := range owners {
-			provider, ok := cfg.Providers[owner]
-			if !ok || provider.Disabled {
-				return fmt.Errorf("model_catalog.%s: route candidate %q missing or disabled", id, owner)
-			}
-			if !config.ProviderMatchesModel(owner, provider, id) {
-				return fmt.Errorf("model_catalog.%s: route candidate %q does not match model", id, owner)
-			}
+		if info.ContextWindowTokens > 0 && info.MaxOutputTokens > 0 && info.MaxOutputTokens >= info.ContextWindowTokens {
+			return fmt.Errorf("model_metadata.%s: max_output_tokens must be less than context_window_tokens", id)
 		}
 	}
 	return nil
@@ -1901,7 +1887,7 @@ func joinUpstreamPath(basePath, incomingPath string) string {
 	return basePath + incomingPath
 }
 
-// resolveTransportPlan 是执行端点的唯一路由入口:解析 ResolvedModelRoute + TransportPlan。
+// resolveTransportPlan 是执行端点的唯一路由入口：从 EffectiveCatalog 解析 TransportPlan。
 // 已禁用 X-AI-Provider / ?provider= / provider/model 显式选择;不允许修改 RouteOwner。
 func (h *Handler) resolveTransportPlan(r *http.Request, model string) (TransportPlan, *APIError) {
 	plans, apiErr := h.resolveTransportPlans(r, model)

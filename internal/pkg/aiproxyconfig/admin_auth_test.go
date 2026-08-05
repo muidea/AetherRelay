@@ -17,7 +17,7 @@ providers:
     api_key: test-key
     endpoints: chat_completions
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384

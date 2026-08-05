@@ -23,7 +23,7 @@ providers:
     allow_unauthenticated: true
     endpoints: chat_completions
     models: static-model
-model_catalog:
+model_metadata:
   static-model:
     context_window_tokens: 8192
     max_output_tokens: 1024
@@ -59,7 +59,7 @@ providers:
     allow_unauthenticated: true
     endpoints: chat_completions
     models: gpt-5.3-codex
-model_catalog:
+model_metadata:
   gpt-5.3-codex:
     context_window_tokens: 8192
     max_output_tokens: 1024
@@ -81,14 +81,14 @@ model_catalog:
 func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 	cfg := config.Config{
 		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
-		ModelCatalog: map[string]config.ModelInfo{
+		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-4o": {
-				ID: "gpt-4o", RouteOwner: "openai",
+				ID:                  "gpt-4o",
 				ContextWindowTokens: 128000, MaxOutputTokens: 16384,
 			},
 		},
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", Disabled: false, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-4o"}, Disabled: false, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
 	}
 	snap := Build(cfg, 3, 2, []PoolModel{
@@ -127,13 +127,51 @@ func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 	}
 }
 
+func TestMetadataDoesNotPublishModel(t *testing.T) {
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"gpt-ghost": {ID: "gpt-ghost", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
+		},
+	}
+	snap := FromStatic(cfg)
+	if _, ok := snap.Lookup("gpt-ghost"); ok || len(snap.SortedModelIDs()) != 0 {
+		t.Fatalf("metadata-only model was published: %+v", snap.CandidatesFor("gpt-ghost"))
+	}
+}
+
+func TestMetadataEnrichesDiscoveredModelWithoutCreatingStaticCandidate(t *testing.T) {
+	cfg := config.Config{
+		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 400000, MaxOutputTokens: 128000},
+		},
+	}
+	snap := Build(cfg, 1, 1, []PoolModel{{ID: "gpt-5"}}, "2026-08-05T00:00:00Z")
+	route, ok := snap.Lookup("gpt-5")
+	if !ok || !route.Builtin || route.RouteOwner != BuiltinProviderID {
+		t.Fatalf("route = %+v, ok = %t", route, ok)
+	}
+	if route.ContextWindowTokens != 400000 || route.MaxOutputTokens != 128000 {
+		t.Fatalf("metadata was not applied: %+v", route)
+	}
+	if candidates := snap.CandidatesFor("gpt-5"); len(candidates) != 1 || !candidates[0].Builtin {
+		t.Fatalf("metadata created an extra candidate: %+v", candidates)
+	}
+}
+
 func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T) {
 	initial := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 4, 1, []PoolModel{{
 		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z")
 	updated := Reconfigure(config.Config{
-		ChatGPTWeb:   config.ChatGPTWebConfig{Enabled: true},
-		ModelCatalog: map[string]config.ModelInfo{"gpt-5": {ID: "gpt-5", RouteOwner: "openai"}},
+		ChatGPTWeb:    config.ChatGPTWebConfig{Enabled: true},
+		ModelMetadata: map[string]config.ModelMetadata{"gpt-5": {ID: "gpt-5"}},
+		Providers: map[string]config.Provider{
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-5"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+		},
 	}, initial)
 	if route, ok := updated.Lookup("gpt-5"); !ok || route.Builtin || route.RouteOwner != "openai" {
 		t.Fatalf("static route after reconfigure=%+v ok=%v", route, ok)
@@ -176,8 +214,11 @@ func TestBuiltinProviderViewEndpoints(t *testing.T) {
 func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) {
 	cfg := config.Config{
 		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
-		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-5.2": {ID: "gpt-5.2", RouteOwner: "static"},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"gpt-5.2": {ID: "gpt-5.2"},
+		},
+		Providers: map[string]config.Provider{
+			"static": {Name: "static", Protocol: "openai", Models: []string{"gpt-5.2"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 	}
 	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 1, AvailableAccounts: 1, Models: []PoolModel{{ID: "gpt-5.2"}, {ID: "gpt-5.2-codex"}}})

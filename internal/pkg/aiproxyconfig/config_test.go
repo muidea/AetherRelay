@@ -1,9 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -221,7 +221,7 @@ codex_oauth:
 	}
 }
 
-func TestLoadModelCatalog(t *testing.T) {
+func TestLoadModelMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -231,7 +231,7 @@ providers:
     api_key: test
     endpoints: chat_completions, responses, completions, embeddings
     models: gpt-*,DeepSeek*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -246,29 +246,44 @@ model_catalog:
 	if err != nil {
 		t.Fatal(err)
 	}
-	gpt, ok := cfg.ModelCatalog["gpt-4o"]
+	gpt, ok := cfg.ModelMetadata["gpt-4o"]
 	if !ok {
-		t.Fatalf("missing gpt-4o catalog entry: %#v", cfg.ModelCatalog)
+		t.Fatalf("missing gpt-4o metadata entry: %#v", cfg.ModelMetadata)
 	}
 	if gpt.ID != "gpt-4o" || gpt.ContextWindowTokens != 128000 || gpt.MaxOutputTokens != 16384 {
 		t.Fatalf("gpt-4o = %#v", gpt)
 	}
 	// model id 严格区分大小写:查找键与展示 ID 均保留配置原文
-	ds, ok := cfg.ModelCatalog["DeepSeek-V4-Flash"]
+	ds, ok := cfg.ModelMetadata["DeepSeek-V4-Flash"]
 	if !ok {
-		t.Fatalf("missing DeepSeek-V4-Flash catalog entry: %#v", cfg.ModelCatalog)
+		t.Fatalf("missing DeepSeek-V4-Flash metadata entry: %#v", cfg.ModelMetadata)
 	}
 	if ds.ID != "DeepSeek-V4-Flash" || ds.ContextWindowTokens != 128000 || ds.MaxOutputTokens != 8192 {
 		t.Fatalf("DeepSeek-V4-Flash = %#v", ds)
 	}
-	if gpt.RouteOwner != "openai" {
-		t.Fatalf("gpt-4o route owner = %q", gpt.RouteOwner)
+	if _, ok := cfg.ModelMetadata["deepseek-v4-flash"]; ok {
+		t.Fatalf("unexpected lowercased metadata key: %#v", cfg.ModelMetadata)
 	}
-	if ds.RouteOwner != "openai" {
-		t.Fatalf("DeepSeek-V4-Flash route owner = %q", ds.RouteOwner)
+}
+
+func TestLoadRejectsRemovedModelCatalogSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  openai:
+    protocol: openai
+    base_url: https://api.openai.com
+    api_key: test
+    endpoints: chat_completions
+    models: gpt-test
+model_catalog:
+  gpt-test:
+    context_window_tokens: 128000
+`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := cfg.ModelCatalog["deepseek-v4-flash"]; ok {
-		t.Fatalf("unexpected lowercased catalog key: %#v", cfg.ModelCatalog)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), `unknown section "model_catalog"`) {
+		t.Fatalf("error = %v, want removed section rejection", err)
 	}
 }
 
@@ -359,7 +374,7 @@ providers:
     endpoints: chat_completions
     models: gpt-*
 default_provider: openai
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -384,7 +399,7 @@ providers:
     api_key: test
     endpoints: chat_completions
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -410,7 +425,7 @@ providers:
     api_key: test
     endpoints: chat_completions
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -901,7 +916,7 @@ func TestLoadRejectsCaseFoldProviderDuplicate(t *testing.T) {
 	}
 }
 
-func TestLoadAllowsCaseDifferentModelCatalogIDs(t *testing.T) {
+func TestLoadAllowsCaseDifferentModelMetadataIDs(t *testing.T) {
 	// model ID 严格区分大小写:DeepSeek-V4-Flash 与 deepseek-v4-flash / GPT-4o 与 gpt-4o 是不同模型。
 	cfg := Config{
 		ListenAddr: "127.0.0.1:8080",
@@ -912,7 +927,7 @@ func TestLoadAllowsCaseDifferentModelCatalogIDs(t *testing.T) {
 				Endpoints: []string{ProviderEndpointChatCompletions, ProviderEndpointEmbeddings},
 			},
 		},
-		ModelCatalog: map[string]ModelInfo{
+		ModelMetadata: map[string]ModelMetadata{
 			"GPT-4o": {
 				ID: "GPT-4o", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
 			},
@@ -927,30 +942,11 @@ func TestLoadAllowsCaseDifferentModelCatalogIDs(t *testing.T) {
 	if err := validate(cfg); err != nil {
 		t.Fatalf("validate case-different models: %v", err)
 	}
-	if _, ok := cfg.ModelCatalog["GPT-4o"]; !ok {
+	if _, ok := cfg.ModelMetadata["GPT-4o"]; !ok {
 		t.Fatal("missing GPT-4o")
 	}
-	if _, ok := cfg.ModelCatalog["gpt-4o"]; !ok {
+	if _, ok := cfg.ModelMetadata["gpt-4o"]; !ok {
 		t.Fatal("missing gpt-4o")
-	}
-	if cfg.ModelCatalog["GPT-4o"].RouteOwner != "openai" || cfg.ModelCatalog["gpt-4o"].RouteOwner != "openai" {
-		t.Fatalf("route owners = %#v %#v", cfg.ModelCatalog["GPT-4o"].RouteOwner, cfg.ModelCatalog["gpt-4o"].RouteOwner)
-	}
-}
-
-func TestCatalogModelsSortedUsesExactIDTieBreak(t *testing.T) {
-	catalog := map[string]ModelInfo{
-		"deepseek-v4-flash": {ID: "deepseek-v4-flash"},
-		"DeepSeek-V4-Flash": {ID: "DeepSeek-V4-Flash"},
-	}
-	for range 100 {
-		items := CatalogModelsSorted(catalog)
-		if len(items) != 2 {
-			t.Fatalf("items = %#v", items)
-		}
-		if items[0].ID != "DeepSeek-V4-Flash" || items[1].ID != "deepseek-v4-flash" {
-			t.Fatalf("unstable exact-id order = %q, %q", items[0].ID, items[1].ID)
-		}
 	}
 }
 
@@ -983,19 +979,19 @@ providers:
 	}
 }
 
-func TestLoadRejectsExactModelCatalogDuplicate(t *testing.T) {
+func TestLoadRejectsExactModelMetadataDuplicate(t *testing.T) {
 	cfg := Config{
 		ListenAddr: "127.0.0.1:8080",
 		Providers: map[string]Provider{
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://api.openai.com", APIKey: "a"},
 		},
-		ModelCatalog: map[string]ModelInfo{
+		ModelMetadata: map[string]ModelMetadata{
 			"gpt-4o": {ID: "gpt-4o"},
 		},
 	}
 	// 模拟 map 键与 info.ID 不同但归一化后撞上同一 id 的情况:
 	// 再塞一个 name 不同、ID 相同的条目(通过二次写入 ensure 路径不方便,直接调 normalize 前构造)。
-	cfg.ModelCatalog["alias"] = ModelInfo{ID: "gpt-4o"}
+	cfg.ModelMetadata["alias"] = ModelMetadata{ID: "gpt-4o"}
 	if err := normalize(&cfg, ""); err == nil {
 		t.Fatal("expected exact duplicate model error")
 	}
@@ -1047,7 +1043,7 @@ providers:
 	}
 }
 
-func TestLoadAcceptsModelCatalogWithoutCapabilities(t *testing.T) {
+func TestLoadAcceptsModelMetadataWithoutCapabilities(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1057,7 +1053,7 @@ providers:
     api_key: test
     endpoints: chat_completions, responses, completions, embeddings
     models: gpt-4o
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1079,7 +1075,7 @@ providers:
     api_key: test
     endpoints: chat_completions, responses, completions, embeddings
     models: gpt-4o
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1123,7 +1119,7 @@ providers:
     api_key: test
     endpoints: chat_completions
     models: gpt-4o
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1138,7 +1134,7 @@ model_catalog:
 	})
 }
 
-func TestLoadRejectsCatalogModelWithoutRoute(t *testing.T) {
+func TestLoadAllowsUnusedModelMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1148,20 +1144,23 @@ providers:
     api_key: test
     endpoints: chat_completions, responses, completions, embeddings
     models: gpt-*
-model_catalog:
+model_metadata:
   orphan-model:
     context_window_tokens: 128000
     max_output_tokens: 16384
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "no enabled provider matches") {
-		t.Fatalf("error = %v, want no enabled provider matches", err)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.ModelMetadata["orphan-model"]; !ok {
+		t.Fatalf("unused metadata was not preserved: %#v", cfg.ModelMetadata)
 	}
 }
 
-func TestLoadBuildsOrderedCatalogCandidates(t *testing.T) {
+func TestLoadPreservesMetadataForPatternOnlyProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1180,7 +1179,7 @@ providers:
     models: shared-*
     priority: 10
     fallback: true
-model_catalog:
+model_metadata:
   shared-model:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1191,13 +1190,13 @@ model_catalog:
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := cfg.ModelCatalog["shared-model"]
-	if info.RouteOwner != "primary" || !reflect.DeepEqual(info.RouteOwners, []string{"primary", "backup"}) {
-		t.Fatalf("route candidates = %#v", info)
+	info := cfg.ModelMetadata["shared-model"]
+	if info.ContextWindowTokens != 128000 || info.MaxOutputTokens != 16384 {
+		t.Fatalf("metadata = %#v", info)
 	}
 }
 
-func TestLoadRejectsInvalidCatalogCapacity(t *testing.T) {
+func TestLoadRejectsInvalidMetadataCapacity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1207,7 +1206,7 @@ providers:
     api_key: test
     endpoints: chat_completions, responses, completions, embeddings
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 1000
     max_output_tokens: 1000
@@ -1229,7 +1228,7 @@ providers:
     base_url: https://example.com
     api_key: test
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1252,7 +1251,7 @@ providers:
     api_key: test
     endpoints: chat_completions, widgets
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1265,7 +1264,7 @@ model_catalog:
 	}
 }
 
-func TestLoadCatalogDoesNotRequireEndpointIntersection(t *testing.T) {
+func TestLoadMetadataDoesNotRequireEndpointIntersection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1275,10 +1274,9 @@ providers:
     api_key: test
     endpoints: chat_completions
     models: emb-*
-model_catalog:
+model_metadata:
   emb-model:
     context_window_tokens: 8192
-    max_output_tokens: 8191
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1286,8 +1284,104 @@ model_catalog:
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if cfg.ModelCatalog["emb-model"].RouteOwner != "custom-openai" {
-		t.Fatalf("model = %#v", cfg.ModelCatalog["emb-model"])
+	if cfg.ModelMetadata["emb-model"].MaxOutputTokens != 0 {
+		t.Fatalf("max output tokens = %d, want omitted metadata to remain zero", cfg.ModelMetadata["emb-model"].MaxOutputTokens)
+	}
+}
+
+func TestLoadDoesNotMaterializeExactProviderModelIntoMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  embedding-e5:
+    protocol: openai
+    base_url: https://example.com
+    api_key: test
+    endpoints: embeddings
+    models: intfloat/multilingual-e5-small
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ModelMetadata) != 0 {
+		t.Fatalf("provider model must not create metadata: %#v", cfg.ModelMetadata)
+	}
+}
+
+func TestLoadDoesNotMaterializeProviderWildcardPattern(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  embedding-e5:
+    protocol: openai
+    base_url: https://example.com
+    api_key: test
+    endpoints: embeddings
+    models: intfloat/*
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ModelMetadata) != 0 {
+		t.Fatalf("wildcard pattern must not publish a model ID: %#v", cfg.ModelMetadata)
+	}
+}
+
+func TestLoadAllowsMetadataEntryWithoutCapacity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  openai:
+    protocol: openai
+    base_url: https://example.com
+    api_key: test
+    endpoints: chat_completions
+    models: gpt-*
+model_metadata:
+  gpt-test:
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := cfg.ModelMetadata["gpt-test"]
+	if info.ID != "gpt-test" || info.ContextWindowTokens != 0 || info.MaxOutputTokens != 0 {
+		t.Fatalf("metadata defaults = %#v", info)
+	}
+}
+
+func TestLoadRejectsNegativeMetadataCapacity(t *testing.T) {
+	for _, field := range []string{"context_window_tokens", "max_output_tokens"} {
+		t.Run(field, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			body := fmt.Sprintf(`
+providers:
+  openai:
+    protocol: openai
+    base_url: https://example.com
+    api_key: test
+    endpoints: chat_completions
+    models: gpt-test
+model_metadata:
+  gpt-test:
+    %s: -1
+`, field)
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("negative %s was accepted", field)
+			}
+		})
 	}
 }
 
@@ -1315,7 +1409,7 @@ providers:
     endpoints: chat_completions
     models: other-*
     fallback: false
-model_catalog:
+model_metadata:
   gpt-test:
     context_window_tokens: 8192
     max_output_tokens: 4096
@@ -1335,9 +1429,6 @@ model_catalog:
 	if !EffectiveProviderFallback(cfg.Providers["defaulted"]) || EffectiveProviderFallback(cfg.Providers["no-fallback"]) {
 		t.Fatalf("fallback defaults = defaulted:%t no-fallback:%t", EffectiveProviderFallback(cfg.Providers["defaulted"]), EffectiveProviderFallback(cfg.Providers["no-fallback"]))
 	}
-	if got := cfg.ModelCatalog["gpt-test"].RouteOwners; !reflect.DeepEqual(got, []string{"defaulted", "zero"}) {
-		t.Fatalf("route owners = %#v", got)
-	}
 }
 
 func TestLoadNormalizesEndpointsOrderAndDedupe(t *testing.T) {
@@ -1350,7 +1441,7 @@ providers:
     api_key: test
     endpoints: embeddings, chat_completions, embeddings, RESPONSES
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1377,7 +1468,7 @@ providers:
     api_key: test
     endpoints: messages
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1400,7 +1491,7 @@ providers:
     api_key: test
     endpoints: embeddings
     models: claude-*
-model_catalog:
+model_metadata:
   claude-x:
     context_window_tokens: 200000
     max_output_tokens: 8192
@@ -1480,7 +1571,7 @@ providers:
     allow_unauthenticated: true
     endpoints: chat_completions
     models: local-*
-model_catalog:
+model_metadata:
   local-model:
     context_window_tokens: 8000
     max_output_tokens: 1000
@@ -1584,7 +1675,7 @@ providers:
     protocol: chatgptweb
     endpoints: chat_completions, images
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
@@ -1609,7 +1700,7 @@ providers:
     protocol: chatgptweb
     endpoints: chat_completions
     models: gpt-*
-model_catalog:
+model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
