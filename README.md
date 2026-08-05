@@ -58,9 +58,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/muidea/ai-proxy/main/scripts
 也可以手动复制配置、按容器网络调整 `listen_addr` 与 `state.dir`，再启动：
 
 ```bash
-mkdir -p deploy/config
+mkdir -p deploy/config deploy/data
 cp config.example.yaml deploy/config/config.yaml
 # 编辑 deploy/config/config.yaml：listen_addr=0.0.0.0:8080，state.dir=/var/lib/ai-proxy
+# compose.yaml 会将 deploy/data 映射为容器内 /var/lib/ai-proxy。
 # 同时配置实际启用 Provider 的环境变量与客户端 Key。
 docker compose up -d
 ```

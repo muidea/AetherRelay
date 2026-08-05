@@ -27,9 +27,17 @@ PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" \
 compose="$TMP/deploy/docker-compose.yml"
 env_file="$TMP/deploy/.env"
 
+test -d "$TMP/deploy/data"
 grep -Fq -- '- "0.0.0.0:9090:8080"' "$compose"
+grep -Fq -- '- ./data:/var/lib/ai-proxy' "$compose"
 grep -Fq 'AI_PROXY_IMAGE=' "$env_file"
 grep -Fq 'Provider:    登录管理台后在 Provider 管理中添加' "$TMP/output"
+grep -Fq "持久化数据:  $TMP/deploy/data" "$TMP/output"
+
+if grep -Fq 'ai-proxy-state' "$compose"; then
+  echo "deploy compose still contains a named state volume" >&2
+  exit 1
+fi
 
 if grep -Eq 'OPENAI_API_KEY|DEEPSEEK_API_KEY|ANTHROPIC_API_KEY' "$compose" "$env_file"; then
   echo "deploy output still contains fixed Provider key variables" >&2
@@ -39,4 +47,3 @@ if grep -Fq 'AI_PROXY_ADMIN_PASSWORD_HASH=' "$env_file"; then
   echo "--skip-admin unexpectedly persisted an Admin password hash" >&2
   exit 1
 fi
-

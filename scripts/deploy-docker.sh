@@ -55,6 +55,7 @@ usage: $0 [options]
 
 一键容器化部署 ai-proxy。产物全部落在部署目录（默认 ./deploy）：
   config/config.yaml   运行配置（由 config.example.yaml 模板生成）
+  data/                持久化数据（DuckDB、图片、交互归档与账号池数据）
   docker-compose.yml   容器编排（自包含，不依赖仓库）
   .env                 镜像引用与 Admin 哈希（chmod 600）
 
@@ -109,11 +110,12 @@ fi
 
 DEPLOY_DIR="$(realpath "$DEPLOY_DIR")"
 CONFIG_DIR="$DEPLOY_DIR/config"
+DATA_DIR="$DEPLOY_DIR/data"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 ENV_FILE="$DEPLOY_DIR/.env"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
 
-mkdir -p "$CONFIG_DIR"
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 
 # 已有 .env 先载入作为默认值（值为我们生成时加引号的形式，source 安全）。
 if [[ -f "$ENV_FILE" ]]; then
@@ -122,6 +124,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 echo "==> 部署目录: $DEPLOY_DIR"
+echo "==> 数据目录: $DATA_DIR"
 echo "==> 镜像: $IMAGE"
 
 # 1. 生成 config.yaml（已有则保留，不覆盖用户改动）
@@ -135,7 +138,7 @@ else
     # 脚本脱离仓库使用时，从镜像内模板生成。
     "$DOCKER" run --rm "$IMAGE" cat /usr/share/ai-proxy/config.example.yaml >"$CONFIG_FILE"
   fi
-  # 容器内固定监听全部网卡（由宿主机端口映射控制暴露面），状态落到命名卷挂载点。
+  # 容器内固定监听全部网卡（由宿主机端口映射控制暴露面），状态落到宿主机数据目录映射点。
   sed -i 's|^  listen_addr:.*|  listen_addr: 0.0.0.0:8080|' "$CONFIG_FILE"
   sed -i 's|^  dir: .*|  dir: /var/lib/ai-proxy|' "$CONFIG_FILE"
   if [[ "$SKIP_ADMIN" != 1 ]]; then
@@ -211,17 +214,14 @@ services:
     volumes:
       # 目录挂载（而非单文件）：管理页保存配置时通过临时文件原子替换。
       - ./config:/etc/ai-proxy
-      - ai-proxy-state:/var/lib/ai-proxy
-
-volumes:
-  ai-proxy-state:
+      - ./data:/var/lib/ai-proxy
 EOF
 echo "    -> 已生成 $COMPOSE_FILE"
 
-# 5. 配置目录交由容器内 UID 10001（ai-proxy 用户）持有（尽力而为）
-if [[ -w "$CONFIG_DIR" ]]; then
-  chown -R 10001:10001 "$CONFIG_DIR" 2>/dev/null \
-    || warn "无法 chown 配置目录为 10001；管理页保存配置可能不可写（只读挂载仍可运行）"
+# 5. 持久化目录交由容器内 UID/GID 10001（ai-proxy 用户）持有（尽力而为）
+if [[ -w "$DEPLOY_DIR" ]]; then
+  chown -R 10001:10001 "$CONFIG_DIR" "$DATA_DIR" 2>/dev/null \
+    || warn "无法 chown 配置与数据目录为 10001:10001；请手动修正目录权限"
 fi
 
 # 6. 拉取镜像、启动并等待就绪
@@ -249,6 +249,7 @@ echo "部署完成"
 echo "  管理台:      http://$ACCESS_HOST:$LISTEN_PORT/admin/"
 echo "  健康检查:    curl http://$ACCESS_HOST:$LISTEN_PORT/healthz"
 echo "  查看日志:    ${COMPOSE[*]} -f $COMPOSE_FILE logs -f"
+echo "  持久化数据:  $DATA_DIR"
 echo "  Provider:    登录管理台后在 Provider 管理中添加；账号池凭据在账号池页面导入"
 if [[ "$SKIP_ADMIN" != 1 ]]; then
   echo "  Admin 账号:  $ADMIN_USERNAME（默认仅本机可登录；经 HTTPS 反向代理部署时，"

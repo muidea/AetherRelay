@@ -19,7 +19,4 @@ services:
       # Mount the directory (rather than a single file): Admin writes replace
       # config.yaml atomically when saving writable settings.
       - ./deploy/config:/etc/ai-proxy
-      - ai-proxy-state:/var/lib/ai-proxy
-
-volumes:
-  ai-proxy-state:
+      - ./deploy/data:/var/lib/ai-proxy

@@ -164,7 +164,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 ### 一键部署脚本（推荐）
 
-仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：生成配置（含容器适配）、初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、拉取镜像、启动容器并等待就绪。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略）。
+仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：生成配置（含容器适配）、初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、拉取镜像、启动容器并等待就绪。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略），运行数据直接持久化到其中的 `data/` 子目录。
 
 ```bash
 # 交互式：按实时提示输入两次 Admin 密码（输入不回显）
@@ -192,17 +192,17 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 - 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
 - `.env` 生成后为 `chmod 600`，含 Admin 哈希，务必保持私有、不入版本库。
 - 重复运行时保留已有 `config.yaml` 不覆盖；`.env` 中已配置的值保留为默认。
-- 部署目录缺省 `chown 10001:10001`（尽力而为，需 root/sudo）；若配置目录不可写，管理页只读但容器可正常运行。
+- 脚本创建 `config/` 与 `data/`，并尽力将两者设为 UID/GID `10001:10001`；权限不足时会提示手动修正。配置目录不可写时管理页只读，数据目录不可写时服务无法保存运行数据。
 
 ### Docker Compose（手动）
 
 仓库中的 [`compose.yaml`](../compose.yaml) 是推荐起点。先建立一个可原子替换的**目录**挂载，而不是只挂载单个 `config.yaml` 文件：管理页保存 Provider、客户端 Key 与实例默认语言时会通过临时文件和 `rename` 更新配置。
 
 ```bash
-mkdir -p deploy/config
+mkdir -p deploy/config deploy/data
 cp config.example.yaml deploy/config/config.yaml
 
-# 容器内需要监听全部网卡，且状态必须落到命名卷挂载点。
+# 容器内需要监听全部网卡，且状态必须落到宿主机数据目录映射点。
 ${EDITOR:-vi} deploy/config/config.yaml
 ```
 
@@ -239,8 +239,8 @@ AI_PROXY_ADMIN_PASSWORD_HASH=$argon2id$...
 若需要从管理页修改配置，配置目录必须由 UID `10001`（容器内 `ai-proxy` 用户）可写；为了让配置本身和同目录临时文件保持私有，可在受控主机上执行：
 
 ```bash
-sudo chown -R 10001:10001 deploy/config
-sudo chmod 700 deploy/config
+sudo chown -R 10001:10001 deploy/config deploy/data
+sudo chmod 700 deploy/config deploy/data
 sudo chmod 600 deploy/config/config.yaml
 docker compose up -d
 docker compose logs -f ai-proxy
@@ -255,27 +255,30 @@ docker compose ps
 docker compose exec ai-proxy curl --fail http://127.0.0.1:8080/healthz
 ```
 
-命名卷 `ai-proxy-state` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除它。配置目录包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与数据卷一起纳入主机备份策略。
+宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除该目录。`deploy/config/` 包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与 `deploy/data/` 一起纳入主机备份策略。
 
 ### 直接运行镜像
 
-不用 Compose 时也必须挂载配置**目录**与数据卷：
+不用 Compose 时也必须挂载宿主机配置目录与数据目录：
 
 ```bash
+mkdir -p deploy/config deploy/data
+sudo chown -R 10001:10001 deploy/config deploy/data
+
 docker run -d --name ai-proxy \
   --restart unless-stopped \
   --env-file .env \
   -p 127.0.0.1:8080:8080 \
   -v "$PWD/deploy/config:/etc/ai-proxy" \
-  -v ai-proxy-state:/var/lib/ai-proxy \
+  -v "$PWD/deploy/data:/var/lib/ai-proxy" \
   ghcr.io/muidea/ai-proxy:1.2.3
 ```
 
-容器内程序最终以 UID/GID `10001`（`ai-proxy`）运行。入口程序只在启动时以 root 初始化 `/var/lib/ai-proxy` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。这样既支持 Docker named volume，也避免容器擅自改变宿主机配置文件权限。
+容器内程序最终以 UID/GID `10001`（`ai-proxy`）运行。入口程序只在启动时以 root 初始化映射到 `/var/lib/ai-proxy` 的数据目录所有权，随后立即降权；它不会修改主机挂载的配置目录，因此配置目录仍需在宿主机上提前设置权限。
 
 ## 升级与回滚
 
-升级保留同一配置目录和数据卷即可：
+升级时保留同一宿主机配置目录和数据目录即可：
 
 ```bash
 docker compose pull
@@ -289,7 +292,7 @@ docker image inspect ghcr.io/muidea/ai-proxy:latest --format '{{index .RepoDiges
 2. 替换二进制（或解压新发布包到安装目录），重启进程/服务。
 3. 启动后检查 `healthz`、`/v1/models` 与日志中的配置校验结果。
 
-跨大版本升级或迁移宿主机前，必须先停止写入并完成备份。**不要并发运行两个实例指向同一个状态卷/工作区**；DuckDB 用量与账号状态不允许多实例共享。
+跨大版本升级或迁移宿主机前，必须先停止写入并完整备份 `deploy/config/` 与 `deploy/data/`。**不要并发运行两个实例指向同一个数据目录**；DuckDB 用量与账号状态不允许多实例共享。
 
 回滚：用旧版本二进制或旧镜像 tag 重复上述流程即可；DuckDB 文件保持原样，不会因启动而被旧版本改写（无法打开的数据库会使启用对应能力的模块在启动期失败，不会降级为空状态）。
 
@@ -302,7 +305,7 @@ docker image inspect ghcr.io/muidea/ai-proxy:latest --format '{{index .RepoDiges
 | 容器内 `/admin` 打不开 | Docker 转发连接在容器内不是 loopback；必须开启 `admin_auth_enabled` 登录保护 |
 | 管理页提示配置不可写 | 挂载的配置目录需要 UID `10001` 可写（`chown -R 10001:10001`）；只读挂载时管理页仅展示 |
 | 端口被占用 | 修改 `server.listen_addr`（或 `AI_PROXY_PORT` 仅替换端口） |
-| 容器升级后数据还在吗 | 命名卷 `ai-proxy-state` 持久化；重建容器不清除。前提是仍挂载同一卷且不与其他实例共享 |
+| 容器升级后数据还在吗 | 宿主机 `deploy/data/` 持久化；重建容器不清除。前提是仍映射同一目录且不与其他实例共享 |
 | 需要远程访问 /metrics | `metrics_remote_access: true`，并设置 `metrics_allowed_cidrs` 限制采集端来源 |
 | 修改了 `chatgpt_web.enabled` / `codex_oauth.enabled` 后不生效 | 这两个开关是启动期 Block 装配设置，修改后必须重启进程 |
 

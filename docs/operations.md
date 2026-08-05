@@ -24,12 +24,12 @@ curl http://127.0.0.1:8080/stats
 
 ## 容器部署
 
-容器部署的完整步骤（Docker Compose 与直接运行镜像、配置目录权限、Admin 登录、命名卷持久化、升级与回滚）见[安装与部署](deployment.md#容器部署)。此处仅列出运维要点：
+容器部署的完整步骤（Docker Compose 与直接运行镜像、目录权限、Admin 登录、数据持久化、升级与回滚）见[安装与部署](deployment.md#容器部署)。此处仅列出运维要点：
 
 - 镜像发布到 GitHub Container Registry：`ghcr.io/muidea/ai-proxy`。`main` 成功构建后更新 `latest` 与 `main`，发布 `vX.Y.Z` tag 后会推送对应的 `X.Y.Z`、`X.Y` 与 Git SHA 标签；生产部署应固定到完整版本或 SHA，不要仅依赖 `latest`。每个标签同时提供 Linux `amd64` 与 `arm64` 镜像。
 - 容器内程序最终以 UID/GID `10001`（`ai-proxy`）运行。入口程序只在启动时以 root 初始化 `/var/lib/ai-proxy` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。
-- 命名卷 `ai-proxy-state` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除它。配置目录包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与数据卷一起纳入主机备份策略。
-- 先按[备份与维护](#备份与维护)停止写入并备份，再进行跨大版本升级或迁移宿主机。不要并发运行两个容器指向同一个状态卷。
+- 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图、交互归档与 OAuth 账号池数据；删除或重建容器不会清除该目录。配置目录包含 Provider Key 表达式、Admin 哈希与管理页生成的客户端 Key 哈希，应与数据目录一起纳入主机备份策略。
+- 先按[备份与维护](#备份与维护)停止写入并备份，再进行跨大版本升级或迁移宿主机。不要并发运行两个容器指向同一个数据目录。
 
 ## Admin 登录安全（可选）
 
