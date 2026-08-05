@@ -13,7 +13,7 @@
 | 运行时依赖 | 无外部服务。唯一结构化状态是进程内嵌 DuckDB 文件 |
 | 网络 | 默认监听 `127.0.0.1:8080`；上游 Provider 需可直连（或经账号代理） |
 
-发布平台矩阵：Release workflow 在 Linux amd64/arm64、macOS arm64、Windows amd64 原生 runner 上打包 `.tar.gz` 与 SHA-256 文件。**不要从 amd64 交叉编译 Linux arm64**：DuckDB Go bindings 需要相应的原生目标 runner。
+发布平台矩阵：Release workflow 在 Linux amd64/arm64、macOS arm64 原生 runner 上打包 `.tar.gz` 与 SHA-256 文件。**不要从 amd64 交叉编译 arm64 目标**：DuckDB Go bindings 需要相应的原生目标 runner。Windows 不发布原生二进制（代码依赖 Unix termios 且需要 MinGW CGO 工具链），Windows 用户请使用 WSL2 或容器部署。
 
 ## 获取发布产物
 
