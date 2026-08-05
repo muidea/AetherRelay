@@ -1,13 +1,31 @@
+# Build outputs
 /ai-proxy
 /bin/
 /dist/
+*.test
+coverage.out
+coverage.html
+
+# Local configuration and secrets
+/config.yaml
+/.env
+/.env.*
+!/.env.example
+/.credential-key
+
+# Docker deployment workspace (config, .env, database and generated compose)
 /deploy/
-config.yaml
+
+# Runtime state
+/var/
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
 usage.csv
 usage.csv.bak.*
-usage.duckdb
-usage.duckdb.wal
-interactions/
-logs/
-chatgpt-web-data/
-var
+/interactions/
+/logs/
+/chatgpt-web-data/
+
+# Local tooling and OS metadata
+.DS_Store
