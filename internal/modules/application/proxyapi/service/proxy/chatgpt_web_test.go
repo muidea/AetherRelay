@@ -44,7 +44,7 @@ func newChatGPTWebHandler(t *testing.T, store usage.Store, exec chatgpttext.Exec
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}})
 	h := NewHandler(cfg, store, nil, metrics.NewRegistry()).WithChatGPTTextExecutor(exec)
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{
-		ID: "gpt-5", Operations: []string{config.ModelOperationChatCompletions},
+		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z"))
 	return h
 }
@@ -344,7 +344,7 @@ func TestUpdateConfigKeepsBuiltinCatalogUntilDiscoveryRefresh(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}})
 	h := NewHandler(cfg, usage.NewMemoryStore(), nil, nil)
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 7, 1, []effectivecatalog.PoolModel{{
-		ID: "gpt-5", Operations: []string{config.ModelOperationChatCompletions},
+		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z"))
 
 	updated := cfg

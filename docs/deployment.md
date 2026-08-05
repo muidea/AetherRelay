@@ -56,8 +56,8 @@ ${EDITOR:-vi} config.yaml
 
 - **Provider 条目必须显式写在配置文件中**，不能靠环境变量创建 provider。示例默认不内置静态 Provider（模型由 ChatGPT Web / Codex OAuth 账号池自动发现，凭据经管理台导入）；需要直连 API 服务商时取消 `providers` 注释并按需填写，所有启用的远程 Provider 都必须有可用凭据。
 - 密钥用 `${ENV}` 展开：`api_key: ${OPENAI_API_KEY}`，运行时由环境变量填充。
-- 每个 enabled Provider 必须显式声明 `protocol`、`base_url`、`endpoint_capabilities` 与 `models`。
-- `model_catalog` 是模型、容量与 operation 的权威，模型 ID exact 且严格区分大小写；每个模型至少匹配一个 enabled Provider。
+- 每个 enabled Provider 必须显式声明 `protocol`、`base_url`、`endpoints` 与 `models`。
+- `model_catalog` 只登记模型与容量元数据，模型 ID exact 且严格区分大小写；每个模型至少匹配一个 enabled Provider，可服务接口由 Provider `endpoints` 决定。
 - `state.dir` 是单实例唯一的持久化工作区（DuckDB 用量、账号池、图片元数据与交互归档都在其中），多实例不得共享。
 - `client_api_keys` 是数据端点的必需认证；不配置任何 Key 时所有数据请求都会 401。
 
@@ -75,14 +75,13 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: ${OPENAI_API_KEY}
-    endpoint_capabilities: chat_completions
+    endpoints: chat_completions
     models: gpt-5.5
 
 model_catalog:
   gpt-5.5:
     context_window_tokens: 128000
     max_output_tokens: 16384
-    operations: chat_completions
 
 client_api_keys:
   codex:
@@ -297,7 +296,7 @@ docker image inspect ghcr.io/muidea/ai-proxy:latest --format '{{index .RepoDiges
 
 | 现象 | 处理 |
 | --- | --- |
-| 启动即失败，提示配置校验错误 | Provider 必须显式声明 `protocol` / `base_url` / `endpoint_capabilities` / `models`；每个 `model_catalog` 条目必须 exact 匹配至少一个 enabled Provider；`operations` 必须至少有一个候选可服务。删除未启用的示例 Provider |
+| 启动即失败，提示配置校验错误 | Provider 必须显式声明 `protocol` / `base_url` / `endpoints` / `models`；每个 `model_catalog` 条目必须 exact 匹配至少一个 enabled Provider。删除未启用的示例 Provider |
 | 所有数据请求返回 401 | 未配置 `client_api_keys` 或 Key 缺失/未知/禁用；Key 是必需的应用层认证 |
 | 容器内 `/admin` 打不开 | Docker 转发连接在容器内不是 loopback；必须开启 `admin_auth_enabled` 登录保护 |
 | 管理页提示配置不可写 | 挂载的配置目录需要 UID `10001` 可写（`chown -R 10001:10001`）；只读挂载时管理页仅展示 |

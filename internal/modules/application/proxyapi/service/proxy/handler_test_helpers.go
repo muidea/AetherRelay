@@ -13,9 +13,8 @@ import (
 	"ai-proxy/internal/pkg/aiproxyusage"
 )
 
-// mustHandlerConfig 为测试构造已解析 Config:补齐 endpoint_capabilities 与 catalog RouteOwner。
+// mustHandlerConfig 为测试构造已解析 Config:补齐 endpoints 与 catalog RouteOwner。
 // 生产路径必须走 config.Load;Handler 不再 materialize。
-// operations 仅填 RouteOwner 实际可服务的集合,满足 operation×capability 交叉校验。
 func mustHandlerConfig(cfg config.Config) config.Config {
 	// 所有业务请求均需有效客户端 Key。未专门覆盖认证场景的测试统一使用此默认凭据；
 	// 认证测试可显式替换或删除它。
@@ -49,15 +48,16 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 				provider.Protocol = "openai"
 			}
 		}
-		if len(provider.EndpointCapabilities) == 0 && !provider.Disabled {
+		if len(provider.Endpoints) == 0 && !provider.Disabled {
 			if provider.Protocol == "anthropic" {
-				provider.EndpointCapabilities = []string{config.EndpointCapabilityMessages}
+				provider.Endpoints = []string{config.ProviderEndpointMessages}
 			} else {
-				provider.EndpointCapabilities = []string{
-					config.EndpointCapabilityChatCompletions,
-					config.EndpointCapabilityResponses,
-					config.EndpointCapabilityCompletions,
-					config.EndpointCapabilityEmbeddings,
+				provider.Endpoints = []string{
+					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointResponses,
+					config.ProviderEndpointCompletions,
+					config.ProviderEndpointEmbeddings,
+					config.ProviderEndpointImages,
 				}
 			}
 		}
@@ -85,7 +85,6 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 					ID:                  pattern,
 					ContextWindowTokens: 128000,
 					MaxOutputTokens:     16384,
-					Operations:          serviceableOperations(provider),
 					RouteOwner:          name,
 				}
 			}
@@ -106,7 +105,6 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 				ID:                  modelID,
 				ContextWindowTokens: 128000,
 				MaxOutputTokens:     16384,
-				Operations:          serviceableOperations(cfg.Providers[owner]),
 				RouteOwner:          owner,
 			}
 		}
@@ -135,19 +133,6 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 				info.RouteOwner = matches[0]
 			}
 		}
-		if len(info.Operations) == 0 {
-			if p, ok := cfg.Providers[info.RouteOwner]; ok {
-				info.Operations = serviceableOperations(p)
-			} else {
-				info.Operations = []string{config.ModelOperationChatCompletions}
-			}
-		} else if p, ok := cfg.Providers[info.RouteOwner]; ok {
-			// 过滤掉 RouteOwner 无法服务的 operation,避免测试夹具与 capability 冲突。
-			info.Operations = filterServiceableOperations(info.Operations, p)
-			if len(info.Operations) == 0 {
-				info.Operations = serviceableOperations(p)
-			}
-		}
 		if info.ContextWindowTokens <= 0 {
 			info.ContextWindowTokens = 128000
 		}
@@ -160,31 +145,6 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 		cfg.ModelCatalog[id] = info
 	}
 	return cfg
-}
-
-func serviceableOperations(provider config.Provider) []string {
-	ops := make([]string, 0, 2)
-	if config.ProviderSupportsInboundPath(provider, "/v1/chat/completions") {
-		ops = append(ops, config.ModelOperationChatCompletions)
-	}
-	if config.ProviderSupportsInboundPath(provider, "/v1/embeddings") {
-		ops = append(ops, config.ModelOperationEmbeddings)
-	}
-	if len(ops) == 0 {
-		ops = []string{config.ModelOperationChatCompletions}
-	}
-	return ops
-}
-
-func filterServiceableOperations(ops []string, provider config.Provider) []string {
-	out := make([]string, 0, len(ops))
-	for _, op := range ops {
-		path := config.OperationToPrimaryInboundPath(op)
-		if path != "" && config.ProviderSupportsInboundPath(provider, path) {
-			out = append(out, op)
-		}
-	}
-	return out
 }
 
 func containsStar(s string) bool {

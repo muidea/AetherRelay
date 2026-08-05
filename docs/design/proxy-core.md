@@ -16,22 +16,21 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 - **Anthropic**：`POST /v1/messages`
 - **扩展**：`POST /v1/search`（ai-proxy 自有搜索端点）、`POST /v1/images/generations|edits`（ChatGPT Web 图片）
 
-`GET/POST /v1/models` 本地合成，不访问上游；只返回模型、容量与 operations，不暴露 provider 名、base URL 或密钥。
+`GET/POST /v1/models` 本地合成，不访问上游；只返回模型与已知容量，不输出 capabilities，也不暴露 provider 名、base URL 或密钥。
 
 ## 字段语义
 
 | 字段 | 语义 |
 | --- | --- |
-| `model_catalog` | 静态模型的权威：模型 ID exact 且严格区分大小写，声明容量与 operations |
-| `operations` | 业务合同，当前枚举 `chat_completions`、`embeddings` |
+| `model_catalog` | 静态模型元数据权威：模型 ID exact 且严格区分大小写，只声明容量 |
 | `protocol` | 仅 `openai` / `anthropic`；必须显式声明，不得按 provider 名推断 |
-| `endpoint_capabilities` | 仅表示上游 direct endpoint 能力（`chat_completions` / `messages` / `responses` / `completions` / `embeddings`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
+| `endpoints` | 仅表示上游 native endpoint（`chat_completions` / `messages` / `responses` / `completions` / `embeddings` / `images`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
 
 `chatgptweb` 与 `codexoauth` 是保留的内建 Provider ID，禁止写入 `providers`；分别由 `chatgpt_web.enabled` / `codex_oauth.enabled` 在运行时注入。
 
 ## 模型路由与候选链
 
-- **两阶段解析**：启动期 `config.Load` 对每个 catalog 条目按 `models` pattern exact 匹配 enabled Provider，校验每个 `operations` 至少有一个候选按固定矩阵可服务，按 `priority` 降序写入 `ResolvedModelRoute.RouteOwners`；校验失败的模型不进 `/v1/models`。请求期 `ResolveTransportPlan` 在同一只读快照上生成 TransportPlan，不修改候选归属。
+- **两阶段解析**：启动期 `config.Load` 对每个 catalog 条目按 `models` pattern exact 匹配 enabled Provider，按 `priority` 降序写入 `ResolvedModelRoute.RouteOwners`。请求期 `ResolveTransportPlan` 再按请求 path、候选 Provider 的 `endpoints` 与固定矩阵生成 TransportPlan；模型目录不维护第二份能力枚举。
 - **候选链**：一个 exact model 可对应多个 enabled Provider，按 `priority`（`-1000`~`1000`，默认 `100`）降序排列，同优先级按 Provider 名稳定排序。内建 Provider 参与同一候选链：静态默认 `100`，Codex OAuth 默认 `90`，ChatGPT Web 默认 `10` 且不作为回退候选。同名模型保留全部候选，不相互覆盖。
 - **回退策略**：仅当客户端响应尚未提交时，对网络错误、`408`、`429`、`5xx` 与流式首事件探测失败，按候选 `fallback: true` 尝试下一项；一次已写出的 SSE/HTTP 响应绝不切换。图片任务一旦提交不回退。
 - **健康度与熔断**：5 分钟有界样本窗口；少于 3 个样本为 `unknown`；连续 3 次可重试失败打开 30 秒熔断；路由跳过熔断 / `unhealthy` / `credential_error` 候选。健康度不替代账号池的真实可用性判断。
@@ -39,15 +38,20 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 ## 转发矩阵
 
-| 客户端 | 上游 protocol | 需要的 capability | 上游 path | 模式 |
+| 客户端 | 上游 protocol | Provider endpoint | 上游 path | 模式 |
 | --- | --- | --- | --- | --- |
 | `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
 | `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
 | `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
+| `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
+| `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
 | `/v1/completions` | openai | `completions` | 同 path | native |
 | `/v1/embeddings` | openai | `embeddings` | 同 path | native |
+| `/v1/search` | chatgptweb | `chat_completions` | `chatgptweb_search` | native |
+| `/v1/images/generations\|edits` | openai | `images` | 同入站 path | native |
+| `/v1/images/generations\|edits` | chatgptweb | `images` | `chatgptweb_images` | native |
 
 矩阵外组合统一 `endpoint_unsupported`，不得经转换隐式获得；`responses` / `completions` / `embeddings` 不能靠 chat/messages 转换派生。
 
@@ -60,7 +64,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 ## Typed Error 与 Envelope
 
-- 稳定 code：`model_required`、`model_not_found`、`operation_unsupported`、`endpoint_unsupported`、`conversion_unsupported`、`invalid_request`(400)、`authentication_failed`(401)、`request_too_large`(413)、`route_contract_invalid`、`proxy_internal_error`(500)、`provider_unavailable`(503)、`upstream_unavailable`(502，唯一访问上游的 code)。
+- 稳定 code：`model_required`、`model_not_found`、`endpoint_unsupported`、`conversion_unsupported`、`invalid_request`(400)、`authentication_failed`(401)、`request_too_large`(413)、`route_contract_invalid`、`proxy_internal_error`(500)、`provider_unavailable`(503)、`upstream_unavailable`(502，唯一访问上游的 code)。
 - envelope 按入站协议输出：OpenAI 带独立 `code`；Anthropic 用 `{"type":"error"}` 且同一 code 前缀写入 message。
 - 所有本地拒绝一律走 typed encoder（禁用 `http.Error`）；错误不泄露 API Key、Authorization 或带凭据 URL。
 
@@ -69,7 +73,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 - 文本生成统一 SSE 增量输出；标准推理端点仅在请求体 `"stream": true` 时进入流式生命周期，`Accept: text/event-stream` 不能隐式改变请求模式。
 - `/v1/chat/completions` 返回 OpenAI Chat Completions SSE（必要时转换 Anthropic 上游事件）；`/v1/messages` 返回 Anthropic Messages SSE（必要时转换 OpenAI 上游事件）。
 - 跨协议 SSE 事件统一转换，响应头与边界一致；转换只保证基础文本 delta。
-- 首包写出后 HTTP 状态不可改写，真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`limit_exceeded`、`upstream_truncated`、`upstream_failed`、`capability_drift`、`incomplete`、`client_write`、`protocol`、`conversion`、`error`）统一写入 DuckDB / Prometheus / `metadata.json`；客户端取消不得计为上游故障。
+- 首包写出后 HTTP 状态不可改写，真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`limit_exceeded`、`upstream_truncated`、`upstream_failed`、`endpoint_drift`、`incomplete`、`client_write`、`protocol`、`conversion`、`error`）统一写入 DuckDB / Prometheus / `metadata.json`；客户端取消不得计为上游故障。
 - 浏览器客户端应使用 `fetch()` + `ReadableStream`（POST + 认证 Header），不使用只支持 GET 的原生 `EventSource`。
 
 ## 观测合同
@@ -78,6 +82,6 @@ usage / metadata / metrics / SLO 必须消费同一 TransportPlan 的观测上�
 
 ## 演进记录
 
-- 2026-07-15：Provider Capability Contract 早期设计（单 RouteOwner、无候选链、operations 枚举含 embedding 预研）→ 归档 `docs/archive/provider-capability-contract-design-2026-07-15.md`
+- 2026-07-15：Provider Capability Contract 早期设计（单 RouteOwner、无候选链、capabilities 枚举含 embedding 预研）→ 归档 `docs/archive/provider-capability-contract-design-2026-07-15.md`
 - 2026-07-23：统一流式 SSE 收口 → 归档 `docs/archive/unified-sse-streaming-design-2026-07-23.md`
 - 后续：候选链、priority/fallback、健康度与熔断、内建 Provider 合成等能力在既有正式合同中收口，无独立设计文档。

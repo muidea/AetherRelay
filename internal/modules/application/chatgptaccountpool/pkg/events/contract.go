@@ -37,10 +37,10 @@ const (
 	TopicCatalogSnapshot             = "aiproxy.chatgpt.accountpool.command.catalog_snapshot"
 )
 
-// Model operations mirrored from the upstream models enumeration contract.
+// Model capabilities mirrored from the upstream models enumeration contract.
 const (
-	ModelOperationChatCompletions  = "chat_completions"
-	ModelOperationImageGenerations = "image_generations"
+	ModelCapabilityTextGeneration  = "text_generation"
+	ModelCapabilityImageGeneration = "image_generation"
 )
 
 type AccountView struct {
@@ -129,11 +129,11 @@ type AcquireImageTokenCommand struct {
 	PlanType   string
 	SourceType string
 	Exclude    []string
-	// Model and Operation filter candidates by the account's latest model
+	// Model and Capability filter candidates by the account's latest model
 	// snapshot. Empty values keep the pre-discovery acquire behavior so
 	// non-catalog callers (for example image task recovery) still work.
-	Model     string
-	Operation string
+	Model      string
+	Capability string
 }
 type AcquireImageTokenResult struct {
 	AccessToken string
@@ -153,10 +153,10 @@ type MarkImageResultCommand struct {
 type MarkImageResultResult struct{ Account AccountView }
 type AcquireTextTokenCommand struct {
 	Exclude []string
-	// Model and Operation filter candidates by the account's latest model
+	// Model and Capability filter candidates by the account's latest model
 	// snapshot. Empty values keep the pre-discovery acquire behavior.
-	Model     string
-	Operation string
+	Model      string
+	Capability string
 }
 type AcquireTextTokenResult struct {
 	AccessToken string
@@ -165,11 +165,11 @@ type AcquireTextTokenResult struct {
 
 // AcquireTextAccountCommand acquires a specific account for text turns. It does
 // not reuse image in-flight slots and requires the account to support the model
-// for chat_completions when Model/Operation are provided.
+// for chat_completions when Model/Capability are provided.
 type AcquireTextAccountCommand struct {
-	AccountID string
-	Model     string
-	Operation string
+	AccountID  string
+	Model      string
+	Capability string
 }
 type AcquireTextAccountResult struct {
 	AccessToken string
@@ -205,12 +205,12 @@ type RefreshTextTokenResult struct {
 	ErrorClass string
 }
 
-// AccountModelEntry is one model+operations projection stored on an account.
+// AccountModelEntry is one model+capabilities projection stored on an account.
 type AccountModelEntry struct {
-	ID         string   `json:"id"`
-	Operations []string `json:"operations"`
-	CreatedAt  int64    `json:"created_at,omitempty"`
-	OwnedBy    string   `json:"owned_by,omitempty"`
+	ID           string   `json:"id"`
+	Capabilities []string `json:"capabilities"`
+	CreatedAt    int64    `json:"created_at,omitempty"`
+	OwnedBy      string   `json:"owned_by,omitempty"`
 }
 
 // AccountModelSnapshot is the derived capability state of one account.
@@ -260,11 +260,11 @@ type RecordModelDiscoveryFailureResult struct {
 
 // CatalogModel is the pool-level union entry for one model ID.
 type CatalogModel struct {
-	ID         string   `json:"id"`
-	Operations []string `json:"operations"`
-	CreatedAt  int64    `json:"created_at,omitempty"`
-	OwnedBy    string   `json:"owned_by,omitempty"`
-	AccountIDs []string `json:"account_ids,omitempty"`
+	ID           string   `json:"id"`
+	Capabilities []string `json:"capabilities"`
+	CreatedAt    int64    `json:"created_at,omitempty"`
+	OwnedBy      string   `json:"owned_by,omitempty"`
+	AccountIDs   []string `json:"account_ids,omitempty"`
 }
 
 type CatalogSnapshotCommand struct{}

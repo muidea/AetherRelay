@@ -22,29 +22,25 @@ func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"text-primary": {
 				Name: "text-primary", Protocol: "openai", Models: []string{"shared-text"}, Priority: 200,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 			"text-backup": {
 				Name: "text-backup", Protocol: "anthropic", Models: []string{"shared-text"}, Priority: 100,
-				EndpointCapabilities: []string{config.EndpointCapabilityMessages},
+				Endpoints: []string{config.ProviderEndpointMessages},
 			},
 			"image": {
 				Name: "image", Protocol: "openai", Models: []string{"image-model"}, Priority: 150,
-				EndpointCapabilities: []string{config.EndpointCapabilityImages},
+				Endpoints: []string{config.ProviderEndpointImages},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"shared-text": {
 				ID: "shared-text", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "text-primary", RouteOwners: []string{"text-backup", "text-primary"},
+				RouteOwner: "text-primary", RouteOwners: []string{"text-backup", "text-primary"},
 			},
 			"image-model": {
 				ID: "image-model", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationImageGenerations}, RouteOwner: "image", RouteOwners: []string{"image"},
-			},
-			"unroutable": {
-				ID: "unroutable", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "text-primary", RouteOwners: []string{"text-primary"},
+				RouteOwner: "image", RouteOwners: []string{"image"},
 			},
 		},
 	}

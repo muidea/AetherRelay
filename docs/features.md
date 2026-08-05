@@ -33,19 +33,24 @@
 - **Anthropic**：`POST /v1/messages`
 - **ai-proxy 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）、`POST /v1/images/generations|edits`（路由到 `chatgptweb` 图片能力）
 
-`GET/POST /v1/models` **本地合成**，不访问上游；只返回有效目录中的模型、`contextWindowTokens` / `maxOutputTokens` / `operations`，不暴露 provider 名、base URL 或密钥。
+`GET/POST /v1/models` **本地合成**，不访问上游；只返回有效目录中的模型及已知的 `contextWindowTokens` / `maxOutputTokens`，不输出 `capabilities`，也不暴露 provider 名、base URL 或密钥。
 
-转发矩阵（`endpoint_capabilities` 只表示上游直连能力；客户端可服务 path 由矩阵决定，含跨协议基础转换）：
+转发矩阵（`endpoints` 只表示上游直连能力；客户端可服务 path 由矩阵决定，含跨协议基础转换）：
 
-| 客户端 | 上游 protocol | 需要的 capability | 上游 path | 模式 |
+| 客户端 | 上游 protocol | Provider endpoint | 上游 path | 模式 |
 | --- | --- | --- | --- | --- |
 | `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
 | `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
 | `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
+| `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
+| `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
 | `/v1/completions` | openai | `completions` | 同 path | native |
 | `/v1/embeddings` | openai | `embeddings` | 同 path | native |
+| `/v1/search` | chatgptweb | `chat_completions` | `chatgptweb_search` | native |
+| `/v1/images/generations\|edits` | openai | `images` | 同入站 path | native |
+| `/v1/images/generations\|edits` | chatgptweb | `images` | `chatgptweb_images` | native |
 
 ## 模型路由与候选链
 
@@ -87,7 +92,7 @@
 
 - 静态 Provider：编辑、启停、优先级（`-1000`~`1000`）与回退开关，保存后热更新。
 - 内建 Provider（`chatgptweb` / `codexoauth`）：展示路由启停与优先级控制、可路由账号数和模型数、不可用原因；不可删除。
-- 运行期可用性：「检查」按钮对当前 Provider 执行一次最小非流式探测，不改写配置；状态合并账号池可用性与请求健康度（`disabled` / `unknown` / `healthy` / `degraded` / `unavailable` / `credential_error` / `capability_drift`）。
+- 运行期可用性：「检查」按钮对当前 Provider 执行一次最小非流式探测，不改写配置；状态合并账号池可用性与请求健康度（`disabled` / `unknown` / `healthy` / `degraded` / `unavailable` / `credential_error` / `endpoint_drift`）。
 - 来源列仅作展示：`builtin` / `official` / `third_party`，不参与路由或安全判断。
 
 ### 客户端 Key
@@ -143,7 +148,7 @@
 - **Prometheus 指标**（前缀 `ai_proxy_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
 - **SLO webhook**：配置阈值（缓存命中率、上游错误率、p99 延迟）与巡检周期后，状态变化时异步 POST `entered` / `resolved` 事件，带 `instance_id`、递增 `seq`、`generation` 与稳定 `event_id`；消费方按 `event_id` 幂等。有界队列 + 单 worker，429 优先遵循 `Retry-After`。
 - **交互归档**：`state.dir/interactions/{round_id}/` 保存脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`；`archive_full_content: false` 可禁止正文落盘；默认保留最近 N 轮（`interaction_retention`）。
-- **Provider live probe**：`go run ./cmd/ai-proxy-probe -config config.yaml -provider <owner> -capability chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `capability_drift` / `environment_undetermined`；不在服务启动时运行。
+- **Provider live probe**：`go run ./cmd/ai-proxy-probe -config config.yaml -provider <owner> -endpoint chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `endpoint_drift` / `environment_undetermined`；不在服务启动时运行。
 
 ## 安全与隐私边界
 
@@ -156,7 +161,7 @@
 ## 限制与不支持项
 
 - 转换仅保证基础文本与基础 SSE；tools / function calling / 多模态 / `response_format` 等在访问上游前拒绝（`conversion_unsupported`）。
-- `responses` / `completions` / `embeddings` 不能由 chat/messages 转换派生，必须由具备对应 `endpoint_capabilities` 的上游直连服务。
+- `responses` / `completions` / `embeddings` 不能由 chat/messages 转换派生，必须由具备对应 `endpoints` 的上游直连服务。
 - 不提供 WebSocket / OpenAI Realtime 代理、`responses/compact`；`/v1/search` 不是 OpenAI 官方端点别名。
 - 不提供请求侧 Provider 覆盖；候选顺序只由配置的 `priority` / `fallback` 决定。
 - ChatGPT Web 不提供通用 function/tool calling、工具循环、深度研究、网页插件；Codex 不提供网页会话与插件能力。

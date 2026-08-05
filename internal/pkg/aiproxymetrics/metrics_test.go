@@ -58,7 +58,7 @@ func TestProviderHealthSnapshotTracksLatestOutcome(t *testing.T) {
 		r.RecordRequestPlan("unavailable", "m", "chat_completions", http.StatusServiceUnavailable, time.Millisecond, "upstream_failed", "", "", "", "")
 	}
 	r.RecordRequestPlan("credential", "m", "chat_completions", http.StatusUnauthorized, time.Millisecond, "upstream_failed", "", "", "", "")
-	r.RecordRequestPlan("drift", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "capability_drift", "", "", "", "")
+	r.RecordRequestPlan("drift", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift", "", "", "", "")
 
 	payload, err := r.StatsJSON()
 	if err != nil {
@@ -80,7 +80,7 @@ func TestProviderHealthSnapshotTracksLatestOutcome(t *testing.T) {
 	if got := stats.ProviderHealth["credential"]; got.LastStatus != http.StatusUnauthorized {
 		t.Fatalf("credential snapshot = %#v", got)
 	}
-	if got := stats.ProviderHealth["drift"]; got.LastOutcome != "capability_drift" || got.Failures != 1 {
+	if got := stats.ProviderHealth["drift"]; got.LastOutcome != "endpoint_drift" || got.Failures != 1 {
 		t.Fatalf("drift snapshot = %#v", got)
 	}
 }
@@ -92,9 +92,9 @@ func TestProviderHealthIgnoresLocalClientAndConversionErrors(t *testing.T) {
 	if got := r.ProviderHealthSnapshot(); len(got) != 0 {
 		t.Fatalf("local request errors must not affect provider health: %#v", got)
 	}
-	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "capability_drift", "", "", "", "")
-	if got := r.ProviderHealthSnapshot()["openai"]; got.Status != "capability_drift" || got.SampleCount != 1 {
-		t.Fatalf("capability drift must remain observable: %#v", got)
+	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift", "", "", "", "")
+	if got := r.ProviderHealthSnapshot()["openai"]; got.Status != "endpoint_drift" || got.SampleCount != 1 {
+		t.Fatalf("endpoint drift must remain observable: %#v", got)
 	}
 }
 

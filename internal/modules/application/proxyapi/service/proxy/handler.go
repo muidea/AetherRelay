@@ -134,12 +134,11 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	cfg.Providers = make(map[string]config.Provider, len(h.cfg.Providers))
 	for name, provider := range h.cfg.Providers {
 		provider.Models = append([]string(nil), provider.Models...)
-		provider.EndpointCapabilities = append([]string(nil), provider.EndpointCapabilities...)
+		provider.Endpoints = append([]string(nil), provider.Endpoints...)
 		cfg.Providers[name] = provider
 	}
 	cfg.ModelCatalog = make(map[string]config.ModelInfo, len(h.cfg.ModelCatalog))
 	for id, info := range h.cfg.ModelCatalog {
-		info.Operations = append([]string(nil), info.Operations...)
 		info.RouteOwners = append([]string(nil), info.RouteOwners...)
 		cfg.ModelCatalog[id] = info
 	}
@@ -218,7 +217,7 @@ func buildClientKeyIndex(cfg config.Config) *clientauth.Index {
 }
 
 // requireResolvedConfig 要求 Config 已通过 config.Load 的 authority 合同。
-// Handler 不合成 model、不补默认容量/operations、不猜测 RouteOwner。
+// Handler 不合成 model、不补默认容量、不猜测 RouteOwner。
 // 对绕过 Load 的调用方做 fail-fast 全量校验。
 func requireResolvedConfig(cfg config.Config) error {
 	if cfg.Providers == nil {
@@ -243,30 +242,30 @@ func requireResolvedConfig(cfg config.Config) error {
 		if len(provider.Models) == 0 {
 			return fmt.Errorf("provider %q: models unresolved", name)
 		}
-		if len(provider.EndpointCapabilities) == 0 {
-			return fmt.Errorf("provider %q: endpoint_capabilities unresolved", name)
+		if len(provider.Endpoints) == 0 {
+			return fmt.Errorf("provider %q: endpoints unresolved", name)
 		}
-		if err := assertUniqueSortedKnownList("provider "+name+" endpoint_capabilities", provider.EndpointCapabilities, knownEndpointCapabilities()); err != nil {
+		if err := assertUniqueSortedKnownList("provider "+name+" endpoints", provider.Endpoints, knownProviderEndpoints()); err != nil {
 			return err
 		}
 		if provider.Protocol == "openai" {
-			for _, capName := range provider.EndpointCapabilities {
-				if capName == config.EndpointCapabilityMessages {
-					return fmt.Errorf("provider %q: endpoint_capabilities messages invalid for openai protocol", name)
+			for _, capName := range provider.Endpoints {
+				if capName == config.ProviderEndpointMessages {
+					return fmt.Errorf("provider %q: endpoints messages invalid for openai protocol", name)
 				}
 			}
 		}
 		if provider.Protocol == "anthropic" {
-			for _, capName := range provider.EndpointCapabilities {
-				if capName != config.EndpointCapabilityMessages {
-					return fmt.Errorf("provider %q: endpoint_capabilities %q invalid for anthropic protocol", name, capName)
+			for _, capName := range provider.Endpoints {
+				if capName != config.ProviderEndpointMessages {
+					return fmt.Errorf("provider %q: endpoints %q invalid for anthropic protocol", name, capName)
 				}
 			}
 		}
 		if provider.Protocol == "chatgptweb" {
-			for _, capName := range provider.EndpointCapabilities {
-				if capName != config.EndpointCapabilityChatCompletions && capName != config.EndpointCapabilityResponses && capName != config.EndpointCapabilityImages {
-					return fmt.Errorf("provider %q: endpoint_capabilities %q invalid for chatgptweb protocol", name, capName)
+			for _, capName := range provider.Endpoints {
+				if capName != config.ProviderEndpointChatCompletions && capName != config.ProviderEndpointResponses && capName != config.ProviderEndpointImages {
+					return fmt.Errorf("provider %q: endpoints %q invalid for chatgptweb protocol", name, capName)
 				}
 			}
 		}
@@ -284,12 +283,6 @@ func requireResolvedConfig(cfg config.Config) error {
 		if info.MaxOutputTokens >= info.ContextWindowTokens {
 			return fmt.Errorf("model_catalog.%s: max_output_tokens must be less than context_window_tokens", id)
 		}
-		if len(info.Operations) == 0 {
-			return fmt.Errorf("model_catalog.%s: operations unresolved", id)
-		}
-		if err := assertUniqueSortedKnownList("model_catalog."+id+" operations", info.Operations, knownModelOperations()); err != nil {
-			return err
-		}
 		owners := append([]string(nil), info.RouteOwners...)
 		if len(owners) == 0 && strings.TrimSpace(info.RouteOwner) != "" {
 			owners = []string{info.RouteOwner}
@@ -297,7 +290,6 @@ func requireResolvedConfig(cfg config.Config) error {
 		if len(owners) == 0 {
 			return fmt.Errorf("model_catalog.%s: route candidates unresolved", id)
 		}
-		matched := map[string]config.Provider{}
 		for _, owner := range owners {
 			provider, ok := cfg.Providers[owner]
 			if !ok || provider.Disabled {
@@ -306,41 +298,19 @@ func requireResolvedConfig(cfg config.Config) error {
 			if !config.ProviderMatchesModel(owner, provider, id) {
 				return fmt.Errorf("model_catalog.%s: route candidate %q does not match model", id, owner)
 			}
-			matched[owner] = provider
-		}
-		for _, op := range info.Operations {
-			path := config.OperationToPrimaryInboundPath(op)
-			serviceable := false
-			for _, provider := range matched {
-				if path != "" && config.ProviderSupportsInboundPath(provider, path) {
-					serviceable = true
-					break
-				}
-			}
-			if !serviceable {
-				return fmt.Errorf("model_catalog.%s: operation %q not serviceable by route candidates", id, op)
-			}
 		}
 	}
 	return nil
 }
 
-func knownEndpointCapabilities() map[string]int {
+func knownProviderEndpoints() map[string]int {
 	return map[string]int{
-		config.EndpointCapabilityChatCompletions: 0,
-		config.EndpointCapabilityMessages:        1,
-		config.EndpointCapabilityResponses:       2,
-		config.EndpointCapabilityCompletions:     3,
-		config.EndpointCapabilityEmbeddings:      4,
-		config.EndpointCapabilityImages:          5,
-	}
-}
-
-func knownModelOperations() map[string]int {
-	return map[string]int{
-		config.ModelOperationChatCompletions:  0,
-		config.ModelOperationEmbeddings:       1,
-		config.ModelOperationImageGenerations: 2,
+		config.ProviderEndpointChatCompletions: 0,
+		config.ProviderEndpointMessages:        1,
+		config.ProviderEndpointResponses:       2,
+		config.ProviderEndpointCompletions:     3,
+		config.ProviderEndpointEmbeddings:      4,
+		config.ProviderEndpointImages:          5,
 	}
 }
 
@@ -404,7 +374,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Message:        "missing or invalid client api key",
 				ClientProtocol: clientProtocolFromRequest(r),
 				ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
-				Operation:      OperationForPath(r.URL.Path),
 			})
 			return
 		}
@@ -415,7 +384,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Message:        "missing or invalid client api key",
 			ClientProtocol: clientProtocolFromRequest(r),
 			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
-			Operation:      OperationForPath(r.URL.Path),
 		})
 		return
 	}
@@ -427,7 +395,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeClientProtocolError(w, http.StatusInternalServerError, clientProtocolFromRequest(r), APIError{
 			Code: ErrorCodeProxyInternalError, Message: "start interaction archive failed",
-			ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path),
+			ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return
 	}
@@ -441,7 +409,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if eventID == "" {
 		writeClientProtocolError(w, http.StatusServiceUnavailable, clientProtocolFromRequest(r), APIError{
 			Code: ErrorCodeUsageStoreUnavailable, Message: "usage store unavailable",
-			ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path),
+			ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return
 	}
@@ -480,7 +448,6 @@ func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID str
 			Message:        "usage store unavailable",
 			ClientProtocol: clientProtocolFromRequest(r),
 			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
-			Operation:      OperationForPath(r.URL.Path),
 		})
 		return false
 	}
@@ -490,7 +457,7 @@ func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID str
 		EventID:        eventID,
 		StartedAt:      time.Now().UTC(),
 		APIKeyID:       identity.KeyID,
-		Operation:      OperationForPath(path),
+		Operation:      RouteLabel(r),
 		Route:          RouteLabel(r),
 		ClientEndpoint: path,
 		ClientProtocol: ClientProtocolForPath(path),
@@ -507,7 +474,6 @@ func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID str
 			Message:        "usage store unavailable",
 			ClientProtocol: clientProtocolFromRequest(r),
 			ClientEndpoint: path,
-			Operation:      rec.Operation,
 		})
 		return false
 	}
@@ -742,7 +708,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		}
 		h.writeArchivedAPIError(w, round, r, start, "", "", false, status, APIError{
 			Code: code, Message: err.Error(), ClientProtocol: clientProtocolFromRequest(r),
-			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path),
+			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return
 	}
@@ -784,7 +750,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(preflightErr), *preflightErr)
 			return
 		}
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, Operation: plan.Operation, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
+		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
 		return
 	}
 	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
@@ -853,12 +819,8 @@ func (h *Handler) writeArchivedError(w http.ResponseWriter, round *archive.Round
 	}
 	if r != nil && r.URL != nil {
 		apiErr.ClientEndpoint = NormalizeClientEndpoint(r.URL.Path)
-		apiErr.Operation = OperationForPath(r.URL.Path)
 	}
 	if round != nil {
-		if apiErr.Operation == "" {
-			apiErr.Operation = round.Operation
-		}
 		if apiErr.ClientEndpoint == "" {
 			apiErr.ClientEndpoint = round.ClientEndpoint
 		}
@@ -876,9 +838,6 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	}
 	if apiErr.ClientEndpoint == "" && r != nil && r.URL != nil {
 		apiErr.ClientEndpoint = NormalizeClientEndpoint(r.URL.Path)
-	}
-	if apiErr.Operation == "" && apiErr.ClientEndpoint != "" {
-		apiErr.Operation = OperationForPath(apiErr.ClientEndpoint)
 	}
 	if apiErr.Model == "" {
 		apiErr.Model = model
@@ -942,7 +901,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		}
 		h.writeArchivedAPIError(w, round, r, start, "", "", false, status, APIError{
 			Code: code, Message: err.Error(), ClientProtocol: clientProtocolFromRequest(r),
-			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path),
+			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return
 	}
@@ -996,7 +955,6 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			Code:             ErrorCodeEndpointUnsupported,
 			Message:          fmt.Sprintf("endpoint %q only supports native transport; conversion is not available", plan.ClientEndpoint),
 			Model:            rawModel,
-			Operation:        plan.Operation,
 			ClientEndpoint:   plan.ClientEndpoint,
 			ClientProtocol:   plan.ClientProtocol,
 			UpstreamProtocol: plan.UpstreamProtocol,
@@ -1009,7 +967,6 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			Code:             ErrorCodeProviderUnavailable,
 			Message:          fmt.Sprintf("provider %q is not configured", plan.RouteOwner),
 			Model:            rawModel,
-			Operation:        plan.Operation,
 			ClientEndpoint:   plan.ClientEndpoint,
 			ClientProtocol:   plan.ClientProtocol,
 			UpstreamProtocol: plan.UpstreamProtocol,
@@ -1466,7 +1423,7 @@ func (h *Handler) prepareOpenAIChatCandidates(plans []TransportPlan, raw []byte,
 			}
 			encoded, err := json.Marshal(payload)
 			if err != nil {
-				apiErr := APIError{Code: ErrorCodeProxyInternalError, Message: err.Error(), Model: plan.ModelID, Operation: plan.Operation, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol}
+				apiErr := APIError{Code: ErrorCodeProxyInternalError, Message: err.Error(), Model: plan.ModelID, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol}
 				if firstErr == nil {
 					firstErr = &apiErr
 				}
@@ -1995,7 +1952,7 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 	}
 	if len(eligible) == 0 {
 		first := plans[0]
-		return nil, &APIError{Code: ErrorCodeProviderUnavailable, Message: fmt.Sprintf("all providers for model %q are unhealthy", model), Model: model, Operation: first.Operation, ClientEndpoint: first.ClientEndpoint, ClientProtocol: first.ClientProtocol}
+		return nil, &APIError{Code: ErrorCodeProviderUnavailable, Message: fmt.Sprintf("all providers for model %q are unhealthy", model), Model: model, ClientEndpoint: first.ClientEndpoint, ClientProtocol: first.ClientProtocol}
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		if eligible[i].Priority != eligible[j].Priority {
@@ -2008,16 +1965,6 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 		return eligible[i].RouteOwner < eligible[j].RouteOwner
 	})
 	return eligible, nil
-}
-
-// resolveProviderName 保留为兼容包装:返回 RouteOwner 与 operation。
-// 新代码应使用 resolveTransportPlan。
-func (h *Handler) resolveProviderName(r *http.Request, model string) (string, string, *APIError) {
-	plan, apiErr := h.resolveTransportPlan(r, model)
-	if apiErr != nil {
-		return "", apiErr.Operation, apiErr
-	}
-	return plan.RouteOwner, plan.Operation, nil
 }
 
 func providerMatchesModel(name string, provider config.Provider, model string) bool {

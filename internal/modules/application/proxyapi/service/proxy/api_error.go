@@ -10,7 +10,6 @@ import (
 const (
 	ErrorCodeModelRequired         = "model_required"
 	ErrorCodeModelNotFound         = "model_not_found"
-	ErrorCodeOperationUnsupported  = "operation_unsupported"
 	ErrorCodeRouteContractInvalid  = "route_contract_invalid"
 	ErrorCodeProviderUnavailable   = "provider_unavailable"
 	ErrorCodeMultipleProviders     = "multiple_providers"
@@ -47,7 +46,6 @@ type APIError struct {
 	Message          string `json:"message"`
 	Type             string `json:"type,omitempty"` // OpenAI error.type
 	Model            string `json:"model,omitempty"`
-	Operation        string `json:"operation,omitempty"`
 	ClientEndpoint   string `json:"client_endpoint,omitempty"`
 	ClientProtocol   string `json:"client_protocol,omitempty"`
 	UpstreamProtocol string `json:"upstream_protocol,omitempty"`
@@ -98,7 +96,7 @@ func openAIErrorType(code string) string {
 func anthropicErrorType(code string) string {
 	switch code {
 	case ErrorCodeRequestTooLarge, ErrorCodeInvalidRequest, ErrorCodeModelRequired, ErrorCodeModelNotFound,
-		ErrorCodeOperationUnsupported, ErrorCodeEndpointUnsupported, ErrorCodeConversionUnsupported,
+		ErrorCodeEndpointUnsupported, ErrorCodeConversionUnsupported,
 		ErrorCodeAuthenticationFailed:
 		return "invalid_request_error"
 	case ErrorCodeProviderUnavailable, ErrorCodeUpstreamUnavailable:
@@ -132,14 +130,4 @@ func statusForAPIError(apiErr *APIError) int {
 	default:
 		return http.StatusBadRequest
 	}
-}
-
-// writeAPIErrorFields 兼容旧调用点的位置参数写法。
-func writeAPIErrorFields(w http.ResponseWriter, status int, code, message, model, operation string) {
-	writeAPIError(w, status, APIError{
-		Code:      code,
-		Message:   message,
-		Model:     model,
-		Operation: operation,
-	})
 }

@@ -70,7 +70,7 @@ func (s *Proxy) runChatGPTImages(ctx context.Context, request chatgptimage.Reque
 }
 
 func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Request, edit bool) (oneImageResult, error) {
-	accountValue, accountErr := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireImageTokenCommand{Model: request.Model, Operation: accevents.ModelOperationImageGenerations})).Get()
+	accountValue, accountErr := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireImageToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireImageTokenCommand{Model: request.Model, Capability: accevents.ModelCapabilityImageGeneration})).Get()
 	if accountErr != nil {
 		slog.Warn("chatgpt image execution failed", "stage", "acquire_account", "event_error_code", accountErr.Code)
 		return oneImageResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt image account unavailable"))

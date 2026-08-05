@@ -558,13 +558,11 @@ func TestLocalModelsEndpointReturnsCatalog(t *testing.T) {
 				ID:                  "gpt-4o",
 				ContextWindowTokens: 128000,
 				MaxOutputTokens:     16384,
-				Operations:          []string{config.ModelOperationChatCompletions},
 			},
 			"deepseek-chat": {
 				ID:                  "deepseek-chat",
 				ContextWindowTokens: 64000,
 				MaxOutputTokens:     8192,
-				Operations:          []string{config.ModelOperationChatCompletions, config.ModelOperationEmbeddings},
 			},
 		},
 	}
@@ -601,14 +599,8 @@ func TestLocalModelsEndpointReturnsCatalog(t *testing.T) {
 	if strings.Contains(response.Body.String(), `"owned_by"`) || strings.Contains(response.Body.String(), `"created"`) {
 		t.Fatalf("model catalog must not expose route owner or meaningless created value: %s", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"operations"`) {
-		t.Fatalf("expected operations field, got: %s", response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `"chat_completions"`) {
-		t.Fatalf("expected chat_completions operation, got: %s", response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `"embeddings"`) {
-		t.Fatalf("expected embeddings operation on deepseek-chat, got: %s", response.Body.String())
+	if strings.Contains(response.Body.String(), `"capabilities"`) {
+		t.Fatalf("model catalog must not expose capabilities: %s", response.Body.String())
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"object":"list"`)
@@ -1620,13 +1612,13 @@ func TestProtocolConversionRejectsInvalidStopBeforeUpstream(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"anthropic": {
 				Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "k",
-				Models: []string{"claude*"}, EndpointCapabilities: []string{config.EndpointCapabilityMessages},
+				Models: []string{"claude*"}, Endpoints: []string{config.ProviderEndpointMessages},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"claude-test": {
 				ID: "claude-test", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "anthropic",
+				RouteOwner: "anthropic",
 			},
 		},
 	}), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
@@ -2227,7 +2219,7 @@ func TestAnthropicToOpenAIStreamReturnsAfterMessageStop(t *testing.T) {
 	}
 }
 
-func TestOperationUnsupportedRejectsBeforeUpstream(t *testing.T) {
+func TestEndpointUnsupportedRejectsBeforeUpstream(t *testing.T) {
 	tmpDir := t.TempDir()
 	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
 	if err != nil {
@@ -2237,16 +2229,12 @@ func TestOperationUnsupportedRejectsBeforeUpstream(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"gpt-chat", "embed-model"}},
+			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"gpt-chat"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-chat": {
 				ID: "gpt-chat", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
-			},
-			"embed-model": {
-				ID: "embed-model", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}
@@ -2254,30 +2242,21 @@ func TestOperationUnsupportedRejectsBeforeUpstream(t *testing.T) {
 	upstreamHits := 0
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamHits++
-		t.Fatalf("upstream should not be called for operation_unsupported")
+		t.Fatalf("upstream should not be called for endpoint_unsupported")
 		return nil, nil
 	})
 
-	// chat-only model calling embeddings
 	req := newRequest(http.MethodPost, "/v1/embeddings", `{"model":"gpt-chat","input":"hi"}`)
 	resp := newResponseRecorder()
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "operation_unsupported") {
+	if !strings.Contains(resp.Body.String(), "endpoint_unsupported") {
 		t.Fatalf("body = %s", resp.Body.String())
 	}
-
-	// embedding-only model calling chat
-	req = newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"embed-model","messages":[{"role":"user","content":"hi"}]}`)
-	resp = newResponseRecorder()
-	handler.ServeHTTP(resp, req)
-	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "operation_unsupported") {
-		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
-	}
 	if upstreamHits != 0 {
-		t.Fatalf("upstream hits = %d", upstreamHits)
+		t.Fatalf("upstream hits=%d", upstreamHits)
 	}
 }
 
@@ -2296,7 +2275,7 @@ func TestSupportedOperationForwardsUpstream(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-chat": {
 				ID: "gpt-chat", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}
@@ -2330,7 +2309,7 @@ func TestModelsListResponseUsesTypedDTO(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-4o": {
 				ID: "gpt-4o", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}
@@ -2348,8 +2327,8 @@ func TestModelsListResponseUsesTypedDTO(t *testing.T) {
 	if payload.Object != "list" || len(payload.Data) != 1 {
 		t.Fatalf("payload = %#v", payload)
 	}
-	if len(payload.Data[0].Operations) != 1 || payload.Data[0].Operations[0] != "chat_completions" {
-		t.Fatalf("record = %#v", payload.Data[0])
+	if strings.Contains(resp.Body.String(), `"capabilities"`) {
+		t.Fatalf("model capabilities must not be exposed: %s", resp.Body.String())
 	}
 }
 
@@ -2368,11 +2347,11 @@ func TestModelsGETAndPOSTConsistent(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"emb": {
 				ID: "emb", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 			"gpt-4o": {
 				ID: "gpt-4o", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	})
@@ -2425,12 +2404,12 @@ func TestEmbeddingOnlyRejectsMessagesResponsesCompletions(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"emb-only"}},
+			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"emb-only"}, Endpoints: []string{config.ProviderEndpointEmbeddings}},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"emb-only": {
 				ID: "emb-only", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	})
@@ -2445,7 +2424,7 @@ func TestEmbeddingOnlyRejectsMessagesResponsesCompletions(t *testing.T) {
 		rec := newResponseRecorder()
 		body := `{"model":"emb-only","messages":[{"role":"user","content":"hi"}],"input":"hi","prompt":"hi"}`
 		handler.ServeHTTP(rec, newRequest(http.MethodPost, path, body))
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "operation_unsupported") {
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "endpoint_unsupported") {
 			t.Fatalf("path %s status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
 	}
@@ -2465,12 +2444,12 @@ func TestAPIErrorDoesNotLeakSecrets(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: secret, Models: []string{"gpt-chat"}},
+			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: secret, Models: []string{"gpt-chat"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-chat": {
 				ID: "gpt-chat", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	})
@@ -2481,7 +2460,7 @@ func TestAPIErrorDoesNotLeakSecrets(t *testing.T) {
 	if strings.Contains(body, secret) || strings.Contains(body, "Authorization") {
 		t.Fatalf("error leaked secret: %s", body)
 	}
-	if !strings.Contains(body, "operation_unsupported") {
+	if !strings.Contains(body, "endpoint_unsupported") {
 		t.Fatalf("body=%s", body)
 	}
 }
@@ -2497,7 +2476,7 @@ func TestNewHandlerRejectsUnresolvedConfig(t *testing.T) {
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k"},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-x": {ID: "gpt-x", ContextWindowTokens: 100, MaxOutputTokens: 10, Operations: []string{"chat_completions"}},
+			"gpt-x": {ID: "gpt-x", ContextWindowTokens: 100, MaxOutputTokens: 10},
 		},
 	}, usage.NewMemoryStore(), nil, metrics.NewRegistry())
 }
@@ -2507,8 +2486,8 @@ func TestNewHandlerAllowsEmptyCatalog(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
-				Models:               []string{"gpt-*"},
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Models:    []string{"gpt-*"},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{},
@@ -2524,7 +2503,7 @@ func TestRequireResolvedConfigRejectsUnknownProtocol(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"weird": {
 				Name: "weird", Protocol: "foo", BaseURL: "https://x", APIKey: "k",
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{},
@@ -2534,15 +2513,15 @@ func TestRequireResolvedConfigRejectsUnknownProtocol(t *testing.T) {
 	}
 }
 
-func TestRequireResolvedConfigRejectsDuplicateCapabilities(t *testing.T) {
+func TestRequireResolvedConfigRejectsDuplicateEndpoints(t *testing.T) {
 	err := requireResolvedConfig(config.Config{
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models: []string{"gpt-*"},
-				EndpointCapabilities: []string{
-					config.EndpointCapabilityChatCompletions,
-					config.EndpointCapabilityChatCompletions,
+				Endpoints: []string{
+					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointChatCompletions,
 				},
 			},
 		},
@@ -2553,28 +2532,26 @@ func TestRequireResolvedConfigRejectsDuplicateCapabilities(t *testing.T) {
 	}
 }
 
-func TestRequireResolvedConfigRejectsUnsortedOperations(t *testing.T) {
+func TestRequireResolvedConfigAcceptsCatalogWithoutCapabilities(t *testing.T) {
 	err := requireResolvedConfig(config.Config{
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models: []string{"multi"},
-				EndpointCapabilities: []string{
-					config.EndpointCapabilityChatCompletions,
-					config.EndpointCapabilityEmbeddings,
+				Endpoints: []string{
+					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointEmbeddings,
 				},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"multi": {
 				ID: "multi", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-				// embeddings 应在 chat_completions 之后
-				Operations: []string{config.ModelOperationEmbeddings, config.ModelOperationChatCompletions},
 				RouteOwner: "openai",
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "sorted") {
+	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -2584,8 +2561,8 @@ func TestRequireResolvedConfigAllowsEmptyCatalog(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
-				Models:               []string{"gpt-*"},
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Models:    []string{"gpt-*"},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{},
@@ -2613,7 +2590,7 @@ func TestRetryableUpstreamErrorDoesNotSwitchProvider(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary",
+				RouteOwner: "primary",
 			},
 		},
 	})
@@ -2650,7 +2627,7 @@ func TestRetryableUpstreamErrorFallsBackToLowerPriorityCandidate(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary", RouteOwners: []string{"primary", "backup"},
+				RouteOwner: "primary", RouteOwners: []string{"primary", "backup"},
 			},
 		},
 	})
@@ -2690,11 +2667,11 @@ func TestChatCompletionSkipsUnsupportedConversionForNativeFallback(t *testing.T)
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"conversion": {Name: "conversion", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 200, EndpointCapabilities: []string{config.EndpointCapabilityMessages}},
-			"native":     {Name: "native", Protocol: "openai", BaseURL: "https://native.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 100, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+			"conversion": {Name: "conversion", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 200, Endpoints: []string{config.ProviderEndpointMessages}},
+			"native":     {Name: "native", Protocol: "openai", BaseURL: "https://native.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 100, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "conversion", RouteOwners: []string{"conversion", "native"}},
+			"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "conversion", RouteOwners: []string{"conversion", "native"}},
 		},
 	})
 	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
@@ -2726,11 +2703,11 @@ func TestAnthropicMessagesSkipsUnsupportedConversionForNativeFallback(t *testing
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"conversion": {Name: "conversion", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 200, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
-			"native":     {Name: "native", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 100, EndpointCapabilities: []string{config.EndpointCapabilityMessages}},
+			"conversion": {Name: "conversion", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 200, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"native":     {Name: "native", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 100, Endpoints: []string{config.ProviderEndpointMessages}},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
-			"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "conversion", RouteOwners: []string{"conversion", "native"}},
+			"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "conversion", RouteOwners: []string{"conversion", "native"}},
 		},
 	})
 	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
@@ -2768,7 +2745,7 @@ func TestNetworkErrorDoesNotSwitchProvider(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary",
+				RouteOwner: "primary",
 			},
 		},
 	})
@@ -2804,7 +2781,7 @@ func TestFirstStreamEventFailureDoesNotSwitchProvider(t *testing.T) {
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary",
+				RouteOwner: "primary",
 			},
 		},
 	})
@@ -2828,15 +2805,15 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 	baseProvider := config.Provider{
 		Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 		Models: []string{"gpt-x", "multi"},
-		EndpointCapabilities: []string{
-			config.EndpointCapabilityChatCompletions,
-			config.EndpointCapabilityEmbeddings,
+		Endpoints: []string{
+			config.ProviderEndpointChatCompletions,
+			config.ProviderEndpointEmbeddings,
 		},
 	}
 	validCatalog := map[string]config.ModelInfo{
 		"gpt-x": {
 			ID: "gpt-x", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-			Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+			RouteOwner: "openai",
 		},
 	}
 	cases := []struct {
@@ -2850,35 +2827,35 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 				Providers: map[string]config.Provider{
 					"weird": {
 						Name: "weird", Protocol: "foo", BaseURL: "https://x", APIKey: "k",
-						EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+						Endpoints: []string{config.ProviderEndpointChatCompletions},
 					},
 				},
 			},
 			wantSub: "unknown protocol",
 		},
 		{
-			name: "unknown capability",
+			name: "unknown endpoint",
 			cfg: config.Config{
 				Providers: map[string]config.Provider{
 					"openai": {
 						Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
-						Models:               []string{"gpt-x"},
-						EndpointCapabilities: []string{"widgets"},
+						Models:    []string{"gpt-x"},
+						Endpoints: []string{"widgets"},
 					},
 				},
 			},
 			wantSub: "unknown value",
 		},
 		{
-			name: "duplicate capability",
+			name: "duplicate endpoint",
 			cfg: config.Config{
 				Providers: map[string]config.Provider{
 					"openai": {
 						Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 						Models: []string{"gpt-x"},
-						EndpointCapabilities: []string{
-							config.EndpointCapabilityChatCompletions,
-							config.EndpointCapabilityChatCompletions,
+						Endpoints: []string{
+							config.ProviderEndpointChatCompletions,
+							config.ProviderEndpointChatCompletions,
 						},
 					},
 				},
@@ -2886,15 +2863,15 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 			wantSub: "duplicate",
 		},
 		{
-			name: "unsorted capability",
+			name: "unsorted endpoint",
 			cfg: config.Config{
 				Providers: map[string]config.Provider{
 					"openai": {
 						Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 						Models: []string{"gpt-x"},
-						EndpointCapabilities: []string{
-							config.EndpointCapabilityEmbeddings,
-							config.EndpointCapabilityChatCompletions,
+						Endpoints: []string{
+							config.ProviderEndpointEmbeddings,
+							config.ProviderEndpointChatCompletions,
 						},
 					},
 				},
@@ -2908,7 +2885,7 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 				ModelCatalog: map[string]config.ModelInfo{
 					"gpt-x": {
 						ID: "gpt-x", ContextWindowTokens: 100, MaxOutputTokens: 100,
-						Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+						RouteOwner: "openai",
 					},
 				},
 			},
@@ -2922,51 +2899,18 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 					"openai": baseProvider,
 					"other": {
 						Name: "other", Protocol: "openai", BaseURL: "https://y", APIKey: "k",
-						Models:               []string{"nope"},
-						EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+						Models:    []string{"nope"},
+						Endpoints: []string{config.ProviderEndpointChatCompletions},
 					},
 				},
 				ModelCatalog: map[string]config.ModelInfo{
 					"gpt-x": {
 						ID: "gpt-x", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-						Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "other",
+						RouteOwner: "other",
 					},
 				},
 			},
 			wantSub: "does not match model",
-		},
-		{
-			name: "operation readiness",
-			cfg: config.Config{
-				Providers: map[string]config.Provider{
-					"openai": {
-						Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
-						Models:               []string{"gpt-x"},
-						EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
-					},
-				},
-				ModelCatalog: map[string]config.ModelInfo{
-					"gpt-x": {
-						ID: "gpt-x", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-						Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "openai",
-					},
-				},
-			},
-			wantSub: "not serviceable",
-		},
-		{
-			name: "unsorted operations",
-			cfg: config.Config{
-				Providers: map[string]config.Provider{"openai": baseProvider},
-				ModelCatalog: map[string]config.ModelInfo{
-					"multi": {
-						ID: "multi", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-						Operations: []string{config.ModelOperationEmbeddings, config.ModelOperationChatCompletions},
-						RouteOwner: "openai",
-					},
-				},
-			},
-			wantSub: "sorted",
 		},
 	}
 	for _, tc := range cases {
@@ -3006,7 +2950,7 @@ func TestSingleRouteOwnerDoesNotSwitchOnRetryableStatuses(t *testing.T) {
 				ModelCatalog: map[string]config.ModelInfo{
 					"gpt-test": {
 						ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384,
-						Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary",
+						RouteOwner: "primary",
 					},
 				},
 			})
@@ -3032,18 +2976,18 @@ func TestRequireResolvedConfigAllowsCaseDifferentModelIDs(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
-				Models:               []string{"GPT-X", "gpt-x"},
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Models:    []string{"GPT-X", "gpt-x"},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"GPT-X": {
 				ID: "GPT-X", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 			"gpt-x": {
 				ID: "gpt-x", ContextWindowTokens: 1000, MaxOutputTokens: 100,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}

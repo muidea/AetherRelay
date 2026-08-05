@@ -31,7 +31,6 @@ const (
 // 只在 ResolvedModelRoute 之上解析,不允许修改 RouteOwner。
 type TransportPlan struct {
 	ModelID          string
-	Operation        string
 	ClientProtocol   string
 	ClientEndpoint   string
 	RouteOwner       string
@@ -80,22 +79,6 @@ func RouteLabel(r *http.Request) string {
 	return "other"
 }
 
-// OperationForPath 将入站 path 映射为 model_catalog.operations 合同枚举。
-// /v1/models 返回空字符串(不适用)。
-func OperationForPath(path string) string {
-	path = strings.TrimRight(strings.TrimSpace(path), "/")
-	switch path {
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/search":
-		return config.ModelOperationChatCompletions
-	case "/v1/embeddings":
-		return config.ModelOperationEmbeddings
-	case "/v1/images/generations", "/v1/images/edits":
-		return config.ModelOperationImageGenerations
-	default:
-		return ""
-	}
-}
-
 // ClientProtocolForPath 由 method+path 决定客户端协议,不从 User-Agent/SDK/body 推断。
 func ClientProtocolForPath(path string) string {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
@@ -114,10 +97,10 @@ func NormalizeClientEndpoint(path string) string {
 	return strings.TrimRight(strings.TrimSpace(path), "/")
 }
 
-// ProviderHasDirectEndpoint 只检查配置中的上游直连 endpoint capability。
+// ProviderHasDirectEndpoint 只检查配置中的上游原生 endpoint。
 // 不得与转换后可服务 path 混用。
-func ProviderHasDirectEndpoint(provider config.Provider, capability string) bool {
-	return config.ProviderHasDirectEndpoint(provider, capability)
+func ProviderHasDirectEndpoint(provider config.Provider, endpoint string) bool {
+	return config.ProviderHasDirectEndpoint(provider, endpoint)
 }
 
 // ResolveTransportPlan returns the first compatible candidate for compatibility
@@ -136,19 +119,17 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 // upstream request and is shared by routing, fallback, and Admin projections.
 func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) ([]TransportPlan, *APIError) {
 	clientEndpoint := NormalizeClientEndpoint(path)
-	operation := OperationForPath(clientEndpoint)
 	clientProtocol := ClientProtocolForPath(clientEndpoint)
 	modelID = strings.TrimSpace(modelID)
 
 	// 入站白名单(执行端点)由 isSupportedInbound 保证;此处仍防御未知 path。
-	if clientEndpoint == "" || operation == "" || clientProtocol == "" {
+	if clientEndpoint == "" || clientProtocol == "" {
 		return nil, &APIError{
 			Code:           ErrorCodeEndpointUnsupported,
 			Message:        fmt.Sprintf("inbound endpoint %q is not supported", path),
 			Model:          modelID,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
-			Operation:      operation,
 		}
 	}
 	if method != "" && method != http.MethodPost {
@@ -159,7 +140,6 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 			Model:          modelID,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
-			Operation:      operation,
 		}
 	}
 
@@ -167,7 +147,6 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 		return nil, &APIError{
 			Code:           ErrorCodeModelRequired,
 			Message:        "model is required",
-			Operation:      operation,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
 		}
@@ -178,22 +157,11 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 			Code:           ErrorCodeModelNotFound,
 			Message:        fmt.Sprintf("model %q was not found in the effective model catalog", modelID),
 			Model:          modelID,
-			Operation:      operation,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
 		}
 	}
-	candidates := snap.CandidatesFor(modelID, operation)
-	if len(candidates) == 0 {
-		return nil, &APIError{
-			Code:           ErrorCodeOperationUnsupported,
-			Message:        fmt.Sprintf("model %q does not support operation %q", modelID, operation),
-			Model:          modelID,
-			Operation:      operation,
-			ClientEndpoint: clientEndpoint,
-			ClientProtocol: clientProtocol,
-		}
-	}
+	candidates := snap.CandidatesFor(modelID)
 
 	plans := make([]TransportPlan, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -211,7 +179,7 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 				continue
 			}
 		}
-		plan, ok := applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, owner, provider)
+		plan, ok := applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner, provider)
 		if !ok {
 			continue
 		}
@@ -227,7 +195,6 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 			Code:           ErrorCodeEndpointUnsupported,
 			Message:        fmt.Sprintf("no compatible provider can serve endpoint %q for model %q", clientEndpoint, modelID),
 			Model:          modelID,
-			Operation:      operation,
 			ClientEndpoint: clientEndpoint,
 			ClientProtocol: clientProtocol,
 		}
@@ -235,109 +202,23 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 	return plans, nil
 }
 
-// applyTransportMatrix 仅应用固定转发矩阵(设计文档 §9)。
-// 矩阵以外组合返回 false → endpoint_unsupported。
-func applyTransportMatrix(clientEndpoint, clientProtocol, operation, modelID, owner string, provider config.Provider) (TransportPlan, bool) {
+// applyTransportMatrix projects the shared routing contract into the
+// request-time plan. The matrix itself lives in config.ResolveProviderTransport
+// so startup validation and request routing cannot drift.
+func applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner string, provider config.Provider) (TransportPlan, bool) {
 	upstreamProtocol := strings.TrimSpace(provider.Protocol)
+	transport, ok := config.ResolveProviderTransport(provider, clientEndpoint)
+	if !ok {
+		return TransportPlan{}, false
+	}
 	base := TransportPlan{
 		ModelID:          modelID,
-		Operation:        operation,
 		ClientProtocol:   clientProtocol,
 		ClientEndpoint:   clientEndpoint,
 		RouteOwner:       owner,
 		UpstreamProtocol: upstreamProtocol,
+		UpstreamEndpoint: transport.UpstreamEndpoint,
+		Mode:             transport.Mode,
 	}
-
-	switch clientEndpoint {
-	case "/v1/chat/completions":
-		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
-			base.UpstreamEndpoint = "chatgptweb"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-		// OpenAI client → OpenAI native / Anthropic conversion
-		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
-			base.UpstreamEndpoint = "/v1/chat/completions"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-		if upstreamProtocol == "anthropic" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityMessages) {
-			base.UpstreamEndpoint = "/v1/messages"
-			base.Mode = TransportModeOpenAIToAnthropic
-			return base, true
-		}
-	case "/v1/messages":
-		// Anthropic client -> Anthropic native / OpenAI conversion
-		if upstreamProtocol == "anthropic" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityMessages) {
-			base.UpstreamEndpoint = "/v1/messages"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
-			base.UpstreamEndpoint = "/v1/chat/completions"
-			base.Mode = TransportModeAnthropicToOpenAI
-			return base, true
-		}
-	case "/v1/responses":
-		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
-			base.UpstreamEndpoint = "chatgptweb_responses"
-			base.Mode = TransportModeChatGPTWebResponses
-			return base, true
-		}
-		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
-			base.UpstreamEndpoint = "/v1/responses"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-		if upstreamProtocol == effectivecatalog.CodexOAuthProviderID && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityResponses) {
-			base.UpstreamEndpoint = "codex_oauth_responses"
-			base.Mode = TransportModeCodexOAuthResponses
-			return base, true
-		}
-	case "/v1/search":
-		// /v1/search is an ai-proxy extension for the one Web-search operation
-		// that can be represented faithfully. Never route it to a same-model
-		// static Provider: that would silently become a normal completion or an
-		// unrelated upstream tool call.
-		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityChatCompletions) {
-			base.UpstreamEndpoint = "chatgptweb_search"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-	case "/v1/completions":
-		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityCompletions) {
-			base.UpstreamEndpoint = "/v1/completions"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-	case "/v1/embeddings":
-		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityEmbeddings) {
-			base.UpstreamEndpoint = "/v1/embeddings"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-	case "/v1/images/generations", "/v1/images/edits":
-		if upstreamProtocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityImages) {
-			base.UpstreamEndpoint = "chatgptweb_images"
-			base.Mode = TransportModeNative
-			return base, true
-		}
-		if upstreamProtocol == "openai" && ProviderHasDirectEndpoint(provider, config.EndpointCapabilityImages) {
-			base.UpstreamEndpoint = clientEndpoint
-			base.Mode = TransportModeNative
-			return base, true
-		}
-	}
-	return TransportPlan{}, false
-}
-
-// TransportPlanForCanonical 在启动校验时判断 RouteOwner 是否能为 operation 的 canonical path 生成 plan。
-// 与请求期 ResolveTransportPlan 使用同一矩阵,但不做 model catalog 查找。
-func TransportPlanForCanonical(providerName string, provider config.Provider, modelID, operation string) (TransportPlan, bool) {
-	path := config.OperationToPrimaryInboundPath(operation)
-	if path == "" {
-		return TransportPlan{}, false
-	}
-	clientProtocol := ClientProtocolForPath(path)
-	return applyTransportMatrix(path, clientProtocol, operation, modelID, providerName, provider)
+	return base, true
 }

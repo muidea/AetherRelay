@@ -179,9 +179,6 @@ func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.
 	if apiErr.ClientEndpoint == "" && r != nil && r.URL != nil {
 		apiErr.ClientEndpoint = NormalizeClientEndpoint(r.URL.Path)
 	}
-	if apiErr.Operation == "" && apiErr.ClientEndpoint != "" {
-		apiErr.Operation = OperationForPath(apiErr.ClientEndpoint)
-	}
 	if apiErr.Model == "" {
 		apiErr.Model = model
 	}
@@ -205,7 +202,7 @@ func (h *Handler) settleChatGPTWeb(round *archive.Round, r *http.Request, provid
 	if round != nil && round.UpstreamProtocol == "" {
 		path := pathOrEmpty(r)
 		round.SetTransportPlan(
-			OperationForPath(NormalizeClientEndpoint(path)),
+			RouteLabel(r),
 			NormalizeClientEndpoint(path),
 			ClientProtocolForPath(path),
 			effectivecatalog.BuiltinProviderID,

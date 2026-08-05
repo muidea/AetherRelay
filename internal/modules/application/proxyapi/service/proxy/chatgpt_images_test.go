@@ -90,7 +90,7 @@ func newChatGPTImageHandler(t *testing.T, store usage.Store, exec chatgptimage.E
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}})
 	h := NewHandler(cfg, store, nil, metrics.NewRegistry()).WithChatGPTImageExecutor(exec)
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{
-		ID: "gpt-image-2", Operations: []string{config.ModelOperationImageGenerations},
+		ID: "gpt-image-2",
 	}}, "2026-07-26T00:00:00Z"))
 	return h
 }

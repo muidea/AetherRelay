@@ -7,26 +7,26 @@ import (
 	"strings"
 )
 
-// ModelOperation mirrors the upstream owner's restricted operation enum.
+// ModelCapability mirrors the upstream owner's restricted capability enum.
 // Kept as a plain string here so the client package does not import events.
-type ModelOperation string
+type ModelCapability string
 
 const (
-	ModelOperationChatCompletions  ModelOperation = "chat_completions"
-	ModelOperationImageGenerations ModelOperation = "image_generations"
+	ModelCapabilityTextGeneration  ModelCapability = "text_generation"
+	ModelCapabilityImageGeneration ModelCapability = "image_generation"
 )
 
 // ModelDescriptor is the constrained projection of one upstream model entry.
-// Models without any verified operation are never returned.
+// Models without any verified capability are never returned.
 type ModelDescriptor struct {
-	ID         string
-	Operations []ModelOperation
-	CreatedAt  int64
-	OwnedBy    string
+	ID           string
+	Capabilities []ModelCapability
+	CreatedAt    int64
+	OwnedBy      string
 }
 
 // ListModels enumerates models available to the authenticated ChatGPT Web
-// account via /backend-api/models. Only verified model IDs and operations
+// account via /backend-api/models. Only verified model IDs and capabilities
 // enter the result; unknown upstream fields are ignored.
 func (c *Client) ListModels() ([]ModelDescriptor, error) {
 	if err := c.Bootstrap(); err != nil {
@@ -88,7 +88,7 @@ func projectModel(raw json.RawMessage) (ModelDescriptor, bool) {
 	if isResearchOnlyModel(id, item.Tags, item.EnabledTools) {
 		return ModelDescriptor{}, false
 	}
-	ops := detectOperations(item.Tags, item.EnabledTools, item.ProductFeatures, item.Capabilities)
+	ops := detectCapabilities(item.Tags, item.EnabledTools, item.ProductFeatures, item.Capabilities)
 	if len(ops) == 0 {
 		return ModelDescriptor{}, false
 	}
@@ -97,10 +97,10 @@ func projectModel(raw json.RawMessage) (ModelDescriptor, bool) {
 		ownedBy = "chatgpt"
 	}
 	return ModelDescriptor{
-		ID:         id,
-		Operations: ops,
-		CreatedAt:  item.Created,
-		OwnedBy:    ownedBy,
+		ID:           id,
+		Capabilities: ops,
+		CreatedAt:    item.Created,
+		OwnedBy:      ownedBy,
 	}, true
 }
 
@@ -131,15 +131,15 @@ func isResearchOnlyModel(id string, tags, enabledTools []string) bool {
 	return false
 }
 
-// detectOperations projects only operations backed by verified signals.
+// detectCapabilities projects only capabilities backed by verified signals.
 //
 // /backend-api/models is ChatGPT Web's conversation model picker: a listed
 // entry with a slug is itself the verified signal for chat_completions, unless
 // the entry is explicitly image-only. image_generations requires an explicit
 // image tool / product-feature signal and is never inferred from the slug.
-func detectOperations(tags, enabledTools []string, productFeatures, capabilities json.RawMessage) []ModelOperation {
-	var ops []ModelOperation
-	add := func(op ModelOperation) {
+func detectCapabilities(tags, enabledTools []string, productFeatures, capabilities json.RawMessage) []ModelCapability {
+	var ops []ModelCapability
+	add := func(op ModelCapability) {
 		for _, existing := range ops {
 			if existing == op {
 				return
@@ -150,10 +150,10 @@ func detectOperations(tags, enabledTools []string, productFeatures, capabilities
 
 	imageOnly := hasAnySignal(tags, "image_generation_only", "image_gen_only", "image_only")
 	if hasImageGenerationSignal(tags, enabledTools, productFeatures, capabilities) {
-		add(ModelOperationImageGenerations)
+		add(ModelCapabilityImageGeneration)
 	}
 	if !imageOnly {
-		add(ModelOperationChatCompletions)
+		add(ModelCapabilityTextGeneration)
 	}
 	return ops
 }

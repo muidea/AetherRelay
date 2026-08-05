@@ -165,8 +165,8 @@ type RefreshByIDResult struct {
 
 // AccountModelEntry is one authoritative model ID returned by the Codex
 // account's /backend-api/codex/models endpoint. Codex OAuth is exposed only
-// through Responses, so the operation is fixed by the proxy owner instead of
-// trusting arbitrary upstream capability fields.
+// through Responses, so its model capability is fixed by the proxy owner
+// instead of trusting arbitrary upstream capability fields.
 type AccountModelEntry struct {
 	ID        string `json:"id"`
 	CreatedAt int64  `json:"created_at,omitempty"`

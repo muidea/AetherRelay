@@ -46,7 +46,7 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 		}
 		h.writeArchivedAPIError(w, round, r, start, "", "", false, status, APIError{
 			Code: code, Message: err.Error(), ClientProtocol: clientProtocolFromRequest(r),
-			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path),
+			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return
 	}
@@ -76,7 +76,7 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(preflightErr), *preflightErr)
 			return
 		}
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, Operation: plan.Operation, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
+		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
 		return
 	}
 	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
@@ -180,7 +180,6 @@ func conversionAPIError(plan TransportPlan, err error) APIError {
 		Code:             ErrorCodeConversionUnsupported,
 		Message:          msg,
 		Model:            plan.ModelID,
-		Operation:        plan.Operation,
 		ClientEndpoint:   plan.ClientEndpoint,
 		ClientProtocol:   plan.ClientProtocol,
 		UpstreamProtocol: plan.UpstreamProtocol,
@@ -308,7 +307,6 @@ func convertUpstreamErrorForClient(plan TransportPlan, status int, upstreamBody 
 			Code:             "upstream_error",
 			Message:          safeMsg,
 			Model:            plan.ModelID,
-			Operation:        plan.Operation,
 			ClientEndpoint:   plan.ClientEndpoint,
 			ClientProtocol:   plan.ClientProtocol,
 			UpstreamProtocol: plan.UpstreamProtocol,

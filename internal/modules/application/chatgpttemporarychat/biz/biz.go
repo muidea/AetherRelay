@@ -954,9 +954,9 @@ func (s *TemporaryChat) handleGetAttachment(ev event.Event, result event.Result)
 func (s *TemporaryChat) acquireTextAccount(accountID, model string) (accevents.AcquireTextAccountResult, error) {
 	if accountID != "" {
 		value, err := s.SendEvent(event.NewEvent(accevents.TopicAcquireTextAccount, s.ID(), acccommon.UnitID, nil, accevents.AcquireTextAccountCommand{
-			AccountID: accountID,
-			Model:     model,
-			Operation: accevents.ModelOperationChatCompletions,
+			AccountID:  accountID,
+			Model:      model,
+			Capability: accevents.ModelCapabilityTextGeneration,
 		})).Get()
 		if err != nil {
 			return accevents.AcquireTextAccountResult{}, fmt.Errorf("original account unavailable")
@@ -968,8 +968,8 @@ func (s *TemporaryChat) acquireTextAccount(accountID, model string) (accevents.A
 		return result, nil
 	}
 	value, err := s.SendEvent(event.NewEvent(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireTextTokenCommand{
-		Model:     model,
-		Operation: accevents.ModelOperationChatCompletions,
+		Model:      model,
+		Capability: accevents.ModelCapabilityTextGeneration,
 	})).Get()
 	if err != nil {
 		return accevents.AcquireTextAccountResult{}, fmt.Errorf("no available text account")
@@ -1039,7 +1039,7 @@ func (s *TemporaryChat) startTurnUsage(ownerID, eventID, model string, startedAt
 		EventID:        eventID,
 		StartedAt:      startedAt,
 		APIKeyID:       "admin:" + strings.TrimSpace(ownerID),
-		Operation:      "chat_completions",
+		Operation:      "text_generation",
 		Route:          "admin_temporary_chat",
 		ClientEndpoint: "/admin/chatgpt/temporary-chat",
 		ClientProtocol: "admin",

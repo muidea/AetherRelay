@@ -194,7 +194,7 @@ func (s *Proxy) refreshChatGPTTextToken(ctx context.Context, token string) (acce
 
 func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (accevents.AcquireTextTokenResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireTextTokenCommand{
-		Model: model, Operation: accevents.ModelOperationChatCompletions,
+		Model: model, Capability: accevents.ModelCapabilityTextGeneration,
 	})).Get()
 	if err != nil {
 		return accevents.AcquireTextTokenResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))

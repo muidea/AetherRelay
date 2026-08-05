@@ -25,7 +25,7 @@ func TestModelSnapshotPersistenceAndCatalogUnion(t *testing.T) {
 	expire := now.Add(time.Hour).Format(time.RFC3339)
 	v1, ok, err := s.PutModelSnapshot(textID, events.AccountModelSnapshot{
 		Models: []events.AccountModelEntry{{
-			ID: "gpt-5", Operations: []string{events.ModelOperationChatCompletions},
+			ID: "gpt-5", Capabilities: []string{events.ModelCapabilityTextGeneration},
 		}},
 		DiscoveredAt: now.Format(time.RFC3339),
 		ExpiresAt:    expire,
@@ -35,7 +35,7 @@ func TestModelSnapshotPersistenceAndCatalogUnion(t *testing.T) {
 	}
 	v2, ok, err := s.PutModelSnapshot(imageID, events.AccountModelSnapshot{
 		Models: []events.AccountModelEntry{{
-			ID: "gpt-image-2", Operations: []string{events.ModelOperationChatCompletions, events.ModelOperationImageGenerations},
+			ID: "gpt-image-2", Capabilities: []string{events.ModelCapabilityTextGeneration, events.ModelCapabilityImageGeneration},
 		}},
 		DiscoveredAt: now.Format(time.RFC3339),
 		ExpiresAt:    expire,
@@ -52,11 +52,11 @@ func TestModelSnapshotPersistenceAndCatalogUnion(t *testing.T) {
 	for _, model := range catalog.Models {
 		byID[model.ID] = model
 	}
-	if len(byID["gpt-5"].Operations) != 1 || byID["gpt-5"].Operations[0] != events.ModelOperationChatCompletions {
-		t.Fatalf("gpt-5 ops=%v", byID["gpt-5"].Operations)
+	if len(byID["gpt-5"].Capabilities) != 1 || byID["gpt-5"].Capabilities[0] != events.ModelCapabilityTextGeneration {
+		t.Fatalf("gpt-5 ops=%v", byID["gpt-5"].Capabilities)
 	}
-	if len(byID["gpt-image-2"].Operations) != 2 {
-		t.Fatalf("gpt-image-2 ops=%v", byID["gpt-image-2"].Operations)
+	if len(byID["gpt-image-2"].Capabilities) != 2 {
+		t.Fatalf("gpt-image-2 ops=%v", byID["gpt-image-2"].Capabilities)
 	}
 
 	// Reload from disk and ensure snapshots survive.
@@ -90,14 +90,14 @@ func TestAcquireFiltersByModelSnapshot(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	expire := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	if _, _, err := s.PutModelSnapshot(aID, events.AccountModelSnapshot{
-		Models:       []events.AccountModelEntry{{ID: "gpt-5", Operations: []string{events.ModelOperationChatCompletions}}},
+		Models:       []events.AccountModelEntry{{ID: "gpt-5", Capabilities: []string{events.ModelCapabilityTextGeneration}}},
 		DiscoveredAt: now, ExpiresAt: expire,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.PutModelSnapshot(bID, events.AccountModelSnapshot{
 		Models: []events.AccountModelEntry{{
-			ID: "gpt-image-2", Operations: []string{events.ModelOperationImageGenerations},
+			ID: "gpt-image-2", Capabilities: []string{events.ModelCapabilityImageGeneration},
 		}},
 		DiscoveredAt: now, ExpiresAt: expire,
 	}); err != nil {
@@ -109,11 +109,11 @@ func TestAcquireFiltersByModelSnapshot(t *testing.T) {
 		t.Fatal("legacy acquire should succeed")
 	}
 	// Model-aware text only picks account A.
-	got, ok := s.AcquireTextToken(nil, "gpt-5", events.ModelOperationChatCompletions)
+	got, ok := s.AcquireTextToken(nil, "gpt-5", events.ModelCapabilityTextGeneration)
 	if !ok || got.ID != aID {
 		t.Fatalf("text acquire=%+v ok=%v", got, ok)
 	}
-	if _, ok := s.AcquireTextToken(nil, "gpt-image-2", events.ModelOperationChatCompletions); ok {
+	if _, ok := s.AcquireTextToken(nil, "gpt-image-2", events.ModelCapabilityTextGeneration); ok {
 		t.Fatal("image-only model should not serve chat")
 	}
 	// Image acquire needs quota > 0 and normal status; set quotas.
@@ -124,11 +124,11 @@ func TestAcquireFiltersByModelSnapshot(t *testing.T) {
 	if _, _, err := s.UpdateByID(aID, nil, nil, &quota, nil); err != nil {
 		t.Fatal(err)
 	}
-	img, ok := s.AcquireImageToken("", "", nil, "gpt-image-2", events.ModelOperationImageGenerations)
+	img, ok := s.AcquireImageToken("", "", nil, "gpt-image-2", events.ModelCapabilityImageGeneration)
 	if !ok || img.ID != bID {
 		t.Fatalf("image acquire=%+v ok=%v", img, ok)
 	}
-	if _, ok := s.AcquireImageToken("", "", nil, "gpt-5", events.ModelOperationImageGenerations); ok {
+	if _, ok := s.AcquireImageToken("", "", nil, "gpt-5", events.ModelCapabilityImageGeneration); ok {
 		t.Fatal("text-only model should not serve image")
 	}
 }
@@ -142,7 +142,7 @@ func TestExpiredSnapshotExcludedFromCatalogAndAcquire(t *testing.T) {
 	id := s.List()[0].ID
 	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
 	if _, _, err := s.PutModelSnapshot(id, events.AccountModelSnapshot{
-		Models:       []events.AccountModelEntry{{ID: "gpt-5", Operations: []string{events.ModelOperationChatCompletions}}},
+		Models:       []events.AccountModelEntry{{ID: "gpt-5", Capabilities: []string{events.ModelCapabilityTextGeneration}}},
 		DiscoveredAt: past,
 		ExpiresAt:    past,
 	}); err != nil {
@@ -151,7 +151,7 @@ func TestExpiredSnapshotExcludedFromCatalogAndAcquire(t *testing.T) {
 	if models := s.CatalogSnapshot().Models; len(models) != 0 {
 		t.Fatalf("expired models should be excluded: %+v", models)
 	}
-	if _, ok := s.AcquireTextToken(nil, "gpt-5", events.ModelOperationChatCompletions); ok {
+	if _, ok := s.AcquireTextToken(nil, "gpt-5", events.ModelCapabilityTextGeneration); ok {
 		t.Fatal("expired snapshot must not be acquired")
 	}
 	candidates, _ := s.ListDiscoveryCandidates()

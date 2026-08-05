@@ -31,10 +31,9 @@ const (
 
 // BuiltinModel is one auto-discovered model bound to the chatgptweb owner.
 type BuiltinModel struct {
-	ID         string
-	Operations []string
-	CreatedAt  int64
-	OwnedBy    string
+	ID        string
+	CreatedAt int64
+	OwnedBy   string
 	// ConflictWithStatic is true when another source publishes the same exact
 	// model ID. It is display-only overlap information; both sources remain in
 	// the effective candidate chain according to their routing policy.
@@ -63,21 +62,18 @@ type Snapshot struct {
 	// account-pool owner; the account-level snapshot is their only authority.
 	CodexOAuthProvider BuiltinProvider
 	CodexOAuthModels   map[string]BuiltinModel
-	// Candidates is the immutable model + operation routing authority. It
-	// contains all compatible static and builtin sources in deterministic order.
+	// Candidates is the immutable model routing authority. Endpoint compatibility
+	// is resolved later by the shared provider transport matrix.
 	Candidates map[string][]Candidate
 	// Version is the account-pool catalog generation used to build this snapshot.
 	Version           uint64
 	CodexOAuthVersion uint64
 }
 
-// Candidate is one eligible upstream source for a model. A candidate may serve
-// only a subset of a model's operations when providers expose different
-// endpoint capabilities.
+// Candidate is one eligible upstream source for a model.
 type Candidate struct {
 	ModelID             string
 	RouteOwner          string
-	Operations          []string
 	Builtin             bool
 	CreatedAt           int64
 	OwnedBy             string
@@ -87,21 +83,10 @@ type Candidate struct {
 	MaxOutputTokens     int
 }
 
-func (c Candidate) SupportsOperation(operation string) bool {
-	operation = strings.TrimSpace(operation)
-	for _, item := range c.Operations {
-		if item == operation {
-			return true
-		}
-	}
-	return false
-}
-
 // Route is the request-time resolved model route from either static or builtin.
 type Route struct {
 	ModelID    string
 	RouteOwner string
-	Operations []string
 	Builtin    bool
 	CreatedAt  int64
 	OwnedBy    string
@@ -158,14 +143,13 @@ func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 		var conflicts []string
 		for _, model := range chatGPT.Models {
 			id := strings.TrimSpace(model.ID)
-			if id == "" || len(model.Operations) == 0 {
+			if id == "" {
 				continue
 			}
 			entry := BuiltinModel{
-				ID:         id,
-				Operations: uniqueSorted(model.Operations),
-				CreatedAt:  model.CreatedAt,
-				OwnedBy:    strings.TrimSpace(model.OwnedBy),
+				ID:        id,
+				CreatedAt: model.CreatedAt,
+				OwnedBy:   strings.TrimSpace(model.OwnedBy),
 			}
 			if _, exists := static[id]; exists {
 				entry.ConflictWithStatic = true
@@ -218,7 +202,7 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		if id == "" {
 			continue
 		}
-		entry := BuiltinModel{ID: id, Operations: []string{config.ModelOperationChatCompletions}, CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
+		entry := BuiltinModel{ID: id, CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
 		if entry.OwnedBy == "" {
 			entry.OwnedBy = "codex"
 		}
@@ -269,7 +253,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 				// Preserve that authority; request execution still fail-fast checks
 				// the provider before creating an upstream request.
 				snap.Candidates[id] = append(snap.Candidates[id], Candidate{
-					ModelID: id, RouteOwner: name, Operations: append([]string(nil), info.Operations...),
+					ModelID: id, RouteOwner: name,
 					Priority: config.DefaultProviderPriority, Fallback: true,
 					ContextWindowTokens: info.ContextWindowTokens, MaxOutputTokens: info.MaxOutputTokens,
 				})
@@ -278,14 +262,9 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 			if provider.Disabled {
 				continue
 			}
-			operations := supportedStaticOperations(info.Operations, provider)
-			if len(operations) == 0 {
-				continue
-			}
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID:             id,
 				RouteOwner:          name,
-				Operations:          operations,
 				Priority:            config.EffectiveProviderPriority(provider),
 				Fallback:            config.EffectiveProviderFallback(provider),
 				ContextWindowTokens: info.ContextWindowTokens,
@@ -296,7 +275,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 	if snap.CodexOAuthProvider.Status == StatusReady {
 		for id, model := range snap.CodexOAuthModels {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
-				ModelID: id, RouteOwner: CodexOAuthProviderID, Operations: append([]string(nil), model.Operations...), Builtin: true,
+				ModelID: id, RouteOwner: CodexOAuthProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true,
 			})
 		}
@@ -304,7 +283,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 	if snap.BuiltinProvider.Status == StatusReady {
 		for id, model := range snap.BuiltinModels {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
-				ModelID: id, RouteOwner: BuiltinProviderID, Operations: append([]string(nil), model.Operations...), Builtin: true,
+				ModelID: id, RouteOwner: BuiltinProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb), Fallback: false,
 			})
 		}
@@ -320,17 +299,6 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 	}
 }
 
-func supportedStaticOperations(operations []string, provider config.Provider) []string {
-	result := make([]string, 0, len(operations))
-	for _, operation := range operations {
-		path := config.OperationToPrimaryInboundPath(operation)
-		if path != "" && config.ProviderSupportsInboundPath(provider, path) {
-			result = append(result, operation)
-		}
-	}
-	return result
-}
-
 // Reconfigure rebuilds an existing auto-discovered catalog against a new
 // static configuration. It keeps only constrained in-memory discovery data;
 // the account pool remains the authority and an immediate refresh follows it.
@@ -338,10 +306,9 @@ func Reconfigure(cfg config.Config, previous Snapshot) Snapshot {
 	poolModels := make([]PoolModel, 0, len(previous.BuiltinModels))
 	for _, model := range previous.BuiltinModels {
 		poolModels = append(poolModels, PoolModel{
-			ID:         model.ID,
-			Operations: append([]string(nil), model.Operations...),
-			CreatedAt:  model.CreatedAt,
-			OwnedBy:    model.OwnedBy,
+			ID:        model.ID,
+			CreatedAt: model.CreatedAt,
+			OwnedBy:   model.OwnedBy,
 		})
 	}
 	codexModels := make([]PoolModel, 0, len(previous.CodexOAuthModels))
@@ -356,14 +323,13 @@ func Reconfigure(cfg config.Config, previous Snapshot) Snapshot {
 
 // PoolModel is the discovery input DTO (account-pool catalog projection).
 type PoolModel struct {
-	ID         string
-	Operations []string
-	CreatedAt  int64
-	OwnedBy    string
+	ID        string
+	CreatedAt int64
+	OwnedBy   string
 }
 
-// CandidatesFor resolves all ordered candidates that can serve an operation.
-func (s Snapshot) CandidatesFor(modelID, operation string) []Candidate {
+// CandidatesFor resolves all ordered candidates for an exact model ID.
+func (s Snapshot) CandidatesFor(modelID string) []Candidate {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return nil
@@ -371,48 +337,26 @@ func (s Snapshot) CandidatesFor(modelID, operation string) []Candidate {
 	items := s.Candidates[modelID]
 	result := make([]Candidate, 0, len(items))
 	for _, item := range items {
-		if operation != "" && !item.SupportsOperation(operation) {
-			continue
-		}
-		item.Operations = append([]string(nil), item.Operations...)
 		result = append(result, item)
 	}
 	return result
 }
 
-// Lookup resolves the first ordered candidate and the union of all model
-// operations. New request routing should call CandidatesFor with its operation.
+// Lookup resolves the first ordered candidate for a model.
 func (s Snapshot) Lookup(modelID string) (Route, bool) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return Route{}, false
 	}
-	candidates := s.CandidatesFor(modelID, "")
+	candidates := s.CandidatesFor(modelID)
 	if len(candidates) == 0 {
 		return Route{}, false
 	}
 	primary := candidates[0]
-	operations := map[string]struct{}{}
-	for _, candidate := range candidates {
-		for _, operation := range candidate.Operations {
-			operations[operation] = struct{}{}
-		}
-	}
 	return Route{
-		ModelID: primary.ModelID, RouteOwner: primary.RouteOwner, Operations: sortedOperations(operations), Builtin: primary.Builtin,
+		ModelID: primary.ModelID, RouteOwner: primary.RouteOwner, Builtin: primary.Builtin,
 		CreatedAt: primary.CreatedAt, OwnedBy: primary.OwnedBy, ContextWindowTokens: primary.ContextWindowTokens, MaxOutputTokens: primary.MaxOutputTokens,
 	}, true
-}
-
-// SupportsOperation reports whether the resolved route allows operation.
-func (r Route) SupportsOperation(operation string) bool {
-	operation = strings.TrimSpace(operation)
-	for _, op := range r.Operations {
-		if op == operation {
-			return true
-		}
-	}
-	return false
 }
 
 // SortedModelIDs returns each model with at least one candidate in stable order.
@@ -427,15 +371,6 @@ func (s Snapshot) SortedModelIDs() []string {
 	return ids
 }
 
-func sortedOperations(values map[string]struct{}) []string {
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
 // BuiltinProviderView returns a synthetic Provider used by the transport matrix.
 func BuiltinProviderView() config.Provider {
 	return BuiltinProviderViewFor(BuiltinProviderID)
@@ -445,14 +380,14 @@ func BuiltinProviderView() config.Provider {
 // transport matrix for a concrete builtin route owner.
 func BuiltinProviderViewFor(owner string) config.Provider {
 	if owner == CodexOAuthProviderID {
-		return config.Provider{Name: CodexOAuthProviderID, Protocol: CodexOAuthProviderID, EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Priority: CodexOAuthPriority, Fallback: true}
+		return config.Provider{Name: CodexOAuthProviderID, Protocol: CodexOAuthProviderID, Endpoints: []string{config.ProviderEndpointResponses}, Priority: CodexOAuthPriority, Fallback: true}
 	}
 	return config.Provider{
-		Name:                 BuiltinProviderID,
-		Protocol:             BuiltinProviderID,
-		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses, config.EndpointCapabilityImages},
-		Priority:             ChatGPTWebPriority,
-		Disabled:             false,
+		Name:      BuiltinProviderID,
+		Protocol:  BuiltinProviderID,
+		Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses, config.ProviderEndpointImages},
+		Priority:  ChatGPTWebPriority,
+		Disabled:  false,
 	}
 }
 

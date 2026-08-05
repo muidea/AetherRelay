@@ -422,7 +422,7 @@ func (s *Account) handleAcquireImage(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire image command"))
 		return
 	}
-	acc, found := s.store.AcquireImageToken(cmd.PlanType, cmd.SourceType, cmd.Exclude, cmd.Model, cmd.Operation)
+	acc, found := s.store.AcquireImageToken(cmd.PlanType, cmd.SourceType, cmd.Exclude, cmd.Model, cmd.Capability)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "no available image quota"))
 		return
@@ -486,7 +486,7 @@ func (s *Account) handleAcquireTextAccount(ev event.Event, result event.Result) 
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire text account command"))
 		return
 	}
-	acc, found := s.store.AcquireTextAccount(cmd.AccountID, cmd.Model, cmd.Operation)
+	acc, found := s.store.AcquireTextAccount(cmd.AccountID, cmd.Model, cmd.Capability)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "saved text account is unavailable"))
 		return
@@ -551,7 +551,7 @@ func (s *Account) handleAcquireText(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire text command"))
 		return
 	}
-	acc, found := s.store.AcquireTextToken(cmd.Exclude, cmd.Model, cmd.Operation)
+	acc, found := s.store.AcquireTextToken(cmd.Exclude, cmd.Model, cmd.Capability)
 	if !found {
 		result.Set(nil, cd.NewError(cd.Unexpected, "no available text account"))
 		return

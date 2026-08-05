@@ -134,7 +134,7 @@ func (h *Handler) archiveAndLogTransportPlan(round *archive.Round, r *http.Reque
 	}
 	if round != nil {
 		round.SetTransportPlan(
-			plan.Operation,
+			RouteLabel(r),
 			plan.ClientEndpoint,
 			plan.ClientProtocol,
 			plan.UpstreamProtocol,

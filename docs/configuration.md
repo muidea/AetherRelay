@@ -20,17 +20,22 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: ${OPENAI_API_KEY}
-    endpoint_capabilities: chat_completions
+    endpoints: chat_completions
     models: gpt-5.5
 
 model_catalog:
   gpt-5.5:
     context_window_tokens: 128000
     max_output_tokens: 16384
-    operations: chat_completions
 ```
 
-`model_catalog` 是静态 Provider 的模型、容量与 operation 权威；模型 ID exact 且严格区分大小写。每个模型会解析为有序 Provider 候选链，而不是唯一 RouteOwner。启用 ChatGPT Web 或 Codex OAuth 后，运行时有效目录还会合成各自的内建模型并参与同一候选链。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；设计背景见[核心代理与路由设计](design/proxy-core.md)。
+`model_catalog` 只登记静态模型及容量元数据；模型 ID exact 且严格区分大小写。Provider 是否能处理某类请求由 `endpoints` 与共享 transport matrix 唯一决定：
+
+| 字段 | 层级 | 枚举 |
+| --- | --- | --- |
+| `providers.*.endpoints` | Provider 原生端点 | `chat_completions`、`messages`、`responses`、`completions`、`embeddings`、`images` |
+
+每个模型会解析为有序 Provider 候选链，而不是唯一 RouteOwner。启用 ChatGPT Web 或 Codex OAuth 后，运行时有效目录还会合成各自的内建模型并参与同一候选链。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；设计背景见[核心代理与路由设计](design/proxy-core.md)。
 
 ## Provider 与模型路由
 
@@ -38,13 +43,13 @@ model_catalog:
 
 - `protocol`：仅 `openai` 或 `anthropic`。`chatgptweb` 与 `codexoauth` 是保留协议/ID，禁止写入 `providers`；分别由 `chatgpt_web` 与 `codex_oauth` 在运行时注入内建 Provider。
 - `base_url`：可带或不带 `/v1`，代理会避免重复拼接。
-- `endpoint_capabilities`：上游直接支持的端点能力，不能由 protocol 自动推断。
+- `endpoints`：上游原生支持的端点，不能由 protocol 自动推断。它应用于该 Provider 匹配的全部模型；若不同模型的端点集合不同，应拆分 Provider 条目及其 `models` pattern。
 - `models`：用于启动期匹配 catalog model 的 pattern；多个 enabled Provider 可以匹配同一 exact model。
 - `priority`：可选整数，范围 `-1000`~`1000`，默认 `100`；数值越高越先被选择，名称只用于同优先级稳定排序。显式 `0` 有效。
 - `fallback`：可选布尔值，默认 `true`；Provider 位于非首候选时，是否允许在安全条件下作为回退目标。
 - `api_key`：远程 Provider 必填；仅 loopback 上游可显式 `allow_unauthenticated: true`。
 
-一个 catalog model 至少要匹配一个 enabled Provider；每个声明的 operation 也至少要有一个匹配 Provider 能按固定 TransportPlan 矩阵服务。候选按 `priority` 降序排序。请求不会接受 `default_provider`、`fallbacks` 列表、`X-AI-Provider`、`?provider=` 或 `provider/model` 前缀来覆盖该顺序。
+一个 catalog model 至少要匹配一个 enabled Provider。候选按 `priority` 降序排序；请求到达后，再按入站 path 从候选的 `endpoints` 和共享 transport matrix 中筛选可服务 Provider。请求不会接受 `default_provider`、`fallbacks` 列表、`X-AI-Provider`、`?provider=` 或 `provider/model` 前缀来覆盖该顺序。
 
 回退只会发生在客户端响应尚未提交时，并且仅针对网络错误、`408`、`429`、`5xx` 或流式请求的首事件探测失败。一次已写出的 SSE/HTTP 响应绝不切换 Provider。转换候选会先做语义预检：不支持的 tools、多模态或结构化字段不会被静默删改；若后续存在可原生保留该语义的候选，可改用该候选，否则返回 `conversion_unsupported`。图片任务一旦提交不回退，避免重复创建。
 
@@ -163,7 +168,7 @@ chatgpt_web:
   - `max_conversations` 达到上限时拒绝新建并提示先删旧记录，不会静默删除历史。
   - `max_messages_per_conversation` / `max_message_bytes` / `turn_timeout_seconds` 均为正数上限。
   - 会话正文只写入 `state.database` 的专用表；浏览器不得使用 localStorage/sessionStorage 保存消息或上游锚点。
-- 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。模型与模型级 operation 来自账号池对 ChatGPT Web `/backend-api/models` 的枚举并集。
+- 启用后自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。公开模型目录来自账号池对 ChatGPT Web `/backend-api/models` 的模型 ID 枚举并集；上游发现的模型特征只供账号池内部执行选择，不进入 `model_catalog` 或 `/v1/models`。
 - 临时对话会持久化创建时的请求模型；仅当 ChatGPT Web SSE 的 assistant `message.metadata.model_slug` 明确返回时，才记录并展示该轮上游实际模型。模型正文的自述不作为路由证据；上游未返回该字段时管理页显示“上游未返回”。
 - 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、受限 `/v1/responses`、`/v1/search`、`/v1/images/generations` 与 `/v1/images/edits`。不得在 `providers` 或 `model_catalog` 中手工声明 `chatgptweb` 路由。
 - 对内建 `chatgptweb`，`/v1/chat/completions` 中唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具（或 `web_search_options`）会启动一次强制搜索；仅使用最后一条纯文本 user 消息作为 query。图片、文件、function/tool 调用、结构化输出和工具循环会在访问上游前返回 `conversion_unsupported`。非流式结果含来源和 `url_citation`；流式是在上游搜索完成后一次性发送完整 delta 的兼容 SSE，不是增量搜索流。

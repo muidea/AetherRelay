@@ -24,9 +24,9 @@ go test ./internal/modules/application/proxyapi/service/proxy -count=1
 go test ./internal/modules/application/proxyapi/service/proxy -run TestResolveTransportPlan -count=1
 go test ./internal/pkg/aiproxyconfig -run TestValidateModelRoutes -count=1
 
-# 上游 capability 现场探测（独立入口，不在服务启动时跑）
+# 上游 endpoint 现场探测（独立入口，不在服务启动时跑）
 go run ./cmd/ai-proxy-probe -config config.yaml \
-  -provider <route-owner> -capability chat_completions -model <exact-model-id>
+  -provider <route-owner> -endpoint chat_completions -model <exact-model-id>
 ```
 
 配置：`cp config.example.yaml config.yaml`，密钥用 `${ENV}` 展开；**provider 条目本身必须写在配置文件中**，不能靠 env 注入创建 provider。
@@ -70,7 +70,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 两阶段权威，不要绕过：
 
-1. **启动期** `config.Load`：每个静态 `model_catalog` 条目必须 **exact、大小写敏感** 地匹配至少一个 enabled provider 的 `models` pattern，按 `priority` 降序写入 `ModelInfo.RouteOwners` / `ResolvedModelRoute`（`RouteOwner` 保留首候选兼容投影）。`operations` 必填且每项至少有一个候选与 endpoint capability 相交可服务；enabled provider 必须显式配置 `endpoint_capabilities`（不得从 protocol 推断）。ChatGPT Web 模型不写入 YAML，由运行时发现。
+1. **启动期** `config.Load`：每个静态 `model_catalog` 条目必须 **exact、大小写敏感** 地匹配至少一个 enabled provider 的 `models` pattern，按 `priority` 降序写入 `ModelInfo.RouteOwners` / `ResolvedModelRoute`（`RouteOwner` 保留首候选兼容投影）。`model_catalog` 只保存容量元数据；enabled provider 必须显式配置 `endpoints`（不得从 protocol 推断），它是接口支持的唯一配置声明。ChatGPT Web 模型不写入 YAML，由运行时发现。
 2. **请求期** `ResolveTransportPlans(cfg, snap, method, path, model)`（`internal/modules/application/proxyapi/service/proxy/route.go`）：从同一 `effectivecatalog.Snapshot` 查找 exact model（静态或内建），再套固定转发矩阵生成候选 `TransportPlan`。请求不能用 `default_provider`、旧 `fallbacks` 列表、`X-AI-Provider` / `?provider=` / `provider/model` 前缀覆盖顺序。仅限 response 未写出时，按每候选 `fallback` 策略尝试可重试失败的下一项。禁止在 YAML 中声明 `protocol: chatgptweb`。
 
 入站白名单：
@@ -81,21 +81,26 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 `GET/POST /v1/models` **本地合成**，不访问上游；不暴露 provider 名、base URL 或密钥。
 
-转发矩阵（`endpoint_capabilities` 只表示上游直连能力）：
+转发矩阵（`endpoints` 只表示上游直连能力）：
 
-| Client | Upstream protocol | 需要的 capability | Upstream path | Mode |
+| Client | Upstream protocol | Provider endpoint | Upstream path | Mode |
 |---|---|---|---|---|
 | `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
 | `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
 | `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
+| `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
+| `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
 | `/v1/completions` | openai | `completions` | 同 path | native |
 | `/v1/embeddings` | openai | `embeddings` | 同 path | native |
+| `/v1/search` | chatgptweb | `chat_completions` | `chatgptweb_search` | native |
+| `/v1/images/generations\|edits` | openai | `images` | 同入站 path | native |
+| `/v1/images/generations\|edits` | chatgptweb | `images` | `chatgptweb_images` | native |
 
 转换仅保证基础文本与基础 SSE。tools / function calling / 多模态 / `response_format` 等 → 访问上游前 `conversion_unsupported`。responses / completions / embeddings **不能**靠 chat/messages 转换派生。标准推理端点只认请求体 `stream: true` 开启 SSE；`Accept: text/event-stream` 不得隐式改变请求模式。SSE 统一响应头与边界见 `docs/unified-sse-streaming-design-2026-07-23.md`。
 
-本地 typed error（访问上游前）：`model_required`、`model_not_found`、`operation_unsupported`、`endpoint_unsupported`、`conversion_unsupported`、`authentication_failed`、`route_contract_invalid`、`provider_unavailable` 等；envelope 按入站协议（OpenAI vs Anthropic）输出。
+本地 typed error（访问上游前）：`model_required`、`model_not_found`、`endpoint_unsupported`、`conversion_unsupported`、`authentication_failed`、`route_contract_invalid`、`provider_unavailable` 等；envelope 按入站协议（OpenAI vs Anthropic）输出。
 
 ## 请求处理路径（proxy）
 
@@ -103,7 +108,7 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
-热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 的候选链与 operation 可服务合同。
+热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 model_catalog 候选链或 Provider endpoint 合同。
 
 ## 安全与资源边界
 
@@ -124,6 +129,6 @@ cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
 
 - **model id 严格大小写敏感**；catalog 与 body 必须原文 exact 匹配。
 - 改路由/能力矩阵时同步：`internal/pkg/aiproxyconfig` 校验、`ResolveTransportPlan`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
-- 不引入请求侧 provider override、`default_provider`、旧 `fallbacks` 列表，或从 protocol 推断 `endpoint_capabilities`。`priority` / `fallback` 是唯一的静态候选策略配置。
+- 不引入请求侧 provider override、`default_provider`、旧 `fallbacks` 列表，或从 protocol 推断 `endpoints`。`priority` / `fallback` 是唯一的静态候选策略配置。
 - `Makefile` 默认 `-buildvcs=false`，避免非完整 git worktree 下 build 失败。
 - 文档、管理 UI 文案以中文为主；代码标识符保持英文。

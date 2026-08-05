@@ -85,18 +85,18 @@ func TestChatGPTWebSearchEndpointForcesBuiltinProviderDespiteModelConflict(t *te
 		Providers: map[string]config.Provider{
 			"preferred-static": {
 				Name: "preferred-static", Protocol: "openai", Models: []string{"gpt-5"}, Priority: 1000,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "preferred-static"},
+			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "preferred-static"},
 		},
 	})
 	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
 		received = request
 		return chatgptsearch.Result{ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test", Snippet: "source excerpt"}}}, nil
 	}})
-	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5", Operations: []string{config.ModelOperationChatCompletions}}}, "2026-08-03T00:00:00Z"))
+	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-08-03T00:00:00Z"))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
@@ -128,7 +128,7 @@ func TestChatGPTWebSearchEndpointRejectsUnsupportedFields(t *testing.T) {
 func TestChatGPTWebSearchEndpointReportsUnavailableAccountPool(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}})
 	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{})
-	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 0, []effectivecatalog.PoolModel{{ID: "gpt-5", Operations: []string{config.ModelOperationChatCompletions}}}, "2026-08-03T00:00:00Z"))
+	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 0, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-08-03T00:00:00Z"))
 	req := httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()

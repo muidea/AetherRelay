@@ -19,7 +19,7 @@ type builtinProviderInput struct {
 
 // updateBuiltinProvider changes only the route-level policy of a synthetic
 // account-pool Provider. It deliberately cannot alter credentials, discovery,
-// lifecycle settings, protocol, capability, or fallback behavior.
+// lifecycle settings, protocol, endpoints, or fallback behavior.
 func (h *Handler) updateBuiltinProvider(w http.ResponseWriter, r *http.Request, rel string) {
 	id := strings.ToLower(strings.Trim(strings.TrimPrefix(rel, "/api/builtin-providers/"), "/"))
 	section, err := builtinProviderSection(id)

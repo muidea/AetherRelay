@@ -18,46 +18,46 @@ func testRouteConfig() config.Config {
 				BaseURL:  "https://openai.test/v1",
 				APIKey:   "k",
 				Models:   []string{"gpt-*", "text-embedding-*"},
-				EndpointCapabilities: []string{
-					config.EndpointCapabilityChatCompletions,
-					config.EndpointCapabilityResponses,
-					config.EndpointCapabilityCompletions,
-					config.EndpointCapabilityEmbeddings,
+				Endpoints: []string{
+					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointResponses,
+					config.ProviderEndpointCompletions,
+					config.ProviderEndpointEmbeddings,
 				},
 			},
 			"openai-chat-only": {
-				Name:                 "openai-chat-only",
-				Protocol:             "openai",
-				BaseURL:              "https://openai-chat.test/v1",
-				APIKey:               "k",
-				Models:               []string{"chat-only-*"},
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Name:      "openai-chat-only",
+				Protocol:  "openai",
+				BaseURL:   "https://openai-chat.test/v1",
+				APIKey:    "k",
+				Models:    []string{"chat-only-*"},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 			"anthropic": {
-				Name:                 "anthropic",
-				Protocol:             "anthropic",
-				BaseURL:              "https://anthropic.test",
-				APIKey:               "k",
-				Models:               []string{"claude-*"},
-				EndpointCapabilities: []string{config.EndpointCapabilityMessages},
+				Name:      "anthropic",
+				Protocol:  "anthropic",
+				BaseURL:   "https://anthropic.test",
+				APIKey:    "k",
+				Models:    []string{"claude-*"},
+				Endpoints: []string{config.ProviderEndpointMessages},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai-full",
+				RouteOwner: "openai-full",
 			},
 			"text-embedding-test": {
 				ID: "text-embedding-test", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "openai-full",
+				RouteOwner: "openai-full",
 			},
 			"chat-only-model": {
 				ID: "chat-only-model", ContextWindowTokens: 32000, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai-chat-only",
+				RouteOwner: "openai-chat-only",
 			},
 			"claude-test": {
 				ID: "claude-test", ContextWindowTokens: 200000, MaxOutputTokens: 8192,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "anthropic",
+				RouteOwner: "anthropic",
 			},
 		},
 	}
@@ -110,21 +110,20 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 			wantMode: TransportModeNative, wantUpstreamPath: "/v1/embeddings", wantOwner: "openai-full",
 		},
 		{
-			name: "responses not available on chat-only endpoint capability",
+			name: "responses not available on chat-only endpoint",
 			path: "/v1/responses", model: "chat-only-model",
-			// model 有 chat_completions,但 RouteOwner 无 responses direct capability
+			// RouteOwner 只声明 chat_completions，没有 responses endpoint。
 			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
-			name: "embeddings not available on chat-only model operations",
+			name: "embeddings not available on chat-only endpoint",
 			path: "/v1/embeddings", model: "chat-only-model",
-			// operation 校验先于 endpoint: catalog 未声明 embeddings → operation_unsupported
-			wantCode: ErrorCodeOperationUnsupported,
+			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
 			name: "embeddings not available via anthropic conversion",
 			path: "/v1/embeddings", model: "claude-test",
-			wantCode: ErrorCodeOperationUnsupported,
+			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
 			name: "responses not available via anthropic",
@@ -142,9 +141,9 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 			wantCode: ErrorCodeModelNotFound,
 		},
 		{
-			name: "operation unsupported for embeddings-only model on chat",
+			name: "provider endpoint determines model serviceability",
 			path: "/v1/chat/completions", model: "text-embedding-test",
-			wantCode: ErrorCodeOperationUnsupported,
+			wantMode: TransportModeNative, wantUpstreamPath: "/v1/chat/completions", wantOwner: "openai-full",
 		},
 	}
 
@@ -187,21 +186,21 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 		Providers: map[string]config.Provider{
 			"primary": {
 				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"shared"}, Priority: 200,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 			"backup": {
 				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"shared"}, Priority: 20,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 			"standby-disabled": {
 				Name: "standby-disabled", Protocol: "openai", BaseURL: "https://disabled.test", APIKey: "k", Models: []string{"shared"}, Priority: 10,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"shared": {
 				ID: "shared", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary", RouteOwners: []string{"standby-disabled", "backup", "primary"},
+				RouteOwner: "primary", RouteOwners: []string{"standby-disabled", "backup", "primary"},
 			},
 		},
 	}
@@ -225,7 +224,6 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 func TestValidateConversionRequestRejectsFeatures(t *testing.T) {
 	plan := TransportPlan{
 		ModelID:          "claude-test",
-		Operation:        config.ModelOperationChatCompletions,
 		ClientProtocol:   ClientProtocolOpenAI,
 		ClientEndpoint:   "/v1/chat/completions",
 		RouteOwner:       "anthropic",
@@ -321,31 +319,6 @@ func TestClientProtocolForPath(t *testing.T) {
 	}
 	if got := ClientProtocolForPath("/v1/embeddings"); got != ClientProtocolOpenAI {
 		t.Fatalf("embeddings protocol = %q", got)
-	}
-}
-
-func TestTransportPlanForCanonical(t *testing.T) {
-	provider := config.Provider{
-		Name:                 "anthropic",
-		Protocol:             "anthropic",
-		EndpointCapabilities: []string{config.EndpointCapabilityMessages},
-	}
-	plan, ok := TransportPlanForCanonical("anthropic", provider, "claude-x", config.ModelOperationChatCompletions)
-	if !ok {
-		t.Fatal("expected canonical plan")
-	}
-	if plan.Mode != TransportModeOpenAIToAnthropic || plan.UpstreamEndpoint != "/v1/messages" {
-		t.Fatalf("plan = %#v", plan)
-	}
-
-	openai := config.Provider{
-		Name:                 "openai",
-		Protocol:             "openai",
-		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
-	}
-	plan, ok = TransportPlanForCanonical("openai", openai, "gpt-x", config.ModelOperationEmbeddings)
-	if ok {
-		t.Fatalf("embeddings should not be ready without embeddings capability: %#v", plan)
 	}
 }
 

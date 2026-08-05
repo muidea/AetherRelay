@@ -134,7 +134,7 @@ type providerView struct {
 	Protocol             string               `json:"protocol"`
 	BaseURL              string               `json:"base_url"`
 	Models               []string             `json:"models"`
-	EndpointCapabilities []string             `json:"endpoint_capabilities"`
+	Endpoints            []string             `json:"endpoints"`
 	AllowUnauthenticated bool                 `json:"allow_unauthenticated"`
 	Priority             int                  `json:"priority"`
 	Fallback             bool                 `json:"fallback"`
@@ -183,7 +183,7 @@ type providerInput struct {
 	APIKey               string   `json:"api_key"`
 	ClearAPIKey          bool     `json:"clear_api_key"`
 	Models               []string `json:"models"`
-	EndpointCapabilities []string `json:"endpoint_capabilities"`
+	Endpoints            []string `json:"endpoints"`
 	AllowUnauthenticated bool     `json:"allow_unauthenticated"`
 	Priority             *int     `json:"priority"`
 	Fallback             *bool    `json:"fallback"`
@@ -678,7 +678,7 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request, rel stri
 		return
 	}
 	if h.metricsRegistry != nil {
-		h.metricsRegistry.RecordRequestPlan(name, result.Model, result.Capability, result.Status, time.Duration(result.DurationMS)*time.Millisecond, mapProbeOutcome(result.Conclusion), "", result.Protocol, result.UpstreamPath, "probe")
+		h.metricsRegistry.RecordRequestPlan(name, result.Model, result.Endpoint, result.Status, time.Duration(result.DurationMS)*time.Millisecond, mapProbeOutcome(result.Conclusion), "", result.Protocol, result.UpstreamPath, "probe")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"provider": name, "status": result.Status, "duration_ms": result.DurationMS, "conclusion": result.Conclusion, "summary": result.Summary})
 }
@@ -721,8 +721,8 @@ func builtinProviderProbeResult(view providerView) (conclusion string, status in
 		conclusion, status = "unavailable", http.StatusServiceUnavailable
 	case "credential_error", "unhealthy":
 		conclusion, status = "unhealthy", http.StatusBadGateway
-	case "capability_drift":
-		conclusion, status = "capability_drift", http.StatusConflict
+	case "endpoint_drift":
+		conclusion, status = "endpoint_drift", http.StatusConflict
 	default:
 		conclusion, status = "unknown", http.StatusAccepted
 	}
@@ -743,8 +743,8 @@ func mapProbeOutcome(conclusion string) string {
 	if conclusion == "success" {
 		return "success"
 	}
-	if conclusion == "capability_drift" {
-		return "capability_drift"
+	if conclusion == "endpoint_drift" {
+		return "endpoint_drift"
 	}
 	return "upstream_failed"
 }
@@ -798,7 +798,7 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 			Protocol:             provider.Protocol,
 			BaseURL:              provider.BaseURL,
 			Models:               append([]string(nil), provider.Models...),
-			EndpointCapabilities: append([]string(nil), provider.EndpointCapabilities...),
+			Endpoints:            append([]string(nil), provider.Endpoints...),
 			AllowUnauthenticated: provider.AllowUnauthenticated,
 			Priority:             config.EffectiveProviderPriority(provider),
 			Fallback:             config.EffectiveProviderFallback(provider),
@@ -823,7 +823,7 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 }
 
 func (h *Handler) builtinCodexProviderView(cfg config.Config) providerView {
-	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", EndpointCapabilities: []string{config.EndpointCapabilityResponses}, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true, Enabled: config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth), Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
+	view := providerView{Name: effectivecatalog.CodexOAuthProviderID, Protocol: effectivecatalog.CodexOAuthProviderID, BaseURL: "(Codex OAuth account pool)", Endpoints: []string{config.ProviderEndpointResponses}, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true, Enabled: config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth), Source: ProviderSourceBuiltin, Builtin: true, Availability: providerAvailability{Status: "unknown"}}
 	if h.chatGPT == nil {
 		view.Availability = providerAvailability{Status: "unavailable"}
 		view.UnavailableReason = "effective catalog is unavailable"
@@ -872,17 +872,17 @@ func (h *Handler) builtinCodexProviderView(cfg config.Config) providerView {
 
 func (h *Handler) builtinChatGPTProviderView(cfg config.Config) providerView {
 	view := providerView{
-		Name:                 effectivecatalog.BuiltinProviderID,
-		Protocol:             effectivecatalog.BuiltinProviderID,
-		BaseURL:              "(account pool)",
-		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses, config.EndpointCapabilityImages},
-		Priority:             config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb),
-		Fallback:             false,
-		Enabled:              config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb),
-		APIKeyConfigured:     false,
-		Source:               ProviderSourceBuiltin,
-		Builtin:              true,
-		Availability:         providerAvailability{Status: "unknown"},
+		Name:             effectivecatalog.BuiltinProviderID,
+		Protocol:         effectivecatalog.BuiltinProviderID,
+		BaseURL:          "(account pool)",
+		Endpoints:        []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses, config.ProviderEndpointImages},
+		Priority:         config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb),
+		Fallback:         false,
+		Enabled:          config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb),
+		APIKeyConfigured: false,
+		Source:           ProviderSourceBuiltin,
+		Builtin:          true,
+		Availability:     providerAvailability{Status: "unknown"},
 	}
 	if h.chatGPT == nil || !h.chatGPTWebAvailable() {
 		view.Availability = providerAvailability{Status: "unavailable"}
@@ -1157,7 +1157,7 @@ func buildProvidersNode(inputs []providerInput, existingSecrets map[string]strin
 		}
 		appendScalar(provider, "priority", fmt.Sprintf("%d", priority), "!!int")
 		appendScalar(provider, "fallback", fmt.Sprintf("%t", fallback), "!!bool")
-		appendScalar(provider, "endpoint_capabilities", strings.Join(input.EndpointCapabilities, ", "), "!!str")
+		appendScalar(provider, "endpoints", strings.Join(input.Endpoints, ", "), "!!str")
 		appendScalar(provider, "models", strings.Join(input.Models, ", "), "!!str")
 		if input.AllowUnauthenticated {
 			appendScalar(provider, "allow_unauthenticated", "true", "!!bool")

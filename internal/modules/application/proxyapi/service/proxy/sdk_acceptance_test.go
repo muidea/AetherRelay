@@ -68,20 +68,20 @@ func TestOpenAISDKModelsChatEmbeddingsAndTypedError(t *testing.T) {
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://upstream.test/v1", APIKey: "upstream-key",
 				Models: []string{"gpt-test", "text-embedding-3-large"},
-				EndpointCapabilities: []string{
-					config.EndpointCapabilityChatCompletions,
-					config.EndpointCapabilityEmbeddings,
+				Endpoints: []string{
+					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointEmbeddings,
 				},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 			"text-embedding-3-large": {
 				ID: "text-embedding-3-large", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
-				Operations: []string{config.ModelOperationEmbeddings}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}, upstream)
@@ -129,20 +129,20 @@ func TestOpenAISDKModelsChatEmbeddingsAndTypedError(t *testing.T) {
 		t.Fatalf("empty embedding: %#v", emb)
 	}
 
-	// typed local error: operation_unsupported — SDK must parse without panic
+	// typed local error: model_not_found — SDK must parse without panic
 	beforeHits := upstreamHits
 	_, err = client.Embeddings.New(ctx, openai.EmbeddingNewParams{
-		Model: "gpt-test",
+		Model: "missing-model",
 		Input: openai.EmbeddingNewParamsInputUnion{OfString: openai.String("nope")},
 	})
 	if err == nil {
-		t.Fatal("expected operation_unsupported error from OpenAI SDK")
+		t.Fatal("expected model_not_found error from OpenAI SDK")
 	}
 	if upstreamHits != beforeHits {
 		t.Fatalf("upstream should not be called for local typed error, hits delta=%d", upstreamHits-beforeHits)
 	}
 	// OpenAI SDK wraps API errors; ensure body code is discoverable.
-	if !strings.Contains(err.Error(), "operation_unsupported") && !strings.Contains(err.Error(), "does not support") {
+	if !strings.Contains(err.Error(), "model_not_found") && !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("SDK error should surface typed contract: %v", err)
 	}
 }
@@ -162,14 +162,14 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"anthropic": {
 				Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.upstream", APIKey: "anthropic-key",
-				Models:               []string{"claude-test"},
-				EndpointCapabilities: []string{config.EndpointCapabilityMessages},
+				Models:    []string{"claude-test"},
+				Endpoints: []string{config.ProviderEndpointMessages},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"claude-test": {
 				ID: "claude-test", ContextWindowTokens: 200000, MaxOutputTokens: 8192,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "anthropic",
+				RouteOwner: "anthropic",
 			},
 		},
 	}, nativeUpstream)
@@ -210,14 +210,14 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://openai.upstream/v1", APIKey: "openai-key",
-				Models:               []string{"gpt-test"},
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Models:    []string{"gpt-test"},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}, convUpstream)
@@ -283,14 +283,14 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://openai.upstream/v1", APIKey: "openai-key",
-				Models:               []string{"gpt-test"},
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
+				Models:    []string{"gpt-test"},
+				Endpoints: []string{config.ProviderEndpointChatCompletions},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-test": {
 				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "openai",
+				RouteOwner: "openai",
 			},
 		},
 	}, errUpstream)

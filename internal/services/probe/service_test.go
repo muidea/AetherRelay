@@ -15,19 +15,19 @@ import (
 
 func TestBuildProbeRequest(t *testing.T) {
 	tests := []struct {
-		capability string
-		path       string
-		stream     bool
+		endpoint string
+		path     string
+		stream   bool
 	}{
-		{config.EndpointCapabilityChatCompletions, "/v1/chat/completions", true},
-		{config.EndpointCapabilityMessages, "/v1/messages", true},
-		{config.EndpointCapabilityResponses, "/v1/responses", true},
-		{config.EndpointCapabilityCompletions, "/v1/completions", true},
-		{config.EndpointCapabilityEmbeddings, "/v1/embeddings", false},
+		{config.ProviderEndpointChatCompletions, "/v1/chat/completions", true},
+		{config.ProviderEndpointMessages, "/v1/messages", true},
+		{config.ProviderEndpointResponses, "/v1/responses", true},
+		{config.ProviderEndpointCompletions, "/v1/completions", true},
+		{config.ProviderEndpointEmbeddings, "/v1/embeddings", false},
 	}
 	for _, tt := range tests {
-		t.Run(tt.capability, func(t *testing.T) {
-			path, body, err := buildProbeRequest(tt.capability, "DeepSeek-V4-Flash", tt.stream)
+		t.Run(tt.endpoint, func(t *testing.T) {
+			path, body, err := buildProbeRequest(tt.endpoint, "DeepSeek-V4-Flash", tt.stream)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -43,11 +43,11 @@ func TestBuildProbeRequest(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := buildProbeRequest(config.EndpointCapabilityEmbeddings, "m", true); err == nil {
+	if _, _, err := buildProbeRequest(config.ProviderEndpointEmbeddings, "m", true); err == nil {
 		t.Fatal("expected embeddings stream probe rejection")
 	}
 	if _, _, err := buildProbeRequest("unknown", "m", false); err == nil {
-		t.Fatal("expected unknown capability rejection")
+		t.Fatal("expected unknown endpoint rejection")
 	}
 }
 
@@ -82,7 +82,7 @@ func TestSanitizeSummary(t *testing.T) {
 	}
 }
 
-func TestIsCapabilityDriftResponse(t *testing.T) {
+func TestIsEndpointDriftResponse(t *testing.T) {
 	for _, tt := range []struct {
 		status  int
 		summary string
@@ -94,8 +94,8 @@ func TestIsCapabilityDriftResponse(t *testing.T) {
 		{520, "cloudflare origin error", false},
 		{http.StatusInternalServerError, "temporary upstream failure", false},
 	} {
-		if got := isCapabilityDriftResponse(tt.status, tt.summary); got != tt.want {
-			t.Fatalf("isCapabilityDriftResponse(%d, %q) = %t, want %t", tt.status, tt.summary, got, tt.want)
+		if got := isEndpointDriftResponse(tt.status, tt.summary); got != tt.want {
+			t.Fatalf("isEndpointDriftResponse(%d, %q) = %t, want %t", tt.status, tt.summary, got, tt.want)
 		}
 	}
 }
@@ -118,10 +118,10 @@ func TestRunProbePopulatesContractFieldsAndOutput(t *testing.T) {
 	provider := config.Provider{
 		Name: "display-name", Protocol: "openai", BaseURL: "https://upstream.test", APIKey: "upstream-key",
 	}
-	result := runProbe(client, "route-owner", config.EndpointCapabilityChatCompletions,
+	result := runProbe(client, "route-owner", config.ProviderEndpointChatCompletions,
 		"DeepSeek-V4-Flash", provider, "/v1/chat/completions", []byte(`{"model":"DeepSeek-V4-Flash"}`), time.Second, false)
 	if !result.OK || result.Provider != "route-owner" || result.Protocol != "openai" ||
-		result.Capability != config.EndpointCapabilityChatCompletions || result.Model != "DeepSeek-V4-Flash" ||
+		result.Endpoint != config.ProviderEndpointChatCompletions || result.Model != "DeepSeek-V4-Flash" ||
 		result.UpstreamPath != "/v1/chat/completions" || result.Status != http.StatusOK || result.Conclusion != "success" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -129,7 +129,7 @@ func TestRunProbePopulatesContractFieldsAndOutput(t *testing.T) {
 	var out bytes.Buffer
 	printResultTo(&out, result)
 	for _, field := range []string{
-		"provider=route-owner", "protocol=openai", "capability=chat_completions",
+		"provider=route-owner", "protocol=openai", "endpoint=chat_completions",
 		"model=DeepSeek-V4-Flash", "path=/v1/chat/completions", "status=200", "conclusion=success",
 	} {
 		if !strings.Contains(out.String(), field) {
@@ -154,7 +154,7 @@ func TestCheckUsesStableFirstCatalogModel(t *testing.T) {
 	defer upstream.Close()
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"route": {Protocol: "openai", BaseURL: upstream.URL, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+			"route": {Protocol: "openai", BaseURL: upstream.URL, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
 			"z-model": {RouteOwner: "route"},

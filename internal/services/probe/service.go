@@ -22,17 +22,17 @@ import (
 func Main() {
 	configPath := flag.String("config", os.Getenv("AI_PROXY_CONFIG"), "config file path")
 	providerName := flag.String("provider", "", "RouteOwner provider name")
-	capability := flag.String("capability", "", "direct endpoint capability (chat_completions|messages|responses|completions|embeddings)")
+	endpoint := flag.String("endpoint", "", "direct endpoint (chat_completions|messages|responses|completions|embeddings)")
 	model := flag.String("model", "", "catalog model id (exact)")
 	timeout := flag.Duration("timeout", 30*time.Second, "request timeout")
-	stream := flag.Bool("stream", false, "also probe streaming when capability supports it")
+	stream := flag.Bool("stream", false, "also probe streaming when endpoint supports it")
 	flag.Parse()
 
 	if *configPath == "" {
 		*configPath = "config.yaml"
 	}
-	if *providerName == "" || *capability == "" || *model == "" {
-		fmt.Fprintln(os.Stderr, "usage: ai-proxy-probe -config config.yaml -provider <route-owner> -capability <cap> -model <model>")
+	if *providerName == "" || *endpoint == "" || *model == "" {
+		fmt.Fprintln(os.Stderr, "usage: ai-proxy-probe -config config.yaml -provider <route-owner> -endpoint <endpoint> -model <model>")
 		os.Exit(2)
 	}
 
@@ -46,8 +46,8 @@ func Main() {
 		fmt.Fprintf(os.Stderr, "provider %q missing or disabled\n", *providerName)
 		os.Exit(1)
 	}
-	if !config.ProviderHasDirectEndpoint(provider, *capability) {
-		fmt.Fprintf(os.Stderr, "provider %q does not declare direct capability %q\n", *providerName, *capability)
+	if !config.ProviderHasDirectEndpoint(provider, *endpoint) {
+		fmt.Fprintf(os.Stderr, "provider %q does not declare direct endpoint %q\n", *providerName, *endpoint)
 		os.Exit(1)
 	}
 	info, ok := config.LookupModel(cfg, *model)
@@ -60,17 +60,17 @@ func Main() {
 		os.Exit(1)
 	}
 
-	path, body, err := buildProbeRequest(*capability, *model, false)
+	path, body, err := buildProbeRequest(*endpoint, *model, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build probe: %v\n", err)
 		os.Exit(1)
 	}
-	result := runProbe(http.DefaultClient, *providerName, *capability, *model, provider, path, body, *timeout, false)
+	result := runProbe(http.DefaultClient, *providerName, *endpoint, *model, provider, path, body, *timeout, false)
 	printResult(result)
 	if *stream {
-		spath, sbody, err := buildProbeRequest(*capability, *model, true)
+		spath, sbody, err := buildProbeRequest(*endpoint, *model, true)
 		if err == nil {
-			sres := runProbe(http.DefaultClient, *providerName, *capability, *model, provider, spath, sbody, *timeout, true)
+			sres := runProbe(http.DefaultClient, *providerName, *endpoint, *model, provider, spath, sbody, *timeout, true)
 			fmt.Println("--- stream probe ---")
 			printResult(sres)
 			if !sres.OK && result.OK {
@@ -88,7 +88,7 @@ type Result struct {
 	OK           bool
 	Provider     string
 	Protocol     string
-	Capability   string
+	Endpoint     string
 	Model        string
 	UpstreamPath string
 	Status       int
@@ -99,14 +99,14 @@ type Result struct {
 }
 
 // Check 对已解析配置执行一次最小、非流式 direct probe。调用方只能使用配置中的
-// RouteOwner、已声明 capability 和归属该 Provider 的 catalog model。
+// RouteOwner、已声明 endpoint 和归属该 Provider 的 catalog model。
 func Check(ctx context.Context, cfg config.Config, providerName string) (Result, error) {
 	provider, ok := cfg.Providers[providerName]
 	if !ok || provider.Disabled {
 		return Result{}, fmt.Errorf("provider %q missing or disabled", providerName)
 	}
-	if len(provider.EndpointCapabilities) == 0 {
-		return Result{}, fmt.Errorf("provider %q has no direct capability", providerName)
+	if len(provider.Endpoints) == 0 {
+		return Result{}, fmt.Errorf("provider %q has no direct endpoint", providerName)
 	}
 	models := make([]string, 0)
 	for id, info := range cfg.ModelCatalog {
@@ -119,17 +119,17 @@ func Check(ctx context.Context, cfg config.Config, providerName string) (Result,
 	}
 	sort.Strings(models)
 	model := models[0]
-	capability := provider.EndpointCapabilities[0]
-	path, body, err := buildProbeRequest(capability, model, false)
+	endpoint := provider.Endpoints[0]
+	path, body, err := buildProbeRequest(endpoint, model, false)
 	if err != nil {
 		return Result{}, err
 	}
-	return runProbeContext(ctx, http.DefaultClient, providerName, capability, model, provider, path, body, 30*time.Second, false), nil
+	return runProbeContext(ctx, http.DefaultClient, providerName, endpoint, model, provider, path, body, 30*time.Second, false), nil
 }
 
-func buildProbeRequest(capability, model string, stream bool) (path string, body []byte, err error) {
-	switch capability {
-	case config.EndpointCapabilityChatCompletions:
+func buildProbeRequest(endpoint, model string, stream bool) (path string, body []byte, err error) {
+	switch endpoint {
+	case config.ProviderEndpointChatCompletions:
 		path = "/v1/chat/completions"
 		payload := map[string]any{
 			"model": model,
@@ -140,7 +140,7 @@ func buildProbeRequest(capability, model string, stream bool) (path string, body
 			"stream":     stream,
 		}
 		body, err = json.Marshal(payload)
-	case config.EndpointCapabilityMessages:
+	case config.ProviderEndpointMessages:
 		path = "/v1/messages"
 		payload := map[string]any{
 			"model":      model,
@@ -151,7 +151,7 @@ func buildProbeRequest(capability, model string, stream bool) (path string, body
 			"stream": stream,
 		}
 		body, err = json.Marshal(payload)
-	case config.EndpointCapabilityEmbeddings:
+	case config.ProviderEndpointEmbeddings:
 		if stream {
 			return "", nil, fmt.Errorf("embeddings does not support stream probe")
 		}
@@ -161,7 +161,7 @@ func buildProbeRequest(capability, model string, stream bool) (path string, body
 			"input": "ping",
 		}
 		body, err = json.Marshal(payload)
-	case config.EndpointCapabilityCompletions:
+	case config.ProviderEndpointCompletions:
 		path = "/v1/completions"
 		payload := map[string]any{
 			"model":      model,
@@ -170,7 +170,7 @@ func buildProbeRequest(capability, model string, stream bool) (path string, body
 			"stream":     stream,
 		}
 		body, err = json.Marshal(payload)
-	case config.EndpointCapabilityResponses:
+	case config.ProviderEndpointResponses:
 		path = "/v1/responses"
 		payload := map[string]any{
 			"model":  model,
@@ -179,20 +179,20 @@ func buildProbeRequest(capability, model string, stream bool) (path string, body
 		}
 		body, err = json.Marshal(payload)
 	default:
-		err = fmt.Errorf("unknown capability %q", capability)
+		err = fmt.Errorf("unknown endpoint %q", endpoint)
 	}
 	return
 }
 
-func runProbe(client *http.Client, providerName, capability, model string, provider config.Provider, path string, body []byte, timeout time.Duration, stream bool) Result {
-	return runProbeContext(context.Background(), client, providerName, capability, model, provider, path, body, timeout, stream)
+func runProbe(client *http.Client, providerName, endpoint, model string, provider config.Provider, path string, body []byte, timeout time.Duration, stream bool) Result {
+	return runProbeContext(context.Background(), client, providerName, endpoint, model, provider, path, body, timeout, stream)
 }
 
-func runProbeContext(parent context.Context, client *http.Client, providerName, capability, model string, provider config.Provider, path string, body []byte, timeout time.Duration, stream bool) Result {
+func runProbeContext(parent context.Context, client *http.Client, providerName, endpoint, model string, provider config.Provider, path string, body []byte, timeout time.Duration, stream bool) Result {
 	res := Result{
 		Provider:     providerName,
 		Protocol:     provider.Protocol,
-		Capability:   capability,
+		Endpoint:     endpoint,
 		UpstreamPath: path,
 		Stream:       stream,
 		Model:        model,
@@ -239,8 +239,8 @@ func runProbeContext(parent context.Context, client *http.Client, providerName, 
 	limited := io.LimitReader(resp.Body, 4096)
 	raw, _ := io.ReadAll(limited)
 	res.Summary = sanitizeSummary(string(raw))
-	if isCapabilityDriftResponse(resp.StatusCode, res.Summary) {
-		res.Conclusion = "capability_drift"
+	if isEndpointDriftResponse(resp.StatusCode, res.Summary) {
+		res.Conclusion = "endpoint_drift"
 		return res
 	}
 	switch {
@@ -250,7 +250,7 @@ func runProbeContext(parent context.Context, client *http.Client, providerName, 
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		res.Conclusion = "credential_issue"
 	case resp.StatusCode == 404 || resp.StatusCode == 405:
-		res.Conclusion = "capability_drift"
+		res.Conclusion = "endpoint_drift"
 	case resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode >= 500:
 		res.Conclusion = "environment_undetermined"
 	default:
@@ -259,9 +259,9 @@ func runProbeContext(parent context.Context, client *http.Client, providerName, 
 	return res
 }
 
-// isCapabilityDriftResponse 识别上游明确说明端点/relay 未实现或当前 base URL 不支持的响应。
+// isEndpointDriftResponse 识别上游明确说明端点/relay 未实现或当前 base URL 不支持的响应。
 // 5xx 本身仍归 environment_undetermined，只有有明确语义的 body 才标记为 drift。
-func isCapabilityDriftResponse(status int, summary string) bool {
+func isEndpointDriftResponse(status int, summary string) bool {
 	if status < http.StatusBadRequest {
 		return false
 	}
@@ -313,8 +313,8 @@ func printResult(r Result) {
 }
 
 func printResultTo(w io.Writer, r Result) {
-	fmt.Fprintf(w, "provider=%s protocol=%s capability=%s model=%s path=%s stream=%t status=%d duration_ms=%d conclusion=%s\n",
-		r.Provider, r.Protocol, r.Capability, r.Model, r.UpstreamPath, r.Stream, r.Status, r.DurationMS, r.Conclusion)
+	fmt.Fprintf(w, "provider=%s protocol=%s endpoint=%s model=%s path=%s stream=%t status=%d duration_ms=%d conclusion=%s\n",
+		r.Provider, r.Protocol, r.Endpoint, r.Model, r.UpstreamPath, r.Stream, r.Status, r.DurationMS, r.Conclusion)
 	if r.Summary != "" {
 		fmt.Fprintf(w, "summary=%s\n", r.Summary)
 	}

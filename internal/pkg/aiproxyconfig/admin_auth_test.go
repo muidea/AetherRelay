@@ -15,13 +15,12 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: test-key
-    endpoint_capabilities: chat_completions
+    endpoints: chat_completions
     models: gpt-*
 model_catalog:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
-    operations: chat_completions
 `
 }
 

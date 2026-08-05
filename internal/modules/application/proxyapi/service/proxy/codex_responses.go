@@ -140,7 +140,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	if codexFailure != nil && codexFailure.HTTPStatus > 0 {
 		message += fmt.Sprintf(" (upstream HTTP %d)", codexFailure.HTTPStatus)
 	}
-	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), Operation: OperationForPath(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID})
+	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID})
 }
 
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {

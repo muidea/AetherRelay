@@ -195,17 +195,15 @@ type ModelInfo struct {
 	ID                  string
 	ContextWindowTokens int
 	MaxOutputTokens     int
-	Operations          []string
 	RouteOwner          string
 	RouteOwners         []string
 }
 
 // ResolvedModelRoute 是启动期只读模型路由 authority 的请求侧视图。
-// 回答“这个具体模型属于谁、具备哪些业务 operation”,供 /v1/models 与请求路由共同消费。
+// 回答“这个具体模型有哪些有序 Provider 候选”,供 /v1/models 与请求路由共同消费。
 // 与 ModelInfo 同源:LookupResolvedModelRoute 从 ModelCatalog 投影,不单独持有第二份状态。
 type ResolvedModelRoute struct {
 	ModelID     string
-	Operations  []string
 	RouteOwner  string
 	RouteOwners []string
 }
@@ -260,9 +258,9 @@ type Provider struct {
 	// fallbackConfigured distinguishes omitted YAML from false. It is private so
 	// only configuration loading owns defaulting.
 	fallbackConfigured bool
-	// EndpointCapabilities 为 provider 显式声明的直通端点能力(非 protocol 推断)。
-	// 取值: chat_completions / messages / responses / completions / embeddings。
-	EndpointCapabilities []string
+	// Endpoints 为 provider 显式声明的直通端点(非 protocol 推断)。
+	// 取值: chat_completions / messages / responses / completions / embeddings / images。
+	Endpoints []string
 	// AllowUnauthenticated 仅允许受信 loopback 上游在无 API Key 时启动。
 	// 远程 base_url 即使设置 true 也必须 fail-fast。
 	AllowUnauthenticated bool
@@ -788,12 +786,12 @@ func setProvider(cfg *Config, name, key, value string) error {
 		provider.fallbackConfigured = true
 	case "fallbacks", "fallback_providers":
 		return fmt.Errorf("providers.%s: use priority and fallback instead of %q", name, key)
-	case "endpoint_capabilities", "endpoint_capability":
-		caps, err := parseEndpointCapabilities(value)
+	case "endpoints", "endpoint":
+		endpoints, err := parseProviderEndpoints(value)
 		if err != nil {
-			return fmt.Errorf("providers.%s.endpoint_capabilities: %w", name, err)
+			return fmt.Errorf("providers.%s.endpoints: %w", name, err)
 		}
-		provider.EndpointCapabilities = caps
+		provider.Endpoints = endpoints
 	case "allow_unauthenticated":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -852,12 +850,6 @@ func setModelInfo(cfg *Config, id, key, value string) error {
 			return fmt.Errorf("model_catalog.%s.%s: %w", id, key, err)
 		}
 		info.MaxOutputTokens = n
-	case "operations", "operation":
-		ops, err := parseModelOperations(value)
-		if err != nil {
-			return fmt.Errorf("model_catalog.%s.%s: %w", id, key, err)
-		}
-		info.Operations = ops
 	default:
 		return fmt.Errorf("model_catalog.%s: unknown key %q", id, key)
 	}
@@ -1121,11 +1113,11 @@ func normalize(cfg *Config, configPath string) error {
 		}
 		// models 严格区分大小写,与请求 body.model 原文匹配。
 		provider.Models = normalizeModelPatterns(provider.Models)
-		caps, err := normalizeEndpointCapabilities(provider.EndpointCapabilities)
+		endpoints, err := normalizeProviderEndpoints(provider.Endpoints)
 		if err != nil {
-			return fmt.Errorf("provider %q endpoint_capabilities: %w", key, err)
+			return fmt.Errorf("provider %q endpoints: %w", key, err)
 		}
-		provider.EndpointCapabilities = caps
+		provider.Endpoints = endpoints
 		normalized[key] = provider
 	}
 	cfg.Providers = normalized
@@ -1152,14 +1144,6 @@ func normalize(cfg *Config, configPath string) error {
 		if info.MaxOutputTokens < 0 {
 			info.MaxOutputTokens = 0
 		}
-		ops, err := normalizeModelOperations(info.Operations)
-		if err != nil {
-			return fmt.Errorf("model_catalog.%s.operations: %w", id, err)
-		}
-		if len(ops) == 0 {
-			return fmt.Errorf("model_catalog.%s.operations: at least one of chat_completions, embeddings, image_generations is required", id)
-		}
-		info.Operations = ops
 		// model ID 严格区分大小写:DeepSeek-V4-Flash 与 deepseek-v4-flash 是两个不同模型。
 		// 仅 exact id 唯一;不做 case-fold 去重。
 		if prev, ok := catalog[id]; ok {
@@ -1313,10 +1297,10 @@ func validateProviders(cfg Config) error {
 		if len(provider.Models) == 0 {
 			return fmt.Errorf("provider %q models is required (explicit; not inferred from provider name or protocol)", name)
 		}
-		if len(provider.EndpointCapabilities) == 0 {
-			return fmt.Errorf("provider %q endpoint_capabilities is required (explicit; not inferred from protocol)", name)
+		if len(provider.Endpoints) == 0 {
+			return fmt.Errorf("provider %q endpoints is required (explicit; not inferred from protocol)", name)
 		}
-		if err := validateProtocolEndpointCaps(provider.Protocol, provider.EndpointCapabilities); err != nil {
+		if err := validateProtocolEndpoints(provider.Protocol, provider.Endpoints); err != nil {
 			return fmt.Errorf("provider %q: %w", name, err)
 		}
 	}
@@ -1621,62 +1605,6 @@ func normalizeCSVList(values []string, foldCase bool) []string {
 	return normalized
 }
 
-// 允许的 model_catalog.operations 取值(与 WorkOrch LLMOperation 对齐)。
-const (
-	ModelOperationChatCompletions  = "chat_completions"
-	ModelOperationEmbeddings       = "embeddings"
-	ModelOperationImageGenerations = "image_generations"
-)
-
-// parseModelOperations 解析 model_catalog.operations(逗号分隔或单值),保留已知枚举大小写折叠后的规范名。
-func parseModelOperations(value string) ([]string, error) {
-	raw := parseCSVList(value, true)
-	return normalizeModelOperations(raw)
-}
-
-// normalizeModelOperations 去重并稳定排序;仅允许 chat_completions / embeddings。
-func normalizeModelOperations(values []string) ([]string, error) {
-	if len(values) == 0 {
-		return nil, nil
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		op := strings.ToLower(strings.TrimSpace(value))
-		if op == "" {
-			continue
-		}
-		switch op {
-		case ModelOperationChatCompletions, ModelOperationEmbeddings, ModelOperationImageGenerations:
-		default:
-			return nil, fmt.Errorf("unknown operation %q (allowed: chat_completions, embeddings, image_generations)", value)
-		}
-		if _, ok := seen[op]; ok {
-			continue
-		}
-		seen[op] = struct{}{}
-		out = append(out, op)
-	}
-	// 稳定顺序:chat_completions、embeddings、image_generations。
-	sort.SliceStable(out, func(i, j int) bool {
-		return operationRank(out[i]) < operationRank(out[j])
-	})
-	return out, nil
-}
-
-func operationRank(op string) int {
-	switch op {
-	case ModelOperationChatCompletions:
-		return 0
-	case ModelOperationEmbeddings:
-		return 1
-	case ModelOperationImageGenerations:
-		return 2
-	default:
-		return 100
-	}
-}
-
 func validateModelCatalogID(id string) error {
 	if id == "" {
 		return fmt.Errorf("id is empty")
@@ -1693,8 +1621,8 @@ func validateModelCatalogID(id string) error {
 }
 
 // validateModelRoutes resolves every enabled matching provider into an ordered
-// candidate set. A catalog operation must be serviceable by at least one
-// candidate; a single model is no longer forced to one provider.
+// candidate set. Endpoint compatibility is evaluated per request by the shared
+// transport matrix; model_catalog carries no endpoint policy.
 func validateModelRoutes(cfg Config) error {
 	// mutate via reassignment of map values
 	// caller holds cfg by value but map is reference — safe to update entries.
@@ -1711,47 +1639,8 @@ func validateModelRoutes(cfg Config) error {
 		}
 		sortProviderCandidates(cfg.Providers, matches)
 		info.RouteOwners = append([]string(nil), matches...)
-		info.RouteOwner = ""
-		for _, op := range info.Operations {
-			path := OperationToPrimaryInboundPath(op)
-			found := false
-			for _, name := range matches {
-				provider := cfg.Providers[name]
-				if !ProviderSupportsInboundPath(provider, path) {
-					continue
-				}
-				found = true
-				if info.RouteOwner == "" {
-					info.RouteOwner = name
-				}
-				break
-			}
-			if !found {
-				return fmt.Errorf("model_catalog.%s: operation %q is not serviceable by any matching provider", id, op)
-			}
-		}
-		if info.RouteOwner == "" {
-			return fmt.Errorf("model_catalog.%s: no route candidate supports declared operations", id)
-		}
+		info.RouteOwner = matches[0]
 		cfg.ModelCatalog[id] = info
-	}
-	return nil
-}
-
-// validateModelOperationsAgainstProvider 保证每个 operation 的 canonical path 可被 provider 服务。
-// chat_completions → /v1/chat/completions; embeddings → /v1/embeddings;
-// image_generations → /v1/images/generations.
-// 校验依据与请求期 TransportPlan 矩阵一致:protocol × direct endpoint capability × 已实现 conversion。
-func validateModelOperationsAgainstProvider(modelID string, operations []string, provider Provider) error {
-	for _, op := range operations {
-		path := OperationToPrimaryInboundPath(op)
-		if path == "" {
-			return fmt.Errorf("model_catalog.%s: unknown operation %q", modelID, op)
-		}
-		// ProviderSupportsInboundPath 编码了 canonical TransportPlan readiness。
-		if !ProviderSupportsInboundPath(provider, path) {
-			return fmt.Errorf("model_catalog.%s: operation %q requires route owner to support inbound path %q (check endpoint_capabilities)", modelID, op, path)
-		}
 	}
 	return nil
 }
@@ -1863,154 +1752,175 @@ func MatchModelPattern(model, pattern string) bool {
 	}
 }
 
-// 允许的 provider.endpoint_capabilities 枚举。
+// Provider endpoint identifiers describe native upstream HTTP surfaces.
 const (
-	EndpointCapabilityChatCompletions = "chat_completions"
-	EndpointCapabilityMessages        = "messages"
-	EndpointCapabilityResponses       = "responses"
-	EndpointCapabilityCompletions     = "completions"
-	EndpointCapabilityEmbeddings      = "embeddings"
-	EndpointCapabilityImages          = "images"
+	ProviderEndpointChatCompletions = "chat_completions"
+	ProviderEndpointMessages        = "messages"
+	ProviderEndpointResponses       = "responses"
+	ProviderEndpointCompletions     = "completions"
+	ProviderEndpointEmbeddings      = "embeddings"
+	ProviderEndpointImages          = "images"
 )
 
-func parseEndpointCapabilities(value string) ([]string, error) {
+func parseProviderEndpoints(value string) ([]string, error) {
 	raw := parseCSVList(value, true)
-	return normalizeEndpointCapabilities(raw)
+	return normalizeProviderEndpoints(raw)
 }
 
-func normalizeEndpointCapabilities(values []string) ([]string, error) {
+func normalizeProviderEndpoints(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		capName := strings.ToLower(strings.TrimSpace(value))
-		if capName == "" {
+		endpoint := strings.ToLower(strings.TrimSpace(value))
+		if endpoint == "" {
 			continue
 		}
-		switch capName {
-		case EndpointCapabilityChatCompletions, EndpointCapabilityMessages, EndpointCapabilityResponses,
-			EndpointCapabilityCompletions, EndpointCapabilityEmbeddings, EndpointCapabilityImages:
+		switch endpoint {
+		case ProviderEndpointChatCompletions, ProviderEndpointMessages, ProviderEndpointResponses,
+			ProviderEndpointCompletions, ProviderEndpointEmbeddings, ProviderEndpointImages:
 		default:
-			return nil, fmt.Errorf("unknown endpoint capability %q", value)
+			return nil, fmt.Errorf("unknown endpoint %q", value)
 		}
-		if _, ok := seen[capName]; ok {
+		if _, ok := seen[endpoint]; ok {
 			continue
 		}
-		seen[capName] = struct{}{}
-		out = append(out, capName)
+		seen[endpoint] = struct{}{}
+		out = append(out, endpoint)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return endpointCapabilityRank(out[i]) < endpointCapabilityRank(out[j])
+		return providerEndpointRank(out[i]) < providerEndpointRank(out[j])
 	})
 	return out, nil
 }
 
-func endpointCapabilityRank(capName string) int {
-	switch capName {
-	case EndpointCapabilityChatCompletions:
+func providerEndpointRank(endpoint string) int {
+	switch endpoint {
+	case ProviderEndpointChatCompletions:
 		return 0
-	case EndpointCapabilityMessages:
+	case ProviderEndpointMessages:
 		return 1
-	case EndpointCapabilityResponses:
+	case ProviderEndpointResponses:
 		return 2
-	case EndpointCapabilityCompletions:
+	case ProviderEndpointCompletions:
 		return 3
-	case EndpointCapabilityEmbeddings:
+	case ProviderEndpointEmbeddings:
 		return 4
-	case EndpointCapabilityImages:
+	case ProviderEndpointImages:
 		return 5
 	default:
 		return 100
 	}
 }
 
-func validateProtocolEndpointCaps(protocol string, caps []string) error {
-	for _, capName := range caps {
+func validateProtocolEndpoints(protocol string, endpoints []string) error {
+	for _, endpoint := range endpoints {
 		switch protocol {
 		case "openai":
-			switch capName {
-			case EndpointCapabilityChatCompletions, EndpointCapabilityResponses, EndpointCapabilityCompletions, EndpointCapabilityEmbeddings, EndpointCapabilityImages:
-			case EndpointCapabilityMessages:
-				return fmt.Errorf("endpoint_capabilities messages is invalid for openai protocol (use chat_completions; conversion serves /v1/messages)")
+			switch endpoint {
+			case ProviderEndpointChatCompletions, ProviderEndpointResponses, ProviderEndpointCompletions, ProviderEndpointEmbeddings, ProviderEndpointImages:
+			case ProviderEndpointMessages:
+				return fmt.Errorf("endpoint messages is invalid for openai protocol (use chat_completions; conversion serves /v1/messages)")
 			default:
-				return fmt.Errorf("unknown endpoint capability %q", capName)
+				return fmt.Errorf("unknown endpoint %q", endpoint)
 			}
 		case "anthropic":
-			switch capName {
-			case EndpointCapabilityMessages:
-			case EndpointCapabilityChatCompletions, EndpointCapabilityResponses, EndpointCapabilityCompletions, EndpointCapabilityEmbeddings, EndpointCapabilityImages:
-				return fmt.Errorf("endpoint_capabilities %q is invalid for anthropic protocol (use messages; conversion may serve /v1/chat/completions)", capName)
+			switch endpoint {
+			case ProviderEndpointMessages:
+			case ProviderEndpointChatCompletions, ProviderEndpointResponses, ProviderEndpointCompletions, ProviderEndpointEmbeddings, ProviderEndpointImages:
+				return fmt.Errorf("endpoint %q is invalid for anthropic protocol (use messages; conversion may serve /v1/chat/completions)", endpoint)
 			default:
-				return fmt.Errorf("unknown endpoint capability %q", capName)
+				return fmt.Errorf("unknown endpoint %q", endpoint)
 			}
 		case "chatgptweb":
-			if capName != EndpointCapabilityChatCompletions && capName != EndpointCapabilityResponses && capName != EndpointCapabilityImages {
-				return fmt.Errorf("endpoint_capabilities %q is invalid for chatgptweb protocol", capName)
+			if endpoint != ProviderEndpointChatCompletions && endpoint != ProviderEndpointResponses && endpoint != ProviderEndpointImages {
+				return fmt.Errorf("endpoint %q is invalid for chatgptweb protocol", endpoint)
 			}
 		}
 	}
 	return nil
 }
 
-// ProviderHasDirectEndpoint 判断 provider 是否显式声明了上游直连 endpoint capability。
+// ProviderHasDirectEndpoint 判断 provider 是否显式声明了上游原生 endpoint。
 // 只检查配置声明,不包含协议转换派生的客户端可服务 path。
-func ProviderHasDirectEndpoint(provider Provider, capability string) bool {
-	capability = strings.TrimSpace(capability)
-	for _, item := range provider.EndpointCapabilities {
-		if item == capability {
+func ProviderHasDirectEndpoint(provider Provider, endpoint string) bool {
+	endpoint = strings.TrimSpace(endpoint)
+	for _, item := range provider.Endpoints {
+		if item == endpoint {
 			return true
 		}
 	}
 	return false
 }
 
-// ProviderHasEndpointCapability 是 ProviderHasDirectEndpoint 的历史别名。
-// 新代码应使用 ProviderHasDirectEndpoint,以区分 direct endpoint 与 conversion 可服务 path。
-func ProviderHasEndpointCapability(provider Provider, capability string) bool {
-	return ProviderHasDirectEndpoint(provider, capability)
+// ProviderTransport is the single protocol/endpoint routing contract shared by
+// startup validation and request-time TransportPlan construction.
+type ProviderTransport struct {
+	UpstreamEndpoint string
+	Mode             string
 }
 
-// ProviderSupportsInboundPath 根据固定转发矩阵判断 RouteOwner 是否可服务某入站 path。
-// 内部只组合:upstream protocol × direct endpoint capability × 已实现转换。
-// 不得仅因 protocol=openai 假定支持全部 OpenAI path。
-// 注意:这是“可服务入站 path”(含 conversion),不是 direct endpoint capability。
-func ProviderSupportsInboundPath(provider Provider, path string) bool {
+// ResolveProviderTransport combines inbound path, upstream protocol and the
+// provider's explicitly declared native endpoints. Matrix entries not listed
+// here are unsupported; callers must not infer endpoints from protocol alone.
+func ResolveProviderTransport(provider Provider, path string) (ProviderTransport, bool) {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
 	switch path {
 	case "/v1/chat/completions":
-		// openai 直通 chat_completions; anthropic 声明 messages 后可通过 conversion 服务。
-		if provider.Protocol == "openai" {
-			return ProviderHasDirectEndpoint(provider, EndpointCapabilityChatCompletions)
+		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
+			return ProviderTransport{UpstreamEndpoint: "chatgptweb", Mode: "native"}, true
 		}
-		if provider.Protocol == "anthropic" {
-			return ProviderHasDirectEndpoint(provider, EndpointCapabilityMessages)
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "native"}, true
 		}
-		if provider.Protocol == "chatgptweb" {
-			return ProviderHasDirectEndpoint(provider, EndpointCapabilityChatCompletions)
+		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "openai_to_anthropic"}, true
 		}
 	case "/v1/messages":
-		// anthropic 直通 messages; openai 声明 chat_completions 后可通过 conversion 服务。
-		if provider.Protocol == "anthropic" {
-			return ProviderHasDirectEndpoint(provider, EndpointCapabilityMessages)
+		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "native"}, true
 		}
-		if provider.Protocol == "openai" {
-			return ProviderHasDirectEndpoint(provider, EndpointCapabilityChatCompletions)
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"}, true
 		}
 	case "/v1/responses":
-		return (provider.Protocol == "openai" || provider.Protocol == "chatgptweb" || provider.Protocol == "codexoauth") && ProviderHasDirectEndpoint(provider, EndpointCapabilityResponses)
-	case "/v1/completions":
-		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityCompletions)
-	case "/v1/embeddings":
-		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityEmbeddings)
-	case "/v1/images/generations", "/v1/images/edits":
-		if provider.Protocol == "chatgptweb" {
-			return ProviderHasDirectEndpoint(provider, EndpointCapabilityImages)
+		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
+			return ProviderTransport{UpstreamEndpoint: "chatgptweb_responses", Mode: "chatgptweb_responses"}, true
 		}
-		return provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, EndpointCapabilityImages)
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/responses", Mode: "native"}, true
+		}
+		if provider.Protocol == "codexoauth" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
+			return ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "codex_oauth_responses"}, true
+		}
+	case "/v1/search":
+		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
+			return ProviderTransport{UpstreamEndpoint: "chatgptweb_search", Mode: "native"}, true
+		}
+	case "/v1/completions":
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointCompletions) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/completions", Mode: "native"}, true
+		}
+	case "/v1/embeddings":
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointEmbeddings) {
+			return ProviderTransport{UpstreamEndpoint: "/v1/embeddings", Mode: "native"}, true
+		}
+	case "/v1/images/generations", "/v1/images/edits":
+		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointImages) {
+			return ProviderTransport{UpstreamEndpoint: "chatgptweb_images", Mode: "native"}, true
+		}
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointImages) {
+			return ProviderTransport{UpstreamEndpoint: path, Mode: "native"}, true
+		}
 	}
-	return false
+	return ProviderTransport{}, false
+}
+
+func ProviderSupportsInboundPath(provider Provider, path string) bool {
+	_, ok := ResolveProviderTransport(provider, path)
+	return ok
 }
 
 // ServiceableInboundPaths 返回 provider 当前可服务的入站 path 列表(稳定排序)。
@@ -2042,20 +1952,6 @@ func providersShareServiceablePath(a, b Provider) bool {
 	return false
 }
 
-// OperationToPrimaryInboundPath 返回 operation 的主入站 path(用于 capability 校验辅助)。
-func OperationToPrimaryInboundPath(operation string) string {
-	switch strings.TrimSpace(operation) {
-	case ModelOperationChatCompletions:
-		return "/v1/chat/completions"
-	case ModelOperationEmbeddings:
-		return "/v1/embeddings"
-	case ModelOperationImageGenerations:
-		return "/v1/images/generations"
-	default:
-		return ""
-	}
-}
-
 // LookupModel 按 exact id 查找 catalog 条目。
 func LookupModel(cfg Config, modelID string) (ModelInfo, bool) {
 	modelID = strings.TrimSpace(modelID)
@@ -2075,26 +1971,9 @@ func LookupResolvedModelRoute(cfg Config, modelID string) (ResolvedModelRoute, b
 	}
 	return ResolvedModelRoute{
 		ModelID:     info.ID,
-		Operations:  append([]string(nil), info.Operations...),
 		RouteOwner:  info.RouteOwner,
 		RouteOwners: append([]string(nil), info.RouteOwners...),
 	}, true
-}
-
-// ModelSupportsOperation 判断 catalog 模型是否声明了 operation。
-func ModelSupportsOperation(info ModelInfo, operation string) bool {
-	operation = strings.TrimSpace(operation)
-	for _, op := range info.Operations {
-		if op == operation {
-			return true
-		}
-	}
-	return false
-}
-
-// ResolvedModelSupportsOperation 判断 ResolvedModelRoute 是否声明了 operation。
-func ResolvedModelSupportsOperation(route ResolvedModelRoute, operation string) bool {
-	return ModelSupportsOperation(ModelInfo{Operations: route.Operations}, operation)
 }
 
 // CatalogModelsSorted 返回 catalog 模型列表;排序键为 case-fold 仅用于稳定展示,不改变 exact id 语义。

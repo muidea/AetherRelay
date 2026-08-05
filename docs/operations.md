@@ -145,7 +145,7 @@ Prometheus 指标均以 `ai_proxy_` 为前缀：
 | `idle_timeout` | SSE 空闲超时。 |
 | `limit_exceeded` | 本地体或流限制。 |
 | `upstream_truncated`、`upstream_failed` | 上游中断或显式失败。 |
-| `capability_drift` | Provider 声明的直连端点或模型能力与上游响应不一致。 |
+| `endpoint_drift` | Provider 声明的直连端点或模型能力与上游响应不一致。 |
 | `incomplete` | 上游未完成。 |
 | `client_write`、`protocol`、`conversion`、`error` | 客户端写入、协议、转换或其它错误。 |
 
@@ -182,14 +182,14 @@ go run ./cmd/ai-proxy-usage-import \
 
 ## Provider live probe
 
-Probe 不会在服务启动时运行，可用于验证某个已配置 Provider 的 direct capability：
+Probe 不会在服务启动时运行，可用于验证某个已配置 Provider 的 direct endpoint：
 
 ```bash
 go run ./cmd/ai-proxy-probe -config config.yaml \
-  -provider <route-owner> -capability chat_completions -model <exact-model-id>
+  -provider <route-owner> -endpoint chat_completions -model <exact-model-id>
 ```
 
-输出会脱敏，结论为 `success`、`credential_issue`、`capability_drift` 或 `environment_undetermined`。带日期的现场审计仅保留当时证据，不能替代对当前配置的重新探测。
+输出会脱敏，结论为 `success`、`credential_issue`、`endpoint_drift` 或 `environment_undetermined`。带日期的现场审计仅保留当时证据，不能替代对当前配置的重新探测。
 
 Admin 的 Provider 页面还会显示配置启用状态之外的运行期可用性，并提供“检查”按钮。该按钮只对当前
 Provider 执行一次最小非流式探测，记录结果但不会改写配置。状态含义如下：
@@ -202,7 +202,7 @@ Provider 执行一次最小非流式探测，记录结果但不会改写配置�
 | `degraded` | 存在失败，但连续失败少于三次。 |
 | `unavailable` | 连续失败至少三次。 |
 | `credential_error` | 最近失败为 401 或 403。 |
-| `capability_drift` | 最近探测表明端点或模型能力与上游不一致。 |
+| `endpoint_drift` | 最近探测表明端点或模型能力与上游不一致。 |
 
 Provider 表的“来源”仅为展示分类：运行时内建 Provider 显示 `builtin`，官方 Base URL 显示 `official`，其余显示 `third_party`。该值不写入 YAML，也不参与路由或安全判断。
 

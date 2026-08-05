@@ -21,16 +21,15 @@ type ModelsListResponse struct {
 
 // ModelRecord 是 catalog 中单个模型的稳定输出。
 type ModelRecord struct {
-	ID                  string   `json:"id"`
-	Object              string   `json:"object"`
-	Operations          []string `json:"operations"`
-	ContextWindowTokens int      `json:"contextWindowTokens,omitempty"`
-	MaxOutputTokens     int      `json:"maxOutputTokens,omitempty"`
+	ID                  string `json:"id"`
+	Object              string `json:"object"`
+	ContextWindowTokens int    `json:"contextWindowTokens,omitempty"`
+	MaxOutputTokens     int    `json:"maxOutputTokens,omitempty"`
 }
 
 // handleModels returns the effective catalog (static model_catalog plus
 // auto-discovered ChatGPT Web models) as an OpenAI-compatible model list.
-// 不转发上游;字段 contextWindowTokens / maxOutputTokens / operations 为扩展元数据。
+// 不转发上游;字段 contextWindowTokens / maxOutputTokens 为扩展元数据。
 // RouteOwner 仅用于内部路由、归档与观测，不作为客户端发现接口的一部分。
 func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID string) {
 	start := time.Now()
@@ -51,7 +50,6 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 				Message:        err.Error(),
 				ClientProtocol: clientProtocolFromRequest(r),
 				ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
-				Operation:      OperationForPath(r.URL.Path),
 			})
 			return
 		}
@@ -93,16 +91,9 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 		if !ok {
 			continue
 		}
-		operations := route.Operations
-		if operations == nil {
-			operations = []string{}
-		} else {
-			operations = append([]string(nil), operations...)
-		}
 		rec := ModelRecord{
-			ID:         route.ModelID,
-			Object:     "model",
-			Operations: operations,
+			ID:     route.ModelID,
+			Object: "model",
 		}
 		// Auto-discovered models omit capacity when unknown; static catalog keeps
 		// its required capacity fields when present.

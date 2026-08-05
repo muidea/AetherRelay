@@ -19,22 +19,22 @@ const (
 	TopicCancelText    = "aiproxy.chatgpt.webupstream.command.cancel_text"
 )
 
-// ModelOperation is the restricted set of operations the upstream models
+// ModelCapability is the restricted set of capabilities the upstream models
 // enumeration may project into the effective catalog.
-type ModelOperation string
+type ModelCapability string
 
 const (
-	ModelOperationChatCompletions  ModelOperation = "chat_completions"
-	ModelOperationImageGenerations ModelOperation = "image_generations"
+	ModelCapabilityTextGeneration  ModelCapability = "text_generation"
+	ModelCapabilityImageGeneration ModelCapability = "image_generation"
 )
 
 // ModelDescriptor is a constrained projection of an upstream model entry.
 // Unknown upstream fields never enter this contract.
 type ModelDescriptor struct {
-	ID         string
-	Operations []ModelOperation
-	CreatedAt  int64
-	OwnedBy    string
+	ID           string
+	Capabilities []ModelCapability
+	CreatedAt    int64
+	OwnedBy      string
 }
 
 type ListModelsCommand struct {

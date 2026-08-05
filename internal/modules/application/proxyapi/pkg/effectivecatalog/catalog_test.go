@@ -21,13 +21,12 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:8081
     allow_unauthenticated: true
-    endpoint_capabilities: chat_completions
+    endpoints: chat_completions
     models: static-model
 model_catalog:
   static-model:
     context_window_tokens: 8192
     max_output_tokens: 1024
-    operations: chat_completions
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -36,11 +35,11 @@ model_catalog:
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := Build(cfg, 1, 1, []PoolModel{{ID: "gpt-5", Operations: []string{config.ModelOperationChatCompletions}}}, "2026-08-03T00:00:00Z")
+	snap := Build(cfg, 1, 1, []PoolModel{{ID: "gpt-5"}}, "2026-08-03T00:00:00Z")
 	if snap.BuiltinProvider.Enabled || snap.BuiltinProvider.Status != StatusDisabled {
 		t.Fatalf("builtin provider=%+v", snap.BuiltinProvider)
 	}
-	if candidates := snap.CandidatesFor("gpt-5", config.ModelOperationChatCompletions); len(candidates) != 0 {
+	if candidates := snap.CandidatesFor("gpt-5"); len(candidates) != 0 {
 		t.Fatalf("disabled builtin candidates=%+v", candidates)
 	}
 }
@@ -58,13 +57,12 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:8081
     allow_unauthenticated: true
-    endpoint_capabilities: chat_completions
+    endpoints: chat_completions
     models: gpt-5.3-codex
 model_catalog:
   gpt-5.3-codex:
     context_window_tokens: 8192
     max_output_tokens: 1024
-    operations: chat_completions
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -74,7 +72,7 @@ model_catalog:
 		t.Fatal(err)
 	}
 	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 1, AvailableAccounts: 1, Models: []PoolModel{{ID: "gpt-5.3-codex"}}})
-	candidates := snap.CandidatesFor("gpt-5.3-codex", config.ModelOperationChatCompletions)
+	candidates := snap.CandidatesFor("gpt-5.3-codex")
 	if len(candidates) != 2 || candidates[0].RouteOwner != CodexOAuthProviderID || candidates[0].Priority != 240 {
 		t.Fatalf("candidates=%+v", candidates)
 	}
@@ -85,18 +83,18 @@ func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
 		ModelCatalog: map[string]config.ModelInfo{
 			"gpt-4o": {
-				ID: "gpt-4o", RouteOwner: "openai", Operations: []string{"chat_completions"},
+				ID: "gpt-4o", RouteOwner: "openai",
 				ContextWindowTokens: 128000, MaxOutputTokens: 16384,
 			},
 		},
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", Disabled: false, EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", Disabled: false, Endpoints: []string{config.ProviderEndpointChatCompletions}},
 		},
 	}
 	snap := Build(cfg, 3, 2, []PoolModel{
-		{ID: "gpt-4o", Operations: []string{"chat_completions", "image_generations"}},
-		{ID: "gpt-5", Operations: []string{"chat_completions"}},
-		{ID: "gpt-image-2", Operations: []string{"chat_completions", "image_generations"}},
+		{ID: "gpt-4o"},
+		{ID: "gpt-5"},
+		{ID: "gpt-image-2"},
 	}, "2026-07-26T00:00:00Z")
 
 	if snap.BuiltinProvider.Status != StatusReady {
@@ -112,7 +110,7 @@ func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 	if !ok || route.Builtin || route.RouteOwner != "openai" {
 		t.Fatalf("static route=%+v ok=%v", route, ok)
 	}
-	candidates := snap.CandidatesFor("gpt-4o", config.ModelOperationChatCompletions)
+	candidates := snap.CandidatesFor("gpt-4o")
 	if len(candidates) != 2 || candidates[0].RouteOwner != "openai" || candidates[1].RouteOwner != BuiltinProviderID {
 		t.Fatalf("gpt-4o candidates=%+v", candidates)
 	}
@@ -131,11 +129,11 @@ func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 
 func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T) {
 	initial := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 4, 1, []PoolModel{{
-		ID: "gpt-5", Operations: []string{"chat_completions"},
+		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z")
 	updated := Reconfigure(config.Config{
 		ChatGPTWeb:   config.ChatGPTWebConfig{Enabled: true},
-		ModelCatalog: map[string]config.ModelInfo{"gpt-5": {ID: "gpt-5", RouteOwner: "openai", Operations: []string{"chat_completions"}}},
+		ModelCatalog: map[string]config.ModelInfo{"gpt-5": {ID: "gpt-5", RouteOwner: "openai"}},
 	}, initial)
 	if route, ok := updated.Lookup("gpt-5"); !ok || route.Builtin || route.RouteOwner != "openai" {
 		t.Fatalf("static route after reconfigure=%+v ok=%v", route, ok)
@@ -143,7 +141,7 @@ func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T)
 	if updated.BuiltinProvider.ConflictCount != 1 || updated.BuiltinProvider.ModelCount != 1 {
 		t.Fatalf("reconfigured provider=%+v", updated.BuiltinProvider)
 	}
-	candidates := updated.CandidatesFor("gpt-5", config.ModelOperationChatCompletions)
+	candidates := updated.CandidatesFor("gpt-5")
 	if len(candidates) != 2 || candidates[0].RouteOwner != "openai" || candidates[1].RouteOwner != BuiltinProviderID {
 		t.Fatalf("reconfigured candidates=%+v", candidates)
 	}
@@ -162,15 +160,15 @@ func TestBuildDisabledAndEmptyStates(t *testing.T) {
 	if discovering.BuiltinProvider.Status != StatusDiscovering {
 		t.Fatalf("discovering status=%s", discovering.BuiltinProvider.Status)
 	}
-	emptyWithStaleModel := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 3, 0, []PoolModel{{ID: "stale", Operations: []string{config.ModelOperationChatCompletions}}}, "")
-	if _, ok := emptyWithStaleModel.Lookup("stale"); ok || len(emptyWithStaleModel.CandidatesFor("stale", config.ModelOperationChatCompletions)) != 0 {
+	emptyWithStaleModel := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}, 3, 0, []PoolModel{{ID: "stale"}}, "")
+	if _, ok := emptyWithStaleModel.Lookup("stale"); ok || len(emptyWithStaleModel.CandidatesFor("stale")) != 0 {
 		t.Fatalf("unavailable account-pool models must not be routable: %+v", emptyWithStaleModel)
 	}
 }
 
-func TestBuiltinProviderViewCapabilities(t *testing.T) {
+func TestBuiltinProviderViewEndpoints(t *testing.T) {
 	provider := BuiltinProviderView()
-	if provider.Protocol != BuiltinProviderID || len(provider.EndpointCapabilities) != 3 {
+	if provider.Protocol != BuiltinProviderID || len(provider.Endpoints) != 3 {
 		t.Fatalf("provider=%+v", provider)
 	}
 }
@@ -179,7 +177,7 @@ func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) 
 	cfg := config.Config{
 		CodexOAuth: config.CodexOAuthConfig{Enabled: true},
 		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-5.2": {ID: "gpt-5.2", RouteOwner: "static", Operations: []string{config.ModelOperationChatCompletions}},
+			"gpt-5.2": {ID: "gpt-5.2", RouteOwner: "static"},
 		},
 	}
 	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{Version: 1, AvailableAccounts: 1, Models: []PoolModel{{ID: "gpt-5.2"}, {ID: "gpt-5.2-codex"}}})
@@ -189,7 +187,7 @@ func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) 
 	if route, ok := snap.Lookup("gpt-5.2"); !ok || route.RouteOwner != "static" || route.Builtin {
 		t.Fatalf("static conflict route=%+v ok=%v", route, ok)
 	}
-	candidates := snap.CandidatesFor("gpt-5.2", config.ModelOperationChatCompletions)
+	candidates := snap.CandidatesFor("gpt-5.2")
 	if len(candidates) != 2 || candidates[0].RouteOwner != "static" || candidates[1].RouteOwner != CodexOAuthProviderID {
 		t.Fatalf("same-model candidates=%+v", candidates)
 	}
@@ -197,7 +195,7 @@ func TestBuildCodexOAuthUsesDiscoveredModelsAndStaticConflictRule(t *testing.T) 
 		t.Fatalf("Codex route=%+v ok=%v", route, ok)
 	}
 	provider := BuiltinProviderViewFor(CodexOAuthProviderID)
-	if provider.Protocol != CodexOAuthProviderID || len(provider.EndpointCapabilities) != 1 || provider.EndpointCapabilities[0] != config.EndpointCapabilityResponses {
+	if provider.Protocol != CodexOAuthProviderID || len(provider.Endpoints) != 1 || provider.Endpoints[0] != config.ProviderEndpointResponses {
 		t.Fatalf("Codex synthetic provider=%+v", provider)
 	}
 }

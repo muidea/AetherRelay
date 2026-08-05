@@ -61,7 +61,7 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 	}
 }
 
-func TestListProjectsLegacyAccountOperationsFields(t *testing.T) {
+func TestListProjectsLegacyAccountCapabilitiesFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	s := New(path, 1)
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
@@ -84,7 +84,7 @@ func TestListProjectsLegacyAccountOperationsFields(t *testing.T) {
 	}
 	item := items[0]
 	if item.CreatedAt == "" || item.RestoreAt == "" || item.ImageInflight != 1 || item.Success != 4 || item.Fail != 2 {
-		t.Fatalf("legacy account operations view=%+v", item)
+		t.Fatalf("legacy account capabilities view=%+v", item)
 	}
 }
 
@@ -415,8 +415,8 @@ func TestTextCooldownIsModelScopedAndExpires(t *testing.T) {
 		t.Fatalf("update found=%v err=%v", found, err)
 	}
 	if _, ok, err := s.PutModelSnapshot(account.ID, events.AccountModelSnapshot{AccountID: account.ID, Models: []events.AccountModelEntry{
-		{ID: "gpt-5", Operations: []string{events.ModelOperationChatCompletions}},
-		{ID: "gpt-4.1", Operations: []string{events.ModelOperationChatCompletions}},
+		{ID: "gpt-5", Capabilities: []string{events.ModelCapabilityTextGeneration}},
+		{ID: "gpt-4.1", Capabilities: []string{events.ModelCapabilityTextGeneration}},
 	}}); err != nil || !ok {
 		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
 	}
@@ -471,8 +471,8 @@ func TestImageCooldownIsModelScopedAndClearsOnSuccess(t *testing.T) {
 		t.Fatalf("update found=%v err=%v", found, err)
 	}
 	if _, ok, err := s.PutModelSnapshot(account.ID, events.AccountModelSnapshot{AccountID: account.ID, Models: []events.AccountModelEntry{
-		{ID: "gpt-image-2", Operations: []string{events.ModelOperationImageGenerations}},
-		{ID: "gpt-image-1", Operations: []string{events.ModelOperationImageGenerations}},
+		{ID: "gpt-image-2", Capabilities: []string{events.ModelCapabilityImageGeneration}},
+		{ID: "gpt-image-1", Capabilities: []string{events.ModelCapabilityImageGeneration}},
 	}}); err != nil || !ok {
 		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
 	}
@@ -487,10 +487,10 @@ func TestImageCooldownIsModelScopedAndClearsOnSuccess(t *testing.T) {
 	if cooldown.Model != "gpt-image-2" || cooldown.ErrorClass != "rate_limit" || cooldown.Until == "" {
 		t.Fatalf("image cooldown=%+v", cooldown)
 	}
-	if _, ok := s.AcquireImageToken("", "", nil, "gpt-image-2", events.ModelOperationImageGenerations); ok {
+	if _, ok := s.AcquireImageToken("", "", nil, "gpt-image-2", events.ModelCapabilityImageGeneration); ok {
 		t.Fatal("rate-limited image model must be in cooldown")
 	}
-	if acquired, ok := s.AcquireImageToken("", "", nil, "gpt-image-1", events.ModelOperationImageGenerations); !ok || acquired.ID != account.ID {
+	if acquired, ok := s.AcquireImageToken("", "", nil, "gpt-image-1", events.ModelCapabilityImageGeneration); !ok || acquired.ID != account.ID {
 		t.Fatalf("unaffected image model acquire=%+v ok=%v", acquired, ok)
 	} else {
 		s.ReleaseImageSlot(acquired.AccessToken)

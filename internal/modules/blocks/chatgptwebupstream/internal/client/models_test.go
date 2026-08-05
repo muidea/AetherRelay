@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestParseModelsResponseProjectsChatAndImageOperations(t *testing.T) {
+func TestParseModelsResponseProjectsChatAndImageCapabilities(t *testing.T) {
 	body := []byte(`{
   "models": [
     {
@@ -57,19 +57,19 @@ func TestParseModelsResponseProjectsChatAndImageOperations(t *testing.T) {
 	if len(byID) != 4 {
 		t.Fatalf("expected 4 projected models, got %d: %+v", len(byID), models)
 	}
-	if got := byID["gpt-5"]; got.ID == "" || !hasOp(got, ModelOperationChatCompletions) || hasOp(got, ModelOperationImageGenerations) || got.CreatedAt != 1710000000 || got.OwnedBy != "openai" {
+	if got := byID["gpt-5"]; got.ID == "" || !hasOp(got, ModelCapabilityTextGeneration) || hasOp(got, ModelCapabilityImageGeneration) || got.CreatedAt != 1710000000 || got.OwnedBy != "openai" {
 		t.Fatalf("gpt-5 projection=%+v", got)
 	}
-	if got := byID["gpt-image-2"]; !hasOp(got, ModelOperationChatCompletions) || !hasOp(got, ModelOperationImageGenerations) {
+	if got := byID["gpt-image-2"]; !hasOp(got, ModelCapabilityTextGeneration) || !hasOp(got, ModelCapabilityImageGeneration) {
 		t.Fatalf("gpt-image-2 should support chat+image, got %+v", got)
 	}
-	if got := byID["image-only-model"]; hasOp(got, ModelOperationChatCompletions) || !hasOp(got, ModelOperationImageGenerations) {
+	if got := byID["image-only-model"]; hasOp(got, ModelCapabilityTextGeneration) || !hasOp(got, ModelCapabilityImageGeneration) {
 		t.Fatalf("image-only-model projection=%+v", got)
 	}
 	if _, exists := byID["id-only-model"]; exists {
 		t.Fatal("id-only upstream entry must not be projected")
 	}
-	if got := byID["no-ops-unknown"]; !hasOp(got, ModelOperationChatCompletions) || hasOp(got, ModelOperationImageGenerations) {
+	if got := byID["no-ops-unknown"]; !hasOp(got, ModelCapabilityTextGeneration) || hasOp(got, ModelCapabilityImageGeneration) {
 		// listed by /backend-api/models with a slug => chat_completions only
 		t.Fatalf("no-ops-unknown projection=%+v", got)
 	}
@@ -92,8 +92,8 @@ func TestParseModelsResponseDedupsAndSorts(t *testing.T) {
 	}
 }
 
-func hasOp(model ModelDescriptor, op ModelOperation) bool {
-	for _, item := range model.Operations {
+func hasOp(model ModelDescriptor, op ModelCapability) bool {
+	for _, item := range model.Capabilities {
 		if item == op {
 			return true
 		}

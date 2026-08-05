@@ -94,11 +94,11 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"primary": {
 				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 200,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses},
+				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "primary"},
+			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "primary"},
 		},
 	})
 	store := usage.NewMemoryStore()
@@ -134,11 +134,11 @@ func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"backup": {
 				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 20,
-				EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions, config.EndpointCapabilityResponses},
+				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
 			},
 		},
 		ModelCatalog: map[string]config.ModelInfo{
-			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, Operations: []string{config.ModelOperationChatCompletions}, RouteOwner: "backup"},
+			"gpt-shared": {ID: "gpt-shared", ContextWindowTokens: 128000, MaxOutputTokens: 16384, RouteOwner: "backup"},
 		},
 	})
 	store := usage.NewMemoryStore()

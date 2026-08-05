@@ -949,7 +949,7 @@ func (s *Store) UpdateByID(id string, typ, status *string, quota *int, proxy *st
 	return toView(acc, true), true, nil
 }
 
-func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string, model, operation string) (events.AccountView, bool) {
+func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string, model, capability string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ex := toSet(exclude)
@@ -985,7 +985,7 @@ func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string,
 		if imageCooldownActiveLocked(acc, model, time.Now().UTC()) {
 			continue
 		}
-		if !accountSupportsModelLocked(acc, model, operation) {
+		if !accountSupportsModelLocked(acc, model, capability) {
 			continue
 		}
 		s.imageInflight[token]++
@@ -1090,7 +1090,7 @@ func clearImageCooldownLocked(acc *Account, model string) {
 	clearCooldownLocked(acc, imageCooldownExtraKey, model)
 }
 
-func (s *Store) AcquireTextToken(exclude []string, model, operation string) (events.AccountView, bool) {
+func (s *Store) AcquireTextToken(exclude []string, model, capability string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ex := toSet(exclude)
@@ -1114,7 +1114,7 @@ func (s *Store) AcquireTextToken(exclude []string, model, operation string) (eve
 		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
 			continue
 		}
-		if !accountSupportsModelLocked(acc, model, operation) {
+		if !accountSupportsModelLocked(acc, model, capability) {
 			continue
 		}
 		acc.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
@@ -1125,8 +1125,8 @@ func (s *Store) AcquireTextToken(exclude []string, model, operation string) (eve
 
 // AcquireTextAccount reacquires a specific account ID for text turns. It does
 // not touch image in-flight slots and only requires the account to remain usable
-// for the requested model/operation.
-func (s *Store) AcquireTextAccount(accountID, model, operation string) (events.AccountView, bool) {
+// for the requested model/capability.
+func (s *Store) AcquireTextAccount(accountID, model, capability string) (events.AccountView, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	accountID = trim(accountID)
@@ -1144,7 +1144,7 @@ func (s *Store) AcquireTextAccount(accountID, model, operation string) (events.A
 		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
 			return events.AccountView{}, false
 		}
-		if !accountSupportsModelLocked(acc, model, operation) {
+		if !accountSupportsModelLocked(acc, model, capability) {
 			return events.AccountView{}, false
 		}
 		acc.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
@@ -1539,13 +1539,13 @@ func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 				entry = &events.CatalogModel{ID: id, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy}
 				byID[id] = entry
 			}
-			for _, op := range model.Operations {
+			for _, op := range model.Capabilities {
 				op = strings.TrimSpace(op)
 				if op == "" {
 					continue
 				}
-				if !containsString(entry.Operations, op) {
-					entry.Operations = append(entry.Operations, op)
+				if !containsString(entry.Capabilities, op) {
+					entry.Capabilities = append(entry.Capabilities, op)
 				}
 			}
 			if !containsString(entry.AccountIDs, acc.ID) {
@@ -1571,10 +1571,10 @@ func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 	return out
 }
 
-func accountSupportsModelLocked(acc *Account, model, operation string) bool {
+func accountSupportsModelLocked(acc *Account, model, capability string) bool {
 	model = strings.TrimSpace(model)
-	operation = strings.TrimSpace(operation)
-	if model == "" && operation == "" {
+	capability = strings.TrimSpace(capability)
+	if model == "" && capability == "" {
 		// Pre-discovery / non-catalog callers keep legacy acquire behavior.
 		return true
 	}
@@ -1588,11 +1588,11 @@ func accountSupportsModelLocked(acc *Account, model, operation string) bool {
 		if model != "" && entry.ID != model {
 			continue
 		}
-		if operation == "" {
+		if capability == "" {
 			return true
 		}
-		for _, op := range entry.Operations {
-			if op == operation {
+		for _, op := range entry.Capabilities {
+			if op == capability {
 				return true
 			}
 		}
@@ -1660,10 +1660,10 @@ func normalizeSnapshot(accountID string, snap events.AccountModelSnapshot) event
 			continue
 		}
 		seen[id] = struct{}{}
-		ops := make([]string, 0, len(model.Operations))
-		for _, op := range model.Operations {
+		ops := make([]string, 0, len(model.Capabilities))
+		for _, op := range model.Capabilities {
 			op = strings.TrimSpace(op)
-			if op != events.ModelOperationChatCompletions && op != events.ModelOperationImageGenerations {
+			if op != events.ModelCapabilityTextGeneration && op != events.ModelCapabilityImageGeneration {
 				continue
 			}
 			if !containsString(ops, op) {
@@ -1674,10 +1674,10 @@ func normalizeSnapshot(accountID string, snap events.AccountModelSnapshot) event
 			continue
 		}
 		out.Models = append(out.Models, events.AccountModelEntry{
-			ID:         id,
-			Operations: ops,
-			CreatedAt:  model.CreatedAt,
-			OwnedBy:    strings.TrimSpace(model.OwnedBy),
+			ID:           id,
+			Capabilities: ops,
+			CreatedAt:    model.CreatedAt,
+			OwnedBy:      strings.TrimSpace(model.OwnedBy),
 		})
 	}
 	return out
@@ -1720,17 +1720,17 @@ func snapshotFromExtra(extra map[string]any) *events.AccountModelSnapshot {
 			CreatedAt: int64(asInt(mm["created_at"])),
 			OwnedBy:   asString(mm["owned_by"]),
 		}
-		switch ops := mm["operations"].(type) {
+		switch ops := mm["capabilities"].(type) {
 		case []any:
 			for _, op := range ops {
 				if s := asString(op); s != "" {
-					entry.Operations = append(entry.Operations, s)
+					entry.Capabilities = append(entry.Capabilities, s)
 				}
 			}
 		case []string:
-			entry.Operations = append(entry.Operations, ops...)
+			entry.Capabilities = append(entry.Capabilities, ops...)
 		}
-		if entry.ID == "" || len(entry.Operations) == 0 {
+		if entry.ID == "" || len(entry.Capabilities) == 0 {
 			continue
 		}
 		snap.Models = append(snap.Models, entry)
@@ -1748,10 +1748,10 @@ func snapshotToMap(snap *events.AccountModelSnapshot) map[string]any {
 	models := make([]map[string]any, 0, len(snap.Models))
 	for _, model := range snap.Models {
 		models = append(models, map[string]any{
-			"id":         model.ID,
-			"operations": append([]string(nil), model.Operations...),
-			"created_at": model.CreatedAt,
-			"owned_by":   model.OwnedBy,
+			"id":           model.ID,
+			"capabilities": append([]string(nil), model.Capabilities...),
+			"created_at":   model.CreatedAt,
+			"owned_by":     model.OwnedBy,
 		})
 	}
 	return map[string]any{

@@ -32,7 +32,7 @@ const otherModelLabel = "_other"
 // Outcome 描述业务结果(完整枚举):
 //
 //	success | client_canceled | idle_timeout | limit_exceeded |
-//	upstream_truncated | upstream_failed | incomplete | capability_drift |
+//	upstream_truncated | upstream_failed | incomplete | endpoint_drift |
 //	client_write | conversion | protocol | error
 //
 // 流式首包 200 后中途失败时 Status 仍可能是 2xx,Outcome 用于区分真实成败。
@@ -384,7 +384,7 @@ func shouldTrackProviderHealth(status int, outcome string) bool {
 		return true
 	}
 	switch outcome {
-	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol", "capability_drift":
+	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol", "endpoint_drift":
 		return true
 	default:
 		return false

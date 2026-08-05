@@ -116,11 +116,11 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 	}
 	out := make([]events.ModelDescriptor, 0, len(models))
 	for _, model := range models {
-		ops := make([]events.ModelOperation, 0, len(model.Operations))
-		for _, op := range model.Operations {
-			ops = append(ops, events.ModelOperation(op))
+		ops := make([]events.ModelCapability, 0, len(model.Capabilities))
+		for _, op := range model.Capabilities {
+			ops = append(ops, events.ModelCapability(op))
 		}
-		out = append(out, events.ModelDescriptor{ID: model.ID, Operations: ops, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
+		out = append(out, events.ModelDescriptor{ID: model.ID, Capabilities: ops, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
 	}
 	result.Set(events.ListModelsResult{Models: out}, nil)
 }

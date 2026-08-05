@@ -264,13 +264,13 @@ func buildProviderHealth(value providerHealth, samples []healthSample, now time.
 	if value.LastStatus == 401 || value.LastStatus == 403 {
 		result.Status = "credential_error"
 	}
-	// A capability contract mismatch is neither a transient availability
+	// An endpoint contract mismatch is neither a transient availability
 	// problem nor a credential failure. Keep it visible to Admin and leave
 	// routing eligible so another request with a compatible shape can recover
 	// the live signal; it is never silently flattened to "unknown".
-	capabilityDrift := value.LastOutcome == "capability_drift"
-	if capabilityDrift {
-		result.Status = "capability_drift"
+	endpointDrift := value.LastOutcome == "endpoint_drift"
+	if endpointDrift {
+		result.Status = "endpoint_drift"
 	}
 	cutoff := now.Add(-providerHealthWindow)
 	durations := make([]float64, 0, len(samples))
@@ -312,7 +312,7 @@ func buildProviderHealth(value providerHealth, samples []healthSample, now time.
 	if result.SampleCount < 3 {
 		return result
 	}
-	if capabilityDrift {
+	if endpointDrift {
 		return result
 	}
 	switch {

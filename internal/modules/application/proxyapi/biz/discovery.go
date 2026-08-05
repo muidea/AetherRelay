@@ -195,18 +195,18 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 		ExpiresAt:    now.Add(modelSnapshotTTL).Format(time.RFC3339),
 	}
 	for _, model := range listed.Models {
-		ops := make([]string, 0, len(model.Operations))
-		for _, op := range model.Operations {
-			ops = append(ops, string(op))
+		capabilities := make([]string, 0, len(model.Capabilities))
+		for _, capability := range model.Capabilities {
+			capabilities = append(capabilities, string(capability))
 		}
-		if strings.TrimSpace(model.ID) == "" || len(ops) == 0 {
+		if strings.TrimSpace(model.ID) == "" || len(capabilities) == 0 {
 			continue
 		}
 		snap.Models = append(snap.Models, accevents.AccountModelEntry{
-			ID:         model.ID,
-			Operations: ops,
-			CreatedAt:  model.CreatedAt,
-			OwnedBy:    model.OwnedBy,
+			ID:           model.ID,
+			Capabilities: capabilities,
+			CreatedAt:    model.CreatedAt,
+			OwnedBy:      model.OwnedBy,
 		})
 	}
 	_, putErr := s.SendEvent(event.NewEventWithContext(accevents.TopicPutModelSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.PutModelSnapshotCommand{
@@ -546,10 +546,9 @@ func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
 	chatGPTModels := make([]effectivecatalog.PoolModel, 0, len(chatGPTResult.Models))
 	for _, model := range chatGPTResult.Models {
 		chatGPTModels = append(chatGPTModels, effectivecatalog.PoolModel{
-			ID:         model.ID,
-			Operations: append([]string(nil), model.Operations...),
-			CreatedAt:  model.CreatedAt,
-			OwnedBy:    model.OwnedBy,
+			ID:        model.ID,
+			CreatedAt: model.CreatedAt,
+			OwnedBy:   model.OwnedBy,
 		})
 	}
 	codexModels := make([]effectivecatalog.PoolModel, 0, len(codexResult.Models))

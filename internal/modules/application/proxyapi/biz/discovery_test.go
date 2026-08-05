@@ -58,7 +58,7 @@ func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
 		modelRequests[cmd.AccessToken]++
 		mu.Unlock()
 		result.Set(upevents.ListModelsResult{Models: []upevents.ModelDescriptor{{
-			ID: "gpt-5", Operations: []upevents.ModelOperation{upevents.ModelOperationChatCompletions},
+			ID: "gpt-5", Capabilities: []upevents.ModelCapability{upevents.ModelCapabilityTextGeneration},
 		}}}, nil)
 	})
 

@@ -75,13 +75,12 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: ${ADMIN_TEST_API_KEY}
-    endpoint_capabilities: chat_completions
+    endpoints: chat_completions
     models: gpt-*
 model_catalog:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
-    operations: chat_completions
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -196,20 +195,20 @@ func TestHandlerClassifiesProviderSources(t *testing.T) {
 		ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true},
 		Providers: map[string]config.Provider{
 			"deepseek": {
-				Name:                 "deepseek",
-				Protocol:             "openai",
-				BaseURL:              "https://api.deepseek.com",
-				APIKey:               "sk-test",
-				Models:               []string{"deepseek-chat"},
-				EndpointCapabilities: []string{"chat_completions"},
+				Name:      "deepseek",
+				Protocol:  "openai",
+				BaseURL:   "https://api.deepseek.com",
+				APIKey:    "sk-test",
+				Models:    []string{"deepseek-chat"},
+				Endpoints: []string{"chat_completions"},
 			},
 			"relay": {
-				Name:                 "relay",
-				Protocol:             "openai",
-				BaseURL:              "https://aiapi.bluetron.cn",
-				APIKey:               "sk-test",
-				Models:               []string{"MiniMax*"},
-				EndpointCapabilities: []string{"chat_completions"},
+				Name:      "relay",
+				Protocol:  "openai",
+				BaseURL:   "https://aiapi.bluetron.cn",
+				APIKey:    "sk-test",
+				Models:    []string{"MiniMax*"},
+				Endpoints: []string{"chat_completions"},
 			},
 		},
 	}
@@ -273,7 +272,7 @@ func TestHandlerProjectsProviderAvailability(t *testing.T) {
 		registry.RecordRequest("unavailable", "m", "chat_completions", http.StatusServiceUnavailable, time.Millisecond, "upstream_failed")
 	}
 	registry.RecordRequest("credential", "m", "chat_completions", http.StatusForbidden, time.Millisecond, "upstream_failed")
-	registry.RecordRequest("drift", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "capability_drift")
+	registry.RecordRequest("drift", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift")
 	cfg := config.Config{Providers: map[string]config.Provider{
 		"healthy":     {},
 		"degraded":    {},
@@ -287,7 +286,7 @@ func TestHandlerProjectsProviderAvailability(t *testing.T) {
 	availability := handler.providerHealth(cfg)
 	for name, want := range map[string]string{
 		"healthy": "healthy", "degraded": "degraded", "unavailable": "unhealthy",
-		"credential": "credential_error", "drift": "capability_drift", "unknown": "unknown", "disabled": "disabled",
+		"credential": "credential_error", "drift": "endpoint_drift", "unknown": "unknown", "disabled": "disabled",
 	} {
 		if got := availability[name].Status; got != want {
 			t.Errorf("%s status = %q, want %q", name, got, want)
@@ -357,8 +356,7 @@ func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 func TestHandlerProbesBuiltinProviderFromCatalogWithoutRecordingMetrics(t *testing.T) {
 	cfg := config.Config{ChatGPTWeb: config.ChatGPTWebConfig{Enabled: true}}
 	snapshot := effectivecatalog.Build(cfg, 1, 2, []effectivecatalog.PoolModel{{
-		ID:         "gpt-5",
-		Operations: []string{config.EndpointCapabilityChatCompletions},
+		ID: "gpt-5",
 	}}, "2026-08-03T12:00:00Z")
 	runtime := &catalogChatGPTRuntimeStub{
 		chatGPTAccountRuntimeStub: &chatGPTAccountRuntimeStub{},
@@ -391,13 +389,13 @@ func TestHandlerUpdatesProvidersPreservesRawSecretAndHotReloads(t *testing.T) {
 	handler := NewHandler(path, runtime)
 	zeroPriority := 0
 	body, err := json.Marshal(updateRequest{Providers: []providerInput{{
-		Name:                 "openai",
-		Protocol:             "openai",
-		BaseURL:              "https://gateway.example.com/v1",
-		Models:               []string{"gpt-*"},
-		EndpointCapabilities: []string{config.EndpointCapabilityChatCompletions},
-		Priority:             &zeroPriority,
-		Enabled:              true,
+		Name:      "openai",
+		Protocol:  "openai",
+		BaseURL:   "https://gateway.example.com/v1",
+		Models:    []string{"gpt-*"},
+		Endpoints: []string{config.ProviderEndpointChatCompletions},
+		Priority:  &zeroPriority,
+		Enabled:   true,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -690,7 +688,7 @@ func TestHandlerRejectsInvalidProviderChangeWithoutReplacingConfig(t *testing.T)
 		t.Fatal(err)
 	}
 	handler := NewHandler(path, &testRuntime{cfg: cfg})
-	body := []byte(`{"providers":[{"name":"openai","protocol":"openai","base_url":"https://api.openai.com/v1","models":["other-*"],"endpoint_capabilities":["chat_completions"],"enabled":true}]}`)
+	body := []byte(`{"providers":[{"name":"openai","protocol":"openai","base_url":"https://api.openai.com/v1","models":["other-*"],"endpoints":["chat_completions"],"enabled":true}]}`)
 	req := httptest.NewRequest(http.MethodPut, "/admin/api/providers", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AI-Proxy-Admin", "1")
