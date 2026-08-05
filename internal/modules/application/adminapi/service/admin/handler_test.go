@@ -113,13 +113,14 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		}
 	}
 	page := rec.Body.String()
-	buildInfoFields := `[[t("服务名称"),service.name],[t("访问基址"),location.origin],[t("构建修订"),service.revision]`
-	if !strings.Contains(page, buildInfoFields) {
-		t.Fatal("system build information does not use the expected non-duplicated fields")
+	serviceInfoFields := `[[t("服务名称"),service.name],[t("访问基址"),location.origin],[t("服务器时间"),runtime.server_time]`
+	if !strings.Contains(page, serviceInfoFields) {
+		t.Fatal("system service information does not use the expected fields")
 	}
-	if strings.Contains(page, `[t("访问基址"),location.origin],[t("当前版本"),service.version]`) ||
-		strings.Contains(page, `[t("当前版本"),service.version],[t("Go 版本"),service.go_version]`) {
-		t.Fatal("system build information duplicates summary fields")
+	for _, diagnosticField := range []string{`t("构建修订")`, `t("构建时间")`, `t("工作区修改")`} {
+		if strings.Contains(page, diagnosticField) {
+			t.Fatalf("system service information exposes diagnostic field %s", diagnosticField)
+		}
 	}
 	chatIndex := strings.Index(page, `id="featureSubChat"`)
 	searchIndex := strings.Index(page, `id="featureSubSearch"`)
