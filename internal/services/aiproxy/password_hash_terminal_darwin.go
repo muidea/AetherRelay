@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build darwin
 
 package aiproxy
 
@@ -10,16 +10,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// isTerminal 与 readPassword 的 Unix 实现：通过 termios 关闭回显读取密码。
-// Windows 见 password_hash_terminal_windows.go。
+// isTerminal 与 readPassword 的 macOS 实现。darwin 的 termios ioctl 常量
+// 是 TIOCGETA/TIOCSETA（Linux 的 TCGETS/TCSETS 不存在于 darwin）。
 
 func isTerminal(fd int) bool {
-	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	_, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
 	return err == nil
 }
 
 func readPassword(fd int) ([]byte, error) {
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	old, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
 	if err != nil {
 		return nil, err
 	}
@@ -27,10 +27,10 @@ func readPassword(fd int) ([]byte, error) {
 	raw.Lflag &^= unix.ECHO
 	raw.Lflag |= unix.ICANON | unix.ISIG
 	raw.Iflag |= unix.ICRNL
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
+	if err := unix.IoctlSetTermios(fd, unix.TIOCSETA, &raw); err != nil {
 		return nil, err
 	}
-	defer func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, old) }()
+	defer func() { _ = unix.IoctlSetTermios(fd, unix.TIOCSETA, old) }()
 
 	reader := bufio.NewReader(os.NewFile(uintptr(fd), "/dev/stdin"))
 	line, err := reader.ReadString('\n')
