@@ -622,7 +622,7 @@ const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[
     images:{items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
     search:{busy:false,result:null,items:[],currentID:"",historyBusy:false},
     chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}},
-  codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,discovery:{progressId:"",timer:null,failures:0,done:true},usage:{progressId:"",timer:null,failures:0,done:true},oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
+  codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,discovery:{progressId:"",timer:null,dismissTimer:null,failures:0,done:true},usage:{progressId:"",timer:null,dismissTimer:null,failures:0,done:true},oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 const splitList=v=>v.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
@@ -1035,12 +1035,24 @@ function renderCodexDiscoveryProgress(progress){
 }
 function stopCodexDiscoveryPolling(){
   if(state.codex.discovery.timer){clearTimeout(state.codex.discovery.timer);state.codex.discovery.timer=null}
+  if(state.codex.discovery.dismissTimer){clearTimeout(state.codex.discovery.dismissTimer);state.codex.discovery.dismissTimer=null}
 }
-function beginCodexDiscoveryPolling(progress){
+function scheduleCodexProgressDismiss(kind,progress,visible){
+  if(!visible||!progress?.done||(Number(progress.failed)||0)>0||String(progress.last_error||"").trim())return;
+  const target=state.codex[kind],pid=String(progress.progress_id||"");
+  if(target.dismissTimer)clearTimeout(target.dismissTimer);
+  target.dismissTimer=setTimeout(()=>{
+    if(target.progressId!==pid)return;
+    if(kind==="discovery")renderCodexDiscoveryProgress(null);else renderCodexUsageProgress(null);
+    target.dismissTimer=null;
+  },4200);
+}
+function beginCodexDiscoveryPolling(progress,options={}){
   if(!progress?.progress_id)return;
+  const visible=options.visible!==false;
   stopCodexDiscoveryPolling();
   state.codex.discovery.progressId=progress.progress_id;state.codex.discovery.failures=0;state.codex.discovery.done=Boolean(progress.done);
-  renderCodexDiscoveryProgress(progress);renderCodexAccounts();
+  renderCodexDiscoveryProgress(visible?progress:null);scheduleCodexProgressDismiss("discovery",progress,visible);renderCodexAccounts();
   const tick=async()=>{
     const pid=state.codex.discovery.progressId;
     if(!pid)return;
@@ -1048,13 +1060,13 @@ function beginCodexDiscoveryPolling(progress){
       const current=await request(apiURL(`/api/codex/accounts/discovery/progress/${encodeURIComponent(pid)}`));
       if(pid!==state.codex.discovery.progressId)return;
       state.codex.discovery.failures=0;state.codex.discovery.done=Boolean(current.done);
-      renderCodexDiscoveryProgress(current);renderCodexAccounts();
+      if(visible)renderCodexDiscoveryProgress(current);scheduleCodexProgressDismiss("discovery",current,visible);renderCodexAccounts();
       if(current.done){state.codex.discovery.timer=null;await loadCodexAccounts();return}
       state.codex.discovery.timer=setTimeout(tick,900);
     }catch(e){
       if(pid!==state.codex.discovery.progressId)return;
       state.codex.discovery.failures++;
-      if(state.codex.discovery.failures>=3){state.codex.discovery.done=true;$("codexDiscoveryProgress").textContent=t("模型同步进度查询失败：{error}。请重新加载账号列表。",{error:e.message});$("codexDiscoveryProgress").style.display="block";renderCodexAccounts();return}
+      if(state.codex.discovery.failures>=3){state.codex.discovery.done=true;if(visible){$("codexDiscoveryProgress").textContent=t("模型同步进度查询失败：{error}。请重新加载账号列表。",{error:e.message});$("codexDiscoveryProgress").style.display="block"}renderCodexAccounts();return}
       state.codex.discovery.timer=setTimeout(tick,1200);
     }
   };
@@ -1077,12 +1089,13 @@ function renderCodexUsageProgress(progress){
   box.textContent=error?`${summary} · ${t("最后错误：{error}",{error})}`:summary;
   box.style.display="block";
 }
-function stopCodexUsagePolling(){if(state.codex.usage.timer){clearTimeout(state.codex.usage.timer);state.codex.usage.timer=null}}
-function beginCodexUsagePolling(progress){
+function stopCodexUsagePolling(){if(state.codex.usage.timer){clearTimeout(state.codex.usage.timer);state.codex.usage.timer=null}if(state.codex.usage.dismissTimer){clearTimeout(state.codex.usage.dismissTimer);state.codex.usage.dismissTimer=null}}
+function beginCodexUsagePolling(progress,options={}){
   if(!progress?.progress_id)return;
+  const visible=options.visible!==false;
   stopCodexUsagePolling();
   state.codex.usage.progressId=progress.progress_id;state.codex.usage.failures=0;state.codex.usage.done=Boolean(progress.done);
-  renderCodexUsageProgress(progress);renderCodexAccounts();
+  renderCodexUsageProgress(visible?progress:null);scheduleCodexProgressDismiss("usage",progress,visible);renderCodexAccounts();
   const tick=async()=>{
     const pid=state.codex.usage.progressId;
     if(!pid)return;
@@ -1090,13 +1103,13 @@ function beginCodexUsagePolling(progress){
       const current=await request(apiURL(`/api/codex/accounts/usage/progress/${encodeURIComponent(pid)}`));
       if(pid!==state.codex.usage.progressId)return;
       state.codex.usage.failures=0;state.codex.usage.done=Boolean(current.done);
-      renderCodexUsageProgress(current);renderCodexAccounts();
+      if(visible)renderCodexUsageProgress(current);scheduleCodexProgressDismiss("usage",current,visible);renderCodexAccounts();
       if(current.done){state.codex.usage.timer=null;await loadCodexAccounts();return}
       state.codex.usage.timer=setTimeout(tick,900);
     }catch(e){
       if(pid!==state.codex.usage.progressId)return;
       state.codex.usage.failures++;
-      if(state.codex.usage.failures>=3){state.codex.usage.done=true;$("codexUsageProgress").textContent=t("用量刷新进度查询失败：{error}。请重新加载账号列表。",{error:e.message});$("codexUsageProgress").style.display="block";renderCodexAccounts();return}
+      if(state.codex.usage.failures>=3){state.codex.usage.done=true;if(visible){$("codexUsageProgress").textContent=t("用量刷新进度查询失败：{error}。请重新加载账号列表。",{error:e.message});$("codexUsageProgress").style.display="block"}renderCodexAccounts();return}
       state.codex.usage.timer=setTimeout(tick,1200);
     }
   };
@@ -1198,9 +1211,9 @@ async function submitCodexImport(event){
     const accounts=parseAccountObjectArray(await readAccountImport("codexImportFile","codexImportAccounts"));
     const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({accounts})});
     toast(`导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`);
-    if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery);
+    if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});
     else if(result.model_discovery_error)toast(result.model_discovery_error,"error");
-    if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh);
+    if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});
     else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");
     $("codexImportDialog").close();await loadCodexAccounts();
   }catch(e){toast(e.message,"error")}finally{clearCodexImport();$("codexImportSubmit").disabled=false}
@@ -1217,7 +1230,7 @@ async function refreshCodexAccounts(ids){
   if(!ids.length){toast("请先选择账号","error");return}
   if(state.codex.busy)return;
   state.codex.busy=true;renderCodexAccounts();
-  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery);else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh);else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
+  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
 }
 function clearCodexOAuthMemory(){
   state.codex.oauth={sessionId:"",authorizeURL:"",expiresIn:0};
@@ -1245,7 +1258,7 @@ async function finishCodexOAuth(event){
   const callback=$("codexOAuthCallback").value.trim(),sessionID=state.codex.oauth.sessionId;
   if(!callback||!sessionID){toast("会话未开始或 callback URL 为空","error");return}
   $("codexOAuthFinish").disabled=true;
-  try{const result=await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});toast("Codex OAuth 账号已导入");if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery);else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh);else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
+  try{const result=await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});toast("Codex OAuth 账号已导入");if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
 }
 function statusTag(status){
   const map={"正常":"status-normal","限流":"status-limited","异常":"status-abnormal","禁用":"status-disabled"};
