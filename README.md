@@ -41,7 +41,7 @@ Anthropic API base: http://127.0.0.1:8080
 
 ## 容器快速开始
 
-发布镜像位于 `ghcr.io/muidea/ai-proxy`，提供 Linux amd64 与 arm64 清单。**一条命令完成部署**（引导生成配置、收集 Provider 密钥、初始化 Admin 凭据并启动容器）：
+发布镜像位于 `ghcr.io/muidea/ai-proxy`，提供 Linux amd64 与 arm64 清单。**一条命令完成部署**（引导生成配置、初始化 Admin 凭据并启动容器）：
 
 ```bash
 git clone https://github.com/muidea/ai-proxy.git && cd ai-proxy && ./scripts/deploy-docker.sh
@@ -53,7 +53,7 @@ git clone https://github.com/muidea/ai-proxy.git && cd ai-proxy && ./scripts/dep
 bash <(curl -fsSL https://raw.githubusercontent.com/muidea/ai-proxy/main/scripts/deploy-docker.sh)
 ```
 
-脚本交互式运行：按提示输入 Provider 密钥，并在容器内交互生成 Admin 密码哈希（密码不进入参数与日志）。无交互场景用 `--admin-password-hash '...'` 注入预生成哈希，或 `--skip-admin` 跳过；完整参数见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
+脚本会实时提示输入两次 Admin 密码（输入不回显，密码不进入参数、环境变量或日志），完成后登录管理台添加 Provider 或导入账号池凭据。无交互场景用 `--admin-password-hash '...'` 注入预生成哈希，或 `--skip-admin` 跳过；完整参数见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
 
 也可以手动复制配置、按容器网络调整 `listen_addr` 与 `state.dir`，再启动：
 

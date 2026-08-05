@@ -14,4 +14,5 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+scripts/test-deploy-docker.sh >"$output_file" 2>&1
 go test ./... -count=1 >"$output_file" 2>&1

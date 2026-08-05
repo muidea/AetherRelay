@@ -164,10 +164,10 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 ### 一键部署脚本（推荐）
 
-仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：生成配置（含容器适配）、收集 Provider 密钥、初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、启动容器并等待就绪。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略）。
+仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：生成配置（含容器适配）、初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、拉取镜像、启动容器并等待就绪。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略）。
 
 ```bash
-# 交互式：按提示输入 Provider 密钥，并在容器内交互生成 Admin 密码哈希
+# 交互式：按实时提示输入两次 Admin 密码（输入不回显）
 ./scripts/deploy-docker.sh
 
 # 无交互（CI / 无人值守）：预先用 `ai-proxy admin password-hash` 生成哈希
@@ -187,9 +187,10 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 要点：
 
-- **Admin 凭据初始化**：密码哈希只经交互式 TTY 生成（`password-hash` 在容器内运行，密码不进入参数/环境变量/日志），写入 `.env` 的 `AI_PROXY_ADMIN_PASSWORD_HASH`，`config.yaml` 中以 `${AI_PROXY_ADMIN_PASSWORD_HASH}` 引用，哈希不落配置明文。
+- **Admin 凭据初始化**：密码提示直接显示在当前 TTY，输入不回显；`password-hash` 在容器内运行，密码不进入参数、环境变量或日志。其 stdout 通过临时挂载文件回传哈希，随即写入 `.env` 的 `AI_PROXY_ADMIN_PASSWORD_HASH` 并删除临时文件；`config.yaml` 中仅以 `${AI_PROXY_ADMIN_PASSWORD_HASH}` 引用。
+- **Provider 配置**：默认配置不内置静态 Provider，因此脚本不询问任何固定厂商 Key。部署完成后从管理台添加任意 Provider，或在账号池页面导入 ChatGPT Web / Codex OAuth 凭据。
 - 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
-- `.env` 生成后为 `chmod 600`，含 Provider 密钥与 Admin 哈希，务必保持私有、不入版本库。
+- `.env` 生成后为 `chmod 600`，含 Admin 哈希，务必保持私有、不入版本库。
 - 重复运行时保留已有 `config.yaml` 不覆盖；`.env` 中已配置的值保留为默认。
 - 部署目录缺省 `chown 10001:10001`（尽力而为，需 root/sudo）；若配置目录不可写，管理页只读但容器可正常运行。
 

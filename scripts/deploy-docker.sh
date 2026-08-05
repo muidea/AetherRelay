@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键容器化部署脚本：生成配置、收集 Provider 密钥、初始化 Admin 凭据并启动容器。
+# 一键容器化部署脚本：生成配置、初始化 Admin 凭据并启动容器。
 # 产物全部落在部署目录（默认 ./deploy），不依赖仓库内的 compose.yaml。
 #
 # Admin 密码哈希只通过交互式 TTY 生成（密码不进入 argv / 环境变量 / 日志），
@@ -16,6 +16,16 @@ ADMIN_USERNAME="ops-admin"
 ADMIN_PASSWORD_HASH=""
 SKIP_ADMIN=0
 LISTEN="127.0.0.1:8080"
+HASH_DIR=""
+
+cleanup() {
+  if [[ -n "$HASH_DIR" && -d "$HASH_DIR" ]]; then
+    rm -rf "$HASH_DIR"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if command -v docker >/dev/null 2>&1; then
   DOCKER=docker
@@ -46,7 +56,7 @@ usage: $0 [options]
 一键容器化部署 ai-proxy。产物全部落在部署目录（默认 ./deploy）：
   config/config.yaml   运行配置（由 config.example.yaml 模板生成）
   docker-compose.yml   容器编排（自包含，不依赖仓库）
-  .env                 Provider 密钥与 Admin 哈希（chmod 600）
+  .env                 镜像引用与 Admin 哈希（chmod 600）
 
 options:
   --dir <path>                 部署目录（默认 ./deploy）
@@ -78,7 +88,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$ADMIN_USERNAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "admin 用户名仅限 [A-Za-z0-9._-]: $ADMIN_USERNAME"
-[[ "$LISTEN" =~ ^[A-Za-z0-9.:-]+$ ]] || die "非法的 --listen 值: $LISTEN（仅允许字母、数字、点、冒号、短横线）"
+if [[ ! "$LISTEN" =~ ^([A-Za-z0-9.-]*):([0-9]{1,5})$ ]]; then
+  die "非法的 --listen 值: $LISTEN（格式应为 host:port，例如 127.0.0.1:8080）"
+fi
+LISTEN_HOST="${BASH_REMATCH[1]}"
+LISTEN_PORT="${BASH_REMATCH[2]}"
+if (( 10#$LISTEN_PORT < 1 || 10#$LISTEN_PORT > 65535 )); then
+  die "非法的 --listen 端口: $LISTEN_PORT（范围 1-65535）"
+fi
+if [[ -z "$LISTEN_HOST" || "$LISTEN_HOST" == "localhost" ]]; then
+  LISTEN_HOST="127.0.0.1"
+fi
 if [[ -n "$ADMIN_PASSWORD_HASH" ]]; then
   [[ "$ADMIN_PASSWORD_HASH" =~ ^\$argon2id\$ ]] || die "--admin-password-hash 必须是 Argon2id PHC 哈希（以 \$argon2id\$ 开头）"
 fi
@@ -130,53 +150,38 @@ else
   echo "    -> 已生成 $CONFIG_FILE"
 fi
 
-# 2. 收集 Provider 密钥（交互或复用 .env）
-ask_secret() {
-  local name="$1" current="${!1:-}" v
-  local prompt
-  if [[ -n "$current" ]]; then
-    prompt="$name [已配置，回车保留]: "
-  else
-    prompt="$name [留空跳过]: "
-  fi
-  read -r -p "$prompt" v || true
-  if [[ -n "$v" ]]; then
-    printf '%s' "$v"
-  else
-    printf '%s' "$current"
-  fi
-}
-
-if [[ -t 0 ]]; then
-  OPENAI_API_KEY="$(ask_secret OPENAI_API_KEY)"
-  DEEPSEEK_API_KEY="$(ask_secret DEEPSEEK_API_KEY)"
-  ANTHROPIC_API_KEY="$(ask_secret ANTHROPIC_API_KEY)"
-else
-  warn "非交互环境：Provider 密钥沿用环境变量或已有 .env 的值"
-fi
-
-# 3. Admin 密码哈希：优先 --admin-password-hash，其次交互式生成
+# 2. Admin 密码哈希：优先 --admin-password-hash，其次交互式生成。
+# stdout 在容器内写入仅当前用户可读的临时文件，stderr 的密码提示则直接显示
+# 在当前 TTY；避免用命令替换吞掉提示，让用户误以为脚本卡住。
 if [[ "$SKIP_ADMIN" != 1 && -z "$ADMIN_PASSWORD_HASH" ]]; then
   if [[ -n "${AI_PROXY_ADMIN_PASSWORD_HASH:-}" ]]; then
     ADMIN_PASSWORD_HASH="$AI_PROXY_ADMIN_PASSWORD_HASH"
   elif [[ -t 0 && -t 1 ]]; then
-    echo "==> 生成 Admin 密码哈希（密码在容器内交互输入，不进入参数/日志）"
-    hash_output="$("$DOCKER" run --rm -it "$IMAGE" ai-proxy admin password-hash 2>&1)" \
-      || die "生成密码哈希失败，docker 输出: $(printf '%s' "$hash_output" | tail -n 3 | tr '\n' ' ')"
-    # pty 模式下提示与哈希混在同一输出流，提取 PHC 行。
-    ADMIN_PASSWORD_HASH="$(printf '%s' "$hash_output" | grep -o '\$argon2id\$[^[:space:]]*' | tail -n 1 | tr -d '\r')"
-    [[ "$ADMIN_PASSWORD_HASH" =~ ^\$argon2id\$ ]] || die "password-hash 输出异常: $(printf '%s' "$hash_output" | tail -n 3 | tr '\n' ' ')"
+    HASH_DIR="$(mktemp -d)"
+    hash_file="$HASH_DIR/value"
+    chmod 700 "$HASH_DIR"
+    echo "==> 设置 Admin 登录密码（输入不回显，请输入两次）"
+    if ! "$DOCKER" run --rm -it \
+      --user "$(id -u):$(id -g)" \
+      --entrypoint /bin/sh \
+      -v "$HASH_DIR:/run/ai-proxy-password-hash:rw" \
+      "$IMAGE" -c \
+      'umask 077; exec /usr/local/bin/ai-proxy admin password-hash > /run/ai-proxy-password-hash/value'; then
+      die "生成 Admin 密码哈希失败"
+    fi
+    ADMIN_PASSWORD_HASH="$(tr -d '\r\n' <"$hash_file")"
+    rm -rf "$HASH_DIR"
+    HASH_DIR=""
+    [[ "$ADMIN_PASSWORD_HASH" =~ ^\$argon2id\$ ]] || die "password-hash 未生成有效的 Argon2id 哈希"
+    echo "    -> Admin 密码已设置"
   else
     die "非交互环境无法生成 Admin 哈希；请用 --admin-password-hash 提供，或 --skip-admin 跳过"
   fi
 fi
 
-# 4. 写入 .env（chmod 600；值加单引号，source 与 compose 插值均安全）
+# 3. 写入 .env（chmod 600；值加单引号，source 与 compose 插值均安全）
 {
   echo "AI_PROXY_IMAGE='$IMAGE'"
-  echo "OPENAI_API_KEY='${OPENAI_API_KEY:-}'"
-  echo "DEEPSEEK_API_KEY='${DEEPSEEK_API_KEY:-}'"
-  echo "ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY:-}'"
   if [[ "$SKIP_ADMIN" != 1 ]]; then
     echo "AI_PROXY_ADMIN_PASSWORD_HASH='$ADMIN_PASSWORD_HASH'"
   fi
@@ -184,11 +189,12 @@ fi
 chmod 600 "$ENV_FILE"
 echo "    -> 已写入 $ENV_FILE (chmod 600)"
 
-# 5. 生成 docker-compose.yml（自包含）
-if [[ "$LISTEN" == "127.0.0.1:"* || "$LISTEN" == "localhost:"* || "$LISTEN" == ":"* ]]; then
-  BIND="127.0.0.1:8080:8080"
+# 4. 生成 docker-compose.yml（自包含）
+BIND="$LISTEN_HOST:$LISTEN_PORT:8080"
+if [[ "$LISTEN_HOST" == 127.* ]]; then
+  ACCESS_HOST="$LISTEN_HOST"
 else
-  BIND="8080:8080"
+  ACCESS_HOST="127.0.0.1"
   warn "非 loopback 监听：请确认已启用 Admin 登录（否则管理台仅 loopback），并由防火墙/反向代理保护数据面"
 fi
 
@@ -201,9 +207,6 @@ services:
       - "$BIND"
     environment:
       AI_PROXY_CONFIG: /etc/ai-proxy/config.yaml
-      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
-      DEEPSEEK_API_KEY: \${DEEPSEEK_API_KEY:-}
-      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
       AI_PROXY_ADMIN_PASSWORD_HASH: \${AI_PROXY_ADMIN_PASSWORD_HASH:-}
     volumes:
       # 目录挂载（而非单文件）：管理页保存配置时通过临时文件原子替换。
@@ -215,14 +218,15 @@ volumes:
 EOF
 echo "    -> 已生成 $COMPOSE_FILE"
 
-# 6. 配置目录交由容器内 UID 10001（ai-proxy 用户）持有（尽力而为）
+# 5. 配置目录交由容器内 UID 10001（ai-proxy 用户）持有（尽力而为）
 if [[ -w "$CONFIG_DIR" ]]; then
   chown -R 10001:10001 "$CONFIG_DIR" 2>/dev/null \
     || warn "无法 chown 配置目录为 10001；管理页保存配置可能不可写（只读挂载仍可运行）"
 fi
 
-# 7. 启动并等待就绪
+# 6. 拉取镜像、启动并等待就绪
 echo "==> 拉取镜像并启动容器"
+"${COMPOSE[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull
 "${COMPOSE[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d
 
 echo "==> 等待服务就绪"
@@ -238,13 +242,14 @@ if [[ "$READY" != 1 ]]; then
   warn "服务未在预期时间内就绪，请检查: ${COMPOSE[*]} -f $COMPOSE_FILE logs -f"
 fi
 
-# 8. 结果提示
+# 7. 结果提示
 echo ""
 echo "=================================================="
 echo "部署完成"
-echo "  管理台:      http://127.0.0.1:8080/admin/"
-echo "  健康检查:    curl http://127.0.0.1:8080/healthz"
+echo "  管理台:      http://$ACCESS_HOST:$LISTEN_PORT/admin/"
+echo "  健康检查:    curl http://$ACCESS_HOST:$LISTEN_PORT/healthz"
 echo "  查看日志:    ${COMPOSE[*]} -f $COMPOSE_FILE logs -f"
+echo "  Provider:    登录管理台后在 Provider 管理中添加；账号池凭据在账号池页面导入"
 if [[ "$SKIP_ADMIN" != 1 ]]; then
   echo "  Admin 账号:  $ADMIN_USERNAME（默认仅本机可登录；经 HTTPS 反向代理部署时，"
   echo "                请在 config.yaml 开启 admin_session_cookie_secure: true）"
