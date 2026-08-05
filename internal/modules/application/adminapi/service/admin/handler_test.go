@@ -45,6 +45,10 @@ func (r *rejectingRuntime) ConfigSnapshot() config.Config { return r.cfg }
 func (r *rejectingRuntime) UpdateConfig(config.Config) error {
 	return errors.New("activation rejected")
 }
+func (r *rejectingRuntime) ProviderStorageAvailable() bool { return true }
+func (r *rejectingRuntime) ReplaceProviders(map[string]config.Provider) error {
+	return errors.New("activation rejected")
+}
 
 func (r *testRuntime) ConfigSnapshot() config.Config {
 	r.mu.Lock()
@@ -119,7 +123,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)", `id="codexAccExport"`, "/api/codex/accounts/export", "if(state.codex.busy)return;", `id="codexAccNormal"`, `id="codexAccAbnormal"`, `id="codexAccRoutable"`, "`${counts.abnormal} / ${counts.disabled}`", `id="cgImportFile"`, `id="codexImportFile"`, `accept=".json,application/json"`, "async function readAccountImport(fileID,textID)", "accountImportMaxBytes=1<<20", "accountImportMaxItems=1000", "beginCodexDiscoveryPolling(result.model_discovery,{visible:false})", "beginCodexUsagePolling(result.usage_refresh,{visible:false})", "function scheduleCodexProgressDismiss(kind,progress,visible)", "renderCodexUsageProgress(null)", "},4200);",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "function providerChanges(original,item)", "async function createProvider(payload,message,close=false)", "async function patchProvider(name,payload,message,close=false)", "/api/providers/${encodeURIComponent(name)}", `method:"DELETE"`, "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)", `id="codexAccExport"`, "/api/codex/accounts/export", "if(state.codex.busy)return;", `id="codexAccNormal"`, `id="codexAccAbnormal"`, `id="codexAccRoutable"`, "`${counts.abnormal} / ${counts.disabled}`", `id="cgImportFile"`, `id="codexImportFile"`, `accept=".json,application/json"`, "async function readAccountImport(fileID,textID)", "accountImportMaxBytes=1<<20", "accountImportMaxItems=1000", "beginCodexDiscoveryPolling(result.model_discovery,{visible:false})", "beginCodexUsagePolling(result.usage_refresh,{visible:false})", "function scheduleCodexProgressDismiss(kind,progress,visible)", "renderCodexUsageProgress(null)", "},4200);",
 		`id="featureSubChat" data-feature-sub="chat" class="active">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)", `id="navSystem"`, `id="panelSystem"`, "function loadSystemInfo()", "/api/system/info",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
@@ -409,7 +413,7 @@ func TestHandlerProbesBuiltinProviderFromCatalogWithoutRecordingMetrics(t *testi
 	}
 }
 
-func TestHandlerUpdatesProvidersWithoutRewritingConfigAndHotReloads(t *testing.T) {
+func TestHandlerCreatesProviderWithoutRewritingConfigAndHotReloads(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
 	cfg, err := config.Load(path)
@@ -419,26 +423,27 @@ func TestHandlerUpdatesProvidersWithoutRewritingConfigAndHotReloads(t *testing.T
 	runtime := &testRuntime{cfg: cfg}
 	handler := NewHandler(path, runtime)
 	zeroPriority := 0
-	body, err := json.Marshal(updateRequest{Providers: []providerInput{{
-		Name:      "openai",
+	body, err := json.Marshal(providerInput{
+		Name:      "gateway",
 		Protocol:  "openai",
 		BaseURL:   "https://gateway.example.com/v1",
+		APIKey:    "gateway-secret",
 		Models:    []string{"gpt-*"},
 		Endpoints: []string{config.ProviderEndpointChatCompletions},
 		Priority:  &zeroPriority,
 		Enabled:   true,
-	}}})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPut, "/admin/api/providers", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("update = %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
 	}
 
 	raw, err := os.ReadFile(path)
@@ -453,9 +458,138 @@ func TestHandlerUpdatesProvidersWithoutRewritingConfigAndHotReloads(t *testing.T
 	if runtime.updates != 1 {
 		t.Fatalf("updates = %d, want 1", runtime.updates)
 	}
-	provider := runtime.cfg.Providers["openai"]
-	if provider.BaseURL != "https://gateway.example.com/v1" || provider.APIKey != "secret-value" || config.EffectiveProviderPriority(provider) != 0 {
+	provider := runtime.cfg.Providers["gateway"]
+	if provider.BaseURL != "https://gateway.example.com/v1" || provider.APIKey != "gateway-secret" || config.EffectiveProviderPriority(provider) != 0 {
 		t.Fatalf("runtime provider = %+v", provider)
+	}
+	if runtime.cfg.Providers["openai"].APIKey != "secret-value" {
+		t.Fatal("creating Provider changed existing Provider credential")
+	}
+}
+
+func TestHandlerPatchesOnlyTargetProviderAndPreservesCredential(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers["other"] = config.Provider{
+		Name: "other", Protocol: "openai", BaseURL: "https://other.example/v1", APIKey: "other-secret",
+		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+
+	body := `{"base_url":"https://gateway.example.com/v1","api_key":"","enabled":false}`
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/OPENAI", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch = %d %s", rec.Code, rec.Body.String())
+	}
+	updated := runtime.ConfigSnapshot()
+	if got := updated.Providers["openai"]; got.BaseURL != "https://gateway.example.com/v1" || got.APIKey != "secret-value" || !got.Disabled {
+		t.Fatalf("patched provider = %+v", got)
+	}
+	if got := updated.Providers["other"]; got.BaseURL != "https://other.example/v1" || got.APIKey != "other-secret" || got.Disabled {
+		t.Fatalf("unrelated provider changed = %+v", got)
+	}
+}
+
+func TestHandlerDeletesOnlyTargetProvider(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers["other"] = config.Provider{
+		Name: "other", Protocol: "openai", BaseURL: "https://other.example/v1", APIKey: "other-secret",
+		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/providers/other", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	updated := runtime.ConfigSnapshot()
+	if _, exists := updated.Providers["other"]; exists {
+		t.Fatal("deleted Provider remains present")
+	}
+	if got := updated.Providers["openai"]; got.APIKey != "secret-value" || got.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("unrelated provider changed = %+v", got)
+	}
+}
+
+func TestHandlerProviderPatchCredentialAndErrorSemantics(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+
+	patch := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AI-Proxy-Admin", "1")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := patch("/admin/api/providers/openai", `{"api_key":"replacement"}`); rec.Code != http.StatusOK {
+		t.Fatalf("replace credential = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := runtime.ConfigSnapshot().Providers["openai"].APIKey; got != "replacement" {
+		t.Fatalf("credential = %q", got)
+	}
+	if rec := patch("/admin/api/providers/openai", `{"base_url":"http://127.0.0.1:8081/v1","clear_api_key":true,"allow_unauthenticated":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear credential = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := runtime.ConfigSnapshot().Providers["openai"]; got.APIKey != "" || !got.AllowUnauthenticated {
+		t.Fatalf("cleared provider = %+v", got)
+	}
+	for _, tc := range []struct {
+		path string
+		body string
+		code int
+	}{
+		{path: "/admin/api/providers/missing", body: `{"enabled":false}`, code: http.StatusNotFound},
+		{path: "/admin/api/providers/chatgptweb", body: `{"enabled":false}`, code: http.StatusBadRequest},
+		{path: "/admin/api/providers/openai", body: `{}`, code: http.StatusBadRequest},
+		{path: "/admin/api/providers/openai", body: `{"api_key":"new","clear_api_key":true}`, code: http.StatusBadRequest},
+	} {
+		if rec := patch(tc.path, tc.body); rec.Code != tc.code {
+			t.Fatalf("patch %s = %d, want %d: %s", tc.path, rec.Code, tc.code, rec.Body.String())
+		}
+	}
+}
+
+func TestHandlerProviderPatchReportsActivationFailure(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(path, &rejectingRuntime{cfg: cfg})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", strings.NewReader(`{"enabled":false}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "activation rejected") {
+		t.Fatalf("activation failure = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -714,8 +848,8 @@ func TestHandlerAllowsProviderChangeThatLeavesUnusedMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := NewHandler(path, &testRuntime{cfg: cfg})
-	body := []byte(`{"providers":[{"name":"openai","protocol":"openai","base_url":"https://api.openai.com/v1","models":["other-*"],"endpoints":["chat_completions"],"enabled":true}]}`)
-	req := httptest.NewRequest(http.MethodPut, "/admin/api/providers", bytes.NewReader(body))
+	body := []byte(`{"models":["other-*"]}`)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()

@@ -190,8 +190,20 @@ type providerInput struct {
 	Enabled              bool     `json:"enabled"`
 }
 
-type updateRequest struct {
-	Providers []providerInput `json:"providers"`
+// providerPatchInput uses pointers so a single Provider update can distinguish
+// an omitted field from an explicit zero value. Provider names are immutable
+// and are taken exclusively from the request path.
+type providerPatchInput struct {
+	Protocol             *string   `json:"protocol"`
+	BaseURL              *string   `json:"base_url"`
+	APIKey               *string   `json:"api_key"`
+	ClearAPIKey          *bool     `json:"clear_api_key"`
+	Models               *[]string `json:"models"`
+	Endpoints            *[]string `json:"endpoints"`
+	AllowUnauthenticated *bool     `json:"allow_unauthenticated"`
+	Priority             *int      `json:"priority"`
+	Fallback             *bool     `json:"fallback"`
+	Enabled              *bool     `json:"enabled"`
 }
 
 func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
@@ -292,11 +304,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
 		h.listProviders(w)
-	case rel == "/api/providers" && r.Method == http.MethodPut:
+	case rel == "/api/providers" && r.Method == http.MethodPost:
 		if !h.requireAdminMutation(w, r) {
 			return
 		}
-		h.updateProviders(w, r)
+		h.createProvider(w, r)
+	case strings.HasPrefix(rel, "/api/providers/") && !strings.HasSuffix(rel, "/probe") && r.Method == http.MethodPatch:
+		if !h.requireAdminMutation(w, r) {
+			return
+		}
+		h.patchProvider(w, r, rel)
+	case strings.HasPrefix(rel, "/api/providers/") && !strings.HasSuffix(rel, "/probe") && r.Method == http.MethodDelete:
+		if !h.requireAdminMutation(w, r) {
+			return
+		}
+		h.deleteProvider(w, rel)
 	case strings.HasPrefix(rel, "/api/builtin-providers/") && r.Method == http.MethodPatch:
 		if !h.requireAdminMutation(w, r) {
 			return
@@ -1021,7 +1043,7 @@ func formatOptionalTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339)
 }
 
-func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
 
@@ -1033,8 +1055,8 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	var request updateRequest
-	if err := dec.Decode(&request); err != nil {
+	var input providerInput
+	if err := dec.Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
@@ -1042,24 +1064,180 @@ func (h *Handler) updateProviders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	for _, item := range request.Providers {
-		if strings.EqualFold(strings.TrimSpace(item.Name), "chatgptweb") || strings.EqualFold(strings.TrimSpace(item.Name), "codexoauth") || strings.TrimSpace(item.Protocol) == "chatgptweb" || strings.TrimSpace(item.Protocol) == "codexoauth" {
-			writeError(w, http.StatusBadRequest, "builtin provider protocols are reserved")
-			return
-		}
+	name := strings.ToLower(strings.TrimSpace(input.Name))
+	protocol := strings.ToLower(strings.TrimSpace(input.Protocol))
+	if name == "chatgptweb" || name == "codexoauth" || protocol == "chatgptweb" || protocol == "codexoauth" {
+		writeError(w, http.StatusBadRequest, "builtin provider protocols are reserved")
+		return
 	}
 	current := h.runtime.ConfigSnapshot()
-
-	providers, err := buildManagedProviders(request.Providers, current.Providers)
+	if _, exists := current.Providers[name]; exists {
+		writeError(w, http.StatusConflict, fmt.Sprintf("provider %q already exists", name))
+		return
+	}
+	created, err := buildManagedProviders([]providerInput{input}, nil)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := providerRuntime.ReplaceProviders(providers); err != nil {
-		writeError(w, http.StatusInternalServerError, "replace providers: "+err.Error())
+	next := make(map[string]config.Provider, len(current.Providers)+1)
+	for id, provider := range current.Providers {
+		next[id] = provider
+	}
+	next[name] = created[name]
+	if _, err := config.ReplaceProviders(current, next); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid provider: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "provider configuration saved and activated"})
+	if err := providerRuntime.ReplaceProviders(next); err != nil {
+		writeError(w, http.StatusInternalServerError, "create provider: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "ok", "message": "provider created and activated"})
+}
+
+func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request, rel string) {
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
+
+	providerRuntime, ok := h.runtime.(managedProviderRuntime)
+	if !ok || !providerRuntime.ProviderStorageAvailable() {
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
+		return
+	}
+	name := strings.ToLower(strings.Trim(strings.TrimPrefix(rel, "/api/providers/"), "/"))
+	if name == "" || strings.Contains(name, "/") {
+		writeError(w, http.StatusBadRequest, "provider name is required")
+		return
+	}
+	if name == "chatgptweb" || name == "codexoauth" {
+		writeError(w, http.StatusBadRequest, "builtin providers must be updated through the builtin Provider endpoint")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var input providerPatchInput
+	if err := dec.Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if err := ensureJSONEOF(dec); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if providerPatchEmpty(input) {
+		writeError(w, http.StatusBadRequest, "at least one provider field is required")
+		return
+	}
+	if input.ClearAPIKey != nil && *input.ClearAPIKey && input.APIKey != nil && strings.TrimSpace(*input.APIKey) != "" {
+		writeError(w, http.StatusBadRequest, "api_key and clear_api_key cannot be set together")
+		return
+	}
+
+	current := h.runtime.ConfigSnapshot()
+	provider, exists := current.Providers[name]
+	if !exists {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("provider %q not found", name))
+		return
+	}
+	applyProviderPatch(&provider, input)
+	provider.Name = name
+	next := make(map[string]config.Provider, len(current.Providers))
+	for id, item := range current.Providers {
+		next[id] = item
+	}
+	next[name] = provider
+	if _, err := config.ReplaceProviders(current, next); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid provider: "+err.Error())
+		return
+	}
+	if err := providerRuntime.ReplaceProviders(next); err != nil {
+		writeError(w, http.StatusInternalServerError, "update provider: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "provider updated and activated"})
+}
+
+func (h *Handler) deleteProvider(w http.ResponseWriter, rel string) {
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
+
+	providerRuntime, ok := h.runtime.(managedProviderRuntime)
+	if !ok || !providerRuntime.ProviderStorageAvailable() {
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
+		return
+	}
+	name := strings.ToLower(strings.Trim(strings.TrimPrefix(rel, "/api/providers/"), "/"))
+	if name == "" || strings.Contains(name, "/") {
+		writeError(w, http.StatusBadRequest, "provider name is required")
+		return
+	}
+	if name == "chatgptweb" || name == "codexoauth" {
+		writeError(w, http.StatusBadRequest, "builtin providers cannot be deleted")
+		return
+	}
+	current := h.runtime.ConfigSnapshot()
+	if _, exists := current.Providers[name]; !exists {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("provider %q not found", name))
+		return
+	}
+	next := make(map[string]config.Provider, len(current.Providers)-1)
+	for id, provider := range current.Providers {
+		if id != name {
+			next[id] = provider
+		}
+	}
+	if _, err := config.ReplaceProviders(current, next); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid provider catalog: "+err.Error())
+		return
+	}
+	if err := providerRuntime.ReplaceProviders(next); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete provider: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "provider deleted and activated"})
+}
+
+func providerPatchEmpty(input providerPatchInput) bool {
+	return input.Protocol == nil && input.BaseURL == nil && input.APIKey == nil && input.ClearAPIKey == nil && input.Models == nil && input.Endpoints == nil && input.AllowUnauthenticated == nil && input.Priority == nil && input.Fallback == nil && input.Enabled == nil
+}
+
+func applyProviderPatch(provider *config.Provider, input providerPatchInput) {
+	if input.Protocol != nil {
+		provider.Protocol = strings.ToLower(strings.TrimSpace(*input.Protocol))
+	}
+	if input.BaseURL != nil {
+		provider.BaseURL = strings.TrimSpace(*input.BaseURL)
+	}
+	if input.APIKey != nil && strings.TrimSpace(*input.APIKey) != "" {
+		provider.APIKey = strings.TrimSpace(*input.APIKey)
+	}
+	if input.ClearAPIKey != nil && *input.ClearAPIKey {
+		provider.APIKey = ""
+	}
+	if input.Models != nil {
+		provider.Models = append([]string(nil), (*input.Models)...)
+	}
+	if input.Endpoints != nil {
+		provider.Endpoints = append([]string(nil), (*input.Endpoints)...)
+	}
+	if input.AllowUnauthenticated != nil {
+		provider.AllowUnauthenticated = *input.AllowUnauthenticated
+	}
+	priority := config.EffectiveProviderPriority(*provider)
+	if input.Priority != nil {
+		priority = *input.Priority
+	}
+	fallback := config.EffectiveProviderFallback(*provider)
+	if input.Fallback != nil {
+		fallback = *input.Fallback
+	}
+	config.ConfigureProviderPolicy(provider, priority, fallback)
+	if input.Enabled != nil {
+		provider.Disabled = !*input.Enabled
+	}
 }
 
 func buildManagedProviders(inputs []providerInput, existing map[string]config.Provider) (map[string]config.Provider, error) {

@@ -91,7 +91,7 @@
 
 ### Provider
 
-- 管理型 Provider：编辑、启停、优先级（`-1000`~`1000`）与回退开关，保存后加密写入 DuckDB 并热更新。
+- 管理型 Provider：新增、编辑、启停和删除均使用单项接口；编辑表单只提交实际发生变化的字段，避免旧页面值覆盖其他内容。`PATCH <base>/api/providers/{name}` 只合并请求中出现的字段，未重新输入的 API Key 保持不变，只有显式 `clear_api_key: true` 才会清空。变更加密写入 DuckDB 并热更新。
 - 内建 Provider（`chatgptweb` / `codexoauth`）：展示路由启停与优先级控制、可路由账号数和模型数、不可用原因；不可删除。
 - 运行期可用性：「检查」按钮对当前 Provider 执行一次最小非流式探测，不改写配置；状态合并账号池可用性与请求健康度（`disabled` / `unknown` / `healthy` / `degraded` / `unavailable` / `credential_error` / `endpoint_drift`）。
 - 来源列仅作展示：`builtin` / `official` / `third_party`，不参与路由或安全判断。

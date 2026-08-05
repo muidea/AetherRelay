@@ -111,7 +111,7 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	}
 
 	// mutation without CSRF -> 403
-	req = httptest.NewRequest(http.MethodPut, "/ops/ai-proxy/api/providers", strings.NewReader(`{"providers":[]}`))
+	req = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/providers", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie[0])

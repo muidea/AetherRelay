@@ -198,7 +198,7 @@ codex_oauth:
 
 管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
 
-Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。管理型 Provider 可编辑优先级与回退开关；内建 Provider 不可删除，但可热更新路由启停与优先级。状态列合并账号池可用性与请求健康度，避免同一 Provider 出现两套相互矛盾的状态。
+Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。管理型 Provider 使用单项接口新增（`POST <admin_base_path>/api/providers`）、局部更新（`PATCH <admin_base_path>/api/providers/{name}`）和删除（`DELETE <admin_base_path>/api/providers/{name}`）；Web 编辑表单只提交实际变化的字段。PATCH 请求未提供 API Key 或提供空字符串时保留原凭据，只有显式 `clear_api_key: true` 才会清空。Provider 名称是不可变标识，改名需要删除旧项后新增。内建 Provider 不可删除，通过独立接口热更新路由启停与优先级。状态列合并账号池可用性与请求健康度，避免同一 Provider 出现两套相互矛盾的状态。
 
 ChatGPT Web 账号池、图片任务、图片存储与 Codex OAuth 账号池始终装配。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。两类账号导出是唯一有意返回完整凭据的管理操作，均固定返回可直接重新导入的 JSON 数组并使用 `Cache-Control: no-store`；OAuth callback、token 与代理不会写入浏览器持久化存储。
 
