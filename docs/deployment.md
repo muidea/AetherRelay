@@ -226,7 +226,7 @@ state:
 生成 Admin 密码哈希时不会启动网关，也不会读取配置：
 
 ```bash
-docker run --rm ghcr.io/muidea/ai-proxy:latest admin password-hash
+docker run --rm ghcr.io/muidea/ai-proxy:latest ai-proxy admin password-hash
 ```
 
 在未纳入版本控制的 `.env` 或容器编排的 secret 中保存实际使用的 Provider Key 和哈希。例如：

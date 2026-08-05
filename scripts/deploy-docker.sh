@@ -161,9 +161,11 @@ if [[ "$SKIP_ADMIN" != 1 && -z "$ADMIN_PASSWORD_HASH" ]]; then
     ADMIN_PASSWORD_HASH="$AI_PROXY_ADMIN_PASSWORD_HASH"
   elif [[ -t 0 && -t 1 ]]; then
     echo "==> 生成 Admin 密码哈希（密码在容器内交互输入，不进入参数/日志）"
-    ADMIN_PASSWORD_HASH="$("$DOCKER" run --rm -it "$IMAGE" admin password-hash 2>/dev/null | tail -n 1 | tr -d '\r')" \
-      || die "生成密码哈希失败"
-    [[ "$ADMIN_PASSWORD_HASH" =~ ^\$argon2id\$ ]] || die "password-hash 输出异常"
+    hash_output="$("$DOCKER" run --rm -it "$IMAGE" ai-proxy admin password-hash 2>&1)" \
+      || die "生成密码哈希失败，docker 输出: $(printf '%s' "$hash_output" | tail -n 3 | tr '\n' ' ')"
+    # pty 模式下提示与哈希混在同一输出流，提取 PHC 行。
+    ADMIN_PASSWORD_HASH="$(printf '%s' "$hash_output" | grep -o '\$argon2id\$[^[:space:]]*' | tail -n 1 | tr -d '\r')"
+    [[ "$ADMIN_PASSWORD_HASH" =~ ^\$argon2id\$ ]] || die "password-hash 输出异常: $(printf '%s' "$hash_output" | tail -n 3 | tr '\n' ' ')"
   else
     die "非交互环境无法生成 Admin 哈希；请用 --admin-password-hash 提供，或 --skip-admin 跳过"
   fi
