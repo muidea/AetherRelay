@@ -81,7 +81,19 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: scripts/build-release.sh "${{ steps.version.outputs.value }}" dist
+        run: |
+          set -o pipefail
+          if ! scripts/build-release.sh "${{ steps.version.outputs.value }}" dist 2>&1 | tee build.log; then
+            echo "build failed; see build-log artifact"
+            exit 1
+          fi
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: build.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}
