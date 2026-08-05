@@ -104,7 +104,7 @@ jobs:
             --title "diagnostic: darwin/arm64 release build failed" \
             --body "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 
-$(tail -60 build.log)" || true
+          $(tail -60 build.log)" || true
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}
