@@ -15,13 +15,14 @@
 
 ## 快速开始
 
-以下快速体验需要 Go 1.24+（源码运行）；也可以直接用发布二进制或容器镜像，见[安装与部署](docs/deployment.md)。先从示例创建配置，填入服务商和模型目录，再启动：
+以下快速体验需要 Go 1.24+（源码运行）；也可以直接用发布二进制或容器镜像，见[安装与部署](docs/deployment.md)。先从示例创建配置，再启动：
 
 ```bash
 cp config.example.yaml config.yaml
-export OPENAI_API_KEY=sk-... # 供 config.yaml 中的 ${OPENAI_API_KEY} 展开
 make run
 ```
+
+示例默认启用 ChatGPT Web 与 Codex OAuth 账号池（模型由账号池自动发现，凭据经管理台导入）；需要直连 API 服务商时，取消 `config.example.yaml` 中 `providers` 注释并按需填写。
 
 默认地址为 `http://127.0.0.1:8080`。启动后可访问：
 

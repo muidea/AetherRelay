@@ -76,12 +76,13 @@ state:
   query_cache_seconds: 15
   interaction_retention: 500
 
-# ChatGPT Web 账号池与图片能力。默认关闭；账号凭据不写入本配置，
+# ChatGPT Web 账号池与图片能力。默认启用；账号凭据不写入本配置，
+# 由 Admin 管理台导入（账号池 → ChatGPT Web）。改为 false 可整体关闭。
 chatgpt_web:
-  enabled: false
+  enabled: true
   # 控制内建 Provider 是否参与模型路由；不影响账号池、图片与临时对话。
   # 省略时跟随 enabled；Provider 管理页可热更新此项。
-  provider_enabled: false
+  provider_enabled: true
   # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 10。
   priority: 10
   # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
@@ -95,131 +96,49 @@ chatgpt_web:
     max_message_bytes: 262144
     turn_timeout_seconds: 300
 
-# 独立 Codex CLI OAuth 账号池。凭据仅保存于 state.database，不写入 YAML。
-# 模型按账号自动发现并缓存，健康账号快照的并集会对外发布；它们仅服务
-# 原生 POST /v1/responses。
+# 独立 Codex CLI OAuth 账号池。默认启用；凭据仅保存于 state.database，
+# 不写入 YAML。模型按账号自动发现并缓存，健康账号快照的并集会对外发布；
+# 它们仅服务原生 POST /v1/responses。改为 false 可整体关闭。
 codex_oauth:
-  enabled: false
+  enabled: true
   # 控制内建 Provider 是否参与模型路由；不影响 Codex 账号池维护。
   # 省略时跟随 enabled；Provider 管理页可热更新此项。
-  provider_enabled: false
+  provider_enabled: true
   # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 90。
   priority: 90
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
   refresh_account_interval_minute: 0
 
-providers:
-  # 每个 enabled provider 必须显式声明 protocol、base_url、endpoint_capabilities。
-  # 远程空 api_key 启动失败；仅 loopback 上游可设 allow_unauthenticated: true。
-  # models pattern 为大小写敏感的 glob；model_catalog 的每个条目必须被
-  # 至少一个 enabled provider 匹配（启动期校验）。
-  openai:
-    enabled: true
-    protocol: openai
-  # base_url 可带或不带 /v1；代理会按入站 path 智能拼接并去重。
-    base_url: https://onlycode.shop/v1
-    api_key: ${OPENAI_API_KEY}
-    # 省略时为 100；范围 -1000~1000，数值越大优先级越高。
-    priority: 100
-    # 作为低优先级候选时是否允许安全回退；省略时为 true。
-    fallback: true
-    endpoint_capabilities: chat_completions, responses, completions
-    models: gpt-*, chatgpt-*, o*
-  # 官方 DeepSeek（小写模型 ID）
-  deepseek:
-    enabled: true
-    protocol: openai
-    base_url: https://api.deepseek.com
-    api_key: ${DEEPSEEK_API_KEY}
-    priority: 100
-    fallback: true
-    endpoint_capabilities: chat_completions, responses, completions
-    models: deepseek-v4-flash
-  # 精确模型 grok-4.5（大小写敏感，pattern 需原文匹配）
-  krill-ai:
-    enabled: true
-    protocol: openai
-    base_url: https://api.krill-ai.com/v1
-    api_key: ${KRILL_AI_API_KEY}
-    priority: 100
-    fallback: true
-    endpoint_capabilities: chat_completions, responses, completions
-    models: grok-4.5
-  # MiniMax 系列（base_url 无 /v1，代理会按入站 path 拼接）
-  minimax:
-    enabled: true
-    protocol: openai
-    base_url: https://aiapi.bluetron.cn
-    api_key: ${MINIMAX_API_KEY}
-    priority: 100
-    fallback: true
-    endpoint_capabilities: chat_completions
-    models: MiniMax*
-  # 精确模型 DeepSeek-V4-Flash（大写，与官方小写 ID 并存于候选链）
-  aiapi-deepseek:
-    enabled: true
-    protocol: openai
-    base_url: https://aiapi.bluetron.cn
-    api_key: ${AIApi_DEEPSEEK_API_KEY}
-    priority: 100
-    fallback: true
-    endpoint_capabilities: chat_completions
-    models: DeepSeek-V4-Flash
-  # 本机/内网 embedding 服务示例（仅 loopback 上游可设 allow_unauthenticated，
-  # 此时不得同时配置 api_key）
-  embedding-e5:
-    enabled: true
-    protocol: openai
-    base_url: http://127.0.0.1:8010
-    allow_unauthenticated: true
-    priority: 100
-    fallback: true
-    endpoint_capabilities: embeddings
-    models: intfloat/multilingual-e5-small
-  # 如需 Anthropic 协议转换（/v1/messages ↔ openai chat），自行添加
-  # protocol: anthropic 的 provider 并在 catalog 登记对应模型。
-  # chatgptweb 与 codexoauth 是保留的内建 Provider ID，禁止在 providers 中声明。
-  # 启用 chatgpt_web.enabled 后由运行时自动注入，模型来自账号池发现结果。
+# 静态 Provider。默认不内置任何占位 Provider：模型由 ChatGPT Web 与
+# Codex OAuth 账号池自动发现。需要直连 API 服务商时，取消注释并按需填写：
+#   - 每个 enabled provider 必须显式声明 protocol、base_url、endpoint_capabilities。
+#   - 远程空 api_key 启动失败；仅 loopback 上游可设 allow_unauthenticated: true
+#     （此时不得同时配置 api_key）。
+#   - models 为大小写敏感的 glob；model_catalog 的每个条目必须被至少一个
+#     enabled provider 匹配（启动期校验）。
+# openai:
+#   enabled: true
+#   protocol: openai
+#   base_url: https://api.example.com/v1   # 可带或不带 /v1，代理自动去重拼接
+#   api_key: ${OPENAI_API_KEY}
+#   priority: 100                          # 范围 -1000~1000，数值越大优先级越高
+#   fallback: true                         # 是否允许作为低优先级候选的安全回退
+#   endpoint_capabilities: chat_completions, responses, completions
+#   models: gpt-*, chatgpt-*, o*
+# 如需 Anthropic 协议转换（/v1/messages ↔ openai chat），添加 protocol: anthropic
+# 的 provider 并在 model_catalog 登记对应模型。
+# chatgptweb 与 codexoauth 是保留的内建 Provider ID，禁止在 providers 中声明；
+# 分别由 chatgpt_web / codex_oauth 在运行时注入，模型来自账号池发现结果。
 
-# 全局模型目录(各 Provider 共用)。model ID 严格区分大小写(exact match)。
-# GET /v1/models 仅返回此处登记的模型,
-# 并附带 contextWindowTokens / maxOutputTokens / operations。model_catalog 是路由与能力的共同 authority。
-model_catalog:
-  # 与 providers.models pattern 大小写敏感匹配；同名内建模型会共同构成候选链。
-  DeepSeek-V4-Flash:
-    context_window_tokens: 1000000
-    max_output_tokens: 65536
-    operations: chat_completions
-  deepseek-v4-flash:
-    context_window_tokens: 1000000
-    max_output_tokens: 65536
-    operations: chat_completions
-  gpt-5.5:
-    context_window_tokens: 400000
-    max_output_tokens: 128000
-    operations: chat_completions
-  MiniMax-M3:
-    context_window_tokens: 1000000
-    max_output_tokens: 32768
-    operations: chat_completions
-  gpt-5.3-codex:
-    context_window_tokens: 400000
-    max_output_tokens: 128000
-    operations: chat_completions
-  grok-4.5:
-    context_window_tokens: 500000
-    max_output_tokens: 16384
-    operations: chat_completions
-  MiniMax-M2.7-highspeed:
-    context_window_tokens: 204800
-    max_output_tokens: 32768
-    operations: chat_completions
-  intfloat/multilingual-e5-small:
-    context_window_tokens: 512
-    max_output_tokens: 1
-    operations: embeddings
-  # ChatGPT Web 与 Codex OAuth 自动发现的模型不写入 model_catalog。
-
-  # 同名静态与自动模型会共同构成候选链：静态默认 priority=100，
-  # Codex OAuth 固定为 90（可用于原生 /v1/responses 回退），
-  # ChatGPT Web 固定为 10 且默认不作为回退。
+# 全局模型目录（静态 Provider 共用）。model ID 严格区分大小写（exact match）；
+# GET /v1/models 返回此处登记的模型与账号池自动发现的模型。
+# ChatGPT Web 与 Codex OAuth 自动发现的模型不需要登记；登记静态模型时，
+# 每个条目必须被至少一个 enabled provider 的 models pattern 匹配（示例）：
+# model_catalog:
+#   gpt-5.5:
+#     context_window_tokens: 400000
+#     max_output_tokens: 128000
+#     operations: chat_completions
+# 同名静态与自动模型会共同构成候选链：静态默认 priority=100，
+# Codex OAuth 固定为 90（可用于原生 /v1/responses 回退），
+# ChatGPT Web 固定为 10 且默认不作为回退。

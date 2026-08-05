@@ -54,7 +54,7 @@ ${EDITOR:-vi} config.yaml
 
 配置要点（完整说明见[配置参考](configuration.md)）：
 
-- **Provider 条目必须显式写在配置文件中**，不能靠环境变量创建 provider。删除或禁用示例中未使用的 Provider；所有仍启用的远程 Provider 都必须有可用凭据。
+- **Provider 条目必须显式写在配置文件中**，不能靠环境变量创建 provider。示例默认不内置静态 Provider（模型由 ChatGPT Web / Codex OAuth 账号池自动发现，凭据经管理台导入）；需要直连 API 服务商时取消 `providers` 注释并按需填写，所有启用的远程 Provider 都必须有可用凭据。
 - 密钥用 `${ENV}` 展开：`api_key: ${OPENAI_API_KEY}`，运行时由环境变量填充。
 - 每个 enabled Provider 必须显式声明 `protocol`、`base_url`、`endpoint_capabilities` 与 `models`。
 - `model_catalog` 是模型、容量与 operation 的权威，模型 ID exact 且严格区分大小写；每个模型至少匹配一个 enabled Provider。
