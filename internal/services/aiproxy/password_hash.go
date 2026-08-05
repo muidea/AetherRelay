@@ -1,15 +1,12 @@
 package aiproxy
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"ai-proxy/internal/pkg/aiproxyconfig"
-
-	"golang.org/x/sys/unix"
 )
 
 // tryAdminSubcommand 处理受限的 admin 子命令。
@@ -105,34 +102,6 @@ func promptAdminPasswordHash() (string, error) {
 		return "", errors.New("failed to hash password")
 	}
 	return phc, nil
-}
-
-func isTerminal(fd int) bool {
-	_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	return err == nil
-}
-
-func readPassword(fd int) ([]byte, error) {
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	if err != nil {
-		return nil, err
-	}
-	raw := *old
-	raw.Lflag &^= unix.ECHO
-	raw.Lflag |= unix.ICANON | unix.ISIG
-	raw.Iflag |= unix.ICRNL
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
-		return nil, err
-	}
-	defer func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, old) }()
-
-	reader := bufio.NewReader(os.NewFile(uintptr(fd), "/dev/stdin"))
-	line, err := reader.ReadString('\n')
-	if err != nil && len(line) == 0 {
-		return nil, err
-	}
-	line = strings.TrimRight(line, "\r\n")
-	return []byte(line), nil
 }
 
 func zeroBytes(b []byte) {

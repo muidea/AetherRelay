@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	events "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
@@ -567,14 +566,6 @@ func (s *Store) CleanupToTarget(targetFreeMB int64, dryRun bool) (events.Cleanup
 	result.CurrentFreeMB = currentFreeMB + result.FreedMB
 	result.Done = result.CurrentFreeMB >= targetFreeMB
 	return result, nil
-}
-
-func diskSpace(path string) (total, free int64, err error) {
-	var filesystem syscall.Statfs_t
-	if err = syscall.Statfs(path, &filesystem); err != nil {
-		return 0, 0, err
-	}
-	return int64(filesystem.Blocks) * int64(filesystem.Bsize), int64(filesystem.Bavail) * int64(filesystem.Bsize), nil
 }
 
 func (s *Store) AbsolutePath(rel string) string {

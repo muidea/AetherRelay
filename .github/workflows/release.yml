@@ -50,14 +50,14 @@ jobs:
           - runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          # Apple Silicon 原生 runner；Intel runner 无法交叉编译
-          # DuckDB CGO 的 darwin/arm64 目标（见 operations.md 构建与发布）。
-          - runner: macos-15-xlarge
+          # darwin/amd64 → darwin/arm64 是 Go 官方支持的 CGO 交叉编译组合
+          # （clang -arch arm64），macos-14（Intel）已验证可发布。
+          - runner: macos-14
             goos: darwin
             goarch: arm64
-          # Windows 不发布原生包：代码依赖 x/sys/unix 的 termios（admin
-          # password-hash），且 go-duckdb 需要 MinGW CGO 工具链，从未验证。
-          # Windows 用户请使用 WSL2 或容器部署。
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
     needs: verify
     runs-on: ${{ matrix.runner }}
     steps:
