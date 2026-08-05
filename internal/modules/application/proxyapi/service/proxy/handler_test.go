@@ -2328,6 +2328,51 @@ func TestModelsListResponseUsesTypedDTO(t *testing.T) {
 	}
 }
 
+func TestDisablingProviderRefreshesModelsAndFeatureCatalog(t *testing.T) {
+	tmpDir := t.TempDir()
+	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr:     ":0",
+		InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"only": {
+				Name: "only", Protocol: "openai", BaseURL: "https://only.test", APIKey: "k",
+				Models: []string{"only-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
+			},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{"only-model": {ID: "only-model"}},
+	})
+	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	if catalog := handler.FeatureCatalog(context.Background()); len(catalog.TextModels) != 1 || catalog.TextModels[0].ID != "only-model" {
+		t.Fatalf("initial feature catalog = %+v", catalog.TextModels)
+	}
+
+	provider := cfg.Providers["only"]
+	provider.Disabled = true
+	cfg.Providers["only"] = provider
+	if err := handler.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	resp := newResponseRecorder()
+	handler.ServeHTTP(resp, newRequest(http.MethodGet, "/v1/models", ""))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("models status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var payload ModelsListResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data) != 0 {
+		t.Fatalf("disabled Provider remains in /v1/models: %+v", payload.Data)
+	}
+	if catalog := handler.FeatureCatalog(context.Background()); len(catalog.TextModels) != 0 {
+		t.Fatalf("disabled Provider remains in feature catalog: %+v", catalog.TextModels)
+	}
+}
+
 func TestModelsListOmitsUnknownCapacityForExactProviderModel(t *testing.T) {
 	tmpDir := t.TempDir()
 	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
