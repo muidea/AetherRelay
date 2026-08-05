@@ -50,9 +50,9 @@ jobs:
           - runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          # Apple Silicon 原生 runner；macos-14 为 Intel，无法交叉编译
+          # Apple Silicon 原生 runner；Intel runner 无法交叉编译
           # DuckDB CGO 的 darwin/arm64 目标（见 operations.md 构建与发布）。
-          - runner: macos-14-xlarge
+          - runner: macos-15-xlarge
             goos: darwin
             goarch: arm64
           # Windows 不发布原生包：代码依赖 x/sys/unix 的 termios（admin
