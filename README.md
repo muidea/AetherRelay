@@ -1,10 +1,21 @@
 # ai-proxy
 
-轻量级本地 LLM API 网关。它提供 OpenAI 和 Anthropic 标准入站端点，严格按请求中的 exact `model` 解析有序 Provider 候选链；仅在响应尚未提交且失败可安全重试时回退到低优先级候选。用量明细持久化至进程内嵌 DuckDB，并提供本地 Web 管理页。
+一个本地运行的 AI 网关：一个地址、一套标准接口，就能接入多家 AI 服务。现有 OpenAI 或 Anthropic 客户端改一下 base URL 即可使用；网关负责挑选服务商、在故障时自动切换，并记录每一次调用的用量。单进程、无外部依赖，开箱即用，附带本地管理页面。
+
+## 功能亮点
+
+- **统一入口，无需改代码**：只提供 OpenAI 与 Anthropic 两种标准接口，兼容绝大多数 AI 客户端与工具；按请求中的模型名精确匹配对应的服务商。
+- **多服务商自动切换**：同一个模型可以配置多家服务商并设定优先级，网关按序挑选；上游暂时不可用且响应尚未返回时，自动尝试下一个服务商。
+- **用量自动记账**：每次调用自动记录用量与归属（哪个客户端、哪个模型、哪个服务商），管理页面可按时间、Key、模型筛选并导出 CSV。
+- **网页管理台**：在浏览器中管理服务商与客户端密钥、查看用量统计、体检各服务商可用性，并展示系统信息（版本、运行时长、开放端点与认证方式）。
+- **ChatGPT 网页账号接入**：导入 ChatGPT 网页账号即可使用文本对话、图片生成与联网搜索，无需官方 API Key。
+- **Codex OAuth 账号池**：接入 Codex CLI 登录的账号，提供 Responses 接口；模型自动发现、登录态自动刷新、额度情况一目了然。
+- **管理台工具集**：临时对话（支持发图与逐轮联网搜索）、图片任务与图片库、在线搜索，供管理员日常使用。
+- **安全默认**：默认只监听本机；所有请求必须携带客户端密钥；密钥与账号凭据不写入日志、数据库或网页。
 
 ## 快速开始
 
-要求 Go 1.24+。先从示例创建配置，填入 Provider 和模型目录，再启动服务：
+以下快速体验需要 Go 1.24+（源码运行）；也可以直接用发布二进制或容器镜像，见[安装与部署](docs/deployment.md)。先从示例创建配置，填入服务商和模型目录，再启动：
 
 ```bash
 cp config.example.yaml config.yaml
@@ -14,18 +25,18 @@ make run
 
 默认地址为 `http://127.0.0.1:8080`。启动后可访问：
 
-- [Provider、客户端 Key、使用统计、账号池与功能集管理](http://127.0.0.1:8080/admin/)（账号池区分 ChatGPT Web / Codex OAuth；功能集包含图片任务、图片库、在线搜索与临时对话。在线搜索历史按管理员隔离并服务端保存；临时对话可按轮启用受限联网搜索。默认仅 loopback；可启用账号密码登录后远程访问，见配置参考）
+- [本地管理台](http://127.0.0.1:8080/admin/)：管理服务商与客户端密钥、查看用量统计与系统信息；「账号池」区分 ChatGPT Web / Codex OAuth，「功能集」包含图片任务、图片库、在线搜索与临时对话（搜索历史按管理员隔离并保存在服务器，临时对话支持逐轮联网搜索）。默认仅本机可访问，可启用账号密码登录后远程访问，见配置参考
 - `GET /healthz`
-- `GET /metrics`、`GET /stats`（默认仅 loopback）
+- `GET /metrics`、`GET /stats`（默认仅本机可访问）
 
-客户端使用裸模型名与标准地址：
+客户端直接使用模型名，把请求地址指向网关即可：
 
 ```text
 OpenAI API base:    http://127.0.0.1:8080/v1
 Anthropic API base: http://127.0.0.1:8080
 ```
 
-所有数据端点都要求客户端 API Key：OpenAI 客户端使用 `Authorization: Bearer <key>`，Anthropic 客户端使用 `X-API-Key: <key>`。缺失、未知或禁用的 Key 返回 401，且不产生用量记录。
+所有调用都需携带客户端密钥：OpenAI 客户端用 `Authorization: Bearer <key>`，Anthropic 客户端用 `X-API-Key: <key>`。缺少密钥、密钥错误或已停用时请求会被拒绝（401），且不会产生用量记录。
 
 ## 容器快速开始
 
@@ -39,7 +50,7 @@ cp config.example.yaml deploy/config/config.yaml
 docker compose up -d
 ```
 
-完整的配置目录权限、Admin 登录、持久化与升级步骤见[容器部署](docs/operations.md#容器部署)。
+完整的配置目录权限、Admin 登录、持久化与升级步骤见[安装与部署](docs/deployment.md#容器部署)。
 
 ## 常用命令
 
@@ -59,12 +70,13 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创�
 
 | 主题 | 文档 |
 | --- | --- |
+| 安装与部署（源码/二进制/容器、升级回滚） | [安装与部署](docs/deployment.md) |
+| 当前功能说明（端点、路由、Admin、账号池等） | [功能说明](docs/features.md) |
 | 配置、客户端 Key、Provider 管理 | [配置参考](docs/configuration.md) |
 | 运行、监控、归档、探针、备份与发布 | [运维与发布](docs/operations.md) |
 | 目录职责与 magicCommon 生命周期 | [代码结构](docs/structure.md) |
-| 已实现功能的设计背景 | [客户端 Key](docs/client-api-key-management-design-2026-07-20.md)、[Admin 登录](docs/admin-login-security-design-2026-07-23.md)、[ChatGPT Web 管理](docs/chatgpt-web-admin-closure-design-2026-07-26.md)、[ChatGPT Web 联网搜索](docs/chatgpt-web-search-design-2026-08-03.md)、[Codex OAuth 号池](docs/codex-oauth-account-pool-design-2026-07-30.md)、[SSE](docs/unified-sse-streaming-design-2026-07-23.md) |
-| 路由与协议设计参考 | [Provider Capability Contract](docs/provider-capability-contract-design-2026-07-15.md) |
+| 最终设计（按功能结构） | [设计索引](docs/design/index.md) · [核心代理与路由](docs/design/proxy-core.md) · [安全与认证](docs/design/security.md) · [ChatGPT Web 能力](docs/design/chatgpt-web.md) · [Codex OAuth 账号池](docs/design/codex-oauth.md) |
 
-带日期的计划、审计和现场记录是历史材料，不是运行时合同；当前行为以本 README、配置参考、运维说明、代码结构以及自动化测试为准。
+带日期的计划、审计和现场记录是历史材料，不是运行时合同；当前行为以本 README、配置参考、运维说明、代码结构以及自动化测试为准。已完成的中间过程与失效文档归档在 [`docs/archive/`](docs/archive/)。
 
 `config.example.yaml` 是可复制的完整配置起点；所有 Provider 必须显式写入配置文件，不能由环境变量创建。

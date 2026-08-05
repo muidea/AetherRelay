@@ -278,4 +278,4 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 | `POST` | `/api/chatgpt/temporary-conversations/{id}/turns/{turn_id}/cancel` | 取消本轮 |
 | `DELETE` | `/api/chatgpt/temporary-conversations/{id}` | 永久删除 |
 
-安全不变量：owner 仅来自已认证 Admin principal；响应 `Cache-Control: no-store`；页面不将消息正文/上游 conversation id/token 写入 localStorage 或 sessionStorage；错误 envelope 不回传 prompt 或原始 SSE。详见 `docs/chatgpt-temporary-chat-design-2026-07-27.md`。
+安全不变量：owner 仅来自已认证 Admin principal；响应 `Cache-Control: no-store`；页面不将消息正文/上游 conversation id/token 写入 localStorage 或 sessionStorage；错误 envelope 不回传 prompt 或原始 SSE。详见 `archive/chatgpt-temporary-chat-design-2026-07-27.md`。

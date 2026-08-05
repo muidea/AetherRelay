@@ -30,7 +30,7 @@ model_catalog:
     operations: chat_completions
 ```
 
-`model_catalog` 是静态 Provider 的模型、容量与 operation 权威；模型 ID exact 且严格区分大小写。每个模型会解析为有序 Provider 候选链，而不是唯一 RouteOwner。启用 ChatGPT Web 或 Codex OAuth 后，运行时有效目录还会合成各自的内建模型并参与同一候选链。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；[Provider Capability Contract](provider-capability-contract-design-2026-07-15.md) 保留为设计参考。
+`model_catalog` 是静态 Provider 的模型、容量与 operation 权威；模型 ID exact 且严格区分大小写。每个模型会解析为有序 Provider 候选链，而不是唯一 RouteOwner。启用 ChatGPT Web 或 Codex OAuth 后，运行时有效目录还会合成各自的内建模型并参与同一候选链。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；设计背景见[核心代理与路由设计](design/proxy-core.md)。
 
 ## Provider 与模型路由
 
@@ -112,7 +112,7 @@ client_api_keys:
 - 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
 - 跨协议转换只保证基础文本，tools、thinking、多模态等未支持能力在访问上游前拒绝。
 
-浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[统一文本流式 SSE 收口设计](unified-sse-streaming-design-2026-07-23.md)。
+浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
 
 ## 统一状态工作区
 
@@ -226,7 +226,7 @@ POST   <base>/api/chatgpt/accounts/export          # {"ids":[...]}；返回凭�
 
 ### 安全登录模式（`admin_auth_enabled: true`）
 
-开启后取消 Admin 的 loopback 限制；任意来源都必须先登录并持有有效会话。详见 [Admin 登录安全设计](admin-login-security-design-2026-07-23.md)。
+开启后取消 Admin 的 loopback 限制；任意来源都必须先登录并持有有效会话。设计详见[安全与认证设计](design/security.md#admin-登录可选)。
 
 ```bash
 # 交互式生成 Argon2id 密码哈希（仅 TTY；密码不进参数/日志）

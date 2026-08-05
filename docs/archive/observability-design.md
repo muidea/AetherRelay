@@ -12,8 +12,8 @@ Last Updated: 2026-06-11
 
 Related:
 
-- [README.md](../README.md)
-- [prd.md](../prd.md)
+- [README.md](../../README.md)
+- [prd.md](../../prd.md)
 - `internal/pkg/aiproxyconfig/config.go`
 - `internal/pkg/aiproxyarchive/recorder.go`
 - `internal/pkg/aiproxyusage/`（当前实现；本文其余 CSV 内容为历史记录）

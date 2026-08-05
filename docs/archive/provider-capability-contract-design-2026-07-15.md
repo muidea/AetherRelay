@@ -16,7 +16,7 @@ Review State: archived 2026-07-15 closure record
 同步，本轮不把跨仓联调计入 ai-proxy 代码修改范围。
 
 C01–C05 的实现收口与 C06 的 SDK/mock 验收已经落入代码；全量门禁和 provider direct capability live matrix
-仍需按本文与 `docs/provider-capability-audit-2026-07-15.md` 复核。因此本文保持 `active`，不得把部分 chat live
+仍需按本文与 `archive/provider-capability-audit-2026-07-15.md` 复核。因此本文保持 `active`，不得把部分 chat live
 结果表述为 C01–C08 全部完成。
 
 用户补充合同：model ID **严格区分大小写**，`DeepSeek-V4-Flash` 与 `deepseek-v4-flash` 视为两个不同 model。
@@ -557,7 +557,7 @@ go run ./cmd/ai-proxy-probe -config ./config.yaml -provider <route-owner> -capab
 ```
 
 该入口只读取并校验现有配置，不修改 provider/catalog，不由 ai-proxy server 启动链调用。
-每次发布的审计结果归档到 `docs/provider-capability-audit-<date>.md`，至少包含：
+每次发布的审计结果归档到 `docs/archive/provider-capability-audit-<date>.md`，至少包含：
 
 - RouteOwner、protocol、direct capability、model、验证时间和环境。
 - 脱敏后的 HTTP status、streaming 是否覆盖、结论与能力漂移处置。
