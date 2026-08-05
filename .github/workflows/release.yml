@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -94,6 +95,16 @@ jobs:
           name: build-log-${{ matrix.goos }}-${{ matrix.goarch }}
           path: build.log
           if-no-files-found: ignore
+      - name: Open diagnostic issue on failure
+        if: failure() && matrix.goos == 'darwin'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "diagnostic: darwin/arm64 release build failed" \
+            --body "run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+$(tail -60 build.log)" || true
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}
