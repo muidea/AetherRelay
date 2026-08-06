@@ -131,7 +131,7 @@ func (s *Upstream) handleGetUserInfo(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
-	info, err := client.GetUserInfo()
+	info, err := client.GetUserInfoContext(ev.Context())
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return

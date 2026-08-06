@@ -181,9 +181,12 @@ codex_oauth:
   refresh_account_interval_minute: 0
 ```
 
-- 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 `GET /backend-api/codex/models` 自动发现模型；结果以受限投影持久化到账号池，6 小时后过期。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
+- 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 `GET /backend-api/codex/models` 自动发现模型；结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。
 - 管理页可按账号读取 `GET /backend-api/wham/usage`，并展示上游观测到的套餐类型、主/次窗口、代码审查和附加窗口的 `used_percent`、恢复时间与限制状态。导入、凭据刷新、OAuth 完成会触发一次账号范围刷新；也可在账号池选中账号后手动刷新。快照有效期为 15 分钟，刷新失败会保留上一份快照并标记错误；不会高频轮询，也不把窗口百分比伪装为 Token 数、请求数或路由可用性。
+- Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
+- Codex 的 refresh token 健康与当前 access token 路由健康分别投影：凭据刷新失败会保留安全错误类别和时间，但不会仅凭该结果把仍能通过鉴权的账号移出路由。成功的模型发现、用量查询或 Responses 请求会恢复系统判定的异常状态；操作员显式设置的 `disabled` 永不被后台成功结果覆盖。恢复状态后会立即刷新有效模型目录。
+- Codex Responses 在账号切换耗尽时保留最后一个真实上游失败，不再用后续的“无可用账号”覆盖首个 401、403、429 或 5xx。安全错误响应和日志会携带上游 HTTP 状态但不记录响应正文、Token、账号头或代理；上游 401 且 refresh token 恢复失败时按 `invalid_token` 反馈，不再误记为普通“上游故障”。
 - 调用中上游明确返回的 `usage_limit_reached` 仍会另行记录为账号/模型级额度耗尽与可选恢复时间，并驱动该模型冷却；普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
 - 可路由模型始终是全部健康账号模型快照的并集；不提供 `codex_oauth.models` 筛选项。管理型 Provider 使用同名模型时，两者都会进入候选链；其默认优先级为 `100`，Codex OAuth 默认 `90`，可在安全的原生 Responses 失败场景回退。`provider_enabled` 与 `priority` 是可热更新的路由策略。
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）以 AES-256-GCM 加密载荷写入 `state.database`。管理列表严格脱敏，不返回 token、账号 ID 或代理 URL。
@@ -194,7 +197,7 @@ codex_oauth:
 
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」按 ChatGPT Web 与 Codex OAuth 分组，「功能集」提供图片任务、图片库、在线搜索与临时对话。Codex 账号表展示每个账号的模型缓存、发现进度/退避、上游用量窗口/刷新进度、模型冷却与调用中观察到的额度耗尽状态；内建 Provider 会直接显示不可用原因、可路由账号数和模型数。相关管理 API 位于该前缀下的 `/api/chatgpt/**`、`/api/codex/**` 与 `/api/features/**`。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」使用统一账号列表展示 ChatGPT Web 与 Codex CLI 两个凭据槽，「功能集」提供图片任务、图片库、在线搜索与临时对话。账号关联使用不可逆 `identity_key`，不向 Admin 暴露上游 account ID；每个槽分别展示凭据刷新、额度、模型缓存、用量窗口和能力故障，不能跨槽共享 refresh token。统一页面统计正常/限流、异常/禁用账号数，以及正常或限流 ChatGPT Web 槽的可用图片额度合计；禁用或异常槽不计入图片额度。内建 Provider 会直接显示不可用原因、可路由账号数和模型数。槽位操作仍通过该 Admin 前缀下的受鉴权账号 API 执行。
 
 管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
 
@@ -203,6 +206,8 @@ Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `bu
 ChatGPT Web 账号池、图片任务、图片存储与 Codex OAuth 账号池始终装配。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。两类账号导出是唯一有意返回完整凭据的管理操作，均固定返回可直接重新导入的 JSON 数组并使用 `Cache-Control: no-store`；OAuth callback、token 与代理不会写入浏览器持久化存储。
 
 ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。列表会分别投影仍生效的文本与生图模型冷却（模型、错误类别、恢复时间），以及最近凭据刷新成功时间或失败类别/时间，供管理页只读展示；绝不返回原始 OAuth 错误、Token 或代理。冷却窗口目前固定为 60 秒，不提供 YAML 或 Web 调参。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
+
+ChatGPT Web 的 `quota` 是上游 `conversation/init` 返回的图片生成剩余额度，不是文本 Token 或请求额度。刷新兼容额度字段和图片能力名称的 snake_case / camelCase 变体；无法识别额度时该账号刷新失败并保留原值，只有上游明确返回零额度或图片能力阻断时才记为 `0`。纯 access token、OAuth 登录、完整 OAuth 导入和密码登录来源采用同一刷新语义；手工刷新可重试异常账号，但不会绕过显式禁用。手工刷新同时尝试续期临期 OAuth 凭据；即使旧 access token 仍能读取账号信息，续期失败也会计入该账号失败并在进度中明确显示，不再报告为整体成功。所选账号无一可刷新时任务返回明确错误，不显示为成功的 `0/0`。单账号信息刷新最多等待 45 秒，取消会传递至上游 HTTP 请求；刷新进度使用独立调度通道，不会被长耗时账号命令阻塞。Codex OAuth 用量使用独立的窗口快照；显式用量刷新可重试异常账号并在 `401` 后刷新凭据一次，但不会绕过显式禁用。未进入候选的所选账号计入失败和总数，不显示为 `0/0`。未知 `used_percent` 不按 `0%` 处理，无有效窗口或解析失败时保留最近一次成功快照并记录安全错误类别。
 
 ```text
 POST   <base>/api/chatgpt/accounts                 # {"tokens":[...],"accounts":[...],"source_type":"web"}；tokens/accounts 至少一项
@@ -215,7 +220,7 @@ POST   <base>/api/codex/accounts/export            # {"ids":[...]}；返回可�
 
 导出属于刻意的敏感操作，只应在受控的本机或已启用 HTTPS 登录保护的 Admin 会话中调用；不要把响应写入日志、浏览器持久化存储或工单。
 
-两类账号池的导入/导出遵循同一使用约定：导入接受 `{ "accounts": [...] }`，导出固定返回数组；完整 OAuth 对象要求 `access_token` 与 `refresh_token`，`id_token` 可选。ChatGPT Web 额外接受 `tokens` 字符串数组及管理页中的换行/逗号分隔 token 文本，适合只有 access token 的场景；完整对象不会降级成单 token 导入。
+两类账号池的导入/导出遵循同一使用约定：导入接受 `{ "accounts": [...] }`，导出固定返回数组；完整 OAuth 对象要求 `credential_type`、`access_token` 与 `refresh_token`，`id_token` 可选。ChatGPT Web 导出固定标记 `credential_type: chatgpt_web`，Codex 导出固定标记 `credential_type: codex_cli`；服务端拒绝把一类 OAuth 导出导入另一类账号池，避免使用错误 OAuth client 刷新 refresh token。ChatGPT Web 额外接受 `tokens` 字符串数组及管理页中的换行/逗号分隔 token 文本，适合只有 access token 的场景；完整对象不会降级成单 token 导入。
 
 管理页以 JSON 文件作为主要导入方式，可直接选择上述导出文件；粘贴 JSON 是辅助方式，两者不能同时使用。浏览器只在提交期间读取文件，不预览、不写入 Web Storage，并在提交或关闭弹窗后清空输入。文件及 HTTP 请求体上限为 1 MiB，单次最多导入 1000 个账号；后端会再次执行数量和凭据结构校验。
 

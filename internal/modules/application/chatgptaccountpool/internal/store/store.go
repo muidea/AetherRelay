@@ -14,6 +14,7 @@ import (
 	"time"
 
 	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	"ai-proxy/internal/pkg/accountidentity"
 	"ai-proxy/internal/pkg/aiproxycredential"
 	"ai-proxy/internal/pkg/aiproxystate"
 )
@@ -323,16 +324,17 @@ func (s *Store) exportLocked(tokens []string) []events.ExportItem {
 			email := firstNonEmpty(acc.Email, asString(profileClaims["email"]), asString(idClaims["email"]))
 			accountID := firstNonEmpty(extraString(acc, "account_id"), asString(authClaims["chatgpt_account_id"]), extraString(acc, "user_id"))
 			items = append(items, events.ExportItem{
-				Type:         firstNonEmpty(extraString(acc, "export_type"), "codex"),
-				Email:        email,
-				AccountID:    accountID,
-				AccessToken:  acc.AccessToken,
-				RefreshToken: acc.RefreshToken,
-				IDToken:      idToken,
-				Expired:      firstNonEmpty(jwtTimestamp(accessClaims, "exp"), extraString(acc, "expired")),
-				LastRefresh:  firstNonEmpty(jwtTimestamp(accessClaims, "iat"), extraString(acc, "last_refresh")),
-				Password:     acc.Password,
-				Proxy:        acc.Proxy,
+				CredentialType: "chatgpt_web",
+				Type:           firstNonEmpty(extraString(acc, "export_type"), "codex"),
+				Email:          email,
+				AccountID:      accountID,
+				AccessToken:    acc.AccessToken,
+				RefreshToken:   acc.RefreshToken,
+				IDToken:        idToken,
+				Expired:        firstNonEmpty(jwtTimestamp(accessClaims, "exp"), extraString(acc, "expired")),
+				LastRefresh:    firstNonEmpty(jwtTimestamp(accessClaims, "iat"), extraString(acc, "last_refresh")),
+				Password:       acc.Password,
+				Proxy:          acc.Proxy,
 			})
 		}
 	}
@@ -414,6 +416,25 @@ func (s *Store) RefreshCandidatesForIDs(ids []string) []events.AccountView {
 	return s.refreshCandidatesLocked(s.tokensForIDsLocked(ids))
 }
 
+// AccountIDsForAccessTokens resolves owner-local selectors to stable account
+// IDs. It is used by scoped management operations before an OAuth rotation;
+// the access tokens never leave the owner or cross an EventHub boundary.
+func (s *Store) AccountIDsForAccessTokens(tokens []string) map[string]struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make(map[string]struct{})
+	for _, token := range tokens {
+		token = s.resolveTokenLocked(trim(token))
+		if token == "" {
+			continue
+		}
+		if acc := s.items[token]; acc != nil && strings.TrimSpace(acc.ID) != "" {
+			ids[acc.ID] = struct{}{}
+		}
+	}
+	return ids
+}
+
 func (s *Store) refreshCandidates(tokens []string) []events.AccountView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -437,7 +458,11 @@ func (s *Store) refreshCandidatesLocked(tokens []string) []events.AccountView {
 		if acc == nil || !isWebCompatibleSource(acc.SourceType) {
 			continue
 		}
-		if acc.Status != StatusNormal && acc.Status != StatusLimited {
+		// Scheduled scans only revisit routable accounts. An explicit manual
+		// selection may also retry an abnormal account so an operator can
+		// recover it after its credential or network issue has been fixed.
+		// Disabled remains an operator-owned state and is never bypassed.
+		if acc.Status != StatusNormal && acc.Status != StatusLimited && (!hasSelection || acc.Status != StatusAbnormal) {
 			continue
 		}
 		out = append(out, toView(acc, true))
@@ -451,7 +476,7 @@ func (s *Store) refreshCandidatesLocked(tokens []string) []events.AccountView {
 // token imported as "web".
 func isWebCompatibleSource(sourceType string) bool {
 	switch strings.ToLower(trim(sourceType)) {
-	case "", "web", "oauth_login", "password":
+	case "", "web", "oauth_login", "oauth_import", "password":
 		return true
 	default:
 		return false
@@ -836,6 +861,9 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 	inputs := make([]input, 0, len(tokens)+len(accounts))
 	for i := range accounts {
 		account := accounts[i]
+		if kind := strings.ToLower(trim(account.CredentialType)); kind != "" && kind != "chatgpt_web" {
+			return 0, 0, 0, fmt.Errorf("credential_type %q cannot be imported into ChatGPT Web", kind)
+		}
 		account.AccessToken = trim(account.AccessToken)
 		account.RefreshToken = trim(account.RefreshToken)
 		account.IDToken = trim(account.IDToken)
@@ -1458,6 +1486,7 @@ func (s *Store) Health() events.HealthResult {
 func toView(acc *Account, withToken bool) events.AccountView {
 	v := events.AccountView{
 		ID:                         acc.ID,
+		IdentityKey:                accountidentity.Key(extraString(acc, "account_id"), acc.Email),
 		Email:                      acc.Email,
 		Type:                       acc.Type,
 		SourceType:                 acc.SourceType,

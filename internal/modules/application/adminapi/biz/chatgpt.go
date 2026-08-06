@@ -103,7 +103,11 @@ func (s *Admin) RefreshChatGPTAccountsByID(ctx context.Context, ids []string) (a
 	return result, nil
 }
 func (s *Admin) ChatGPTAccountRefreshProgress(ctx context.Context, id string) (accevents.RefreshProgress, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshProgress, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshProgressCommand{ProgressID: id})).Get()
+	ev := event.NewEventWithContext(accevents.TopicRefreshProgress, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshProgressCommand{ProgressID: id})
+	// Progress reads are mutex-protected and must remain observable while any
+	// long-running account command occupies the account-pool's default lane.
+	ev.BindLaneKey(acccommon.UnitID + "/refresh-progress")
+	value, err := s.SendEvent(ev).Get()
 	if err != nil {
 		return accevents.RefreshProgress{}, fmt.Errorf("chatgpt account refresh progress unavailable")
 	}

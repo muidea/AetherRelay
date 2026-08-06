@@ -12,6 +12,7 @@ import (
 	"time"
 
 	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	"ai-proxy/internal/pkg/accountidentity"
 	"ai-proxy/internal/pkg/aiproxycredential"
 	"ai-proxy/internal/pkg/aiproxystate"
 	"github.com/google/uuid"
@@ -175,6 +176,14 @@ func (s *Store) List() []events.AccountView {
 }
 
 func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped int, err error) {
+	added, updated, skipped, _, err = s.ImportWithIDs(inputs)
+	return added, updated, skipped, err
+}
+
+// ImportWithIDs imports credentials and returns the stable IDs affected by
+// this batch. Management orchestration uses these IDs to scope follow-up
+// discovery and usage work to the imported accounts only.
+func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, skipped int, ids []string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Validate the complete batch before changing state. A malformed trailing
@@ -183,6 +192,9 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 	seenRefresh := map[string]struct{}{}
 	seenAccess := map[string]struct{}{}
 	for _, input := range inputs {
+		if kind := strings.ToLower(strings.TrimSpace(input.CredentialType)); kind != "" && kind != "codex_cli" {
+			return 0, 0, 0, nil, fmt.Errorf("credential_type %q cannot be imported into Codex OAuth", kind)
+		}
 		input.AccessToken = strings.TrimSpace(input.AccessToken)
 		input.RefreshToken = strings.TrimSpace(input.RefreshToken)
 		if input.AccessToken == "" || input.RefreshToken == "" {
@@ -198,7 +210,7 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 			continue
 		}
 		if err := validateProxy(input.Proxy); err != nil {
-			return 0, 0, skipped, err
+			return 0, 0, skipped, nil, err
 		}
 		seenRefresh[input.RefreshToken] = struct{}{}
 		seenAccess[input.AccessToken] = struct{}{}
@@ -221,6 +233,7 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 		} else {
 			updated++
 		}
+		ids = append(ids, existing.ID)
 		changed = true
 		existing.AccessToken = input.AccessToken
 		existing.RefreshToken = input.RefreshToken
@@ -244,12 +257,12 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 		existing.UsageRefreshError = ""
 	}
 	if err := s.saveLocked(); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	if changed {
 		s.bumpCatalogLocked()
 	}
-	return added, updated, skipped, nil
+	return added, updated, skipped, unique(ids), nil
 }
 
 func (s *Store) Delete(ids []string) (int, error) {
@@ -366,7 +379,8 @@ func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
 			continue
 		}
 		result = append(result, events.CredentialInput{
-			AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken,
+			CredentialType: "codex_cli",
+			AccessToken:    item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken,
 			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy,
 		})
 	}
@@ -426,16 +440,8 @@ func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (eve
 	}
 	item.LastRefreshErrAt = time.Now().UTC().Format(time.RFC3339)
 	item.LastRefreshErrClass = strings.TrimSpace(errorClass)
-	statusChanged := false
-	if permanent && item.Status != events.StatusAbnormal {
-		item.Status = events.StatusAbnormal
-		statusChanged = true
-	}
 	if err := s.saveLocked(); err != nil {
 		return events.RefreshTokenResult{}, err
-	}
-	if statusChanged {
-		s.bumpCatalogLocked()
 	}
 	return events.RefreshTokenResult{AccountID: item.ID, PermanentFailure: permanent, ErrorClass: errorClass}, nil
 }
@@ -453,6 +459,10 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 	if success {
 		item.Success++
 		delete(item.QuotaObservations, model)
+		if item.Status == events.StatusAbnormal {
+			item.Status = events.StatusNormal
+			statusChanged = true
+		}
 	} else {
 		item.Fail++
 		if quotaExhausted && model != "" {
@@ -606,6 +616,7 @@ func parseExpiry(value string) (time.Time, bool) {
 func toView(item *account, now time.Time) events.AccountView {
 	view := events.AccountView{
 		ID:                         item.ID,
+		IdentityKey:                accountidentity.Key(item.AccountIDHeader, item.Email),
 		Email:                      item.Email,
 		PlanType:                   item.PlanType,
 		Status:                     item.Status,
@@ -657,17 +668,33 @@ func normalizeQuotaResetAt(value string) string {
 	return resetAt.UTC().Format(time.RFC3339)
 }
 
-// ListDiscoveryCandidates returns only normal accounts. The credential fields
-// are strictly EventHub-internal discovery inputs and cannot reach Admin.
-func (s *Store) ListDiscoveryCandidates() events.ListDiscoveryCandidatesResult {
+// ListDiscoveryCandidates returns normal accounts for automatic discovery. An
+// explicit operator selection may also retry an abnormal account with its
+// current access token; disabled remains an operator-owned state. Credential
+// fields are strictly EventHub-internal and cannot reach Admin.
+func (s *Store) ListDiscoveryCandidates(accountIDs []string) events.ListDiscoveryCandidatesResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
+	requested := make(map[string]struct{}, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if accountID = strings.TrimSpace(accountID); accountID != "" {
+			requested[accountID] = struct{}{}
+		}
+	}
 	out := events.ListDiscoveryCandidatesResult{Version: s.catalogVersion}
 	for _, id := range s.order {
 		item := s.items[id]
-		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" {
+		if item == nil || strings.TrimSpace(item.AccessToken) == "" {
 			continue
+		}
+		if item.Status != events.StatusNormal && (len(requested) == 0 || item.Status != events.StatusAbnormal) {
+			continue
+		}
+		if len(requested) > 0 {
+			if _, found := requested[item.ID]; !found {
+				continue
+			}
 		}
 		needs := item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now)
 		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
@@ -698,6 +725,9 @@ func (s *Store) PutModelSnapshot(accountID string, snapshot events.AccountModelS
 	item.ModelDiscoveryFailures = 0
 	item.ModelDiscoveryRetryAt = ""
 	item.ModelDiscoveryLastError = ""
+	if item.Status == events.StatusAbnormal {
+		item.Status = events.StatusNormal
+	}
 	if err := s.saveLocked(); err != nil {
 		return s.catalogVersion, false, err
 	}
@@ -726,8 +756,11 @@ func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, 
 	return item.ModelDiscoveryRetryAt, true, nil
 }
 
-// ListUsageCandidates returns normal accounts selected by their local IDs.
-// Credential fields remain restricted to the account-pool/proxy EventHub path.
+// ListUsageCandidates returns routable accounts for an unscoped refresh. An
+// explicit operator selection may also retry an abnormal account because the
+// usage flow can refresh an invalid credential once and recover it. Disabled
+// remains an operator-owned state and is never bypassed. Credential fields
+// remain restricted to the account-pool/proxy EventHub path.
 func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandidatesResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -740,7 +773,10 @@ func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandida
 	result := events.ListUsageCandidatesResult{}
 	for _, id := range s.order {
 		item := s.items[id]
-		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" {
+		if item == nil || strings.TrimSpace(item.AccessToken) == "" {
+			continue
+		}
+		if item.Status != events.StatusNormal && (len(requested) == 0 || item.Status != events.StatusAbnormal) {
 			continue
 		}
 		if len(requested) > 0 {
@@ -775,8 +811,16 @@ func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageS
 	if clean.PlanType != "" {
 		item.PlanType = clean.PlanType
 	}
+	statusChanged := false
+	if item.Status == events.StatusAbnormal {
+		item.Status = events.StatusNormal
+		statusChanged = true
+	}
 	if err := s.saveLocked(); err != nil {
 		return false, err
+	}
+	if statusChanged {
+		s.bumpCatalogLocked()
 	}
 	return true, nil
 }

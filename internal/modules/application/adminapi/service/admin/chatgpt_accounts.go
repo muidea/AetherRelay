@@ -49,6 +49,12 @@ func (h *Handler) addChatGPTAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "at most 1000 accounts may be imported at once")
 		return
 	}
+	for _, account := range body.Accounts {
+		if strings.ToLower(strings.TrimSpace(account.CredentialType)) != "chatgpt_web" {
+			writeError(w, http.StatusBadRequest, "complete ChatGPT Web credentials require credential_type=chatgpt_web")
+			return
+		}
+	}
 	result, err := h.chatGPT.AddChatGPTAccounts(r.Context(), body.Tokens, body.Accounts, body.SourceType)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

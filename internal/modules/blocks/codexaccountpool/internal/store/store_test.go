@@ -53,6 +53,14 @@ func TestImportValidatesWholeBatchAndRedactsView(t *testing.T) {
 	}
 }
 
+func TestImportRejectsChatGPTWebCredentialType(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{CredentialType: "chatgpt_web", AccessToken: "access", RefreshToken: "refresh"}})
+	if err == nil {
+		t.Fatal("expected cross-client credential import to fail")
+	}
+}
+
 func TestExportByIDsReturnsOnlySelectedCredentials(t *testing.T) {
 	store := openTestStore(t)
 	first := events.CredentialInput{AccessToken: "access-one", RefreshToken: "refresh-one", IDToken: "id-one", AccountID: "account-one", Proxy: "http://127.0.0.1:8080"}
@@ -136,7 +144,7 @@ func TestModelDiscoverySnapshotControlsCatalogAndAcquire(t *testing.T) {
 	if len(accounts) != 2 {
 		t.Fatalf("accounts=%+v", accounts)
 	}
-	candidates := store.ListDiscoveryCandidates()
+	candidates := store.ListDiscoveryCandidates(nil)
 	if len(candidates.Candidates) != 2 || !candidates.Candidates[0].NeedsDiscovery || !candidates.Candidates[0].DiscoveryDue {
 		t.Fatalf("discovery candidates=%+v", candidates)
 	}
@@ -199,7 +207,7 @@ func TestExpiredModelSnapshotIsNotPublishedAndFailureIsScoped(t *testing.T) {
 	if err != nil || !found || retryAt == "" {
 		t.Fatalf("failure retry_at=%q found=%v err=%v", retryAt, found, err)
 	}
-	candidates := store.ListDiscoveryCandidates()
+	candidates := store.ListDiscoveryCandidates(nil)
 	if len(candidates.Candidates) != 1 || candidates.Candidates[0].DiscoveryDue {
 		t.Fatalf("failed account should honor discovery backoff: %+v", candidates)
 	}
@@ -242,6 +250,115 @@ func TestUsageSnapshotIsRedactedAndRetainedAfterRefreshFailure(t *testing.T) {
 		if contains(string(payload), secret) {
 			t.Fatalf("usage projection leaked secret %q: %s", secret, payload)
 		}
+	}
+}
+
+func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	if _, err := store.RecordRefreshFailure(id, events.ErrorInvalidToken, true); err != nil {
+		t.Fatal(err)
+	}
+	view, found := store.View(id)
+	if !found || view.Status != events.StatusNormal || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
+		t.Fatalf("refresh failure view=%+v found=%v", view, found)
+	}
+
+	abnormal := events.StatusAbnormal
+	if _, err := store.Update(id, &abnormal, nil); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if ok, err := store.PutUsageSnapshot(id, events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Minute).Format(time.RFC3339)}); err != nil || !ok {
+		t.Fatalf("put usage ok=%v err=%v", ok, err)
+	}
+	view, _ = store.View(id)
+	if view.Status != events.StatusNormal || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
+		t.Fatalf("usage recovery view=%+v", view)
+	}
+
+	if _, err := store.Update(id, &abnormal, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.PutModelSnapshot(id, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
+		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
+	}
+	view, _ = store.View(id)
+	if view.Status != events.StatusNormal || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
+		t.Fatalf("model recovery view=%+v", view)
+	}
+
+	disabled := events.StatusDisabled
+	if _, err := store.Update(id, &disabled, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.PutUsageSnapshot(id, events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339)}); err != nil || !ok {
+		t.Fatalf("put disabled usage ok=%v err=%v", ok, err)
+	}
+	view, _ = store.View(id)
+	if view.Status != events.StatusDisabled {
+		t.Fatalf("verified usage bypassed disabled state: %+v", view)
+	}
+}
+
+func TestExplicitUsageCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: "normal-access", RefreshToken: "normal-refresh"},
+		{AccessToken: "abnormal-access", RefreshToken: "abnormal-refresh"},
+		{AccessToken: "disabled-access", RefreshToken: "disabled-refresh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := store.List()
+	if len(items) != 3 {
+		t.Fatalf("items=%#v", items)
+	}
+	statusByID := map[string]string{items[0].ID: events.StatusNormal, items[1].ID: events.StatusAbnormal, items[2].ID: events.StatusDisabled}
+	for id, status := range statusByID {
+		if _, err := store.Update(id, &status, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := store.ListUsageCandidates(nil).Candidates; len(got) != 1 || got[0].AccountID != items[0].ID {
+		t.Fatalf("unscoped candidates=%#v", got)
+	}
+	ids := []string{items[0].ID, items[1].ID, items[2].ID}
+	if got := store.ListUsageCandidates(ids).Candidates; len(got) != 2 || got[0].AccountID != items[0].ID || got[1].AccountID != items[1].ID {
+		t.Fatalf("explicit candidates=%#v", got)
+	}
+}
+
+func TestExplicitDiscoveryCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: "normal-access", RefreshToken: "normal-refresh"},
+		{AccessToken: "abnormal-access", RefreshToken: "abnormal-refresh"},
+		{AccessToken: "disabled-access", RefreshToken: "disabled-refresh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := store.List()
+	statusByID := map[string]string{items[0].ID: events.StatusNormal, items[1].ID: events.StatusAbnormal, items[2].ID: events.StatusDisabled}
+	for id, status := range statusByID {
+		if _, err := store.Update(id, &status, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := store.ListDiscoveryCandidates(nil).Candidates; len(got) != 1 || got[0].AccountID != items[0].ID {
+		t.Fatalf("automatic candidates=%#v", got)
+	}
+	ids := []string{items[0].ID, items[1].ID, items[2].ID}
+	if got := store.ListDiscoveryCandidates(ids).Candidates; len(got) != 2 || got[0].AccountID != items[0].ID || got[1].AccountID != items[1].ID {
+		t.Fatalf("explicit candidates=%#v", got)
 	}
 }
 

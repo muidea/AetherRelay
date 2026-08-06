@@ -188,6 +188,14 @@ func TestImportValidatesCompleteBatchBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestImportRejectsCodexCredentialType(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	_, _, _, err := s.Import(nil, []events.ExportItem{{CredentialType: "codex_cli", AccessToken: "access", RefreshToken: "refresh"}}, "")
+	if err == nil {
+		t.Fatal("expected cross-client credential import to fail")
+	}
+}
+
 func TestRefreshProjectionRestoresLimitedAccountAndPreservesOperatorStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	s := New(path, 1, encryptedTestCodec(t))
@@ -234,19 +242,45 @@ func TestRefreshCandidatesForDoesNotTreatUnknownSelectionAsAllAccounts(t *testin
 func TestRefreshCandidatesIncludeAllChatGPTWebCredentialSources(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	accounts := New(path, 3, encryptedTestCodec(t))
-	for _, item := range []struct{ token, source string }{{"token-web", "web"}, {"token-oauth", "oauth_login"}, {"token-password", "password"}, {"token-other", "api"}} {
+	for _, item := range []struct{ token, source string }{{"token-web", "web"}, {"token-oauth", "oauth_login"}, {"token-import", "oauth_import"}, {"token-password", "password"}, {"token-other", "api"}} {
 		if _, _, err := accounts.Add([]string{item.token}, item.source); err != nil {
 			t.Fatal(err)
 		}
 	}
 	candidates := accounts.RefreshCandidates()
-	if len(candidates) != 3 {
+	if len(candidates) != 4 {
 		t.Fatalf("candidate count=%d candidates=%#v", len(candidates), candidates)
 	}
 	for _, item := range candidates {
 		if item.SourceType == "api" {
 			t.Fatalf("non-Web source was selected: %#v", item)
 		}
+	}
+}
+
+func TestManualRefreshCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testing.T) {
+	accounts := New(filepath.Join(t.TempDir(), "accounts.json"), 2, encryptedTestCodec(t))
+	if _, _, err := accounts.Add([]string{"token-abnormal", "token-disabled"}, "oauth_import"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := accounts.Update("token-abnormal", "", StatusAbnormal, nil, ""); err != nil || !ok {
+		t.Fatalf("mark abnormal: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := accounts.Update("token-disabled", "", StatusDisabled, nil, ""); err != nil || !ok {
+		t.Fatalf("mark disabled: ok=%v err=%v", ok, err)
+	}
+
+	items := accounts.List()
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	got := accounts.RefreshCandidatesForIDs(ids)
+	if len(got) != 1 || got[0].Status != StatusAbnormal {
+		t.Fatalf("manual candidates=%#v", got)
+	}
+	if got := accounts.RefreshCandidates(); len(got) != 0 {
+		t.Fatalf("scheduled candidates=%#v", got)
 	}
 }
 

@@ -45,6 +45,7 @@ const (
 
 type AccountView struct {
 	ID            string `json:"id"`
+	IdentityKey   string `json:"identity_key,omitempty"`
 	Email         string `json:"email,omitempty"`
 	Type          string `json:"type,omitempty"`
 	SourceType    string `json:"source_type,omitempty"`
@@ -307,16 +308,17 @@ type OAuthFinishResult struct {
 }
 
 type ExportItem struct {
-	Type         string `json:"type"`
-	Email        string `json:"email"`
-	AccountID    string `json:"account_id"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	IDToken      string `json:"id_token"`
-	Expired      string `json:"expired"`
-	LastRefresh  string `json:"last_refresh"`
-	Password     string `json:"password,omitempty"`
-	Proxy        string `json:"proxy,omitempty"`
+	CredentialType string `json:"credential_type,omitempty"`
+	Type           string `json:"type"`
+	Email          string `json:"email"`
+	AccountID      string `json:"account_id"`
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
+	IDToken        string `json:"id_token"`
+	Expired        string `json:"expired"`
+	LastRefresh    string `json:"last_refresh"`
+	Password       string `json:"password,omitempty"`
+	Proxy          string `json:"proxy,omitempty"`
 }
 type ExportCommand struct{ AccessTokens []string }
 type ExportResult struct {

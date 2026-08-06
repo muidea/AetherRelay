@@ -48,6 +48,7 @@ const (
 // access, refresh, or ID tokens, account IDs, or proxy URLs.
 type AccountView struct {
 	ID                         string                `json:"id"`
+	IdentityKey                string                `json:"identity_key,omitempty"`
 	Email                      string                `json:"email,omitempty"`
 	PlanType                   string                `json:"plan_type,omitempty"`
 	Status                     string                `json:"status"`
@@ -87,13 +88,14 @@ type QuotaObservation struct {
 // CredentialInput is the deliberate secret-bearing Admin import contract.
 // It never appears in a list or health response.
 type CredentialInput struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	IDToken      string `json:"id_token,omitempty"`
-	AccountID    string `json:"account_id,omitempty"`
-	Email        string `json:"email,omitempty"`
-	Expired      string `json:"expired,omitempty"`
-	Proxy        string `json:"proxy,omitempty"`
+	CredentialType string `json:"credential_type,omitempty"`
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
+	IDToken        string `json:"id_token,omitempty"`
+	AccountID      string `json:"account_id,omitempty"`
+	Email          string `json:"email,omitempty"`
+	Expired        string `json:"expired,omitempty"`
+	Proxy          string `json:"proxy,omitempty"`
 }
 
 type ListCommand struct{}
@@ -103,9 +105,10 @@ type ListResult struct {
 
 type ImportCommand struct{ Accounts []CredentialInput }
 type ImportResult struct {
-	Added   int `json:"added"`
-	Updated int `json:"updated"`
-	Skipped int `json:"skipped"`
+	Added      int      `json:"added"`
+	Updated    int      `json:"updated"`
+	Skipped    int      `json:"skipped"`
+	AccountIDs []string `json:"account_ids,omitempty"`
 }
 
 type DeleteCommand struct{ IDs []string }
@@ -224,7 +227,7 @@ type DiscoveryCandidate struct {
 	DiscoveryDue    bool
 }
 
-type ListDiscoveryCandidatesCommand struct{}
+type ListDiscoveryCandidatesCommand struct{ AccountIDs []string }
 type ListDiscoveryCandidatesResult struct {
 	Candidates []DiscoveryCandidate
 	Version    uint64

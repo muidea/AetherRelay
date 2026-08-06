@@ -32,14 +32,14 @@ func (s *Admin) ImportCodexAccounts(ctx context.Context, accounts []events.Crede
 	if !ok {
 		return codexmanagement.ImportResult{}, fmt.Errorf("invalid Codex account import result")
 	}
-	output := codexmanagement.ImportResult{Added: result.Added, Updated: result.Updated, Skipped: result.Skipped}
-	progress, discoveryErr := s.StartCodexModelDiscovery(context.WithoutCancel(ctx), nil)
+	output := codexmanagement.ImportResult{Added: result.Added, Updated: result.Updated, Skipped: result.Skipped, AccountIDs: result.AccountIDs}
+	progress, discoveryErr := s.StartCodexModelDiscovery(context.WithoutCancel(ctx), result.AccountIDs)
 	if discoveryErr != nil {
 		output.ModelDiscoveryError = discoveryErr.Error()
 	} else {
 		output.ModelDiscovery = &progress
 	}
-	usage, usageErr := s.StartCodexUsageRefresh(context.WithoutCancel(ctx), nil)
+	usage, usageErr := s.StartCodexUsageRefresh(context.WithoutCancel(ctx), result.AccountIDs)
 	if usageErr != nil {
 		output.UsageRefreshError = usageErr.Error()
 	} else {

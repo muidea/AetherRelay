@@ -146,12 +146,12 @@ func (s *Account) handleImport(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account import command"))
 		return
 	}
-	added, updated, skipped, err := s.store.Import(cmd.Accounts)
+	added, updated, skipped, accountIDs, err := s.store.ImportWithIDs(cmd.Accounts)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
-	result.Set(events.ImportResult{Added: added, Updated: updated, Skipped: skipped}, nil)
+	result.Set(events.ImportResult{Added: added, Updated: updated, Skipped: skipped, AccountIDs: accountIDs}, nil)
 }
 
 func (s *Account) handleDelete(ev event.Event, result event.Result) {
@@ -299,11 +299,12 @@ func (s *Account) handleListDiscoveryCandidates(ev event.Event, result event.Res
 	if result == nil {
 		return
 	}
-	if _, ok := ev.Data().(events.ListDiscoveryCandidatesCommand); !ok {
+	command, ok := ev.Data().(events.ListDiscoveryCandidatesCommand)
+	if !ok {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex discovery candidates command"))
 		return
 	}
-	result.Set(s.store.ListDiscoveryCandidates(), nil)
+	result.Set(s.store.ListDiscoveryCandidates(command.AccountIDs), nil)
 }
 
 func (s *Account) handlePutModelSnapshot(ev event.Event, result event.Result) {
@@ -435,7 +436,7 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex OAuth exchange failed"))
 		return
 	}
-	added, updated, skipped, importErr := s.store.Import([]events.CredentialInput{{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken, AccountID: tokens.AccountID, Email: tokens.Email, Expired: tokens.Expired, Proxy: session.proxy}})
+	added, updated, skipped, importErr := s.store.Import([]events.CredentialInput{{CredentialType: "codex_cli", AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken, AccountID: tokens.AccountID, Email: tokens.Email, Expired: tokens.Expired, Proxy: session.proxy}})
 	if importErr != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, importErr.Error()))
 		return
@@ -525,7 +526,7 @@ func (s *Account) startOAuth(command events.OAuthStartCommand) (events.OAuthStar
 	}
 	sessionID := uuid.NewString()
 	state := sessionID + "." + nonce
-	params := url.Values{"client_id": {oauth.ClientID}, "response_type": {"code"}, "redirect_uri": {oauth.RedirectURI}, "scope": {"openid email profile offline_access"}, "state": {state}, "code_challenge": {oauth.CodeChallenge(verifier)}, "code_challenge_method": {"S256"}, "prompt": {"login"}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"}}
+	params := url.Values{"client_id": {oauth.ClientID}, "response_type": {"code"}, "redirect_uri": {oauth.RedirectURI}, "scope": {"openid profile email offline_access api.connectors.read api.connectors.invoke"}, "state": {state}, "code_challenge": {oauth.CodeChallenge(verifier)}, "code_challenge_method": {"S256"}, "prompt": {"login"}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"}}
 	if hint := strings.TrimSpace(command.EmailHint); hint != "" {
 		params.Set("login_hint", hint)
 	}

@@ -17,9 +17,13 @@ import (
 
 func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexresponses.Request) (codexresponses.Result, error) {
 	tried := make([]string, 0, 2)
+	var lastFailure *codexresponses.Failure
 	for {
 		account, err := s.acquireCodexAccount(ctx, request.Model, tried)
 		if err != nil {
+			if lastFailure != nil {
+				return codexresponses.Result{}, lastFailure
+			}
 			return codexresponses.Result{}, err
 		}
 		out, failure := s.completeCodexOnce(ctx, account, request)
@@ -27,6 +31,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 			return out, nil
 		}
+		lastFailure = failure
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
@@ -35,9 +40,14 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 					return out, nil
 				}
+				lastFailure = failure
 			}
 			if refreshErr != nil {
-				s.recordCodexResult(ctx, account.AccountID, request.Model, false, refreshFailureClass(refreshed), 0, false, "")
+				class := refreshFailureClass(refreshed)
+				if refreshed.PermanentFailure {
+					class = accevents.ErrorInvalidToken
+				}
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, class, 0, false, "")
 				tried = append(tried, account.AccountID)
 				continue
 			}
@@ -58,9 +68,13 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 
 func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
 	tried := make([]string, 0, 2)
+	var lastFailure *codexresponses.Failure
 	for {
 		account, err := s.acquireCodexAccount(ctx, request.Model, tried)
 		if err != nil {
+			if lastFailure != nil {
+				return lastFailure
+			}
 			return err
 		}
 		emitted := false
@@ -79,6 +93,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if failure == nil {
 			return err
 		}
+		lastFailure = failure
 		if emitted {
 			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 			return err
@@ -92,9 +107,16 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 					return nil
 				}
 				failure, _ = codexresponses.AsFailure(err)
+				if failure != nil {
+					lastFailure = failure
+				}
 			}
 			if refreshErr != nil {
-				s.recordCodexResult(ctx, account.AccountID, request.Model, false, refreshFailureClass(refreshed), 0, false, "")
+				class := refreshFailureClass(refreshed)
+				if refreshed.PermanentFailure {
+					class = accevents.ErrorInvalidToken
+				}
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, class, 0, false, "")
 				tried = append(tried, account.AccountID)
 				continue
 			}

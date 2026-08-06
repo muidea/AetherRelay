@@ -306,7 +306,8 @@ func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
 
 func TestChatGPTAccountExportIsNoStoreAndImportable(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{exportedItems: []accevents.ExportItem{{
-		Type: "codex", Email: "export@example.invalid", AccountID: "account-export",
+		CredentialType: "chatgpt_web",
+		Type:           "codex", Email: "export@example.invalid", AccountID: "account-export",
 		AccessToken: "access-export", RefreshToken: "refresh-export", IDToken: "id-export",
 	}}}
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)

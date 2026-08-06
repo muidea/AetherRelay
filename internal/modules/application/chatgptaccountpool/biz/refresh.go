@@ -15,7 +15,10 @@ import (
 	"github.com/muidea/magicCommon/event"
 )
 
-const refreshProgressTTL = time.Hour
+const (
+	refreshProgressTTL        = time.Hour
+	accountInfoRefreshTimeout = 45 * time.Second
+)
 
 func (s *Account) putProgress(progress events.RefreshProgress) {
 	s.progressMu.Lock()
@@ -121,7 +124,7 @@ func (s *Account) refreshAccounts() {
 	}
 	defer s.refreshing.Store(false)
 
-	s.refreshOAuthTokens()
+	_ = s.refreshOAuthTokens(nil)
 	if s.stopping.Load() {
 		return
 	}
@@ -147,19 +150,31 @@ func (s *Account) runManualRefresh(progressID string, tokens []string) {
 	// Match the scheduled refresh path: renew eligible OAuth access tokens
 	// before requesting ChatGPT Web account information. A manual refresh is
 	// expected to recover an expired OAuth access token, not merely report it.
-	s.refreshOAuthTokens()
+	selectedIDs := s.store.AccountIDsForAccessTokens(tokens)
+	oauthFailures := s.refreshOAuthTokens(selectedIDs)
 	if s.stopping.Load() {
 		s.finishProgress(progressID, "account pool is shutting down")
 		return
 	}
 	candidates := s.store.RefreshCandidatesFor(tokens)
 	s.replaceProgress(progressID, events.RefreshProgress{ProgressID: progressID, Total: len(candidates), Errors: []events.RefreshError{}})
+	if len(candidates) == 0 {
+		s.finishProgress(progressID, "no refreshable accounts found")
+		return
+	}
 	for _, account := range candidates {
 		if s.stopping.Load() {
 			s.finishProgress(progressID, "account pool is shutting down")
 			return
 		}
 		err := s.refreshAccount(account)
+		if oauthFailure, found := oauthFailures[account.ID]; found {
+			if err != nil {
+				err = fmt.Errorf("account information refresh failed; OAuth credential renewal failed (%s): %w", oauthFailure, err)
+			} else {
+				err = fmt.Errorf("account information refreshed, but OAuth credential renewal failed (%s)", oauthFailure)
+			}
+		}
 		if s.stopping.Load() {
 			s.finishProgress(progressID, "account pool is shutting down")
 			return
@@ -183,19 +198,36 @@ func (s *Account) runManualRefreshByID(progressID string, ids []string) {
 		return
 	}
 	defer s.refreshing.Store(false)
-	s.refreshOAuthTokens()
+	selectedIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			selectedIDs[id] = struct{}{}
+		}
+	}
+	oauthFailures := s.refreshOAuthTokens(selectedIDs)
 	if s.stopping.Load() {
 		s.finishProgress(progressID, "account pool is shutting down")
 		return
 	}
 	candidates := s.store.RefreshCandidatesForIDs(ids)
 	s.replaceProgress(progressID, events.RefreshProgress{ProgressID: progressID, Total: len(candidates), Errors: []events.RefreshError{}})
+	if len(candidates) == 0 {
+		s.finishProgress(progressID, "no refreshable accounts found")
+		return
+	}
 	for _, account := range candidates {
 		if s.stopping.Load() {
 			s.finishProgress(progressID, "account pool is shutting down")
 			return
 		}
 		err := s.refreshAccount(account)
+		if oauthFailure, found := oauthFailures[account.ID]; found {
+			if err != nil {
+				err = fmt.Errorf("account information refresh failed; OAuth credential renewal failed (%s): %w", oauthFailure, err)
+			} else {
+				err = fmt.Errorf("account information refreshed, but OAuth credential renewal failed (%s)", oauthFailure)
+			}
+		}
 		if s.stopping.Load() {
 			s.finishProgress(progressID, "account pool is shutting down")
 			return
@@ -213,7 +245,9 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 	if s.stopping.Load() {
 		return context.Canceled
 	}
-	result := s.SendEvent(event.NewEvent(upevents.TopicGetUserInfo, s.ID(), upcommon.UnitID, nil, upevents.GetUserInfoCommand{
+	ctx, cancel := context.WithTimeout(s.shutdownCtx, accountInfoRefreshTimeout)
+	defer cancel()
+	result := s.SendEvent(event.NewEventWithContext(upevents.TopicGetUserInfo, s.ID(), upcommon.UnitID, nil, ctx, upevents.GetUserInfoCommand{
 		AccessToken: account.AccessToken,
 		Proxy:       account.Proxy,
 	}))
@@ -247,20 +281,40 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 	return nil
 }
 
-func (s *Account) refreshOAuthTokens() {
+// refreshOAuthTokens renews due OAuth credentials and returns failures keyed
+// by stable account ID. Account information may still be readable with the
+// current access token, but a manual refresh must expose a credential failure
+// instead of reporting the whole operation as successful.
+func (s *Account) refreshOAuthTokens(selectedIDs map[string]struct{}) map[string]string {
+	failures := make(map[string]string)
 	if s.oauth == nil || s.stopping.Load() {
-		return
+		return failures
 	}
 	now := time.Now().UTC()
 	for _, candidate := range s.store.TokenRefreshCandidates(now, 24*time.Hour, 72*time.Hour, 6*time.Hour, 3) {
 		if s.stopping.Load() {
-			return
+			return failures
+		}
+		if len(selectedIDs) > 0 {
+			account, found := s.store.ViewForAccessToken(candidate.AccessToken)
+			if !found {
+				continue
+			}
+			if _, selected := selectedIDs[account.ID]; !selected {
+				continue
+			}
 		}
 		// Scheduled and request-driven renewal must share the same per-account
 		// flight. Otherwise an expired token under traffic can consume a
 		// rotating refresh token twice concurrently.
-		_, _ = s.refreshTextToken(candidate.AccessToken)
+		_, err := s.refreshTextToken(candidate.AccessToken)
+		if err != nil {
+			if account, found := s.store.ViewForAccessToken(candidate.AccessToken); found {
+				failures[account.ID] = oauth.FailureClass(err)
+			}
+		}
 	}
+	return failures
 }
 
 // refreshTextToken is the request-driven counterpart of the scheduled OAuth

@@ -4,6 +4,7 @@ import (
 	"ai-proxy/internal/pkg/chatattachment"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -16,7 +17,17 @@ import (
 	http "github.com/bogdanfinn/fhttp"
 )
 
-type fakeDoer struct{ requests []*http.Request }
+type fakeDoer struct {
+	requests []*http.Request
+	initBody string
+}
+
+type contextBlockingDoer struct{}
+
+func (contextBlockingDoer) Do(request *http.Request) (*http.Response, error) {
+	<-request.Context().Done()
+	return nil, request.Context().Err()
+}
 
 func (d *fakeDoer) Do(request *http.Request) (*http.Response, error) {
 	d.requests = append(d.requests, request)
@@ -27,13 +38,72 @@ func (d *fakeDoer) Do(request *http.Request) (*http.Response, error) {
 	case "/backend-api/me":
 		body = `{"email":"person@example.com"}`
 	case "/backend-api/conversation/init":
-		body = `{"limits_progress":[{"feature_name":"image_gen","remaining":3,"reset_after":"tomorrow"}]}`
+		body = d.initBody
+		if body == "" {
+			body = `{"limits_progress":[{"feature_name":"image_gen","remaining":3,"reset_after":"tomorrow"}]}`
+		}
 	case "/backend-api/accounts/check/v4-2023-04-27":
 		body = `{"accounts":{"default":{"account":{"plan_type":"plus"}}}}`
 	default:
 		return nil, fmt.Errorf("unexpected path %s", request.URL.Path)
 	}
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}, nil
+}
+
+func TestGetUserInfoAcceptsCurrentQuotaFieldVariants(t *testing.T) {
+	doer := &fakeDoer{initBody: `{"limitsProgress":[{"featureName":"image_generation","remainingValue":"4","resetAt":3600}],"planType":"pro"}`}
+	client := newWithDoer(Config{AccessToken: "secret"}, "https://chatgpt.com", doer)
+	before := time.Now().UTC().Add(59 * time.Minute)
+	info, err := client.GetUserInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := time.Parse(time.RFC3339, info.RestoreAt)
+	if err != nil {
+		t.Fatalf("restore_at=%q: %v", info.RestoreAt, err)
+	}
+	if info.Quota != 4 || reset.Before(before) {
+		t.Fatalf("info=%+v", info)
+	}
+}
+
+func TestGetUserInfoDerivesRemainingQuotaAndRecognizesBlockedFeature(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "total minus used", body: `{"limits_progress":[{"name":"img_gen","maxValue":10,"usedValue":3}]}`, want: 7},
+		{name: "blocked", body: `{"blockedFeatures":["image_edit"]}`, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newWithDoer(Config{AccessToken: "secret"}, "https://chatgpt.com", &fakeDoer{initBody: tc.body})
+			info, err := client.GetUserInfo()
+			if err != nil || info.Quota != tc.want {
+				t.Fatalf("info=%+v err=%v", info, err)
+			}
+		})
+	}
+}
+
+func TestGetUserInfoRejectsMissingQuotaInsteadOfReportingZero(t *testing.T) {
+	client := newWithDoer(Config{AccessToken: "secret"}, "https://chatgpt.com", &fakeDoer{initBody: `{}`})
+	if _, err := client.GetUserInfo(); err == nil || !strings.Contains(err.Error(), "did not provide image quota") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestGetUserInfoHonorsCallerCancellation(t *testing.T) {
+	client := newWithDoer(Config{AccessToken: "secret"}, "https://chatgpt.com", contextBlockingDoer{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := client.GetUserInfoContext(ctx); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("cancellation took %s", elapsed)
+	}
 }
 
 func TestGetUserInfoUsesAuthenticatedWebSequence(t *testing.T) {

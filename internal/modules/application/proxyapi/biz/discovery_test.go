@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,6 +192,41 @@ func TestManualCodexDiscoveryReportsAccountScopedProgress(t *testing.T) {
 	}
 }
 
+func TestCodexModelDiscoveryCountsIneligibleRequestedAccountsAsFailures(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ListDiscoveryCandidatesResult{}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}, codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}}
+	started, err := proxy.StartCodexModelDiscovery(context.Background(), []string{"disabled-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		progress, found := proxy.CodexModelDiscoveryProgress(started.ProgressID)
+		if !found {
+			t.Fatal("discovery progress disappeared")
+		}
+		if progress.Done {
+			if progress.Total != 1 || progress.Processed != 1 || progress.Succeeded != 0 || progress.Failed != 1 || !strings.Contains(progress.LastError, "none of the requested") {
+				t.Fatalf("progress=%+v", progress)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("model discovery did not complete: %+v", progress)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)
@@ -252,6 +288,41 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("manual usage refresh did not complete: %+v", progress)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestCodexUsageRefreshCountsIneligibleRequestedAccountsAsFailures(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicListUsageCandidates, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ListUsageCandidatesResult{}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
+	started, err := proxy.StartCodexUsageRefresh(context.Background(), []string{"disabled-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		progress, found := proxy.CodexUsageRefreshProgress(started.ProgressID)
+		if !found {
+			t.Fatal("usage progress disappeared")
+		}
+		if progress.Done {
+			if progress.Total != 1 || progress.Processed != 1 || progress.Succeeded != 0 || progress.Failed != 1 || !strings.Contains(progress.LastError, "none of the requested") {
+				t.Fatalf("progress=%+v", progress)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("usage refresh did not complete: %+v", progress)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

@@ -39,6 +39,12 @@ func (h *Handler) importCodexAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "at most 1000 accounts may be imported at once")
 		return
 	}
+	for _, account := range body.Accounts {
+		if strings.ToLower(strings.TrimSpace(account.CredentialType)) != "codex_cli" {
+			writeError(w, http.StatusBadRequest, "Codex credentials require credential_type=codex_cli")
+			return
+		}
+	}
 	result, err := h.codex.ImportCodexAccounts(r.Context(), body.Accounts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

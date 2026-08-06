@@ -53,49 +53,56 @@ func (e *Error) Error() string { return e.Cause.Error() }
 func (e *Error) Unwrap() error { return e.Cause }
 
 func Refresh(ctx context.Context, request Request) (Result, error) {
-	form := url.Values{"client_id": {ClientID}, "grant_type": {"refresh_token"}, "refresh_token": {strings.TrimSpace(request.RefreshToken)}, "scope": {"openid profile email"}}
-	return exchange(ctx, form, request.Proxy)
+	return refresh(ctx, request, TokenURL)
 }
 
 func ExchangeAuthorizationCode(ctx context.Context, request AuthorizationCodeRequest) (Result, error) {
 	form := url.Values{"client_id": {ClientID}, "grant_type": {"authorization_code"}, "code": {strings.TrimSpace(request.Code)}, "redirect_uri": {RedirectURI}, "code_verifier": {strings.TrimSpace(request.CodeVerifier)}}
-	return exchange(ctx, form, request.Proxy)
-}
-
-func exchange(ctx context.Context, form url.Values, proxy string) (Result, error) {
-	if strings.TrimSpace(form.Get("refresh_token")) == "" && strings.TrimSpace(form.Get("code")) == "" {
+	if strings.TrimSpace(request.Code) == "" {
 		return Result{}, &Error{Permanent: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
 	}
+	return exchange(ctx, TokenURL, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", request.Proxy)
+}
+
+func refresh(ctx context.Context, request Request, endpoint string) (Result, error) {
+	refreshToken := strings.TrimSpace(request.RefreshToken)
+	if refreshToken == "" {
+		return Result{}, &Error{Permanent: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
+	}
+	body, err := json.Marshal(struct {
+		ClientID     string `json:"client_id"`
+		GrantType    string `json:"grant_type"`
+		RefreshToken string `json:"refresh_token"`
+	}{ClientID: ClientID, GrantType: "refresh_token", RefreshToken: refreshToken})
+	if err != nil {
+		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("encode OAuth refresh request: %w", err)}
+	}
+	return exchange(ctx, endpoint, strings.NewReader(string(body)), "application/json", request.Proxy)
+}
+
+func exchange(ctx context.Context, endpoint string, requestBody io.Reader, contentType, proxy string) (Result, error) {
 	client, err := newHTTPClient(proxy)
 	if err != nil {
 		return Result{}, &Error{Permanent: true, Class: "invalid_request", Cause: err}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, requestBody)
 	if err != nil {
 		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("create OAuth request: %w", err)}
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, &Error{Class: classifyTransport(err), Cause: fmt.Errorf("OAuth request failed: %w", err)}
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return Result{}, &Error{Class: "network", Cause: fmt.Errorf("read OAuth response: %w", err)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		class, permanent := "upstream", false
-		switch resp.StatusCode {
-		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
-			class, permanent = "invalid_token", true
-		case http.StatusTooManyRequests:
-			class = "rate_limit"
-		case http.StatusRequestTimeout, http.StatusGatewayTimeout:
-			class = "timeout"
-		}
-		return Result{}, &Error{Permanent: permanent, Class: class, Cause: fmt.Errorf("OAuth token endpoint returned HTTP %d", resp.StatusCode)}
+		class, permanent := classifyOAuthResponse(resp.StatusCode, responseBody)
+		return Result{}, &Error{Permanent: permanent, Class: class, Cause: fmt.Errorf("OAuth token endpoint returned HTTP %d (%s)", resp.StatusCode, class)}
 	}
 	var decoded struct {
 		AccessToken  string `json:"access_token"`
@@ -103,7 +110,7 @@ func exchange(ctx context.Context, form url.Values, proxy string) (Result, error
 		IDToken      string `json:"id_token"`
 		ExpiresIn    int    `json:"expires_in"`
 	}
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("decode OAuth response: %w", err)}
 	}
 	if strings.TrimSpace(decoded.AccessToken) == "" {
@@ -115,6 +122,57 @@ func exchange(ctx context.Context, form url.Values, proxy string) (Result, error
 		result.Expired = time.Now().UTC().Add(time.Duration(decoded.ExpiresIn) * time.Second).Format(time.RFC3339)
 	}
 	return result, nil
+}
+
+func classifyOAuthResponse(status int, body []byte) (string, bool) {
+	code := oauthErrorCode(body)
+	switch code {
+	case "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated":
+		return code, true
+	}
+	switch status {
+	case http.StatusUnauthorized:
+		return "invalid_token", true
+	case http.StatusForbidden:
+		return "forbidden", true
+	case http.StatusTooManyRequests:
+		return "rate_limit", false
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return "timeout", false
+	}
+	if code != "" {
+		return code, false
+	}
+	return "upstream", false
+}
+
+func oauthErrorCode(body []byte) string {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	errorValue := payload["error"]
+	if value, ok := errorValue.(string); ok {
+		return safeOAuthErrorCode(value)
+	}
+	if nested, ok := errorValue.(map[string]any); ok {
+		if value, ok := nested["code"].(string); ok {
+			return safeOAuthErrorCode(value)
+		}
+	}
+	if value, ok := payload["code"].(string); ok {
+		return safeOAuthErrorCode(value)
+	}
+	return ""
+}
+
+func safeOAuthErrorCode(value string) string {
+	switch value = strings.ToLower(strings.TrimSpace(value)); value {
+	case "invalid_request", "invalid_client", "invalid_grant", "invalid_scope", "unauthorized_client", "unsupported_grant_type", "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated":
+		return value
+	default:
+		return ""
+	}
 }
 
 func newHTTPClient(rawProxy string) (*http.Client, error) {

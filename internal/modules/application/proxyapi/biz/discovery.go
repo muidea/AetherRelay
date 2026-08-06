@@ -82,7 +82,7 @@ func (s *Proxy) watchDiscovery(ctx context.Context) {
 			}
 		}
 	}
-	codexCandidates, err := s.listCodexDiscoveryCandidates(ctx)
+	codexCandidates, err := s.listCodexDiscoveryCandidates(ctx, nil)
 	if err == nil {
 		for _, candidate := range codexCandidates.Candidates {
 			if candidate.DiscoveryDue {
@@ -257,7 +257,7 @@ func (s *Proxy) runCodexDiscoveryJob(ctx context.Context, progressID string, acc
 // hold codexDiscoveryMu. Empty progressID denotes the periodic internal round.
 func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, accountIDs []string, progressID string) {
 
-	candidates, err := s.listCodexDiscoveryCandidates(ctx)
+	candidates, err := s.listCodexDiscoveryCandidates(ctx, accountIDs)
 	if err != nil {
 		slog.Warn("Codex model discovery failed", "stage", "list_candidates", "error", err.Error())
 		s.finishCodexDiscoveryProgress(progressID, err.Error())
@@ -282,7 +282,7 @@ func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, 
 		}
 		selected = append(selected, candidate)
 	}
-	s.setCodexDiscoveryTotal(progressID, len(selected), len(requested) > 0 && len(selected) == 0)
+	s.setCodexDiscoveryTotal(progressID, len(selected), len(requested))
 	if len(selected) == 0 {
 		s.refreshEffectiveCatalog(ctx)
 		s.finishCodexDiscoveryProgress(progressID, "")
@@ -380,20 +380,27 @@ func (s *Proxy) putCodexDiscoveryProgress(progress proxyevents.CodexDiscoveryPro
 	s.discoveryJobsMu.Unlock()
 }
 
-func (s *Proxy) setCodexDiscoveryTotal(progressID string, total int, noEligibleSelected bool) {
+func (s *Proxy) setCodexDiscoveryTotal(progressID string, candidateTotal, requestedTotal int) {
 	if strings.TrimSpace(progressID) == "" {
 		return
 	}
 	s.discoveryJobsMu.Lock()
 	progress, found := s.codexDiscoveryJobs[progressID]
 	if found {
-		progress.Total = total
-		if total == 0 {
-			if noEligibleSelected {
-				progress.LastError = "none of the requested Codex OAuth accounts is eligible for model discovery"
-			} else {
-				progress.LastError = "no eligible Codex OAuth account was found for model discovery"
+		progress.Total = candidateTotal
+		if requestedTotal > 0 {
+			progress.Total = requestedTotal
+			if rejected := max(0, requestedTotal-candidateTotal); rejected > 0 {
+				progress.Processed = rejected
+				progress.Failed = rejected
+				if candidateTotal == 0 {
+					progress.LastError = "none of the requested Codex OAuth accounts is eligible for model discovery"
+				} else {
+					progress.LastError = "some requested Codex OAuth accounts are not eligible for model discovery"
+				}
 			}
+		} else if candidateTotal == 0 {
+			progress.LastError = "no eligible Codex OAuth account was found for model discovery"
 		}
 		s.codexDiscoveryJobs[progressID] = progress
 	}
@@ -487,8 +494,8 @@ func (s *Proxy) listDiscoveryCandidates(ctx context.Context) (accevents.ListDisc
 	return result, nil
 }
 
-func (s *Proxy) listCodexDiscoveryCandidates(ctx context.Context) (codexevents.ListDiscoveryCandidatesResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicListDiscoveryCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListDiscoveryCandidatesCommand{})).Get()
+func (s *Proxy) listCodexDiscoveryCandidates(ctx context.Context, accountIDs []string) (codexevents.ListDiscoveryCandidatesResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicListDiscoveryCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListDiscoveryCandidatesCommand{AccountIDs: accountIDs})).Get()
 	if err != nil {
 		return codexevents.ListDiscoveryCandidatesResult{}, fmt.Errorf("list Codex discovery candidates failed")
 	}

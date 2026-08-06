@@ -64,8 +64,7 @@ func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, 
 		s.finishCodexUsageProgress(progressID, err.Error())
 		return
 	}
-	requested := len(accountIDs) > 0
-	s.setCodexUsageTotal(progressID, len(candidates.Candidates), requested && len(candidates.Candidates) == 0)
+	s.setCodexUsageTotal(progressID, len(candidates.Candidates), len(accountIDs))
 	if len(candidates.Candidates) == 0 {
 		s.finishCodexUsageProgress(progressID, "")
 		return
@@ -85,6 +84,7 @@ func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, 
 		}()
 	}
 	wg.Wait()
+	s.refreshEffectiveCatalog(ctx)
 	s.finishCodexUsageProgress(progressID, "")
 }
 
@@ -202,20 +202,27 @@ func (s *Proxy) putCodexUsageProgress(progress proxyevents.CodexUsageProgress) {
 	s.discoveryJobsMu.Unlock()
 }
 
-func (s *Proxy) setCodexUsageTotal(progressID string, total int, noEligibleSelected bool) {
+func (s *Proxy) setCodexUsageTotal(progressID string, candidateTotal, requestedTotal int) {
 	if strings.TrimSpace(progressID) == "" {
 		return
 	}
 	s.discoveryJobsMu.Lock()
 	progress, found := s.codexUsageJobs[progressID]
 	if found {
-		progress.Total = total
-		if total == 0 {
-			if noEligibleSelected {
-				progress.LastError = "none of the requested Codex OAuth accounts is eligible for usage refresh"
-			} else {
-				progress.LastError = "no eligible Codex OAuth account was found for usage refresh"
+		progress.Total = candidateTotal
+		if requestedTotal > 0 {
+			progress.Total = requestedTotal
+			if rejected := max(0, requestedTotal-candidateTotal); rejected > 0 {
+				progress.Processed = rejected
+				progress.Failed = rejected
+				if candidateTotal == 0 {
+					progress.LastError = "none of the requested Codex OAuth accounts is eligible for usage refresh"
+				} else {
+					progress.LastError = "some requested Codex OAuth accounts are not eligible for usage refresh"
+				}
 			}
+		} else if candidateTotal == 0 {
+			progress.LastError = "no eligible Codex OAuth account was found for usage refresh"
 		}
 		s.codexUsageJobs[progressID] = progress
 	}

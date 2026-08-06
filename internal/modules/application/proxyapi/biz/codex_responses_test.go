@@ -131,6 +131,46 @@ func TestCompleteCodexResponsesUsesRefreshFailureClassForCooldownAndSwitchesAcco
 	}
 }
 
+func TestCompleteCodexResponsesPreservesUpstreamInvalidTokenWhenRecoveryIsExhausted(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
+		if len(ev.Data().(accevents.AcquireCommand).Exclude) > 0 {
+			result.Set(nil, cd.NewError(cd.NotFound, "no fallback account"))
+			return
+		}
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "rejected-token"}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRefreshToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", PermanentFailure: true, ErrorClass: accevents.ErrorInvalidToken}, cd.NewError(cd.Unexpected, "OAuth credential rejected"))
+	})
+	recorded := make(chan accevents.RecordResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicComplete, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CompleteResult{ErrorClass: upevents.ErrorInvalidToken, HTTPStatus: 401}, nil)
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	_, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)})
+	failure, ok := codexresponses.AsFailure(err)
+	if !ok || failure.Kind != codexresponses.KindInvalidToken || failure.HTTPStatus != 401 {
+		t.Fatalf("failure=%+v err=%v", failure, err)
+	}
+	if command := <-recorded; command.ErrorClass != accevents.ErrorInvalidToken {
+		t.Fatalf("feedback=%+v", command)
+	}
+}
+
 func TestCompleteCodexResponsesRecordsObservedQuotaExhaustion(t *testing.T) {
 	hub := event.NewHub(16)
 	background := task.NewBackgroundRoutine(8)

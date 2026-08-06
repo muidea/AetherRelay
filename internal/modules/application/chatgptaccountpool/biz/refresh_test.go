@@ -81,6 +81,10 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 		if !ok || command.AccessToken != "account-token" || command.Proxy != proxyURL {
 			t.Fatalf("unexpected upstream command: %#v", ev.Data())
 		}
+		deadline, hasDeadline := ev.Context().Deadline()
+		if !hasDeadline || time.Until(deadline) <= 0 || time.Until(deadline) > accountInfoRefreshTimeout {
+			t.Fatalf("refresh deadline=%v found=%v", deadline, hasDeadline)
+		}
 		result.Set(upevents.GetUserInfoResult{PlanType: "plus", Quota: 3}, nil)
 	})
 	account := newAccount(hub, background, accounts, 0)
@@ -114,6 +118,24 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 		if refreshErr.AccountID == "account-token" {
 			t.Fatalf("progress leaked access token: %#v", progress)
 		}
+	}
+}
+
+func TestManualRefreshReportsEmptyCandidateSelection(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+
+	account.putProgress(accevents.RefreshProgress{ProgressID: "empty", Errors: []accevents.RefreshError{}})
+	account.runManualRefreshByID("empty", []string{"missing-account"})
+	progress, found := account.getProgress("empty")
+	if !found || !progress.Done || progress.Total != 0 || progress.Error != "no refreshable accounts found" {
+		t.Fatalf("progress=%#v found=%v", progress, found)
 	}
 }
 

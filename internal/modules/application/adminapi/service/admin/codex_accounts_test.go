@@ -82,7 +82,7 @@ func (s *codexAccountRuntimeStub) CodexUsageRefreshProgress(_ context.Context, p
 func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 	runtime := &codexAccountRuntimeStub{}
 	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
-	importRequest := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts", strings.NewReader(`{"accounts":[{"access_token":"access","refresh_token":"refresh"}]}`))
+	importRequest := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts", strings.NewReader(`{"accounts":[{"credential_type":"codex_cli","access_token":"access","refresh_token":"refresh"}]}`))
 	importRequest.RemoteAddr = "127.0.0.1:1234"
 	importRequest.Header.Set("X-AI-Proxy-Admin", "1")
 	importRecorder := httptest.NewRecorder()

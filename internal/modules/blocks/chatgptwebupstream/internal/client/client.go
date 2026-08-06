@@ -3,12 +3,17 @@
 package client
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	http "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
@@ -120,7 +125,11 @@ func newWithDoer(config Config, baseURL string, doer doer) *Client {
 // Bootstrap validates the browser TLS path, primes the cookie jar, and records
 // the current page's PoW resource hints for chat-requirements.
 func (c *Client) Bootstrap() error {
-	body, err := c.get("/", "bootstrap")
+	return c.BootstrapContext(context.Background())
+}
+
+func (c *Client) BootstrapContext(ctx context.Context) error {
+	body, err := c.getContext(ctx, "/", "bootstrap")
 	if err != nil {
 		return err
 	}
@@ -131,31 +140,28 @@ func (c *Client) Bootstrap() error {
 // GetUserInfo mirrors the three authenticated Web endpoints used by Python.
 // It is production transport code; live acceptance still requires a token.
 func (c *Client) GetUserInfo() (UserInfo, error) {
-	if err := c.Bootstrap(); err != nil {
+	return c.GetUserInfoContext(context.Background())
+}
+
+func (c *Client) GetUserInfoContext(ctx context.Context) (UserInfo, error) {
+	if err := c.BootstrapContext(ctx); err != nil {
 		return UserInfo{}, err
 	}
-	meBody, err := c.get("/backend-api/me", "get_me")
+	meBody, err := c.getContext(ctx, "/backend-api/me", "get_me")
 	if err != nil {
 		return UserInfo{}, err
 	}
-	initBody, err := c.postJSON("/backend-api/conversation/init", `{"gizmo_id":null,"requested_default_model":null,"conversation_id":null,"timezone_offset_min":-480}`, "conversation_init")
+	initBody, err := c.postJSONContext(ctx, "/backend-api/conversation/init", `{"gizmo_id":null,"requested_default_model":null,"conversation_id":null,"timezone_offset_min":-480}`, "conversation_init")
 	if err != nil {
 		return UserInfo{}, err
 	}
-	accountBody, err := c.get("/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-480", "account_check")
+	accountBody, err := c.getContext(ctx, "/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-480", "account_check")
 	if err != nil {
 		return UserInfo{}, err
 	}
 
 	var me struct {
 		Email string `json:"email"`
-	}
-	var init struct {
-		LimitsProgress []struct {
-			FeatureName string `json:"feature_name"`
-			Remaining   int    `json:"remaining"`
-			ResetAfter  string `json:"reset_after"`
-		} `json:"limits_progress"`
 	}
 	var accounts struct {
 		Accounts struct {
@@ -169,37 +175,165 @@ func (c *Client) GetUserInfo() (UserInfo, error) {
 	if err := json.Unmarshal(meBody, &me); err != nil {
 		return UserInfo{}, fmt.Errorf("decode get_me: %w", err)
 	}
-	if err := json.Unmarshal(initBody, &init); err != nil {
-		return UserInfo{}, fmt.Errorf("decode conversation_init: %w", err)
-	}
 	if err := json.Unmarshal(accountBody, &accounts); err != nil {
 		return UserInfo{}, fmt.Errorf("decode account_check: %w", err)
 	}
 	info := UserInfo{Email: me.Email, PlanType: accounts.Accounts.Default.Account.PlanType}
+	quota, restoreAt, initPlan, err := parseConversationInit(initBody, time.Now().UTC())
+	if err != nil {
+		return UserInfo{}, err
+	}
+	info.Quota, info.RestoreAt = quota, restoreAt
+	if info.PlanType == "" {
+		info.PlanType = initPlan
+	}
 	if info.PlanType == "" {
 		info.PlanType = "free"
-	}
-	for _, limit := range init.LimitsProgress {
-		if limit.FeatureName == "image_gen" {
-			info.Quota, info.RestoreAt = limit.Remaining, limit.ResetAfter
-			break
-		}
 	}
 	return info, nil
 }
 
+func parseConversationInit(body []byte, observedAt time.Time) (int, string, string, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var root map[string]any
+	if err := dec.Decode(&root); err != nil {
+		return 0, "", "", fmt.Errorf("decode conversation_init: %w", err)
+	}
+	planType := stringValue(firstValue(root, "plan_type", "planType", "subscription_plan"))
+	blocked, _ := firstValue(root, "blocked_features", "blockedFeatures").([]any)
+	imageBlocked := false
+	for _, feature := range blocked {
+		if isImageQuotaFeature(stringValue(feature)) {
+			imageBlocked = true
+			break
+		}
+	}
+	limits, _ := firstValue(root, "limits_progress", "limitsProgress").([]any)
+	for _, raw := range limits {
+		limit, ok := raw.(map[string]any)
+		if !ok || !isImageQuotaFeature(stringValue(firstValue(limit, "feature_name", "featureName", "feature", "name"))) {
+			continue
+		}
+		remaining, found := numericValue(firstValue(limit, "remaining", "remaining_value", "remainingValue", "remaining_count", "remainingCount"))
+		if !found {
+			total, totalOK := numericValue(firstValue(limit, "max_value", "maxValue", "cap", "total", "limit", "quota", "usage_limit", "usageLimit"))
+			used, usedOK := numericValue(firstValue(limit, "used", "used_value", "usedValue", "consumed", "current_usage", "currentUsage"))
+			if totalOK && usedOK {
+				remaining, found = total-used, true
+			}
+		}
+		if !found {
+			if imageBlocked {
+				return 0, normalizeReset(firstValue(limit, "reset_at", "resetAt", "next_reset_at", "nextResetAt", "reset_after", "resetAfter"), observedAt), planType, nil
+			}
+			return 0, "", planType, fmt.Errorf("conversation_init image quota is missing remaining capacity")
+		}
+		return normalizeQuota(remaining), normalizeReset(firstValue(limit, "reset_at", "resetAt", "next_reset_at", "nextResetAt", "reset_after", "resetAfter"), observedAt), planType, nil
+	}
+	if imageBlocked {
+		return 0, "", planType, nil
+	}
+	return 0, "", planType, fmt.Errorf("conversation_init did not provide image quota")
+}
+
+func firstValue(object map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := object[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func isImageQuotaFeature(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "image_gen", "image_generation", "image_edit", "img_gen":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		return ""
+	}
+}
+
+func numericValue(value any) (float64, bool) {
+	text := stringValue(value)
+	if text == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	return parsed, err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
+}
+
+func normalizeQuota(value float64) int {
+	if value <= 0 {
+		return 0
+	}
+	if value >= float64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(math.Floor(value))
+}
+
+func normalizeReset(value any, observedAt time.Time) string {
+	text := stringValue(value)
+	if text == "" {
+		return ""
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return text
+	}
+	var reset time.Time
+	switch {
+	case parsed > 1_000_000_000_000:
+		reset = time.UnixMilli(int64(parsed))
+	case parsed > 1_000_000_000:
+		reset = time.Unix(int64(parsed), 0)
+	default:
+		reset = observedAt.Add(time.Duration(parsed * float64(time.Second)))
+	}
+	return reset.UTC().Format(time.RFC3339)
+}
+
 func (c *Client) get(path, operation string) ([]byte, error) {
-	return c.request(http.MethodGet, path, nil, operation)
+	return c.getContext(context.Background(), path, operation)
+}
+func (c *Client) getContext(ctx context.Context, path, operation string) ([]byte, error) {
+	return c.requestContext(ctx, http.MethodGet, path, nil, operation)
 }
 func (c *Client) postJSON(path, payload, operation string) ([]byte, error) {
-	return c.request(http.MethodPost, path, strings.NewReader(payload), operation)
+	return c.postJSONContext(context.Background(), path, payload, operation)
+}
+func (c *Client) postJSONContext(ctx context.Context, path, payload, operation string) ([]byte, error) {
+	return c.requestContext(ctx, http.MethodPost, path, strings.NewReader(payload), operation)
 }
 
 func (c *Client) request(method, path string, body io.Reader, operation string) ([]byte, error) {
+	return c.requestContext(context.Background(), method, path, body, operation)
+}
+
+func (c *Client) requestContext(ctx context.Context, method, path string, body io.Reader, operation string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	req, err := http.NewRequest(method, c.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("%s request: %w", operation, err)
 	}
+	req = req.WithContext(ctx)
 	req.Header.Set("authorization", "Bearer "+c.accessToken)
 	req.Header.Set("origin", c.baseURL)
 	req.Header.Set("referer", c.baseURL+"/")

@@ -177,11 +177,30 @@
     </section>
 
     <section id="panelAccountPools" class="panel">
-      <section class="hero"><div><h2>账号池</h2><p>集中管理 ChatGPT Web 与 Codex OAuth 账号。两类账号池的凭据、网络出口、刷新状态、冷却策略和模型目录相互隔离。</p></div></section>
-      <div class="subnav" role="tablist" aria-label="账号池类型">
-        <button type="button" id="poolSubChatGPT" data-pool-sub="chatgptweb" class="active">ChatGPT Web</button>
-        <button type="button" id="poolSubCodex" data-pool-sub="codex">Codex OAuth</button>
-      </div>
+      <section class="hero"><div><h2>统一账号池</h2><p>按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。</p></div></section>
+      <section class="stats">
+        <div class="stat"><div class="stat-label">统一账号</div><div class="stat-value" id="uaTotal">—</div></div>
+        <div class="stat"><div class="stat-label">ChatGPT Web 凭据</div><div class="stat-value" id="uaWebCount">—</div></div>
+        <div class="stat"><div class="stat-label">Codex CLI 凭据</div><div class="stat-value" id="uaCodexCount">—</div></div>
+        <div class="stat"><div class="stat-label">双凭据账号</div><div class="stat-value" id="uaDualCount">—</div></div>
+        <div class="stat"><div class="stat-label">可用图片额度</div><div class="stat-value" id="uaImageQuota">—</div></div>
+        <div class="stat"><div class="stat-label">正常 / 限流</div><div class="stat-value" id="uaNormalLimited">—</div></div>
+        <div class="stat"><div class="stat-label">异常 / 禁用</div><div class="stat-value" id="uaAbnormalDisabled">—</div></div>
+      </section>
+      <section class="card">
+        <div class="toolbar cg-account-toolbar">
+          <span class="toolbar-title">账号列表</span><span class="toolbar-meta" id="uaMeta"></span>
+          <input id="uaSearch" class="search" type="search" autocomplete="off" placeholder="搜索脱敏邮箱或本地 ID">
+          <div class="cg-toolbar-actions">
+            <button type="button" class="btn" id="uaReload">重新加载</button>
+            <button type="button" class="btn" id="uaWebOAuth">ChatGPT Web OAuth</button>
+            <button type="button" class="btn" id="uaWebImport">导入 Web 凭据</button>
+            <button type="button" class="btn" id="uaCodexOAuth">Codex OAuth</button>
+            <button type="button" class="btn btn-primary" id="uaCodexImport">导入 Codex 凭据</button>
+          </div>
+        </div>
+        <div id="uaAccountTable" class="loading"><div class="spin"></div><div>正在加载账号…</div></div>
+      </section>
     </section>
 
     <section id="panelFeatures" class="panel">
@@ -234,7 +253,7 @@
               <option value="">全部类型</option>
             </select>
             <div class="cg-toolbar-actions">
-              <button type="button" class="btn" id="cgAccRefreshSelected">刷新所选凭据</button>
+              <button type="button" class="btn" id="cgAccRefreshSelected">刷新所选账号</button>
               <button type="button" class="btn" id="cgAccExportSelected">导出所选账号</button>
               <button type="button" class="btn link-danger" id="cgAccDeleteSelected">删除所选账号</button>
               <button type="button" class="btn" id="cgAccOAuth">OAuth 导入</button>
@@ -459,7 +478,7 @@
     <div class="modal-head"><span class="modal-title">导入 ChatGPT Web 凭据</span><button class="close" type="button" id="cgImportClose">×</button></div>
     <div class="modal-body">
       <div class="field"><label class="label" for="cgImportFile">JSON 文件</label><input id="cgImportFile" class="control" type="file" accept=".json,application/json"><div class="help">推荐直接选择 ChatGPT Web 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。</div></div>
-      <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="8" placeholder="每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组"></textarea><div class="help">文件与粘贴内容只能选择一种。支持纯 access token 文本、JSON 字符串数组，以及完整 OAuth 账号数组或 {accounts:[...]}；凭据不会回显。</div></div>
+      <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="8" placeholder="每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组"></textarea><div class="help">文件与粘贴内容只能选择一种。支持纯 access token 文本，以及 credential_type=chatgpt_web 的完整 OAuth JSON；Codex OAuth 导出不可导入此处。</div></div>
       <div class="field"><label class="label" for="cgImportSource">source_type</label>
         <select id="cgImportSource" class="control"><option value="">留空</option><option value="web">手工导入（web）</option></select>
       </div>
@@ -517,7 +536,7 @@
     <div class="modal-body">
       <div class="field"><label class="label" for="codexImportFile">JSON 文件</label><input id="codexImportFile" class="control" type="file" accept=".json,application/json"><div class="help">推荐直接选择 Codex OAuth 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。</div></div>
       <div class="field"><label class="label" for="codexImportAccounts">粘贴 accounts JSON（辅助）</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea></div>
-      <div class="help">文件与粘贴内容只能选择一种。仅接受 Codex OAuth 导出结构；凭据和代理只在提交期间保留于页面内存，列表与后续页面不会回显。</div>
+      <div class="help">文件与粘贴内容只能选择一种。仅接受 credential_type=codex_cli 的 Codex OAuth 导出结构；ChatGPT Web 导出不可导入此处。</div>
     </div>
     <div class="modal-foot"><button class="btn" type="button" id="codexImportCancel">取消</button><button class="btn btn-primary" type="submit" id="codexImportSubmit">导入</button></div>
   </form>
@@ -595,7 +614,7 @@ Object.assign(enUS,{
   "搜索历史":"Search history","按管理员账号隔离，最多保留 30 天":"Isolated per administrator; retained for up to 30 days","正在加载搜索历史…":"Loading search history…","暂无搜索历史":"No search history","无法加载搜索历史":"Could not load search history","未命名搜索":"Untitled search",
 });
 Object.assign(enUS,{
-  "导入凭据":"Import credentials","导入 ChatGPT Web 凭据":"Import ChatGPT Web credentials","凭据":"Credentials","每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组":"One access token per line, or paste a JSON array exported by ChatGPT Web","支持纯 access token 文本、JSON 字符串数组，以及完整 OAuth 账号数组或 {accounts:[...]}。完整对象会保留 refresh_token、id_token 和 proxy，凭据不会回显。":"Accepts plain access-token text, JSON string arrays, complete OAuth account arrays, or {accounts:[...]}. Complete objects retain refresh_token, id_token, and proxy; credentials are never echoed.",
+  "导入凭据":"Import credentials","导入 ChatGPT Web 凭据":"Import ChatGPT Web credentials","凭据":"Credentials","每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组":"One access token per line, or paste a JSON array exported by ChatGPT Web","支持纯 access token 文本、JSON 字符串数组，以及完整 OAuth 账号数组或 {accounts:[...]}。完整对象会保留 refresh_token、id_token 和 proxy，且必须带 credential_type=chatgpt_web；凭据不会回显。":"Accepts plain access-token text, JSON string arrays, complete OAuth account arrays, or {accounts:[...]}. Complete objects retain refresh_token, id_token, and proxy, and must contain credential_type=chatgpt_web; credentials are never echoed.",
   "JSON 文件":"JSON file","推荐直接选择 ChatGPT Web 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。":"Select a JSON file exported by ChatGPT Web. Maximum 1 MiB and 1,000 accounts.","粘贴凭据（辅助）":"Paste credentials (alternative)","文件与粘贴内容只能选择一种。支持纯 access token 文本、JSON 字符串数组，以及完整 OAuth 账号数组或 {accounts:[...]}；凭据不会回显。":"Choose either a file or pasted content. Plain access-token text, JSON string arrays, complete OAuth account arrays, and {accounts:[...]} are supported; credentials are never echoed.","推荐直接选择 Codex OAuth 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。":"Select a JSON file exported by Codex OAuth. Maximum 1 MiB and 1,000 accounts.","粘贴 accounts JSON（辅助）":"Paste accounts JSON (alternative)","文件与粘贴内容只能选择一种。仅接受 Codex OAuth 导出结构；凭据和代理只在提交期间保留于页面内存，列表与后续页面不会回显。":"Choose either a file or pasted content. Only the Codex OAuth export structure is accepted; credentials and proxies remain in memory only during submission and are never echoed.",
 });
 Object.assign(enUS,{
@@ -614,7 +633,9 @@ Object.assign(enUS,{
 Object.assign(enUS,{
   "查看当前服务版本、运行状态、外部接入方式和已开放的数据面 API。":"View the service version, runtime status, external access methods, and exposed data-plane APIs.","当前版本":"Version","运行时间":"Uptime","启动时间":"Started at","Go 版本":"Go version","服务信息":"Service information","当前支持的接入方式":"Supported access methods","开放的 API 端点":"Exposed API endpoints","实际注册路由":"Registered routes","正在加载系统信息…":"Loading system information…","服务名称":"Service name","访问基址":"Base URL","服务器时间":"Server time","认证方式":"Authentication","协议":"Protocol","远程访问":"Remote access","说明":"Description","无需认证":"None","客户端 API Key":"Client API key","网络策略":"Network policy","监听地址可达":"Available on listener","仅本机":"Loopback only","已允许远程访问":"Remote access enabled","配置的网络范围":"Configured networks","无法加载系统信息":"Could not load system information","天":"d","小时":"h","分钟":"m","秒":"s"
 });
-const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"chatgptweb",featureSub:"chat",system:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",
+Object.assign(enUS,{"刷新所选账号":"Refresh selected accounts","刷新账号":"Refresh account"});
+Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。":"Manage separate ChatGPT Web and Codex CLI credential slots under one account identity. Each slot is renewed only by its matching OAuth client.","统一账号":"Unified accounts","ChatGPT Web 凭据":"ChatGPT Web credentials","Codex CLI 凭据":"Codex CLI credentials","双凭据账号":"Dual-credential accounts","可用图片额度":"Available image quota","导入 Web 凭据":"Import Web credentials","导入 Codex 凭据":"Import Codex credentials","ChatGPT Web 凭据槽":"ChatGPT Web credential slot","Codex CLI 凭据槽":"Codex CLI credential slot","未配置 ChatGPT Web 凭据":"ChatGPT Web credentials not configured","未配置 Codex CLI 凭据":"Codex CLI credentials not configured","刷新额度/凭据":"Refresh quota/credentials","删除槽位":"Delete slot"});
+const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{query:"",loading:false},
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
     featureCatalog:null,
@@ -820,7 +841,7 @@ function setHash(){
     return;
   }
   if(state.tab==="account-pools"){
-    location.hash="#/account-pools/"+(state.poolSub||"chatgptweb");
+    location.hash="#/account-pools";
     return;
   }
   if(state.tab==="features"){
@@ -842,9 +863,9 @@ function showTab(tab){
   $("panelSystem").classList.toggle("active",tab==="system");
   $("panelAccountPools").classList.toggle("active",tab==="account-pools");
   $("panelFeatures").classList.toggle("active",tab==="features");
-  $("panelChatGPT").classList.toggle("active",(tab==="account-pools"&&state.poolSub!=="codex")||tab==="features");
+  $("panelChatGPT").classList.toggle("active",tab==="features");
   $("cgHero").classList.toggle("hidden",tab==="features");
-  $("panelCodex").classList.toggle("active",tab==="account-pools"&&state.poolSub==="codex");
+  $("panelCodex").classList.remove("active");
   $("navProviders").classList.toggle("active",tab==="providers");
   $("navClientKeys").classList.toggle("active",tab==="client-keys");
   $("navUsage").classList.toggle("active",tab==="usage");
@@ -853,19 +874,14 @@ function showTab(tab){
   $("navSystem").classList.toggle("active",tab==="system");
   if(tab==="usage"){loadFilterOptions(false);loadUsage(true)}
   else if(tab==="client-keys")loadClientKeys();
-  else if(tab==="account-pools")showAccountPoolSub(state.poolSub||"chatgptweb");
+  else if(tab==="account-pools"){loadUnifiedAccounts();setHash()}
   else if(tab==="features")showFeatureSub(state.featureSub||"chat");
   else if(tab==="system")loadSystemInfo();
   else loadProviders();
 }
 function showAccountPoolSub(sub){
-  state.poolSub=sub==="codex"?"codex":"chatgptweb";
-  $("poolSubChatGPT").classList.toggle("active",state.poolSub==="chatgptweb");
-  $("poolSubCodex").classList.toggle("active",state.poolSub==="codex");
-  $("panelChatGPT").classList.toggle("active",state.tab==="account-pools"&&state.poolSub==="chatgptweb");
-  $("panelCodex").classList.toggle("active",state.tab==="account-pools"&&state.poolSub==="codex");
-  if(state.poolSub==="codex")loadCodexAccounts();
-  else showChatGPTSub("accounts");
+  state.poolSub="unified";
+  loadUnifiedAccounts();
   if(state.tab==="account-pools")setHash();
 }
 function showFeatureSub(sub){
@@ -1134,10 +1150,70 @@ async function loadCodexAccounts(){
     const ids=new Set(state.codex.accounts.map(item=>item.id));
     state.codex.selected.forEach(id=>{if(!ids.has(id))state.codex.selected.delete(id)});
     renderCodexAccounts();
+	if(state.tab==="account-pools")renderUnifiedAccounts();
   }catch(e){
     if(e.status===503){setCodexUnavailable(e.message);box.className="";box.innerHTML=`<div class="empty">${esc(e.message||"Codex OAuth 服务当前不可用")}</div>`;return}
     box.className="";box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;
   }
+}
+
+function unifiedIdentityKey(slot,kind){
+  const identity=String(slot?.identity_key||"").trim();
+  if(identity)return identity;
+  const email=String(slot?.email||"").trim().toLowerCase();
+  return email?`email:${email}`:`${kind}:${String(slot?.id||"")}`;
+}
+function unifiedAccounts(){
+  const rows=new Map();
+  for(const web of state.cg.accounts||[]){
+    const key=unifiedIdentityKey(web,"chatgpt_web"),row=rows.get(key)||{id:key,email:web.email||"",web:null,codex:null};
+    row.web=web;if(!row.email)row.email=web.email||"";rows.set(key,row);
+  }
+  for(const codex of state.codex.accounts||[]){
+    const key=unifiedIdentityKey(codex,"codex_cli"),row=rows.get(key)||{id:key,email:codex.email||"",web:null,codex:null};
+    row.codex=codex;if(!row.email)row.email=codex.email||"";rows.set(key,row);
+  }
+  return [...rows.values()].sort((a,b)=>String(a.email||a.id).localeCompare(String(b.email||b.id)));
+}
+function unifiedAccountStatus(row){
+  const statuses=[row?.web?.status,row?.codex?.status].map(value=>String(value||"").toLowerCase()).filter(Boolean);
+  if(statuses.includes("异常")||statuses.includes("abnormal"))return "异常";
+  if(statuses.includes("限流")||statuses.includes("limited"))return "限流";
+  if(statuses.length&&statuses.every(value=>value==="禁用"||value==="disabled"))return "禁用";
+  if(statuses.some(value=>value==="正常"||value==="normal"))return "正常";
+  return statuses.length?"异常":"—";
+}
+function unifiedWebSlot(account){
+  if(!account)return `<div class="subtle">未配置 ChatGPT Web 凭据</div>`;
+  const restore=formatRestoreAt(account.restore_at);
+  return `<div class="codex-account-state"><div class="tags"><span class="tag tag-purple">chatgpt_web</span>${statusTag(account.status)}</div>${tokenRefreshBadge(account)}<div class="subtle">图片额度 ${Math.max(0,Number(account.quota)||0)}${restore.relative?` · ${esc(restore.relative)}`:""}</div><div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}">刷新额度/凭据</button><button class="link-btn" data-ua-web-export="${esc(account.id)}">导出</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}">删除槽位</button></div></div>`;
+}
+function unifiedCodexSlot(account){
+  if(!account)return `<div class="subtle">未配置 Codex CLI 凭据</div>`;
+  return `<div class="codex-account-state"><div class="tags"><span class="tag tag-purple">codex_cli</span>${codexStatusTag(account.status)}</div>${codexRefreshBadge(account)}${codexUsageSnapshotBadge(account)}${codexModelSnapshotBadge(account)}<div class="actions"><button class="link-btn" data-ua-codex-discovery="${esc(account.id)}">同步模型</button><button class="link-btn" data-ua-codex-usage="${esc(account.id)}">刷新用量</button><button class="link-btn" data-ua-codex-refresh="${esc(account.id)}">刷新凭据</button><button class="link-btn" data-ua-codex-export="${esc(account.id)}">导出</button><button class="link-btn link-danger" data-ua-codex-delete="${esc(account.id)}">删除槽位</button></div></div>`;
+}
+function renderUnifiedAccounts(){
+  const all=unifiedAccounts(),q=String(state.unified.query||"").trim().toLowerCase();
+  const rows=q?all.filter(row=>String(row.email||"").toLowerCase().includes(q)||String(row.web?.id||"").toLowerCase().includes(q)||String(row.codex?.id||"").toLowerCase().includes(q)):all;
+  const imageQuota=all.reduce((total,row)=>{const status=String(row.web?.status||"");return status==="正常"||status==="限流"?total+Math.max(0,Number(row.web?.quota)||0):total},0);
+  const statusCounts={"正常":0,"限流":0,"异常":0,"禁用":0};all.forEach(row=>{const status=unifiedAccountStatus(row);if(statusCounts[status]!=null)statusCounts[status]++});
+  $("uaTotal").textContent=all.length;$("uaWebCount").textContent=all.filter(row=>row.web).length;$("uaCodexCount").textContent=all.filter(row=>row.codex).length;$("uaDualCount").textContent=all.filter(row=>row.web&&row.codex).length;$("uaImageQuota").textContent=imageQuota;$("uaNormalLimited").textContent=`${statusCounts["正常"]} / ${statusCounts["限流"]}`;$("uaAbnormalDisabled").textContent=`${statusCounts["异常"]} / ${statusCounts["禁用"]}`;$("uaMeta").textContent=`显示 ${rows.length} / ${all.length}`;
+  const box=$("uaAccountTable");box.className="";
+  if(!rows.length){box.innerHTML=`<div class="empty">${all.length?"未找到匹配账号":"尚未导入账号凭据"}</div>`;return}
+  box.innerHTML=`<div class="table-wrap"><table class="codex-account-table"><thead><tr><th>账号</th><th>ChatGPT Web 凭据槽</th><th>Codex CLI 凭据槽</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${codexAccountIdentity({id:row.id,email:row.email})}<div class="account-refresh-state">${statusTag(unifiedAccountStatus(row))}</div></td><td>${unifiedWebSlot(row.web)}</td><td>${unifiedCodexSlot(row.codex)}</td></tr>`).join("")}</tbody></table></div>`;
+  document.querySelectorAll("[data-ua-web-refresh]").forEach(el=>el.onclick=()=>refreshAccounts([el.dataset.uaWebRefresh]));
+  document.querySelectorAll("[data-ua-web-export]").forEach(el=>el.onclick=()=>openExportDialog([el.dataset.uaWebExport]));
+  document.querySelectorAll("[data-ua-web-delete]").forEach(el=>el.onclick=()=>deleteAccounts([el.dataset.uaWebDelete]));
+  document.querySelectorAll("[data-ua-codex-discovery]").forEach(el=>el.onclick=()=>startCodexModelDiscovery([el.dataset.uaCodexDiscovery]));
+  document.querySelectorAll("[data-ua-codex-usage]").forEach(el=>el.onclick=()=>startCodexUsageRefresh([el.dataset.uaCodexUsage]));
+  document.querySelectorAll("[data-ua-codex-refresh]").forEach(el=>el.onclick=()=>refreshCodexAccounts([el.dataset.uaCodexRefresh]));
+  document.querySelectorAll("[data-ua-codex-export]").forEach(el=>el.onclick=()=>openExportDialog([el.dataset.uaCodexExport],"codex"));
+  document.querySelectorAll("[data-ua-codex-delete]").forEach(el=>el.onclick=()=>deleteCodexAccounts([el.dataset.uaCodexDelete]));
+}
+async function loadUnifiedAccounts(){
+  if(state.unified.loading)return;
+  state.unified.loading=true;const box=$("uaAccountTable");box.className="loading";box.innerHTML=`<div class="spin"></div><div>正在加载账号…</div>`;
+  try{await Promise.all([loadChatGPTAccounts(),loadCodexAccounts()]);renderUnifiedAccounts()}finally{state.unified.loading=false}
 }
 function filteredCodexAccounts(){
   const q=(state.codex.query||"").trim().toLowerCase();
@@ -1313,6 +1389,7 @@ async function loadChatGPTAccounts(){
     typeSel.innerHTML=`<option value="">全部类型</option>`+types.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
     if(types.includes(prev))typeSel.value=prev;
     renderChatGPTAccounts();
+	if(state.tab==="account-pools")renderUnifiedAccounts();
   }catch(e){
     if(e.status===503){setChatGPTUnavailable(e.message);box.innerHTML=`<div class="empty">${esc(e.message||"ChatGPT Web 服务当前不可用")}</div>`;return}
     box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;
@@ -1362,7 +1439,7 @@ function renderChatGPTAccounts(){
       <td>${chatGPTAccountActivity(success,fail)}</td>
       <td class="cg-account-actions"><div class="actions">
         <button class="link-btn" data-acc-edit="${esc(a.id)}">编辑</button>
-        <button class="link-btn" data-acc-refresh="${esc(a.id)}" ${state.cg.refresh.busy?"disabled":""}>刷新凭据</button>
+        <button class="link-btn" data-acc-refresh="${esc(a.id)}" ${state.cg.refresh.busy?"disabled":""}>刷新账号</button>
         <button class="link-btn link-danger" data-acc-del="${esc(a.id)}" ${state.cg.accountDeleteBusy?"disabled":""}>删除</button>
       </div></td>
     </tr>`;
@@ -1482,11 +1559,12 @@ async function pollRefreshProgress(pid){
       const p=await request(apiURL(`/api/chatgpt/accounts/refresh/progress/${encodeURIComponent(pid)}`));
       fails=0;
       const done=Boolean(p.done);
-      $("cgRefreshProgress").textContent=`刷新进度 ${p.processed||0}/${p.total||0}`+(done?"（已完成）":"…")+(p.error?` · ${p.error}`:"");
+      const total=Math.max(0,Number(p.total)||0),refreshed=Math.max(0,Number(p.refreshed)||0),failed=Math.max(0,total-refreshed);const taskError=String(p.error||"").trim(),firstError=Array.isArray(p.errors)&&p.errors.length?String(p.errors[0].error||"").trim():"",displayError=firstError||taskError;
+      $("cgRefreshProgress").textContent=done?`刷新完成：成功 ${refreshed}，失败 ${failed}，共 ${total} 个账号${displayError?` · ${displayError}`:""}`:`刷新进度 ${p.processed||0}/${total}…`+(taskError?` · ${taskError}`:"");
       if(done){
         state.cg.refresh.busy=false;state.cg.refresh.progressId="";state.cg.refresh.timer=null;
-        toast("账号刷新完成");
-        setTimeout(()=>$("cgRefreshProgress").classList.add("hidden"),2500);
+        toast(displayError||`账号刷新完成：成功 ${refreshed}，失败 ${failed}，共 ${total} 个账号`,failed||displayError?"error":"success");
+        setTimeout(()=>$("cgRefreshProgress").classList.add("hidden"),4200);
         await loadChatGPTAccounts();
         return;
       }
@@ -2766,6 +2844,12 @@ function copyAllTemporaryMessages(){
 // ChatGPT Web events
 $(`systemRefresh`).onclick=loadSystemInfo;
 document.querySelectorAll("[data-pool-sub]").forEach(btn=>btn.onclick=()=>{showAccountPoolSub(btn.dataset.poolSub)});
+$("uaSearch").oninput=e=>{state.unified.query=e.target.value;renderUnifiedAccounts()};
+$("uaReload").onclick=loadUnifiedAccounts;
+$("uaWebOAuth").onclick=openOAuthDialog;
+$("uaWebImport").onclick=openImportDialog;
+$("uaCodexOAuth").onclick=openCodexOAuth;
+$("uaCodexImport").onclick=openCodexImport;
 document.querySelectorAll("[data-feature-sub]").forEach(btn=>btn.onclick=()=>{showFeatureSub(btn.dataset.featureSub)});
 $("codexRetry").onclick=loadCodexAccounts;
 $("codexAccReload").onclick=loadCodexAccounts;

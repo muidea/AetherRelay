@@ -12,6 +12,7 @@ type ImportResult struct {
 	Added               int                                 `json:"added"`
 	Updated             int                                 `json:"updated"`
 	Skipped             int                                 `json:"skipped"`
+	AccountIDs          []string                            `json:"account_ids,omitempty"`
 	ModelDiscovery      *proxyevents.CodexDiscoveryProgress `json:"model_discovery,omitempty"`
 	ModelDiscoveryError string                              `json:"model_discovery_error,omitempty"`
 	UsageRefresh        *proxyevents.CodexUsageProgress     `json:"usage_refresh,omitempty"`
