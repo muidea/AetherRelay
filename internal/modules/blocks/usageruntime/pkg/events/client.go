@@ -180,6 +180,29 @@ func (c client) AllTimeByKey(ctx context.Context) (map[string]usage.Summary, err
 	return response.Value, nil
 }
 
+func (c client) EnsureClientAPIKey(ctx context.Context, id string, at time.Time) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyEnsure, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyEnsureCommand{ID: id, CreatedAt: at}), "client key ensure")
+}
+func (c client) TouchClientAPIKey(ctx context.Context, id string, at time.Time) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyTouch, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyTouchCommand{ID: id, UsedAt: at}), "client key touch")
+}
+func (c client) ClientAPIKeyMetadata(ctx context.Context) (map[string]usage.ClientAPIKeyMetadata, error) {
+	ev := event.NewEventWithContext(TopicClientKeyMetadata, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyMetadataCommand{})
+	result, err := send(c.hub, ev, "client key metadata")
+	if err != nil {
+		return nil, err
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return nil, fmt.Errorf("client key metadata failed: %s", getErr.Message)
+	}
+	response, ok := data.(ClientKeyMetadataResult)
+	if !ok {
+		return nil, fmt.Errorf("invalid client key metadata response")
+	}
+	return response.Value, nil
+}
+
 func (c client) sendEmpty(ev event.Event, name string) error {
 	_, err := send(c.hub, ev, name)
 	return err

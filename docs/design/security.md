@@ -28,7 +28,7 @@
 ### Admin 管理
 
 - 创建与轮换不接受客户端提供的 `api_key` / `api_key_hash`（服务端生成）；PATCH 只允许改 `enabled`；轮换保持同一 `api_key_id`，激活后新请求只接受新 Key，在途旧快照请求允许完成，无宽限期；禁用与删除均使新请求 401，不删除历史 usage；删除 `default` 返回 400。
-- 列表只暴露 `id`、`enabled`、`credential_source`（managed / external）、`key_configured`，不暴露摘要、长度或环境变量名。
+- 列表只暴露 `id`、`enabled`、`created_at`、`last_used_at`，不暴露摘要、长度或环境变量名；不存在凭据来源分类。
 
 ### 配置写入与激活事务
 

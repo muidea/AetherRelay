@@ -104,6 +104,14 @@ type KeySummary struct {
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 }
 
+// ClientAPIKeyMetadata stores lifecycle timestamps independently from the
+// credential definition. It never contains the raw key or its digest.
+type ClientAPIKeyMetadata struct {
+	ID         string     `json:"id"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
 // Dashboard 是 Web / Admin API 的主查询结果。
 type Dashboard struct {
 	Scope    ScopeInfo     `json:"scope"`
@@ -198,4 +206,7 @@ type Store interface {
 	Healthy() bool
 	// AllTimeByKey 供 metrics 启动镜像初始化。
 	AllTimeByKey(context.Context) (map[string]Summary, error)
+	EnsureClientAPIKey(context.Context, string, time.Time) error
+	TouchClientAPIKey(context.Context, string, time.Time) error
+	ClientAPIKeyMetadata(context.Context) (map[string]ClientAPIKeyMetadata, error)
 }

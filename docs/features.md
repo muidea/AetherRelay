@@ -76,8 +76,8 @@
 - 所有数据端点必需认证：OpenAI 用 `Authorization: Bearer <key>`，Anthropic 用 `X-API-Key: <key>`；两 Header 可兼容，同时出现必须同一 Key。
 - 缺失、空、未知、禁用、格式错误或冲突 Key 均为 401，且不产生用量记录。
 - Key ID 匹配 `[a-z0-9][a-z0-9._-]{0,63}`；`default` 为历史用量保留 ID，不能配置。
-- 原始 Key 不写入日志、DuckDB、归档或管理 API，也不转发给上游。管理端创建的 Key 只保存 SHA-256 摘要；创建/轮换仅在成功响应中显示一次明文。
-- Admin 可创建、启停、轮换、删除 Key。完整配置见[配置参考](configuration.md#客户端-api-key)。
+- 原始 Key 不写入日志、归档或管理 API，也不转发给上游；DuckDB 只保存 SHA-256 摘要。创建/轮换仅在成功响应中显示一次明文。
+- Admin 可创建、启停、轮换、删除 Key；创建时间和最后使用时间保存在 DuckDB 并在管理页展示。完整配置见[配置参考](configuration.md#客户端-api-key)。
 
 ## 用量统计
 

@@ -7,18 +7,21 @@ import (
 )
 
 const (
-	TopicAcquire       = "aiproxy.usage.command.acquire"
-	TopicStart         = "aiproxy.usage.command.start"
-	TopicComplete      = "aiproxy.usage.command.complete"
-	TopicDashboard     = "aiproxy.usage.command.dashboard"
-	TopicCount         = "aiproxy.usage.command.count"
-	TopicEvents        = "aiproxy.usage.command.events"
-	TopicExport        = "aiproxy.usage.command.export"
-	TopicFilterOptions = "aiproxy.usage.command.filter-options"
-	TopicRecover       = "aiproxy.usage.command.recover"
-	TopicCheckpoint    = "aiproxy.usage.command.checkpoint"
-	TopicHealthy       = "aiproxy.usage.command.healthy"
-	TopicAllTime       = "aiproxy.usage.command.all-time"
+	TopicAcquire           = "aiproxy.usage.command.acquire"
+	TopicStart             = "aiproxy.usage.command.start"
+	TopicComplete          = "aiproxy.usage.command.complete"
+	TopicDashboard         = "aiproxy.usage.command.dashboard"
+	TopicCount             = "aiproxy.usage.command.count"
+	TopicEvents            = "aiproxy.usage.command.events"
+	TopicExport            = "aiproxy.usage.command.export"
+	TopicFilterOptions     = "aiproxy.usage.command.filter-options"
+	TopicRecover           = "aiproxy.usage.command.recover"
+	TopicCheckpoint        = "aiproxy.usage.command.checkpoint"
+	TopicHealthy           = "aiproxy.usage.command.healthy"
+	TopicAllTime           = "aiproxy.usage.command.all-time"
+	TopicClientKeyEnsure   = "aiproxy.usage.command.client-key-ensure"
+	TopicClientKeyTouch    = "aiproxy.usage.command.client-key-touch"
+	TopicClientKeyMetadata = "aiproxy.usage.command.client-key-metadata"
 )
 
 type AcquireCommand struct{}
@@ -42,3 +45,15 @@ type HealthyCommand struct{}
 type HealthyResult struct{ Value bool }
 type AllTimeCommand struct{}
 type AllTimeResult struct{ Value map[string]usage.Summary }
+type ClientKeyEnsureCommand struct {
+	ID        string
+	CreatedAt time.Time
+}
+type ClientKeyTouchCommand struct {
+	ID     string
+	UsedAt time.Time
+}
+type ClientKeyMetadataCommand struct{}
+type ClientKeyMetadataResult struct {
+	Value map[string]usage.ClientAPIKeyMetadata
+}

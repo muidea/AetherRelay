@@ -15,15 +15,16 @@ import (
 
 // MemoryStore 是单测用内存 Store,实现与 DuckDBStore 相同接口语义。
 type MemoryStore struct {
-	mu      sync.Mutex
-	events  map[string]*Event
-	closed  atomic.Bool
-	healthy atomic.Int32
+	mu         sync.Mutex
+	events     map[string]*Event
+	clientKeys map[string]ClientAPIKeyMetadata
+	closed     atomic.Bool
+	healthy    atomic.Int32
 }
 
 // NewMemoryStore 构造空内存 store。
 func NewMemoryStore() *MemoryStore {
-	s := &MemoryStore{events: make(map[string]*Event)}
+	s := &MemoryStore{events: make(map[string]*Event), clientKeys: make(map[string]ClientAPIKeyMetadata)}
 	s.healthy.Store(1)
 	return s
 }

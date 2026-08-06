@@ -819,7 +819,7 @@ func TestHandlerManagesHashedClientAPIKeys(t *testing.T) {
 	list.RemoteAddr = "127.0.0.1:1234"
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, list)
-	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), created.APIKey) || !strings.Contains(rec.Body.String(), `"credential_source":"managed"`) {
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), created.APIKey) || strings.Contains(rec.Body.String(), `credential_source`) {
 		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
 

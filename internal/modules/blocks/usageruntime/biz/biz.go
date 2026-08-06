@@ -42,6 +42,9 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(usageevents.TopicCheckpoint, biz.handleCheckpoint)
 	biz.SubscribeFunc(usageevents.TopicHealthy, biz.handleHealthy)
 	biz.SubscribeFunc(usageevents.TopicAllTime, biz.handleAllTime)
+	biz.SubscribeFunc(usageevents.TopicClientKeyEnsure, biz.handleClientKeyEnsure)
+	biz.SubscribeFunc(usageevents.TopicClientKeyTouch, biz.handleClientKeyTouch)
+	biz.SubscribeFunc(usageevents.TopicClientKeyMetadata, biz.handleClientKeyMetadata)
 	return biz, nil
 }
 
@@ -60,6 +63,9 @@ func (s *UsageRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(usageevents.TopicCheckpoint)
 	s.UnsubscribeFunc(usageevents.TopicHealthy)
 	s.UnsubscribeFunc(usageevents.TopicAllTime)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyEnsure)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyTouch)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyMetadata)
 	if s.runtime != nil {
 		s.runtime.Close(ctx)
 	}
@@ -263,4 +269,53 @@ func (s *UsageRuntime) handleAllTime(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(usageevents.AllTimeResult{Value: value}, nil)
+}
+
+func (s *UsageRuntime) handleClientKeyEnsure(ev event.Event, result event.Result) {
+	cmd, ok := ev.Data().(usageevents.ClientKeyEnsureCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid client key ensure command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Store() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "usage block is not ready"))
+		return
+	}
+	if err := s.runtime.Store().EnsureClientAPIKey(ev.Context(), cmd.ID, cmd.CreatedAt); err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(struct{}{}, nil)
+}
+func (s *UsageRuntime) handleClientKeyTouch(ev event.Event, result event.Result) {
+	cmd, ok := ev.Data().(usageevents.ClientKeyTouchCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid client key touch command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Store() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "usage block is not ready"))
+		return
+	}
+	if err := s.runtime.Store().TouchClientAPIKey(ev.Context(), cmd.ID, cmd.UsedAt); err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(struct{}{}, nil)
+}
+func (s *UsageRuntime) handleClientKeyMetadata(ev event.Event, result event.Result) {
+	if _, ok := ev.Data().(usageevents.ClientKeyMetadataCommand); !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid client key metadata command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Store() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "usage block is not ready"))
+		return
+	}
+	value, err := s.runtime.Store().ClientAPIKeyMetadata(ev.Context())
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(usageevents.ClientKeyMetadataResult{Value: value}, nil)
 }

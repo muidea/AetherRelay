@@ -55,7 +55,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 ## 客户端 API Key
 
-`client_api_keys` 是调用方身份与用量归属的唯一配置 authority：
+`client_api_keys` 是调用方身份与用量归属的数据模型；Key 由 Admin 创建并持久化，配置文件不内置任何默认 Key：
 
 ```yaml
 client_api_keys:
@@ -75,7 +75,8 @@ client_api_keys:
 - 每个数据请求必须携带 Key；缺失、空 Header、未知、禁用、格式错误或两个身份 Header 冲突时均返回 401，且不产生用量记录。
 - OpenAI 使用 `Authorization: Bearer <key>`，Anthropic 使用 `X-API-Key: <key>`；两种 Header 可兼容，但同时出现时必须为同一 Key。
 - 原始客户端 Key 不写入日志、DuckDB、归档或管理 API，也不会转发给上游。
-- Admin 可创建、启停、轮换或删除客户端 Key。创建和轮换仅在成功响应中显示一次明文；托管 Key 的 YAML 使用 `api_key_hash`，不能与 `api_key` 同时配置。
+- Admin 可创建、启停、轮换或删除客户端 Key。创建和轮换仅在成功响应中显示一次明文；Key 摘要由运行时存储管理。
+- Key 的 `created_at` 与 `last_used_at` 属于运行期管理元数据，统一保存在 `state.database` 的 DuckDB `client_api_key_metadata` 表中，不写入 YAML；Admin 列表从 DuckDB 读取。首次发现历史 Key 时补建创建时间，成功认证请求会更新最后使用时间。
 - `inbound_api_key`、`AI_PROXY_INBOUND_API_KEY`、`usage_file` 与 `AI_PROXY_USAGE_FILE` 已删除，配置中出现会启动失败。
 
 客户端 Key 是必需的应用层认证；若监听 `0.0.0.0:8080` 或 `:8080`，仍应在防火墙、反向代理或私有网络层实施额外访问控制。

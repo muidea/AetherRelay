@@ -202,6 +202,11 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 		client:              newHTTPClient(cfg.RequestTimeout),
 	}
 	h.clientKeyIndex.Store(buildClientKeyIndex(cfg))
+	if usageStore != nil {
+		for id := range cfg.ClientAPIKeys {
+			_ = usageStore.EnsureClientAPIKey(context.Background(), id, time.Now().UTC())
+		}
+	}
 	h.ReplaceEffectiveCatalog(effectivecatalog.FromStatic(cfg))
 	return h
 }
@@ -372,6 +377,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return
+	}
+	// Client key lifecycle metadata is persisted separately from the key
+	// definition. A failed metadata write must never block an authenticated
+	// request or expose storage details to the caller.
+	if h.usageStore != nil {
+		_ = h.usageStore.TouchClientAPIKey(r.Context(), identity.KeyID, time.Now().UTC())
 	}
 	r = r.WithContext(clientauth.WithClientIdentity(r.Context(), identity))
 
