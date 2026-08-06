@@ -111,6 +111,15 @@ type ClientAPIKeyMetadata struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
+type ClientAPIKeyRecord struct {
+	ID            string
+	Hash          string
+	Enabled       bool
+	CreatedAt     time.Time
+	LastUsedAt    *time.Time
+	LastRotatedAt *time.Time
+	RevokedAt     *time.Time
+}
 
 // Dashboard 是 Web / Admin API 的主查询结果。
 type Dashboard struct {
@@ -209,4 +218,9 @@ type Store interface {
 	EnsureClientAPIKey(context.Context, string, time.Time) error
 	TouchClientAPIKey(context.Context, string, time.Time) error
 	ClientAPIKeyMetadata(context.Context) (map[string]ClientAPIKeyMetadata, error)
+	ListClientAPIKeys(context.Context) (map[string]ClientAPIKeyRecord, error)
+	CreateClientAPIKey(context.Context, ClientAPIKeyRecord) error
+	SetClientAPIKeyEnabled(context.Context, string, bool) error
+	RotateClientAPIKey(context.Context, string, string, time.Time) error
+	RevokeClientAPIKey(context.Context, string, time.Time) error
 }

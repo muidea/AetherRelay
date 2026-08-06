@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // migrate 在事务内应用尚未执行的 schema 版本;若库中存在更高未知版本则 fail-fast。
 func migrate(ctx context.Context, db *sql.DB) error {
@@ -68,9 +68,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return fmt.Errorf("record migration v3: %w", err)
 		}
 	}
+	if applied < 4 {
+		if err := applyV4(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)`, 4, "client_api_keys_v4", time.Now().UTC()); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
+}
+func applyV4(ctx context.Context, tx *sql.Tx) error {
+	for _, q := range []string{`ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS key_hash VARCHAR`, `ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS enabled BOOLEAN`, `ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS last_rotated_at TIMESTAMPTZ`, `ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("apply v4: %w", err)
+		}
 	}
 	return nil
 }

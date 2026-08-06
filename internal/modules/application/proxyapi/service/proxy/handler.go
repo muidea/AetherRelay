@@ -141,10 +141,6 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	for id, info := range h.cfg.ModelMetadata {
 		cfg.ModelMetadata[id] = info
 	}
-	cfg.ClientAPIKeys = make(map[string]config.ClientAPIKey, len(h.cfg.ClientAPIKeys))
-	for id, key := range h.cfg.ClientAPIKeys {
-		cfg.ClientAPIKeys[id] = key
-	}
 	return cfg
 }
 
@@ -169,12 +165,18 @@ func (h *Handler) ReplaceEffectiveCatalog(snap effectivecatalog.Snapshot) {
 
 // UpdateConfig 在完整请求边界之间原子切换运行时配置。
 // 已进入代理处理的请求继续使用旧配置，新请求使用新配置。
-// client_api_keys 可热更新(重建身份索引);usage_store 路径不热切换。
+// Client API keys are reloaded from the usage store; the usage-store path is
+// not hot-swappable.
 func (h *Handler) UpdateConfig(cfg config.Config) error {
+	idx := clientauth.BuildIndex(nil)
+	if h.usageStore != nil {
+		if records, err := h.usageStore.ListClientAPIKeys(context.Background()); err == nil {
+			idx = buildClientKeyIndexFromRecords(records)
+		}
+	}
 	if err := requireResolvedConfig(cfg); err != nil {
 		return err
 	}
-	idx := buildClientKeyIndex(cfg)
 	previousCatalog := h.EffectiveCatalog()
 	h.cfgMu.Lock()
 	defer h.cfgMu.Unlock()
@@ -190,6 +192,8 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 
 // NewHandler 装配代理处理器。usageStore 可为 nil(仅健康检查/测试),业务请求 Start 将失败。
 func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *archive.Recorder, metricsSource any) *Handler {
+	if usageStore != nil {
+	}
 	if err := requireResolvedConfig(cfg); err != nil {
 		panic("proxy.NewHandler: " + err.Error() + "; call config.Load or tests.MustHandlerConfig")
 	}
@@ -201,21 +205,23 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 		driftTracker:        NewFingerprintDriftTracker(2),
 		client:              newHTTPClient(cfg.RequestTimeout),
 	}
-	h.clientKeyIndex.Store(buildClientKeyIndex(cfg))
+	idx := clientauth.BuildIndex(nil)
 	if usageStore != nil {
-		for id := range cfg.ClientAPIKeys {
-			_ = usageStore.EnsureClientAPIKey(context.Background(), id, time.Now().UTC())
+		if records, err := usageStore.ListClientAPIKeys(context.Background()); err == nil {
+			idx = buildClientKeyIndexFromRecords(records)
 		}
 	}
+	h.clientKeyIndex.Store(idx)
 	h.ReplaceEffectiveCatalog(effectivecatalog.FromStatic(cfg))
 	return h
 }
 
-func buildClientKeyIndex(cfg config.Config) *clientauth.Index {
-	entries := config.ClientAPIKeyEntries(cfg)
-	keys := make([]clientauth.KeyEntry, 0, len(entries))
-	for _, e := range entries {
-		keys = append(keys, clientauth.KeyEntry{ID: e.ID, APIKey: e.APIKey, APIKeyHash: e.APIKeyHash, Enabled: e.Enabled})
+func buildClientKeyIndexFromRecords(records map[string]usage.ClientAPIKeyRecord) *clientauth.Index {
+	keys := make([]clientauth.KeyEntry, 0, len(records))
+	for id, r := range records {
+		if r.Hash != "" && r.Enabled && r.RevokedAt == nil {
+			keys = append(keys, clientauth.KeyEntry{ID: id, APIKeyHash: r.Hash, Enabled: true})
+		}
 	}
 	return clientauth.BuildIndex(keys)
 }

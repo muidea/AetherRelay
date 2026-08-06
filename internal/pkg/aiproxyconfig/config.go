@@ -2,14 +2,11 @@ package config
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -66,9 +63,6 @@ type Config struct {
 	SLO                  SLOConfig
 	// AdminAuth 描述可选的 Admin 登录安全配置。默认关闭,保持 loopback-only 兼容行为。
 	AdminAuth AdminAuthConfig
-	// ClientAPIKeys 是客户端调用方识别与用量归属的唯一配置 authority。
-	// 业务请求必须携带并匹配一个 enabled Key；配置可暂时为空，以便通过本地 Admin 创建首个 Key。
-	ClientAPIKeys map[string]ClientAPIKey
 	// UsageStore 描述进程内嵌 DuckDB 持久化统计存储。路径与资源参数变更需重启。
 	UsageStore UsageStoreConfig
 	// ChatGPTWeb 是 ChatGPT Web 账号池和图片能力的本地运行配置。
@@ -117,15 +111,6 @@ type AdminAuthConfig struct {
 	SessionCookieSecure bool
 	// SessionTTLSeconds 是会话绝对有效期,默认 28800(8h),范围 300~86400。
 	SessionTTLSeconds int
-}
-
-// ClientAPIKey 描述一个客户端调用方密钥条目。
-// ID 规范化为小写;APIKey 可含 ${ENV} 展开结果;Enabled=false 时请求返回 401。
-type ClientAPIKey struct {
-	ID         string
-	APIKey     string
-	APIKeyHash string
-	Enabled    bool
 }
 
 // UsageStoreConfig is the runtime projection consumed by the usage owner. It
@@ -270,7 +255,6 @@ func Load(path string) (Config, error) {
 			SessionCookieSecure: false,
 			SessionTTLSeconds:   DefaultAdminSessionTTLSeconds,
 		},
-		ClientAPIKeys: map[string]ClientAPIKey{},
 		State: StateConfig{
 			Dir:                  "var",
 			Database:             "ai-proxy.duckdb",
@@ -337,7 +321,6 @@ func loadFile(path string, cfg *Config) error {
 	section := ""
 	providerName := ""
 	modelName := ""
-	clientKeyID := ""
 	chatgptWebSub := ""
 	lineNo := 0
 	for scanner.Scan() {
@@ -357,11 +340,10 @@ func loadFile(path string, cfg *Config) error {
 		switch {
 		case indent == 0 && !hasValue:
 			switch key {
-			case "server", "state", "providers", "model_metadata", "client_api_keys", "chatgpt_web", "codex_oauth":
+			case "server", "state", "providers", "model_metadata", "chatgpt_web", "codex_oauth":
 				section = key
 				providerName = ""
 				modelName = ""
-				clientKeyID = ""
 				chatgptWebSub = ""
 			default:
 				return fmt.Errorf("%s:%d: unknown section %q", path, lineNo, key)
@@ -370,7 +352,6 @@ func loadFile(path string, cfg *Config) error {
 			section = ""
 			providerName = ""
 			modelName = ""
-			clientKeyID = ""
 			if key == "admin_password_hash" {
 				setErr = setTopLevel(cfg, key, expandDollarBraceOnly(value))
 			} else {
@@ -393,24 +374,15 @@ func loadFile(path string, cfg *Config) error {
 			setErr = setChatGPTWeb(cfg, key, expand(value))
 		case section == "codex_oauth" && indent >= 2:
 			setErr = setCodexOAuth(cfg, key, expand(value))
-		case section == "client_api_keys" && indent == 2 && !hasValue:
-			clientKeyID = key
-			providerName = ""
-			modelName = ""
-			ensureClientAPIKey(cfg, clientKeyID)
-		case section == "client_api_keys" && indent >= 4 && clientKeyID != "":
-			setErr = setClientAPIKey(cfg, clientKeyID, key, expand(value))
 		case section == "providers" && indent == 2 && !hasValue:
 			providerName = key
 			modelName = ""
-			clientKeyID = ""
 			ensureProvider(cfg, providerName)
 		case section == "providers" && indent >= 4 && providerName != "":
 			setErr = setProvider(cfg, providerName, key, expand(value))
 		case section == "model_metadata" && indent == 2 && !hasValue:
 			modelName = key
 			providerName = ""
-			clientKeyID = ""
 			ensureModelMetadata(cfg, modelName)
 		case section == "model_metadata" && indent >= 4 && modelName != "":
 			setErr = setModelMetadata(cfg, modelName, key, expand(value))
@@ -432,7 +404,7 @@ func setTopLevel(cfg *Config, key, value string) error {
 	case "usage_file", "AI_PROXY_USAGE_FILE", "usage_store", "interaction_dir", "interaction_retention":
 		return fmt.Errorf("%s is not supported; configure the state workspace instead", key)
 	case "inbound_api_key":
-		return fmt.Errorf("inbound_api_key is not supported; use client_api_keys for caller identity and usage attribution")
+		return fmt.Errorf("inbound_api_key is not supported; client API keys are managed in the state database")
 	case "debug_log":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -689,39 +661,6 @@ func setChatGPTTemporaryChat(cfg *Config, key, value string) error {
 	return nil
 }
 
-func ensureClientAPIKey(cfg *Config, id string) ClientAPIKey {
-	if cfg.ClientAPIKeys == nil {
-		cfg.ClientAPIKeys = map[string]ClientAPIKey{}
-	}
-	if existing, ok := cfg.ClientAPIKeys[id]; ok {
-		return existing
-	}
-	entry := ClientAPIKey{ID: id, Enabled: true}
-	cfg.ClientAPIKeys[id] = entry
-	return entry
-}
-
-func setClientAPIKey(cfg *Config, id, key, value string) error {
-	entry := ensureClientAPIKey(cfg, id)
-	switch key {
-	case "api_key":
-		entry.APIKey = value
-	case "api_key_hash":
-		entry.APIKeyHash = value
-	case "enabled":
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("client_api_keys.%s.enabled: %w", id, err)
-		}
-		entry.Enabled = b
-	default:
-		return fmt.Errorf("client_api_keys.%s: unknown key %q", id, key)
-	}
-	entry.ID = id
-	cfg.ClientAPIKeys[id] = entry
-	return nil
-}
-
 func setServer(cfg *Config, key, value string) error {
 	// server 段与顶层键共享同一套字段。
 	return setTopLevel(cfg, key, value)
@@ -834,7 +773,7 @@ func applyEnv(cfg *Config) error {
 		cfg.ListenAddr = addrFromPort(value)
 	}
 	if os.Getenv("AI_PROXY_INBOUND_API_KEY") != "" {
-		return fmt.Errorf("AI_PROXY_INBOUND_API_KEY is not supported; configure client_api_keys instead")
+		return fmt.Errorf("AI_PROXY_INBOUND_API_KEY is not supported; manage client API keys in the state database")
 	}
 	if os.Getenv("AI_PROXY_USAGE_FILE") != "" || os.Getenv("AI_PROXY_USAGE_STORE_PATH") != "" || os.Getenv("AI_PROXY_CHATGPT_WEB_DATA_DIR") != "" || os.Getenv("AI_PROXY_INTERACTION_DIR") != "" || os.Getenv("AI_PROXY_INTERACTION_RETENTION") != "" {
 		return fmt.Errorf("legacy state environment variables are not supported; configure the state workspace instead")
@@ -1048,9 +987,8 @@ func normalize(cfg *Config, configPath string) error {
 		cfg.CodexOAuth.ProviderEnabled = true
 	}
 	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
-	if err := normalizeClientAPIKeys(cfg); err != nil {
-		return err
-	}
+	// Client API keys are deliberately excluded from configuration. They are
+	// loaded from the state database by the proxy runtime.
 	normalized := make(map[string]Provider, len(cfg.Providers))
 	var err error
 	normalized, err = normalizeProviders(cfg.Providers)
@@ -1168,11 +1106,8 @@ func validateMetricsCIDRs(cidrs []string) error {
 }
 
 func validate(cfg Config) error {
-	// client_api_keys 是归属机制而非强制登录;非 loopback 监听不再要求 inbound key。
-	// 生产环境需由防火墙/反代等独立接入层保护(见闭包方案 §7.5)。
-	if err := validateClientAPIKeys(cfg); err != nil {
-		return err
-	}
+	// Client API keys are stored exclusively in DuckDB and are not validated
+	// from configuration.
 	if err := validateState(cfg.State); err != nil {
 		return err
 	}
@@ -1894,9 +1829,6 @@ func providersShareServiceablePath(a, b Provider) bool {
 	return false
 }
 
-// clientAPIKeyIDPattern: [a-z0-9][a-z0-9._-]{0,63}
-var clientAPIKeyIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-
 // ReservedClientAPIKeyID 保留给历史 usage 记录，配置中禁止声明。
 const ReservedClientAPIKeyID = "default"
 
@@ -1947,83 +1879,6 @@ func normalizeState(state *StateConfig, configPath string) error {
 		state.InteractionRetention = 500
 	}
 	return nil
-}
-
-func normalizeClientAPIKeys(cfg *Config) error {
-	if cfg.ClientAPIKeys == nil {
-		cfg.ClientAPIKeys = map[string]ClientAPIKey{}
-		return nil
-	}
-	normalized := make(map[string]ClientAPIKey, len(cfg.ClientAPIKeys))
-	for rawID, entry := range cfg.ClientAPIKeys {
-		id := strings.ToLower(strings.TrimSpace(entry.ID))
-		if id == "" {
-			id = strings.ToLower(strings.TrimSpace(rawID))
-		}
-		if id == "" {
-			return fmt.Errorf("client_api_keys: empty id")
-		}
-		if id == ReservedClientAPIKeyID {
-			return fmt.Errorf("client_api_keys: %q is a reserved id", ReservedClientAPIKeyID)
-		}
-		if !clientAPIKeyIDPattern.MatchString(id) {
-			return fmt.Errorf("client_api_keys: invalid id %q (must match [a-z0-9][a-z0-9._-]{0,63})", id)
-		}
-		if existing, ok := normalized[id]; ok {
-			return fmt.Errorf("client_api_keys: duplicate id after case fold: %q and %q", existing.ID, rawID)
-		}
-		entry.ID = id
-		entry.APIKey = strings.TrimSpace(entry.APIKey)
-		entry.APIKeyHash = strings.ToLower(strings.TrimSpace(entry.APIKeyHash))
-		normalized[id] = entry
-	}
-	cfg.ClientAPIKeys = normalized
-	return nil
-}
-
-func validateClientAPIKeys(cfg Config) error {
-	// 用摘要做唯一性检查;错误信息不得包含密钥明文。
-	seenDigests := make(map[string]string, len(cfg.ClientAPIKeys))
-	for id, entry := range cfg.ClientAPIKeys {
-		if id == ReservedClientAPIKeyID {
-			return fmt.Errorf("client_api_keys: %q is a reserved id", ReservedClientAPIKeyID)
-		}
-		if !clientAPIKeyIDPattern.MatchString(id) {
-			return fmt.Errorf("client_api_keys: invalid id %q", id)
-		}
-		if entry.APIKey != "" && entry.APIKeyHash != "" {
-			return fmt.Errorf("client_api_keys.%s: api_key and api_key_hash are mutually exclusive", id)
-		}
-		if entry.Enabled && entry.APIKey == "" && entry.APIKeyHash == "" {
-			return fmt.Errorf("client_api_keys.%s: api_key or api_key_hash is required when enabled", id)
-		}
-		if entry.APIKey == "" && entry.APIKeyHash == "" {
-			continue
-		}
-		digest := entry.APIKeyHash
-		if entry.APIKey != "" {
-			sum := sha256.Sum256([]byte(entry.APIKey))
-			digest = "sha256:" + hex.EncodeToString(sum[:])
-		} else if !isClientAPIKeyHash(digest) {
-			return fmt.Errorf("client_api_keys.%s: invalid api_key_hash", id)
-		}
-		if prev, ok := seenDigests[digest]; ok {
-			if entry.APIKey != "" && cfg.ClientAPIKeys[prev].APIKey != "" {
-				return fmt.Errorf("client_api_keys: duplicate api_key shared by %q and %q", prev, id)
-			}
-			return fmt.Errorf("client_api_keys: duplicate credential shared by %q and %q", prev, id)
-		}
-		seenDigests[digest] = id
-	}
-	return nil
-}
-
-func isClientAPIKeyHash(value string) bool {
-	if !strings.HasPrefix(value, "sha256:") || len(value) != len("sha256:")+64 {
-		return false
-	}
-	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
-	return err == nil
 }
 
 func validateState(state StateConfig) error {
@@ -2152,23 +2007,6 @@ func parseMemoryLimitBytes(raw string) (int64, error) {
 		return 0, fmt.Errorf("memory_limit too large (max 16GB)")
 	}
 	return bytes, nil
-}
-
-// ClientAPIKeyEntries 返回稳定排序的客户端 Key 条目,供 clientauth 索引构建。
-func ClientAPIKeyEntries(cfg Config) []ClientAPIKey {
-	if len(cfg.ClientAPIKeys) == 0 {
-		return nil
-	}
-	ids := make([]string, 0, len(cfg.ClientAPIKeys))
-	for id := range cfg.ClientAPIKeys {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]ClientAPIKey, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, cfg.ClientAPIKeys[id])
-	}
-	return out
 }
 
 // UsageStoreMemoryLimitSQL 返回可安全用于 SET memory_limit 的字面量(已校验)。

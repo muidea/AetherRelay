@@ -3,6 +3,7 @@ package biz
 import (
 	"bytes"
 	"context"
+	"fmt"
 
 	basebiz "ai-proxy/internal/modules/base/biz"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
@@ -45,6 +46,11 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(usageevents.TopicClientKeyEnsure, biz.handleClientKeyEnsure)
 	biz.SubscribeFunc(usageevents.TopicClientKeyTouch, biz.handleClientKeyTouch)
 	biz.SubscribeFunc(usageevents.TopicClientKeyMetadata, biz.handleClientKeyMetadata)
+	biz.SubscribeFunc(usageevents.TopicClientKeyList, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyCreate, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyEnable, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyRotate, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyRevoke, biz.handleClientKeyCommand)
 	return biz, nil
 }
 
@@ -66,6 +72,11 @@ func (s *UsageRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(usageevents.TopicClientKeyEnsure)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyTouch)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyMetadata)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyList)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyCreate)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyEnable)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyRotate)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyRevoke)
 	if s.runtime != nil {
 		s.runtime.Close(ctx)
 	}
@@ -269,6 +280,39 @@ func (s *UsageRuntime) handleAllTime(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(usageevents.AllTimeResult{Value: value}, nil)
+}
+func (s *UsageRuntime) handleClientKeyCommand(ev event.Event, result event.Result) {
+	if s.runtime == nil || s.runtime.Store() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "usage block is not ready"))
+		return
+	}
+	st := s.runtime.Store()
+	var err error
+	switch c := ev.Data().(type) {
+	case usageevents.ClientKeyListCommand:
+		v, e := st.ListClientAPIKeys(ev.Context())
+		if e != nil {
+			err = e
+		} else {
+			result.Set(usageevents.ClientKeyListResult{Value: v}, nil)
+			return
+		}
+	case usageevents.ClientKeyCreateCommand:
+		err = st.CreateClientAPIKey(ev.Context(), c.Value)
+	case usageevents.ClientKeyEnableCommand:
+		err = st.SetClientAPIKeyEnabled(ev.Context(), c.ID, c.Enabled)
+	case usageevents.ClientKeyRotateCommand:
+		err = st.RotateClientAPIKey(ev.Context(), c.ID, c.Hash, c.At)
+	case usageevents.ClientKeyRevokeCommand:
+		err = st.RevokeClientAPIKey(ev.Context(), c.ID, c.At)
+	default:
+		err = fmt.Errorf("invalid client key command")
+	}
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(struct{}{}, nil)
 }
 
 func (s *UsageRuntime) handleClientKeyEnsure(ev event.Event, result event.Result) {

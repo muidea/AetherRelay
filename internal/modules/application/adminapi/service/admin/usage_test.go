@@ -35,11 +35,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		InputTokens: 10, OutputTokens: 5, HTTPStatus: 200, Outcome: "success",
 	})
 
-	rt := &fakeRuntime{cfg: config.Config{
-		ClientAPIKeys: map[string]config.ClientAPIKey{
-			"codex": {ID: "codex", APIKey: "x", Enabled: true},
-		},
-	}}
+	rt := &fakeRuntime{cfg: config.Config{}}
 	h := NewHandlerWithUsage("", rt, store)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage/dashboard?range=30d", nil)
@@ -96,10 +92,6 @@ func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 	})
 
 	rt := &fakeRuntime{cfg: config.Config{
-		ClientAPIKeys: map[string]config.ClientAPIKey{
-			"codex":      {ID: "codex", APIKey: "secret-should-not-leak", Enabled: true},
-			"unused-key": {ID: "unused-key", APIKey: "y", Enabled: false},
-		},
 		Providers: map[string]config.Provider{
 			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-4o"}},
 		},
@@ -231,9 +223,6 @@ func TestUsageFilterOptionsStoreFailureDegrades(t *testing.T) {
 	store := usage.NewMemoryStore()
 	_ = store.Close()
 	rt := &fakeRuntime{cfg: config.Config{
-		ClientAPIKeys: map[string]config.ClientAPIKey{
-			"codex": {ID: "codex", APIKey: "x", Enabled: true},
-		},
 		Providers: map[string]config.Provider{
 			"openai": {Name: "openai"},
 		},

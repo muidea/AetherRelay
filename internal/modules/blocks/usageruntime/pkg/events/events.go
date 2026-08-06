@@ -22,6 +22,11 @@ const (
 	TopicClientKeyEnsure   = "aiproxy.usage.command.client-key-ensure"
 	TopicClientKeyTouch    = "aiproxy.usage.command.client-key-touch"
 	TopicClientKeyMetadata = "aiproxy.usage.command.client-key-metadata"
+	TopicClientKeyList     = "aiproxy.usage.command.client-key-list"
+	TopicClientKeyCreate   = "aiproxy.usage.command.client-key-create"
+	TopicClientKeyEnable   = "aiproxy.usage.command.client-key-enable"
+	TopicClientKeyRotate   = "aiproxy.usage.command.client-key-rotate"
+	TopicClientKeyRevoke   = "aiproxy.usage.command.client-key-revoke"
 )
 
 type AcquireCommand struct{}
@@ -56,4 +61,21 @@ type ClientKeyTouchCommand struct {
 type ClientKeyMetadataCommand struct{}
 type ClientKeyMetadataResult struct {
 	Value map[string]usage.ClientAPIKeyMetadata
+}
+type ClientKeyListCommand struct{}
+type ClientKeyListResult struct {
+	Value map[string]usage.ClientAPIKeyRecord
+}
+type ClientKeyCreateCommand struct{ Value usage.ClientAPIKeyRecord }
+type ClientKeyEnableCommand struct {
+	ID      string
+	Enabled bool
+}
+type ClientKeyRotateCommand struct {
+	ID, Hash string
+	At       time.Time
+}
+type ClientKeyRevokeCommand struct {
+	ID string
+	At time.Time
 }

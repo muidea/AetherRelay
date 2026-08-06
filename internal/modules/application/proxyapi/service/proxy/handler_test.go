@@ -358,9 +358,6 @@ func TestAnthropicNativeAvoidsDuplicateV1AndArchives(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		DebugLog:       true,
-		ClientAPIKeys: map[string]config.ClientAPIKey{
-			"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true},
-		},
 		Providers: map[string]config.Provider{
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test/v1", APIKey: "test-key"},
 		},
@@ -1144,9 +1141,6 @@ func testHandler(baseURL, tmpDir, provider string) *Handler {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		DebugLog:       true,
-		ClientAPIKeys: map[string]config.ClientAPIKey{
-			"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true},
-		},
 		Providers: map[string]config.Provider{
 			provider: {Name: provider, Protocol: "openai", BaseURL: baseURL, APIKey: "test-key"},
 		},
@@ -1678,8 +1672,6 @@ func TestProtocolConversionRejectsTools(t *testing.T) {
 func TestHealthzBypassesInboundAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
-	handler.cfg.ClientAPIKeys = map[string]config.ClientAPIKey{"test": {ID: "test", APIKey: "secret", Enabled: true}}
-	handler.clientKeyIndex.Store(buildClientKeyIndex(handler.cfg))
 	req := newRequest(http.MethodGet, "/healthz", "")
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1697,8 +1689,6 @@ func TestInboundAPIKeyNotForwardedUpstream(t *testing.T) {
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
-	handler.cfg.ClientAPIKeys = map[string]config.ClientAPIKey{"test": {ID: "test", APIKey: "inbound-secret", Enabled: true}}
-	handler.clientKeyIndex.Store(buildClientKeyIndex(handler.cfg))
 	// provider API key is test-key from testHandler
 	handler.client.Transport = transport
 	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)

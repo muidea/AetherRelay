@@ -82,5 +82,5 @@ func assertGatewayRoutes(t *testing.T) {
 
 func testConfig(dir string) config.Config {
 	database := filepath.Join(dir, "ai-proxy.duckdb")
-	return config.Config{ListenAddr: "127.0.0.1:0", State: config.StateConfig{Dir: dir, Database: database, MemoryLimit: "256MB", Threads: 2}, UsageStore: config.UsageStoreConfig{Path: database, MemoryLimit: "256MB", Threads: 2}, InteractionDir: filepath.Join(dir, "interactions"), InteractionRetention: 2, ClientAPIKeys: map[string]config.ClientAPIKey{"test-client": {ID: "test-client", APIKey: "test-client-key", Enabled: true}}, Providers: map[string]config.Provider{}, ModelMetadata: map[string]config.ModelMetadata{}}
+	return config.Config{ListenAddr: "127.0.0.1:0", State: config.StateConfig{Dir: dir, Database: database, MemoryLimit: "256MB", Threads: 2}, UsageStore: config.UsageStoreConfig{Path: database, MemoryLimit: "256MB", Threads: 2}, InteractionDir: filepath.Join(dir, "interactions"), InteractionRetention: 2, Providers: map[string]config.Provider{}, ModelMetadata: map[string]config.ModelMetadata{}}
 }

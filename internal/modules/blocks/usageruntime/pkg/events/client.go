@@ -202,6 +202,30 @@ func (c client) ClientAPIKeyMetadata(ctx context.Context) (map[string]usage.Clie
 	}
 	return response.Value, nil
 }
+func (c client) ListClientAPIKeys(ctx context.Context) (map[string]usage.ClientAPIKeyRecord, error) {
+	ev := event.NewEventWithContext(TopicClientKeyList, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyListCommand{})
+	r, e := send(c.hub, ev, "client key list")
+	if e != nil {
+		return nil, e
+	}
+	v, g := r.Get()
+	if g != nil {
+		return nil, fmt.Errorf("client key list: %s", g.Message)
+	}
+	return v.(ClientKeyListResult).Value, nil
+}
+func (c client) CreateClientAPIKey(ctx context.Context, v usage.ClientAPIKeyRecord) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyCreate, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyCreateCommand{Value: v}), "client key create")
+}
+func (c client) SetClientAPIKeyEnabled(ctx context.Context, id string, v bool) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyEnable, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyEnableCommand{ID: id, Enabled: v}), "client key enable")
+}
+func (c client) RotateClientAPIKey(ctx context.Context, id, h string, t time.Time) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyRotate, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyRotateCommand{ID: id, Hash: h, At: t}), "client key rotate")
+}
+func (c client) RevokeClientAPIKey(ctx context.Context, id string, t time.Time) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyRevoke, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyRevokeCommand{ID: id, At: t}), "client key revoke")
+}
 
 func (c client) sendEmpty(ev event.Event, name string) error {
 	_, err := send(c.hub, ev, name)

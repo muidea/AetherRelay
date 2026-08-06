@@ -76,9 +76,9 @@ func (h *Handler) usageDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 标注 key 状态。
-	cfg := h.runtime.ConfigSnapshot()
+	keyRecords, _ := h.usageStore.ListClientAPIKeys(ctx)
 	for i := range dash.ByAPIKey {
-		dash.ByAPIKey[i].Status = keyStatus(cfg, dash.ByAPIKey[i].APIKeyID)
+		dash.ByAPIKey[i].Status = keyStatus(keyRecords, dash.ByAPIKey[i].APIKeyID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"scope":      dash.Scope,
@@ -211,9 +211,9 @@ func parseUsageFilter(r *http.Request) (usage.UsageFilter, error) {
 	return f, nil
 }
 
-func keyStatus(cfg config.Config, id string) string {
-	if entry, ok := cfg.ClientAPIKeys[id]; ok {
-		if entry.Enabled {
+func keyStatus(records map[string]usage.ClientAPIKeyRecord, id string) string {
+	if entry, ok := records[id]; ok {
+		if entry.Enabled && entry.RevokedAt == nil {
 			return "active"
 		}
 		return "disabled"
@@ -228,10 +228,10 @@ func (h *Handler) usageFilterOptions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cfg := h.runtime.ConfigSnapshot()
-
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
+	keyRecords, _ := h.usageStore.ListClientAPIKeys(ctx)
+	cfg := h.runtime.ConfigSnapshot()
 	started := time.Now()
 	usageRes, usageErr := h.usageStore.FilterOptions(ctx, usage.FilterOptionsQuery{
 		From:    filter.From,
@@ -261,7 +261,7 @@ func (h *Handler) usageFilterOptions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	apiKeys, providers, models := mergeFilterOptions(cfg, usageRes)
+	apiKeys, providers, models := mergeFilterOptions(cfg, keyRecords, usageRes)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"scope": map[string]any{
 			"from":     scopeFrom,
@@ -310,7 +310,7 @@ type filterOptionItem struct {
 	InUsage  bool   `json:"in_usage"`
 }
 
-func mergeFilterOptions(cfg config.Config, usageRes usage.FilterOptionsResult) (apiKeys, providers, models []filterOptionItem) {
+func mergeFilterOptions(cfg config.Config, keyRecords map[string]usage.ClientAPIKeyRecord, usageRes usage.FilterOptionsResult) (apiKeys, providers, models []filterOptionItem) {
 	keyMap := map[string]*filterOptionItem{}
 	ensureKey := func(id string) *filterOptionItem {
 		if o, ok := keyMap[id]; ok {
@@ -321,10 +321,10 @@ func mergeFilterOptions(cfg config.Config, usageRes usage.FilterOptionsResult) (
 		return o
 	}
 	// 配置中的 client keys。
-	for id := range cfg.ClientAPIKeys {
+	for id := range keyRecords {
 		o := ensureKey(id)
 		o.InConfig = true
-		o.Status = keyStatus(cfg, id)
+		o.Status = keyStatus(keyRecords, id)
 	}
 	for _, id := range usageRes.APIKeyIDs {
 		if id == "" {
@@ -333,7 +333,7 @@ func mergeFilterOptions(cfg config.Config, usageRes usage.FilterOptionsResult) (
 		o := ensureKey(id)
 		o.InUsage = true
 		if o.Status == "" {
-			o.Status = keyStatus(cfg, id)
+			o.Status = keyStatus(keyRecords, id)
 		}
 	}
 	apiKeys = make([]filterOptionItem, 0, len(keyMap))

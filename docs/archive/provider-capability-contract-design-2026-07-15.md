@@ -142,7 +142,7 @@ OpenAI SDK、Anthropic SDK 和 WorkOrch 都是该功能合同的消费者。客�
 
 ### 4.3 入站认证
 
-- 客户端身份由 `client_api_keys` 解析；每个数据请求都必须携带已启用 Key，而不是使用上游 provider API Key。
+- 客户端身份由 DuckDB 客户端 Key 记录解析；每个数据请求都必须携带已启用 Key，而不是使用上游 provider API Key。
 - ai-proxy 接受 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
 - 客户端认证头不得原样作为上游认证转发；上游认证由 RouteOwner 配置重新生成。
 

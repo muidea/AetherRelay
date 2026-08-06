@@ -35,13 +35,10 @@ func startProxySDKServer(t *testing.T, cfg config.Config, upstream http.RoundTri
 		t.Fatal(err)
 	}
 	cfg = mustHandlerConfig(cfg)
-	if cfg.ClientAPIKeys == nil {
-		cfg.ClientAPIKeys = map[string]config.ClientAPIKey{}
-	}
 	// SDK 测试默认 key,与 WithAPIKey("inbound-not-used") / anthropic WithAPIKey("inbound") 对齐。
-	cfg.ClientAPIKeys["sdk"] = config.ClientAPIKey{ID: "sdk", APIKey: "inbound-not-used", Enabled: true}
-	cfg.ClientAPIKeys["anthropic-sdk"] = config.ClientAPIKey{ID: "anthropic-sdk", APIKey: "inbound", Enabled: true}
 	h := NewHandler(cfg, usage.NewMemoryStore(), rec, metrics.NewRegistry())
+	withClientKey(h, "sdk", "inbound-not-used")
+	withClientKey(h, "anthropic-sdk", "inbound")
 	if upstream != nil {
 		h.client.Transport = upstream
 	}

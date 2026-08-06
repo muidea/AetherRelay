@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -16,14 +18,6 @@ import (
 // mustHandlerConfig 为测试构造已解析 Config:补齐 endpoints，并将历史夹具中的
 // metadata ID 显式加入匹配 Provider，避免 metadata 在测试中充当模型来源。
 func mustHandlerConfig(cfg config.Config) config.Config {
-	// 所有业务请求均需有效客户端 Key。未专门覆盖认证场景的测试统一使用此默认凭据；
-	// 认证测试可显式替换或删除它。
-	if cfg.ClientAPIKeys == nil {
-		cfg.ClientAPIKeys = map[string]config.ClientAPIKey{}
-	}
-	if _, ok := cfg.ClientAPIKeys["test-client"]; !ok {
-		cfg.ClientAPIKeys["test-client"] = config.ClientAPIKey{ID: "test-client", APIKey: "test-client-key", Enabled: true}
-	}
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
@@ -234,9 +228,13 @@ func readUsageFromStore(t *testing.T, h *Handler) [][]string {
 
 // withClientKey 注册并切换客户端 Key 索引(测试热更新)。
 func withClientKey(h *Handler, id, secret string) {
-	if h.cfg.ClientAPIKeys == nil {
-		h.cfg.ClientAPIKeys = map[string]config.ClientAPIKey{}
+	if h.usageStore == nil {
+		return
 	}
-	h.cfg.ClientAPIKeys[id] = config.ClientAPIKey{ID: id, APIKey: secret, Enabled: true}
-	h.clientKeyIndex.Store(buildClientKeyIndex(h.cfg))
+	sum := sha256.Sum256([]byte(secret))
+	hash := "sha256:" + hex.EncodeToString(sum[:])
+	_ = h.usageStore.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: id, Hash: hash, Enabled: true, CreatedAt: time.Now().UTC()})
+	if records, err := h.usageStore.ListClientAPIKeys(context.Background()); err == nil {
+		h.clientKeyIndex.Store(buildClientKeyIndexFromRecords(records))
+	}
 }

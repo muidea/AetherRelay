@@ -480,7 +480,6 @@ providers:
 }
 
 func TestLoadAllowsNonLoopbackWithoutClientKeys(t *testing.T) {
-	// client_api_keys 是归属机制而非强制登录;非 loopback 不再要求 inbound key。
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 server:
@@ -553,45 +552,17 @@ providers:
 	}
 }
 
-func TestLoadClientAPIKeys(t *testing.T) {
-	t.Setenv("CODEX_API_KEY", "sk-codex-from-env")
+func TestLoadRejectsClientAPIKeysSection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(`
-client_api_keys:
-  Codex:
-    api_key: ${CODEX_API_KEY}
-    enabled: true
-  workorch:
-    api_key: sk-workorch
-    enabled: false
-providers:
-  openai:
-    protocol: openai
-    base_url: https://api.openai.com
-    api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
-    models: gpt-*
-`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("client_api_keys:\n  legacy:\n    api_key: ignored\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.ClientAPIKeys) != 2 {
-		t.Fatalf("keys = %#v", cfg.ClientAPIKeys)
-	}
-	codex, ok := cfg.ClientAPIKeys["codex"]
-	if !ok || codex.APIKey != "sk-codex-from-env" || !codex.Enabled {
-		t.Fatalf("codex = %#v ok=%v", codex, ok)
-	}
-	wo, ok := cfg.ClientAPIKeys["workorch"]
-	if !ok || wo.Enabled {
-		t.Fatalf("workorch = %#v", wo)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown section") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestLoadRejectsDefaultClientKeyID(t *testing.T) {
+func TestLoadRejectsLegacyClientKeySection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 client_api_keys:
@@ -608,12 +579,12 @@ providers:
 		t.Fatal(err)
 	}
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "reserved") {
+	if err == nil || !strings.Contains(err.Error(), "unknown section") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestLoadRejectsDuplicateClientSecrets(t *testing.T) {
+func TestLoadRejectsLegacyClientKeySectionWithNestedValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 client_api_keys:
@@ -635,10 +606,7 @@ providers:
 	if err == nil {
 		t.Fatal("expected duplicate secret error")
 	}
-	if strings.Contains(err.Error(), "same-secret") {
-		t.Fatalf("error leaked secret: %v", err)
-	}
-	if !strings.Contains(err.Error(), "duplicate api_key") {
+	if !strings.Contains(err.Error(), "unknown section") {
 		t.Fatalf("error = %q", err)
 	}
 }

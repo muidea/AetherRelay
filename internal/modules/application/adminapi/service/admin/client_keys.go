@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -17,15 +16,15 @@ import (
 
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxyusage"
-
-	"go.yaml.in/yaml/v4"
 )
 
 type clientKeyView struct {
-	ID         string `json:"id"`
-	Enabled    bool   `json:"enabled"`
-	CreatedAt  string `json:"created_at,omitempty"`
-	LastUsedAt string `json:"last_used_at,omitempty"`
+	ID            string `json:"id"`
+	Enabled       bool   `json:"enabled"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	LastUsedAt    string `json:"last_used_at,omitempty"`
+	LastRotatedAt string `json:"last_rotated_at,omitempty"`
+	RevokedAt     string `json:"revoked_at,omitempty"`
 }
 
 type createClientKeyRequest struct {
@@ -38,39 +37,28 @@ type updateClientKeyRequest struct {
 }
 
 func (h *Handler) listClientAPIKeys(w http.ResponseWriter) {
-	cfg := h.runtime.ConfigSnapshot()
-	metadata := map[string]usage.ClientAPIKeyMetadata{}
 	if h.usageStore != nil {
-		for id := range cfg.ClientAPIKeys {
-			_ = h.usageStore.EnsureClientAPIKey(context.Background(), id, time.Now().UTC())
-		}
-		if loaded, err := h.usageStore.ClientAPIKeyMetadata(context.Background()); err == nil {
-			metadata = loaded
-		}
-	}
-	keys := clientKeyViews(cfg, metadata)
-	writeJSON(w, http.StatusOK, map[string]any{"client_api_keys": keys, "writable": strings.TrimSpace(h.configPath) != "", "hot_reload": true})
-}
-
-func clientKeyViews(cfg config.Config, metadata map[string]usage.ClientAPIKeyMetadata) []clientKeyView {
-	ids := make([]string, 0, len(cfg.ClientAPIKeys))
-	for id := range cfg.ClientAPIKeys {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	result := make([]clientKeyView, 0, len(ids))
-	for _, id := range ids {
-		key := cfg.ClientAPIKeys[id]
-		view := clientKeyView{ID: id, Enabled: key.Enabled}
-		if meta, ok := metadata[id]; ok {
-			view.CreatedAt = meta.CreatedAt.UTC().Format(time.RFC3339)
-			if meta.LastUsedAt != nil {
-				view.LastUsedAt = meta.LastUsedAt.UTC().Format(time.RFC3339)
+		if records, err := h.usageStore.ListClientAPIKeys(context.Background()); err == nil {
+			keys := make([]clientKeyView, 0, len(records))
+			for _, r := range records {
+				v := clientKeyView{ID: r.ID, Enabled: r.Enabled, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339)}
+				if r.LastUsedAt != nil {
+					v.LastUsedAt = r.LastUsedAt.UTC().Format(time.RFC3339)
+				}
+				if r.LastRotatedAt != nil {
+					v.LastRotatedAt = r.LastRotatedAt.UTC().Format(time.RFC3339)
+				}
+				if r.RevokedAt != nil {
+					v.RevokedAt = r.RevokedAt.UTC().Format(time.RFC3339)
+				}
+				keys = append(keys, v)
 			}
+			sort.Slice(keys, func(i, j int) bool { return keys[i].ID < keys[j].ID })
+			writeJSON(w, 200, map[string]any{"client_api_keys": keys, "writable": true, "hot_reload": true})
+			return
 		}
-		result = append(result, view)
 	}
-	return result
+	writeError(w, http.StatusServiceUnavailable, "client API key store unavailable")
 }
 
 func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
@@ -95,121 +83,81 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "generate client API key")
 		return
 	}
-	h.updateMu.Lock()
-	defer h.updateMu.Unlock()
-	if _, ok := h.runtime.ConfigSnapshot().ClientAPIKeys[id]; ok {
-		writeError(w, http.StatusConflict, "client API key id already exists")
-		return
-	}
-	rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
-		if mappingValue(node, id) != nil {
-			return errors.New("client API key id already exists")
-		}
-		entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		appendScalar(entry, "api_key_hash", hash, "!!str")
-		appendScalar(entry, "enabled", fmt.Sprintf("%t", enabled), "!!bool")
-		node.Content = append(node.Content, mappingKey(id), entry)
-		return nil
-	})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := h.activateAndCommitConfig(rewrite); err != nil {
-		writeError(w, http.StatusInternalServerError, "activate config: "+err.Error())
-		return
-	}
 	if h.usageStore != nil {
-		_ = h.usageStore.EnsureClientAPIKey(context.Background(), id, time.Now().UTC())
+		if err := h.usageStore.CreateClientAPIKey(r.Context(), usage.ClientAPIKeyRecord{ID: id, Hash: hash, Enabled: enabled, CreatedAt: time.Now().UTC()}); err != nil {
+			writeError(w, 409, "client API key id already exists")
+			return
+		}
+		if err := h.refreshClientKeyRuntime(r.Context()); err != nil {
+			writeError(w, 500, "activate client API keys")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 201, map[string]any{"id": id, "enabled": enabled, "api_key": secret, "message": "Copy this API key now. It cannot be displayed again."})
+		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "enabled": enabled, "api_key": secret, "message": "Copy this API key now. It cannot be displayed again."})
+	writeError(w, http.StatusServiceUnavailable, "client API key store unavailable")
 }
 
 func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel string) {
 	if !h.requireAdminMutation(w, r) {
 		return
 	}
-	rest := strings.TrimPrefix(rel, "/api/client-api-keys/")
-	rotate := strings.HasSuffix(rest, "/rotate")
-	id := strings.TrimSuffix(rest, "/rotate")
-	id = strings.ToLower(strings.TrimSpace(strings.Trim(id, "/")))
-	if id == "" || id == config.ReservedClientAPIKeyID {
-		writeError(w, http.StatusBadRequest, "invalid client API key id")
-		return
-	}
-	h.updateMu.Lock()
-	defer h.updateMu.Unlock()
-	if _, ok := h.runtime.ConfigSnapshot().ClientAPIKeys[id]; !ok {
-		writeError(w, http.StatusNotFound, "client API key not found")
-		return
-	}
-	switch {
-	case rotate && r.Method == http.MethodPost:
-		secret, hash, err := generateClientKey()
-		if err != nil {
-			writeError(w, 500, "generate client API key")
+	if h.usageStore != nil {
+		rest := strings.TrimPrefix(rel, "/api/client-api-keys/")
+		rotate := strings.HasSuffix(rest, "/rotate")
+		id := strings.ToLower(strings.Trim(strings.TrimSuffix(rest, "/rotate"), "/"))
+		if id == "" || id == config.ReservedClientAPIKeyID {
+			writeError(w, 400, "invalid client API key id")
 			return
 		}
-		rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
-			entry := mappingValue(node, id)
-			if entry == nil {
-				return errors.New("client API key not found")
+		if rotate && r.Method == http.MethodPost {
+			secret, hash, err := generateClientKey()
+			if err != nil {
+				writeError(w, 500, "generate client API key")
+				return
 			}
-			removeMappingValue(entry, "api_key")
-			setMappingValue(entry, "api_key_hash", scalar(hash, "!!str"))
-			return nil
-		})
-		if err != nil {
-			writeError(w, 400, err.Error())
-			return
-		}
-		if err := h.activateAndCommitConfig(rewrite); err != nil {
-			writeError(w, 500, "activate config: "+err.Error())
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, map[string]any{"id": id, "api_key": secret, "message": "Copy this API key now. It cannot be displayed again."})
-	case !rotate && r.Method == http.MethodPatch:
-		var input updateClientKeyRequest
-		if !decodeAdminJSON(w, r, &input) {
-			return
-		}
-		if input.Enabled == nil {
-			writeError(w, 400, "enabled is required")
-			return
-		}
-		rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error {
-			entry := mappingValue(node, id)
-			if entry == nil {
-				return errors.New("client API key not found")
+			if err := h.usageStore.RotateClientAPIKey(r.Context(), id, hash, time.Now().UTC()); err != nil {
+				writeError(w, 404, "client API key not found")
+				return
 			}
-			setMappingValue(entry, "enabled", scalar(fmt.Sprintf("%t", *input.Enabled), "!!bool"))
-			return nil
-		})
-		if err != nil {
-			writeError(w, 400, err.Error())
+			if err := h.refreshClientKeyRuntime(r.Context()); err != nil {
+				writeError(w, 500, "activate client API keys")
+				return
+			}
+			writeJSON(w, 200, map[string]any{"id": id, "api_key": secret, "message": "Copy this API key now. It cannot be displayed again."})
 			return
 		}
-		if err := h.activateAndCommitConfig(rewrite); err != nil {
-			writeError(w, 500, "activate config: "+err.Error())
+		if !rotate && r.Method == http.MethodPatch {
+			var in updateClientKeyRequest
+			if !decodeAdminJSON(w, r, &in) || in.Enabled == nil {
+				return
+			}
+			if err := h.usageStore.SetClientAPIKeyEnabled(r.Context(), id, *in.Enabled); err != nil {
+				writeError(w, 404, "client API key not found")
+				return
+			}
+			if err := h.refreshClientKeyRuntime(r.Context()); err != nil {
+				writeError(w, 500, "activate client API keys")
+				return
+			}
+			writeJSON(w, 200, clientKeyView{ID: id, Enabled: *in.Enabled})
 			return
 		}
-		writeJSON(w, 200, clientKeyView{ID: id, Enabled: *input.Enabled})
-	case !rotate && r.Method == http.MethodDelete:
-		rewrite, err := prepareClientKeysRewrite(h.configPath, h.adminBasePath(), func(node *yaml.Node) error { removeMappingValue(node, id); return nil })
-		if err != nil {
-			writeError(w, 400, err.Error())
+		if !rotate && r.Method == http.MethodDelete {
+			if err := h.usageStore.RevokeClientAPIKey(r.Context(), id, time.Now().UTC()); err != nil {
+				writeError(w, 404, "client API key not found")
+				return
+			}
+			if err := h.refreshClientKeyRuntime(r.Context()); err != nil {
+				writeError(w, 500, "activate client API keys")
+				return
+			}
+			w.WriteHeader(204)
 			return
 		}
-		if err := h.activateAndCommitConfig(rewrite); err != nil {
-			writeError(w, 500, "activate config: "+err.Error())
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		http.NotFound(w, r)
 	}
+	writeError(w, http.StatusServiceUnavailable, "client API key store unavailable")
 }
 
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, target any) bool {
@@ -237,29 +185,12 @@ func generateClientKey() (string, string, error) {
 	sum := sha256.Sum256([]byte(key))
 	return key, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
-
-func prepareClientKeysRewrite(path, expectedAdminBasePath string, mutate func(*yaml.Node) error) (*configRewrite, error) {
-	return prepareConfigRewrite(path, expectedAdminBasePath, func(root *yaml.Node) error {
-		node := mappingValue(root, "client_api_keys")
-		if node == nil {
-			node = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-			setMappingValue(root, "client_api_keys", node)
-		}
-		if node.Kind != yaml.MappingNode {
-			return errors.New("client_api_keys must be a mapping")
-		}
-		return mutate(node)
-	})
-}
-
-func removeMappingValue(mapping *yaml.Node, key string) {
-	if mapping == nil || mapping.Kind != yaml.MappingNode {
-		return
+func (h *Handler) refreshClientKeyRuntime(ctx context.Context) error {
+	records, err := h.usageStore.ListClientAPIKeys(ctx)
+	if err != nil {
+		return err
 	}
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == key {
-			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
-			return
-		}
-	}
+	cfg := h.runtime.ConfigSnapshot()
+	_ = records // UpdateConfig reloads the authoritative records from DuckDB.
+	return h.runtime.UpdateConfig(cfg)
 }

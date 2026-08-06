@@ -602,13 +602,13 @@
 - 修改归档、metrics 或 SLO 时，必须证明内存、队列、样本或文件保留范围仍然有界。
 - 所有 DoD 通过前，不得将对应 Goal 标记为完成。
 
-## G-USAGE client_api_keys + DuckDB（2026-07-17 收口）
+## G-USAGE Client API Key + DuckDB（2026-08-06 收口）
 
-> 本段增量补充，不删除既有 Goal/DoD。完整合同见 `docs/api-key-usage-duckdb-web-closure-plan-2026-07-17.md`。
+> 本段增量补充，不删除既有 Goal/DoD。客户端 Key 不再属于 YAML 配置合同。
 
 ### Goals
 
-- **G-USAGE.01** 客户端 API Key 用于调用方识别与用量归属；唯一配置 authority 为 `client_api_keys`。
+- **G-USAGE.01** 客户端 API Key 用于调用方识别与用量归属；唯一持久化 authority 为 DuckDB `client_api_key_metadata`。
 - **G-USAGE.02** 每个数据请求必须携带已启用 Key；缺失/未知/禁用/格式错误/冲突 Key 返回 401 且不计 usage。
 - **G-USAGE.03** DuckDB `usage_events` 是唯一在线用量持久化 authority；CSV 仅导出与一次性导入。
 - **G-USAGE.04** 调用在访问上游前持久化 `started`，所有退出路径尝试 `completed`。
@@ -619,7 +619,8 @@
 - 不建设账号/账单/额度系统。
 - 不支持多实例共享同一 DuckDB 文件。
 - 不在启动时自动导入旧 `usage.csv`。
-- `client_api_keys` 不是强制登录体系；非 loopback 访问需独立网络保护。
+- 客户端 Key 不从 `config.yaml` 读取；Admin 创建、启停、轮换和撤销均直接写入 DuckDB。
+- 客户端 Key 明文只在创建或轮换成功响应中返回一次；数据库只保存 SHA-256 摘要。
 
 ### DoD
 
