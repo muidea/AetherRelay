@@ -100,7 +100,15 @@ curl -sS http://127.0.0.1:8080/v1/chat/completions \
 | `/v1/images/generations` | 图片生成能力 |
 | `/v1/images/edits` | 图片编辑能力 |
 
-协议转换只保证网关文档声明的基础语义。工具调用、多模态和特殊响应格式等高级能力，不应仅根据端点名称假定支持；请求失败时应按错误码处理。
+协议转换只保证网关文档声明的基础语义。工具调用、多模态、`response_format` / JSON Schema
+等高级能力，不应仅根据端点名称假定支持。
+
+对于 `/v1/responses`，需要区分两类候选：
+
+- 受限投影或跨协议转换只保证基础文本能力；遇到 JSON Schema、`response_format`、tools 等改变结果语义的字段，网关应在访问上游前返回 `conversion_unsupported`，不得静默删除或改写。
+- OpenAI 原生 Responses 候选可以支持额外的原生能力（例如 `gpt-5.5` 的 JSON Schema Structured Outputs），但该能力必须由 provider/model 的独立 capability 验证和声明；不能仅凭 `responses` 端点标记推导。
+
+因此，应用需要 JSON Schema 时，应选择已明确声明该能力的原生候选；不能因为模型同时出现在 `/v1/responses` 目录中，就假定所有候选都支持 JSON Schema。
 
 ## 5. `/v1/models` 与系统开放端点的关系
 

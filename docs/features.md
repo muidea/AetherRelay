@@ -67,7 +67,7 @@
 
 ## 协议转换
 
-跨协议转换只保证基础文本与基础 SSE。tools / function calling、多模态、`response_format` 等能力在访问上游前返回 `conversion_unsupported`（typed error），不会被静默删改；若后续存在可原生保留该语义的候选，可改用该候选。`responses` / `completions` / `embeddings` **不能**靠 chat/messages 转换派生。转换前后统一 SSE 响应头与边界，见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
+跨协议转换只保证基础文本与基础 SSE。tools / function calling、多模态、`response_format` / JSON Schema 等能力在访问上游前返回 `conversion_unsupported`（typed error），不会被静默删改；若存在已验证可原生保留该语义的候选，可改用该候选。`responses` / `completions` / `embeddings` **不能**靠 chat/messages 转换派生。转换前后统一 SSE 响应头与边界，见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
 
 标准推理端点只在请求体 `"stream": true` 时进入流式生命周期；`Accept: text/event-stream` 不能隐式改变请求模式。
 

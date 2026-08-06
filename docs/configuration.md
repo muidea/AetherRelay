@@ -97,7 +97,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 - `/v1/chat/completions` 返回 OpenAI Chat Completions SSE，必要时转换 Anthropic 上游事件。
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
-- `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
+- `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
 - `/v1/search` 是 ai-proxy 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
 - 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
 - 跨协议转换只保证基础文本，tools、thinking、多模态等未支持能力在访问上游前拒绝。

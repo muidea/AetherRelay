@@ -58,7 +58,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 ## 协议转换边界
 
 - 跨协议最低保证为**基础文本**：system/user/assistant 文本、`max_tokens` / `temperature` / `top_p` / `stop` 映射、非流式与基础文本流式、usage 映射。
-- tools / function calling、多模态、`response_format` / JSON schema、provider 私有 reasoning 等能力**不能转换派生**，在访问上游前返回 `conversion_unsupported`（typed error），绝不静默删改；若后续候选可原生保留该语义，可改用该候选。
+- tools / function calling、多模态、`response_format` / JSON schema、provider 私有 reasoning 等能力**不能转换派生**，在访问上游前返回 `conversion_unsupported`（typed error），绝不静默删改；若存在已通过独立 capability 验证、可原生保留该语义的候选（例如 OpenAI 原生 Responses 的 Structured Outputs），可改用该候选。
 - 转换错误保留上游 HTTP status，但输出客户端协议可解析的安全 envelope；流式期间发现不支持内容记 `outcome=conversion` 并终止流，不切换 provider、不伪造正常终止事件。
 - 上游请求头按上游 protocol 的 allowlist 重建（而非全量复制后删减），客户端与 provider 认证/版本头完全隔离（如 `Anthropic-Version` 由代理固定生成）。
 
