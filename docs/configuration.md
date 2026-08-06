@@ -197,7 +197,7 @@ codex_oauth:
 
 ## 本地管理页
 
-访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」使用统一账号列表展示 ChatGPT Web 与 Codex CLI 两个凭据槽，「功能集」提供图片任务、图片库、在线搜索与临时对话。账号关联使用不可逆 `identity_key`，不向 Admin 暴露上游 account ID；每个槽分别展示凭据刷新、额度、模型缓存、用量窗口和能力故障，不能跨槽共享 refresh token。统一页面统计正常/限流、异常/禁用账号数，以及正常或限流 ChatGPT Web 槽的可用图片额度合计；禁用或异常槽不计入图片额度。内建 Provider 会直接显示不可用原因、可路由账号数和模型数。槽位操作仍通过该 Admin 前缀下的受鉴权账号 API 执行。
+访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」使用统一账号列表展示 ChatGPT Web 与 Codex CLI 两个凭据槽，「功能集」提供图片任务、图片库、在线搜索与临时对话。账号关联使用不可逆 `identity_key`，不向 Admin 暴露上游 account ID；每个槽分别展示凭据刷新、额度、模型缓存、用量窗口和能力故障，不能跨槽共享 refresh token。统一页面统计正常/限流、异常/禁用账号数、正常或限流 ChatGPT Web 槽的可用图片额度合计，以及凭据刷新失败槽位数（ChatGPT Web / Codex CLI 分开统计）；禁用或异常槽不计入图片额度。内建 Provider 会直接显示不可用原因、可路由账号数和模型数。槽位操作仍通过该 Admin 前缀下的受鉴权账号 API 执行。
 
 管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
 
