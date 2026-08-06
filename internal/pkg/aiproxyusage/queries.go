@@ -349,6 +349,7 @@ SELECT
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
     duration_ms, upstream_duration_ms,
+    upstream_status, coalesce(upstream_content_type, ''), coalesce(upstream_content_length, 0), coalesce(upstream_transfer_encoding, ''),
     stream, estimated, state
 FROM usage_events
 WHERE ` + where + `
@@ -368,6 +369,7 @@ LIMIT ?`
 		var completedAt sql.NullTime
 		var httpStatus sql.NullInt64
 		var durationMS, upstreamMS sql.NullInt64
+		var upstreamStatus sql.NullInt64
 		var usageDate string
 		if err := rows.Scan(
 			&e.EventID, &e.RoundID, &e.StartedAt, &completedAt,
@@ -380,7 +382,7 @@ LIMIT ?`
 			&e.InputTokens, &e.OutputTokens, &e.TotalTokens,
 			&e.CachedInputTokens, &e.CacheCreationInputTokens,
 			&httpStatus, &e.Outcome, &e.ErrorCode,
-			&durationMS, &upstreamMS,
+			&durationMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &e.UpstreamContentLength, &e.UpstreamTransferEncoding,
 			&e.Stream, &e.Estimated, &e.State,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
@@ -398,6 +400,9 @@ LIMIT ?`
 		}
 		if upstreamMS.Valid {
 			e.UpstreamDurationMS = upstreamMS.Int64
+		}
+		if upstreamStatus.Valid {
+			e.UpstreamStatus = int(upstreamStatus.Int64)
 		}
 		events = append(events, e)
 	}

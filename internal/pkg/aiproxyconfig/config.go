@@ -58,9 +58,12 @@ type Config struct {
 	LogFormat            string
 	RequestTimeout       time.Duration
 	StreamIdleTimeout    time.Duration
-	MetricsRemoteAccess  bool
-	MetricsAllowedCIDRs  []string
-	SLO                  SLOConfig
+	// UpstreamBodyIdleTimeout limits silence while reading a buffered upstream
+	// response; it prevents waiting indefinitely for EOF after partial data.
+	UpstreamBodyIdleTimeout time.Duration
+	MetricsRemoteAccess     bool
+	MetricsAllowedCIDRs     []string
+	SLO                     SLOConfig
 	// AdminAuth 描述可选的 Admin 登录安全配置。默认关闭,保持 loopback-only 兼容行为。
 	AdminAuth AdminAuthConfig
 	// UsageStore 描述进程内嵌 DuckDB 持久化统计存储。路径与资源参数变更需重启。
@@ -170,9 +173,13 @@ type TemporaryChatConfig struct {
 
 // ModelMetadata describes optional client-visible metadata for an exact model ID.
 type ModelMetadata struct {
-	ID                  string
-	ContextWindowTokens int
-	MaxOutputTokens     int
+	ID                     string
+	ContextWindowTokens    int
+	MaxOutputTokens        int
+	ReasoningDeclared      bool
+	ReasoningSupported     bool
+	ReasoningDefaultEffort string
+	ReasoningEfforts       []string
 }
 
 // MaxModelMetadataIDLength 限制 model_metadata id 长度,避免异常配置与标签膨胀。
@@ -248,6 +255,7 @@ func Load(path string) (Config, error) {
 		LogFormat:                "json",
 		RequestTimeout:           5 * time.Minute,
 		StreamIdleTimeout:        5 * time.Minute,
+		UpstreamBodyIdleTimeout:  180 * time.Second,
 		AdminAuth: AdminAuthConfig{
 			Enabled:             false,
 			BasePath:            DefaultAdminBasePath,
@@ -459,6 +467,12 @@ func setTopLevel(cfg *Config, key, value string) error {
 			return fmt.Errorf("stream_idle_timeout_seconds: %w", err)
 		}
 		cfg.StreamIdleTimeout = time.Duration(n) * time.Second
+	case "upstream_body_idle_timeout_seconds":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("upstream_body_idle_timeout_seconds: %w", err)
+		}
+		cfg.UpstreamBodyIdleTimeout = time.Duration(n) * time.Second
 	case "default_provider":
 		return fmt.Errorf("default_provider is not supported; routing uses effective model candidates only")
 	case "metrics_remote_access":
@@ -758,6 +772,27 @@ func setModelMetadata(cfg *Config, id, key, value string) error {
 			return fmt.Errorf("model_metadata.%s.%s: %w", id, key, err)
 		}
 		info.MaxOutputTokens = n
+	case "reasoning_supported":
+		b, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return fmt.Errorf("model_metadata.%s.%s: %w", id, key, err)
+		}
+		info.ReasoningDeclared, info.ReasoningSupported = true, b
+	case "reasoning_default_effort":
+		info.ReasoningDeclared, info.ReasoningDefaultEffort = true, strings.ToLower(strings.TrimSpace(value))
+	case "reasoning_efforts":
+		info.ReasoningDeclared = true
+		value = strings.TrimSpace(strings.Trim(value, "[]"))
+		if value == "" {
+			info.ReasoningEfforts = nil
+		} else {
+			for _, part := range strings.Split(value, ",") {
+				v := strings.ToLower(strings.Trim(strings.TrimSpace(part), "\"'"))
+				if v != "" {
+					info.ReasoningEfforts = append(info.ReasoningEfforts, v)
+				}
+			}
+		}
 	default:
 		return fmt.Errorf("model_metadata.%s: unknown key %q", id, key)
 	}
@@ -888,6 +923,13 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("AI_PROXY_STREAM_IDLE_TIMEOUT_SECONDS: %w", err)
 		}
 		cfg.StreamIdleTimeout = time.Duration(n) * time.Second
+	}
+	if value := os.Getenv("AI_PROXY_UPSTREAM_BODY_IDLE_TIMEOUT_SECONDS"); value != "" {
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("AI_PROXY_UPSTREAM_BODY_IDLE_TIMEOUT_SECONDS: %w", err)
+		}
+		cfg.UpstreamBodyIdleTimeout = time.Duration(n) * time.Second
 	}
 	if value := os.Getenv("AI_PROXY_METRICS_REMOTE_ACCESS"); value != "" {
 		b, err := parseStrictBool(value)
@@ -1547,6 +1589,21 @@ func validateModelMetadata(cfg Config) error {
 		}
 		if info.ContextWindowTokens > 0 && info.MaxOutputTokens > 0 && info.MaxOutputTokens >= info.ContextWindowTokens {
 			return fmt.Errorf("model_metadata.%s: max_output_tokens must be less than context_window_tokens", id)
+		}
+		if info.ReasoningDeclared && info.ReasoningSupported {
+			if len(info.ReasoningEfforts) == 0 {
+				return fmt.Errorf("model_metadata.%s: reasoning_efforts is required when reasoning_supported is true", id)
+			}
+			seen := map[string]bool{}
+			for _, effort := range info.ReasoningEfforts {
+				if effort == "" || seen[effort] {
+					return fmt.Errorf("model_metadata.%s: invalid reasoning_efforts", id)
+				}
+				seen[effort] = true
+			}
+			if info.ReasoningDefaultEffort != "" && !seen[info.ReasoningDefaultEffort] {
+				return fmt.Errorf("model_metadata.%s: reasoning_default_effort must be listed in reasoning_efforts", id)
+			}
 		}
 	}
 	return nil

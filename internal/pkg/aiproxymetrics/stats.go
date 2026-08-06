@@ -261,7 +261,11 @@ func buildProviderHealth(value providerHealth, samples []healthSample, now time.
 		result.CircuitState = "half_open"
 		result.Status = "degraded"
 	}
-	if value.LastStatus == 401 || value.LastStatus == 403 {
+	// An expired circuit must remain routable for the half-open recovery probe,
+	// even when the last failure was an authentication error. Otherwise the
+	// credential_error projection would permanently exclude the provider and
+	// the probe could never observe that credentials/upstream access recovered.
+	if !halfOpen && (value.LastStatus == 401 || value.LastStatus == 403) {
 		result.Status = "credential_error"
 	}
 	// An endpoint contract mismatch is neither a transient availability

@@ -245,6 +245,10 @@ SET
     upstream_duration_ms = ?,
     stream = ?,
     estimated = ?,
+    upstream_status = ?,
+    upstream_content_type = ?,
+    upstream_content_length = ?,
+    upstream_transfer_encoding = ?,
     state = ?
 WHERE event_id = ?
   AND state = ?`,
@@ -266,6 +270,10 @@ WHERE event_id = ?
 		rec.UpstreamDuration.Milliseconds(),
 		rec.Stream,
 		rec.Estimated,
+		nullInt(rec.UpstreamStatus),
+		nullString(rec.UpstreamContentType),
+		nullInt64(rec.UpstreamContentLength),
+		nullString(rec.UpstreamTransferEncoding),
 		StateCompleted,
 		rec.EventID,
 		StateStarted,
@@ -366,6 +374,13 @@ func nullString(s string) any {
 }
 
 func nullInt64(v int64) any {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+func nullInt(v int) any {
 	if v == 0 {
 		return nil
 	}

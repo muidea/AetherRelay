@@ -335,6 +335,7 @@ func (r *Registry) RecordRequestPlan(provider, model, route string, status int, 
 			h.Successes++
 			h.ConsecutiveFailures = 0
 			h.LastSuccessAt = now
+			h.LastStatus = status
 			h.CircuitOpenUntil = time.Time{}
 		} else if outcome != "success" || status == 401 || status == 403 || status == 408 || status == 429 || status >= 500 {
 			h.Failures++

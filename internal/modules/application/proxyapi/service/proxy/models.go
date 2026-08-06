@@ -26,7 +26,17 @@ type ModelRecord struct {
 	// SupportedEndpoints is derived at runtime from the model's eligible
 	// providers and the shared transport matrix. It contains client-facing
 	// paths, never provider configuration endpoint names.
-	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
+	SupportedEndpoints []string           `json:"supported_endpoints,omitempty"`
+	Capabilities       *ModelCapabilities `json:"capabilities,omitempty"`
+}
+
+type ModelCapabilities struct {
+	Reasoning *ReasoningCapability `json:"reasoning,omitempty"`
+}
+type ReasoningCapability struct {
+	Supported     bool     `json:"supported"`
+	DefaultEffort string   `json:"default_effort,omitempty"`
+	Efforts       []string `json:"efforts,omitempty"`
 }
 
 // handleModels returns the effective catalog (exact provider models, optional
@@ -99,6 +109,9 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 			Object: "model",
 		}
 		rec.SupportedEndpoints = modelSupportedEndpoints(snap, id)
+		if metadata, ok := snap.StaticModels[route.ModelID]; ok && metadata.ReasoningDeclared {
+			rec.Capabilities = &ModelCapabilities{Reasoning: &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}}
+		}
 		// Every source omits optional capacity metadata when unknown or not applicable.
 		if route.ContextWindowTokens > 0 {
 			rec.ContextWindowTokens = route.ContextWindowTokens

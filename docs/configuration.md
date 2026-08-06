@@ -78,6 +78,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
 | `request_timeout_seconds` | 非流式总超时及流式等待响应头超时。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
+| `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
 | `debug_log`、`log_format` | 调试日志和 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
@@ -251,3 +252,5 @@ server:
 - 该模式不替代 TLS、主机账户隔离或配置文件权限保护。
 
 Admin usage API 的筛选参数、导出边界与响应格式以当前管理页、`internal/modules/application/adminapi/service/admin` 的合同测试和 DuckDB 查询实现为准。
+
+模型级 `model_metadata` 可声明 `reasoning_supported`、`reasoning_default_effort` 与 `reasoning_efforts`。`/v1/models` 会通过 `capabilities.reasoning` 暴露已声明能力；Responses 请求中的 `reasoning.effort` 按模型枚举校验，未指定时使用默认值，不支持的值返回 400，不做静默降级。未声明能力的模型不会注入 `reasoning` 字段。

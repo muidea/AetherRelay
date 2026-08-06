@@ -131,6 +131,31 @@ func TestProviderHealthHalfOpenIsRoutableRecoveryProbe(t *testing.T) {
 	}
 }
 
+func TestProviderHealthHalfOpenOverridesCredentialErrorForRecovery(t *testing.T) {
+	r := NewRegistry()
+	for range 3 {
+		r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusUnauthorized, time.Millisecond, "upstream_failed", "", "", "", "")
+	}
+	r.mu.Lock()
+	value := r.providerHealth["provider"]
+	value.CircuitOpenUntil = time.Now().Add(-time.Second)
+	r.providerHealth["provider"] = value
+	r.mu.Unlock()
+
+	got := r.ProviderHealthSnapshot()["provider"]
+	if got.CircuitState != "half_open" || got.Status != "degraded" {
+		t.Fatalf("expired credential circuit must permit recovery probe: %#v", got)
+	}
+
+	// A successful probe must clear both the circuit and the consecutive-failure
+	// state so subsequent requests are not immediately re-quarantined.
+	r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusOK, time.Millisecond, "success", "", "", "", "")
+	got = r.ProviderHealthSnapshot()["provider"]
+	if got.CircuitState != "closed" || got.ConsecutiveFailures != 0 || got.Status == "credential_error" {
+		t.Fatalf("successful recovery probe did not restore provider: %#v", got)
+	}
+}
+
 func TestClientUsageAndStoreMetrics(t *testing.T) {
 	r := NewRegistry()
 	r.InitializeClientUsage(map[string]ClientUsage{"default": {Requests: 2, InputTokens: 10, OutputTokens: 5, TotalTokens: 15}})

@@ -45,9 +45,13 @@ type Round struct {
 	IgnoredFeatures []string
 	// UpstreamDuration 是本次上游 HTTP 请求（含首包探测）的耗时，仅供
 	// usage 结算使用；完整 metadata 当前仍保留总请求耗时。
-	UpstreamDuration time.Duration
-	recorder         *Recorder
-	written          map[string]struct{} // basename -> present
+	UpstreamDuration         time.Duration
+	UpstreamStatus           int
+	UpstreamContentType      string
+	UpstreamContentLength    int64
+	UpstreamTransferEncoding string
+	recorder                 *Recorder
+	written                  map[string]struct{} // basename -> present
 }
 
 func (r *Round) markWritten(name string) {
@@ -109,6 +113,17 @@ func (r *Round) SetUpstreamDuration(duration time.Duration) {
 		return
 	}
 	r.UpstreamDuration = duration
+}
+
+func (r *Round) SetUpstreamHeaders(status int, contentType string, contentLength int64, transferEncoding string, headerDuration time.Duration) {
+	if r == nil {
+		return
+	}
+	r.UpstreamStatus = status
+	r.UpstreamContentType = contentType
+	r.UpstreamContentLength = contentLength
+	r.UpstreamTransferEncoding = transferEncoding
+	r.UpstreamDuration = headerDuration
 }
 
 // SetIgnoredFeatures records the request fields intentionally not represented

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // migrate 在事务内应用尚未执行的 schema 版本;若库中存在更高未知版本则 fail-fast。
 func migrate(ctx context.Context, db *sql.DB) error {
@@ -76,9 +76,31 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if applied < 5 {
+		if err := applyV5(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?)`, 5, "upstream_observability_v5", time.Now().UTC()); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
+}
+
+func applyV5(ctx context.Context, tx *sql.Tx) error {
+	for _, q := range []string{
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS upstream_status INTEGER`,
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS upstream_content_type VARCHAR`,
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS upstream_content_length BIGINT`,
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS upstream_transfer_encoding VARCHAR`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("apply v5: %w", err)
+		}
 	}
 	return nil
 }

@@ -78,6 +78,31 @@ func TestOpenAICompatibleBufferedUsage(t *testing.T) {
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"cache_hit_rate": 0.5714285714285714`)
 }
 
+type blockingResponseBody struct{ closed chan struct{} }
+
+func (b *blockingResponseBody) Read([]byte) (int, error) { <-b.closed; return 0, io.EOF }
+func (b *blockingResponseBody) Close() error {
+	select {
+	case <-b.closed:
+	default:
+		close(b.closed)
+	}
+	return nil
+}
+
+func TestReadLimitedUpstreamContextHonorsIdleTimeout(t *testing.T) {
+	h := &Handler{cfg: config.Config{MaxUpstreamResponseBytes: 1024}}
+	body := &blockingResponseBody{closed: make(chan struct{})}
+	started := time.Now()
+	_, err := h.readLimitedUpstreamContext(context.Background(), body, 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("err=%v, want upstream body idle timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("idle timeout took too long: %s", elapsed)
+	}
+}
+
 func TestOpenAICompatibleGzipResponseUsage(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if got := r.Header.Get("Accept-Encoding"); got != "" {

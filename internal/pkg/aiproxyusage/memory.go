@@ -120,6 +120,10 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.ErrorCode = rec.ErrorCode
 	e.DurationMS = rec.Duration.Milliseconds()
 	e.UpstreamDurationMS = rec.UpstreamDuration.Milliseconds()
+	e.UpstreamStatus = rec.UpstreamStatus
+	e.UpstreamContentType = rec.UpstreamContentType
+	e.UpstreamContentLength = rec.UpstreamContentLength
+	e.UpstreamTransferEncoding = rec.UpstreamTransferEncoding
 	e.Stream = rec.Stream
 	e.Estimated = rec.Estimated
 	e.State = StateCompleted

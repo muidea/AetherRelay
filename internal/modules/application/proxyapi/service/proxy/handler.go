@@ -37,6 +37,7 @@ import (
 
 type Handler struct {
 	cfgMu               sync.RWMutex
+	clientMu            sync.RWMutex
 	cfg                 config.Config
 	effectiveCatalog    atomic.Pointer[effectivecatalog.Snapshot]
 	clientKeyIndex      atomic.Pointer[clientauth.Index]
@@ -49,6 +50,13 @@ type Handler struct {
 	chatGPTSearch       chatgptsearch.Executor
 	chatGPTImage        chatgptimage.Executor
 	codexResponses      codexresponses.Executor
+}
+
+func (h *Handler) currentClient() *http.Client {
+	h.clientMu.RLock()
+	client := h.client
+	h.clientMu.RUnlock()
+	return client
 }
 
 // WithChatGPTTextExecutor binds proxyapi's owner-local ChatGPT execution
@@ -146,6 +154,16 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	return cfg
 }
 
+// currentConfig returns a shallow immutable-by-convention snapshot. Config
+// reload replaces maps rather than mutating them, so a request can safely use
+// this value after the short read-lock has been released.
+func (h *Handler) currentConfig() config.Config {
+	h.cfgMu.RLock()
+	cfg := h.cfg
+	h.cfgMu.RUnlock()
+	return cfg
+}
+
 // EffectiveCatalog returns the current request-time routing snapshot. When no
 // snapshot has been published yet, a static-only view is synthesized from cfg.
 func (h *Handler) EffectiveCatalog() effectivecatalog.Snapshot {
@@ -188,7 +206,9 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 	// same effective directory throughout a configuration hot reload.
 	h.ReplaceEffectiveCatalog(effectivecatalog.Reconfigure(cfg, previousCatalog))
 	h.clientKeyIndex.Store(idx)
+	h.clientMu.Lock()
 	h.client = newHTTPClient(cfg.RequestTimeout)
+	h.clientMu.Unlock()
 	return nil
 }
 
@@ -353,9 +373,6 @@ func newHTTPClient(requestTimeout time.Duration) *http.Client {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.cfgMu.RLock()
-	defer h.cfgMu.RUnlock()
-
 	requestID := ensureRequestID(r)
 	r = attachRequestID(w, r, requestID)
 
@@ -518,6 +535,30 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 		EventID: eventID, CompletedAt: time.Now().UTC(), HTTPStatus: http.StatusInternalServerError,
 		Outcome: "error", ErrorCode: ErrorCodeProxyInternalError,
 		Duration: time.Since(startedAt), UpstreamDuration: upstreamDuration,
+		UpstreamStatus: func() int {
+			if round != nil {
+				return round.UpstreamStatus
+			}
+			return 0
+		}(),
+		UpstreamContentType: func() string {
+			if round != nil {
+				return round.UpstreamContentType
+			}
+			return ""
+		}(),
+		UpstreamContentLength: func() int64 {
+			if round != nil {
+				return round.UpstreamContentLength
+			}
+			return 0
+		}(),
+		UpstreamTransferEncoding: func() string {
+			if round != nil {
+				return round.UpstreamTransferEncoding
+			}
+			return ""
+		}(),
 	})
 	if err == nil && h.metricsRegistry != nil {
 		h.metricsRegistry.RecordClientUsage(clientauth.ClientIdentityFromContext(r.Context()).KeyID, 0, 0)
@@ -564,6 +605,10 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		rec.UpstreamEndpoint = round.UpstreamEndpoint
 		rec.ConversionMode = round.ConversionMode
 		rec.UpstreamDuration = round.UpstreamDuration
+		rec.UpstreamStatus = round.UpstreamStatus
+		rec.UpstreamContentType = round.UpstreamContentType
+		rec.UpstreamContentLength = round.UpstreamContentLength
+		rec.UpstreamTransferEncoding = round.UpstreamTransferEncoding
 	}
 	// When interaction archive is disabled, builtin settlement still needs
 	// stable plan labels so usage dashboards can filter provider traffic.
@@ -620,7 +665,7 @@ func isRequestTooLarge(err error) bool {
 
 // readLimitedBody 使用 MaxBytesReader 读取请求体,超限返回明确错误。
 func (h *Handler) readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	limit := h.cfg.MaxRequestBodyBytes
+	limit := h.currentConfig().MaxRequestBodyBytes
 	if limit <= 0 {
 		limit = config.DefaultMaxRequestBodyBytes
 	}
@@ -638,11 +683,11 @@ func (h *Handler) readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byt
 
 // streamLimits 返回流式累计与单行上限。
 func (h *Handler) streamLimits() (maxStream, maxLine int64) {
-	maxStream = h.cfg.MaxStreamBytes
+	maxStream = h.currentConfig().MaxStreamBytes
 	if maxStream <= 0 {
 		maxStream = config.DefaultMaxStreamBytes
 	}
-	maxLine = h.cfg.MaxSSELineBytes
+	maxLine = h.currentConfig().MaxSSELineBytes
 	if maxLine <= 0 {
 		maxLine = config.DefaultMaxSSELineBytes
 	}
@@ -679,19 +724,107 @@ func readSSELine(reader *bufio.Reader, maxLine int64) ([]byte, error) {
 
 // readLimitedUpstream 读取上游响应体并施加大小上限。
 func (h *Handler) readLimitedUpstream(body io.Reader) ([]byte, error) {
-	limit := h.cfg.MaxUpstreamResponseBytes
+	return h.readLimitedUpstreamContext(context.Background(), io.NopCloser(body), 0)
+}
+
+func isEventStreamContentType(contentType string) bool {
+	return strings.Contains(strings.ToLower(contentType), "text/event-stream")
+}
+
+// readLimitedUpstreamContext reads a buffered response while honoring both
+// downstream cancellation and an idle timeout. A buffered response must not
+// wait forever for EOF after an upstream has sent only a partial body.
+func (h *Handler) readLimitedUpstreamContext(ctx context.Context, body io.ReadCloser, idleTimeout time.Duration) ([]byte, error) {
+	limit := h.currentConfig().MaxUpstreamResponseBytes
 	if limit <= 0 {
 		limit = config.DefaultMaxUpstreamResponseBytes
 	}
-	limited := io.LimitReader(body, limit+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, err
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("upstream response exceeds limit of %d bytes", limit)
+	type readResult struct {
+		data []byte
+		err  error
 	}
-	return data, nil
+	results := make(chan readResult, 1)
+	data := make([]byte, 0, 64*1024)
+	readNext := func() {
+		go func() {
+			readBuf := make([]byte, 32*1024)
+			n, err := body.Read(readBuf)
+			results <- readResult{data: append([]byte(nil), readBuf[:n]...), err: err}
+		}()
+	}
+	readNext()
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	if idleTimeout > 0 {
+		timer = time.NewTimer(idleTimeout)
+		timerC = timer.C
+		defer timer.Stop()
+	}
+	select {
+	case <-ctx.Done():
+		_ = body.Close()
+		return nil, ctx.Err()
+	case <-timerC:
+		_ = body.Close()
+		return nil, fmt.Errorf("upstream response body idle timeout after %s", idleTimeout.Truncate(time.Millisecond))
+	case result := <-results:
+		data = append(data, result.data...)
+		if int64(len(data)) > limit {
+			_ = body.Close()
+			return nil, fmt.Errorf("upstream response exceeds limit of %d bytes", limit)
+		}
+		if result.err == io.EOF {
+			return data, nil
+		}
+		if result.err != nil {
+			return nil, result.err
+		}
+		if timer != nil {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(idleTimeout)
+		}
+		readNext()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = body.Close()
+				return nil, ctx.Err()
+			case <-timerC:
+				_ = body.Close()
+				return nil, fmt.Errorf("upstream response body idle timeout after %s", idleTimeout.Truncate(time.Millisecond))
+			case result := <-results:
+				data = append(data, result.data...)
+				if int64(len(data)) > limit {
+					_ = body.Close()
+					return nil, fmt.Errorf("upstream response exceeds limit of %d bytes", limit)
+				}
+				if result.err == io.EOF {
+					return data, nil
+				}
+				if result.err != nil {
+					return nil, result.err
+				}
+				if timer != nil {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(idleTimeout)
+				}
+				readNext()
+			}
+		}
+	}
 }
 
 // isSupportedInbound 限制客户端只能访问标准 OpenAI / Anthropic path。
@@ -766,6 +899,10 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 	}
 	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+			h.recordAndPrint(round, r, plan.RouteOwner, model, stream, 0, time.Since(start), tokenUsage{}, "client_canceled")
+			return
+		}
 		h.writeArchivedError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -778,6 +915,10 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		defer result.Cancel()
 	}
 	defer resp.Body.Close()
+	if !stream && isEventStreamContentType(resp.Header.Get("Content-Type")) {
+		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, "upstream_protocol_error: stream=false request returned event-stream")
+		return
+	}
 	if selectedPlan.Mode == TransportModeOpenAIToAnthropic {
 		if resp.StatusCode >= http.StatusBadRequest {
 			h.writeConversionUpstreamError(w, r, resp, round, start, selectedPlan, providerName, model, stream)
@@ -918,6 +1059,21 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	}
 	defer r.Body.Close()
 	rawBody, rawModel, rawStream := parseRawRequestBody(body)
+	if NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
+		var request map[string]any
+		if err := json.Unmarshal(body, &request); err == nil {
+			if err := h.applyModelReasoning(rawModel, request); err != nil {
+				h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
+				return
+			}
+			if metadata, ok := h.currentConfig().ModelMetadata[rawModel]; ok && metadata.ReasoningDeclared && metadata.ReasoningSupported {
+				if updated, err := json.Marshal(request); err == nil {
+					body = updated
+					rawBody = request
+				}
+			}
+		}
+	}
 	if err := h.writeArchiveRequest(round, body); err != nil {
 		log.Printf("archive raw request: %v", err)
 	}
@@ -972,7 +1128,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		})
 		return
 	}
-	provider, ok := h.cfg.Providers[plan.RouteOwner]
+	provider, ok := h.currentConfig().Providers[plan.RouteOwner]
 	if !ok {
 		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusServiceUnavailable, APIError{
 			Code:             ErrorCodeProviderUnavailable,
@@ -1000,6 +1156,10 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	streamRequest := rawStream
 	result, plan, err := h.doNativeUpstreamCandidates(r, round, plans, body, len(body), streamRequest, r.URL.RawQuery, r.Method)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+			h.recordAndPrint(round, r, providerName, rawModel, rawStream, 0, time.Since(start), tokenUsage{}, "client_canceled")
+			return
+		}
 		if codexPlan, ok := codexFallbackPlan(plans, plan); ok {
 			h.recordCandidateFailure(r, plan, http.StatusBadGateway, result.Duration)
 			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
@@ -1052,8 +1212,12 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		h.writeArchiveMetadata(round, providerName, rawModel, true, resp.StatusCode, duration, usage, responsePath, errMsg, fullPath, outcomeFromStreamFail(streamErr, resp.StatusCode))
 		return
 	}
-	responseBody, err := h.readLimitedUpstream(resp.Body)
+	responseBody, err := h.readLimitedUpstreamContext(r.Context(), resp.Body, h.currentConfig().UpstreamBodyIdleTimeout)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+			h.recordAndPrint(round, r, providerName, rawModel, rawStream, 0, time.Since(start), tokenUsage{}, "client_canceled")
+			return
+		}
 		h.writeArchivedError(w, round, r, start, providerName, rawModel, rawStream, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -1079,9 +1243,53 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	h.writeArchiveMetadata(round, providerName, rawModel, rawStream, resp.StatusCode, duration, usage, responsePath, "", "", "")
 }
 
+func (h *Handler) applyModelReasoning(model string, body map[string]any) *APIError {
+	metadata, ok := h.currentConfig().ModelMetadata[model]
+	if !ok || !metadata.ReasoningDeclared {
+		return nil
+	}
+	raw, present := body["reasoning"]
+	if !metadata.ReasoningSupported {
+		if present {
+			return &APIError{Code: ErrorCodeInvalidRequest, Message: "reasoning is not supported for model " + model, Feature: "reasoning", Model: model}
+		}
+		return nil
+	}
+	if !present && metadata.ReasoningDefaultEffort != "" {
+		body["reasoning"] = map[string]any{"effort": metadata.ReasoningDefaultEffort}
+		return nil
+	}
+	if !present {
+		return nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return &APIError{Code: ErrorCodeInvalidRequest, Message: "reasoning must be an object", Feature: "reasoning", Model: model}
+	}
+	effort, _ := obj["effort"].(string)
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if effort == "" {
+		return nil
+	}
+	for _, allowed := range metadata.ReasoningEfforts {
+		if effort == strings.ToLower(allowed) {
+			return nil
+		}
+	}
+	return &APIError{Code: ErrorCodeInvalidRequest, Message: "unsupported reasoning effort " + effort + " for model " + model, Feature: "reasoning.effort", Model: model}
+}
+
 func (h *Handler) handleBufferedResponse(w http.ResponseWriter, resp *http.Response, round *archive.Round, start time.Time, providerName, model string, stream bool, requestBody map[string]any, r *http.Request) {
-	responseBody, readErr := h.readLimitedUpstream(resp.Body)
+	if !stream && isEventStreamContentType(resp.Header.Get("Content-Type")) {
+		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, "upstream_protocol_error: stream=false request returned event-stream")
+		return
+	}
+	responseBody, readErr := h.readLimitedUpstreamContext(r.Context(), resp.Body, h.currentConfig().UpstreamBodyIdleTimeout)
 	if readErr != nil {
+		if errors.Is(readErr, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+			h.recordAndPrint(round, r, providerName, model, stream, 0, time.Since(start), tokenUsage{}, "client_canceled")
+			return
+		}
 		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, readErr.Error())
 		return
 	}
@@ -1149,7 +1357,7 @@ func (h *Handler) handleStreamResponse(w http.ResponseWriter, resp *http.Respons
 	for {
 		line, err := readSSELine(reader, maxLine)
 		if len(line) > 0 {
-			resetStreamIdleTimer(idleTimer, h.cfg.StreamIdleTimeout)
+			resetStreamIdleTimer(idleTimer, h.currentConfig().StreamIdleTimeout)
 			totalBytes += int64(len(line))
 			if totalBytes > maxStream {
 				streamErr = h.logStreamIssue(round, providerName, model, "read upstream stream limit", fmt.Errorf("stream exceeds limit of %d bytes", maxStream), requestContext, nil)
@@ -1291,7 +1499,7 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 	for {
 		line, err := readSSELine(reader, maxLine)
 		if len(line) > 0 {
-			resetStreamIdleTimer(idleTimer, h.cfg.StreamIdleTimeout)
+			resetStreamIdleTimer(idleTimer, h.currentConfig().StreamIdleTimeout)
 			totalBytes += int64(len(line))
 			if totalBytes > maxStream {
 				streamErr = h.logStreamIssue(round, providerName, model, "read raw stream limit", fmt.Errorf("stream exceeds limit of %d bytes", maxStream), requestContext, nil)
@@ -1406,7 +1614,7 @@ func (h *Handler) prepareOpenAIChatCandidates(plans []TransportPlan, raw []byte,
 	result := make([]preparedHTTPCandidate, 0, len(plans))
 	var firstErr *APIError
 	for _, plan := range plans {
-		provider, ok := h.cfg.Providers[plan.RouteOwner]
+		provider, ok := h.currentConfig().Providers[plan.RouteOwner]
 		if !ok || provider.Disabled {
 			continue
 		}
@@ -1450,7 +1658,7 @@ func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw [
 	result := make([]preparedHTTPCandidate, 0, len(plans))
 	var firstErr *APIError
 	for _, plan := range plans {
-		provider, ok := h.cfg.Providers[plan.RouteOwner]
+		provider, ok := h.currentConfig().Providers[plan.RouteOwner]
 		if !ok || provider.Disabled {
 			continue
 		}
@@ -1529,7 +1737,7 @@ func (h *Handler) doNativeUpstreamCandidates(r *http.Request, round *archive.Rou
 	var lastErr error
 	var lastPlan TransportPlan
 	for index, plan := range candidates {
-		provider, ok := h.cfg.Providers[plan.RouteOwner]
+		provider, ok := h.currentConfig().Providers[plan.RouteOwner]
 		if !ok || provider.Disabled {
 			lastErr = fmt.Errorf("provider %q is unavailable", plan.RouteOwner)
 			lastPlan = plan
@@ -1631,8 +1839,20 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 	)
 
 	upstreamStart := time.Now()
-	resp, err := h.client.Do(req)
+	client := h.currentClient()
+	if client == nil {
+		return upstreamResult{}, fmt.Errorf("upstream client is unavailable")
+	}
+	resp, err := client.Do(req)
 	duration := time.Since(upstreamStart)
+	if resp != nil {
+		contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
+		transferEncoding := strings.Join(resp.TransferEncoding, ",")
+		h.debugfRound(round, r, "upstream response headers provider=%s status=%d content_type=%q content_length=%d transfer_encoding=%q header_duration=%s", providerName, resp.StatusCode, contentType, resp.ContentLength, transferEncoding, duration.Truncate(time.Millisecond))
+		if round != nil {
+			round.SetUpstreamHeaders(resp.StatusCode, contentType, resp.ContentLength, transferEncoding, duration)
+		}
+	}
 	if round != nil {
 		round.SetUpstreamDuration(duration)
 	}
@@ -1654,7 +1874,7 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 	// 流式请求在写出首包前探测完整首行；失败直接返回，绝不切换 RouteOwner。
 	if stream && resp.StatusCode < 400 {
 		_, maxLine := h.streamLimits()
-		primed, peekErr := primeStreamBody(resp, h.cfg.StreamIdleTimeout, maxLine)
+		primed, peekErr := primeStreamBody(resp, h.currentConfig().StreamIdleTimeout, maxLine)
 		duration = time.Since(upstreamStart)
 		if peekErr != nil {
 			_ = resp.Body.Close()
@@ -1773,8 +1993,9 @@ func (h *Handler) upstreamContext(parent context.Context, stream bool) (context.
 	if stream {
 		return context.WithCancel(parent)
 	}
-	if h.cfg.RequestTimeout > 0 {
-		return context.WithTimeout(parent, h.cfg.RequestTimeout)
+	requestTimeout := h.currentConfig().RequestTimeout
+	if requestTimeout > 0 {
+		return context.WithTimeout(parent, requestTimeout)
 	}
 	return parent, nil
 }
@@ -1931,7 +2152,7 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 			path = r.URL.Path
 		}
 	}
-	plans, apiErr := ResolveTransportPlans(h.cfg, h.EffectiveCatalog(), method, path, model)
+	plans, apiErr := ResolveTransportPlans(h.currentConfig(), h.EffectiveCatalog(), method, path, model)
 	if apiErr != nil {
 		return nil, apiErr
 	}
@@ -2006,7 +2227,7 @@ func (h *Handler) decodedResponseBodyAndHeader(body []byte, header http.Header) 
 		return nil, decodedHeader, fmt.Errorf("gzip decode failed: %w", err)
 	}
 	defer reader.Close()
-	limit := h.cfg.MaxUpstreamResponseBytes
+	limit := h.currentConfig().MaxUpstreamResponseBytes
 	if limit <= 0 {
 		limit = config.DefaultMaxUpstreamResponseBytes
 	}
@@ -2285,11 +2506,12 @@ type streamIdleTimer struct {
 }
 
 func (h *Handler) startStreamIdleTimer(cancel context.CancelFunc) (*streamIdleTimer, func()) {
-	if cancel == nil || h.cfg.StreamIdleTimeout <= 0 {
+	streamIdleTimeout := h.currentConfig().StreamIdleTimeout
+	if cancel == nil || streamIdleTimeout <= 0 {
 		return nil, func() {}
 	}
-	idle := &streamIdleTimer{timeout: h.cfg.StreamIdleTimeout}
-	idle.timer = time.AfterFunc(h.cfg.StreamIdleTimeout, func() {
+	idle := &streamIdleTimer{timeout: streamIdleTimeout}
+	idle.timer = time.AfterFunc(streamIdleTimeout, func() {
 		idle.expired.Store(true)
 		cancel()
 	})

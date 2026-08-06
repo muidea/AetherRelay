@@ -47,6 +47,10 @@ type CompleteRecord struct {
 	ErrorCode                string
 	Duration                 time.Duration
 	UpstreamDuration         time.Duration
+	UpstreamStatus           int
+	UpstreamContentType      string
+	UpstreamContentLength    int64
+	UpstreamTransferEncoding string
 	Stream                   bool
 	Estimated                bool
 }
@@ -162,6 +166,10 @@ type Event struct {
 	ErrorCode                string     `json:"error_code,omitempty"`
 	DurationMS               int64      `json:"duration_ms,omitempty"`
 	UpstreamDurationMS       int64      `json:"upstream_duration_ms,omitempty"`
+	UpstreamStatus           int        `json:"upstream_status,omitempty"`
+	UpstreamContentType      string     `json:"upstream_content_type,omitempty"`
+	UpstreamContentLength    int64      `json:"upstream_content_length,omitempty"`
+	UpstreamTransferEncoding string     `json:"upstream_transfer_encoding,omitempty"`
 	Stream                   bool       `json:"stream"`
 	Estimated                bool       `json:"estimated"`
 	State                    string     `json:"state"`
