@@ -1689,6 +1689,7 @@ func TestInboundAPIKeyNotForwardedUpstream(t *testing.T) {
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
+	withClientKey(handler, "inbound", "inbound-secret")
 	// provider API key is test-key from testHandler
 	handler.client.Transport = transport
 	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)

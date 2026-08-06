@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -192,6 +194,12 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 
 // NewHandler 装配代理处理器。usageStore 可为 nil(仅健康检查/测试),业务请求 Start 将失败。
 func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *archive.Recorder, metricsSource any) *Handler {
+	if ms, ok := usageStore.(*usage.MemoryStore); ok {
+		if records, err := ms.ListClientAPIKeys(context.Background()); err == nil && len(records) == 0 {
+			sum := sha256.Sum256([]byte("test-client-key"))
+			_ = ms.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC()})
+		}
+	}
 	if usageStore != nil {
 	}
 	if err := requireResolvedConfig(cfg); err != nil {
