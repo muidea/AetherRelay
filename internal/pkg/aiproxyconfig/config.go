@@ -1870,6 +1870,7 @@ func ServiceableInboundPaths(provider Provider) []string {
 		"/v1/chat/completions",
 		"/v1/messages",
 		"/v1/responses",
+		"/v1/search",
 		"/v1/completions",
 		"/v1/embeddings",
 		"/v1/images/generations",

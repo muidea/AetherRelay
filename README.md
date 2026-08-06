@@ -89,6 +89,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创�
 | --- | --- |
 | 安装与部署（源码/二进制/容器、升级回滚） | [安装与部署](docs/deployment.md) |
 | 当前功能说明（端点、路由、Admin、账号池等） | [功能说明](docs/features.md) |
+| 外部应用集成（模型能力发现与端点选择） | [集成指南](docs/integration.md) |
 | 配置、客户端 Key、Provider 管理 | [配置参考](docs/configuration.md) |
 | 运行、监控、归档、探针、备份与发布 | [运维与发布](docs/operations.md) |
 | 目录职责与 magicCommon 生命周期 | [代码结构](docs/structure.md) |

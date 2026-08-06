@@ -81,6 +81,9 @@ type Candidate struct {
 	Fallback            bool
 	ContextWindowTokens int
 	MaxOutputTokens     int
+	// SupportedEndpoints is the generation-consistent client path projection
+	// calculated from the provider transport matrix when the snapshot is built.
+	SupportedEndpoints []string
 }
 
 // Route is the request-time resolved model route from either static or builtin.
@@ -249,26 +252,31 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 				ModelID: id, RouteOwner: name,
 				Priority: config.EffectiveProviderPriority(provider), Fallback: config.EffectiveProviderFallback(provider),
 				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
+				SupportedEndpoints: config.ServiceableInboundPaths(provider),
 			})
 		}
 	}
 	if snap.CodexOAuthProvider.Status == StatusReady {
 		for id, model := range snap.CodexOAuthModels {
 			metadata := cfg.ModelMetadata[id]
+			providerView := BuiltinProviderViewFor(CodexOAuthProviderID)
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: CodexOAuthProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true,
 				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
+				SupportedEndpoints: config.ServiceableInboundPaths(providerView),
 			})
 		}
 	}
 	if snap.BuiltinProvider.Status == StatusReady {
 		for id, model := range snap.BuiltinModels {
 			metadata := cfg.ModelMetadata[id]
+			providerView := BuiltinProviderViewFor(BuiltinProviderID)
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: BuiltinProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb), Fallback: false,
 				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
+				SupportedEndpoints: config.ServiceableInboundPaths(providerView),
 			})
 		}
 	}

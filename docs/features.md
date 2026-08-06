@@ -1,6 +1,6 @@
 # 功能说明
 
-本文按功能域说明 `ai-proxy` 当前提供的能力：入口、启用条件与使用方式。配置项的完整含义见[配置参考](configuration.md)，安装部署见[安装与部署](deployment.md)，运行期观测、备份与发布见[运维与发布](operations.md)。
+本文按功能域说明 `ai-proxy` 当前提供的能力：入口、启用条件与使用方式。外部应用接入模型能力发现请参阅[外部应用集成指南](integration.md)。配置项的完整含义见[配置参考](configuration.md)，安装部署见[安装与部署](deployment.md)，运行期观测、备份与发布见[运维与发布](operations.md)。
 
 ## 功能总览
 
@@ -33,7 +33,9 @@
 - **Anthropic**：`POST /v1/messages`
 - **ai-proxy 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）、`POST /v1/images/generations|edits`（路由到 `chatgptweb` 图片能力）
 
-`GET/POST /v1/models` **本地合成**，不访问上游；只返回有效目录中的模型及已知的 `contextWindowTokens` / `maxOutputTokens`，不输出 `capabilities`，也不暴露 provider 名、base URL 或密钥。
+`GET/POST /v1/models` **本地合成**，不访问上游；返回有效目录中的模型、已知的 `contextWindowTokens` / `maxOutputTokens`，以及运行时推导的 `supported_endpoints`。`supported_endpoints` 是客户端可调用的完整路径列表，由模型候选 Provider、Provider 原生 `endpoints` 和统一传输矩阵计算，不是静态模型元数据，也不暴露 provider 名、base URL 或密钥。
+
+`supported_endpoints` 只表示模型至少有一个当前可用候选可以服务的客户端路径。例如 Anthropic Provider 声明原生 `messages` 时，模型可以同时显示 `/v1/messages` 与经协议转换的 `/v1/chat/completions`；ChatGPT Web 的 `chat_completions` 还会派生 `/v1/search`，`images` 会派生图片生成和编辑两个路径。系统信息中的“开放 API 端点”是实例级路由清单，需与模型的 `supported_endpoints` 取交集后再发起请求。
 
 转发矩阵（`endpoints` 只表示上游直连能力；客户端可服务 path 由矩阵决定，含跨协议基础转换）：
 

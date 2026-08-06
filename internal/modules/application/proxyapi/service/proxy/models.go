@@ -23,6 +23,10 @@ type ModelRecord struct {
 	Object              string `json:"object"`
 	ContextWindowTokens int    `json:"contextWindowTokens,omitempty"`
 	MaxOutputTokens     int    `json:"maxOutputTokens,omitempty"`
+	// SupportedEndpoints is derived at runtime from the model's eligible
+	// providers and the shared transport matrix. It contains client-facing
+	// paths, never provider configuration endpoint names.
+	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
 }
 
 // handleModels returns the effective catalog (exact provider models, optional
@@ -94,6 +98,7 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 			ID:     route.ModelID,
 			Object: "model",
 		}
+		rec.SupportedEndpoints = modelSupportedEndpoints(snap, id)
 		// Every source omits optional capacity metadata when unknown or not applicable.
 		if route.ContextWindowTokens > 0 {
 			rec.ContextWindowTokens = route.ContextWindowTokens
@@ -104,6 +109,30 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 		data = append(data, rec)
 	}
 	return ModelsListResponse{Object: "list", Data: data}
+}
+
+// modelSupportedEndpoints returns the client-facing paths that at least one
+// eligible candidate can serve. Provider endpoints are deliberately translated
+// through the same matrix during catalog construction so the model response
+// and request routing observe one immutable generation.
+func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string) []string {
+	seen := map[string]bool{}
+	for _, candidate := range snap.CandidatesFor(modelID) {
+		for _, path := range candidate.SupportedEndpoints {
+			seen[path] = true
+		}
+	}
+	paths := []string{
+		"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/search",
+		"/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits",
+	}
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if seen[path] {
+			result = append(result, path)
+		}
+	}
+	return result
 }
 
 // ReserveMetricsModels 为 metrics 预占各 Provider 精确 models 的 label 槽位。
