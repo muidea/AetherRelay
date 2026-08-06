@@ -108,11 +108,11 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
-热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 admin 写回后切换运行配置（含 `client_api_keys` 索引重建）；`state.database` 及其资源参数不热切换。保存路径必须通过与启动期相同的完整校验，且不得破坏 Provider 模型来源、候选链或 endpoint 合同。
+热更新：`Handler.UpdateConfig` / `ConfigSnapshot` 供 Provider 配置写回后切换运行配置；Client API Key 由 DuckDB 独立事务管理并刷新认证索引，`state.database` 及其资源参数不热切换。
 
 ## 安全与资源边界
 
-- 默认 `127.0.0.1:8080`。`client_api_keys` 是数据端点的必需认证；非 loopback 仍需由网络层保护。**已删除** `inbound_api_key` / `AI_PROXY_INBOUND_API_KEY` / `usage_file`。
+- 默认 `127.0.0.1:8080`。Client API Key 是数据端点的必需认证；非 loopback 仍需由网络层保护。**已删除** `inbound_api_key` / `AI_PROXY_INBOUND_API_KEY` / `usage_file`。
 - 客户端 Key 不转上游；上游鉴权只来自 provider 配置。原始客户端 Key 不进日志/DuckDB/Web。
 - Admin 默认位于 `/admin` 且 loopback-only；启用 `admin_auth_enabled` 后可用 `admin_base_path` 设定入口，并以 HTTPS 登录方式远程访问。Provider API Key 只显示“已配置”，不回显明文。
 - `/metrics`、`/stats` 默认 loopback；`metrics_remote_access` 可放开。

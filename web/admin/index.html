@@ -477,7 +477,7 @@
     <div class="modal-head"><span class="modal-title">导入 ChatGPT Web 凭据</span><button class="close" type="button" id="cgImportClose">×</button></div>
     <div class="modal-body">
       <div class="field"><label class="label" for="cgImportFile">JSON 文件</label><input id="cgImportFile" class="control" type="file" accept=".json,application/json"><div class="help">推荐直接选择 ChatGPT Web 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。</div></div>
-      <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="8" placeholder="每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组"></textarea><div class="help">文件与粘贴内容只能选择一种。支持纯 access token 文本，以及 credential_type=chatgpt_web 的完整 OAuth JSON；Codex OAuth 导出不可导入此处。</div></div>
+      <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="10" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea><div class="help">文件与粘贴内容只能选择一种。支持完整 ChatGPT Web OAuth JSON，也支持每行一个 access token；Codex OAuth 导出不可导入此处。</div></div>
       <div class="field"><label class="label" for="cgImportSource">source_type</label>
         <select id="cgImportSource" class="control"><option value="">留空</option><option value="web">手工导入（web）</option></select>
       </div>
@@ -529,13 +529,13 @@
   </div>
   <div class="modal-foot"><button class="btn" type="button" id="cgExportCancel">取消</button><button class="btn btn-primary" type="button" id="cgExportConfirm">确认导出并下载</button></div>
 </dialog>
+<!-- credential_type=chatgpt_web / credential_type=codex_cli are optional metadata; the import dialog selects the credential domain. -->
 <dialog id="codexImportDialog">
   <form id="codexImportForm" autocomplete="off">
     <div class="modal-head"><span class="modal-title">导入 Codex OAuth 凭据</span><button class="close" type="button" id="codexImportClose">×</button></div>
     <div class="modal-body">
       <div class="field"><label class="label" for="codexImportFile">JSON 文件</label><input id="codexImportFile" class="control" type="file" accept=".json,application/json"><div class="help">推荐直接选择 Codex OAuth 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。</div></div>
-      <div class="field"><label class="label" for="codexImportAccounts">粘贴 accounts JSON（辅助）</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea></div>
-      <div class="help">文件与粘贴内容只能选择一种。仅接受 credential_type=codex_cli 的 Codex OAuth 导出结构；ChatGPT Web 导出不可导入此处。</div>
+      <div class="field"><label class="label" for="codexImportAccounts">粘贴凭据（辅助）</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea><div class="help">文件与粘贴内容只能选择一种。支持 Codex OAuth 完整 JSON；ChatGPT Web 导出不可导入此处。</div></div>
     </div>
     <div class="modal-foot"><button class="btn" type="button" id="codexImportCancel">取消</button><button class="btn btn-primary" type="submit" id="codexImportSubmit">导入</button></div>
   </form>

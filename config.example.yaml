@@ -1,6 +1,6 @@
 server:
   # 默认仅绑定 loopback。若改为 0.0.0.0:8080 / :8080 等非 loopback,
-  # client_api_keys 是归属机制而非强制登录;非 loopback 需由网络层保护。
+  # 非 loopback 监听时仍需由网络层保护数据端点。
   listen_addr: 127.0.0.1:8080
   # 请求体 / 上游响应大小上限(字节)。
   max_request_body_bytes: 33554432
@@ -60,11 +60,7 @@ server:
 # endpoints 是接口支持的唯一声明；客户端可服务 path 由它与共享路由矩阵决定
 # (含 OpenAI chat ↔ Anthropic messages 基础文本转换)。
 
-# 客户端 API Key。所有数据端点均需携带一个已启用的 Key。
-# client_api_keys:
-#   codex:
-#     api_key: ${CODEX_API_KEY}
-#     enabled: true
+# 客户端 API Key 不在配置文件中声明，由 Admin 创建并保存在 state.database。
 
 # 单一持久化工作区：DuckDB 保存用量、账号、任务和图片元数据；
 # 原始图片、缩略图和交互归档保存在固定子目录。每个实例必须独占该目录。

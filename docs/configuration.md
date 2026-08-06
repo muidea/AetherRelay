@@ -55,28 +55,14 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 ## 客户端 API Key
 
-`client_api_keys` 是调用方身份与用量归属的数据模型；Key 由 Admin 创建并持久化，配置文件不内置任何默认 Key：
-
-```yaml
-client_api_keys:
-  codex:
-    api_key: ${CODEX_API_KEY}
-    enabled: true
-  ci-agent:
-    # 由本地 Admin 管理端创建的 Key 只保存 SHA-256 摘要。
-    api_key_hash: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-    enabled: true
-  batch:
-    api_key: ${BATCH_API_KEY}
-    enabled: false
-```
+客户端 API Key 不属于 YAML 配置。Key 由 Admin 创建并保存在 `state.database` 的 DuckDB 中，初始数据库可以没有任何 Key。
 
 - Key ID 需匹配 `[a-z0-9][a-z0-9._-]{0,63}`，`default` 为历史用量保留 ID，不能配置。
 - 每个数据请求必须携带 Key；缺失、空 Header、未知、禁用、格式错误或两个身份 Header 冲突时均返回 401，且不产生用量记录。
 - OpenAI 使用 `Authorization: Bearer <key>`，Anthropic 使用 `X-API-Key: <key>`；两种 Header 可兼容，但同时出现时必须为同一 Key。
 - 原始客户端 Key 不写入日志、DuckDB、归档或管理 API，也不会转发给上游。
 - Admin 可创建、启停、轮换或删除客户端 Key。创建和轮换仅在成功响应中显示一次明文；Key 摘要由运行时存储管理。
-- Key 的 `created_at` 与 `last_used_at` 属于运行期管理元数据，统一保存在 `state.database` 的 DuckDB `client_api_key_metadata` 表中，不写入 YAML；Admin 列表从 DuckDB 读取。首次发现历史 Key 时补建创建时间，成功认证请求会更新最后使用时间。
+- Key 的摘要、启用状态、创建时间、轮换/撤销时间和最后使用时间均保存在 DuckDB；Admin 列表只展示非敏感管理字段。
 - `inbound_api_key`、`AI_PROXY_INBOUND_API_KEY`、`usage_file` 与 `AI_PROXY_USAGE_FILE` 已删除，配置中出现会启动失败。
 
 客户端 Key 是必需的应用层认证；若监听 `0.0.0.0:8080` 或 `:8080`，仍应在防火墙、反向代理或私有网络层实施额外访问控制。
@@ -221,7 +207,7 @@ POST   <base>/api/codex/accounts/export            # {"ids":[...]}；返回可�
 
 导出属于刻意的敏感操作，只应在受控的本机或已启用 HTTPS 登录保护的 Admin 会话中调用；不要把响应写入日志、浏览器持久化存储或工单。
 
-两类账号池的导入/导出遵循同一使用约定：导入接受 `{ "accounts": [...] }`，导出固定返回数组；完整 OAuth 对象要求 `credential_type`、`access_token` 与 `refresh_token`，`id_token` 可选。ChatGPT Web 导出固定标记 `credential_type: chatgpt_web`，Codex 导出固定标记 `credential_type: codex_cli`；服务端拒绝把一类 OAuth 导出导入另一类账号池，避免使用错误 OAuth client 刷新 refresh token。ChatGPT Web 额外接受 `tokens` 字符串数组及管理页中的换行/逗号分隔 token 文本，适合只有 access token 的场景；完整对象不会降级成单 token 导入。
+两类账号池的导入/导出遵循同一使用约定：导入接受 `{ "accounts": [...] }`，导出固定返回数组；完整 OAuth 对象需要包含可用的 `access_token` 与 `refresh_token`，`id_token` 可选。凭据类型由 `/api/chatgpt/accounts` 或 `/api/codex/accounts` 导入入口决定，不强制要求冗余 `credential_type` 字段；服务端仍拒绝把一类 OAuth 导出导入另一类账号池，避免使用错误 OAuth client 刷新 refresh token。ChatGPT Web 额外接受 `tokens` 字符串数组及管理页中的换行/逗号分隔 token 文本，适合只有 access token 的场景；完整对象不会降级成单 token 导入。
 
 管理页以 JSON 文件作为主要导入方式，可直接选择上述导出文件；粘贴 JSON 是辅助方式，两者不能同时使用。浏览器只在提交期间读取文件，不预览、不写入 Web Storage，并在提交或关闭弹窗后清空输入。文件及 HTTP 请求体上限为 1 MiB，单次最多导入 1000 个账号；后端会再次执行数量和凭据结构校验。
 

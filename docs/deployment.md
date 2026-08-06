@@ -60,7 +60,7 @@ ${EDITOR:-vi} config.yaml
 - 每个 enabled Provider 仍必须显式声明 `protocol`、`base_url`、`endpoints` 与 `models`，但这些字段由管理页提交到运行期 Provider 存储。
 - `model_metadata` 只登记可选模型元数据，模型 ID exact 且严格区分大小写；它不发布模型或创建路由。Provider 的精确 `models` 与账号池发现结果决定实际模型，通配 pattern 只参与候选匹配。
 - `state.dir` 是单实例唯一的持久化工作区（DuckDB 用量、账号池、图片元数据与交互归档都在其中），多实例不得共享。
-- `client_api_keys` 是数据端点的必需认证；不配置任何 Key 时所有数据请求都会 401。
+- 客户端 API Key 不在配置文件中声明，由 Admin 创建并保存到 DuckDB；数据库没有 Key 时服务仍可启动，但所有数据端点返回 401，Admin 仍可用于创建第一个 Key。
 
 ```yaml
 server:
@@ -75,10 +75,6 @@ model_metadata:
     context_window_tokens: 128000
     max_output_tokens: 16384
 
-client_api_keys:
-  codex:
-    api_key: ${CODEX_API_KEY}
-    enabled: true
 ```
 
 Provider 不在启动配置中声明；服务启动后通过管理台创建，并加密保存到 DuckDB。
@@ -296,7 +292,7 @@ docker image inspect ghcr.io/muidea/ai-proxy:latest --format '{{index .RepoDiges
 | 现象 | 处理 |
 | --- | --- |
 | 启动即失败，提示配置校验错误 | `model_metadata` ID 与容量、状态目录及启动期开关必须合法；Provider 字段在管理页保存时独立校验 |
-| 所有数据请求返回 401 | 未配置 `client_api_keys` 或 Key 缺失/未知/禁用；Key 是必需的应用层认证 |
+| 所有数据请求返回 401 | DuckDB 尚未创建 Key，或 Key 缺失/未知/禁用；Key 是必需的应用层认证 |
 | 容器内 `/admin` 打不开 | Docker 转发连接在容器内不是 loopback；必须开启 `admin_auth_enabled` 登录保护 |
 | 管理页提示配置不可写 | 挂载的配置目录需要 UID `10001` 可写（`chown -R 10001:10001`）；这只影响 YAML 管理项，不影响由 DuckDB 承载的 Provider 目录 |
 | Provider 管理提示安全存储不可写 | 注入合法的 `AI_PROXY_CREDENTIAL_KEY`，并确保 `state.database` 所在数据目录可写 |

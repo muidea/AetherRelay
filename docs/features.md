@@ -9,7 +9,7 @@
 | OpenAI / Anthropic 标准代理 | `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/completions`、`/v1/embeddings`、`/v1/models` | 管理页配置 Provider |
 | 模型路由候选链 | 请求体 exact `model` → 有序候选 | Provider 精确模型 / 账号池发现 + Provider pattern |
 | 协议转换 | OpenAI ↔ Anthropic 基础文本 | 候选链中跨协议 Provider 且语义可保留 |
-| 客户端 API Key | 全部数据端点认证 | `client_api_keys` 或 Admin 管理端创建 |
+| 客户端 API Key | 全部数据端点认证 | Admin 创建并保存到 DuckDB |
 | 用量统计与 DuckDB 持久化 | Admin「使用统计」、`/admin/api/usage/export.csv` | 默认启用（`state.database`） |
 | Admin 管理页 | `/admin`（默认 loopback-only） | 默认启用；远程访问需 `admin_auth_enabled` |
 | — Provider 管理与健康检查 | Admin「Provider」 | — |
@@ -63,7 +63,7 @@
 - 有效目录始终合成两个账号池的内建模型并参与同一候选链；同名模型保留全部候选，不相互覆盖。管理型 Provider 默认 `priority=100`，Codex OAuth 默认 `90`（可作原生 Responses 回退），ChatGPT Web 默认 `10` 且不作为回退候选。
 - 健康度与熔断：5 分钟有界样本窗口，少于 3 个样本显示 `unknown`；连续 3 次可重试失败打开 30 秒熔断，路由跳过熔断 / `unhealthy` / `credential_error` 候选。不替代账号池真实可用性判断。
 - 回退仅发生在客户端响应未提交时，且只针对网络错误、`408`、`429`、`5xx` 或流式首事件探测失败；一次已写出的 SSE/HTTP 响应绝不切换 Provider。图片任务一旦提交不回退，避免重复创建。
-- 热更新：管理页保存后经与启动期相同的完整校验激活；`client_api_keys` 索引同步重建；`state.database` 资源参数与账号定时刷新间隔不热切换。
+- 热更新：管理页保存 Provider 后经与启动期相同的完整校验激活；Client API Key 变更直接刷新认证索引；`state.database` 资源参数与账号定时刷新间隔不热切换。
 
 ## 协议转换
 
@@ -120,8 +120,8 @@
 - `identity_key` 优先由上游 account ID 单向摘要生成，缺失时退化为规范化邮箱摘要；Admin 不返回原始上游 account ID。统一账号状态只是管理投影，不允许两个槽共享或复制 refresh token。
 - 统一账号状态按最严重的有效槽位聚合：任一槽异常则为“异常”，否则 ChatGPT Web 限流则为“限流”，全部已配置槽均禁用才为“禁用”，其余存在正常槽则为“正常”。页面同时保留各凭据槽原始状态，并分别统计正常/限流、异常/禁用账号数、所有正常或限流 ChatGPT Web 槽的可用图片额度总和，以及 ChatGPT Web / Codex CLI 两类凭据槽的刷新失败数。
 
-- ChatGPT Web：导入纯 access token 或 `credential_type: chatgpt_web` 的完整 OAuth 凭据、批量刷新、删除、导出、OAuth 导入；所有 ChatGPT Web 凭据来源采用同一刷新语义，手工刷新只处理所选账号并尊重显式禁用，无可刷新账号时显示明确错误而非成功 `0/0`。手工刷新若同时续期 OAuth 凭据，即使旧 access token 仍可读取账号信息，凭据续期失败也会计入失败并明确显示。账号刷新兼容上游图片额度字段的 snake_case / camelCase 变体和常见图片能力名称，并明确展示成功/失败数量。未返回可识别额度时刷新失败并保留原额度，不会静默写成 `0`；明确返回额度耗尽或图片能力被阻断时才写入 `0`。单账号上游刷新限制为 45 秒，进度读取独立于长耗时账号命令。只读展示文本/生图模型冷却、最近凭据刷新状态；支持「同步模型」。
-- Codex OAuth：导入/导出 `credential_type: codex_cli` 的完整凭据、刷新、删除、PKCE OAuth 导入、批量刷新所选用量、同步模型并轮询进度；refresh token 使用当前 Codex CLI 的 JSON 请求合同，并区分明确的过期、重复使用、撤销与暂时性刷新错误，不再把所有 HTTP 400 归为 `invalid_token`。导入后的模型同步和用量刷新只针对本批受影响账号，不触发全量账号扫描。凭据刷新健康与当前 access token 路由健康独立展示，刷新失败不会否定随后成功的模型、用量或 Responses 鉴权；成功结果可恢复系统异常状态，但不会覆盖显式禁用。显式用量刷新和模型同步都可重试异常账号；用量请求遇到 `401` 时会刷新凭据一次。两类任务都会将未进入候选的所选账号计入失败和总数，不显示为成功 `0/0`。用量解析兼容 snake_case / camelCase，使用 `used_percent_known` 区分未知值与 `0%`。响应没有任何有效用量窗口时刷新失败并保留最近一次成功快照，页面显示失败数量和安全错误类别。账号统计与 ChatGPT Web 统一为四列（总数、正常、异常/禁用、可路由），具体用量限制保留在账号行展示；同时展示模型缓存、发现进度/退避、上游用量窗口（套餐、`used_percent`、恢复时间）、模型冷却与额度耗尽状态。两类账号导出均为可直接回导的 JSON 数组，但不同 `credential_type` 不能跨池导入。
+- ChatGPT Web：导入纯 access token 或完整 OAuth 凭据、批量刷新、删除、导出、OAuth 导入；账号池入口本身决定凭据类型，不强制要求冗余 `credential_type` 字段；所有 ChatGPT Web 凭据来源采用同一刷新语义，手工刷新只处理所选账号并尊重显式禁用，无可刷新账号时显示明确错误而非成功 `0/0`。手工刷新若同时续期 OAuth 凭据，即使旧 access token 仍可读取账号信息，凭据续期失败也会计入失败并明确显示。账号刷新兼容上游图片额度字段的 snake_case / camelCase 变体和常见图片能力名称，并明确展示成功/失败数量。未返回可识别额度时刷新失败并保留原额度，不会静默写成 `0`；明确返回额度耗尽或图片能力被阻断时才写入 `0`。单账号上游刷新限制为 45 秒，进度读取独立于长耗时账号命令。只读展示文本/生图模型冷却、最近凭据刷新状态；支持「同步模型」。
+- Codex OAuth：导入/导出完整凭据、刷新、删除、PKCE OAuth 导入、批量刷新所选用量、同步模型并轮询进度；账号池入口本身决定凭据类型，不强制要求冗余 `credential_type` 字段。refresh token 使用当前 Codex CLI 的 JSON 请求合同，并区分明确的过期、重复使用、撤销与暂时性刷新错误，不再把所有 HTTP 400 归为 `invalid_token`。导入后的模型同步和用量刷新只针对本批受影响账号，不触发全量账号扫描。凭据刷新健康与当前 access token 路由健康独立展示，刷新失败不会否定随后成功的模型、用量或 Responses 鉴权；成功结果可恢复系统异常状态，但不会覆盖显式禁用。显式用量刷新和模型同步都可重试异常账号；用量请求遇到 `401` 时会刷新凭据一次。两类任务都会将未进入候选的所选账号计入失败和总数，不显示为成功 `0/0`。用量解析兼容 snake_case / camelCase，使用 `used_percent_known` 区分未知值与 `0%`。响应没有任何有效用量窗口时刷新失败并保留最近一次成功快照，页面显示失败数量和安全错误类别。账号统计与 ChatGPT Web 统一为四列（总数、正常、异常/禁用、可路由），具体用量限制保留在账号行展示；同时展示模型缓存、发现进度/退避、上游用量窗口（套餐、`used_percent`、恢复时间）、模型冷却与额度耗尽状态。两类账号导出均为可直接回导的 JSON 数组，导入入口负责区分账号池类型。
 - Codex Responses 的账号切换耗尽后会返回最后一个真实上游失败及安全 HTTP 状态，不再把 401、403、429 或 5xx 覆盖成泛化的 `provider_unavailable`；不会记录上游响应正文或任何账号凭据。
 - 两类账号池都支持直接选择各自导出的 JSON 文件重新导入，也保留粘贴 JSON 的辅助入口；ChatGPT Web 额外支持粘贴纯 access token。文件与粘贴内容不能同时使用，单次限制 1 MiB、1000 个账号，提交或关闭弹窗后立即清除浏览器内存引用。
 - Codex 导入、OAuth 完成和凭据刷新自动触发的模型同步与用量刷新在后台静默轮询，只保留主操作的一次结果提示；手工点击“同步模型”或“刷新用量”时才显示对应的独立进度，成功完成信息短暂展示后自动隐藏，轮询错误保留以便排查。
@@ -165,7 +165,7 @@
 
 ## 安全与隐私边界
 
-- 默认仅监听 `127.0.0.1:8080`；非 loopback 监听时，`client_api_keys` 是归属机制而非强制登录，需网络层另行保护。
+- 默认仅监听 `127.0.0.1:8080`；非 loopback 监听时仍需网络层另行保护。
 - Admin / `/metrics` / `/stats` 默认 loopback-only；远程访问分别由 `admin_auth_enabled`（账号密码 + 会话 + CSRF，任意来源均需登录，无 loopback 旁路）与 `metrics_remote_access` + `metrics_allowed_cidrs` 控制。
 - Provider Key 只显示"已配置"，不回显明文；原始客户端 Key 不进日志 / DuckDB / 归档 / Web / 上游。
 - 日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header。

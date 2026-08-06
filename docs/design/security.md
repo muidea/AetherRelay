@@ -4,35 +4,34 @@
 
 ## 设计目标
 
-- 客户端 Key 是数据端点的必需认证，也是用量归属的唯一身份来源；Key 本身永不落盘、永不转发。
+- 客户端 Key 是数据端点的必需认证，也是用量归属的唯一身份来源；明文只在创建/轮换响应中出现一次，DuckDB 只保存摘要。
 - Admin 默认仅本机可访问；开启登录后任意来源都必须认证，不保留 loopback 旁路。
-- 敏感信息（Key、token、账号凭据、密码哈希）不写入日志、DuckDB、归档、错误信息或浏览器持久化。
+- 敏感信息（Key、token、账号凭据、密码哈希）不写入日志、归档、错误信息或浏览器持久化。
 
 ## 客户端 API Key
 
 ### 配置合同
 
-- `client_api_keys` 是唯一持久化权威，不新建账号库或外部 Secret 服务。
-- 每个条目 `api_key` 与 `api_key_hash` **必须二选一**，同时存在或均缺失均为配置错误；唯一例外是允许旧的无凭据禁用条目存在，补齐有效凭据前不可重新启用。
-- `api_key_hash` 仅接受 `sha256:` + 64 位小写十六进制，是对完整 Key UTF-8 字节的 SHA-256 摘要；原始 Key 与摘要在所有条目间均唯一。
+- DuckDB 是客户端 Key 的唯一持久化权威，不接受 YAML 中的 Key 定义或摘要。
+- Key 摘要仅接受 `sha256:` + 64 位小写十六进制；原始 Key 与摘要在所有条目间均唯一。
 - Key ID 匹配 `[a-z0-9][a-z0-9._-]{0,63}`；`default` 为历史用量保留 ID，不能配置。
 - 服务端生成 Key 统一 `sk_` + base64.RawURLEncoding(crypto/rand 32 bytes)，至少 256 bit 熵；明文仅在创建/轮换成功响应中返回一次，响应 `Cache-Control: no-store`。
 
 ### 身份解析与 401 不变量
 
-- 运行时认证索引只存摘要 → ClientIdentity 映射；外部条目（`api_key`）启动/激活时先计算 `sha256(api_key)`，两来源进入同一索引。
+- 运行时认证索引只从 DuckDB 读取摘要 → ClientIdentity 映射。
 - OpenAI 用 `Authorization: Bearer <key>`，Anthropic 用 `X-API-Key: <key>`；两种 Header 可兼容，同时出现必须为同一 Key。
 - 缺失、空白、未知、禁用、格式错误或冲突 Header 均返回 401，且**不产生用量记录**（401 发生在 `UsageStore.Start` 之前）。
 - 所有持久化、指标、日志、归档与 Admin 查询只出现 `api_key_id`，原始 Key 绝不出现。
 
 ### Admin 管理
 
-- 创建与轮换不接受客户端提供的 `api_key` / `api_key_hash`（服务端生成）；PATCH 只允许改 `enabled`；轮换保持同一 `api_key_id`，激活后新请求只接受新 Key，在途旧快照请求允许完成，无宽限期；禁用与删除均使新请求 401，不删除历史 usage；删除 `default` 返回 400。
+- 创建与轮换不接受客户端提供的明文或摘要（服务端生成）；PATCH 只允许改 `enabled`；轮换保持同一 `api_key_id`，激活后新请求只接受新 Key，在途旧快照请求允许完成，无宽限期；禁用与撤销均使新请求 401，不删除历史 usage；删除 `default` 返回 400。
 - 列表只暴露 `id`、`enabled`、`created_at`、`last_used_at`，不暴露摘要、长度或环境变量名；不存在凭据来源分类。
 
 ### 配置写入与激活事务
 
-在更新互斥下执行：读原始字节并验证 `If-Match: <revision>`（revision 为配置原始字节 SHA-256，过期返回 409 且不写文件不激活）→ 定点修改目标 mapping（保留未改动 `${ENV}` 标量）→ 同目录临时文件经完整 `config.Load` 校验 → 原子 rename → `RuntimeConfig.UpdateConfig` 激活。激活失败用预存原始字节原子回滚并返回 500；候选配置在 Load 完成前绝不激活。
+客户端 Key 管理直接使用 DuckDB 事务并刷新运行时认证索引，不修改配置文件，也不依赖配置文件 revision。
 
 ## Admin 登录（可选）
 
