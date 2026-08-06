@@ -59,7 +59,8 @@ func assertGatewayRoutes(t *testing.T) {
 		{method: http.MethodGet, path: "/metrics", status: http.StatusOK},
 		{method: http.MethodGet, path: "/admin/", status: http.StatusOK},
 		{method: http.MethodGet, path: "/admin/api/system/info", status: http.StatusOK},
-		{method: http.MethodGet, path: "/v1/models", status: http.StatusOK},
+		// The fresh DuckDB has no client keys; data endpoints must reject the request.
+		{method: http.MethodGet, path: "/v1/models", status: http.StatusUnauthorized},
 		{method: http.MethodPost, path: "/v1/unknown", status: http.StatusNotFound},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
