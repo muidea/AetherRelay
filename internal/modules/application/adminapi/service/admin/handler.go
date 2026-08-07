@@ -293,7 +293,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case rel == "/api/model-metadata" && r.Method == http.MethodGet:
 		h.listModelMetadata(w)
 	case strings.HasPrefix(rel, "/api/model-metadata/") && r.Method == http.MethodPatch:
-		if !h.requireAdminMutation(w, r) { return }
+		if !h.requireAdminMutation(w, r) {
+			return
+		}
 		h.patchModelMetadata(w, r, rel)
 	case rel == "/api/features/models" && r.Method == http.MethodGet:
 		h.featureCatalog(w, r)
