@@ -38,6 +38,11 @@ type CompleteRecord struct {
 	UpstreamProtocol         string
 	UpstreamEndpoint         string
 	ConversionMode           string
+	ConversionLevel          int
+	ConversionDuration       time.Duration
+	ConversionDegraded       bool
+	IgnoredFeatures          []string
+	UnsupportedFeatures      []string
 	InputTokens              int64
 	OutputTokens             int64
 	CachedInputTokens        int64
@@ -156,6 +161,11 @@ type Event struct {
 	UpstreamProtocol         string     `json:"upstream_protocol,omitempty"`
 	UpstreamEndpoint         string     `json:"upstream_endpoint,omitempty"`
 	ConversionMode           string     `json:"conversion_mode,omitempty"`
+	ConversionLevel          int        `json:"conversion_level,omitempty"`
+	ConversionDurationMS     int64      `json:"conversion_duration_ms,omitempty"`
+	ConversionDegraded       bool       `json:"conversion_degraded,omitempty"`
+	IgnoredFeatures          []string   `json:"ignored_features,omitempty"`
+	UnsupportedFeatures      []string   `json:"unsupported_features,omitempty"`
 	InputTokens              int64      `json:"input_tokens"`
 	OutputTokens             int64      `json:"output_tokens"`
 	TotalTokens              int64      `json:"total_tokens"`

@@ -499,6 +499,51 @@ func TestHandlerPatchesOnlyTargetProviderAndPreservesCredential(t *testing.T) {
 	}
 }
 
+func TestHandlerPatchesProviderConversionReleaseAndPreservesCredential(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := cfg.Providers["openai"]
+	provider.Endpoints = []string{config.ProviderEndpointResponses}
+	cfg.Providers["openai"] = provider
+	cfg.ModelMetadata["gpt-4o"] = config.ModelMetadata{
+		ID: "gpt-4o",
+		ConversionCapabilities: map[string]config.ConversionCapability{
+			config.ConversionDirectionAnthropicToResponses: {Level: 3, Text: true, Tools: true, Streaming: true},
+		},
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+	body := `{"conversion_releases":{"gpt-4o":{"anthropic_to_responses":{"enabled":true,"verified":true,"evidence_id":"eval-admin"}}}}`
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch = %d %s", rec.Code, rec.Body.String())
+	}
+	updated := runtime.ConfigSnapshot().Providers["openai"]
+	if updated.APIKey != "secret-value" || updated.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("provider fields changed = %+v", updated)
+	}
+	release := updated.ConversionReleases["gpt-4o"][config.ConversionDirectionAnthropicToResponses]
+	if !release.Enabled || !release.Verified || release.EvidenceID != "eval-admin" {
+		t.Fatalf("release = %#v", release)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/providers", nil)
+	listReq.RemoteAddr = "127.0.0.1:1234"
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"evidence_id":"eval-admin"`) {
+		t.Fatalf("provider list = %d %s", listRec.Code, listRec.Body.String())
+	}
+}
+
 func TestHandlerDeletesOnlyTargetProvider(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)

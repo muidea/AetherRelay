@@ -42,14 +42,15 @@ type AnthropicError struct {
 // APIError 描述稳定错误合同;不得包含 API Key、Authorization 或上游敏感体。
 // 可选上下文字段用于客户端与 WorkOrch 诊断,均不泄露 secret。
 type APIError struct {
-	Code             string `json:"code"`
-	Message          string `json:"message"`
-	Type             string `json:"type,omitempty"` // OpenAI error.type
-	Model            string `json:"model,omitempty"`
-	ClientEndpoint   string `json:"client_endpoint,omitempty"`
-	ClientProtocol   string `json:"client_protocol,omitempty"`
-	UpstreamProtocol string `json:"upstream_protocol,omitempty"`
-	Feature          string `json:"feature,omitempty"`
+	Code                string   `json:"code"`
+	Message             string   `json:"message"`
+	Type                string   `json:"type,omitempty"` // OpenAI error.type
+	Model               string   `json:"model,omitempty"`
+	ClientEndpoint      string   `json:"client_endpoint,omitempty"`
+	ClientProtocol      string   `json:"client_protocol,omitempty"`
+	UpstreamProtocol    string   `json:"upstream_protocol,omitempty"`
+	Feature             string   `json:"feature,omitempty"`
+	UnsupportedFeatures []string `json:"unsupported_features,omitempty"`
 }
 
 func writeAPIError(w http.ResponseWriter, status int, apiErr APIError) {

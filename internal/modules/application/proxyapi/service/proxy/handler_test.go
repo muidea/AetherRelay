@@ -478,8 +478,10 @@ func TestUnmatchedModelWithoutDefaultProviderReturns400(t *testing.T) {
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		t.Fatalf("request should not reach upstream")
-		return nil, nil
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("upstream path = %s", r.URL.Path)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":2,"output_tokens":1}}`))}, nil
 	})
 	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"unknown-model","messages":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
@@ -887,25 +889,27 @@ func TestOpenAIResponsesRejectsAnthropicProvider(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key", Models: []string{"claude*"}},
+			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key", Models: []string{"claude*"}, ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"claude-test": {"responses_to_anthropic": {Enabled: true, Verified: true}}}},
 		},
+		ModelMetadata: map[string]config.ModelMetadata{"claude-test": {ID: "claude-test", ConversionCapabilities: map[string]config.ConversionCapability{"responses_to_anthropic": {Level: 1, Text: true}}}},
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		t.Fatalf("request should not reach upstream")
-		return nil, nil
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("upstream path = %s", r.URL.Path)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":2,"output_tokens":1}}`))}, nil
 	})
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"claude-test","input":"hi"}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusBadRequest {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	// catalog/endpoint authority: anthropic 不具备 /v1/responses → endpoint_unsupported
-	if !strings.Contains(response.Body.String(), "endpoint_unsupported") {
-		t.Fatalf("unexpected body: %s", response.Body.String())
+	if !strings.Contains(response.Body.String(), `"object":"response"`) || !strings.Contains(response.Body.String(), "hello") {
+		t.Fatalf("unexpected converted body: %s", response.Body.String())
 	}
 }
 
@@ -1508,7 +1512,7 @@ func TestMetricsEndpointRecordedThroughHandler(t *testing.T) {
 		t.Fatalf("metrics status = %d, want 200", metricsRec.Code)
 	}
 	body := metricsRec.Body.String()
-	wantMetric := `ai_proxy_requests_total{provider="openai",model="gpt-test",route="chat_completions",status="2xx",outcome="success",client_endpoint="/v1/chat/completions",upstream_protocol="openai",upstream_endpoint="/v1/chat/completions",conversion_mode="native"} 2`
+	wantMetric := `ai_proxy_requests_total{provider="openai",model="gpt-test",route="chat_completions",status="2xx",outcome="success",client_endpoint="/v1/chat/completions",upstream_protocol="openai",upstream_endpoint="/v1/chat/completions",conversion_mode="native",conversion_level="0"} 2`
 	if !strings.Contains(body, wantMetric) {
 		t.Fatalf("expected chat_completions 2xx TransportPlan counter, got:\n%s", body)
 	}

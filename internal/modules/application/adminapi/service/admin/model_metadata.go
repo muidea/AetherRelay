@@ -8,25 +8,32 @@ import (
 	"sort"
 	"strings"
 
+	"ai-proxy/internal/pkg/aiproxyconfig"
 	"go.yaml.in/yaml/v4"
 )
 
 type modelMetadataView struct {
-	ID                     string   `json:"id"`
-	ContextWindowTokens    int      `json:"context_window_tokens,omitempty"`
-	MaxOutputTokens        int      `json:"max_output_tokens,omitempty"`
-	ReasoningDeclared      bool     `json:"reasoning_declared"`
-	ReasoningSupported     bool     `json:"reasoning_supported"`
-	ReasoningDefaultEffort string   `json:"reasoning_default_effort,omitempty"`
-	ReasoningEfforts       []string `json:"reasoning_efforts,omitempty"`
+	ID                     string                                 `json:"id"`
+	ContextWindowTokens    int                                    `json:"context_window_tokens,omitempty"`
+	MaxOutputTokens        int                                    `json:"max_output_tokens,omitempty"`
+	ReasoningDeclared      bool                                   `json:"reasoning_declared"`
+	ReasoningSupported     bool                                   `json:"reasoning_supported"`
+	ReasoningDefaultEffort string                                 `json:"reasoning_default_effort,omitempty"`
+	ReasoningEfforts       []string                               `json:"reasoning_efforts,omitempty"`
+	NativeResponsesTools   bool                                   `json:"native_responses_tools"`
+	NativeResponsesImages  bool                                   `json:"native_responses_images"`
+	ConversionCapabilities map[string]config.ConversionCapability `json:"conversion_capabilities,omitempty"`
 }
 
 type modelMetadataPatch struct {
-	ContextWindowTokens    *int      `json:"context_window_tokens"`
-	MaxOutputTokens        *int      `json:"max_output_tokens"`
-	ReasoningSupported     *bool     `json:"reasoning_supported"`
-	ReasoningDefaultEffort *string   `json:"reasoning_default_effort"`
-	ReasoningEfforts       *[]string `json:"reasoning_efforts"`
+	ContextWindowTokens    *int                                    `json:"context_window_tokens"`
+	MaxOutputTokens        *int                                    `json:"max_output_tokens"`
+	ReasoningSupported     *bool                                   `json:"reasoning_supported"`
+	ReasoningDefaultEffort *string                                 `json:"reasoning_default_effort"`
+	ReasoningEfforts       *[]string                               `json:"reasoning_efforts"`
+	NativeResponsesTools   *bool                                   `json:"native_responses_tools"`
+	NativeResponsesImages  *bool                                   `json:"native_responses_images"`
+	ConversionCapabilities *map[string]config.ConversionCapability `json:"conversion_capabilities"`
 }
 
 func (h *Handler) listModelMetadata(w http.ResponseWriter) {
@@ -39,7 +46,7 @@ func (h *Handler) listModelMetadata(w http.ResponseWriter) {
 	items := make([]modelMetadataView, 0, len(ids))
 	for _, id := range ids {
 		m := cfg.ModelMetadata[id]
-		items = append(items, modelMetadataView{ID: id, ContextWindowTokens: m.ContextWindowTokens, MaxOutputTokens: m.MaxOutputTokens, ReasoningDeclared: m.ReasoningDeclared, ReasoningSupported: m.ReasoningSupported, ReasoningDefaultEffort: m.ReasoningDefaultEffort, ReasoningEfforts: append([]string(nil), m.ReasoningEfforts...)})
+		items = append(items, modelMetadataView{ID: id, ContextWindowTokens: m.ContextWindowTokens, MaxOutputTokens: m.MaxOutputTokens, ReasoningDeclared: m.ReasoningDeclared, ReasoningSupported: m.ReasoningSupported, ReasoningDefaultEffort: m.ReasoningDefaultEffort, ReasoningEfforts: append([]string(nil), m.ReasoningEfforts...), NativeResponsesTools: m.NativeResponsesTools, NativeResponsesImages: m.NativeResponsesImages, ConversionCapabilities: m.ConversionCapabilities})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "writable": strings.TrimSpace(h.configPath) != ""})
 }
@@ -131,5 +138,55 @@ func mutateModelMetadataYAML(root *yaml.Node, id string, input modelMetadataPatc
 		set("reasoning_efforts", "["+strings.Join(*input.ReasoningEfforts, ", ")+"]")
 		_ = vals
 	}
+	if input.NativeResponsesTools != nil {
+		set("native_responses_tools", fmt.Sprint(*input.NativeResponsesTools))
+	}
+	if input.NativeResponsesImages != nil {
+		set("native_responses_images", fmt.Sprint(*input.NativeResponsesImages))
+	}
+	if input.ConversionCapabilities != nil {
+		setConversionCapabilities(entry, *input.ConversionCapabilities)
+	}
 	return nil
+}
+
+func setConversionCapabilities(entry *yaml.Node, capabilities map[string]config.ConversionCapability) {
+	mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	directions := []string{"responses_to_anthropic", "anthropic_to_responses"}
+	for _, direction := range directions {
+		capability, ok := capabilities[direction]
+		if !ok {
+			continue
+		}
+		value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		fields := []struct {
+			name  string
+			value any
+		}{
+			{"level", capability.Level}, {"text", capability.Text}, {"images", capability.Images},
+			{"documents", capability.Documents}, {"reasoning", capability.Reasoning}, {"tools", capability.Tools},
+			{"structured_output", capability.StructuredOutput}, {"streaming", capability.Streaming}, {"continuation", capability.Continuation},
+		}
+		for _, field := range fields {
+			tag := "!!bool"
+			if field.name == "level" {
+				tag = "!!int"
+			}
+			value.Content = append(value.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: field.name}, &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: fmt.Sprint(field.value)})
+		}
+		if capability.ReasoningAdapter != "" {
+			value.Content = append(value.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "reasoning_adapter"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: capability.ReasoningAdapter})
+		}
+		if capability.ReasoningTargetEffort != "" {
+			value.Content = append(value.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "reasoning_target_effort"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: capability.ReasoningTargetEffort})
+		}
+		mapping.Content = append(mapping.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: direction}, value)
+	}
+	for i := 0; i+1 < len(entry.Content); i += 2 {
+		if entry.Content[i].Value == "conversion_capabilities" {
+			entry.Content[i+1] = mapping
+			return
+		}
+	}
+	entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "conversion_capabilities"}, mapping)
 }

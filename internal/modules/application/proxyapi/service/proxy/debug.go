@@ -141,6 +141,9 @@ func (h *Handler) archiveAndLogTransportPlan(round *archive.Round, r *http.Reque
 			plan.UpstreamEndpoint,
 			plan.Mode,
 		)
+		if plan.IsConversion() {
+			round.SetConversionLevel(plan.ConversionLevel)
+		}
 	}
 	if round == nil {
 		return

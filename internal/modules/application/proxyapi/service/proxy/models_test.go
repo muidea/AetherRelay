@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	config "ai-proxy/internal/pkg/aiproxyconfig"
 )
 
 func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
@@ -41,5 +42,65 @@ func TestModelSupportedEndpointsIncludesChatGPTWebSearchAndImages(t *testing.T) 
 		if !found {
 			t.Fatalf("supported endpoints=%v missing %s", got, path)
 		}
+	}
+}
+
+func TestModelsProjectsDegradedReasoningConversion(t *testing.T) {
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"anthropic": {
+				Name: "anthropic", Protocol: "anthropic", BaseURL: "https://example.invalid", APIKey: "test",
+				Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages},
+				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"claude-test": {TransportModeResponsesToAnthropic: {Enabled: true, Verified: true}}},
+			},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"claude-test": {
+				ID: "claude-test", ReasoningDeclared: true, ReasoningSupported: true, ReasoningEfforts: []string{"low"},
+				ConversionCapabilities: map[string]config.ConversionCapability{
+					TransportModeResponsesToAnthropic: {
+						Level: 2, Text: true, Streaming: true, Reasoning: true,
+						ReasoningAdapter: config.ReasoningAdapterResponsesToAnthropicAdaptive, ReasoningTargetEffort: "low",
+					},
+				},
+			},
+		},
+	}
+	response := buildModelsListResponse(effectivecatalog.Build(cfg, 0, 0, nil, ""))
+	if len(response.Data) != 1 || response.Data[0].Capabilities == nil || response.Data[0].Capabilities.Conversions == nil {
+		t.Fatalf("models = %#v", response)
+	}
+	capability := response.Data[0].Capabilities.Conversions.ResponsesToAnthropic
+	if capability == nil || !capability.Reasoning || capability.ReasoningMode != "degrade" {
+		t.Fatalf("conversion capability = %#v", capability)
+	}
+}
+
+func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.T) {
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"responses": {
+				Name: "responses", Protocol: "openai", BaseURL: "https://example.invalid", APIKey: "test",
+				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointResponses},
+				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"shared-model": {TransportModeAnthropicToResponses: {Enabled: true, Verified: true}}},
+			},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"shared-model": {ID: "shared-model", ConversionCapabilities: map[string]config.ConversionCapability{
+				TransportModeResponsesToAnthropic: {Level: 1, Text: true},
+				TransportModeAnthropicToResponses: {Level: 1, Text: true},
+			}},
+		},
+	}
+	response := buildModelsListResponse(effectivecatalog.Build(cfg, 0, 0, nil, ""))
+	if len(response.Data) != 1 || response.Data[0].Capabilities == nil || response.Data[0].Capabilities.Conversions == nil {
+		t.Fatalf("models = %#v", response)
+	}
+	conversions := response.Data[0].Capabilities.Conversions
+	if conversions.AnthropicToResponses == nil {
+		t.Fatalf("anthropic_to_responses was not projected: %#v", conversions)
+	}
+	if conversions.ResponsesToAnthropic != nil {
+		t.Fatalf("responses_to_anthropic projected without an Anthropic provider: %#v", conversions)
 	}
 }

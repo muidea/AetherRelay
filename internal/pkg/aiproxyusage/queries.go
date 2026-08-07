@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -345,6 +346,8 @@ SELECT
     coalesce(client_endpoint, ''), coalesce(client_protocol, ''),
     coalesce(upstream_protocol, ''), coalesce(upstream_endpoint, ''),
     coalesce(conversion_mode, ''),
+    coalesce(conversion_level, 0), coalesce(conversion_duration_ms, 0),
+    coalesce(conversion_degraded, false), coalesce(ignored_features, ''), coalesce(unsupported_features, ''),
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
@@ -370,6 +373,7 @@ LIMIT ?`
 		var httpStatus sql.NullInt64
 		var durationMS, upstreamMS sql.NullInt64
 		var upstreamStatus sql.NullInt64
+		var ignored, unsupported string
 		var usageDate string
 		if err := rows.Scan(
 			&e.EventID, &e.RoundID, &e.StartedAt, &completedAt,
@@ -379,6 +383,7 @@ LIMIT ?`
 			&e.ClientEndpoint, &e.ClientProtocol,
 			&e.UpstreamProtocol, &e.UpstreamEndpoint,
 			&e.ConversionMode,
+			&e.ConversionLevel, &e.ConversionDurationMS, &e.ConversionDegraded, &ignored, &unsupported,
 			&e.InputTokens, &e.OutputTokens, &e.TotalTokens,
 			&e.CachedInputTokens, &e.CacheCreationInputTokens,
 			&httpStatus, &e.Outcome, &e.ErrorCode,
@@ -403,6 +408,12 @@ LIMIT ?`
 		}
 		if upstreamStatus.Valid {
 			e.UpstreamStatus = int(upstreamStatus.Int64)
+		}
+		if strings.TrimSpace(ignored) != "" && ignored != "null" {
+			_ = json.Unmarshal([]byte(ignored), &e.IgnoredFeatures)
+		}
+		if strings.TrimSpace(unsupported) != "" && unsupported != "null" {
+			_ = json.Unmarshal([]byte(unsupported), &e.UnsupportedFeatures)
 		}
 		events = append(events, e)
 	}

@@ -78,6 +78,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
 | `request_timeout_seconds` | 非流式总超时及流式等待响应头超时。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
+| `stream_first_event_timeout_seconds` | 跨协议转换 SSE 首事件等待超时，默认 `30` 秒；用于防止上游迟迟不发送首事件。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
 | `debug_log`、`log_format` | 调试日志和 `json`/`text` 格式。 |
@@ -101,7 +102,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
 - `/v1/search` 是 ai-proxy 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
 - 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
-- 跨协议转换只保证基础文本，tools、thinking、多模态等未支持能力在访问上游前拒绝。
+- 跨协议转换按模型方向化 capability 开放：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；流式工具、多模态、结构化输出、continuation 仍在访问上游前拒绝。thinking/reasoning 只有配置方向专用 adapter 时才以降级模式开放。最近调用、usage 与 Prometheus 请求指标会同时记录 `conversion_mode`、`conversion_level`、转换耗时和拒绝/降级能力。
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
 
@@ -120,6 +121,8 @@ state:
 `state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、不可迁移或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
 
 `state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
+
+Usage runtime 当前使用重新基线化的最终 schema v1（版本名 `usage_final_v1`），不再执行历史增量 migration。首次遇到旧 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v1 并保留新产生的数据。升级前如需回查旧数据，应先备份整个 `state.database`。
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 
@@ -253,4 +256,10 @@ server:
 
 Admin usage API 的筛选参数、导出边界与响应格式以当前管理页、`internal/modules/application/adminapi/service/admin` 的合同测试和 DuckDB 查询实现为准。
 
-模型级 `model_metadata` 可声明 `reasoning_supported`、`reasoning_default_effort` 与 `reasoning_efforts`。`/v1/models` 会通过 `capabilities.reasoning` 暴露已声明能力；Responses 请求中的 `reasoning.effort` 按模型枚举校验，未指定时使用默认值，不支持的值返回 400，不做静默降级。未声明能力的模型不会注入 `reasoning` 字段。
+模型级 `model_metadata` 可声明 `reasoning_supported`、`reasoning_default_effort` 与 `reasoning_efforts`。`native_responses_tools` 和 `native_responses_images` 只描述模型原生 Responses 路径能力，不代表 Responses↔Anthropic 转换能力。转换器实现上限在 `conversion_capabilities` 下按方向声明；`level` 只能是 0–3，未声明等同 0，Level 1 必须有 `text: true`，`streaming` 需要 Level 2，`tools/images` 需要 Level 3。
+
+转换还必须通过具体 Provider 的发布门闩。管理型 Provider 可在管理页编辑 `conversion_releases`，结构为 `exact model -> direction -> {enabled, verified, evidence_id}`；静态 Provider 使用同名 YAML 字段。只有 `enabled=true` 且 `verified=true`，模型被该 Provider 匹配、方向与 protocol/endpoints 相容，并且存在可实现的模型级 capability 时才会发布。未声明默认关闭；`verified=true, enabled=false` 可保留证据并用于灰度回滚。Provider 定义与 API key 由管理台加密保存在 DuckDB 时，发布门闩也随同一 Provider 记录持久化和热更新。
+
+跨协议 `reasoning/thinking` 只能显式降级开放，不能仅写 `reasoning: true`：必须同时声明方向匹配的 `reasoning_adapter` 和 `reasoning_target_effort`，且目标 effort 必须列在该模型的 `reasoning_efforts` 中。Responses→Anthropic 使用 `responses_to_anthropic_adaptive`，生成 Anthropic `thinking.type=adaptive` 与配置的 `output_config.effort`；Anthropic→Responses 使用 `anthropic_to_responses_effort`，生成配置的 `reasoning.effort`。客户端传入的具体 effort 或 manual `budget_tokens` 不会跨协议换算，Anthropic manual `thinking.type=enabled` 会拒绝。上游返回的 reasoning/thinking 块和 delta 只会被识别后省略，不会转成普通文本；归档和“最近调用明细”记录 `conversion_degraded=true` 及有限字段名。
+
+当前转换实现覆盖纯文本非流式、纯文本 SSE，以及 Level 3 的 function tools 非流式请求/响应；图片、documents、JSON Schema/structured output、continuation 和流式工具事件仍会拒绝。只有模型实现声明与至少一个具体 Provider 发布门闩同时通过的 exact model 才会进入转换候选；`/v1/models` 会通过 `capabilities.reasoning`、`capabilities.native.responses` 和已验证的 `capabilities.conversions` 暴露能力，其中转换 reasoning 会标记 `reasoning_mode: "degrade"`，不代表无损保留。原生 Responses 请求中的 `reasoning.effort` 按模型枚举校验，未指定时使用默认值，不支持的值返回 400，不做静默降级。未声明能力的模型不会注入 `reasoning` 字段。

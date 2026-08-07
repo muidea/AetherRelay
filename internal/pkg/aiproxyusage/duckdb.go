@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -42,7 +43,8 @@ type DuckDBStore struct {
 	optionsCache *filterOptionsCache
 }
 
-// OpenDuckDB 打开(或创建)DuckDB 文件,应用安全设置,执行 migration,并恢复遗留 started 行。
+// OpenDuckDB 打开(或创建)DuckDB 文件，应用安全设置，初始化当前最终
+// schema，并恢复当前 schema 中遗留的 started 行。
 func OpenDuckDB(cfg config.UsageStoreConfig) (*DuckDBStore, error) {
 	path := strings.TrimSpace(cfg.Path)
 	if path == "" {
@@ -216,6 +218,14 @@ func (s *DuckDBStore) Complete(ctx context.Context, rec CompleteRecord) error {
 		return fmt.Errorf("completed usage event requires http_status and outcome")
 	}
 	total := rec.InputTokens + rec.OutputTokens
+	unsupported, err := json.Marshal(rec.UnsupportedFeatures)
+	if err != nil {
+		return ErrInvalidTokens
+	}
+	ignored, err := json.Marshal(rec.IgnoredFeatures)
+	if err != nil {
+		return ErrInvalidTokens
+	}
 	completedAt := rec.CompletedAt.UTC()
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
@@ -232,7 +242,12 @@ SET
     model = COALESCE(NULLIF(?, ''), model),
     upstream_protocol = ?,
     upstream_endpoint = ?,
-    conversion_mode = ?,
+	conversion_mode = ?,
+	conversion_level = ?,
+	conversion_duration_ms = ?,
+	conversion_degraded = ?,
+	ignored_features = ?,
+	unsupported_features = ?,
     input_tokens = ?,
     output_tokens = ?,
     total_tokens = ?,
@@ -258,6 +273,11 @@ WHERE event_id = ?
 		nullString(rec.UpstreamProtocol),
 		nullString(rec.UpstreamEndpoint),
 		nullString(rec.ConversionMode),
+		rec.ConversionLevel,
+		rec.ConversionDuration.Milliseconds(),
+		rec.ConversionDegraded,
+		nullString(string(ignored)),
+		nullString(string(unsupported)),
 		rec.InputTokens,
 		rec.OutputTokens,
 		total,

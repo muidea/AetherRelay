@@ -27,6 +27,11 @@ var csvExportHeader = []string{
 	"upstream_protocol",
 	"upstream_endpoint",
 	"conversion_mode",
+	"conversion_level",
+	"conversion_duration_ms",
+	"conversion_degraded",
+	"ignored_features",
+	"unsupported_features",
 	"input_tokens",
 	"output_tokens",
 	"total_tokens",
@@ -70,6 +75,8 @@ SELECT
     coalesce(client_endpoint, ''), coalesce(client_protocol, ''),
     coalesce(upstream_protocol, ''), coalesce(upstream_endpoint, ''),
     coalesce(conversion_mode, ''),
+    coalesce(conversion_level, 0), coalesce(conversion_duration_ms, 0),
+    coalesce(conversion_degraded, false), coalesce(ignored_features, ''), coalesce(unsupported_features, ''),
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
@@ -95,6 +102,7 @@ ORDER BY started_at ASC, event_id ASC`
 			eventID, apiKeyID, provider, model, operation, route string
 			clientEndpoint, clientProtocol                       string
 			upstreamProtocol, upstreamEndpoint, conversionMode   string
+			ignoredFeatures, unsupportedFeatures                 string
 			outcome, errorCode, state, usageDate                 string
 			roundID                                              int64
 			inputTok, outputTok, totalTok                        int64
@@ -103,6 +111,8 @@ ORDER BY started_at ASC, event_id ASC`
 			startedAt                                            time.Time
 			completedAt                                          sql.NullTime
 			httpStatus, durationMS, upstreamMS                   sql.NullInt64
+			conversionLevel, conversionDurationMS                int64
+			conversionDegraded                                   bool
 		)
 		if err := rows.Scan(
 			&eventID, &roundID, &startedAt, &completedAt,
@@ -112,6 +122,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&clientEndpoint, &clientProtocol,
 			&upstreamProtocol, &upstreamEndpoint,
 			&conversionMode,
+			&conversionLevel, &conversionDurationMS, &conversionDegraded, &ignoredFeatures, &unsupportedFeatures,
 			&inputTok, &outputTok, &totalTok,
 			&cachedIn, &cacheCreate,
 			&httpStatus, &outcome, &errorCode,
@@ -155,6 +166,11 @@ ORDER BY started_at ASC, event_id ASC`
 			upstreamProtocol,
 			upstreamEndpoint,
 			conversionMode,
+			strconv.FormatInt(conversionLevel, 10),
+			strconv.FormatInt(conversionDurationMS, 10),
+			strconv.FormatBool(conversionDegraded),
+			ignoredFeatures,
+			unsupportedFeatures,
 			strconv.FormatInt(inputTok, 10),
 			strconv.FormatInt(outputTok, 10),
 			strconv.FormatInt(totalTok, 10),

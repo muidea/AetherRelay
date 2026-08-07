@@ -604,6 +604,11 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		rec.UpstreamProtocol = round.UpstreamProtocol
 		rec.UpstreamEndpoint = round.UpstreamEndpoint
 		rec.ConversionMode = round.ConversionMode
+		rec.ConversionLevel = round.ConversionLevel
+		rec.ConversionDuration = round.ConversionDuration
+		rec.ConversionDegraded = round.ConversionDegraded
+		rec.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
+		rec.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		rec.UpstreamDuration = round.UpstreamDuration
 		rec.UpstreamStatus = round.UpstreamStatus
 		rec.UpstreamContentType = round.UpstreamContentType
@@ -881,6 +886,10 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	plan := plans[0]
+	if round != nil && plan.IsConversion() {
+		round.SetTransportPlan(RouteLabel(r), plan.ClientEndpoint, plan.ClientProtocol, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+		round.SetConversionLevel(plan.ConversionLevel)
+	}
 	if plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
 		// chatgptweb is an in-memory builtin provider, never a static
 		// cfg.Providers entry. Route it before looking up static providers.
@@ -973,6 +982,7 @@ func (h *Handler) writeArchivedError(w http.ResponseWriter, round *archive.Round
 		apiErr.ClientEndpoint = NormalizeClientEndpoint(r.URL.Path)
 	}
 	if round != nil {
+		round.SetUnsupportedFeatures(apiErr.UnsupportedFeatures)
 		if apiErr.ClientEndpoint == "" {
 			apiErr.ClientEndpoint = round.ClientEndpoint
 		}
@@ -1016,6 +1026,9 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	}
 	body = append(body, '\n')
 	if round != nil {
+		if len(apiErr.UnsupportedFeatures) > 0 {
+			round.UnsupportedFeatures = append([]string(nil), apiErr.UnsupportedFeatures...)
+		}
 		if err := h.writeArchiveResponse(round, "response.json", body); err != nil {
 			log.Printf("archive api error response: %v", err)
 		}
@@ -1059,17 +1072,18 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	}
 	defer r.Body.Close()
 	rawBody, rawModel, rawStream := parseRawRequestBody(body)
+	conversionBody := rawBody
 	if NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
 		var request map[string]any
 		if err := json.Unmarshal(body, &request); err == nil {
-			if err := h.applyModelReasoning(rawModel, request); err != nil {
-				h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
-				return
-			}
-			if metadata, ok := h.currentConfig().ModelMetadata[rawModel]; ok && metadata.ReasoningDeclared && metadata.ReasoningSupported {
-				if updated, err := json.Marshal(request); err == nil {
-					body = updated
-					rawBody = request
+			// Validate an explicitly supplied reasoning object before routing, but
+			// defer default-effort injection until we know the selected plan is
+			// native. A conversion candidate must not receive a synthetic
+			// reasoning field that it is required to reject.
+			if _, present := request["reasoning"]; present {
+				if err := h.applyModelReasoning(rawModel, request); err != nil {
+					h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
+					return
 				}
 			}
 		}
@@ -1085,6 +1099,33 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	plan := plans[0]
+	if !plan.IsConversion() {
+		nativeRequest := map[string]any{}
+		if err := json.Unmarshal(body, &nativeRequest); err == nil {
+			rawBody = nativeRequest
+		}
+		metadata, hasMetadata := h.currentConfig().ModelMetadata[rawModel]
+		_, hadReasoning := rawBody["reasoning"]
+		injectDefaultReasoning := hasMetadata && metadata.ReasoningDeclared && metadata.ReasoningSupported && !hadReasoning && metadata.ReasoningDefaultEffort != ""
+		if err := h.applyModelReasoning(rawModel, rawBody); err != nil {
+			h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
+			return
+		}
+		if injectDefaultReasoning {
+			if updated, err := json.Marshal(rawBody); err == nil {
+				body = updated
+				_ = h.writeArchiveRequest(round, body)
+				h.archiveAndLogClientRequest(round, r, len(body))
+			}
+		}
+	}
+	// Record the declared conversion plan before semantic preflight so a
+	// conversion_unsupported response still carries the real level in usage,
+	// archive and metrics. A later selected candidate overwrites this snapshot.
+	if round != nil && plan.IsConversion() {
+		round.SetTransportPlan(RouteLabel(r), plan.ClientEndpoint, plan.ClientProtocol, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+		round.SetConversionLevel(plan.ConversionLevel)
+	}
 	if plan.Mode == TransportModeChatGPTWebResponses && plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), rawStream)
 		h.handleChatGPTWebResponses(w, r, start, plan.RouteOwner, rawModel, rawStream, rawBody)
@@ -1115,6 +1156,53 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		}
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), true)
 		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, body, rawBody, true)
+		return
+	}
+	if hasTransportMode(plans, TransportModeResponsesToAnthropic) {
+		candidates, preflightErr := h.prepareOpenAIResponsesCandidates(plans, body, conversionBody, rawStream, r.URL.RawQuery, r.Method)
+		if len(candidates) == 0 {
+			if preflightErr != nil {
+				h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, *preflightErr)
+				return
+			}
+			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, APIError{Code: ErrorCodeConversionUnsupported, Message: "Responses to Anthropic conversion is unavailable", Feature: "responses_to_anthropic", UnsupportedFeatures: []string{"responses_to_anthropic"}})
+			return
+		}
+		result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
+		if err != nil {
+			if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+				h.settleConversionClientCanceled(round, r, selected.Plan.RouteOwner, rawModel, rawStream, start)
+				return
+			}
+			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, false, http.StatusBadGateway, err.Error())
+			return
+		}
+		if result.Cancel != nil {
+			defer result.Cancel()
+		}
+		defer result.Response.Body.Close()
+		h.archiveAndLogTransportPlan(round, r, selected.Plan, result.Provider, rawStream)
+		markConversionDegraded(round, selected.DegradedFeatures)
+		if selected.Plan.Mode == TransportModeNative {
+			h.handlePreparedNativeResponses(w, r, round, start, result, selected.Plan, rawModel, rawStream, rawBody)
+			return
+		}
+		if result.Response.StatusCode >= http.StatusBadRequest {
+			h.writeConversionUpstreamError(w, r, result.Response, round, start, selected.Plan, result.ProviderName, rawModel, rawStream)
+			return
+		}
+		if rawStream {
+			if err := h.handleResponsesToAnthropicStream(w, r, result.Response, round, start, result.ProviderName, rawModel, selected.ConversionCapability); err != nil {
+				log.Printf("responses→anthropic stream: %v", err)
+			}
+			return
+		}
+		h.handleResponsesToAnthropic(w, r, result.Response, round, start, result.ProviderName, rawModel, selected.ConversionCapability)
+		return
+	}
+	if plan.Mode == TransportModeAnthropicToResponses {
+		// This endpoint is handled by handleAnthropicMessages, not forwardRaw.
+		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, APIError{Code: ErrorCodeConversionUnsupported, Message: "Anthropic to Responses conversion must use the Messages handler", Feature: "anthropic_to_responses"})
 		return
 	}
 	if plan.Mode != TransportModeNative {
@@ -1241,6 +1329,34 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	duration := time.Since(start)
 	h.recordAndPrint(round, r, providerName, rawModel, rawStream, resp.StatusCode, duration, usage, "")
 	h.writeArchiveMetadata(round, providerName, rawModel, rawStream, resp.StatusCode, duration, usage, responsePath, "", "", "")
+}
+
+func hasTransportMode(plans []TransportPlan, mode string) bool {
+	for _, plan := range plans {
+		if plan.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) handlePreparedNativeResponses(w http.ResponseWriter, r *http.Request, round *archive.Round, start time.Time, result upstreamResult, plan TransportPlan, model string, stream bool, requestBody map[string]any) {
+	resp := result.Response
+	if stream && isEventStreamContentType(resp.Header.Get("Content-Type")) {
+		copyResponseHeader(w.Header(), resp.Header)
+		prepareSSEHeaders(w.Header())
+		w.WriteHeader(resp.StatusCode)
+		usage, fullPath, streamErr := h.copyAndArchiveRawStream(w, resp, round, result.ProviderName, result.Provider, model, requestBody, r.Context(), result.Cancel, plan.UpstreamEndpoint)
+		duration := time.Since(start)
+		errMessage := ""
+		if streamErr != nil {
+			errMessage = streamErr.Error()
+		}
+		h.recordAndPrintFail(round, r, result.ProviderName, model, true, resp.StatusCode, duration, usage, streamErr)
+		h.writeArchiveMetadata(round, result.ProviderName, model, true, resp.StatusCode, duration, usage, "response.sse", errMessage, fullPath, outcomeFromStreamFail(streamErr, resp.StatusCode))
+		return
+	}
+	h.handleBufferedResponse(w, resp, round, start, result.ProviderName, model, stream, requestBody, r)
 }
 
 func (h *Handler) applyModelReasoning(model string, body map[string]any) *APIError {
@@ -1602,12 +1718,14 @@ type upstreamResult struct {
 // may be skipped in favour of a lower native candidate without losing request
 // semantics or committing a response.
 type preparedHTTPCandidate struct {
-	Plan     TransportPlan
-	Provider config.Provider
-	Body     []byte
-	Stream   bool
-	RawQuery string
-	Method   string
+	Plan                 TransportPlan
+	Provider             config.Provider
+	Body                 []byte
+	Stream               bool
+	RawQuery             string
+	Method               string
+	ConversionCapability config.ConversionCapability
+	DegradedFeatures     []string
 }
 
 func (h *Handler) prepareOpenAIChatCandidates(plans []TransportPlan, raw []byte, body map[string]any, stream bool, rawQuery, method string) ([]preparedHTTPCandidate, *APIError) {
@@ -1685,9 +1803,182 @@ func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw [
 				continue
 			}
 			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost})
+		case TransportModeAnthropicToResponses:
+			if err := h.validateDeclaredConversionCapability(plan, body, stream); err != nil {
+				apiErr := conversionAPIError(plan, err)
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			capability, _ := h.declaredConversionCapability(plan)
+			conversionBody := h.withBoundedDefaultOutputLimit(plan, body)
+			encoded, degraded, err := buildResponsesFromAnthropicWithCapability(conversionBody, plan.ModelID, stream, capability)
+			if err != nil {
+				apiErr := conversionAPIError(plan, err)
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, RawQuery: rawQuery, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
 		}
 	}
 	return result, firstErr
+}
+
+func (h *Handler) prepareOpenAIResponsesCandidates(plans []TransportPlan, raw []byte, body map[string]any, stream bool, rawQuery, method string) ([]preparedHTTPCandidate, *APIError) {
+	result := make([]preparedHTTPCandidate, 0, len(plans))
+	var firstErr *APIError
+	for _, plan := range plans {
+		provider, ok := h.currentConfig().Providers[plan.RouteOwner]
+		if !ok || provider.Disabled {
+			continue
+		}
+		switch plan.Mode {
+		case TransportModeNative:
+			if plan.UpstreamProtocol == "openai" {
+				result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: raw, Stream: stream, RawQuery: rawQuery, Method: method})
+			}
+		case TransportModeResponsesToAnthropic:
+			if err := h.validateDeclaredConversionCapability(plan, body, stream); err != nil {
+				apiErr := conversionAPIError(plan, err)
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			capability, _ := h.declaredConversionCapability(plan)
+			conversionBody := h.withBoundedDefaultOutputLimit(plan, body)
+			encoded, degraded, err := buildAnthropicFromResponsesWithCapability(conversionBody, plan.ModelID, stream, capability)
+			if err != nil {
+				apiErr := conversionAPIError(plan, err)
+				if firstErr == nil {
+					firstErr = &apiErr
+				}
+				continue
+			}
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, RawQuery: rawQuery, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
+		}
+	}
+	return result, firstErr
+}
+
+func (h *Handler) withBoundedDefaultOutputLimit(plan TransportPlan, body map[string]any) map[string]any {
+	field := "max_output_tokens"
+	if plan.Mode == TransportModeAnthropicToResponses {
+		field = "max_tokens"
+	}
+	if _, exists := body[field]; exists {
+		return body
+	}
+	metadata, ok := h.currentConfig().ModelMetadata[plan.ModelID]
+	if !ok || metadata.MaxOutputTokens <= 0 || metadata.MaxOutputTokens >= 4096 {
+		return body
+	}
+	bounded := make(map[string]any, len(body)+1)
+	for key, value := range body {
+		bounded[key] = value
+	}
+	bounded[field] = metadata.MaxOutputTokens
+	return bounded
+}
+
+func (h *Handler) validateDeclaredConversionCapability(plan TransportPlan, body map[string]any, stream bool) error {
+	capability, err := h.declaredConversionCapability(plan)
+	if err != nil {
+		return err
+	}
+	if stream && !capability.Streaming {
+		return fmt.Errorf("stream")
+	}
+	needsTools := conversionRequestNeedsTools(plan.Mode, body)
+	if stream && needsTools {
+		return fmt.Errorf("streaming tools")
+	}
+	if needsTools && !capability.Tools {
+		return fmt.Errorf("tools")
+	}
+	metadata := h.currentConfig().ModelMetadata[plan.ModelID]
+	if metadata.MaxOutputTokens > 0 {
+		field := "max_output_tokens"
+		if plan.Mode == TransportModeAnthropicToResponses {
+			field = "max_tokens"
+		}
+		if raw, exists := body[field]; exists {
+			value, ok := numberAsInt(raw)
+			if !ok || value <= 0 || value > metadata.MaxOutputTokens {
+				return fmt.Errorf("%s exceeds model limit %d", field, metadata.MaxOutputTokens)
+			}
+		}
+	}
+	return nil
+}
+
+func (h *Handler) declaredConversionCapability(plan TransportPlan) (config.ConversionCapability, error) {
+	metadata, ok := h.currentConfig().ModelMetadata[plan.ModelID]
+	if !ok {
+		return config.ConversionCapability{}, fmt.Errorf("conversion capability is not declared")
+	}
+	capability, ok := metadata.ConversionCapabilities[plan.Mode]
+	if !ok || !conversionCapabilityUsable(plan.Mode, capability) {
+		return config.ConversionCapability{}, fmt.Errorf("conversion capability is not available")
+	}
+	return capability, nil
+}
+
+func markConversionDegraded(round *archive.Round, features []string) {
+	if round == nil || len(features) == 0 {
+		return
+	}
+	round.SetConversionDegraded(true)
+	round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, features...)))
+}
+
+func conversionRequestNeedsTools(direction string, body map[string]any) bool {
+	if hasNonEmptyConversionFeature(body["tools"]) {
+		return true
+	}
+	if choice, ok := body["tool_choice"].(string); ok {
+		if choice != "" && choice != "none" {
+			return true
+		}
+	} else if choice, ok := body["tool_choice"].(map[string]any); ok && len(choice) > 0 {
+		return true
+	}
+	if direction == TransportModeResponsesToAnthropic {
+		items, _ := body["input"].([]any)
+		for _, raw := range items {
+			if item, ok := raw.(map[string]any); ok {
+				typ, _ := item["type"].(string)
+				if typ == "function_call" || typ == "function_call_output" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	messages, _ := body["messages"].([]any)
+	for _, raw := range messages {
+		message, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hasNonEmptyConversionFeature(message["tool_calls"]) {
+			return true
+		}
+		if blocks, ok := message["content"].([]any); ok {
+			for _, rawBlock := range blocks {
+				if block, ok := rawBlock.(map[string]any); ok {
+					typ, _ := block["type"].(string)
+					if typ == "tool_use" || typ == "tool_result" {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (h *Handler) doPreparedHTTPCandidates(r *http.Request, round *archive.Round, candidates []preparedHTTPCandidate) (upstreamResult, preparedHTTPCandidate, error) {
@@ -1697,6 +1988,9 @@ func (h *Handler) doPreparedHTTPCandidates(r *http.Request, round *archive.Round
 		result, err := h.doUpstreamPath(r, round, candidate.Plan.RouteOwner, candidate.Provider, candidate.Body, len(candidate.Body), candidate.Stream, candidate.Plan.UpstreamEndpoint, candidate.RawQuery, candidate.Method)
 		if err != nil {
 			last, lastErr = candidate, err
+			if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+				return result, candidate, err
+			}
 			if index < len(candidates)-1 {
 				h.recordCandidateFailure(r, candidate.Plan, http.StatusBadGateway, result.Duration)
 			}
@@ -1747,8 +2041,11 @@ func (h *Handler) doNativeUpstreamCandidates(r *http.Request, round *archive.Rou
 		if err != nil {
 			lastErr = err
 			lastPlan = plan
+			if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+				return result, plan, err
+			}
 			if index < len(candidates)-1 && h.metricsRegistry != nil {
-				h.metricsRegistry.RecordRequestPlan(plan.RouteOwner, plan.ModelID, RouteLabel(r), http.StatusBadGateway, result.Duration, "upstream_failed", plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+				recordRequestPlanMetric(h.metricsRegistry, plan, RouteLabel(r), http.StatusBadGateway, result.Duration, "upstream_failed")
 			}
 			continue
 		}
@@ -1761,7 +2058,7 @@ func (h *Handler) doNativeUpstreamCandidates(r *http.Request, round *archive.Rou
 				return result, plan, nil
 			}
 			if h.metricsRegistry != nil {
-				h.metricsRegistry.RecordRequestPlan(plan.RouteOwner, plan.ModelID, RouteLabel(r), result.Response.StatusCode, result.Duration, "upstream_failed", plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+				recordRequestPlanMetric(h.metricsRegistry, plan, RouteLabel(r), result.Response.StatusCode, result.Duration, "upstream_failed")
 			}
 			_ = result.Response.Body.Close()
 			if result.Cancel != nil {
@@ -1811,7 +2108,20 @@ func (h *Handler) recordCandidateFailure(r *http.Request, plan TransportPlan, st
 	if h == nil || h.metricsRegistry == nil || strings.TrimSpace(plan.RouteOwner) == "" {
 		return
 	}
-	h.metricsRegistry.RecordRequestPlan(plan.RouteOwner, plan.ModelID, RouteLabel(r), status, duration, "upstream_failed", plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+	recordRequestPlanMetric(h.metricsRegistry, plan, RouteLabel(r), status, duration, "upstream_failed")
+}
+
+func recordRequestPlanMetric(reg metricsport.Port, plan TransportPlan, route string, status int, duration time.Duration, outcome string) {
+	if reg == nil {
+		return
+	}
+	if levelReporter, ok := reg.(metricsport.PlanLevelReporter); ok {
+		levelReporter.RecordRequestPlanWithLevel(plan.RouteOwner, plan.ModelID, route, status, duration, outcome,
+			plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode, plan.ConversionLevel)
+		return
+	}
+	reg.RecordRequestPlan(plan.RouteOwner, plan.ModelID, route, status, duration, outcome,
+		plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
 }
 
 func (h *Handler) doUpstream(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool) (upstreamResult, error) {
@@ -1866,7 +2176,9 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 		}
 		if h.metricsRegistry != nil {
 			h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptHeader)
-			h.metricsRegistry.RecordUpstreamError(providerName, -1)
+			if !errors.Is(err, context.Canceled) || !errors.Is(r.Context().Err(), context.Canceled) {
+				h.metricsRegistry.RecordUpstreamError(providerName, -1)
+			}
 		}
 		return upstreamResult{}, err
 	}
@@ -1874,7 +2186,7 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 	// 流式请求在写出首包前探测完整首行；失败直接返回，绝不切换 RouteOwner。
 	if stream && resp.StatusCode < 400 {
 		_, maxLine := h.streamLimits()
-		primed, peekErr := primeStreamBody(resp, h.currentConfig().StreamIdleTimeout, maxLine)
+		primed, peekErr := primeStreamBody(resp, h.currentConfig().StreamFirstEventTimeout, maxLine)
 		duration = time.Since(upstreamStart)
 		if peekErr != nil {
 			_ = resp.Body.Close()
@@ -1883,7 +2195,9 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 			}
 			if h.metricsRegistry != nil {
 				h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptFirstEvent)
-				h.metricsRegistry.RecordUpstreamError(providerName, -1)
+				if !errors.Is(peekErr, context.Canceled) || !errors.Is(r.Context().Err(), context.Canceled) {
+					h.metricsRegistry.RecordUpstreamError(providerName, -1)
+				}
 			}
 			return upstreamResult{}, peekErr
 		}
@@ -1901,8 +2215,9 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 	return upstreamResult{ProviderName: providerName, Provider: provider, Response: resp, Duration: duration, Cancel: cancel}, nil
 }
 
-// primeStreamBody 在 timeout 内读取上游流式响应的首行(必须含 \n),成功后把字节回填到 Body。
-// 复用 readSSELine 施加单行上限; partial EOF(无换行)视为首事件失败。
+// primeStreamBody 在 timeout 内读取上游首个有效 SSE data 事件，成功后把探测字节回填到 Body。
+// 空行、event 行和 comment 不构成首事件，不能用来无限续期首事件超时。
+// 非 SSE 响应仍只探测首个完整行，由后续协议处理器给出 Content-Type 错误。
 // timeout<=0 时使用 30s 兜底,避免永久阻塞。
 func primeStreamBody(resp *http.Response, timeout time.Duration, maxLine int64) (*http.Response, error) {
 	if resp == nil || resp.Body == nil {
@@ -1922,15 +2237,31 @@ func primeStreamBody(resp *http.Response, timeout time.Duration, maxLine int64) 
 	ch := make(chan peekResult, 1)
 	go func() {
 		reader := bufio.NewReader(resp.Body)
-		line, err := readSSELine(reader, maxLine)
-		// 必须读到完整换行; partial EOF 不视为成功。
-		if err != nil {
-			ch <- peekResult{prefix: line, err: err}
-			return
-		}
-		if len(line) == 0 || line[len(line)-1] != '\n' {
-			ch <- peekResult{err: fmt.Errorf("upstream stream closed before complete first SSE line")}
-			return
+		var prefix []byte
+		requireDataEvent := isEventStreamContentType(resp.Header.Get("Content-Type"))
+		for {
+			line, err := readSSELine(reader, maxLine)
+			// 必须读到完整换行; partial EOF 不视为成功。
+			if err != nil {
+				ch <- peekResult{prefix: prefix, err: err}
+				return
+			}
+			if len(line) == 0 || line[len(line)-1] != '\n' {
+				ch <- peekResult{err: fmt.Errorf("upstream stream closed before complete first SSE line")}
+				return
+			}
+			prefix = append(prefix, line...)
+			if int64(len(prefix)) > maxLine*4 {
+				ch <- peekResult{err: fmt.Errorf("upstream stream preamble exceeds limit of %d bytes", maxLine*4)}
+				return
+			}
+			if !requireDataEvent {
+				break
+			}
+			trimmed := strings.TrimSpace(string(line))
+			if strings.HasPrefix(trimmed, "data:") && strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")) != "" {
+				break
+			}
 		}
 		// 把 reader 缓冲中已预读的内容拼进 prefix,再接回原始 Body。
 		var extra []byte
@@ -1938,7 +2269,7 @@ func primeStreamBody(resp *http.Response, timeout time.Duration, maxLine int64) 
 			extra = make([]byte, buffered)
 			_, _ = io.ReadFull(reader, extra)
 		}
-		prefix := append(append([]byte{}, line...), extra...)
+		prefix = append(prefix, extra...)
 		ch <- peekResult{prefix: prefix}
 	}()
 
@@ -1960,7 +2291,7 @@ func primeStreamBody(resp *http.Response, timeout time.Duration, maxLine int64) 
 		return resp, nil
 	case <-timer.C:
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("upstream stream first byte timeout after %s", timeout.Truncate(time.Millisecond))
+		return nil, fmt.Errorf("upstream stream first event timeout after %s", timeout.Truncate(time.Millisecond))
 	}
 }
 
@@ -2187,6 +2518,9 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 		return nil, &APIError{Code: ErrorCodeProviderUnavailable, Message: fmt.Sprintf("all providers for model %q are unhealthy", model), Model: model, ClientEndpoint: first.ClientEndpoint, ClientProtocol: first.ClientProtocol}
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
+		if left, right := transportPlanSemanticRank(eligible[i]), transportPlanSemanticRank(eligible[j]); left != right {
+			return left < right
+		}
 		if eligible[i].Priority != eligible[j].Priority {
 			return eligible[i].Priority > eligible[j].Priority
 		}
@@ -2305,6 +2639,9 @@ func (h *Handler) recordAndPrint(round *archive.Round, r *http.Request, provider
 
 func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, fail *streamFail) {
 	outcome := outcomeFromStreamFail(fail, status)
+	if status == 0 && outcome == string(streamKindClientCanceled) {
+		status = 499
+	}
 	errMessage := ""
 	errorCode := ""
 	if fail != nil {
@@ -2316,25 +2653,33 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 		}
 	}
 	clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode := "", "", "", ""
+	conversionLevel := 0
 	if round != nil {
 		clientEndpoint = round.ClientEndpoint
 		upstreamProtocol = round.UpstreamProtocol
 		upstreamEndpoint = round.UpstreamEndpoint
 		conversionMode = round.ConversionMode
+		conversionLevel = round.ConversionLevel
 	}
 	// 结算 DuckDB usage event(ServeHTTP 已 Start)。
 	eventID := ""
 	if r != nil {
 		eventID = usageEventIDFromContext(r.Context())
 	}
-	if h.completeUsage(r, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, round) && h.metricsRegistry != nil && r != nil {
+	usageCompleted := h.completeUsage(r, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, round)
+	if usageCompleted && h.metricsRegistry != nil && r != nil {
 		h.metricsRegistry.RecordClientUsage(clientauth.ClientIdentityFromContext(r.Context()).KeyID, tok.PromptTokens, tok.CompletionTokens)
 	}
 
 	if h.metricsRegistry != nil {
 		route := RouteLabel(r)
-		h.metricsRegistry.RecordRequestPlan(provider, model, route, status, duration, outcome,
-			clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode)
+		if levelReporter, ok := h.metricsRegistry.(metricsport.PlanLevelReporter); ok {
+			levelReporter.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome,
+				clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode, conversionLevel)
+		} else {
+			h.metricsRegistry.RecordRequestPlan(provider, model, route, status, duration, outcome,
+				clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode)
+		}
 		// 普通 HTTP upstream 已在转发器中计数；ChatGPT Web 的 executor
 		// 路径没有该入口，因此也要记录其尚未提交响应的上游失败。
 		if shouldCountUpstreamError(fail, stream) {
@@ -2343,8 +2688,20 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 			h.metricsRegistry.RecordUpstreamError(provider, -1) // -1 = ChatGPT Web upstream failure
 		}
 		h.metricsRegistry.RecordTokens(provider, model, tok.PromptTokens, tok.CompletionTokens, tok.CachedInputTokens, tok.CacheCreationInputTokens)
+		if usageCompleted && round != nil && round.ConversionMode != "" && round.ConversionMode != TransportModeNative {
+			if reporter, ok := h.metricsRegistry.(metricsport.ConversionReporter); ok {
+				reporter.RecordConversion(provider, model, round.ClientProtocol, round.UpstreamProtocol, round.ConversionMode, round.ConversionLevel, round.UpstreamStatus, round.ConversionDuration, round.ConversionDegraded, tok.Estimated, round.IgnoredFeatures, round.UnsupportedFeatures)
+			}
+		}
 	}
 	h.printSummary(round, provider, model, stream, status, duration, tok, errMessage)
+}
+
+func (h *Handler) settleConversionClientCanceled(round *archive.Round, r *http.Request, provider, model string, stream bool, start time.Time) {
+	duration := time.Since(start)
+	fail := newStreamFail(streamKindClientCanceled, "client canceled", context.Canceled, false)
+	h.recordAndPrintFail(round, r, provider, model, stream, 499, duration, tokenUsage{}, fail)
+	h.writeArchiveMetadata(round, provider, model, stream, 499, duration, tokenUsage{}, "", fail.Error(), "", string(streamKindClientCanceled))
 }
 
 func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model string, stream bool, status int, duration time.Duration, usage tokenUsage, responsePath, message, fullResponsePath, outcome string) {
@@ -2393,7 +2750,11 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.UpstreamProtocol = round.UpstreamProtocol
 		meta.UpstreamEndpoint = round.UpstreamEndpoint
 		meta.ConversionMode = round.ConversionMode
+		meta.ConversionLevel = round.ConversionLevel
 		meta.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
+		meta.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
+		meta.ConversionDurationMS = round.ConversionDuration.Milliseconds()
+		meta.ConversionDegraded = round.ConversionDegraded
 	}
 	if round != nil {
 		if round.HasFile("request.meta.json") {

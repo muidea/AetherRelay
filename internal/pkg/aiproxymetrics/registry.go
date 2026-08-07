@@ -41,6 +41,9 @@ type requestKey struct {
 	Provider, Model, Route, Status, Outcome string
 	// TransportPlan 有界枚举 label(空值归一为 unknown,避免基数爆炸)。
 	ClientEndpoint, UpstreamProtocol, UpstreamEndpoint, ConversionMode string
+	// ConversionLevel is the validated model/direction capability level. Keep
+	// it bounded to 0..3 so it cannot create unbounded Prometheus cardinality.
+	ConversionLevel int
 }
 
 // tokenKey 是 token 计数器的复合 label。
@@ -51,6 +54,16 @@ type tokenKey struct {
 // errorKey 是 upstream 错误计数的复合 label。
 type errorKey struct {
 	Provider, StatusCode string
+}
+
+type conversionKey struct {
+	Provider, Model, ClientProtocol, UpstreamProtocol, Mode string
+	Level, UpstreamStatus                                   int
+	Degraded, Estimated                                     bool
+}
+
+type conversionFeatureKey struct {
+	Provider, Model, Mode, Kind, Feature string
 }
 
 // clientUsageKey 只有配置内受控的 api_key_id 与 default，label 基数有界。
@@ -91,6 +104,11 @@ type Registry struct {
 	upstreamAttempts map[string]uint64 // provider -> total attempts
 	providerHealth   map[string]providerHealth
 	healthSamples    map[string][]healthSample
+
+	conversionCount         map[conversionKey]uint64
+	conversionDurationSum   map[conversionKey]float64
+	conversionDurationCount map[conversionKey]uint64
+	conversionFeatures      map[conversionFeatureKey]uint64
 
 	clientRequests          map[clientUsageKey]uint64
 	clientInput             map[clientUsageKey]uint64
@@ -135,6 +153,10 @@ func NewRegistry() *Registry {
 		upstreamAttempts:          map[string]uint64{},
 		providerHealth:            map[string]providerHealth{},
 		healthSamples:             map[string][]healthSample{},
+		conversionCount:           map[conversionKey]uint64{},
+		conversionDurationSum:     map[conversionKey]float64{},
+		conversionDurationCount:   map[conversionKey]uint64{},
+		conversionFeatures:        map[conversionFeatureKey]uint64{},
 		clientRequests:            map[clientUsageKey]uint64{},
 		clientInput:               map[clientUsageKey]uint64{},
 		clientOutput:              map[clientUsageKey]uint64{},
@@ -142,6 +164,54 @@ func NewRegistry() *Registry {
 		usageWriteErr:             map[string]uint64{},
 		usageHealthy:              true,
 		knownModels:               map[string]map[string]struct{}{},
+	}
+}
+
+func (r *Registry) RecordConversion(provider, model, clientProtocol, upstreamProtocol, conversionMode string, conversionLevel, upstreamStatus int, duration time.Duration, degraded, estimated bool, ignoredFeatures, unsupportedFeatures []string) {
+	if r == nil || conversionMode == "" || conversionMode == "native" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	model = r.normalizeModelLabel(provider, model)
+	key := conversionKey{
+		Provider: provider, Model: model,
+		ClientProtocol: boundProtocolLabel(clientProtocol), UpstreamProtocol: boundProtocolLabel(upstreamProtocol),
+		Mode: boundModeLabel(conversionMode), Level: boundConversionLevel(conversionLevel),
+		UpstreamStatus: boundConversionStatus(upstreamStatus), Degraded: degraded, Estimated: estimated,
+	}
+	r.conversionCount[key]++
+	r.conversionDurationSum[key] += duration.Seconds()
+	r.conversionDurationCount[key]++
+	r.recordConversionFeaturesLocked(provider, model, key.Mode, "ignored", ignoredFeatures)
+	r.recordConversionFeaturesLocked(provider, model, key.Mode, "unsupported", unsupportedFeatures)
+}
+
+func (r *Registry) recordConversionFeaturesLocked(provider, model, mode, kind string, features []string) {
+	seen := map[string]struct{}{}
+	for _, feature := range features {
+		feature = boundConversionFeature(feature)
+		if _, exists := seen[feature]; exists {
+			continue
+		}
+		seen[feature] = struct{}{}
+		r.conversionFeatures[conversionFeatureKey{Provider: provider, Model: model, Mode: mode, Kind: kind, Feature: feature}]++
+	}
+}
+
+func boundConversionStatus(status int) int {
+	if status < 100 || status > 599 {
+		return 0
+	}
+	return status
+}
+
+func boundConversionFeature(feature string) string {
+	switch strings.TrimSpace(feature) {
+	case "reasoning", "thinking", "reasoning_output", "thinking_output", "tools", "tool_choice", "function_call", "function_call_output", "tool_use", "tool_result", "stream", "max_output_tokens", "max_tokens", "text.format", "previous_response_id", "image", "document", "structured_output", "continuation", "unsupported_feature", "unsupported_content", "unsupported_role":
+		return strings.TrimSpace(feature)
+	default:
+		return "_other"
 	}
 }
 
@@ -307,11 +377,18 @@ func (r *Registry) ReserveModels(provider string, models []string) {
 // RecordRequest 记录一次完成的请求(包含 duration)。
 // status 归一为 2xx/3xx/4xx/5xx;outcome 描述业务结果(空则 success)。
 func (r *Registry) RecordRequest(provider, model, route string, status int, duration time.Duration, outcome string) {
-	r.RecordRequestPlan(provider, model, route, status, duration, outcome, "", "", "", "")
+	r.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome, "", "", "", "", 0)
 }
 
 // RecordRequestPlan 记录请求,并附带 TransportPlan 有界 label。
 func (r *Registry) RecordRequestPlan(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string) {
+	r.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode, 0)
+}
+
+// RecordRequestPlanWithLevel records a request with the validated conversion
+// capability level. The legacy RecordRequestPlan API remains available and
+// records level 0 for callers that do not have a conversion declaration.
+func (r *Registry) RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int) {
 	if r == nil {
 		return
 	}
@@ -325,6 +402,7 @@ func (r *Registry) RecordRequestPlan(provider, model, route string, status int, 
 		Provider: provider, Model: model, Route: route, Status: statusBucket(status), Outcome: outcome,
 		ClientEndpoint: boundEndpointLabel(clientEndpoint), UpstreamProtocol: boundProtocolLabel(upstreamProtocol),
 		UpstreamEndpoint: boundEndpointLabel(upstreamEndpoint), ConversionMode: boundModeLabel(conversionMode),
+		ConversionLevel: boundConversionLevel(conversionLevel),
 	}
 	r.requestCount[key]++
 	if provider != "" && shouldTrackProviderHealth(status, outcome) {
@@ -732,11 +810,18 @@ func boundProtocolLabel(p string) string {
 
 func boundModeLabel(m string) string {
 	switch strings.TrimSpace(m) {
-	case "native", "openai_to_anthropic", "anthropic_to_openai":
+	case "native", "openai_to_anthropic", "anthropic_to_openai", "responses_to_anthropic", "anthropic_to_responses":
 		return strings.TrimSpace(m)
 	case "":
 		return "unknown"
 	default:
 		return "other"
 	}
+}
+
+func boundConversionLevel(level int) int {
+	if level < 0 || level > 3 {
+		return 0
+	}
+	return level
 }

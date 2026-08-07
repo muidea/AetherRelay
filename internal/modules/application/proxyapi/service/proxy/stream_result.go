@@ -94,6 +94,14 @@ func streamFailFromMessage(msg string) *streamFail {
 	kind := streamKindError
 	lower := strings.ToLower(msg)
 	switch {
+	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "client canceled"):
+		kind = streamKindClientCanceled
+	case strings.Contains(lower, "idle timeout") || strings.Contains(lower, "first event timeout") || strings.Contains(lower, "first/next event timeout"):
+		kind = streamKindIdleTimeout
+	case strings.Contains(lower, "exceeds") || strings.Contains(lower, "limit"):
+		kind = streamKindLimitExceeded
+	case strings.Contains(lower, "without terminal") || strings.Contains(lower, "closed before") || strings.Contains(lower, "unexpected eof"):
+		kind = streamKindUpstreamTrunc
 	case strings.Contains(lower, "conversion") || strings.Contains(lower, "protocol conversion") || strings.Contains(lower, "conversion_unsupported"):
 		kind = streamKindConversion
 	case strings.Contains(lower, "invalid sse") || strings.Contains(lower, "protocol "):

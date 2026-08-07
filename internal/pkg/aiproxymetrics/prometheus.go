@@ -29,6 +29,10 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 		cacheCreationTokens:     copyTokenKeys(r.cacheCreationTokens),
 		cacheHitRate:            computeCacheHitRateLocked(r),
 		upstreamErrors:          copyErrorKeys(r.upstreamErrors),
+		conversionCount:         maps.Clone(r.conversionCount),
+		conversionDurationSum:   maps.Clone(r.conversionDurationSum),
+		conversionDurationCount: maps.Clone(r.conversionDurationCount),
+		conversionFeatures:      maps.Clone(r.conversionFeatures),
 		clientRequests:          copyClientKeys(r.clientRequests),
 		clientInput:             copyClientKeys(r.clientInput),
 		clientOutput:            copyClientKeys(r.clientOutput),
@@ -78,6 +82,15 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 	writeCounter(w, "ai_proxy_upstream_errors_total",
 		"Total upstream error responses, by provider and HTTP status code.",
 		snapshot.upstreamErrors, errorKeyLabels)
+
+	writeCounter(w, "ai_proxy_conversion_requests_total",
+		"Total protocol conversion requests by bounded conversion contract labels.", snapshot.conversionCount, conversionKeyLabels)
+	writeCounterFloat(w, "ai_proxy_conversion_duration_seconds_sum",
+		"Sum of local conversion processing durations in seconds.", snapshot.conversionDurationSum, conversionKeyLabels)
+	writeCounter(w, "ai_proxy_conversion_duration_seconds_count",
+		"Number of local conversion processing duration observations.", snapshot.conversionDurationCount, conversionKeyLabels)
+	writeCounter(w, "ai_proxy_conversion_features_total",
+		"Total bounded ignored or unsupported conversion features.", snapshot.conversionFeatures, conversionFeatureKeyLabels)
 
 	writeCounter(w, "ai_proxy_client_requests_total",
 		"Total completed client requests by configured API key ID.", snapshot.clientRequests, clientUsageKeyLabels)
@@ -150,6 +163,10 @@ type prometheusSnapshot struct {
 	cacheCreationTokens     map[tokenKey]uint64
 	cacheHitRate            map[tokenKey]float64
 	upstreamErrors          map[errorKey]uint64
+	conversionCount         map[conversionKey]uint64
+	conversionDurationSum   map[conversionKey]float64
+	conversionDurationCount map[conversionKey]uint64
+	conversionFeatures      map[conversionFeatureKey]uint64
 	clientRequests          map[clientUsageKey]uint64
 	clientInput             map[clientUsageKey]uint64
 	clientOutput            map[clientUsageKey]uint64
@@ -225,6 +242,7 @@ func requestKeyLabels(k requestKey) string {
 		"upstream_protocol", k.UpstreamProtocol,
 		"upstream_endpoint", k.UpstreamEndpoint,
 		"conversion_mode", k.ConversionMode,
+		"conversion_level", strconv.Itoa(k.ConversionLevel),
 	)
 }
 
@@ -234,6 +252,20 @@ func tokenKeyLabels(k tokenKey) string {
 
 func errorKeyLabels(k errorKey) string {
 	return formatLabels("provider", k.Provider, "status_code", k.StatusCode)
+}
+
+func conversionKeyLabels(k conversionKey) string {
+	return formatLabels(
+		"provider", k.Provider, "model", k.Model,
+		"client_protocol", k.ClientProtocol, "upstream_protocol", k.UpstreamProtocol,
+		"conversion_mode", k.Mode, "conversion_level", strconv.Itoa(k.Level),
+		"upstream_status", strconv.Itoa(k.UpstreamStatus),
+		"degraded", strconv.FormatBool(k.Degraded), "estimated", strconv.FormatBool(k.Estimated),
+	)
+}
+
+func conversionFeatureKeyLabels(k conversionFeatureKey) string {
+	return formatLabels("provider", k.Provider, "model", k.Model, "conversion_mode", k.Mode, "kind", k.Kind, "feature", k.Feature)
 }
 
 func clientUsageKeyLabels(k clientUsageKey) string { return formatLabels("api_key_id", string(k)) }

@@ -14,6 +14,9 @@ server:
   log_format: text
   request_timeout_seconds: 300
   stream_idle_timeout_seconds: 300
+  # Converted SSE first-event deadline. Keep it shorter than the inter-event
+  # idle window so an upstream that never starts cannot occupy a request.
+  stream_first_event_timeout_seconds: 30
   upstream_body_idle_timeout_seconds: 180
   # 可观测性端点(/metrics, /stats)访问控制。默认仅 loopback 可访问,
   # 在受信内网可以设为 true 开放给 Prometheus / TUI 拉取。
@@ -107,6 +110,9 @@ codex_oauth:
 # 直连 Provider 通过管理台创建；定义与 API Key 使用 AI_PROXY_CREDENTIAL_KEY
 # 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth
 # 是账号池注入的内建 Provider，模型来自账号池发现结果。
+# Responses↔Anthropic 转换除 model_metadata 实现声明外，还必须在对应管理型
+# Provider 的 conversion_releases 中按 exact model/direction 设置 enabled=true、
+# verified=true；该发布门闩可在 Provider 编辑页维护，未声明默认关闭。
 
 # 可选模型元数据目录（所有 Provider 共用）。model ID 严格区分大小写（exact match）。
 # enabled provider 的精确 models 与账号池发现结果决定模型是否存在；
@@ -119,12 +125,35 @@ model_metadata:
     reasoning_supported: true
     reasoning_default_effort: low
     reasoning_efforts: [none, low, high, max]
+    native_responses_tools: true
+    native_responses_images: false
   deepseek-v4-flash:
     context_window_tokens: 1000000
     max_output_tokens: 65536
     reasoning_supported: true
     reasoning_default_effort: low
     reasoning_efforts: [none, low, high, max]
+    native_responses_tools: true
+    native_responses_images: false
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 3
+        text: true
+        tools: true
+        images: false
+        streaming: true
+        reasoning: true
+        reasoning_adapter: responses_to_anthropic_adaptive
+        reasoning_target_effort: low
+      anthropic_to_responses:
+        level: 3
+        text: true
+        tools: true
+        images: false
+        streaming: true
+        reasoning: true
+        reasoning_adapter: anthropic_to_responses_effort
+        reasoning_target_effort: low
   gpt-5.5:
     context_window_tokens: 400000
     max_output_tokens: 128000

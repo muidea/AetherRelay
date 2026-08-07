@@ -65,6 +65,14 @@ func (c client) RecordRequestPlan(provider, model, route string, status int, dur
 	c.record(RecordCommand{Kind: RequestPlan, Provider: provider, Model: model, Route: route, Status: status, Duration: duration, Outcome: outcome, ClientEndpoint: clientEndpoint, UpstreamProtocol: upstreamProtocol, UpstreamEndpoint: upstreamEndpoint, ConversionMode: conversionMode})
 }
 
+func (c client) RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int) {
+	c.record(RecordCommand{Kind: RequestPlan, Provider: provider, Model: model, Route: route, Status: status, Duration: duration, Outcome: outcome, ClientEndpoint: clientEndpoint, UpstreamProtocol: upstreamProtocol, UpstreamEndpoint: upstreamEndpoint, ConversionMode: conversionMode, ConversionLevel: conversionLevel})
+}
+
+func (c client) RecordConversion(provider, model, clientProtocol, upstreamProtocol, conversionMode string, conversionLevel, upstreamStatus int, duration time.Duration, degraded, estimated bool, ignoredFeatures, unsupportedFeatures []string) {
+	c.record(RecordCommand{Kind: Conversion, Provider: provider, Model: model, ClientProtocol: clientProtocol, UpstreamProtocol: upstreamProtocol, ConversionMode: conversionMode, ConversionLevel: conversionLevel, UpstreamStatus: upstreamStatus, Duration: duration, Degraded: degraded, Estimated: estimated, IgnoredFeatures: append([]string(nil), ignoredFeatures...), UnsupportedFeatures: append([]string(nil), unsupportedFeatures...)})
+}
+
 func (c client) RecordTokens(provider, model string, input, output, cached, cacheCreation int) {
 	c.record(RecordCommand{Kind: Tokens, Provider: provider, Model: model, Input: input, Output: output, Cached: cached, CacheCreation: cacheCreation})
 }

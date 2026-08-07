@@ -102,7 +102,9 @@ func (s *MetricsRuntime) handleRecord(ev event.Event, _ event.Result) {
 	case metricsevents.UsageStoreHealthy:
 		registry.SetUsageStoreHealthy(command.Healthy)
 	case metricsevents.RequestPlan:
-		registry.RecordRequestPlan(command.Provider, command.Model, command.Route, command.Status, command.Duration, command.Outcome, command.ClientEndpoint, command.UpstreamProtocol, command.UpstreamEndpoint, command.ConversionMode)
+		registry.RecordRequestPlanWithLevel(command.Provider, command.Model, command.Route, command.Status, command.Duration, command.Outcome, command.ClientEndpoint, command.UpstreamProtocol, command.UpstreamEndpoint, command.ConversionMode, command.ConversionLevel)
+	case metricsevents.Conversion:
+		registry.RecordConversion(command.Provider, command.Model, command.ClientProtocol, command.UpstreamProtocol, command.ConversionMode, command.ConversionLevel, command.UpstreamStatus, command.Duration, command.Degraded, command.Estimated, command.IgnoredFeatures, command.UnsupportedFeatures)
 	case metricsevents.Tokens:
 		registry.RecordTokens(command.Provider, command.Model, command.Input, command.Output, command.Cached, command.CacheCreation)
 	case metricsevents.UpstreamAttempt:

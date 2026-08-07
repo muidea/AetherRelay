@@ -100,12 +100,11 @@ curl -sS http://127.0.0.1:8080/v1/chat/completions \
 | `/v1/images/generations` | 图片生成能力 |
 | `/v1/images/edits` | 图片编辑能力 |
 
-协议转换只保证网关文档声明的基础语义。工具调用、多模态、`response_format` / JSON Schema
-等高级能力，不应仅根据端点名称假定支持。
+协议转换按 `/v1/models` 返回的方向化 `capabilities.conversions` 和 `level` 开放：Level 1 为非流式纯文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools。该投影要求模型实现 capability 与至少一个具体 Provider 的 `provider/model/direction` 验证发布门闩同时通过；端点名称或模型级声明本身不能推出转换等级。
 
 对于 `/v1/responses`，需要区分两类候选：
 
-- 受限投影或跨协议转换只保证基础文本能力；遇到 JSON Schema、`response_format`、tools 等改变结果语义的字段，网关应在访问上游前返回 `conversion_unsupported`，不得静默删除或改写。
+- 受限投影或跨协议转换只保证声明等级；未声明的 tools、并行工具控制、多模态、thinking/reasoning、JSON Schema、`response_format`、continuation、`metadata`/provider-specific 字段等改变结果语义的字段，网关会在访问上游前返回 `conversion_unsupported`，不得静默删除或改写。配置了方向专用 reasoning adapter 时，客户端 reasoning/thinking 控制映射到目标协议的固定 effort，但具体 effort/budget 不跨协议换算；上游 reasoning/thinking 输出块和 delta 只省略并标记 `conversion_degraded`，不转成普通文本。Level 3 的 tools 仅限非流式 function 定义/call/result，流式工具仍拒绝。
 - OpenAI 原生 Responses 候选可以支持额外的原生能力（例如 `gpt-5.5` 的 JSON Schema Structured Outputs），但该能力必须由 provider/model 的独立 capability 验证和声明；不能仅凭 `responses` 端点标记推导。
 
 因此，应用需要 JSON Schema 时，应选择已明确声明该能力的原生候选；不能因为模型同时出现在 `/v1/responses` 目录中，就假定所有候选都支持 JSON Schema。

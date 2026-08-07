@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,23 +58,24 @@ func TestMigrationFirstAndIdempotent(t *testing.T) {
 	}
 	defer s2.Close()
 
-	var ver int
-	if err := s2.db.QueryRow(`SELECT version FROM schema_migrations WHERE version = 1`).Scan(&ver); err != nil {
-		t.Fatalf("read migration: %v", err)
+	var version int
+	var name string
+	var count int
+	if err := s2.db.QueryRow(`SELECT version, name FROM schema_migrations`).Scan(&version, &name); err != nil {
+		t.Fatalf("read schema version: %v", err)
 	}
-	if ver != 1 {
-		t.Fatalf("version = %d", ver)
+	if version != currentSchemaVersion || name != currentSchemaName {
+		t.Fatalf("schema = %d/%q", version, name)
 	}
-	if err := s2.db.QueryRow(`SELECT version FROM schema_migrations WHERE version = 2`).Scan(&ver); err != nil || ver != 2 {
-		t.Fatalf("migration v2 = %d, err=%v", ver, err)
+	if err := s2.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("schema version rows = %d, err=%v", count, err)
 	}
 }
 
-func TestUnknownHigherSchemaVersionFailFast(t *testing.T) {
+func TestHistoricalSchemaIsResetToFinalV1(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "future.duckdb")
+	path := filepath.Join(dir, "historical.duckdb")
 
-	// 先创建带更高版本的库。
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
@@ -86,17 +88,45 @@ CREATE TABLE schema_migrations (
 )`); err != nil {
 		t.Fatalf("create mig: %v", err)
 	}
+	if _, err := db.Exec(`CREATE TABLE usage_events (
+event_id VARCHAR PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL, usage_date DATE NOT NULL,
+api_key_id VARCHAR NOT NULL, state VARCHAR NOT NULL
+)`); err != nil {
+		t.Fatalf("create historical usage_events: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO usage_events VALUES ('old-event', now(), current_date, 'old-key', 'started')`); err != nil {
+		t.Fatalf("insert historical event: %v", err)
+	}
 	if _, err := db.Exec(
-		`INSERT INTO schema_migrations(version, name, applied_at) VALUES (99, 'future', ?)`,
+		`INSERT INTO schema_migrations(version, name, applied_at) VALUES (5, 'upstream_observability_v5', ?)`,
 		time.Now().UTC(),
 	); err != nil {
-		t.Fatalf("insert future: %v", err)
+		t.Fatalf("insert historical version: %v", err)
 	}
 	_ = db.Close()
 
-	_, err = OpenDuckDB(testCfg(path))
-	if err == nil {
-		t.Fatal("expected fail-fast on unknown higher schema version")
+	store, err := OpenDuckDB(testCfg(path))
+	if err != nil {
+		t.Fatalf("reset historical schema: %v", err)
+	}
+	defer store.Close()
+	var version int
+	var name string
+	if err := store.db.QueryRow(`SELECT version, name FROM schema_migrations`).Scan(&version, &name); err != nil {
+		t.Fatal(err)
+	}
+	if version != currentSchemaVersion || name != currentSchemaName {
+		t.Fatalf("schema = %d/%q", version, name)
+	}
+	var oldEvents int
+	if err := store.db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'old-event'`).Scan(&oldEvents); err != nil {
+		t.Fatal(err)
+	}
+	if oldEvents != 0 {
+		t.Fatalf("historical events retained = %d", oldEvents)
+	}
+	if err := store.Start(context.Background(), StartRecord{EventID: "new-event", StartedAt: time.Now().UTC(), APIKeyID: "new-key"}); err != nil {
+		t.Fatalf("final schema is not writable: %v", err)
 	}
 }
 
@@ -137,7 +167,12 @@ func TestCompleteOnlyUpdatesStarted(t *testing.T) {
 		Provider: "deepseek", Model: "flash",
 		InputTokens: 10, OutputTokens: 5,
 		HTTPStatus: 200, Outcome: "success",
-		Duration: 100 * time.Millisecond,
+		Duration:            100 * time.Millisecond,
+		ConversionMode:      "responses_to_anthropic",
+		ConversionLevel:     3,
+		ConversionDegraded:  true,
+		IgnoredFeatures:     []string{"reasoning_output"},
+		UnsupportedFeatures: []string{"images"},
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -152,6 +187,14 @@ func TestCompleteOnlyUpdatesStarted(t *testing.T) {
 	}
 	if state != StateCompleted || total != 15 || provider != "deepseek" {
 		t.Fatalf("state=%s total=%d provider=%s", state, total, provider)
+	}
+	page, err := s.Events(ctx, EventFilter{UsageFilter: UsageFilter{From: now.Add(-time.Hour), To: now.Add(time.Hour)}, PageSize: 10})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("events=%+v err=%v", page, err)
+	}
+	event := page.Events[0]
+	if !event.ConversionDegraded || event.ConversionLevel != 3 || strings.Join(event.IgnoredFeatures, ",") != "reasoning_output" || strings.Join(event.UnsupportedFeatures, ",") != "images" {
+		t.Fatalf("conversion observability=%+v", event)
 	}
 }
 
@@ -449,6 +492,7 @@ func TestExportCSV(t *testing.T) {
 		Provider: "openai", Model: "gpt",
 		InputTokens: 3, OutputTokens: 4,
 		HTTPStatus: 200, Outcome: "success",
+		IgnoredFeatures: []string{"thinking_output"},
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -473,6 +517,16 @@ func TestExportCSV(t *testing.T) {
 	}
 	if rows[1][0] != "evt-x" {
 		t.Fatalf("row event_id = %s", rows[1][0])
+	}
+	headerIndex := map[string]int{}
+	for i, header := range rows[0] {
+		headerIndex[header] = i
+	}
+	if _, ok := headerIndex["ignored_features"]; !ok {
+		t.Fatalf("ignored_features missing from CSV header: %v", rows[0])
+	}
+	if got := rows[1][headerIndex["ignored_features"]]; !strings.Contains(got, "thinking_output") {
+		t.Fatalf("ignored_features CSV value = %q", got)
 	}
 	// 不包含密钥类字段名。
 	for _, h := range rows[0] {

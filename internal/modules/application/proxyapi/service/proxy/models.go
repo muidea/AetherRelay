@@ -31,7 +31,34 @@ type ModelRecord struct {
 }
 
 type ModelCapabilities struct {
-	Reasoning *ReasoningCapability `json:"reasoning,omitempty"`
+	Reasoning   *ReasoningCapability    `json:"reasoning,omitempty"`
+	Native      *NativeCapabilities     `json:"native,omitempty"`
+	Conversions *ConversionCapabilities `json:"conversions,omitempty"`
+}
+type ConversionCapabilities struct {
+	ResponsesToAnthropic *ConversionCapability `json:"responses_to_anthropic,omitempty"`
+	AnthropicToResponses *ConversionCapability `json:"anthropic_to_responses,omitempty"`
+}
+type ConversionCapability struct {
+	Level     int  `json:"level"`
+	Text      bool `json:"text"`
+	Images    bool `json:"images"`
+	Documents bool `json:"documents"`
+	Reasoning bool `json:"reasoning"`
+	// ReasoningMode is "degrade" when cross-protocol reasoning controls are
+	// adapted but reasoning output is intentionally not exposed as text.
+	ReasoningMode    string `json:"reasoning_mode,omitempty"`
+	Tools            bool   `json:"tools"`
+	StructuredOutput bool   `json:"structured_output"`
+	Streaming        bool   `json:"streaming"`
+	Continuation     bool   `json:"continuation"`
+}
+type NativeCapabilities struct {
+	Responses *NativeResponsesCapabilities `json:"responses,omitempty"`
+}
+type NativeResponsesCapabilities struct {
+	Tools  bool `json:"tools"`
+	Images bool `json:"images"`
 }
 type ReasoningCapability struct {
 	Supported     bool     `json:"supported"`
@@ -112,6 +139,35 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 		if metadata, ok := snap.StaticModels[route.ModelID]; ok && metadata.ReasoningDeclared {
 			rec.Capabilities = &ModelCapabilities{Reasoning: &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}}
 		}
+		if metadata, ok := snap.StaticModels[route.ModelID]; ok && metadata.NativeResponsesDeclared {
+			if rec.Capabilities == nil {
+				rec.Capabilities = &ModelCapabilities{}
+			}
+			rec.Capabilities.Native = &NativeCapabilities{Responses: &NativeResponsesCapabilities{Tools: metadata.NativeResponsesTools, Images: metadata.NativeResponsesImages}}
+		}
+		if metadata, ok := snap.StaticModels[route.ModelID]; ok {
+			for direction, capability := range metadata.ConversionCapabilities {
+				if !conversionCapabilityUsable(direction, capability) || !implementedConversionDirection(direction) || !modelHasConversionDirection(snap, id, direction) {
+					continue
+				}
+				if rec.Capabilities == nil {
+					rec.Capabilities = &ModelCapabilities{}
+				}
+				if rec.Capabilities.Conversions == nil {
+					rec.Capabilities.Conversions = &ConversionCapabilities{}
+				}
+				projected := &ConversionCapability{Level: capability.Level, Text: capability.Text, Images: capability.Images, Documents: capability.Documents, Reasoning: capability.Reasoning, Tools: capability.Tools, StructuredOutput: capability.StructuredOutput, Streaming: capability.Streaming, Continuation: capability.Continuation}
+				if capability.Reasoning {
+					projected.ReasoningMode = "degrade"
+				}
+				switch direction {
+				case "responses_to_anthropic":
+					rec.Capabilities.Conversions.ResponsesToAnthropic = projected
+				case "anthropic_to_responses":
+					rec.Capabilities.Conversions.AnthropicToResponses = projected
+				}
+			}
+		}
 		// Every source omits optional capacity metadata when unknown or not applicable.
 		if route.ContextWindowTokens > 0 {
 			rec.ContextWindowTokens = route.ContextWindowTokens
@@ -122,6 +178,24 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 		data = append(data, rec)
 	}
 	return ModelsListResponse{Object: "list", Data: data}
+}
+
+func modelHasConversionDirection(snap effectivecatalog.Snapshot, modelID, direction string) bool {
+	for _, candidate := range snap.CandidatesFor(modelID) {
+		for _, mode := range candidate.ConversionModes {
+			if mode == direction {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Both conversion directions are implemented for text, text SSE and
+// function-tool non-streaming requests.  Capability flags that are not yet
+// semantically safe are filtered by conversionCapabilityUsable.
+func implementedConversionDirection(direction string) bool {
+	return direction == "responses_to_anthropic" || direction == "anthropic_to_responses"
 }
 
 // modelSupportedEndpoints returns the client-facing paths that at least one

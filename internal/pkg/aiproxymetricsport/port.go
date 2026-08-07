@@ -21,6 +21,19 @@ type Reporter interface {
 	RecordUpstreamError(provider string, status int)
 }
 
+// PlanLevelReporter is implemented by metrics reporters that expose the
+// validated conversion capability level. It is kept separate from Reporter
+// so older in-process/test reporters remain source compatible.
+type PlanLevelReporter interface {
+	RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int)
+}
+
+// ConversionReporter exposes bounded conversion-specific observations without
+// adding request bodies or arbitrary error text to metric labels.
+type ConversionReporter interface {
+	RecordConversion(provider, model, clientProtocol, upstreamProtocol, conversionMode string, conversionLevel, upstreamStatus int, duration time.Duration, degraded, estimated bool, ignoredFeatures, unsupportedFeatures []string)
+}
+
 type Reader interface {
 	Prometheus() ([]byte, error)
 	StatsJSON() ([]byte, error)

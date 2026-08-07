@@ -27,34 +27,42 @@ const (
 	UsageStoreRecovered  RecordKind = "usage_store_recovered"
 	UsageStoreHealthy    RecordKind = "usage_store_healthy"
 	RequestPlan          RecordKind = "request_plan"
+	Conversion           RecordKind = "conversion"
 	Tokens               RecordKind = "tokens"
 	UpstreamAttempt      RecordKind = "upstream_attempt"
 	UpstreamError        RecordKind = "upstream_error"
 )
 
 type RecordCommand struct {
-	Kind             RecordKind
-	Provider         string
-	Model            string
-	Models           []string
-	APIKeyID         string
-	Route            string
-	Outcome          string
-	ClientEndpoint   string
-	UpstreamProtocol string
-	UpstreamEndpoint string
-	ConversionMode   string
-	Phase            string
-	AttemptKind      metrics.AttemptLatencyKind
-	Status           int
-	Input            int
-	Output           int
-	Cached           int
-	CacheCreation    int
-	Count            int64
-	Duration         time.Duration
-	Healthy          bool
-	Failed           bool
+	Kind                RecordKind
+	Provider            string
+	Model               string
+	Models              []string
+	APIKeyID            string
+	Route               string
+	Outcome             string
+	ClientEndpoint      string
+	ClientProtocol      string
+	UpstreamProtocol    string
+	UpstreamEndpoint    string
+	ConversionMode      string
+	ConversionLevel     int
+	UpstreamStatus      int
+	Degraded            bool
+	Estimated           bool
+	IgnoredFeatures     []string
+	UnsupportedFeatures []string
+	Phase               string
+	AttemptKind         metrics.AttemptLatencyKind
+	Status              int
+	Input               int
+	Output              int
+	Cached              int
+	CacheCreation       int
+	Count               int64
+	Duration            time.Duration
+	Healthy             bool
+	Failed              bool
 }
 
 type PrometheusCommand struct{}

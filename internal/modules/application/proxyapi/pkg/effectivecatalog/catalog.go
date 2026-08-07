@@ -84,6 +84,9 @@ type Candidate struct {
 	// SupportedEndpoints is the generation-consistent client path projection
 	// calculated from the provider transport matrix when the snapshot is built.
 	SupportedEndpoints []string
+	// ConversionModes contains only conversion directions that this concrete
+	// provider candidate can execute for the model.
+	ConversionModes []string
 }
 
 // Route is the request-time resolved model route from either static or builtin.
@@ -252,7 +255,8 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 				ModelID: id, RouteOwner: name,
 				Priority: config.EffectiveProviderPriority(provider), Fallback: config.EffectiveProviderFallback(provider),
 				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
-				SupportedEndpoints: config.ServiceableInboundPaths(provider),
+				SupportedEndpoints: serviceablePathsForModel(provider, id, metadata),
+				ConversionModes:    conversionModesForModel(provider, id, metadata),
 			})
 		}
 	}
@@ -289,6 +293,51 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 		})
 		snap.Candidates[id] = candidates
 	}
+}
+
+func serviceablePathsForModel(provider config.Provider, modelID string, metadata config.ModelMetadata) []string {
+	paths := config.ServiceableInboundPaths(provider)
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		transport, ok := config.ResolveProviderTransport(provider, path)
+		if !ok {
+			continue
+		}
+		if transport.Mode == "responses_to_anthropic" && !conversionCapabilityAvailable(provider, modelID, metadata, "responses_to_anthropic") {
+			continue
+		}
+		if transport.Mode == "anthropic_to_responses" && !conversionCapabilityAvailable(provider, modelID, metadata, "anthropic_to_responses") {
+			continue
+		}
+		result = append(result, path)
+	}
+	return result
+}
+
+func conversionCapabilityAvailable(provider config.Provider, modelID string, metadata config.ModelMetadata, direction string) bool {
+	capability, ok := metadata.ConversionCapabilities[direction]
+	return ok && config.ConversionCapabilityUsable(direction, capability) && config.ProviderConversionReleased(provider, modelID, direction)
+}
+
+func conversionModesForModel(provider config.Provider, modelID string, metadata config.ModelMetadata) []string {
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, path := range config.ServiceableInboundPaths(provider) {
+		transport, ok := config.ResolveProviderTransport(provider, path)
+		if !ok || !conversionCapabilityAvailable(provider, modelID, metadata, transport.Mode) {
+			continue
+		}
+		if transport.Mode != config.ConversionDirectionResponsesToAnthropic && transport.Mode != config.ConversionDirectionAnthropicToResponses {
+			continue
+		}
+		if _, exists := seen[transport.Mode]; exists {
+			continue
+		}
+		seen[transport.Mode] = struct{}{}
+		result = append(result, transport.Mode)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func exactProviderModels(cfg config.Config) map[string]config.ModelMetadata {

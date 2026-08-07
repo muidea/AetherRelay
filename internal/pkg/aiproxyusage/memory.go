@@ -110,6 +110,11 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.UpstreamProtocol = rec.UpstreamProtocol
 	e.UpstreamEndpoint = rec.UpstreamEndpoint
 	e.ConversionMode = rec.ConversionMode
+	e.ConversionLevel = rec.ConversionLevel
+	e.ConversionDurationMS = rec.ConversionDuration.Milliseconds()
+	e.ConversionDegraded = rec.ConversionDegraded
+	e.IgnoredFeatures = append([]string(nil), rec.IgnoredFeatures...)
+	e.UnsupportedFeatures = append([]string(nil), rec.UnsupportedFeatures...)
 	e.InputTokens = rec.InputTokens
 	e.OutputTokens = rec.OutputTokens
 	e.TotalTokens = total
@@ -413,6 +418,11 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			e.UpstreamProtocol,
 			e.UpstreamEndpoint,
 			e.ConversionMode,
+			strconv.Itoa(e.ConversionLevel),
+			strconv.FormatInt(e.ConversionDurationMS, 10),
+			strconv.FormatBool(e.ConversionDegraded),
+			strings.Join(e.IgnoredFeatures, ","),
+			strings.Join(e.UnsupportedFeatures, ","),
 			strconv.FormatInt(e.InputTokens, 10),
 			strconv.FormatInt(e.OutputTokens, 10),
 			strconv.FormatInt(e.TotalTokens, 10),

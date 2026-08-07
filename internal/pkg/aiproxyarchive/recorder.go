@@ -32,17 +32,21 @@ type Round struct {
 	StablePrefixHash   string    `json:"stable_prefix_hash,omitempty"`
 	RequestFingerprint string    `json:"request_fingerprint,omitempty"`
 	// Transport plan fields (in-memory only; written into Metadata at finish).
-	Operation        string
-	ClientEndpoint   string
-	ClientProtocol   string
-	UpstreamProtocol string
-	UpstreamEndpoint string
-	ConversionMode   string
+	Operation          string
+	ClientEndpoint     string
+	ClientProtocol     string
+	UpstreamProtocol   string
+	UpstreamEndpoint   string
+	ConversionMode     string
+	ConversionLevel    int
+	ConversionDuration time.Duration
+	ConversionDegraded bool
 	// IgnoredFeatures records explicitly compatibility-degraded request fields.
 	// It is populated by a bounded protocol adapter and never contains payload
 	// values, so metadata can explain a degraded request without retaining
 	// sensitive input.
-	IgnoredFeatures []string
+	IgnoredFeatures     []string
+	UnsupportedFeatures []string
 	// UpstreamDuration 是本次上游 HTTP 请求（含首包探测）的耗时，仅供
 	// usage 结算使用；完整 metadata 当前仍保留总请求耗时。
 	UpstreamDuration         time.Duration
@@ -106,6 +110,27 @@ func (r *Round) SetTransportPlan(operation, clientEndpoint, clientProtocol, upst
 	r.UpstreamProtocol = upstreamProtocol
 	r.UpstreamEndpoint = upstreamEndpoint
 	r.ConversionMode = conversionMode
+	r.ConversionDegraded = false
+	if conversionMode == "responses_to_anthropic" || conversionMode == "anthropic_to_responses" {
+		r.ConversionLevel = 1
+	} else if conversionMode == "openai_to_anthropic" || conversionMode == "anthropic_to_openai" {
+		r.ConversionLevel = 1
+	} else {
+		r.ConversionLevel = 0
+	}
+}
+
+// SetConversionLevel records the validated model/direction capability used by
+// this round. Native paths remain level 0; invalid values are clamped away so
+// archive metadata cannot publish an unsupported level.
+func (r *Round) SetConversionLevel(level int) {
+	if r == nil {
+		return
+	}
+	if level < 0 || level > 3 {
+		level = 0
+	}
+	r.ConversionLevel = level
 }
 
 func (r *Round) SetUpstreamDuration(duration time.Duration) {
@@ -153,7 +178,11 @@ type Metadata struct {
 	UpstreamProtocol       string   `json:"upstream_protocol,omitempty"`
 	UpstreamEndpoint       string   `json:"upstream_endpoint,omitempty"`
 	ConversionMode         string   `json:"conversion_mode,omitempty"`
+	ConversionLevel        int      `json:"conversion_level,omitempty"`
 	IgnoredFeatures        []string `json:"ignored_features,omitempty"`
+	UnsupportedFeatures    []string `json:"unsupported_features,omitempty"`
+	ConversionDurationMS   int64    `json:"conversion_duration_ms,omitempty"`
+	ConversionDegraded     bool     `json:"conversion_degraded,omitempty"`
 	StablePrefixHash       string   `json:"stable_prefix_hash,omitempty"`
 	RequestFingerprint     string   `json:"request_fingerprint,omitempty"`
 	StablePrefixDrift      bool     `json:"stable_prefix_drift,omitempty"`
@@ -179,6 +208,27 @@ type Metadata struct {
 	// FullContentEnabled 标明配置是否启用完整正文归档(不保证磁盘写入一定成功)。
 	FullContentEnabled bool   `json:"full_content_enabled"`
 	Error              string `json:"error,omitempty"`
+}
+
+func (r *Round) SetUnsupportedFeatures(features []string) {
+	if r == nil {
+		return
+	}
+	r.UnsupportedFeatures = append([]string(nil), features...)
+}
+
+func (r *Round) SetConversionDuration(duration time.Duration) {
+	if r == nil {
+		return
+	}
+	r.ConversionDuration = duration
+}
+
+func (r *Round) SetConversionDegraded(degraded bool) {
+	if r == nil {
+		return
+	}
+	r.ConversionDegraded = degraded
 }
 
 func NewRecorder(root string, maxRounds ...int) (*Recorder, error) {

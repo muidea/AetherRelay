@@ -248,3 +248,78 @@ func TestBuildCodexOAuthPublishesAllDiscoveredModels(t *testing.T) {
 		t.Fatalf("Codex discovered route=%+v ok=%v", route, ok)
 	}
 }
+
+func TestProviderConversionReleaseIsIsolatedAndHotReloaded(t *testing.T) {
+	const modelID = "claude-shared"
+	direction := config.ConversionDirectionResponsesToAnthropic
+	release := func(enabled bool) map[string]map[string]config.ProviderConversionRelease {
+		return map[string]map[string]config.ProviderConversionRelease{
+			modelID: {direction: {Enabled: enabled, Verified: true, EvidenceID: "test"}},
+		}
+	}
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"released": {Name: "released", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: release(true)},
+			"closed":   {Name: "closed", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: release(false)},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{direction: {Level: 3, Text: true, Tools: true, Streaming: true}}},
+		},
+	}
+
+	snapshot := FromStatic(cfg)
+	assertCandidateConversion := func(owner string, want bool) {
+		t.Helper()
+		for _, candidate := range snapshot.CandidatesFor(modelID) {
+			if candidate.RouteOwner != owner {
+				continue
+			}
+			if got := containsCatalogValue(candidate.ConversionModes, direction); got != want {
+				t.Fatalf("provider %s conversion=%t modes=%v", owner, got, candidate.ConversionModes)
+			}
+			if got := containsCatalogValue(candidate.SupportedEndpoints, "/v1/responses"); got != want {
+				t.Fatalf("provider %s responses endpoint=%t endpoints=%v", owner, got, candidate.SupportedEndpoints)
+			}
+			return
+		}
+		t.Fatalf("provider %s candidate missing", owner)
+	}
+	assertCandidateConversion("released", true)
+	assertCandidateConversion("closed", false)
+
+	provider := cfg.Providers["released"]
+	provider.ConversionReleases = release(false)
+	cfg.Providers["released"] = provider
+	provider = cfg.Providers["closed"]
+	provider.ConversionReleases = release(true)
+	cfg.Providers["closed"] = provider
+	snapshot = Reconfigure(cfg, snapshot)
+	assertCandidateConversion("released", false)
+	assertCandidateConversion("closed", true)
+}
+
+func TestProviderConversionReleaseDefaultsClosed(t *testing.T) {
+	const modelID = "claude-default-closed"
+	direction := config.ConversionDirectionResponsesToAnthropic
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"anthropic": {Name: "anthropic", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{direction: {Level: 2, Text: true, Streaming: true}}},
+		},
+	}
+	candidate := FromStatic(cfg).CandidatesFor(modelID)[0]
+	if containsCatalogValue(candidate.ConversionModes, direction) || containsCatalogValue(candidate.SupportedEndpoints, "/v1/responses") {
+		t.Fatalf("unreleased conversion was published: %#v", candidate)
+	}
+}
+
+func containsCatalogValue(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

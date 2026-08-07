@@ -31,7 +31,7 @@ func TestStoreEncryptsProviderCatalogAndRestoresIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := config.Provider{Name: "openai", Protocol: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "provider-secret-value", Models: []string{"gpt-5"}, Endpoints: []string{config.ProviderEndpointResponses}}
+	provider := config.Provider{Name: "openai", Protocol: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "provider-secret-value", Models: []string{"gpt-5"}, Endpoints: []string{config.ProviderEndpointResponses}, ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"gpt-5": {config.ConversionDirectionAnthropicToResponses: {Enabled: true, Verified: true, EvidenceID: "eval-1"}}}}
 	config.ConfigureProviderPolicy(&provider, 0, false)
 	if err := store.Replace(map[string]config.Provider{"openai": provider}); err != nil {
 		t.Fatal(err)
@@ -59,6 +59,9 @@ func TestStoreEncryptsProviderCatalogAndRestoresIt(t *testing.T) {
 	providers, initialized, err := store.Load()
 	if err != nil || !initialized || providers["openai"].APIKey != "provider-secret-value" || config.EffectiveProviderPriority(providers["openai"]) != 0 {
 		t.Fatalf("providers=%+v initialized=%t err=%v", providers, initialized, err)
+	}
+	if release := providers["openai"].ConversionReleases["gpt-5"][config.ConversionDirectionAnthropicToResponses]; !release.Enabled || !release.Verified || release.EvidenceID != "eval-1" {
+		t.Fatalf("conversion release = %#v", release)
 	}
 }
 

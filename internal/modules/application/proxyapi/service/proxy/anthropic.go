@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -70,6 +71,10 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 		return
 	}
 	plan := plans[0]
+	if round != nil && plan.IsConversion() {
+		round.SetTransportPlan(RouteLabel(r), plan.ClientEndpoint, plan.ClientProtocol, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+		round.SetConversionLevel(plan.ConversionLevel)
+	}
 	candidates, preflightErr := h.prepareAnthropicMessageCandidates(plans, bodyBytes, body, stream, r.URL.RawQuery, r.Method)
 	if len(candidates) == 0 {
 		if preflightErr != nil {
@@ -81,6 +86,10 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 	}
 	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
+			h.settleConversionClientCanceled(round, r, selected.Plan.RouteOwner, model, stream, start)
+			return
+		}
 		h.writeArchivedError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -103,6 +112,21 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.handleOpenAIToAnthropicBuffered(w, r, resp, round, start, providerName, model, body)
+		return
+	}
+	if selectedPlan.Mode == TransportModeAnthropicToResponses {
+		markConversionDegraded(round, selected.DegradedFeatures)
+		if resp.StatusCode >= http.StatusBadRequest {
+			h.writeConversionUpstreamError(w, r, resp, round, start, selectedPlan, providerName, model, stream)
+			return
+		}
+		if stream {
+			if err := h.handleAnthropicToResponsesStream(w, r, resp, round, start, providerName, model, selected.ConversionCapability); err != nil {
+				log.Printf("anthropic→responses stream: %v", err)
+			}
+			return
+		}
+		h.handleAnthropicToResponses(w, r, resp, round, start, providerName, model, selected.ConversionCapability)
 		return
 	}
 	h.writePreparedAnthropicNativeResponse(w, r, round, start, selectedPlan, providerName, provider, resp, model, stream, body, result.Cancel)
@@ -184,6 +208,12 @@ func conversionAPIError(plan TransportPlan, err error) APIError {
 		ClientProtocol:   plan.ClientProtocol,
 		UpstreamProtocol: plan.UpstreamProtocol,
 		Feature:          feature,
+		UnsupportedFeatures: func() []string {
+			if feature == "" {
+				return nil
+			}
+			return []string{feature}
+		}(),
 	}
 }
 
@@ -195,7 +225,9 @@ func conversionFeatureFromError(err error) string {
 	// 从已知错误文案提取 feature 名。
 	for _, key := range []string{
 		"tools", "tool_choice", "functions", "function_call", "response_format",
+		"max_output_tokens", "max_tokens", "stream",
 		"stop_sequences", "stop",
+		"parallel_tool_calls", "disable_parallel_tool_use", "store", "truncation", "include", "conversation", "prompt", "metadata", "service_tier", "thinking", "background", "reasoning", "previous_response_id", "text.format",
 		"tool_calls", "tool role", "tool_use", "tool_result",
 		"image", "image_url", "input_image", "audio", "input_audio", "document", "file",
 	} {

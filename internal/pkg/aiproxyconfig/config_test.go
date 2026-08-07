@@ -247,6 +247,8 @@ model_metadata:
   DeepSeek-V4-Flash:
     context_window_tokens: 128000
     max_output_tokens: 8192
+    native_responses_tools: true
+    native_responses_images: false
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -270,8 +272,180 @@ model_metadata:
 	if ds.ID != "DeepSeek-V4-Flash" || ds.ContextWindowTokens != 128000 || ds.MaxOutputTokens != 8192 {
 		t.Fatalf("DeepSeek-V4-Flash = %#v", ds)
 	}
+	if !ds.NativeResponsesDeclared || !ds.NativeResponsesTools || ds.NativeResponsesImages {
+		t.Fatalf("DeepSeek native Responses capabilities = %#v", ds)
+	}
 	if _, ok := cfg.ModelMetadata["deepseek-v4-flash"]; ok {
 		t.Fatalf("unexpected lowercased metadata key: %#v", cfg.ModelMetadata)
+	}
+}
+
+func TestLoadModelConversionCapabilities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+model_metadata:
+  demo:
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 1
+        text: true
+        streaming: false
+      anthropic_to_responses:
+        level: 3
+        text: true
+        tools: true
+        images: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.ModelMetadata["demo"].ConversionCapabilities
+	if got["responses_to_anthropic"].Level != 1 || !got["responses_to_anthropic"].Text || got["anthropic_to_responses"].Level != 3 || !got["anthropic_to_responses"].Tools {
+		t.Fatalf("conversion capabilities = %#v", got)
+	}
+}
+
+func TestLoadProviderConversionRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  anthropic:
+    protocol: anthropic
+    base_url: https://api.anthropic.com
+    api_key: test
+    endpoints: messages
+    models: claude-demo
+    conversion_releases:
+      claude-demo:
+        responses_to_anthropic:
+          enabled: true
+          verified: true
+          evidence_id: eval-2026-08-07
+model_metadata:
+  claude-demo:
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 3
+        text: true
+        tools: true
+        streaming: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := cfg.Providers["anthropic"]
+	if !ProviderConversionReleased(provider, "claude-demo", ConversionDirectionResponsesToAnthropic) {
+		t.Fatalf("conversion release = %#v", provider.ConversionReleases)
+	}
+	if got := provider.ConversionReleases["claude-demo"][ConversionDirectionResponsesToAnthropic].EvidenceID; got != "eval-2026-08-07" {
+		t.Fatalf("evidence_id = %q", got)
+	}
+}
+
+func TestLoadRejectsEnabledUnverifiedProviderConversionRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  anthropic:
+    protocol: anthropic
+    base_url: https://api.anthropic.com
+    api_key: test
+    endpoints: messages
+    models: claude-demo
+    conversion_releases:
+      claude-demo:
+        responses_to_anthropic:
+          enabled: true
+          verified: false
+model_metadata:
+  claude-demo:
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 2
+        text: true
+        streaming: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "enabled requires verified: true") {
+		t.Fatalf("error = %v, want verification gate rejection", err)
+	}
+}
+
+func TestLoadRejectsInvalidConversionLevel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+model_metadata:
+  demo:
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 4
+        text: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "level must be 0, 1, 2 or 3") {
+		t.Fatalf("error = %v, want invalid conversion level", err)
+	}
+}
+
+func TestLoadModelConversionReasoningAdapter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+model_metadata:
+  demo:
+    reasoning_supported: true
+    reasoning_efforts: [low, medium]
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 2
+        text: true
+        reasoning: true
+        reasoning_adapter: responses_to_anthropic_adaptive
+        reasoning_target_effort: medium
+      anthropic_to_responses:
+        level: 2
+        text: true
+        reasoning: true
+        reasoning_adapter: anthropic_to_responses_effort
+        reasoning_target_effort: low
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := cfg.ModelMetadata["demo"].ConversionCapabilities[ConversionDirectionResponsesToAnthropic]
+	if !ConversionCapabilityUsable(ConversionDirectionResponsesToAnthropic, capability) || capability.ReasoningTargetEffort != "medium" {
+		t.Fatalf("capability = %#v", capability)
+	}
+}
+
+func TestLoadRejectsReasoningConversionWithoutAdapter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+model_metadata:
+  demo:
+    reasoning_supported: true
+    reasoning_efforts: [low]
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 2
+        text: true
+        reasoning: true
+        reasoning_target_effort: low
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "reasoning_adapter is invalid") {
+		t.Fatalf("error = %v, want missing adapter rejection", err)
 	}
 }
 
@@ -369,6 +543,17 @@ providers:
 	}
 	if cfg.StreamIdleTimeout != 0 {
 		t.Fatalf("stream idle timeout = %s", cfg.StreamIdleTimeout)
+	}
+}
+
+func TestLoadStreamFirstEventTimeout(t *testing.T) {
+	t.Setenv("AI_PROXY_STREAM_FIRST_EVENT_TIMEOUT_SECONDS", "7")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StreamFirstEventTimeout != 7*time.Second {
+		t.Fatalf("stream first event timeout = %s", cfg.StreamFirstEventTimeout)
 	}
 }
 

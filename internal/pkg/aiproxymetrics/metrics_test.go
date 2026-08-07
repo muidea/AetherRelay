@@ -38,8 +38,8 @@ func TestRegistryCounters(t *testing.T) {
 	}
 	out := buf.String()
 
-	mustContain(t, out, `ai_proxy_requests_total{provider="openai",model="gpt-4",route="chat_completions",status="2xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown"} 2`)
-	mustContain(t, out, `ai_proxy_requests_total{provider="openai",model="gpt-4",route="chat_completions",status="5xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown"} 1`)
+	mustContain(t, out, `ai_proxy_requests_total{provider="openai",model="gpt-4",route="chat_completions",status="2xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown",conversion_level="0"} 2`)
+	mustContain(t, out, `ai_proxy_requests_total{provider="openai",model="gpt-4",route="chat_completions",status="5xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown",conversion_level="0"} 1`)
 	mustContain(t, out, `ai_proxy_input_tokens_total{provider="openai",model="gpt-4"} 300`)
 	mustContain(t, out, `ai_proxy_output_tokens_total{provider="openai",model="gpt-4"} 150`)
 	mustContain(t, out, `ai_proxy_cached_input_tokens_total{provider="openai",model="gpt-4"} 30`)
@@ -48,6 +48,44 @@ func TestRegistryCounters(t *testing.T) {
 	mustContain(t, out, `ai_proxy_upstream_errors_total{provider="openai",status_code="502"} 1`)
 	mustContain(t, out, "# TYPE ai_proxy_requests_total counter")
 	mustContain(t, out, "# EOF")
+}
+
+func TestRegistryConversionLevelIsBoundedAndExposed(t *testing.T) {
+	r := NewRegistry()
+	r.RecordRequestPlanWithLevel("anthropic", "claude", "responses", http.StatusOK, time.Millisecond, "success", "/v1/responses", "anthropic", "/v1/messages", "responses_to_anthropic", 3)
+	r.RecordRequestPlanWithLevel("anthropic", "claude", "responses", http.StatusOK, time.Millisecond, "success", "/v1/responses", "anthropic", "/v1/messages", "responses_to_anthropic", 99)
+	var buf strings.Builder
+	if err := r.WritePrometheus(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	mustContain(t, out, `conversion_mode="responses_to_anthropic",conversion_level="3"} 1`)
+	mustContain(t, out, `conversion_mode="responses_to_anthropic",conversion_level="0"} 1`)
+}
+
+func TestRegistryConversionMetricsExposeBoundedContract(t *testing.T) {
+	r := NewRegistry()
+	r.RecordConversion(
+		"anthropic", "claude-test", "openai", "anthropic",
+		"responses_to_anthropic", 3, http.StatusOK, 1250*time.Millisecond,
+		true, true,
+		[]string{"reasoning_output", "reasoning_output", "provider_private_field"},
+		[]string{"structured_output", "unknown_extension"},
+	)
+
+	var buf strings.Builder
+	if err := r.WritePrometheus(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	labels := `provider="anthropic",model="claude-test",client_protocol="openai",upstream_protocol="anthropic",conversion_mode="responses_to_anthropic",conversion_level="3",upstream_status="200",degraded="true",estimated="true"`
+	mustContain(t, out, `ai_proxy_conversion_requests_total{`+labels+`} 1`)
+	mustContain(t, out, `ai_proxy_conversion_duration_seconds_sum{`+labels+`} 1.25`)
+	mustContain(t, out, `ai_proxy_conversion_duration_seconds_count{`+labels+`} 1`)
+	mustContain(t, out, `ai_proxy_conversion_features_total{provider="anthropic",model="claude-test",conversion_mode="responses_to_anthropic",kind="ignored",feature="reasoning_output"} 1`)
+	mustContain(t, out, `ai_proxy_conversion_features_total{provider="anthropic",model="claude-test",conversion_mode="responses_to_anthropic",kind="ignored",feature="_other"} 1`)
+	mustContain(t, out, `ai_proxy_conversion_features_total{provider="anthropic",model="claude-test",conversion_mode="responses_to_anthropic",kind="unsupported",feature="structured_output"} 1`)
+	mustContain(t, out, `ai_proxy_conversion_features_total{provider="anthropic",model="claude-test",conversion_mode="responses_to_anthropic",kind="unsupported",feature="_other"} 1`)
 }
 
 func TestProviderHealthSnapshotTracksLatestOutcome(t *testing.T) {
@@ -199,9 +237,9 @@ func TestRegistryDurationSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	mustContain(t, out, `ai_proxy_request_duration_seconds_count{provider="p",model="m",route="chat_completions",status="2xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown"} 2`)
+	mustContain(t, out, `ai_proxy_request_duration_seconds_count{provider="p",model="m",route="chat_completions",status="2xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown",conversion_level="0"} 2`)
 	// sum = 0.4s
-	if !strings.Contains(out, `ai_proxy_request_duration_seconds_sum{provider="p",model="m",route="chat_completions",status="2xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown"} 0.4`) {
+	if !strings.Contains(out, `ai_proxy_request_duration_seconds_sum{provider="p",model="m",route="chat_completions",status="2xx",outcome="success",client_endpoint="unknown",upstream_protocol="unknown",upstream_endpoint="unknown",conversion_mode="unknown",conversion_level="0"} 0.4`) {
 		t.Fatalf("expected 0.4 in output: %s", out)
 	}
 }

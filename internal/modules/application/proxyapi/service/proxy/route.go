@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -14,9 +15,11 @@ const (
 	ClientProtocolOpenAI    = "openai"
 	ClientProtocolAnthropic = "anthropic"
 
-	TransportModeNative            = "native"
-	TransportModeOpenAIToAnthropic = "openai_to_anthropic"
-	TransportModeAnthropicToOpenAI = "anthropic_to_openai"
+	TransportModeNative               = "native"
+	TransportModeOpenAIToAnthropic    = "openai_to_anthropic"
+	TransportModeAnthropicToOpenAI    = "anthropic_to_openai"
+	TransportModeResponsesToAnthropic = "responses_to_anthropic"
+	TransportModeAnthropicToResponses = "anthropic_to_responses"
 	// TransportModeChatGPTWebResponses is a bounded, stateless Responses
 	// projection backed by the ChatGPT Web text executor. It intentionally is
 	// not a native upstream Responses implementation.
@@ -37,13 +40,16 @@ type TransportPlan struct {
 	UpstreamProtocol string
 	UpstreamEndpoint string
 	Mode             string // native | openai_to_anthropic | anthropic_to_openai
-	Priority         int
-	Fallback         bool
+	// ConversionLevel is copied from the validated model/direction metadata.
+	// Native plans always use level 0.
+	ConversionLevel int
+	Priority        int
+	Fallback        bool
 }
 
 // IsConversion 表示需要协议转换(非 native 直通)。
 func (p TransportPlan) IsConversion() bool {
-	return p.Mode == TransportModeOpenAIToAnthropic || p.Mode == TransportModeAnthropicToOpenAI
+	return p.Mode == TransportModeOpenAIToAnthropic || p.Mode == TransportModeAnthropicToOpenAI || p.Mode == TransportModeResponsesToAnthropic || p.Mode == TransportModeAnthropicToResponses
 }
 
 // RouteLabel 把入站 HTTP 路径归一化为 Prometheus 标签使用的稳定 route 名。
@@ -163,7 +169,7 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 	}
 	candidates := snap.CandidatesFor(modelID)
 
-	plans := make([]TransportPlan, 0, len(candidates))
+	compatible := make([]TransportPlan, 0, len(candidates))
 	for _, candidate := range candidates {
 		owner := strings.TrimSpace(candidate.RouteOwner)
 		if owner == "" {
@@ -183,14 +189,49 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 		if !ok {
 			continue
 		}
-		if len(plans) > 0 && !candidate.Fallback {
+		if (plan.Mode == TransportModeResponsesToAnthropic || plan.Mode == TransportModeAnthropicToResponses) && !conversionDeclared(cfg, provider, modelID, plan.Mode) {
 			continue
 		}
 		plan.Priority = candidate.Priority
 		plan.Fallback = candidate.Fallback
+		if plan.IsConversion() {
+			if metadata, ok := cfg.ModelMetadata[modelID]; ok {
+				if capability, ok := metadata.ConversionCapabilities[plan.Mode]; ok {
+					plan.ConversionLevel = capability.Level
+				}
+			}
+		}
+		compatible = append(compatible, plan)
+	}
+	// Protocol-preserving candidates always lead cross-protocol conversion,
+	// regardless of provider priority. Provider priority and health still order
+	// candidates within the same semantic class.
+	sort.SliceStable(compatible, func(i, j int) bool {
+		if left, right := transportPlanSemanticRank(compatible[i]), transportPlanSemanticRank(compatible[j]); left != right {
+			return left < right
+		}
+		if compatible[i].Priority != compatible[j].Priority {
+			return compatible[i].Priority > compatible[j].Priority
+		}
+		return compatible[i].RouteOwner < compatible[j].RouteOwner
+	})
+	plans := make([]TransportPlan, 0, len(compatible))
+	for _, plan := range compatible {
+		if len(plans) > 0 && !plan.Fallback {
+			continue
+		}
 		plans = append(plans, plan)
 	}
 	if len(plans) == 0 {
+		if level, direction := configuredUnavailableConversion(cfg, modelID, clientEndpoint, clientProtocol); level > 0 {
+			return nil, &APIError{
+				Code:                ErrorCodeConversionUnsupported,
+				Message:             fmt.Sprintf("conversion level %d for %s is not released by a compatible provider", level, direction),
+				Feature:             direction,
+				UnsupportedFeatures: []string{direction},
+				Model:               modelID, ClientEndpoint: clientEndpoint, ClientProtocol: clientProtocol,
+			}
+		}
 		return nil, &APIError{
 			Code:           ErrorCodeEndpointUnsupported,
 			Message:        fmt.Sprintf("no compatible provider can serve endpoint %q for model %q", clientEndpoint, modelID),
@@ -200,6 +241,59 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 		}
 	}
 	return plans, nil
+}
+
+func transportPlanSemanticRank(plan TransportPlan) int {
+	switch plan.Mode {
+	case TransportModeNative, TransportModeCodexOAuthResponses:
+		return 0
+	case TransportModeChatGPTWebResponses:
+		return 1
+	default:
+		if plan.IsConversion() {
+			return 2
+		}
+		return 1
+	}
+}
+
+func configuredUnavailableConversion(cfg config.Config, modelID, endpoint, protocol string) (int, string) {
+	metadata, ok := cfg.ModelMetadata[modelID]
+	if !ok {
+		return 0, ""
+	}
+	direction := ""
+	switch {
+	case endpoint == "/v1/responses" && protocol == ClientProtocolOpenAI:
+		direction = TransportModeResponsesToAnthropic
+	case endpoint == "/v1/messages" && protocol == ClientProtocolAnthropic:
+		direction = TransportModeAnthropicToResponses
+	}
+	if direction == "" {
+		return 0, ""
+	}
+	capability, ok := metadata.ConversionCapabilities[direction]
+	if !ok {
+		return 0, ""
+	}
+	return capability.Level, direction
+}
+
+func conversionDeclared(cfg config.Config, provider config.Provider, modelID, mode string) bool {
+	metadata, ok := cfg.ModelMetadata[modelID]
+	if !ok {
+		return false
+	}
+	direction := mode
+	capability, ok := metadata.ConversionCapabilities[direction]
+	return ok && conversionCapabilityUsable(direction, capability) && config.ProviderConversionReleased(provider, modelID, direction)
+}
+
+// conversionCapabilityUsable keeps route and discovery policy aligned with
+// config validation. Reasoning is available only through an explicit,
+// direction-specific degraded adapter.
+func conversionCapabilityUsable(direction string, capability config.ConversionCapability) bool {
+	return config.ConversionCapabilityUsable(direction, capability)
 }
 
 // applyTransportMatrix projects the shared routing contract into the
