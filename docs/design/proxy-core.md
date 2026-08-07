@@ -22,7 +22,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 | 字段 | 语义 |
 | --- | --- |
-| `model_metadata` | 可选静态模型元数据：模型 ID exact 且严格区分大小写；两个容量字段均可选，路由不依赖容量 |
+| `model_metadata` | 可选静态模型元数据：模型 ID exact 且严格区分大小写；容量字段与 reasoning 能力字段均可选，路由不依赖这些字段 |
 | `protocol` | 仅 `openai` / `anthropic`；必须显式声明，不得按 provider 名推断 |
 | `endpoints` | 仅表示上游 native endpoint（`chat_completions` / `messages` / `responses` / `completions` / `embeddings` / `images`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
 

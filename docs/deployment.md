@@ -74,6 +74,9 @@ model_metadata:
   gpt-5.5:
     context_window_tokens: 128000
     max_output_tokens: 16384
+    reasoning_supported: true
+    reasoning_default_effort: medium
+    reasoning_efforts: [none, low, medium, high, xhigh, max]
 
 ```
 

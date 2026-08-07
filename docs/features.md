@@ -33,7 +33,7 @@
 - **Anthropic**：`POST /v1/messages`
 - **ai-proxy 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）、`POST /v1/images/generations|edits`（路由到 `chatgptweb` 图片能力）
 
-`GET/POST /v1/models` **本地合成**，不访问上游；返回有效目录中的模型、已知的 `contextWindowTokens` / `maxOutputTokens`，以及运行时推导的 `supported_endpoints`。`supported_endpoints` 是客户端可调用的完整路径列表，由模型候选 Provider、Provider 原生 `endpoints` 和统一传输矩阵计算，不是静态模型元数据，也不暴露 provider 名、base URL 或密钥。
+`GET/POST /v1/models` **本地合成**，不访问上游；返回有效目录中的模型、已知的 `contextWindowTokens` / `maxOutputTokens`、已声明的 `capabilities.reasoning`，以及运行时推导的 `supported_endpoints`。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`supported_endpoints` 是客户端可调用的完整路径列表，由模型候选 Provider、Provider 原生 `endpoints` 和统一传输矩阵计算，不是静态模型元数据，也不暴露 provider 名、base URL 或密钥。
 
 `supported_endpoints` 只表示模型至少有一个当前可用候选可以服务的客户端路径。例如 Anthropic Provider 声明原生 `messages` 时，模型可以同时显示 `/v1/messages` 与经协议转换的 `/v1/chat/completions`；ChatGPT Web 的 `chat_completions` 还会派生 `/v1/search`，`images` 会派生图片生成和编辑两个路径。系统信息中的“开放 API 端点”是实例级路由清单，需与模型的 `supported_endpoints` 取交集后再发起请求。
 
