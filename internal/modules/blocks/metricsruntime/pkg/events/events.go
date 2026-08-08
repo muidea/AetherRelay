@@ -12,6 +12,8 @@ const (
 	TopicPrometheus     = "aiproxy.metrics.command.prometheus"
 	TopicStats          = "aiproxy.metrics.command.stats"
 	TopicProviderHealth = "aiproxy.metrics.command.provider_health"
+	TopicProviderModel  = "aiproxy.metrics.command.provider_model_health"
+	TopicResetHealth    = "aiproxy.metrics.command.reset_provider_health"
 )
 
 type AcquireCommand struct{}
@@ -73,3 +75,12 @@ type ProviderHealthCommand struct{}
 type ProviderHealthResult struct {
 	Values map[string]metrics.StatsProviderHealth
 }
+
+type ProviderModelHealthCommand struct{ Provider, Model string }
+type ProviderModelHealthResult struct {
+	Value metrics.StatsProviderHealth
+	Found bool
+}
+
+type ResetProviderHealthCommand struct{ Provider string }
+type ResetProviderHealthResult struct{}

@@ -114,6 +114,39 @@ func (c client) ProviderHealthSnapshot() map[string]metrics.StatsProviderHealth 
 	return values
 }
 
+func (c client) ProviderModelHealth(provider, model string) (metrics.StatsProviderHealth, bool) {
+	ev := event.NewEventWithContext(TopicProviderModel, c.source, common.UnitID, event.NewHeader(), context.Background(), ProviderModelHealthCommand{Provider: provider, Model: model})
+	result, err := send(c.hub, ev, "metrics provider model health")
+	if err != nil {
+		return metrics.StatsProviderHealth{}, false
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return metrics.StatsProviderHealth{}, false
+	}
+	payload, ok := data.(ProviderModelHealthResult)
+	if !ok {
+		return metrics.StatsProviderHealth{}, false
+	}
+	return payload.Value, payload.Found
+}
+
+func (c client) ResetProviderHealth(provider string) error {
+	ev := event.NewEventWithContext(TopicResetHealth, c.source, common.UnitID, event.NewHeader(), context.Background(), ResetProviderHealthCommand{Provider: provider})
+	result, err := send(c.hub, ev, "metrics reset provider health")
+	if err != nil {
+		return err
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return fmt.Errorf("metrics reset provider health command failed: %w", getErr)
+	}
+	if _, ok := data.(ResetProviderHealthResult); !ok {
+		return fmt.Errorf("invalid metrics reset provider health response")
+	}
+	return nil
+}
+
 func (c client) record(command RecordCommand) {
 	if c.hub == nil {
 		return

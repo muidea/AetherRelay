@@ -57,6 +57,9 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 				continue
 			}
 		}
+		if failure.Kind == codexresponses.KindInvalidRequest {
+			return codexresponses.Result{}, failure
+		}
 		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 		if failure.Kind == codexresponses.KindRateLimit || failure.Kind == codexresponses.KindInvalidToken {
 			tried = append(tried, account.AccountID)
@@ -127,6 +130,9 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 			}
 		}
 		if failure == nil {
+			return err
+		}
+		if failure.Kind == codexresponses.KindInvalidRequest {
 			return err
 		}
 		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
@@ -260,6 +266,8 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int) *codexresponses.Failure {
 	var failure *codexresponses.Failure
 	switch class {
+	case upevents.ErrorInvalidRequest:
+		failure = codexresponses.NewFailure(codexresponses.KindInvalidRequest, retryAfter, fmt.Errorf("Codex upstream rejected the request"))
 	case upevents.ErrorInvalidToken:
 		failure = codexresponses.NewFailure(codexresponses.KindInvalidToken, retryAfter, fmt.Errorf("Codex OAuth access token rejected"))
 	case upevents.ErrorRateLimit:

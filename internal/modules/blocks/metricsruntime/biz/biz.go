@@ -40,6 +40,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(metricsevents.TopicPrometheus, biz.handlePrometheus)
 	biz.SubscribeFunc(metricsevents.TopicStats, biz.handleStats)
 	biz.SubscribeFunc(metricsevents.TopicProviderHealth, biz.handleProviderHealth)
+	biz.SubscribeFunc(metricsevents.TopicProviderModel, biz.handleProviderModelHealth)
+	biz.SubscribeFunc(metricsevents.TopicResetHealth, biz.handleResetProviderHealth)
 	return biz, nil
 }
 
@@ -59,6 +61,8 @@ func (s *MetricsRuntime) Teardown(context.Context) {
 	s.UnsubscribeFunc(metricsevents.TopicPrometheus)
 	s.UnsubscribeFunc(metricsevents.TopicStats)
 	s.UnsubscribeFunc(metricsevents.TopicProviderHealth)
+	s.UnsubscribeFunc(metricsevents.TopicProviderModel)
+	s.UnsubscribeFunc(metricsevents.TopicResetHealth)
 	if s.runtime != nil {
 		s.runtime.Close()
 	}
@@ -160,4 +164,32 @@ func (s *MetricsRuntime) handleProviderHealth(ev event.Event, result event.Resul
 		return
 	}
 	result.Set(metricsevents.ProviderHealthResult{Values: s.runtime.Registry().ProviderHealthSnapshot()}, nil)
+}
+
+func (s *MetricsRuntime) handleProviderModelHealth(ev event.Event, result event.Result) {
+	command, ok := ev.Data().(metricsevents.ProviderModelHealthCommand)
+	if !ok || command.Provider == "" || command.Model == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid metrics provider model health command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Registry() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "metrics block is not ready"))
+		return
+	}
+	value, found := s.runtime.Registry().ProviderModelHealth(command.Provider, command.Model)
+	result.Set(metricsevents.ProviderModelHealthResult{Value: value, Found: found}, nil)
+}
+
+func (s *MetricsRuntime) handleResetProviderHealth(ev event.Event, result event.Result) {
+	command, ok := ev.Data().(metricsevents.ResetProviderHealthCommand)
+	if !ok || command.Provider == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid metrics reset provider health command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Registry() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "metrics block is not ready"))
+		return
+	}
+	s.runtime.Registry().ResetProviderHealth(command.Provider)
+	result.Set(metricsevents.ResetProviderHealthResult{}, nil)
 }

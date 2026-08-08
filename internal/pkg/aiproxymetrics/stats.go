@@ -3,6 +3,7 @@ package metrics
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -344,6 +345,31 @@ func (r *Registry) ProviderHealthSnapshot() map[string]StatsProviderHealth {
 		result[provider] = buildProviderHealth(value, r.healthSamples[provider], now)
 	}
 	return result
+}
+
+// ProviderModelHealth projects credential and request health for one exact
+// model. Routing uses it to keep a model-scoped 401/403 from quarantining
+// other models that share the same Provider transport and API key.
+func (r *Registry) ProviderModelHealth(provider, model string) (StatsProviderHealth, bool) {
+	if r == nil || strings.TrimSpace(provider) == "" || strings.TrimSpace(model) == "" {
+		return StatsProviderHealth{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	model = strings.TrimSpace(model)
+	filtered := make([]healthSample, 0)
+	var value providerHealth
+	for _, sample := range r.healthSamples[provider] {
+		if sample.Model != model {
+			continue
+		}
+		filtered = append(filtered, sample)
+		value = applyProviderHealthSample(value, sample)
+	}
+	if len(filtered) == 0 {
+		return StatsProviderHealth{}, false
+	}
+	return buildProviderHealth(value, filtered, time.Now()), true
 }
 
 func latencyLabel(k latencyKey) string {

@@ -18,12 +18,13 @@ type Header struct {
 type ErrorClass string
 
 const (
-	ErrorInvalidToken ErrorClass = "invalid_token"
-	ErrorRateLimit    ErrorClass = "rate_limit"
-	ErrorTimeout      ErrorClass = "timeout"
-	ErrorNetwork      ErrorClass = "network"
-	ErrorUpstream     ErrorClass = "upstream"
-	ErrorProtocol     ErrorClass = "protocol"
+	ErrorInvalidRequest ErrorClass = "invalid_request"
+	ErrorInvalidToken   ErrorClass = "invalid_token"
+	ErrorRateLimit      ErrorClass = "rate_limit"
+	ErrorTimeout        ErrorClass = "timeout"
+	ErrorNetwork        ErrorClass = "network"
+	ErrorUpstream       ErrorClass = "upstream"
+	ErrorProtocol       ErrorClass = "protocol"
 )
 
 // RateLimitObservation is the bounded projection of an upstream limit error.

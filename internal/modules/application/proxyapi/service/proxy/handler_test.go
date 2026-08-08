@@ -3217,3 +3217,90 @@ func TestUpstreamHeaderAllowlistConversionAnthropicToOpenAI(t *testing.T) {
 		t.Fatalf("Authorization = %q", got.Get("Authorization"))
 	}
 }
+
+func TestUpdateConfigResetsHealthOnlyForChangedProvider(t *testing.T) {
+	tmpDir := t.TempDir()
+	recorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr: ":0", InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"deepseek": {Name: "deepseek", Protocol: "anthropic", BaseURL: "https://old.test", APIKey: "k", Models: []string{"deepseek-test"}, Endpoints: []string{config.ProviderEndpointMessages}},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{"deepseek-test": {ID: "deepseek-test"}},
+	})
+	registry := metrics.NewRegistry()
+	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, registry)
+	for range 3 {
+		registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+	}
+	if got := registry.ProviderHealthSnapshot()["deepseek"]; got.CircuitState != "open" {
+		t.Fatalf("circuit was not opened: %#v", got)
+	}
+
+	next := handler.ConfigSnapshot()
+	provider := next.Providers["deepseek"]
+	provider.BaseURL = "https://recovered.test"
+	next.Providers["deepseek"] = provider
+	if err := handler.UpdateConfig(next); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.ProviderHealthSnapshot()["deepseek"]; ok {
+		t.Fatal("changed provider retained stale health")
+	}
+
+	for range 3 {
+		registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+	}
+	unchanged := handler.ConfigSnapshot()
+	unchanged.RequestTimeout += time.Second
+	if err := handler.UpdateConfig(unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.ProviderHealthSnapshot()["deepseek"]; got.CircuitState != "open" {
+		t.Fatalf("unmodified provider health was reset: %#v", got)
+	}
+}
+
+func TestCredentialFailureDoesNotQuarantineSiblingModel(t *testing.T) {
+	tmpDir := t.TempDir()
+	recorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr: ":0", InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"shared": {Name: "shared", Protocol: "anthropic", BaseURL: "https://shared.test", APIKey: "k", Models: []string{"unauthorized-model", "authorized-model"}, Endpoints: []string{config.ProviderEndpointMessages}},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"unauthorized-model": {ID: "unauthorized-model"},
+			"authorized-model":   {ID: "authorized-model"},
+		},
+	})
+	registry := metrics.NewRegistry()
+	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, registry)
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] == "unauthorized-model" {
+			return testResponse(http.StatusForbidden, "application/json", `{"type":"error","error":{"type":"forbidden_error","message":"model access denied"}}`), nil
+		}
+		return testResponse(http.StatusOK, "application/json", `{"id":"m1","type":"message","role":"assistant","model":"authorized-model","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`), nil
+	})
+
+	denied := newResponseRecorder()
+	handler.ServeHTTP(denied, newRequest(http.MethodPost, "/v1/messages", `{"model":"unauthorized-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("denied status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	allowed := newResponseRecorder()
+	handler.ServeHTTP(allowed, newRequest(http.MethodPost, "/v1/messages", `{"model":"authorized-model","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if allowed.Code != http.StatusOK || !strings.Contains(allowed.Body.String(), "OK") {
+		t.Fatalf("allowed status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+}

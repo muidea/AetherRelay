@@ -16,8 +16,8 @@ state:
 
 model_metadata:
   gpt-5.5:
-    context_window_tokens: 128000
-    max_output_tokens: 16384
+    context_window_tokens: 1050000
+    max_output_tokens: 128000
 ```
 
 `model_metadata` 是可选的静态模型元数据目录；模型 ID exact 且严格区分大小写。Provider 是否能处理某类请求由 `endpoints` 与共享 transport matrix 唯一决定。`GET/POST /v1/models` 会把这套运行时结果以模型级 `supported_endpoints` 返回；该字段不是配置项，也不应写入 `model_metadata`：
@@ -51,7 +51,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 回退只会发生在客户端响应尚未提交时，并且仅针对网络错误、`408`、`429`、`5xx` 或流式请求的首事件探测失败。一次已写出的 SSE/HTTP 响应绝不切换 Provider。转换候选会先做语义预检：不支持的 tools、多模态或结构化字段不会被静默删改；若后续存在可原生保留该语义的候选，可改用该候选，否则返回 `conversion_unsupported`。ChatGPT Web、Codex OAuth 和图片等可能创建上游状态的执行器采用更严格的专用回退边界，避免重复执行。native 请求保留安全 query；跨协议转换清空客户端 query。
 
-运行时健康度是 5 分钟的有界样本窗口：少于 3 个样本显示 `unknown`；连续 3 次可重试失败会打开 30 秒熔断，路由会跳过熔断、`unhealthy` 或 `credential_error` 候选。健康度不替代账号池的真实可用性判断。管理页将可用性与健康度合并为单一状态视图，显示样本量、成功率、P95、熔断和账号池可路由原因。
+运行时健康度是 5 分钟的有界样本窗口：少于 3 个样本显示 `unknown`；连续 3 次可重试失败会打开 30 秒熔断，路由会跳过熔断、`unhealthy` 或 `credential_error` 候选。401/403 credential 状态按 Provider + exact model 隔离，避免共享 Provider 中一个未授权模型阻断其他已授权模型；传输失败和 open circuit 仍属于 Provider 整体。Provider 定义新增、删除或实际变更时，热更新会在返回成功前同步清除该 Provider 的旧健康窗口与熔断状态；与 Provider 无关的配置更新不会清除健康状态。健康度不替代账号池的真实可用性判断。管理页将可用性与健康度合并为单一状态视图，显示样本量、成功率、P95、熔断和账号池可路由原因。
 
 ## 客户端 API Key
 
@@ -101,7 +101,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
 - `/v1/search` 是 ai-proxy 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
-- 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
+- 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；需要可切换上游端点时应创建管理型直连 Provider。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
 - 跨协议转换按模型方向化 capability 开放：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；流式工具、多模态、结构化输出、continuation 仍在访问上游前拒绝。thinking/reasoning 只有配置方向专用 adapter 时才以降级模式开放。最近调用、usage 与 Prometheus 请求指标会同时记录 `conversion_mode`、`conversion_level`、转换耗时和拒绝/降级能力。
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
@@ -263,3 +263,11 @@ Admin usage API 的筛选参数、导出边界与响应格式以当前管理页�
 跨协议 `reasoning/thinking` 只能显式降级开放，不能仅写 `reasoning: true`：必须同时声明方向匹配的 `reasoning_adapter` 和 `reasoning_target_effort`，且目标 effort 必须列在该模型的 `reasoning_efforts` 中。Responses→Anthropic 使用 `responses_to_anthropic_adaptive`：显式 `reasoning.effort=none` 映射为 `thinking.type=disabled`（不发送 `output_config`），其他 effort 生成 `thinking.type=adaptive` 与配置的 `output_config.effort`；Anthropic→Responses 使用 `anthropic_to_responses_effort`，生成配置的 `reasoning.effort`。客户端传入的具体 effort 或 manual `budget_tokens` 不会跨协议换算，Anthropic manual `thinking.type=enabled` 会拒绝。Anthropic 请求省略 `thinking` 时，若目标模型明确支持 `none`，转换器会显式设置 `reasoning.effort=none`，避免上游默认 reasoning 改变工具调用合同。DeepSeek Anthropic 接入在 thinking 开启时不接受指定 `tool_choice`；需要命名工具时，Responses 客户端必须显式传入 `reasoning.effort=none`。上游返回的 reasoning/thinking 块和 delta 只会被识别后省略，不会转成普通文本；归档和“最近调用明细”记录 `conversion_degraded=true` 及有限字段名。
 
 当前转换实现覆盖纯文本非流式、纯文本 SSE，以及 Level 3 的 function tools 非流式请求/响应；图片、documents、JSON Schema/structured output、continuation 和流式工具事件仍会拒绝。只有模型实现声明与至少一个具体 Provider 发布门闩同时通过的 exact model 才会进入转换候选；`/v1/models` 会通过 `capabilities.reasoning`、`capabilities.native.responses` 和已验证的 `capabilities.conversions` 暴露能力，其中转换 reasoning 会标记 `reasoning_mode: "degrade"`，不代表无损保留。原生 Responses 请求中的 `reasoning.effort` 按模型枚举校验，未指定时使用默认值，不支持的值返回 400，不做静默降级。未声明能力的模型不会注入 `reasoning` 字段。
+
+当前 `grok-4.5` 的双向 Level 3 release 已分别在 Krill Anthropic Messages 与 OpenAI Responses transport 上验证；Provider 切换后仍只激活与当前 protocol/endpoints 相容的方向。其 hosted web search 未形成可验证工具事件，不属于 `native_responses_tools` 或转换 tools 的发布范围。
+
+当前 `gpt-5.6-luna` 同样完成 Krill 双向 Level 3 验证。模型元数据按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.6-luna) 发布 `1,050,000` context window 和 `128,000` max output tokens。Luna 的 Responses output item 私有 metadata 会被有界省略并标记降级，不属于可转换内容。
+
+`gpt-5.5` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.5) 发布 `1,050,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `medium`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools、tool result 闭环及全部五档 reasoning；不据此开放跨协议转换或图片能力。
+
+`gpt-5.4-mini` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 发布 `400,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `none`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools 与 tool result 闭环，不据此开放跨协议转换。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理会在上游调用前明确拒绝；目录中的 `maxOutputTokens` 仅表示模型输出能力上限。

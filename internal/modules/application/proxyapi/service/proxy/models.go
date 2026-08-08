@@ -136,16 +136,16 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 			Object: "model",
 		}
 		rec.SupportedEndpoints = modelSupportedEndpoints(snap, id)
-		if metadata, ok := snap.StaticModels[route.ModelID]; ok && metadata.ReasoningDeclared {
+		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.ReasoningDeclared {
 			rec.Capabilities = &ModelCapabilities{Reasoning: &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}}
 		}
-		if metadata, ok := snap.StaticModels[route.ModelID]; ok && metadata.NativeResponsesDeclared {
+		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.NativeResponsesDeclared {
 			if rec.Capabilities == nil {
 				rec.Capabilities = &ModelCapabilities{}
 			}
 			rec.Capabilities.Native = &NativeCapabilities{Responses: &NativeResponsesCapabilities{Tools: metadata.NativeResponsesTools, Images: metadata.NativeResponsesImages}}
 		}
-		if metadata, ok := snap.StaticModels[route.ModelID]; ok {
+		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok {
 			for direction, capability := range metadata.ConversionCapabilities {
 				if !conversionCapabilityUsable(direction, capability) || !implementedConversionDirection(direction) || !modelHasConversionDirection(snap, id, direction) {
 					continue

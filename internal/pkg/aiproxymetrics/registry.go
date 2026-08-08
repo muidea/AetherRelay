@@ -208,7 +208,7 @@ func boundConversionStatus(status int) int {
 
 func boundConversionFeature(feature string) string {
 	switch strings.TrimSpace(feature) {
-	case "reasoning", "thinking", "reasoning_output", "thinking_output", "tools", "tool_choice", "function_call", "function_call_output", "tool_use", "tool_result", "stream", "max_output_tokens", "max_tokens", "text.format", "previous_response_id", "image", "document", "structured_output", "continuation", "unsupported_feature", "unsupported_content", "unsupported_role":
+	case "reasoning", "thinking", "reasoning_output", "thinking_output", "internal_chat_message_metadata_passthrough", "output_metadata", "tools", "tool_choice", "function_call", "function_call_output", "tool_use", "tool_result", "stream", "max_output_tokens", "max_tokens", "text.format", "previous_response_id", "image", "document", "structured_output", "continuation", "unsupported_feature", "unsupported_content", "unsupported_role":
 		return strings.TrimSpace(feature)
 	default:
 		return "_other"
@@ -407,29 +407,13 @@ func (r *Registry) RecordRequestPlanWithLevel(provider, model, route string, sta
 	r.requestCount[key]++
 	if provider != "" && shouldTrackProviderHealth(status, outcome) {
 		now := time.Now()
-		h := r.providerHealth[provider]
-		h.LastOutcome = outcome
-		if status >= 200 && status < 400 && outcome == "success" {
-			h.Successes++
-			h.ConsecutiveFailures = 0
-			h.LastSuccessAt = now
-			h.LastStatus = status
-			h.CircuitOpenUntil = time.Time{}
-		} else if outcome != "success" || status == 401 || status == 403 || status == 408 || status == 429 || status >= 500 {
-			h.Failures++
-			h.ConsecutiveFailures++
-			h.LastFailureAt = now
-			h.LastStatus = status
-			if h.ConsecutiveFailures >= 3 && retryableHealthFailure(status, outcome) {
-				h.CircuitOpenUntil = now.Add(30 * time.Second)
-			}
-		}
-		r.providerHealth[provider] = h
+		sample := healthSample{At: now, Model: model, Operation: route, Status: status, Outcome: outcome, Duration: duration}
+		r.providerHealth[provider] = applyProviderHealthSample(r.providerHealth[provider], sample)
 		samples := r.healthSamples[provider]
 		if len(samples) >= providerHealthSamplesCap {
 			samples = samples[providerHealthSamplesCap/2:]
 		}
-		r.healthSamples[provider] = append(samples, healthSample{At: now, Model: model, Operation: route, Status: status, Outcome: outcome, Duration: duration})
+		r.healthSamples[provider] = append(samples, sample)
 	}
 	seconds := duration.Seconds()
 	r.requestDurationSum[key] += seconds
@@ -449,6 +433,26 @@ func (r *Registry) RecordRequestPlanWithLevel(provider, model, route string, sta
 		samples = samples[latencySamplesCap/2:]
 	}
 	r.latencySamples[latKey] = append(samples, seconds)
+}
+
+func applyProviderHealthSample(health providerHealth, sample healthSample) providerHealth {
+	health.LastOutcome = sample.Outcome
+	if sample.Status >= 200 && sample.Status < 400 && sample.Outcome == "success" {
+		health.Successes++
+		health.ConsecutiveFailures = 0
+		health.LastSuccessAt = sample.At
+		health.LastStatus = sample.Status
+		health.CircuitOpenUntil = time.Time{}
+	} else if sample.Outcome != "success" || sample.Status == 401 || sample.Status == 403 || sample.Status == 408 || sample.Status == 429 || sample.Status >= 500 {
+		health.Failures++
+		health.ConsecutiveFailures++
+		health.LastFailureAt = sample.At
+		health.LastStatus = sample.Status
+		if health.ConsecutiveFailures >= 3 && retryableHealthFailure(sample.Status, sample.Outcome) {
+			health.CircuitOpenUntil = sample.At.Add(30 * time.Second)
+		}
+	}
+	return health
 }
 
 // shouldTrackProviderHealth keeps the provider-health window about upstream
@@ -480,6 +484,20 @@ func retryableHealthFailure(status int, outcome string) bool {
 	default:
 		return false
 	}
+}
+
+// ResetProviderHealth discards process-local health and circuit state after
+// an operator changes a Provider definition. Historical request counters stay
+// intact; only observations tied to the previous transport configuration are
+// no longer eligible to gate routing.
+func (r *Registry) ResetProviderHealth(provider string) {
+	if r == nil || strings.TrimSpace(provider) == "" {
+		return
+	}
+	r.mu.Lock()
+	delete(r.providerHealth, provider)
+	delete(r.healthSamples, provider)
+	r.mu.Unlock()
 }
 
 // RecordTokens 累计 token 用量,并按 cached_input_tokens>0 判定 cache hit/miss。

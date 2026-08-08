@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
-	value, err := forceStream([]byte(`{"model":"gpt-5.2","stream":false,"tools":[{"type":"function"}],"metadata":{"tenant":"alpha"}}`))
+	value, err := forceStream([]byte(`{"model":"gpt-5.2","input":"hello","stream":false,"tools":[{"type":"function"}],"metadata":{"tenant":"alpha"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,6 +23,9 @@ func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
 		if !strings.Contains(text, required) {
 			t.Fatalf("forced request lost native field %s: %s", required, text)
 		}
+	}
+	if !strings.Contains(text, `"content":[{"text":"hello","type":"input_text"}]`) || !strings.Contains(text, `"role":"user"`) {
+		t.Fatalf("string input was not normalized for Codex: %s", text)
 	}
 }
 
@@ -38,6 +42,61 @@ func TestCompletedResponseSupportsJSONAndSSE(t *testing.T) {
 	}
 }
 
+func TestCompletedResponseRebuildsFunctionCallOutputItem(t *testing.T) {
+	stream := "event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"arguments\":\"{\\\"city\\\":\\\"Shanghai\\\"}\",\"call_id\":\"call_1\",\"name\":\"lookup_city\"}}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_1\",\"output\":[]}}\n\n"
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}
+	value, class, _, err := completedResponse(response, 4096)
+	if err != nil || class != "" {
+		t.Fatalf("completed class=%q err=%v", class, err)
+	}
+	var completed struct {
+		Output []struct {
+			Type      string `json:"type"`
+			Name      string `json:"name"`
+			CallID    string `json:"call_id"`
+			Arguments string `json:"arguments"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(value, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if len(completed.Output) != 1 || completed.Output[0].Type != "function_call" || completed.Output[0].Name != "lookup_city" || completed.Output[0].CallID != "call_1" || completed.Output[0].Arguments != `{"city":"Shanghai"}` {
+		t.Fatalf("function output=%s", value)
+	}
+}
+
+func TestResponseWithOutputTextBuildsStandardOutputItem(t *testing.T) {
+	value := responseWithOutputText(json.RawMessage(`{"object":"response","id":"resp_1","output":[]}`), "hello")
+	var response struct {
+		Output []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(value, &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Output) != 1 || response.Output[0].Type != "message" || response.Output[0].Role != "assistant" || len(response.Output[0].Content) != 1 || response.Output[0].Content[0].Type != "output_text" || response.Output[0].Content[0].Text != "hello" {
+		t.Fatalf("standard output=%s", value)
+	}
+}
+
+func TestClassifyStatusTreatsClientErrorsAsInvalidRequest(t *testing.T) {
+	if got := classifyStatus(http.StatusBadRequest); got != events.ErrorInvalidRequest {
+		t.Fatalf("400 class=%q", got)
+	}
+	if got := classifyStatus(http.StatusUnprocessableEntity); got != events.ErrorInvalidRequest {
+		t.Fatalf("422 class=%q", got)
+	}
+}
+
 func TestTerminalClass(t *testing.T) {
 	if done, class := terminalClass([]byte("data: {\"type\":\"response.completed\"}\n")); !done || class != "" {
 		t.Fatalf("completed terminal = done=%v class=%q", done, class)
@@ -45,6 +104,39 @@ func TestTerminalClass(t *testing.T) {
 	if done, class := terminalClass([]byte("data: {\"type\":\"response.failed\"}\n")); !done || class != events.ErrorUpstream {
 		t.Fatalf("failed terminal = done=%v class=%q", done, class)
 	}
+	if done, class := terminalEvent([]byte("event: response.completed\n")); !done || class != "" {
+		t.Fatalf("event-only completed terminal = done=%v class=%q", done, class)
+	}
+	if done, class := terminalEvent([]byte("event: response.failed\n")); !done || class != events.ErrorUpstream {
+		t.Fatalf("event-only failed terminal = done=%v class=%q", done, class)
+	}
+	if got := sseEventName([]byte("event: response.output_item.done\n")); got != "response.output_item.done" {
+		t.Fatalf("output done event=%q", got)
+	}
+}
+
+func TestRunStreamAcceptsCleanEOFAfterOutputItemDoneEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	stream := &responseStream{cancel: cancel, updates: make(chan streamUpdate, 8)}
+	upstream := &Upstream{streams: map[string]*responseStream{"stream-1": stream}}
+	upstream.runStream(ctx, "stream-1", stream, io.NopCloser(strings.NewReader("event: response.output_item.done\n")), 1024)
+	if upstream.stream("stream-1") == nil {
+		t.Fatal("producer removed stream before the consumer drained terminal state")
+	}
+	done := false
+	for update := range stream.updates {
+		if update.done {
+			done = true
+			if update.errorClass != "" {
+				t.Fatalf("terminal class=%q", update.errorClass)
+			}
+		}
+	}
+	if !done {
+		t.Fatal("clean EOF after output_item.done was not completed")
+	}
+	upstream.removeStream("stream-1")
 }
 
 func TestRateLimitObservationReadsCodexUsageReset(t *testing.T) {

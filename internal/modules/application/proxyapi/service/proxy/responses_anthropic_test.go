@@ -791,6 +791,27 @@ func TestReasoningOutputIsOmittedAndMarkedDegraded(t *testing.T) {
 	}
 }
 
+func TestResponsesProviderMetadataIsOmitted(t *testing.T) {
+	capability := config.ConversionCapability{Level: 3, Text: true, Tools: true}
+	response, _, ignored, err := convertOpenAIResponsesToAnthropicWithCapability([]byte(`{
+		"id":"r1","model":"gpt","status":"completed",
+		"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"visible"}],"internal_chat_message_metadata_passthrough":{"opaque":"secret"},"metadata":{"provider":"private"}}],
+		"usage":{"input_tokens":1,"output_tokens":1}
+	}`), "gpt", capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(response), "secret") || !strings.Contains(string(response), "visible") {
+		t.Fatalf("response=%s", response)
+	}
+	if !strings.Contains(strings.Join(ignored, ","), "internal_chat_message_metadata_passthrough") {
+		t.Fatalf("ignored=%#v", ignored)
+	}
+	if !strings.Contains(strings.Join(ignored, ","), "output_metadata") {
+		t.Fatalf("ignored=%#v", ignored)
+	}
+}
+
 func TestReasoningSSEBlocksAreOmitted(t *testing.T) {
 	capability := config.ConversionCapability{Level: 2, Text: true, Reasoning: true, ReasoningAdapter: config.ReasoningAdapterAnthropicToResponsesEffort, ReasoningTargetEffort: "low"}
 	state := &textConversionStreamState{}

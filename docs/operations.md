@@ -55,6 +55,7 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 
 - 启用后任意来源都必须登录；不再保留 loopback 特权旁路。
 - 修改密码哈希、账号或开关并成功热更新后，全部内存会话立即失效。
+- 管理接口成功修改 Provider 后，旧 transport 产生的健康样本和熔断会在 PATCH 返回前同步清除；恢复上游后无需等待原 30 秒 cooldown。未修改 Provider 的普通配置热更新不会重置其健康状态。
 - `admin_base_path` 是启动期路由；变更后必须重启进程，并同步反向代理路径规则。
 - 连续 5 次登录失败会按对端 IP 锁定 15 分钟（不信任 forwarded IP）。
 - `AI_PROXY_CREDENTIAL_KEY`、客户端 Key 哈希、Admin 密码哈希与 DuckDB 文件仍需主机权限保护；不要把主密钥写入 `config.yaml`、数据库、日志或版本库。

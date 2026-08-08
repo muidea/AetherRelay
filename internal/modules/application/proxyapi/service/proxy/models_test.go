@@ -77,6 +77,26 @@ func TestModelsProjectsDegradedReasoningConversion(t *testing.T) {
 	}
 }
 
+func TestModelsProjectsMetadataForCodexOAuthDiscoveredModel(t *testing.T) {
+	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
+		"gpt-pool": {
+			ID: "gpt-pool", ContextWindowTokens: 400000, MaxOutputTokens: 128000,
+			ReasoningDeclared: true, ReasoningSupported: true, ReasoningDefaultEffort: "none", ReasoningEfforts: []string{"none", "low"},
+		},
+	}}
+	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
+		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-pool"}},
+	})
+	response := buildModelsListResponse(snapshot)
+	if len(response.Data) != 1 || response.Data[0].ID != "gpt-pool" {
+		t.Fatalf("models=%#v", response.Data)
+	}
+	record := response.Data[0]
+	if record.ContextWindowTokens != 400000 || record.MaxOutputTokens != 128000 || record.Capabilities == nil || record.Capabilities.Reasoning == nil || record.Capabilities.Reasoning.DefaultEffort != "none" || !reflect.DeepEqual(record.Capabilities.Reasoning.Efforts, []string{"none", "low"}) {
+		t.Fatalf("Codex OAuth metadata=%#v", record)
+	}
+}
+
 func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.T) {
 	cfg := config.Config{
 		Providers: map[string]config.Provider{

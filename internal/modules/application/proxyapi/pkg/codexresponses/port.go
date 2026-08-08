@@ -24,6 +24,7 @@ type ErrorKind string
 
 const (
 	KindProviderUnavailable ErrorKind = "provider_unavailable"
+	KindInvalidRequest      ErrorKind = "invalid_request"
 	KindInvalidToken        ErrorKind = "invalid_token"
 	KindRateLimit           ErrorKind = "rate_limit"
 	KindTimeout             ErrorKind = "timeout"

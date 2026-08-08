@@ -123,6 +123,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	status := http.StatusBadGateway
 	code := ErrorCodeUpstreamUnavailable
 	switch failure.ErrorCode {
+	case string(codexresponses.KindInvalidRequest):
+		status = http.StatusBadRequest
+		code = ErrorCodeInvalidRequest
 	case string(codexresponses.KindProviderUnavailable):
 		status = http.StatusServiceUnavailable
 		code = ErrorCodeProviderUnavailable
@@ -181,6 +184,8 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 	var kind streamKind
 	countUpstream := false
 	switch failure.Kind {
+	case codexresponses.KindInvalidRequest:
+		kind = streamKindError
 	case codexresponses.KindClientCanceled:
 		kind = streamKindClientCanceled
 	case codexresponses.KindClientWrite:

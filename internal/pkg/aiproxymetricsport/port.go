@@ -38,11 +38,13 @@ type Reader interface {
 	Prometheus() ([]byte, error)
 	StatsJSON() ([]byte, error)
 	ProviderHealthSnapshot() map[string]metrics.StatsProviderHealth
+	ProviderModelHealth(provider, model string) (metrics.StatsProviderHealth, bool)
 }
 
 type Port interface {
 	Reporter
 	Reader
+	ResetProviderHealth(provider string) error
 }
 
 // Direct 仅供 Block 内部和单元测试把 Registry 适配为 Port；生产跨单元调用应使用 EventHub client。
@@ -75,4 +77,13 @@ func (p directPort) StatsJSON() ([]byte, error) { return p.Registry.StatsJSON() 
 
 func (p directPort) ProviderHealthSnapshot() map[string]metrics.StatsProviderHealth {
 	return p.Registry.ProviderHealthSnapshot()
+}
+
+func (p directPort) ProviderModelHealth(provider, model string) (metrics.StatsProviderHealth, bool) {
+	return p.Registry.ProviderModelHealth(provider, model)
+}
+
+func (p directPort) ResetProviderHealth(provider string) error {
+	p.Registry.ResetProviderHealth(provider)
+	return nil
 }

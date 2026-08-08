@@ -155,16 +155,50 @@ model_metadata:
         reasoning_adapter: anthropic_to_responses_effort
         reasoning_target_effort: low
   gpt-5.5:
+    # OpenAI's model page publishes a 1,050,000-token context window.
+    context_window_tokens: 1050000
+    max_output_tokens: 128000
+    reasoning_supported: true
+    reasoning_default_effort: medium
+    reasoning_efforts: [none, low, medium, high, xhigh]
+    native_responses_tools: true
+    native_responses_images: false
+  gpt-5.4-mini:
     context_window_tokens: 400000
+    max_output_tokens: 128000
+    reasoning_supported: true
+    reasoning_default_effort: none
+    reasoning_efforts: [none, low, medium, high, xhigh]
+    native_responses_tools: true
+    native_responses_images: false
+  gpt-5.6-luna:
+    # OpenAI's model page publishes a 1,050,000-token context window.
+    context_window_tokens: 1050000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
     reasoning_efforts: [none, low, medium, high, xhigh, max]
-  gpt-5.6-luna:
-    # Codex cache has not published a GPT-5.6 ceiling yet. Reuse the observed
-    # GPT-5.5 Codex context window conservatively until discovery provides one.
-    context_window_tokens: 1000000
-    max_output_tokens: 128000
+    native_responses_tools: true
+    native_responses_images: false
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 3
+        text: true
+        tools: true
+        images: false
+        streaming: true
+        reasoning: true
+        reasoning_adapter: responses_to_anthropic_adaptive
+        reasoning_target_effort: medium
+      anthropic_to_responses:
+        level: 3
+        text: true
+        tools: true
+        images: false
+        streaming: true
+        reasoning: true
+        reasoning_adapter: anthropic_to_responses_effort
+        reasoning_target_effort: medium
   gpt-5.6-sol:
     context_window_tokens: 1000000
     max_output_tokens: 128000
@@ -180,6 +214,30 @@ model_metadata:
   grok-4.5:
     context_window_tokens: 500000
     max_output_tokens: 16384
+    reasoning_supported: true
+    reasoning_default_effort: low
+    reasoning_efforts: [none, low, high, max]
+    native_responses_tools: true
+    native_responses_images: false
+    conversion_capabilities:
+      responses_to_anthropic:
+        level: 3
+        text: true
+        tools: true
+        images: false
+        streaming: true
+        reasoning: true
+        reasoning_adapter: responses_to_anthropic_adaptive
+        reasoning_target_effort: low
+      anthropic_to_responses:
+        level: 3
+        text: true
+        tools: true
+        images: false
+        streaming: true
+        reasoning: true
+        reasoning_adapter: anthropic_to_responses_effort
+        reasoning_target_effort: low
   MiniMax-M2.7-highspeed:
     context_window_tokens: 204800
     max_output_tokens: 32768

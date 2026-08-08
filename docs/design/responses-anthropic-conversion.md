@@ -654,7 +654,7 @@ conversion_duration_ms
 estimated
 ```
 
-`ignored_features` 在显式 reasoning adapter 下允许记录被省略的 `reasoning`、`thinking`、`reasoning_output`、`thinking_output` 字段名，但不得记录字段值；未配置 adapter 时，这些字段必须进入 `unsupported_features` 或错误响应。
+`ignored_features` 在显式 reasoning adapter 下允许记录被省略的 `reasoning`、`thinking`、`reasoning_output`、`thinking_output` 字段名，但不得记录字段值；未配置 adapter 时，这些字段必须进入 `unsupported_features` 或错误响应。已识别的 Krill/Codex Responses output item 私有字段仅以 `internal_chat_message_metadata_passthrough`、`output_metadata` 两个有界名称记录并省略字段值，不得折叠进 Anthropic 文本或工具输入。
 
 Prometheus 使用以下低基数指标，不把错误文本、请求正文或任意 feature 值作为 label：
 

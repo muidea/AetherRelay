@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -197,6 +198,16 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 	if err := requireResolvedConfig(cfg); err != nil {
 		return err
 	}
+	h.cfgMu.RLock()
+	changedProviders := changedProviderNames(h.cfg.Providers, cfg.Providers)
+	h.cfgMu.RUnlock()
+	if h.metricsRegistry != nil {
+		for _, provider := range changedProviders {
+			if err := h.metricsRegistry.ResetProviderHealth(provider); err != nil {
+				return fmt.Errorf("reset provider %q health: %w", provider, err)
+			}
+		}
+	}
 	previousCatalog := h.EffectiveCatalog()
 	h.cfgMu.Lock()
 	defer h.cfgMu.Unlock()
@@ -210,6 +221,24 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 	h.client = newHTTPClient(cfg.RequestTimeout)
 	h.clientMu.Unlock()
 	return nil
+}
+
+func changedProviderNames(current, next map[string]config.Provider) []string {
+	names := make(map[string]struct{}, len(current)+len(next))
+	for name := range current {
+		names[name] = struct{}{}
+	}
+	for name := range next {
+		names[name] = struct{}{}
+	}
+	changed := make([]string, 0, len(names))
+	for name := range names {
+		if !reflect.DeepEqual(current[name], next[name]) {
+			changed = append(changed, name)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }
 
 // NewHandler 装配代理处理器。usageStore 可为 nil(仅健康检查/测试),业务请求 Start 将失败。
@@ -1131,11 +1160,23 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
+		if _, exists := rawBody["max_output_tokens"]; exists {
+			h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), rawStream)
+			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, APIError{
+				Code: ErrorCodeInvalidRequest, Message: "max_output_tokens is not supported by the fixed Codex OAuth upstream", Feature: "max_output_tokens", Model: rawModel,
+			})
+			return
+		}
 		if !rawStream {
 			response, codexErr := h.completeCodexOAuthResponse(r.Context(), rawModel, body)
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
+				return
+			}
+			if failure, ok := codexresponses.AsFailure(codexErr); ok && failure.Kind == codexresponses.KindInvalidRequest {
+				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
+				h.writeCodexResponsesError(w, r, round, start, plan.RouteOwner, rawModel, false, codexErr)
 				return
 			}
 			h.recordCandidateFailure(r, plan, http.StatusBadGateway, time.Since(start))
@@ -2533,12 +2574,26 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 	}
 	health := h.metricsRegistry.ProviderHealthSnapshot()
 	eligible := make([]TransportPlan, 0, len(plans))
+	modelHealth := make(map[string]metrics.StatsProviderHealth, len(plans))
 	for _, plan := range plans {
-		value, ok := health[plan.RouteOwner]
-		if ok && (value.Status == "unhealthy" || value.Status == "credential_error" || value.CircuitState == "open") {
+		providerValue, providerOK := health[plan.RouteOwner]
+		specific, specificOK := h.metricsRegistry.ProviderModelHealth(plan.RouteOwner, plan.ModelID)
+		if specificOK && (specific.Status == "unhealthy" || specific.Status == "credential_error" || specific.CircuitState == "open") {
+			continue
+		}
+		// Credential failures are model-scoped: one Provider key may be
+		// authorized for some exact models but not others. Transport failures
+		// and open provider circuits remain shared across all models.
+		if providerOK && (providerValue.Status == "unhealthy" || providerValue.CircuitState == "open") {
 			continue
 		}
 		eligible = append(eligible, plan)
+		key := plan.RouteOwner + "\x00" + plan.ModelID
+		if specificOK {
+			modelHealth[key] = specific
+		} else if providerOK {
+			modelHealth[key] = providerValue
+		}
 	}
 	if len(eligible) == 0 {
 		first := plans[0]
@@ -2551,7 +2606,9 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 		if eligible[i].Priority != eligible[j].Priority {
 			return eligible[i].Priority > eligible[j].Priority
 		}
-		left, right := health[eligible[i].RouteOwner], health[eligible[j].RouteOwner]
+		leftKey := eligible[i].RouteOwner + "\x00" + eligible[i].ModelID
+		rightKey := eligible[j].RouteOwner + "\x00" + eligible[j].ModelID
+		left, right := modelHealth[leftKey], modelHealth[rightKey]
 		if left.Score != right.Score {
 			return left.Score > right.Score
 		}

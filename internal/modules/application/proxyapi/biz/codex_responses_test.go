@@ -171,6 +171,39 @@ func TestCompleteCodexResponsesPreservesUpstreamInvalidTokenWhenRecoveryIsExhaus
 	}
 }
 
+func TestCompleteCodexResponsesDoesNotPenalizeAccountForInvalidRequest(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "token"}, nil)
+	})
+	recorded := make(chan accevents.RecordResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicComplete, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CompleteResult{ErrorClass: upevents.ErrorInvalidRequest, HTTPStatus: 400}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	_, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)})
+	failure, ok := codexresponses.AsFailure(err)
+	if !ok || failure.Kind != codexresponses.KindInvalidRequest || failure.HTTPStatus != 400 {
+		t.Fatalf("failure=%+v err=%v", failure, err)
+	}
+	select {
+	case command := <-recorded:
+		t.Fatalf("invalid request penalized account: %+v", command)
+	default:
+	}
+}
+
 func TestCompleteCodexResponsesRecordsObservedQuotaExhaustion(t *testing.T) {
 	hub := event.NewHub(16)
 	background := task.NewBackgroundRoutine(8)

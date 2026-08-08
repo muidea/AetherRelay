@@ -55,6 +55,11 @@ type BuiltinProvider struct {
 
 // Snapshot is the atomic read model shared by /v1/models and ResolveTransportPlan.
 type Snapshot struct {
+	// ModelMetadata contains declarations for every configured exact model,
+	// including models whose membership comes only from an account-pool catalog.
+	ModelMetadata map[string]config.ModelMetadata
+	// StaticModels contains only models matched by a managed direct Provider.
+	// It remains the static membership set and must not include metadata-only IDs.
 	StaticModels    map[string]config.ModelMetadata
 	BuiltinProvider BuiltinProvider
 	BuiltinModels   map[string]BuiltinModel
@@ -121,6 +126,7 @@ type CatalogInput struct {
 func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 	static := exactProviderModels(cfg)
 	snap := Snapshot{
+		ModelMetadata: cloneModelMetadata(cfg.ModelMetadata),
 		StaticModels:  static,
 		Version:       chatGPT.Version,
 		BuiltinModels: map[string]BuiltinModel{},
@@ -458,6 +464,7 @@ func BuiltinProviderViewFor(owner string) config.Provider {
 // Empty returns a disabled empty snapshot.
 func Empty() Snapshot {
 	return Snapshot{
+		ModelMetadata:    map[string]config.ModelMetadata{},
 		StaticModels:     map[string]config.ModelMetadata{},
 		BuiltinModels:    map[string]BuiltinModel{},
 		CodexOAuthModels: map[string]BuiltinModel{},
@@ -468,6 +475,14 @@ func Empty() Snapshot {
 		},
 		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Status: StatusDisabled},
 	}
+}
+
+func cloneModelMetadata(source map[string]config.ModelMetadata) map[string]config.ModelMetadata {
+	result := make(map[string]config.ModelMetadata, len(source))
+	for id, metadata := range source {
+		result[id] = metadata
+	}
+	return result
 }
 
 // FromStatic builds a snapshot containing only the static catalog (chatgpt web off).

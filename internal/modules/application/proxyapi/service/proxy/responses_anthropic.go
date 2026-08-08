@@ -462,6 +462,17 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 	registry := newToolCallRegistry()
 	toolStop := false
 	for _, item := range in.Output {
+		if _, exists := item["internal_chat_message_metadata_passthrough"]; exists {
+			// Krill/Codex-compatible Responses relays may attach opaque
+			// internal message metadata to output items. It has no Anthropic
+			// semantic equivalent and must never be exposed as content.
+			delete(item, "internal_chat_message_metadata_passthrough")
+			ignored = append(ignored, "internal_chat_message_metadata_passthrough")
+		}
+		if _, exists := item["metadata"]; exists {
+			delete(item, "metadata")
+			ignored = append(ignored, "output_metadata")
+		}
 		typ, _ := item["type"].(string)
 		switch typ {
 		case "message":

@@ -20,7 +20,9 @@
 ## 原生 Responses 代理
 
 - `codexoauth` 只服务原生 `POST /v1/responses`（HTTP JSON/SSE P0）；请求与 SSE 事件不经过 ChatGPT Web 消息树转换；`/v1/chat/completions` 不能路由到该 Provider。
-- 非流式请求在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象；上游若返回原生 JSON Response 也接受。
+- `codexoauth` 是只读内建 Provider，上游 Responses、模型发现和用量端点由实现固定，不参与管理型 Provider 的 protocol/base URL/endpoints 切换；如需切换上游接入端点，必须使用独立的管理型直连 Provider。
+- 非流式请求在内部要求上游 SSE；优先返回 `response.completed` 的原始 Response 对象，也可从完整 `output_item.done` 重建标准文本和 function-call output。上游若返回原生 JSON Response 也接受。
+- 流式响应透传标准 Responses 事件。若工具调用已收到完整 `function_call_arguments.done` 和 `response.output_item.done`，随后 clean EOF 可作为成功结束；代理不会伪造缺失的 `response.completed` data。
 - P0 不支持 realtime/WebSocket、`responses/compact`、网页会话或插件能力。
 
 ## 账号韧性

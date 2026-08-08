@@ -187,6 +187,7 @@ func (s *Upstream) handlePull(ev event.Event, result event.Result) {
 	select {
 	case update, ok := <-stream.updates:
 		if !ok {
+			s.removeStream(cmd.StreamID)
 			result.Set(events.PullResult{Done: true}, nil)
 			return
 		}
@@ -256,8 +257,10 @@ func (s *Upstream) handleGetUsage(ev event.Event, result event.Result) {
 func (s *Upstream) runStream(ctx context.Context, streamID string, stream *responseStream, body io.ReadCloser, maxLine int64) {
 	defer body.Close()
 	defer close(stream.updates)
-	defer s.removeStream(streamID)
 	reader := bufio.NewReader(body)
+	pendingTerminal := false
+	pendingClass := events.ErrorClass("")
+	sawOutputDone := false
 	for {
 		line, err := readLine(reader, maxLine)
 		if len(line) > 0 {
@@ -268,10 +271,22 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
 				return
 			}
+			if done, class := terminalEvent(line); done {
+				pendingTerminal, pendingClass = true, class
+			}
+			if sseEventName(line) == "response.output_item.done" {
+				sawOutputDone = true
+			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol})
+				if pendingTerminal {
+					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: pendingClass})
+				} else if sawOutputDone {
+					sendUpdate(ctx, stream, streamUpdate{done: true})
+				} else {
+					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol})
+				}
 				return
 			}
 			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyTransport(err)})
@@ -666,6 +681,21 @@ func forceStream(body []byte) ([]byte, error) {
 	if err := json.Unmarshal(body, &values); err != nil {
 		return nil, err
 	}
+	// The public Responses API accepts a string input shorthand. The fixed
+	// Codex backend accepts only the equivalent message-array representation.
+	if raw, ok := values["input"]; ok {
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			normalized, err := json.Marshal([]any{map[string]any{
+				"role":    "user",
+				"content": []any{map[string]any{"type": "input_text", "text": text}},
+			}})
+			if err != nil {
+				return nil, err
+			}
+			values["input"] = normalized
+		}
+	}
 	values["stream"] = json.RawMessage("true")
 	// The ChatGPT Codex backend accepts native Responses requests only as
 	// non-persisted executions. Downstream clients need not know this transport
@@ -699,6 +729,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	}
 	reader := bufio.NewReader(response.Body)
 	var outputText strings.Builder
+	outputItems := map[int]json.RawMessage{}
 	for {
 		line, err := readLine(reader, 1<<20)
 		if len(line) > 0 {
@@ -706,17 +737,23 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 			if strings.HasPrefix(trimmed, "data:") {
 				payload := []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
 				var event struct {
-					Type     string          `json:"type"`
-					Delta    string          `json:"delta"`
-					Response json.RawMessage `json:"response"`
+					Type        string          `json:"type"`
+					Delta       string          `json:"delta"`
+					OutputIndex int             `json:"output_index"`
+					Item        json.RawMessage `json:"item"`
+					Response    json.RawMessage `json:"response"`
 				}
 				if json.Unmarshal(payload, &event) == nil {
 					switch event.Type {
 					case "response.output_text.delta":
 						outputText.WriteString(event.Delta)
+					case "response.output_item.done":
+						if event.OutputIndex >= 0 && event.OutputIndex < 1024 && json.Valid(event.Item) {
+							outputItems[event.OutputIndex] = bytes.Clone(event.Item)
+						}
 					case "response.completed":
 						if len(event.Response) > 0 {
-							return responseWithOutputText(event.Response, outputText.String()), "", events.RateLimitObservation{}, nil
+							return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, nil
 						}
 					case "response.failed", "response.incomplete":
 						observation := rateLimitObservation(payload, time.Now().UTC())
@@ -739,26 +776,75 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 }
 
 func responseWithOutputText(response json.RawMessage, text string) []byte {
+	return responseWithOutputItems(response, nil, text)
+}
+
+func responseWithOutputItems(response json.RawMessage, items map[int]json.RawMessage, text string) []byte {
 	if strings.TrimSpace(text) == "" {
-		return bytes.Clone(response)
+		if len(items) == 0 {
+			return bytes.Clone(response)
+		}
 	}
 	var object map[string]json.RawMessage
 	if json.Unmarshal(response, &object) != nil {
 		return bytes.Clone(response)
 	}
-	if existing := strings.TrimSpace(string(object["output_text"])); existing != "" && existing != `""` && existing != "null" {
+	if outputHasItems(object["output"]) {
 		return bytes.Clone(response)
 	}
-	encoded, err := json.Marshal(text)
+	if strings.TrimSpace(text) != "" {
+		encoded, err := json.Marshal(text)
+		if err != nil {
+			return bytes.Clone(response)
+		}
+		object["output_text"] = encoded
+	}
+	outputItems := orderedOutputItems(items)
+	if len(outputItems) == 0 {
+		generated, err := json.Marshal(map[string]any{
+			"id":     "msg_" + uuid.NewString(),
+			"type":   "message",
+			"status": "completed",
+			"role":   "assistant",
+			"content": []any{map[string]any{
+				"type":        "output_text",
+				"text":        text,
+				"annotations": []any{},
+			}},
+		})
+		if err != nil {
+			return bytes.Clone(response)
+		}
+		outputItems = []json.RawMessage{generated}
+	}
+	output, err := json.Marshal(outputItems)
 	if err != nil {
 		return bytes.Clone(response)
 	}
-	object["output_text"] = encoded
+	object["output"] = output
 	result, err := json.Marshal(object)
 	if err != nil {
 		return bytes.Clone(response)
 	}
 	return result
+}
+
+func orderedOutputItems(items map[int]json.RawMessage) []json.RawMessage {
+	indices := make([]int, 0, len(items))
+	for index := range items {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	result := make([]json.RawMessage, 0, len(indices))
+	for _, index := range indices {
+		result = append(result, bytes.Clone(items[index]))
+	}
+	return result
+}
+
+func outputHasItems(raw json.RawMessage) bool {
+	var items []json.RawMessage
+	return json.Unmarshal(raw, &items) == nil && len(items) > 0
 }
 
 func readLine(reader *bufio.Reader, limit int64) ([]byte, error) {
@@ -799,6 +885,25 @@ func terminalClass(line []byte) (bool, events.ErrorClass) {
 	default:
 		return false, ""
 	}
+}
+
+func terminalEvent(line []byte) (bool, events.ErrorClass) {
+	switch sseEventName(line) {
+	case "response.completed":
+		return true, ""
+	case "response.failed", "response.incomplete":
+		return true, events.ErrorUpstream
+	default:
+		return false, ""
+	}
+}
+
+func sseEventName(line []byte) string {
+	value := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(value, "event:") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(value, "event:"))
 }
 
 func terminalOutcome(line []byte) (bool, events.ErrorClass, events.RateLimitObservation) {
@@ -956,6 +1061,9 @@ func classifyStatus(status int) events.ErrorClass {
 	}
 	if status == http.StatusTooManyRequests {
 		return events.ErrorRateLimit
+	}
+	if status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		return events.ErrorInvalidRequest
 	}
 	return events.ErrorUpstream
 }

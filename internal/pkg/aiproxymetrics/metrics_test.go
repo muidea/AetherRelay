@@ -150,6 +150,35 @@ func TestProviderHealthUsesLowSampleUnknownAndOpensCircuit(t *testing.T) {
 	}
 }
 
+func TestResetProviderHealthClearsOnlyTargetCircuit(t *testing.T) {
+	r := NewRegistry()
+	for range 3 {
+		r.RecordRequestPlan("changed", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+		r.RecordRequestPlan("unchanged", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+	}
+	r.ResetProviderHealth("changed")
+	if _, ok := r.ProviderHealthSnapshot()["changed"]; ok {
+		t.Fatal("changed provider health was not reset")
+	}
+	if got := r.ProviderHealthSnapshot()["unchanged"]; got.CircuitState != "open" {
+		t.Fatalf("unrelated provider health changed: %#v", got)
+	}
+}
+
+func TestProviderModelHealthIsolatesCredentialFailure(t *testing.T) {
+	r := NewRegistry()
+	r.RecordRequestPlan("shared", "unauthorized-model", "messages", http.StatusForbidden, time.Millisecond, "error", "", "", "", "")
+	r.RecordRequestPlan("shared", "authorized-model", "messages", http.StatusOK, time.Millisecond, "success", "", "", "", "")
+	unauthorized, ok := r.ProviderModelHealth("shared", "unauthorized-model")
+	if !ok || unauthorized.Status != "credential_error" {
+		t.Fatalf("unauthorized model health=%#v found=%v", unauthorized, ok)
+	}
+	authorized, ok := r.ProviderModelHealth("shared", "authorized-model")
+	if !ok || authorized.Status == "credential_error" {
+		t.Fatalf("authorized model health=%#v found=%v", authorized, ok)
+	}
+}
+
 func TestProviderHealthHalfOpenIsRoutableRecoveryProbe(t *testing.T) {
 	r := NewRegistry()
 	for range 3 {

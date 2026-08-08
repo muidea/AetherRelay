@@ -26,6 +26,10 @@ Anthropic-Version: 2023-06-01
 
 `client-api-key` 由 ai-proxy 管理端创建。它不是 Provider 的上游 API Key，也不是 ChatGPT Web 或 Codex OAuth 凭据；网关不会把客户端 Key 作为上游凭据转发。
 
+`codexoauth` 是账号池注入的只读内建 Provider，只提供固定 Codex OAuth 上游的原生 `/v1/responses`。业务端不能通过 Provider 配置切换其 protocol、base URL 或 endpoints；需要切换上游接入端点时，应使用独立的管理型直连 Provider。Codex OAuth 边界会把 Responses 标准字符串 `input` 等价展开为消息数组，并强制上游 `stream=true`、`store=false`；这些属于固定传输适配，不改变业务端发布的客户端端点。模型目录中的 `maxOutputTokens` 表示模型输出能力上限，不代表该固定 transport 接受客户端 `max_output_tokens` 参数；当前传入该字段会在上游调用前明确返回 400，不会静默省略。
+
+Codex OAuth 的非流式聚合会从 SSE `output_item.done` 重建标准 `output`；若上游只提供文本 delta，则生成等价的 assistant/output_text item。流式工具调用已观察到固定上游在完整 `function_call_arguments.done` 后仅发送 `event: response.output_item.done` 并 clean EOF，未必提供 `response.completed` data。代理只在已收到 item done event 时将这种 EOF 结算为成功，不伪造缺失的 completion 对象；依赖严格 `response.completed` data 的应用应使用非流式工具调用。
+
 ### 1.1 SDK 配置
 
 Python OpenAI SDK：
@@ -178,6 +182,12 @@ curl -sS http://127.0.0.1:8080/v1/models \
 Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。若目标模型的 `reasoning_efforts` 明确包含 `none`，代理会显式发送 `reasoning.effort=none`，避免目标模型的默认 reasoning 模式改变工具选择语义；显式 `thinking.type=adaptive` 仍按 capability 中固定的目标 effort 降级映射。反向 Responses→Anthropic 中，显式 `reasoning.effort=none` 映射为 `thinking.type=disabled`，其他 effort 映射为 adaptive + 配置的目标 effort。DeepSeek Anthropic 接入在 thinking 开启时拒绝命名 `tool_choice`，因此命名工具请求应显式使用 `reasoning.effort=none`。
 
 对于只实现 OpenAI Chat Completions 的旧应用，仅选择 `supported_endpoints` 包含 `/v1/chat/completions` 的模型。Chat→Anthropic 是基础文本兼容路径；Anthropic 返回的 thinking 块会被识别并省略，不会作为 assistant 文本暴露。不要把 Provider 配置中的 `responses`、`messages` 等名称拼成 URL。
+
+`grok-4.5` 在 Krill Provider 上已分别通过 Anthropic Messages 与 OpenAI Responses transport 的文本、SSE、非流式 function tools、工具结果闭环及 reasoning/thinking 降级验证。当前模型元数据发布 `none/low/high/max`，转换固定降级目标为 `low`，图片与流式工具保持关闭。Krill 原生 Responses 接受 `store=false`、`reasoning.effort=high` 和 `text.verbosity=high`；但 hosted `web_search` 即使要求 `tool_choice=required` 也未产生真实搜索工具事件，因此 `web_search=live` 应由应用端工具能力负责，不能依据该配置推断上游已支持实时搜索。
+
+`gpt-5.6-luna` 在同一 Krill Provider 上也已完成双向 Level 3 验证；模型目录按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.6-luna) 发布 `1,050,000` context window 和 `128,000` max output tokens。reasoning 发布 `none/low/medium/high/xhigh/max`，默认与固定转换目标均为 `medium`。Krill Responses 会在 Luna output item 附加 `internal_chat_message_metadata_passthrough` 和 `metadata`；代理识别后省略，分别只记录对应的有界 degraded feature，不向 Anthropic 内容泄漏内部元数据。
+
+`gpt-5.5` 由内建 `codexoauth` 发布原生 `/v1/responses`，模型目录按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.5) 返回 `1,050,000` context window 和 `128,000` max output tokens。实测 `none/low/medium/high/xhigh` reasoning、非流式文本、文本 SSE、function call、tool result 闭环和流式工具事件均可用；默认 effort 为 `medium`。不要发送 `max` effort。图片能力保持关闭；客户端 `max_output_tokens` 受固定 Codex OAuth transport 限制，会在调用上游前返回明确的 400。
 
 ## 4. OpenAI Responses 集成
 

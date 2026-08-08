@@ -11,6 +11,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	config "ai-proxy/internal/pkg/aiproxyconfig"
+	aiproxymetrics "ai-proxy/internal/pkg/aiproxymetrics"
 	"ai-proxy/internal/pkg/aiproxyusage"
 )
 
@@ -74,6 +75,45 @@ func TestCodexOAuthResponsesPreservesNativeRequestAndSettlesUsage(t *testing.T) 
 	event := events[0]
 	if event.Outcome != "success" || event.Provider != effectivecatalog.CodexOAuthProviderID || event.UpstreamProtocol != effectivecatalog.CodexOAuthProviderID || event.UpstreamEndpoint != "codex_oauth_responses" || event.ConversionMode != TransportModeCodexOAuthResponses {
 		t.Fatalf("Codex usage metadata=%+v", event)
+	}
+}
+
+func TestCodexOAuthInvalidRequestReturnsClientError(t *testing.T) {
+	failure := codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("Codex upstream rejected the request"))
+	failure.HTTPStatus = http.StatusBadRequest
+	registry := aiproxymetrics.NewRegistry()
+	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{}})
+	handler := NewHandler(cfg, usage.NewMemoryStore(), nil, registry).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+		return codexresponses.Result{}, failure
+	}})
+	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"invalid_request"`)) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if health := registry.ProviderHealthSnapshot(); len(health) != 0 {
+		t.Fatalf("invalid request changed Provider health: %#v", health)
+	}
+}
+
+func TestCodexOAuthRejectsUnsupportedMaxOutputTokensBeforeUpstream(t *testing.T) {
+	called := false
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+		called = true
+		return codexresponses.Result{}, nil
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello","max_output_tokens":64}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"feature":"max_output_tokens"`)) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if called {
+		t.Fatal("unsupported max_output_tokens reached Codex upstream")
 	}
 }
 
