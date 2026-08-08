@@ -79,6 +79,7 @@
     .tc-status-idle{color:#237804}.tc-status-streaming{color:#0958d9}.tc-status-recovery_required{color:#ad6800}.tc-status-closed{color:#8c8c8c}
     @media(max-width:900px){.tc-layout{grid-template-columns:1fr}.tc-list{min-height:220px}.tc-main{min-height:420px}.tc-messages{padding:14px}.tc-bubble{max-width:calc(100% - 37px)}}
     .feature-input-wrap{position:relative}.feature-input-wrap textarea.control{display:block;min-height:108px;padding:10px 126px 48px 12px}.feature-submit-inside{position:absolute;right:10px;bottom:10px;min-width:104px;box-shadow:0 2px 5px rgba(22,119,255,.24)}
+    .task-status-cancelled{color:#595959;background:#f5f5f5;border-color:#bfbfbf}.task-action-list{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.task-detail-results{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.task-detail-results img{width:112px;height:112px;object-fit:cover;border:1px solid var(--line);border-radius:6px;cursor:pointer}.task-detail-prompt,.task-detail-error{white-space:pre-wrap;word-break:break-word}.task-detail-error{color:var(--danger)}
   </style>
 </head>
 <body>
@@ -287,8 +288,8 @@
               <div class="task-id-row"><input id="cgTaskClientId" class="control mono" required autocomplete="off"><button type="button" class="btn" id="cgTaskRegenId">重新生成</button></div>
             </div>
             <div class="field"><label class="label required" for="cgTaskModel">model</label><select id="cgTaskModel" class="control" required><option value="">正在加载…</option></select><div class="help">仅列出当前至少有一个可用 Provider 的生图模型。</div></div>
-            <div class="field"><label class="label" for="cgTaskSize">size</label><input id="cgTaskSize" class="control" autocomplete="off" placeholder="例如 1024x1024"></div>
-            <div class="field"><label class="label" for="cgTaskQuality">quality</label><input id="cgTaskQuality" class="control" autocomplete="off" placeholder="可选"></div>
+            <div class="field"><label class="label" for="cgTaskSize">size</label><input id="cgTaskSize" class="control" list="cgTaskSizeOptions" autocomplete="off" placeholder="选择或输入自定义尺寸"><datalist id="cgTaskSizeOptions"><option value="auto"><option value="1024x1024"><option value="1536x1024"><option value="1024x1536"></datalist><div class="help">可选择常用尺寸，也可按上游模型要求输入自定义值。</div></div>
+            <div class="field"><label class="label" for="cgTaskQuality">quality</label><input id="cgTaskQuality" class="control" list="cgTaskQualityOptions" autocomplete="off" placeholder="选择或输入自定义质量"><datalist id="cgTaskQualityOptions"><option value="auto"><option value="low"><option value="medium"><option value="high"></datalist><div class="help">可选择常用质量，也可按上游模型要求输入自定义值。</div></div>
             <div class="field full">
               <label class="label required" for="cgTaskPrompt">prompt</label>
               <div class="feature-input-wrap">
@@ -501,6 +502,10 @@
   <div class="modal-head"><span class="modal-title">调用明细</span><button class="close" type="button" id="closeUsageEvent">×</button></div>
   <div class="modal-body"><dl class="event-detail" id="usageEventDetail"></dl></div>
 </dialog>
+<dialog id="imageTaskDetailDialog">
+  <div class="modal-head"><span class="modal-title">图片任务详情</span><button class="close" type="button" id="closeImageTaskDetail">×</button></div>
+  <div class="modal-body"><dl class="event-detail" id="imageTaskDetail"></dl><div class="task-detail-results" id="imageTaskDetailResults"></div></div>
+</dialog>
 <dialog id="clientKeyDialog"><form id="clientKeyForm" autocomplete="off"><div class="modal-head"><span class="modal-title">新建客户端 Key</span><button class="close" type="button" id="closeClientKeyDialog">×</button></div><div class="modal-body"><div class="field"><label class="label required" for="clientKeyID">ID</label><input id="clientKeyID" class="control" name="client_key_id" autocomplete="off" required pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="例如 ci-agent"></div><div class="field"><label class="check"><input id="clientKeyEnabled" type="checkbox" checked> 创建后立即启用</label></div></div><div class="modal-foot"><button class="btn" type="button" id="cancelClientKey">取消</button><button class="btn btn-primary" type="submit">创建</button></div></form></dialog>
 <dialog id="clientSecretDialog"><div class="modal-head"><span class="modal-title">请立即复制 API Key</span><button class="close" type="button" id="closeClientSecret">×</button></div><div class="modal-body"><p class="help">关闭后无法再次查看。</p><input id="clientSecret" class="control" readonly autocomplete="off"></div><div class="modal-foot"><button class="btn btn-primary" id="copyClientSecret">复制</button></div></dialog>
 
@@ -644,6 +649,7 @@ const enUS={
 Object.assign(enUS,{
   "搜索历史":"Search history","按管理员账号隔离，最多保留 30 天":"Isolated per administrator; retained for up to 30 days","正在加载搜索历史…":"Loading search history…","暂无搜索历史":"No search history","无法加载搜索历史":"Could not load search history","未命名搜索":"Untitled search",
   "输入图片描述。Enter 换行，Ctrl+Enter 提交":"Describe the image. Enter adds a line; Ctrl+Enter submits.","输入需要检索的问题或关键词。Enter 换行，Ctrl+Enter 提交":"Enter a question or keywords to search. Enter adds a line; Ctrl+Enter submits.",
+  "选择或输入自定义尺寸":"Select or enter a custom size","选择或输入自定义质量":"Select or enter a custom quality","可选择常用尺寸，也可按上游模型要求输入自定义值。":"Choose a common size or enter a value supported by the upstream model.","可选择常用质量，也可按上游模型要求输入自定义值。":"Choose a common quality or enter a value supported by the upstream model.","图片任务详情":"Image task details","查看":"View","恢复轮询":"Resume polling","重新提交任务":"Resubmit task","任务 ID":"Task ID","会话":"Conversation","模式":"Mode","进度":"Progress","耗时":"Elapsed","错误":"Error","结果":"Results","提交":"Submitted","更新":"Updated","提示词":"Prompt","尺寸":"Size","质量":"Quality","用量":"Usage"
 });
 Object.assign(enUS,{
   "导入凭据":"Import credentials","导入 ChatGPT Web 凭据":"Import ChatGPT Web credentials","凭据":"Credentials","每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组":"One access token per line, or paste a JSON array exported by ChatGPT Web","支持纯 access token 文本、JSON 字符串数组，以及完整 OAuth 账号数组或 {accounts:[...]}。完整对象会保留 refresh_token、id_token 和 proxy，且必须带 credential_type=chatgpt_web；凭据不会回显。":"Accepts plain access-token text, JSON string arrays, complete OAuth account arrays, or {accounts:[...]}. Complete objects retain refresh_token, id_token, and proxy, and must contain credential_type=chatgpt_web; credentials are never echoed.",
@@ -1395,7 +1401,7 @@ function chatGPTAccountActivity(success,failed){
 }
 function taskStatusTag(status){
   const value=String(status||"").toLowerCase();
-  const map={queued:"task-status-queued",running:"task-status-running",success:"task-status-success",error:"task-status-error",failed:"task-status-error",cancelled:"task-status-error",canceled:"task-status-error"};
+  const map={queued:"task-status-queued",running:"task-status-running",success:"task-status-success",error:"task-status-error",failed:"task-status-error",cancelled:"task-status-cancelled",canceled:"task-status-cancelled"};
   const labels={queued:"排队中",running:"处理中",success:"成功",error:"失败",failed:"失败",cancelled:"已取消",canceled:"已取消"};
   return `<span class="tag ${map[value]||"tag-default"}">${esc(labels[value]||status||"—")}</span>`;
 }
@@ -1795,11 +1801,12 @@ function renderChatGPTTasks(){
     const elapsed=t.elapsed_secs!=null?`${Number(t.elapsed_secs).toFixed(1)}s`:(t.duration_ms!=null?`${t.duration_ms}ms`:"—");
     const progress=taskProgressLabel(t);
     const actionBusy=state.cg.tasks.resumeBusy.has(t.id);
-    const action=canResumeTask(t)
-      ?`<button class="link-btn" data-task-resume="${esc(t.id)}" ${actionBusy?"disabled":""}>恢复轮询</button>`
-      :canRetryGenerationTask(t)
-        ?`<button class="link-btn" data-task-retry="${esc(t.id)}" ${actionBusy?"disabled":""}>重新提交任务</button>`
-        :"—";
+    const actions=[`<button class="link-btn" data-task-view="${esc(t.id)}">查看</button>`];
+    if(isTerminalTask(t))actions.push(`<button class="link-btn link-danger" data-task-delete="${esc(t.id)}" ${actionBusy?"disabled":""}>删除</button>`);
+    else actions.push(`<button class="link-btn link-danger" data-task-cancel="${esc(t.id)}" ${actionBusy?"disabled":""}>取消</button>`);
+    if(canResumeTask(t))actions.push(`<button class="link-btn" data-task-resume="${esc(t.id)}" ${actionBusy?"disabled":""}>恢复轮询</button>`);
+    if(canRetryGenerationTask(t))actions.push(`<button class="link-btn" data-task-retry="${esc(t.id)}" ${actionBusy?"disabled":""}>重新提交任务</button>`);
+    const action=`<div class="task-action-list">${actions.join("")}</div>`;
     const error=String(t.error||"").trim();
     return `<tr>
       <td class="mono" title="${esc(t.id)}">${esc((t.id||"").slice(0,12))}${(t.id||"").length>12?"…":""}</td>
@@ -1820,9 +1827,52 @@ function renderChatGPTTasks(){
   $("cgTaskTable").innerHTML=`<div class="table-wrap"><table class="cg-task-table"><thead><tr>
     <th>任务 ID</th><th>会话</th><th>模式</th><th>模型</th><th>状态</th><th>进度</th><th>耗时</th><th>错误</th><th>结果</th><th>提交</th><th>更新</th><th>操作</th>
   </tr></thead><tbody>${rows}</tbody></table></div>`;
+  document.querySelectorAll("[data-task-view]").forEach(btn=>btn.onclick=()=>showImageTaskDetail(btn.dataset.taskView));
+  document.querySelectorAll("[data-task-cancel]").forEach(btn=>btn.onclick=()=>cancelImageTask(btn.dataset.taskCancel));
+  document.querySelectorAll("[data-task-delete]").forEach(btn=>btn.onclick=()=>deleteImageTask(btn.dataset.taskDelete));
   document.querySelectorAll("[data-task-resume]").forEach(btn=>btn.onclick=()=>resumeTask(btn.dataset.taskResume));
   document.querySelectorAll("[data-task-retry]").forEach(btn=>btn.onclick=()=>retryGenerationTask(btn.dataset.taskRetry));
   document.querySelectorAll("[data-preview-src]").forEach(img=>img.onclick=()=>openLightbox(img.dataset.previewSrc,img.dataset.previewTitle||"预览"));
+}
+function clearTaskPolling(taskId){
+  const timer=state.cg.tasks.poll.timers.get(taskId);
+  if(timer)clearTimeout(timer);
+  state.cg.tasks.poll.timers.delete(taskId);
+  state.cg.tasks.poll.fails.delete(taskId);
+  state.cg.tasks.poll.started.delete(taskId);
+}
+function showImageTaskDetail(taskId){
+  const task=state.cg.tasks.items.find(item=>item.id===taskId);
+  if(!task)return;
+  const elapsed=task.elapsed_secs!=null?`${Number(task.elapsed_secs).toFixed(1)}s`:(task.duration_ms!=null?`${task.duration_ms}ms`:"—");
+  const rows=[["任务 ID",task.id],["状态",task.status],["模式",task.mode],["模型",task.model],["Provider",task.provider],["提示词",task.prompt],["尺寸",task.size],["质量",task.quality],["会话",task.conversation_id],["进度",taskProgressLabel(task)],["耗时",elapsed],["提交",formatAccountDate(task.created_at)],["更新",formatAccountDate(task.updated_at)],["错误",task.error],["用量",task.usage?JSON.stringify(task.usage,null,2):""]];
+  $("imageTaskDetail").innerHTML=rows.map(([label,value])=>`<dt>${esc(t(label))}</dt><dd class="${label==="提示词"?"task-detail-prompt":label==="错误"?"task-detail-error":""}">${esc(value||"—")}</dd>`).join("");
+  $("imageTaskDetailResults").innerHTML=(task.data||[]).map((item,index)=>{const src=taskImageSrc(item);return src?`<img src="${esc(src)}" data-preview-src="${esc(src)}" data-preview-title="${esc(`${task.id} #${index+1}`)}" alt="${esc(`${t("结果")} ${index+1}`)}" loading="lazy">`:""}).join("");
+  $("imageTaskDetailResults").querySelectorAll("[data-preview-src]").forEach(img=>img.onclick=()=>openLightbox(img.dataset.previewSrc,img.dataset.previewTitle));
+  $("imageTaskDetailDialog").showModal();
+  translateDOM($("imageTaskDetailDialog"));
+}
+async function cancelImageTask(taskId){
+  const owner=state.cg.tasks.owner;
+  if(!owner||!taskId||state.cg.tasks.resumeBusy.has(taskId))return;
+  if(!confirm("取消会停止 ai-proxy 本地等待并尽力取消上游请求。若上游已经受理，仍可能继续执行并产生额度消耗。是否继续？"))return;
+  state.cg.tasks.resumeBusy.add(taskId);renderChatGPTTasks();
+  try{
+    const task=await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}/cancel`),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({owner_id:owner})});
+    clearTaskPolling(taskId);upsertTask(task);renderChatGPTTasks();toast("图片任务已取消");
+  }catch(err){toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+}
+async function deleteImageTask(taskId){
+  const owner=state.cg.tasks.owner;
+  if(!owner||!taskId||state.cg.tasks.resumeBusy.has(taskId))return;
+  if(!confirm("仅删除任务记录；已经保存到图片库的图片不会删除。是否继续？"))return;
+  state.cg.tasks.resumeBusy.add(taskId);renderChatGPTTasks();
+  try{
+    await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}`),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({owner_id:owner})});
+    clearTaskPolling(taskId);state.cg.tasks.items=state.cg.tasks.items.filter(item=>item.id!==taskId);renderChatGPTTasks();toast("图片任务记录已删除");
+  }catch(err){toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
 }
 function startTaskPolling(taskId){
   if(!taskId||!state.cg.tasks.owner)return;
@@ -2245,6 +2295,7 @@ $("copyClientSecret").onclick=async()=>{try{await navigator.clipboard.writeText(
 $("loadMoreEvents").onclick=()=>loadEvents(false);
 $("usageApply").onclick=()=>{const prevKey=filterOptionsCacheKey();state.apiKeyFilter=$("usageKeyFilter").value.trim();state.providerFilter=$("usageProviderFilter").value.trim();state.modelFilter=$("usageModelFilter").value.trim();state.outcomeFilter=$("usageOutcomeFilter").value.trim();state.estimatedFilter=$("usageEstimatedFilter").value;state.from=$("usageFrom").value?new Date($("usageFrom").value).toISOString():"";state.to=$("usageTo").value?new Date($("usageTo").value).toISOString():"";if(state.from||state.to)state.range="custom";setHash();if(filterOptionsCacheKey()!==prevKey)loadFilterOptions(true);loadUsage(true)};
 $("closeUsageEvent").onclick=()=>$("usageEventDialog").close();
+$("closeImageTaskDetail").onclick=()=>$("imageTaskDetailDialog").close();
 document.querySelectorAll("#rangeGroup .btn").forEach(btn=>btn.onclick=()=>{state.range=btn.dataset.range;if(state.range!=="custom"){state.from="";state.to=""}document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b===btn));setHash();loadFilterOptions(true);loadUsage(true)});
 function applyUsageState(p){
   state.range=p.range||"today";

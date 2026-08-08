@@ -9,13 +9,16 @@ const (
 	TopicList             = "imagetask/list"
 	TopicResumePoll       = "imagetask/resume_poll"
 	TopicRetryGeneration  = "imagetask/retry_generation"
+	TopicCancel           = "imagetask/cancel"
+	TopicDelete           = "imagetask/delete"
 )
 
 const (
-	StatusQueued  = "queued"
-	StatusRunning = "running"
-	StatusSuccess = "success"
-	StatusError   = "error"
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusSuccess   = "success"
+	StatusError     = "error"
+	StatusCancelled = "cancelled"
 )
 
 type TaskView struct {
@@ -95,3 +98,19 @@ type RetryGenerationCommand struct {
 }
 
 type RetryGenerationResult struct{ Task TaskView }
+
+type CancelCommand struct {
+	OwnerID string
+	TaskID  string
+}
+
+type CancelResult struct{ Task TaskView }
+
+type DeleteCommand struct {
+	OwnerID string
+	TaskID  string
+}
+
+type DeleteResult struct {
+	Deleted bool `json:"deleted"`
+}

@@ -34,6 +34,10 @@ type chatGPTAccountRuntimeStub struct {
 	retryOwner         string
 	retryTaskID        string
 	retryBaseURL       string
+	cancelOwner        string
+	cancelTaskID       string
+	deleteOwner        string
+	deleteTaskID       string
 	temporaryCreate    tempevents.CreateConversationCommand
 	temporaryGet       tempevents.GetConversationCommand
 	temporaryTurn      tempevents.StartTurnCommand
@@ -148,6 +152,14 @@ func (s *chatGPTAccountRuntimeStub) ResumeChatGPTImageTask(context.Context, stri
 func (s *chatGPTAccountRuntimeStub) RetryChatGPTImageGeneration(_ context.Context, ownerID, taskID, baseURL string) (taskevents.RetryGenerationResult, error) {
 	s.retryOwner, s.retryTaskID, s.retryBaseURL = ownerID, taskID, baseURL
 	return taskevents.RetryGenerationResult{Task: taskevents.TaskView{ID: taskID, Status: taskevents.StatusQueued, Mode: "generate", Progress: "retrying_submission"}}, nil
+}
+func (s *chatGPTAccountRuntimeStub) CancelChatGPTImageTask(_ context.Context, ownerID, taskID string) (taskevents.CancelResult, error) {
+	s.cancelOwner, s.cancelTaskID = ownerID, taskID
+	return taskevents.CancelResult{Task: taskevents.TaskView{ID: taskID, Status: taskevents.StatusCancelled}}, nil
+}
+func (s *chatGPTAccountRuntimeStub) DeleteChatGPTImageTask(_ context.Context, ownerID, taskID string) (taskevents.DeleteResult, error) {
+	s.deleteOwner, s.deleteTaskID = ownerID, taskID
+	return taskevents.DeleteResult{Deleted: true}, nil
 }
 func (s *chatGPTAccountRuntimeStub) ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error) {
 	return effectivecatalog.Empty(), nil
@@ -264,6 +276,29 @@ func TestChatGPTImageTaskRetryGeneration(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted || runtime.retryOwner != "owner-1" || runtime.retryTaskID != "task-1" || runtime.retryBaseURL != "http://example.com" || !strings.Contains(rec.Body.String(), `"retrying_submission"`) {
 		t.Fatalf("retry status=%d owner=%q task=%q base=%q body=%s", rec.Code, runtime.retryOwner, runtime.retryTaskID, runtime.retryBaseURL, rec.Body.String())
+	}
+}
+
+func TestChatGPTImageTaskCancelAndDelete(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+
+	cancel := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/cancel", strings.NewReader(`{"owner_id":"owner-1"}`))
+	cancel.RemoteAddr = "127.0.0.1:1234"
+	cancel.Header.Set("X-AI-Proxy-Admin", "1")
+	cancelRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(cancelRecorder, cancel)
+	if cancelRecorder.Code != http.StatusOK || runtime.cancelOwner != "owner-1" || runtime.cancelTaskID != "task-1" || !strings.Contains(cancelRecorder.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("cancel status=%d owner=%q task=%q body=%s", cancelRecorder.Code, runtime.cancelOwner, runtime.cancelTaskID, cancelRecorder.Body.String())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/admin/api/chatgpt/image-tasks/task-1", strings.NewReader(`{"owner_id":"owner-1"}`))
+	deleteRequest.RemoteAddr = "127.0.0.1:1234"
+	deleteRequest.Header.Set("X-AI-Proxy-Admin", "1")
+	deleteRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusOK || runtime.deleteOwner != "owner-1" || runtime.deleteTaskID != "task-1" || !strings.Contains(deleteRecorder.Body.String(), `"deleted":true`) {
+		t.Fatalf("delete status=%d owner=%q task=%q body=%s", deleteRecorder.Code, runtime.deleteOwner, runtime.deleteTaskID, deleteRecorder.Body.String())
 	}
 }
 

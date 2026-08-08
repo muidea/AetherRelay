@@ -198,6 +198,30 @@ func (s *Admin) RetryChatGPTImageGeneration(ctx context.Context, ownerID, taskID
 	return result, nil
 }
 
+func (s *Admin) CancelChatGPTImageTask(ctx context.Context, ownerID, taskID string) (taskevents.CancelResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(taskevents.TopicCancel, s.ID(), taskcommon.UnitID, event.NewHeader(), ctx, taskevents.CancelCommand{OwnerID: ownerID, TaskID: taskID})).Get()
+	if err != nil {
+		return taskevents.CancelResult{}, fmt.Errorf("chatgpt image task cancel rejected: %w", err)
+	}
+	result, ok := value.(taskevents.CancelResult)
+	if !ok {
+		return taskevents.CancelResult{}, fmt.Errorf("invalid chatgpt image task cancel result")
+	}
+	return result, nil
+}
+
+func (s *Admin) DeleteChatGPTImageTask(ctx context.Context, ownerID, taskID string) (taskevents.DeleteResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(taskevents.TopicDelete, s.ID(), taskcommon.UnitID, event.NewHeader(), ctx, taskevents.DeleteCommand{OwnerID: ownerID, TaskID: taskID})).Get()
+	if err != nil {
+		return taskevents.DeleteResult{}, fmt.Errorf("chatgpt image task delete rejected: %w", err)
+	}
+	result, ok := value.(taskevents.DeleteResult)
+	if !ok {
+		return taskevents.DeleteResult{}, fmt.Errorf("invalid chatgpt image task delete result")
+	}
+	return result, nil
+}
+
 func (s *Admin) ListChatGPTImages(ctx context.Context, baseURL, startDate, endDate string) (imgevents.ListResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicList, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.ListCommand{BaseURL: baseURL, StartDate: startDate, EndDate: endDate})).Get()
 	if err != nil {

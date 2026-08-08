@@ -287,7 +287,7 @@ func (s *Store) MarkRunning(ownerID, taskID, progress string) {
 	defer s.mu.Unlock()
 	key := taskKey(ownerID, taskID)
 	rec, ok := s.items[key]
-	if !ok {
+	if !ok || rec.Status == events.StatusCancelled || rec.Status == events.StatusSuccess {
 		return
 	}
 	now := time.Now().UTC()
@@ -306,7 +306,7 @@ func (s *Store) MarkProgress(ownerID, taskID, progress string) {
 	defer s.mu.Unlock()
 	key := taskKey(ownerID, taskID)
 	rec, ok := s.items[key]
-	if !ok {
+	if !ok || (rec.Status != events.StatusQueued && rec.Status != events.StatusRunning) {
 		return
 	}
 	rec.Progress = progress
@@ -322,7 +322,7 @@ func (s *Store) SetAccountID(ownerID, taskID, accountID string) {
 	defer s.mu.Unlock()
 	key := taskKey(ownerID, taskID)
 	rec, ok := s.items[key]
-	if !ok {
+	if !ok || (rec.Status != events.StatusQueued && rec.Status != events.StatusRunning) {
 		return
 	}
 	rec.AccountID = strings.TrimSpace(accountID)
@@ -336,7 +336,7 @@ func (s *Store) SetProvider(ownerID, taskID, provider string) {
 	defer s.mu.Unlock()
 	key := taskKey(ownerID, taskID)
 	rec, ok := s.items[key]
-	if !ok {
+	if !ok || (rec.Status != events.StatusQueued && rec.Status != events.StatusRunning) {
 		return
 	}
 	rec.Provider = strings.TrimSpace(provider)
@@ -350,7 +350,7 @@ func (s *Store) MarkSuccess(ownerID, taskID string, data []events.ImageData, con
 	defer s.mu.Unlock()
 	key := taskKey(ownerID, taskID)
 	rec, ok := s.items[key]
-	if !ok {
+	if !ok || (rec.Status != events.StatusQueued && rec.Status != events.StatusRunning) {
 		return
 	}
 	rec.Status = events.StatusSuccess
@@ -372,7 +372,7 @@ func (s *Store) MarkError(ownerID, taskID, errMsg, conversationID string) {
 	defer s.mu.Unlock()
 	key := taskKey(ownerID, taskID)
 	rec, ok := s.items[key]
-	if !ok {
+	if !ok || (rec.Status != events.StatusQueued && rec.Status != events.StatusRunning) {
 		return
 	}
 	rec.Status = events.StatusError
@@ -384,6 +384,50 @@ func (s *Store) MarkError(ownerID, taskID, errMsg, conversationID string) {
 	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.items[key] = rec
 	_ = s.saveLocked()
+}
+
+func (s *Store) IsActive(ownerID, taskID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.items[taskKey(ownerID, taskID)]
+	return ok && (rec.Status == events.StatusQueued || rec.Status == events.StatusRunning)
+}
+
+func (s *Store) CancelActive(ownerID, taskID string) (events.TaskView, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := taskKey(ownerID, taskID)
+	rec, ok := s.items[key]
+	if !ok || (rec.Status != events.StatusQueued && rec.Status != events.StatusRunning) {
+		return events.TaskView{}, false, nil
+	}
+	previous := rec
+	rec.Status = events.StatusCancelled
+	rec.Progress = ""
+	rec.Error = ""
+	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.items[key] = rec
+	if err := s.saveLocked(); err != nil {
+		s.items[key] = previous
+		return events.TaskView{}, false, err
+	}
+	return rec.TaskView, true, nil
+}
+
+func (s *Store) DeleteTerminal(ownerID, taskID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := taskKey(ownerID, taskID)
+	rec, ok := s.items[key]
+	if !ok || rec.Status == events.StatusQueued || rec.Status == events.StatusRunning {
+		return false, nil
+	}
+	delete(s.items, key)
+	if err := s.saveLocked(); err != nil {
+		s.items[key] = rec
+		return false, err
+	}
+	return true, nil
 }
 
 // RetryGeneration resets a terminal generation task. Eligibility belongs to

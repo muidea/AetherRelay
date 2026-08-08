@@ -155,7 +155,11 @@ func (s *Upstream) handleGenerateImage(ev event.Event, result event.Result) {
 		result.Set(events.GenerateImageResult{ErrorClass: classifyError(err)}, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
-	generated, err := client.GenerateImage(context.Background(), upclient.ImageRequest{Prompt: cmd.Prompt, Model: cmd.Model, Size: cmd.Size, Quality: cmd.Quality}, upclient.ImagePollOptions{})
+	ctx := ev.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	generated, err := client.GenerateImage(ctx, upclient.ImageRequest{Prompt: cmd.Prompt, Model: cmd.Model, Size: cmd.Size, Quality: cmd.Quality}, upclient.ImagePollOptions{})
 	if err != nil {
 		slog.Warn("chatgpt web image generation failed", "error_class", classifyError(err))
 		result.Set(events.GenerateImageResult{ConversationID: generated.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
@@ -188,7 +192,11 @@ func (s *Upstream) handleEditImage(ev event.Event, result event.Result) {
 		result.Set(events.EditImageResult{ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
-	generated, err := client.GenerateImage(context.Background(), upclient.ImageRequest{Prompt: cmd.Prompt, Model: cmd.Model, Size: cmd.Size, Quality: cmd.Quality, References: references}, upclient.ImagePollOptions{})
+	ctx := ev.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	generated, err := client.GenerateImage(ctx, upclient.ImageRequest{Prompt: cmd.Prompt, Model: cmd.Model, Size: cmd.Size, Quality: cmd.Quality, References: references}, upclient.ImagePollOptions{})
 	if err != nil {
 		slog.Warn("chatgpt web image edit failed", "error_class", classifyError(err))
 		result.Set(events.EditImageResult{ConversationID: generated.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
@@ -216,7 +224,11 @@ func (s *Upstream) handleResumeImage(ev event.Event, result event.Result) {
 		return
 	}
 	timeout := time.Duration(cmd.ExtraTimeoutSecs) * time.Second
-	resumed, err := client.ResumeImage(context.Background(), cmd.ConversationID, timeout)
+	ctx := ev.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resumed, err := client.ResumeImage(ctx, cmd.ConversationID, timeout)
 	if err != nil {
 		result.Set(events.ResumeImageResult{ConversationID: resumed.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return

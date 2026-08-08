@@ -112,6 +112,42 @@ func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Req
 	}
 	writeJSON(w, http.StatusAccepted, out.Task)
 }
+
+func (h *Handler) cancelChatGPTImageTask(w http.ResponseWriter, r *http.Request, rel string) {
+	var body chatGPTTaskBody
+	if !decodeAdminBody(w, r, &body) {
+		return
+	}
+	parts := strings.Split(strings.Trim(rel, "/"), "/")
+	if len(parts) != 5 || strings.TrimSpace(body.OwnerID) == "" {
+		writeError(w, http.StatusBadRequest, "owner_id and task_id are required")
+		return
+	}
+	out, err := h.chatGPT.CancelChatGPTImageTask(r.Context(), body.OwnerID, parts[3])
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out.Task)
+}
+
+func (h *Handler) deleteChatGPTImageTask(w http.ResponseWriter, r *http.Request, rel string) {
+	var body chatGPTTaskBody
+	if !decodeAdminBody(w, r, &body) {
+		return
+	}
+	parts := strings.Split(strings.Trim(rel, "/"), "/")
+	if len(parts) != 4 || strings.TrimSpace(body.OwnerID) == "" {
+		writeError(w, http.StatusBadRequest, "owner_id and task_id are required")
+		return
+	}
+	out, err := h.chatGPT.DeleteChatGPTImageTask(r.Context(), body.OwnerID, parts[3])
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
 func decodeAdminBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(target) != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")

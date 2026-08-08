@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
@@ -29,13 +30,18 @@ import (
 
 type ImageTask struct {
 	basebiz.Base
-	store  *store.Store
-	topics []string
+	store   *store.Store
+	topics  []string
+	runMu   sync.Mutex
+	running map[string]*taskRun
 }
+
+type taskRun struct{ cancel context.CancelFunc }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*ImageTask, *cd.Error) {
 	b := &ImageTask{
-		Base: basebiz.New(common.UnitID, hub, background),
+		Base:    basebiz.New(common.UnitID, hub, background),
+		running: map[string]*taskRun{},
 	}
 	bootstrap, err := configevents.RequestBootstrap(ctx, b.EventHub(), b.ID())
 	if err != nil {
@@ -54,18 +60,28 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicList,
 		events.TopicResumePoll,
 		events.TopicRetryGeneration,
+		events.TopicCancel,
+		events.TopicDelete,
 	}
 	b.SubscribeFunc(events.TopicSubmitGeneration, b.handleSubmitGeneration)
 	b.SubscribeFunc(events.TopicSubmitEdit, b.handleSubmitEdit)
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicResumePoll, b.handleResumePoll)
 	b.SubscribeFunc(events.TopicRetryGeneration, b.handleRetryGeneration)
+	b.SubscribeFunc(events.TopicCancel, b.handleCancel)
+	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
 	return b, nil
 }
 
 func (s *ImageTask) Run(context.Context) *cd.Error { return nil }
 
 func (s *ImageTask) Teardown(context.Context) {
+	s.runMu.Lock()
+	for _, run := range s.running {
+		run.cancel()
+	}
+	s.running = map[string]*taskRun{}
+	s.runMu.Unlock()
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
@@ -98,8 +114,8 @@ func (s *ImageTask) handleSubmitGeneration(ev event.Event, result event.Result) 
 	}
 	if created {
 		ownerID, taskID, prompt, model, size, quality, baseURL := cmd.OwnerID, cmd.ClientTaskID, cmd.Prompt, cmd.Model, cmd.Size, cmd.Quality, cmd.BaseURL
-		s.AsyncTask(func() {
-			s.runGeneration(ownerID, taskID, prompt, model, size, quality, baseURL)
+		s.startTask(ownerID, taskID, func(ctx context.Context) {
+			s.runGeneration(ctx, ownerID, taskID, prompt, model, size, quality, baseURL)
 		})
 	}
 	result.Set(events.SubmitResult{Task: view}, nil)
@@ -128,8 +144,8 @@ func (s *ImageTask) handleSubmitEdit(ev event.Event, result event.Result) {
 	}
 	if created {
 		ownerID, taskID, prompt, model, size, quality, baseURL, images := cmd.OwnerID, cmd.ClientTaskID, cmd.Prompt, cmd.Model, cmd.Size, cmd.Quality, cmd.BaseURL, append([]string(nil), cmd.Images...)
-		s.AsyncTask(func() {
-			s.runEdit(ownerID, taskID, prompt, model, size, quality, baseURL, images)
+		s.startTask(ownerID, taskID, func(ctx context.Context) {
+			s.runEdit(ctx, ownerID, taskID, prompt, model, size, quality, baseURL, images)
 		})
 	}
 	result.Set(events.SubmitResult{Task: view}, nil)
@@ -177,8 +193,8 @@ func (s *ImageTask) handleResumePoll(ev event.Event, result event.Result) {
 	s.store.MarkRunning(cmd.OwnerID, cmd.TaskID, "resuming_poll")
 	view, _ = s.store.Get(cmd.OwnerID, cmd.TaskID)
 	ownerID, taskID, conversationID, accountID, baseURL := cmd.OwnerID, cmd.TaskID, resume.Task.ConversationID, resume.AccountID, ""
-	s.AsyncTask(func() {
-		s.runResumePoll(ownerID, taskID, conversationID, accountID, cmd.ExtraTimeoutSecs, baseURL)
+	s.startTask(ownerID, taskID, func(ctx context.Context) {
+		s.runResumePoll(ctx, ownerID, taskID, conversationID, accountID, cmd.ExtraTimeoutSecs, baseURL)
 	})
 	result.Set(events.ResumePollResult{Task: view}, nil)
 }
@@ -211,10 +227,91 @@ func (s *ImageTask) handleRetryGeneration(ev event.Event, result event.Result) {
 		return
 	}
 	ownerID, taskID, prompt, model, size, quality, baseURL := cmd.OwnerID, cmd.TaskID, view.Prompt, view.Model, view.Size, view.Quality, cmd.BaseURL
-	s.AsyncTask(func() {
-		s.runGeneration(ownerID, taskID, prompt, model, size, quality, baseURL)
+	s.startTask(ownerID, taskID, func(ctx context.Context) {
+		s.runGeneration(ctx, ownerID, taskID, prompt, model, size, quality, baseURL)
 	})
 	result.Set(events.RetryGenerationResult{Task: view}, nil)
+}
+
+func (s *ImageTask) handleCancel(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.CancelCommand)
+	if !ok || strings.TrimSpace(cmd.OwnerID) == "" || strings.TrimSpace(cmd.TaskID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid cancel command"))
+		return
+	}
+	view, cancelled, err := s.store.CancelActive(cmd.OwnerID, cmd.TaskID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	if !cancelled {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "task is not cancellable"))
+		return
+	}
+	s.cancelTask(cmd.OwnerID, cmd.TaskID)
+	result.Set(events.CancelResult{Task: view}, nil)
+}
+
+func (s *ImageTask) handleDelete(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.DeleteCommand)
+	if !ok || strings.TrimSpace(cmd.OwnerID) == "" || strings.TrimSpace(cmd.TaskID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid delete command"))
+		return
+	}
+	deleted, err := s.store.DeleteTerminal(cmd.OwnerID, cmd.TaskID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	if !deleted {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "task is not deletable"))
+		return
+	}
+	s.cancelTask(cmd.OwnerID, cmd.TaskID)
+	result.Set(events.DeleteResult{Deleted: true}, nil)
+}
+
+func imageTaskRunKey(ownerID, taskID string) string { return ownerID + "\x00" + taskID }
+
+func (s *ImageTask) startTask(ownerID, taskID string, execute func(context.Context)) {
+	ctx, cancel := context.WithCancel(context.Background())
+	run := &taskRun{cancel: cancel}
+	key := imageTaskRunKey(ownerID, taskID)
+	s.runMu.Lock()
+	if previous := s.running[key]; previous != nil {
+		previous.cancel()
+	}
+	s.running[key] = run
+	s.runMu.Unlock()
+	s.AsyncTask(func() {
+		defer func() {
+			cancel()
+			s.runMu.Lock()
+			if s.running[key] == run {
+				delete(s.running, key)
+			}
+			s.runMu.Unlock()
+		}()
+		if !s.store.IsActive(ownerID, taskID) {
+			return
+		}
+		execute(ctx)
+	})
+}
+
+func (s *ImageTask) cancelTask(ownerID, taskID string) {
+	s.runMu.Lock()
+	run := s.running[imageTaskRunKey(ownerID, taskID)]
+	s.runMu.Unlock()
+	if run != nil {
+		run.cancel()
+	}
 }
 
 // isResumableConversationFailure accepts any terminal failure after an
@@ -234,10 +331,10 @@ func isRetryableBootstrapFailure(task events.TaskView) bool {
 	return isBootstrapTransportError(task.Error)
 }
 
-func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality, baseURL string) {
+func (s *ImageTask) runGeneration(ctx context.Context, ownerID, taskID, prompt, model, size, quality, baseURL string) {
 	start := time.Now()
 	s.store.MarkRunning(ownerID, taskID, "selecting_provider")
-	value, executeErr := s.SendEvent(event.NewEvent(proxyevents.TopicExecuteFeatureImage, s.ID(), proxycommon.UnitID, nil, proxyevents.ExecuteFeatureImageCommand{
+	value, executeErr := s.SendEvent(event.NewEventWithContext(proxyevents.TopicExecuteFeatureImage, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.ExecuteFeatureImageCommand{
 		OwnerID: ownerID, Model: model, Prompt: prompt, Size: size, Quality: quality,
 	})).Get()
 	if executeErr != nil {
@@ -262,7 +359,7 @@ func (s *ImageTask) runGeneration(ownerID, taskID, prompt, model, size, quality,
 	for _, item := range generated.Data {
 		outputs = append(outputs, featureImageOutput(item))
 	}
-	data, persistErr := s.persistImageOutputs(outputs, baseURL)
+	data, persistErr := s.persistImageOutputs(ctx, outputs, baseURL)
 	if persistErr != nil {
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
@@ -298,7 +395,7 @@ func isBootstrapTransportError(message string) bool {
 	return strings.Contains(message, "bootstrap: tls:") || strings.Contains(message, "bootstrap: timeout:")
 }
 
-func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseURL string, encodedImages []string) {
+func (s *ImageTask) runEdit(ctx context.Context, ownerID, taskID, prompt, model, size, quality, baseURL string, encodedImages []string) {
 	start := time.Now()
 	s.store.MarkRunning(ownerID, taskID, "decoding_images")
 	images, err := imageinput.DecodeBase64Images(encodedImages)
@@ -308,7 +405,7 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 	}
 
 	s.store.MarkProgress(ownerID, taskID, "selecting_provider")
-	value, executeErr := s.SendEvent(event.NewEvent(proxyevents.TopicExecuteFeatureImage, s.ID(), proxycommon.UnitID, nil, proxyevents.ExecuteFeatureImageCommand{
+	value, executeErr := s.SendEvent(event.NewEventWithContext(proxyevents.TopicExecuteFeatureImage, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.ExecuteFeatureImageCommand{
 		OwnerID: ownerID, Model: model, Prompt: prompt, Size: size, Quality: quality, Images: images,
 	})).Get()
 	if executeErr != nil {
@@ -332,7 +429,7 @@ func (s *ImageTask) runEdit(ownerID, taskID, prompt, model, size, quality, baseU
 	for _, item := range edited.Data {
 		outputs = append(outputs, featureImageOutput(item))
 	}
-	data, persistErr := s.persistImageOutputs(outputs, baseURL)
+	data, persistErr := s.persistImageOutputs(ctx, outputs, baseURL)
 	if persistErr != nil {
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
@@ -350,9 +447,9 @@ func featureImageOutput(item proxyevents.FeatureImageData) upevents.ImageOutput 
 	return output
 }
 
-func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID string, extraTimeoutSecs int, baseURL string) {
+func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversationID, accountID string, extraTimeoutSecs int, baseURL string) {
 	start := time.Now()
-	accRes := s.SendEvent(event.NewEvent(accevents.TopicAcquireImageAccount, s.ID(), acccommon.UnitID, nil, accevents.AcquireImageAccountCommand{AccountID: accountID}))
+	accRes := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireImageAccount, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireImageAccountCommand{AccountID: accountID}))
 	accVal, accErr := accRes.Get()
 	if accErr != nil {
 		s.store.MarkError(ownerID, taskID, accErr.Error(), conversationID)
@@ -369,7 +466,7 @@ func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID str
 	}()
 
 	s.store.MarkProgress(ownerID, taskID, "resuming_poll")
-	resumeRes := s.SendEvent(event.NewEvent(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, nil, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, ConversationID: conversationID, ExtraTimeoutSecs: extraTimeoutSecs}))
+	resumeRes := s.SendEvent(event.NewEventWithContext(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, ConversationID: conversationID, ExtraTimeoutSecs: extraTimeoutSecs}))
 	resumeVal, resumeErr := resumeRes.Get()
 	if resumeErr != nil {
 		if partial, ok := resumeVal.(upevents.ResumeImageResult); ok && partial.ConversationID != "" {
@@ -387,7 +484,7 @@ func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID str
 		conversationID = resumed.ConversationID
 	}
 	s.store.MarkProgress(ownerID, taskID, "receiving_image")
-	data, persistErr := s.persistImageOutputs(resumed.Images, baseURL)
+	data, persistErr := s.persistImageOutputs(ctx, resumed.Images, baseURL)
 	if persistErr != nil {
 		s.markImageResult(token, "", true, "")
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), conversationID)
@@ -397,12 +494,15 @@ func (s *ImageTask) runResumePoll(ownerID, taskID, conversationID, accountID str
 	s.store.MarkSuccess(ownerID, taskID, data, conversationID, nil, time.Since(start).Milliseconds())
 }
 
-func (s *ImageTask) persistImageOutputs(images []upevents.ImageOutput, baseURL string) ([]events.ImageData, error) {
+func (s *ImageTask) persistImageOutputs(ctx context.Context, images []upevents.ImageOutput, baseURL string) ([]events.ImageData, error) {
 	data := make([]events.ImageData, 0, len(images))
 	for _, image := range images {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		item := events.ImageData{URL: image.URL, B64JSON: image.B64JSON, RevisedPrompt: image.RevisedPrompt}
 		if len(image.Bytes) > 0 {
-			saveEv := event.NewEvent(imgevents.TopicSave, s.ID(), imgcommon.UnitID, nil, imgevents.SaveCommand{Bytes: image.Bytes, BaseURL: baseURL})
+			saveEv := event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{Bytes: image.Bytes, BaseURL: baseURL})
 			saveVal, saveErr := s.SendEvent(saveEv).Get()
 			if saveErr != nil {
 				return nil, saveErr

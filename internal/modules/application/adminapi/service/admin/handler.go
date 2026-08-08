@@ -70,6 +70,8 @@ type ChatGPTRuntime interface {
 	ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error)
 	ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error)
 	RetryChatGPTImageGeneration(context.Context, string, string, string) (taskevents.RetryGenerationResult, error)
+	CancelChatGPTImageTask(context.Context, string, string) (taskevents.CancelResult, error)
+	DeleteChatGPTImageTask(context.Context, string, string) (taskevents.DeleteResult, error)
 	ChatGPTEffectiveCatalog(context.Context) (effectivecatalog.Snapshot, error)
 	CreateTemporaryConversation(context.Context, tempevents.CreateConversationCommand) (tempevents.ConversationResult, error)
 	ListTemporaryConversations(context.Context, tempevents.ListConversationsCommand) (tempevents.ListConversationsResult, error)
@@ -458,6 +460,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && strings.HasSuffix(rel, "/retry-generation") && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.retryChatGPTImageGeneration(w, r, rel)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && strings.HasSuffix(rel, "/cancel") && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.cancelChatGPTImageTask(w, r, rel)
+		}
+	case strings.HasPrefix(rel, "/api/chatgpt/image-tasks/") && r.Method == http.MethodDelete:
+		if h.requireAdminMutation(w, r) {
+			h.deleteChatGPTImageTask(w, r, rel)
 		}
 	case rel == "/api/chatgpt/temporary-conversations" && r.Method == http.MethodGet:
 		h.listTemporaryConversations(w, r)

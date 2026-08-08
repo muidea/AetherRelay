@@ -44,7 +44,7 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 	})
 
 	imageTask := &ImageTask{Base: basebiz.New(imgcommon.UnitID, hub, background), store: tasks}
-	imageTask.runGeneration("owner", "task", "prompt", "gpt-image-2", "", "", "")
+	imageTask.runGeneration(context.Background(), "owner", "task", "prompt", "gpt-image-2", "", "", "")
 
 	view, found := tasks.Get("owner", "task")
 	resume, resumable := tasks.GetResumeInfo("owner", "task")
@@ -71,7 +71,7 @@ func TestRunGenerationRecordsRecoveryMetadataOnFailure(t *testing.T) {
 	})
 
 	imageTask := &ImageTask{Base: basebiz.New(imgcommon.UnitID, hub, background), store: tasks}
-	imageTask.runGeneration("owner", "task", "prompt", "gpt-image-2", "", "", "")
+	imageTask.runGeneration(context.Background(), "owner", "task", "prompt", "gpt-image-2", "", "", "")
 
 	resume, found := tasks.GetResumeInfo("owner", "task")
 	if !found || resume.Task.Status != imgevents.StatusError || resume.Task.Provider != "chatgptweb" || resume.Task.ConversationID != "conversation-1" || resume.AccountID != "account-1" {
