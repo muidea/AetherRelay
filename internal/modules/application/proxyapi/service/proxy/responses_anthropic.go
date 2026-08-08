@@ -667,9 +667,20 @@ func applyResponsesReasoningAdapter(request map[string]any, raw any, present boo
 	if err := rejectConversionFields(reasoning, map[string]struct{}{"effort": {}}); err != nil {
 		return nil, fmt.Errorf("reasoning.%w", err)
 	}
-	if effort, exists := reasoning["effort"]; exists {
-		if value, ok := effort.(string); !ok || strings.TrimSpace(value) == "" {
+	effortValue, exists := reasoning["effort"]
+	if exists {
+		value, ok := effortValue.(string)
+		if !ok || strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("reasoning.effort")
+		}
+		if strings.EqualFold(strings.TrimSpace(value), "none") {
+			// An explicit Responses effort=none is the only cross-protocol
+			// signal that disables Anthropic thinking. In particular, do not
+			// emit output_config: DeepSeek rejects named tool_choice while
+			// thinking is enabled.
+			request["thinking"] = map[string]any{"type": "disabled"}
+			delete(request, "output_config")
+			return []string{"reasoning"}, nil
 		}
 	}
 	request["thinking"] = map[string]any{"type": "adaptive"}

@@ -146,7 +146,7 @@ curl -sS http://127.0.0.1:8080/v1/models \
 | `POST /v1/responses` 路由到 Anthropic Messages 上游 | `responses_to_anthropic` |
 | `POST /v1/messages` 路由到 OpenAI Responses 上游 | `anthropic_to_responses` |
 
-转换能力只有在模型 metadata 声明和具体 Provider release 门闩同时通过时才会出现在目录中。
+转换能力只有在模型 metadata 声明、具体 Provider release 门闩通过且 release 方向与当前上游 protocol/endpoints 相容时才会出现在目录中。Provider 可以保留其他方向的 dormant release，但业务应用不会在 `/v1/models` 中看到它们，也不应依赖管理面保存的历史档案推断能力。
 
 ## 3. 端点选择
 
@@ -175,9 +175,9 @@ curl -sS http://127.0.0.1:8080/v1/models \
      且 stream == false
 ```
 
-Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。若目标模型的 `reasoning_efforts` 明确包含 `none`，代理会显式发送 `reasoning.effort=none`，避免目标模型的默认 reasoning 模式改变工具选择语义；显式 `thinking.type=adaptive` 仍按 capability 中固定的目标 effort 降级映射。
+Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。若目标模型的 `reasoning_efforts` 明确包含 `none`，代理会显式发送 `reasoning.effort=none`，避免目标模型的默认 reasoning 模式改变工具选择语义；显式 `thinking.type=adaptive` 仍按 capability 中固定的目标 effort 降级映射。反向 Responses→Anthropic 中，显式 `reasoning.effort=none` 映射为 `thinking.type=disabled`，其他 effort 映射为 adaptive + 配置的目标 effort。DeepSeek Anthropic 接入在 thinking 开启时拒绝命名 `tool_choice`，因此命名工具请求应显式使用 `reasoning.effort=none`。
 
-对于只实现 OpenAI Chat Completions 的旧应用，仅选择 `supported_endpoints` 包含 `/v1/chat/completions` 的模型。不要把 Provider 配置中的 `responses`、`messages` 等名称拼成 URL。
+对于只实现 OpenAI Chat Completions 的旧应用，仅选择 `supported_endpoints` 包含 `/v1/chat/completions` 的模型。Chat→Anthropic 是基础文本兼容路径；Anthropic 返回的 thinking 块会被识别并省略，不会作为 assistant 文本暴露。不要把 Provider 配置中的 `responses`、`messages` 等名称拼成 URL。
 
 ## 4. OpenAI Responses 集成
 
@@ -512,7 +512,7 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 ## 10. 目录缓存与刷新
 
-模型目录会随 Provider 启停、健康状态、模型匹配、端点变更和账号池发现结果变化。推荐策略：
+模型目录会随 Provider 启停、健康状态、模型匹配、端点变更和账号池发现结果变化。Provider 切换上游协议时，网关只摘取与当前 transport 一致的 active release；保留的其他方向记录不会进入业务目录。推荐策略：
 
 - 进程启动时必须获取一次，获取失败时不要盲发模型请求；
 - 使用短时缓存，建议由应用按自身流量设置 30 至 300 秒 TTL；

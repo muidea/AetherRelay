@@ -379,6 +379,44 @@ model_metadata:
 	}
 }
 
+func TestReconcileProviderConversionReleasesPreservesDormantDirection(t *testing.T) {
+	cfg := Config{ModelMetadata: map[string]ModelMetadata{
+		"deepseek-v4-flash": {
+			ID: "deepseek-v4-flash",
+			ConversionCapabilities: map[string]ConversionCapability{
+				ConversionDirectionAnthropicToResponses: {Level: 3, Text: true, Tools: true},
+				ConversionDirectionResponsesToAnthropic: {Level: 3, Text: true, Tools: true},
+			},
+		},
+	}}
+	provider := Provider{
+		Name: "deepseek", Protocol: "anthropic", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "test",
+		Models: []string{"deepseek-v4-flash"}, Endpoints: []string{ProviderEndpointMessages},
+		ConversionReleases: map[string]map[string]ProviderConversionRelease{
+			"deepseek-v4-flash": {
+				ConversionDirectionAnthropicToResponses: {Enabled: true, Verified: true, EvidenceID: "responses-eval"},
+			},
+		},
+	}
+	provider = ReconcileProviderConversionReleases(cfg, provider)
+	directions := provider.ConversionReleases["deepseek-v4-flash"]
+	if release := directions[ConversionDirectionAnthropicToResponses]; !release.Enabled || !release.Verified || release.EvidenceID != "responses-eval" {
+		t.Fatalf("dormant release changed: %#v", release)
+	}
+	if _, ok := directions[ConversionDirectionResponsesToAnthropic]; !ok {
+		t.Fatalf("compatible draft was not appended: %#v", directions)
+	}
+	if ProviderConversionActive(provider, "deepseek-v4-flash", ConversionDirectionAnthropicToResponses) {
+		t.Fatal("dormant Responses release became active on an Anthropic provider")
+	}
+	if ProviderConversionActive(provider, "deepseek-v4-flash", ConversionDirectionResponsesToAnthropic) {
+		t.Fatal("disabled draft became active")
+	}
+	if err := validateProviderConversionReleases(cfg, "deepseek", provider); err != nil {
+		t.Fatalf("dormant release rejected: %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidConversionLevel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

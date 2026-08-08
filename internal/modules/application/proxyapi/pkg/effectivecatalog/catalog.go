@@ -319,7 +319,7 @@ func serviceablePathsForModel(provider config.Provider, modelID string, metadata
 
 func conversionCapabilityAvailable(provider config.Provider, modelID string, metadata config.ModelMetadata, direction string) bool {
 	capability, ok := metadata.ConversionCapabilities[direction]
-	return ok && config.ConversionCapabilityUsable(direction, capability) && config.ProviderConversionReleased(provider, modelID, direction)
+	return ok && config.ConversionCapabilityUsable(direction, capability) && config.ProviderConversionActive(provider, modelID, direction)
 }
 
 func conversionModesForModel(provider config.Provider, modelID string, metadata config.ModelMetadata) []string {

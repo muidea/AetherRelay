@@ -749,6 +749,34 @@ func TestReasoningAdaptersUseConfiguredTargetEffort(t *testing.T) {
 	}
 }
 
+func TestResponsesReasoningNoneDisablesAnthropicThinking(t *testing.T) {
+	capability := config.ConversionCapability{
+		Level: 3, Text: true, Tools: true, Reasoning: true,
+		ReasoningAdapter: config.ReasoningAdapterResponsesToAnthropicAdaptive, ReasoningTargetEffort: "medium",
+	}
+	body, ignored, err := buildAnthropicFromResponsesWithCapability(map[string]any{
+		"input": "Use lookup.", "reasoning": map[string]any{"effort": "none"},
+		"tools": []any{map[string]any{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}}},
+	}, "claude-test", false, capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	thinking, ok := request["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "disabled" {
+		t.Fatalf("request=%s", body)
+	}
+	if _, ok := request["output_config"]; ok {
+		t.Fatalf("disabled thinking must not include output_config: %s", body)
+	}
+	if !strings.Contains(strings.Join(ignored, ","), "reasoning") {
+		t.Fatalf("ignored=%#v", ignored)
+	}
+}
+
 func TestReasoningOutputIsOmittedAndMarkedDegraded(t *testing.T) {
 	capability := config.ConversionCapability{Level: 2, Text: true, Reasoning: true, ReasoningAdapter: config.ReasoningAdapterAnthropicToResponsesEffort, ReasoningTargetEffort: "low"}
 	response, _, ignored, err := convertAnthropicToResponsesWithCapability([]byte(`{"id":"m1","model":"claude","content":[{"type":"thinking","thinking":"secret","signature":"sig"},{"type":"text","text":"visible"}]}`), "claude", capability)

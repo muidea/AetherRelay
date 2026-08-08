@@ -63,7 +63,7 @@ Level 3 在 Level 2 基础上增加 function tool 定义、`function_call`/`tool
 | `temperature` | `temperature` | 目标模型支持时映射 |
 | `top_p` | `top_p` | 目标模型支持时映射 |
 | `stream` | `stream` | 进入对应流式转换器 |
-| `reasoning` | `thinking` | 仅按方向适配器映射到固定目标 effort；不转换客户端 effort |
+| `reasoning` | `thinking` | 显式 `effort=none` 映射 `thinking.type=disabled`；其他值按方向适配器映射到固定目标 effort；不转换客户端具体 effort |
 | `tools` | `tools` | Level 3 仅支持 function 定义，流式工具事件拒绝 |
 | `tool_choice` | `tool_choice` | Level 3 映射 auto/required/none 与指定 function |
 | `text.format` | 无通用等价字段 | 拒绝 JSON Schema/结构化输出转换 |
@@ -83,6 +83,8 @@ OpenAI Responses 使用：
 ```
 
 Anthropic 使用 `thinking` 配置和 thinking content block。两者的控制维度和返回结构不同，因此不能把 `effort` 直接改名为 `thinking`，也不能将 `budget_tokens` 反推为 `effort`。
+
+Responses→Anthropic 仅对显式 `reasoning.effort=none` 做关闭语义映射；该请求不会携带 `output_config`。其余 effort 统一采用 capability 声明的 adaptive 目标值。DeepSeek Anthropic 上游在 thinking 开启时拒绝命名 `tool_choice`，命名工具调用必须显式选择 `none`。
 
 ### 5.2 能力声明
 
@@ -112,7 +114,7 @@ model_metadata:
         reasoning_target_effort: low
 ```
 
-`reasoning=true` 必须同时有方向匹配的 adapter 和 `reasoning_target_effort`，目标 effort 必须出现在 `reasoning_efforts`。Responses→Anthropic 的 adapter 只生成 `thinking: {"type":"adaptive"}` 和配置的 `output_config.effort`；Anthropic→Responses 的 adapter 只生成配置的 `reasoning.effort`。客户端指定的 effort 不自动换算，Anthropic manual `thinking: {"type":"enabled","budget_tokens":...}` 也不转换。未声明 thinking 不触发降级适配；目标模型支持 `none` 时只显式关闭目标 reasoning，以保持源协议的未启用语义。
+`reasoning=true` 必须同时有方向匹配的 adapter 和 `reasoning_target_effort`，目标 effort 必须出现在 `reasoning_efforts`。Responses→Anthropic 的 adapter 对显式 `none` 生成 `thinking: {"type":"disabled"}`，对其他 effort 生成 `thinking: {"type":"adaptive"}` 和配置的 `output_config.effort`；Anthropic→Responses 的 adapter 只生成配置的 `reasoning.effort`。客户端指定的其他 effort 不自动换算，Anthropic manual `thinking: {"type":"enabled","budget_tokens":...}` 也不转换。未声明 thinking 不触发降级适配；目标模型支持 `none` 时只显式关闭目标 reasoning，以保持源协议的未启用语义。
 
 没有适配器或适配器不匹配时，在上游请求创建前返回：
 
@@ -465,7 +467,7 @@ client_canceled
 
 ## 23. 正式配置 schema
 
-当前实现使用两层门闩：exact model metadata 描述转换器对该模型的实现上限，Provider 的 `conversion_releases` 描述具体 `provider/model/direction` 是否完成真实验证并允许发布。两层必须同时通过；任一层未声明都等同关闭。
+当前实现使用两层门闩：exact model metadata 描述转换器对该模型的实现上限，Provider 的 `conversion_releases` 描述具体 `provider/model/direction` 是否完成真实验证并允许发布。release 可以作为 dormant 档案跨 protocol/endpoints 切换保留；只有两层声明均通过且方向与 Provider 当前 transport 相容时才是 active。切换管理型 Provider 上游端点会为缺失的当前兼容方向追加关闭草稿，不复制其他方向的验证结论或证据。
 
 ```yaml
 model_metadata:
@@ -683,7 +685,7 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 ## 30. 灰度、熔断与回滚
 
-转换能力默认关闭，按 `provider/model/direction` 通过 `conversion_releases` 灰度开启。Provider 管理热更新会原子重建有效目录，因此 `/v1/models` 与请求路由使用同一代发布状态。灰度期间监控：
+转换能力默认关闭，按 `provider/model/direction` 通过 `conversion_releases` 灰度开启。Provider 管理热更新会原子重建有效目录，因此 `/v1/models` 与请求路由使用同一代 active 发布状态；与当前 transport 不相容的 dormant release 只保存在管理配置中。灰度期间监控：
 
 - conversion error rate；
 - upstream 400/422 rate；

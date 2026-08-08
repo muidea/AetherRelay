@@ -1155,6 +1155,9 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request, rel stri
 	}
 	applyProviderPatch(&provider, input)
 	provider.Name = name
+	if input.Protocol != nil || input.Endpoints != nil {
+		provider = config.ReconcileProviderConversionReleases(current, provider)
+	}
 	next := make(map[string]config.Provider, len(current.Providers))
 	for id, item := range current.Providers {
 		next[id] = item

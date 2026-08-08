@@ -1551,15 +1551,14 @@ func validateProviderConversionReleases(cfg Config, name string, provider Provid
 			if !metadataExists || !capabilityExists || !ConversionCapabilityUsable(direction, capability) {
 				return fmt.Errorf("providers.%s.conversion_releases.%s.%s requires a usable model_metadata conversion capability", name, modelID, direction)
 			}
-			if !providerSupportsConversionDirection(provider, direction) {
-				return fmt.Errorf("providers.%s.conversion_releases.%s.%s is incompatible with provider protocol/endpoints", name, modelID, direction)
-			}
 		}
 	}
 	return nil
 }
 
-func providerSupportsConversionDirection(provider Provider, direction string) bool {
+// ProviderSupportsConversionDirection reports whether the provider's current
+// protocol/endpoints can execute a stored conversion direction.
+func ProviderSupportsConversionDirection(provider Provider, direction string) bool {
 	for _, path := range ServiceableInboundPaths(provider) {
 		for _, transport := range ResolveProviderTransports(provider, path) {
 			if transport.Mode == direction {
@@ -1568,6 +1567,50 @@ func providerSupportsConversionDirection(provider Provider, direction string) bo
 		}
 	}
 	return false
+}
+
+// ReconcileProviderConversionReleases retains dormant release history and
+// appends a disabled draft for each currently compatible direction. Only exact
+// provider model IDs and already stored model IDs are materialized.
+func ReconcileProviderConversionReleases(cfg Config, provider Provider) Provider {
+	provider.ConversionReleases = cloneProviderConversionReleases(provider.ConversionReleases)
+	if provider.ConversionReleases == nil {
+		provider.ConversionReleases = map[string]map[string]ProviderConversionRelease{}
+	}
+	modelIDs := map[string]struct{}{}
+	for modelID := range provider.ConversionReleases {
+		modelIDs[modelID] = struct{}{}
+	}
+	for _, modelID := range provider.Models {
+		modelID = strings.TrimSpace(modelID)
+		if modelID != "" && !strings.Contains(modelID, "*") {
+			modelIDs[modelID] = struct{}{}
+		}
+	}
+	for modelID := range modelIDs {
+		metadata, ok := cfg.ModelMetadata[modelID]
+		if !ok || !ProviderMatchesModel(provider.Name, provider, modelID) {
+			continue
+		}
+		directions := provider.ConversionReleases[modelID]
+		if directions == nil {
+			directions = map[string]ProviderConversionRelease{}
+		}
+		for _, direction := range []string{ConversionDirectionResponsesToAnthropic, ConversionDirectionAnthropicToResponses} {
+			if _, exists := directions[direction]; exists || !ProviderSupportsConversionDirection(provider, direction) {
+				continue
+			}
+			capability, exists := metadata.ConversionCapabilities[direction]
+			if !exists || !ConversionCapabilityUsable(direction, capability) {
+				continue
+			}
+			directions[direction] = ProviderConversionRelease{}
+		}
+		if len(directions) > 0 {
+			provider.ConversionReleases[modelID] = directions
+		}
+	}
+	return provider
 }
 
 // ProviderConversionReleased returns true only for a concrete rollout that is
@@ -1579,6 +1622,13 @@ func ProviderConversionReleased(provider Provider, modelID, direction string) bo
 	}
 	release, ok := directions[direction]
 	return ok && release.Enabled && release.Verified
+}
+
+// ProviderConversionActive combines stored release state with the provider's
+// current transport. Dormant records remain preserved but cannot be routed or
+// advertised until the provider switches back to a compatible endpoint.
+func ProviderConversionActive(provider Provider, modelID, direction string) bool {
+	return ProviderSupportsConversionDirection(provider, direction) && ProviderConversionReleased(provider, modelID, direction)
 }
 
 // validateProviderAPIKey:远程上游必须有 API Key;仅 allow_unauthenticated + loopback base_url 允许空 Key。

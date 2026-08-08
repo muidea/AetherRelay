@@ -544,6 +544,51 @@ func TestHandlerPatchesProviderConversionReleaseAndPreservesCredential(t *testin
 	}
 }
 
+func TestHandlerSwitchesProviderTransportAndPreservesDormantReleases(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := cfg.Providers["openai"]
+	provider.Endpoints = []string{config.ProviderEndpointResponses}
+	provider.ConversionReleases = map[string]map[string]config.ProviderConversionRelease{
+		"gpt-4o": {
+			config.ConversionDirectionAnthropicToResponses: {Enabled: true, Verified: true, EvidenceID: "responses-eval"},
+		},
+	}
+	cfg.Providers["openai"] = provider
+	cfg.ModelMetadata["gpt-4o"] = config.ModelMetadata{
+		ID: "gpt-4o",
+		ConversionCapabilities: map[string]config.ConversionCapability{
+			config.ConversionDirectionAnthropicToResponses: {Level: 3, Text: true, Tools: true},
+			config.ConversionDirectionResponsesToAnthropic: {Level: 3, Text: true, Tools: true},
+		},
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", strings.NewReader(`{"protocol":"anthropic","base_url":"https://api.deepseek.com/anthropic","endpoints":["messages"]}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch = %d %s", rec.Code, rec.Body.String())
+	}
+	updated := runtime.ConfigSnapshot().Providers["openai"]
+	if updated.Protocol != "anthropic" || len(updated.Endpoints) != 1 || updated.Endpoints[0] != config.ProviderEndpointMessages || updated.APIKey != "secret-value" {
+		t.Fatalf("provider = %#v", updated)
+	}
+	directions := updated.ConversionReleases["gpt-4o"]
+	if old := directions[config.ConversionDirectionAnthropicToResponses]; !old.Enabled || !old.Verified || old.EvidenceID != "responses-eval" {
+		t.Fatalf("old release changed: %#v", old)
+	}
+	if draft, ok := directions[config.ConversionDirectionResponsesToAnthropic]; !ok || draft.Enabled || draft.Verified || draft.EvidenceID != "" {
+		t.Fatalf("new draft = %#v, exists=%t", draft, ok)
+	}
+}
+
 func TestHandlerDeletesOnlyTargetProvider(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)

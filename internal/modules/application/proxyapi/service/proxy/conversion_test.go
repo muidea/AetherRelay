@@ -162,6 +162,34 @@ func TestConvertOpenAIResponseAllowsEmptyToolCalls(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatConversionOmitsThinking(t *testing.T) {
+	body := []byte(`{"id":"m1","model":"deepseek","content":[{"type":"thinking","thinking":"private"},{"type":"text","text":"visible"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`)
+	out, _, err := convertAnthropicResponse(body, "deepseek")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "private") || !strings.Contains(string(out), "visible") {
+		t.Fatalf("response=%s", out)
+	}
+}
+
+func TestAnthropicChatStreamOmitsThinking(t *testing.T) {
+	id, model, finish := "m1", "deepseek", "stop"
+	usage := tokenUsage{}
+	content := &strings.Builder{}
+	roleSent := true
+	for _, payload := range []string{
+		`{"type":"content_block_start","content_block":{"type":"thinking","thinking":""}}`,
+		`{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private"}}`,
+		`{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"private"}}`,
+	} {
+		events, err := anthropicStreamEvents(payload, &id, &model, &usage, content, &finish, &roleSent, 1)
+		if err != nil || len(events) != 0 {
+			t.Fatalf("events=%q err=%v", events, err)
+		}
+	}
+}
+
 func TestHasNonEmptyConversionFeature(t *testing.T) {
 	if hasNonEmptyConversionFeature(nil) {
 		t.Fatal("nil")

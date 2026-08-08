@@ -720,6 +720,11 @@ func convertAnthropicResponse(body []byte, fallbackModel string) ([]byte, tokenU
 		switch part.Type {
 		case "text", "":
 			text.WriteString(part.Text)
+		case "thinking", "redacted_thinking":
+			// Chat Completions has no portable reasoning-content contract.
+			// Recognize and omit Anthropic thinking instead of exposing it as
+			// assistant text or failing an otherwise valid text conversion.
+			continue
 		default:
 			return nil, tokenUsage{}, fmt.Errorf("protocol conversion does not support response content type %q; use a native provider", part.Type)
 		}
@@ -1242,6 +1247,9 @@ func anthropicStreamEvents(payload string, id, model *string, usage *tokenUsage,
 	case "content_block_start":
 		if block, ok := event["content_block"].(map[string]any); ok {
 			typ, _ := block["type"].(string)
+			if typ == "thinking" || typ == "redacted_thinking" {
+				return nil, nil
+			}
 			if typ != "" && typ != "text" {
 				return nil, fmt.Errorf("protocol conversion does not support streaming content type %q; use a native provider", typ)
 			}
@@ -1249,6 +1257,9 @@ func anthropicStreamEvents(payload string, id, model *string, usage *tokenUsage,
 	case "content_block_delta":
 		if delta, ok := event["delta"].(map[string]any); ok {
 			dType, _ := delta["type"].(string)
+			if dType == "thinking_delta" || dType == "signature_delta" {
+				return nil, nil
+			}
 			if dType != "" && dType != "text_delta" && dType != "text" {
 				return nil, fmt.Errorf("protocol conversion does not support streaming delta type %q; use a native provider", dType)
 			}

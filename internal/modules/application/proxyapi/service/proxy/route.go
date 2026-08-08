@@ -286,7 +286,7 @@ func conversionDeclared(cfg config.Config, provider config.Provider, modelID, mo
 	}
 	direction := mode
 	capability, ok := metadata.ConversionCapabilities[direction]
-	return ok && conversionCapabilityUsable(direction, capability) && config.ProviderConversionReleased(provider, modelID, direction)
+	return ok && conversionCapabilityUsable(direction, capability) && config.ProviderConversionActive(provider, modelID, direction)
 }
 
 // conversionCapabilityUsable keeps route and discovery policy aligned with

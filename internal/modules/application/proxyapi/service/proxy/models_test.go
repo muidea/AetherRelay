@@ -83,7 +83,10 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 			"responses": {
 				Name: "responses", Protocol: "openai", BaseURL: "https://example.invalid", APIKey: "test",
 				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
-				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"shared-model": {TransportModeAnthropicToResponses: {Enabled: true, Verified: true}}},
+				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"shared-model": {
+					TransportModeAnthropicToResponses: {Enabled: true, Verified: true},
+					TransportModeResponsesToAnthropic: {Enabled: true, Verified: true},
+				}},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
