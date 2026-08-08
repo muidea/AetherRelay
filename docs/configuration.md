@@ -295,6 +295,8 @@ endpoint 下只允许选择固定 profile：`level1`、`level2`、`level2_reason
 
 当前 `gpt-5.6-luna` 同样完成双向 Level 3 验证。模型元数据发布 `272,000` context window 和 `128,000` max output tokens。Luna 的 Responses output item 私有 metadata 会被有界省略并标记降级，不属于可转换内容。
 
+`gpt-5.6-luna`、`gpt-5.6-sol` 与 `gpt-5.6-terra` 统一声明 reasoning 支持：允许值均为 `none/low/medium/high/xhigh/max`，默认值均为 `medium`。Reasoning 声明只用于能力发布；Sol 与 Terra 未配置方向化转换模板时，不会因此自动开放跨协议转换。
+
 `gpt-5.5` 发布 `272,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `medium`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools、tool result 闭环及全部五档 reasoning；不据此开放跨协议转换或图片能力。
 
 `gpt-5.4-mini` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 发布 `400,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `none`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools 与 tool result 闭环，不据此开放跨协议转换。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理会在上游调用前明确拒绝；目录中的 `maxOutputTokens` 仅表示模型输出能力上限。

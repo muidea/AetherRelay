@@ -180,9 +180,15 @@ model_metadata:
   gpt-5.6-sol:
     context_window_tokens: 272000
     max_output_tokens: 128000
+    reasoning_supported: true
+    reasoning_default_effort: medium
+    reasoning_efforts: [none, low, medium, high, xhigh, max]
   gpt-5.6-terra:
     context_window_tokens: 272000
     max_output_tokens: 128000
+    reasoning_supported: true
+    reasoning_default_effort: medium
+    reasoning_efforts: [none, low, medium, high, xhigh, max]
   gpt-5.4:
     context_window_tokens: 1050000
     max_output_tokens: 128000
