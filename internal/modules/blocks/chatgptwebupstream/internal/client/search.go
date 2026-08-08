@@ -354,8 +354,8 @@ func (c *Client) pollSearch(ctx context.Context, conversationID string) (SearchR
 			}
 			return SearchResult{}, fmt.Errorf("search poll: timed out waiting for result")
 		}
-		if err := waitForImagePoll(ctx, minDuration(3*time.Second, time.Until(deadline))); err != nil {
-			return SearchResult{}, err
+		if err := waitForPoll(ctx, minDuration(3*time.Second, time.Until(deadline))); err != nil {
+			return SearchResult{}, fmt.Errorf("search poll: %w", err)
 		}
 	}
 }
@@ -379,6 +379,8 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 	mapping, _ := root["mapping"].(map[string]any)
 	var latest map[string]any
 	latestTime := float64(-1)
+	var latestWithText map[string]any
+	latestWithTextTime := float64(-1)
 	for _, rawNode := range mapping {
 		node, _ := rawNode.(map[string]any)
 		message, _ := node["message"].(map[string]any)
@@ -391,6 +393,15 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 		if latest == nil || created >= latestTime {
 			latest, latestTime = message, created
 		}
+		// The Web document can append a newer assistant bookkeeping node
+		// without content after the answer-bearing node. Keep the newest
+		// non-empty message separately so that node cannot hide the answer.
+		if searchMessageText(message) != "" && (latestWithText == nil || created >= latestWithTextTime) {
+			latestWithText, latestWithTextTime = message, created
+		}
+	}
+	if searchMessageText(latest) == "" && latestWithText != nil {
+		latest = latestWithText
 	}
 	if latest == nil {
 		return SearchResult{ConversationID: bounded(conversationID, 512)}, false, nil

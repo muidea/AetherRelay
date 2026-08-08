@@ -207,6 +207,18 @@ func TestChatGPTWebResponsesRejectsStatefulAndToolSemantics(t *testing.T) {
 	}
 }
 
+func TestChatGPTWebResponsesRejectsUndeclaredReasoningBeforeUpstream(t *testing.T) {
+	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":"hello","reasoning":{"effort":"low"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-client-key")
+	resp := httptest.NewRecorder()
+	h.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), `"feature":"reasoning"`) {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestChatGPTWebTextSuccessSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	h := newChatGPTWebHandler(t, store, chatGPTTextExecutorStub{})

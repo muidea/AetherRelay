@@ -20,7 +20,7 @@ func ConfigureLogger(format string, debug bool) {
 
 // newLogger 根据环境变量构造 ai-proxy 使用的 slog logger。
 // LOG_FORMAT=text 时输出人类可读 key=value,否则默认 JSON。
-// AI_PROXY_DEBUG_LOG=true 启用 Debug 级别,否则 Info 起跳。
+// AI_PROXY_VERBOSE_LOGGING=true 启用 Debug 级别,否则 Info 起跳。
 func newLogger() *slog.Logger {
 	return newLoggerWithOptions(os.Stderr, os.Getenv("LOG_FORMAT"), parseDebugFlag())
 }
@@ -45,7 +45,7 @@ func newLoggerWithOptions(w io.Writer, format string, debug bool) *slog.Logger {
 }
 
 func parseDebugFlag() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("AI_PROXY_DEBUG_LOG")))
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("AI_PROXY_VERBOSE_LOGGING")))
 	return v == "1" || v == "true" || v == "yes"
 }
 

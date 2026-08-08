@@ -32,6 +32,13 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		h.handleChatGPTWebSearchResponses(w, r, started, provider, model, stream, searchInvocation)
 		return
 	}
+	if _, present := body["reasoning"]; present && !h.chatGPTWebReasoningSupported(model) {
+		apiErr := unsupportedChatGPTWebFeature("reasoning")
+		apiErr.Model = model
+		fail := newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, fmt.Errorf("%s", apiErr.Message), false)
+		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *apiErr, fail, tokenUsage{})
+		return
+	}
 	h.cfgMu.RLock()
 	executor := h.chatGPTText
 	h.cfgMu.RUnlock()
@@ -173,6 +180,12 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 	}
 	_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
 	h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, nil)
+}
+
+func (h *Handler) chatGPTWebReasoningSupported(model string) bool {
+	snapshot := h.EffectiveCatalog()
+	metadata, ok := snapshot.ModelMetadata[strings.TrimSpace(model)]
+	return ok && metadata.ReasoningDeclared && metadata.ReasoningSupported
 }
 
 func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Request, []string, *APIError) {

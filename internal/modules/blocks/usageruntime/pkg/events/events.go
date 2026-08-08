@@ -27,6 +27,7 @@ const (
 	TopicClientKeyEnable   = "aiproxy.usage.command.client-key-enable"
 	TopicClientKeyRotate   = "aiproxy.usage.command.client-key-rotate"
 	TopicClientKeyRevoke   = "aiproxy.usage.command.client-key-revoke"
+	TopicClientKeyDelete   = "aiproxy.usage.command.client-key-delete"
 )
 
 type AcquireCommand struct{}
@@ -79,3 +80,4 @@ type ClientKeyRevokeCommand struct {
 	ID string
 	At time.Time
 }
+type ClientKeyDeleteCommand struct{ ID string }

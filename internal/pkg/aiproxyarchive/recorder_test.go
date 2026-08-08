@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,21 +86,96 @@ func TestRecorderDoesNotDeleteActiveRounds(t *testing.T) {
 	assertDirExists(t, root, "000003")
 }
 
-func assertDirExists(t *testing.T, root, name string) {
-	t.Helper()
-	info, err := os.Stat(filepath.Join(root, name))
+func TestRecorderScopesRoundsByAPIKey(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 2, FullContent: false, ScopeByAPIKey: true})
 	if err != nil {
-		t.Fatalf("expected %s to exist: %v", name, err)
+		t.Fatal(err)
 	}
-	if !info.IsDir() {
-		t.Fatalf("expected %s to be a directory", name)
+	for i := 0; i < 3; i++ {
+		round, err := recorder.StartForAPIKey("workorch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := round.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		round, err := recorder.StartForAPIKey("other-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := round.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertDirMissing(t, root, "workorch", "000001")
+	assertDirExists(t, root, "workorch", "000002")
+	assertDirExists(t, root, "workorch", "000003")
+	assertDirExists(t, root, "other-key", "000004")
+	assertDirExists(t, root, "other-key", "000005")
+}
+
+func TestRemoveAPIKeyScope(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := recorder.StartForAPIKey("remove-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := round.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAPIKeyScope(root, "remove-me"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "remove-me")); !os.IsNotExist(err) {
+		t.Fatalf("api key scope should be removed, err=%v", err)
 	}
 }
 
-func assertDirMissing(t *testing.T, root, name string) {
+func TestRecorderRecoversIncompleteScopedRound(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "workorch", "000007")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "request.json"), []byte(`{"model":"test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"outcome": "process_interrupted"`) || !strings.Contains(string(data), `"request_path": "request.json"`) {
+		t.Fatalf("unexpected recovered metadata: %s", data)
+	}
+}
+
+func assertDirExists(t *testing.T, root string, parts ...string) {
 	t.Helper()
-	if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
-		t.Fatalf("expected %s to be removed, stat err = %v", name, err)
+	path := filepath.Join(append([]string{root}, parts...)...)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected %s to be a directory", path)
+	}
+}
+
+func assertDirMissing(t *testing.T, root string, parts ...string) {
+	t.Helper()
+	path := filepath.Join(append([]string{root}, parts...)...)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to be removed, stat err = %v", path, err)
 	}
 }
 

@@ -241,4 +241,5 @@ type Store interface {
 	SetClientAPIKeyEnabled(context.Context, string, bool) error
 	RotateClientAPIKey(context.Context, string, string, time.Time) error
 	RevokeClientAPIKey(context.Context, string, time.Time) error
+	DeleteClientAPIKey(context.Context, string) error
 }

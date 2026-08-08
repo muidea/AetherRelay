@@ -72,6 +72,32 @@ func (s *DuckDBStore) RevokeClientAPIKey(ctx context.Context, id string, t time.
 	return err
 }
 
+func (s *DuckDBStore) DeleteClientAPIKey(ctx context.Context, id string) error {
+	s.write.Lock()
+	defer s.write.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `DELETE FROM client_api_key_metadata WHERE api_key_id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, countErr := res.RowsAffected(); countErr == nil && n == 0 {
+		return sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_events WHERE api_key_id=?`, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.cache.clear()
+	s.optionsCache.clear()
+	return nil
+}
+
 func (s *DuckDBStore) EnsureClientAPIKey(ctx context.Context, id string, createdAt time.Time) error {
 	if s == nil || s.closed.Load() {
 		return ErrStoreUnavailable

@@ -17,6 +17,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetrics"
+	"ai-proxy/internal/pkg/aiproxyusage"
 )
 
 type testRuntime struct {
@@ -919,6 +920,40 @@ func TestLegacyClientAPIKeyConfigManagementRemoved(t *testing.T) {
 	handler.ServeHTTP(rec, disable)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteClientAPIKeyRemovesInteractionScope(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{InteractionDir: filepath.Join(root, "interactions")}
+	runtime := &testRuntime{cfg: cfg}
+	store := usage.NewMemoryStore()
+	now := time.Now().UTC()
+	if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "ci-agent", Hash: "sha256:test", Enabled: true, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	scope := filepath.Join(cfg.InteractionDir, "ci-agent")
+	if err := os.MkdirAll(filepath.Join(scope, "000001"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandlerWithUsage("", runtime, store)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/client-api-keys/ci-agent", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(scope); !os.IsNotExist(err) {
+		t.Fatalf("interaction scope still exists: %v", err)
+	}
+	keys, err := store.ListClientAPIKeys(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := keys["ci-agent"]; ok {
+		t.Fatal("client API key metadata still exists")
 	}
 }
 

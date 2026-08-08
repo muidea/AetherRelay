@@ -42,7 +42,7 @@ func Run(version string) int {
 		slog.Error("load config", slog.Any("error", err))
 		return 1
 	}
-	logging.ConfigureLogger(cfg.LogFormat, cfg.DebugLog)
+	logging.ConfigureLogger(cfg.LogFormat, cfg.VerboseLogging)
 
 	runtime := NewRuntime(configevents.Bootstrap{Config: cfg, ConfigPath: resolvedConfigPath, Version: version, StartedAt: time.Now().UTC()})
 	serviceCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

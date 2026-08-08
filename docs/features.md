@@ -22,7 +22,7 @@
 | Codex OAuth 原生 Responses | `/v1/responses` 路由到内建 `codexoauth` | `codex_oauth.provider_enabled` |
 | Prometheus 指标 / 统计快照 | `/metrics`、`/stats`、`/stats/stream` | 默认 loopback-only |
 | SLO 违规 webhook | 状态变化时异步 POST | `slo_violation_webhook` 配置 |
-| 交互归档 | `state.dir/interactions/{round_id}/` | 默认启用 |
+| 交互归档 | `state.dir/interactions/{api_key_id}/{round_id}/` | 默认启用 |
 | Provider live probe | `cmd/ai-proxy-probe` / Admin「检查」按钮 | 独立命令，不进启动流程 |
 
 ## 标准数据端点
@@ -104,7 +104,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ### 客户端 Key
 
-创建、启停、轮换、删除客户端 API Key；管理端生成的 Key 以 SHA-256 摘要形式写回配置。
+创建、启停、轮换、删除客户端 API Key；管理端生成的 Key 仅以 SHA-256 摘要保存在 DuckDB。删除 Key 时同步删除其用量调用明细与 `interactions/{api_key_id}/` 交互归档。
 
 ### 使用统计
 
@@ -163,7 +163,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - **Prometheus 指标**（前缀 `ai_proxy_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
 - **SLO webhook**：配置阈值（缓存命中率、上游错误率、p99 延迟）与巡检周期后，状态变化时异步 POST `entered` / `resolved` 事件，带 `instance_id`、递增 `seq`、`generation` 与稳定 `event_id`；消费方按 `event_id` 幂等。有界队列 + 单 worker，429 优先遵循 `Retry-After`。
-- **交互归档**：`state.dir/interactions/{round_id}/` 保存脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`；`archive_full_content: false` 可禁止正文落盘；默认保留最近 N 轮（`interaction_retention`）。
+- **交互归档**：`state.dir/interactions/{api_key_id}/{round_id}/` 按客户端 API Key 作用域保存脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`；`archive_full_content: false` 可禁止正文落盘；每个 API Key 默认保留最近 N 轮（`interaction_retention`）。目录名使用 API Key ID，不包含原始密钥。
 - **Provider live probe**：`go run ./cmd/ai-proxy-probe -config config.yaml -provider <owner> -endpoint chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `endpoint_drift` / `environment_undetermined`；不在服务启动时运行。
 
 ## 安全与隐私边界

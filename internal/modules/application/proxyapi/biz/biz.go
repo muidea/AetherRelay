@@ -74,7 +74,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}
 	recorder, err := archive.NewRecorderOptions(bootstrap.Config.InteractionDir, archive.RecorderOptions{
-		MaxRounds: bootstrap.Config.InteractionRetention, FullContent: bootstrap.Config.ArchiveFullContent,
+		MaxRounds: bootstrap.Config.InteractionRetention, FullContent: bootstrap.Config.ArchiveFullContent, ScopeByAPIKey: true,
 	})
 	if err != nil {
 		return nil, cd.NewError(cd.Unexpected, "init interaction archive: "+err.Error())

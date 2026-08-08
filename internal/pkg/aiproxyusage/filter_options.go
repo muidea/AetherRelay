@@ -71,6 +71,16 @@ func (c *filterOptionsCache) put(key string, value FilterOptionsResult) {
 	c.touchOrder(key)
 }
 
+func (c *filterOptionsCache) clear() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*filterOptionsCacheEntry)
+	c.order = nil
+}
+
 func (c *filterOptionsCache) touchOrder(key string) {
 	c.removeOrder(key)
 	c.order = append(c.order, key)

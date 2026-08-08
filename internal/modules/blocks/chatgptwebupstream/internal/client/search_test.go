@@ -83,3 +83,14 @@ func TestParseSearchDocumentDeduplicatesAndBoundsSources(t *testing.T) {
 		t.Fatalf("title was not bounded: %d", len(result.Sources[0].Title))
 	}
 }
+
+func TestParseSearchDocumentKeepsAnswerWhenNewerAssistantNodeIsEmpty(t *testing.T) {
+	document := []byte(`{"mapping":{
+		"answer":{"message":{"create_time":2,"author":{"role":"assistant"},"content":{"parts":["answer text"]},"metadata":{"status":"completed"}}},
+		"bookkeeping":{"message":{"create_time":3,"author":{"role":"assistant"},"content":{"parts":[]},"metadata":{}}}
+	}}`)
+	result, terminal, err := parseSearchDocument("conversation", document)
+	if err != nil || !terminal || result.Text != "answer text" {
+		t.Fatalf("result=%+v terminal=%v err=%v", result, terminal, err)
+	}
+}

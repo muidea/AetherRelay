@@ -382,7 +382,7 @@ func TestAnthropicNativeAvoidsDuplicateV1AndArchives(t *testing.T) {
 	cfg := config.Config{
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		DebugLog:       true,
+		VerboseLogging: true,
 		Providers: map[string]config.Provider{
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test/v1", APIKey: "test-key"},
 		},
@@ -1169,7 +1169,7 @@ func testHandler(baseURL, tmpDir, provider string) *Handler {
 	cfg := config.Config{
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		DebugLog:       true,
+		VerboseLogging: true,
 		Providers: map[string]config.Provider{
 			provider: {Name: provider, Protocol: "openai", BaseURL: baseURL, APIKey: "test-key"},
 		},
@@ -1673,7 +1673,7 @@ func TestProtocolConversionRejectsTools(t *testing.T) {
 	handler := NewHandler(mustHandlerConfig(config.Config{
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		DebugLog:       true,
+		VerboseLogging: true,
 		Providers: map[string]config.Provider{
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "k", Models: []string{"claude*"}},
 		},
@@ -3150,7 +3150,7 @@ func TestUpstreamHeaderAllowlistAnthropic(t *testing.T) {
 	handler := NewHandler(mustHandlerConfig(config.Config{
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		DebugLog:       true,
+		VerboseLogging: true,
 		Providers: map[string]config.Provider{
 			"anthropic": {
 				Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test",

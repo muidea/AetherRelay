@@ -17,7 +17,7 @@ func TestLoadConfigFileAndEnv(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 server:
   port: 9090
-  debug_log: false
+  verbose_logging: false
   stream_idle_timeout_seconds: 900
 state:
   dir: test-state
@@ -69,7 +69,7 @@ providers:
 	if cfg.InteractionRetention != 500 {
 		t.Fatalf("interaction retention = %d", cfg.InteractionRetention)
 	}
-	if cfg.DebugLog {
+	if cfg.VerboseLogging {
 		t.Fatalf("debug log should be disabled by config")
 	}
 	if cfg.StreamIdleTimeout != 900*time.Second {
@@ -883,7 +883,7 @@ func TestLoadRejectsInvalidBool(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 server:
-  debug_log: maybe
+  verbose_logging: maybe
 providers:
   openai:
     protocol: openai
@@ -1009,7 +1009,7 @@ providers:
 }
 
 func TestLoadRejectsInvalidEnv(t *testing.T) {
-	t.Setenv("AI_PROXY_DEBUG_LOG", "maybe")
+	t.Setenv("AI_PROXY_VERBOSE_LOGGING", "maybe")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1025,7 +1025,7 @@ providers:
 	if err == nil {
 		t.Fatal("expected invalid env bool to fail")
 	}
-	if !strings.Contains(err.Error(), "AI_PROXY_DEBUG_LOG") {
+	if !strings.Contains(err.Error(), "AI_PROXY_VERBOSE_LOGGING") {
 		t.Fatalf("error = %q", err)
 	}
 }

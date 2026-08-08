@@ -448,7 +448,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// round 与 event 在读取 body / 访问上游前建立。event ID 不复用客户端可控的
 	// X-Request-ID；round_id 用于将 usage_events 和本地归档精确关联。
-	round, err := h.startRound()
+	round, err := h.startRound(identity.KeyID)
 	if err != nil {
 		writeClientProtocolError(w, http.StatusInternalServerError, clientProtocolFromRequest(r), APIError{
 			Code: ErrorCodeProxyInternalError, Message: "start interaction archive failed",
@@ -976,11 +976,14 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 	h.handleBufferedResponse(w, resp, round, start, providerName, model, stream, body, r)
 }
 
-func (h *Handler) startRound() (*archive.Round, error) {
+func (h *Handler) startRound(apiKeyID string) (*archive.Round, error) {
 	if h.interactionRecorder == nil {
 		return nil, nil
 	}
-	return h.interactionRecorder.Start()
+	if strings.TrimSpace(apiKeyID) == "" {
+		return h.interactionRecorder.Start()
+	}
+	return h.interactionRecorder.StartForAPIKey(apiKeyID)
 }
 
 func (h *Handler) writeArchivedError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, message string) {

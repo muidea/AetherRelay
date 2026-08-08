@@ -10,7 +10,7 @@ server:
   max_sse_line_bytes: 1048576
   # 是否落盘完整请求/响应正文;false 时仅保留 metadata 等元数据。
   archive_full_content: true
-  debug_log: true
+  verbose_logging: true
   log_format: text
   request_timeout_seconds: 300
   stream_idle_timeout_seconds: 300

@@ -76,6 +76,7 @@
     .tc-empty{padding:40px 20px;text-align:center;color:var(--muted)}
     .tc-status-idle{color:#237804}.tc-status-streaming{color:#0958d9}.tc-status-recovery_required{color:#ad6800}.tc-status-closed{color:#8c8c8c}
     @media(max-width:900px){.tc-layout{grid-template-columns:1fr}.tc-list{min-height:220px}.tc-main{min-height:420px}.tc-messages{padding:14px}.tc-bubble{max-width:calc(100% - 37px)}}
+    .feature-input-wrap{position:relative}.feature-input-wrap textarea.control{display:block;min-height:108px;padding:10px 126px 48px 12px}.feature-submit-inside{position:absolute;right:10px;bottom:10px;min-width:104px;box-shadow:0 2px 5px rgba(22,119,255,.24)}
   </style>
 </head>
 <body>
@@ -286,11 +287,14 @@
             <div class="field"><label class="label required" for="cgTaskModel">model</label><select id="cgTaskModel" class="control" required><option value="">正在加载…</option></select><div class="help">仅列出当前至少有一个可用 Provider 的生图模型。</div></div>
             <div class="field"><label class="label" for="cgTaskSize">size</label><input id="cgTaskSize" class="control" autocomplete="off" placeholder="例如 1024x1024"></div>
             <div class="field"><label class="label" for="cgTaskQuality">quality</label><input id="cgTaskQuality" class="control" autocomplete="off" placeholder="可选"></div>
-            <div class="field full"><label class="label required" for="cgTaskPrompt">prompt</label><textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off"></textarea></div>
-            <div class="field full hidden" id="cgTaskImagesField"><label class="label required" for="cgTaskImages">images（data URL 或可访问 URL，每行一个）</label><textarea id="cgTaskImages" class="control" rows="3" autocomplete="off" placeholder="data:image/png;base64,...&#10;https://example.invalid/a.png"></textarea></div>
-            <div class="field full task-submit-actions">
-              <button type="submit" class="btn btn-primary" id="cgTaskSubmit">提交任务</button>
+            <div class="field full">
+              <label class="label required" for="cgTaskPrompt">prompt</label>
+              <div class="feature-input-wrap">
+                <textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off"></textarea>
+                <button type="submit" class="btn btn-primary feature-submit-inside" id="cgTaskSubmit">提交任务</button>
+              </div>
             </div>
+            <div class="field full hidden" id="cgTaskImagesField"><label class="label required" for="cgTaskImages">images（data URL 或可访问 URL，每行一个）</label><textarea id="cgTaskImages" class="control" rows="3" autocomplete="off" placeholder="data:image/png;base64,...&#10;https://example.invalid/a.png"></textarea></div>
           </form>
         </section>
         <section class="card">
@@ -327,8 +331,14 @@
           <div class="toolbar task-submit-toolbar"><span class="toolbar-title">在线搜索</span><span class="toolbar-meta">/v1/search · ChatGPT Web</span></div>
           <form id="cgSearchForm" class="task-form" autocomplete="off">
             <div class="field"><label class="label required" for="cgSearchModel">模型</label><select id="cgSearchModel" class="control" required><option value="">正在加载…</option></select><div class="help">仅列出当前由 ChatGPT Web 账号池发现且可执行强制联网搜索的模型。</div></div>
-            <div class="field full"><label class="label required" for="cgSearchQuery">搜索内容</label><textarea id="cgSearchQuery" class="control" required rows="4" autocomplete="off" placeholder="输入需要检索的问题或关键词"></textarea><div class="help">每次提交创建一个独立搜索会话，仅支持纯文本输入。</div></div>
-            <div class="field full task-submit-actions"><button type="submit" class="btn btn-primary" id="cgSearchSubmit">开始搜索</button></div>
+            <div class="field full">
+              <label class="label required" for="cgSearchQuery">搜索内容</label>
+              <div class="feature-input-wrap">
+                <textarea id="cgSearchQuery" class="control" required rows="4" autocomplete="off" placeholder="输入需要检索的问题或关键词"></textarea>
+                <button type="submit" class="btn btn-primary feature-submit-inside" id="cgSearchSubmit">开始搜索</button>
+              </div>
+              <div class="help">每次提交创建一个独立搜索会话，仅支持纯文本输入。</div>
+            </div>
           </form>
         </section>
         <section class="card">
@@ -2017,7 +2027,7 @@ async function deleteSelectedImages(){
   finally{state.cg.images.deleteBusy=false;$("cgImgDeleteSelected").disabled=false}
 }
 
-async function loadClientKeys(){try{const d=await request(apiURL("/api/client-api-keys"));state.clientKeys=d.client_api_keys||[];$(`addClientKey`).disabled=!d.writable;const rows=state.clientKeys.map(k=>`<tr><td class="key-id" title="${esc(k.id)}">${esc(k.id)}</td><td><span class="tag ${k.enabled?"tag-status-active":"tag-status-disabled"}">${k.enabled?"已启用":"已禁用"}</span></td><td>${esc(k.created_at?formatDate(k.created_at):"—")}</td><td>${esc(k.last_used_at?formatDate(k.last_used_at):"—")}</td><td class="key-actions"><div class="actions"><button class="link-btn" data-key-toggle="${esc(k.id)}" data-enabled="${!k.enabled}">${k.enabled?"禁用":"启用"}</button><button class="link-btn" data-key-rotate="${esc(k.id)}">轮换</button><button class="link-btn link-danger" data-key-delete="${esc(k.id)}">删除</button></div></td></tr>`).join("");const table=$("clientKeyTable");table.className="";table.innerHTML=`<div class="table-wrap"><table class="client-key-table"><thead><tr><th>ID</th><th>状态</th><th>创建时间</th><th>最后使用</th><th>操作</th></tr></thead><tbody>${rows||`<tr><td colspan="5" class="empty">尚未配置客户端 Key</td></tr>`}</tbody></table></div>`;document.querySelectorAll("[data-key-toggle]").forEach(b=>b.onclick=()=>keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyToggle)}`),"PATCH",{enabled:b.dataset.enabled==="true"}));document.querySelectorAll("[data-key-rotate]").forEach(b=>b.onclick=()=>rotateClientKey(b.dataset.keyRotate));document.querySelectorAll("[data-key-delete]").forEach(b=>b.onclick=()=>{if(confirm(`删除 ${b.dataset.keyDelete}？`))keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyDelete)}`),"DELETE")})}catch(e){$("clientKeyTable").textContent=e.message}}
+async function loadClientKeys(){try{const d=await request(apiURL("/api/client-api-keys"));state.clientKeys=d.client_api_keys||[];$(`addClientKey`).disabled=!d.writable;const rows=state.clientKeys.map(k=>`<tr><td class="key-id" title="${esc(k.id)}">${esc(k.id)}</td><td><span class="tag ${k.enabled?"tag-status-active":"tag-status-disabled"}">${k.enabled?"已启用":"已禁用"}</span></td><td>${esc(k.created_at?formatDate(k.created_at):"—")}</td><td>${esc(k.last_used_at?formatDate(k.last_used_at):"—")}</td><td class="key-actions"><div class="actions"><button class="link-btn" data-key-toggle="${esc(k.id)}" data-enabled="${!k.enabled}">${k.enabled?"禁用":"启用"}</button><button class="link-btn" data-key-rotate="${esc(k.id)}">轮换</button><button class="link-btn link-danger" data-key-delete="${esc(k.id)}">删除</button></div></td></tr>`).join("");const table=$("clientKeyTable");table.className="";table.innerHTML=`<div class="table-wrap"><table class="client-key-table"><thead><tr><th>ID</th><th>状态</th><th>创建时间</th><th>最后使用</th><th>操作</th></tr></thead><tbody>${rows||`<tr><td colspan="5" class="empty">尚未配置客户端 Key</td></tr>`}</tbody></table></div>`;document.querySelectorAll("[data-key-toggle]").forEach(b=>b.onclick=()=>keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyToggle)}`),"PATCH",{enabled:b.dataset.enabled==="true"}));document.querySelectorAll("[data-key-rotate]").forEach(b=>b.onclick=()=>rotateClientKey(b.dataset.keyRotate));document.querySelectorAll("[data-key-delete]").forEach(b=>b.onclick=()=>{if(confirm(`删除 ${b.dataset.keyDelete}？该 Key 的调用明细和交互归档也会同步删除。`))keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyDelete)}`),"DELETE")})}catch(e){$("clientKeyTable").textContent=e.message}}
 async function keyRequest(url,method,body){try{await request(url,{method,headers:authHeaders({"Content-Type":"application/json"}),body:body?JSON.stringify(body):undefined});toast("客户端 Key 配置已保存");loadClientKeys()}catch(e){toast(e.message,"error")}}
 async function rotateClientKey(id){if(!confirm(`轮换 ${id}？旧 Key 将立即失效。`))return;try{const d=await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/rotate`),{method:"POST",headers:authHeaders()});showClientSecret(d.api_key);loadClientKeys()}catch(e){toast(e.message,"error")}}
 function showClientSecret(key){$("clientSecret").value=key;$("clientSecretDialog").showModal()}
@@ -2908,6 +2918,16 @@ $("cgTaskOwner").onchange=()=>{
 };
 $("cgTaskForm").onsubmit=submitTask;
 $("cgSearchForm").onsubmit=submitFeatureSearch;
+function submitTextareaOnEnter(event,formID){
+  if(event.key!=="Enter"||event.shiftKey||event.isComposing)return;
+  const form=$(formID);
+  const submit=form?.querySelector('button[type="submit"],input[type="submit"]');
+  if(!form||submit?.disabled)return;
+  event.preventDefault();
+  form.requestSubmit();
+}
+$("cgTaskPrompt").addEventListener("keydown",e=>submitTextareaOnEnter(e,"cgTaskForm"));
+$("cgSearchQuery").addEventListener("keydown",e=>submitTextareaOnEnter(e,"cgSearchForm"));
 $("cgSearchHistoryReload").onclick=()=>loadFeatureSearchHistory();
 
 $("cgImgStart").onchange=e=>{state.cg.images.start=e.target.value||"";loadChatGPTImages()};

@@ -2,6 +2,8 @@ package archive
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,12 +17,13 @@ import (
 )
 
 type Recorder struct {
-	root        string
-	maxRounds   int
-	fullContent bool
-	mu          sync.Mutex
-	next        int
-	active      map[int]struct{}
+	root          string
+	maxRounds     int
+	fullContent   bool
+	scopeByAPIKey bool
+	mu            sync.Mutex
+	next          int
+	active        map[int]struct{}
 }
 
 type Round struct {
@@ -239,6 +242,8 @@ func NewRecorder(root string, maxRounds ...int) (*Recorder, error) {
 type RecorderOptions struct {
 	MaxRounds   int
 	FullContent bool
+	// ScopeByAPIKey partitions rounds by the authenticated client key ID.
+	ScopeByAPIKey bool
 }
 
 // NewRecorderOptions 使用显式选项构造归档器。
@@ -258,7 +263,12 @@ func NewRecorderOptions(root string, opts RecorderOptions) (*Recorder, error) {
 	if max <= 0 {
 		max = 500
 	}
-	recorder := &Recorder{root: root, maxRounds: max, fullContent: opts.FullContent, next: next, active: map[int]struct{}{}}
+	recorder := &Recorder{root: root, maxRounds: max, fullContent: opts.FullContent, next: next, active: map[int]struct{}{}, scopeByAPIKey: opts.ScopeByAPIKey}
+	if opts.ScopeByAPIKey {
+		if err := recorder.recoverIncompleteLocked(); err != nil {
+			return nil, err
+		}
+	}
 	if err := recorder.cleanupLocked(); err != nil {
 		return nil, err
 	}
@@ -289,6 +299,19 @@ func firstInt(values []int, fallback int) int {
 }
 
 func (r *Recorder) Start() (*Round, error) {
+	return r.start("", true)
+}
+
+// StartForAPIKey starts an archive round in a dedicated API-key scope.
+// The key ID is an internal stable identifier, never the raw secret.
+func (r *Recorder) StartForAPIKey(apiKeyID string) (*Round, error) {
+	if !r.scopeByAPIKey {
+		return r.Start()
+	}
+	return r.start(apiKeyID, false)
+}
+
+func (r *Recorder) start(apiKeyID string, legacy bool) (*Round, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -298,14 +321,54 @@ func (r *Recorder) Start() (*Round, error) {
 	r.active[id] = struct{}{}
 	r.mu.Unlock()
 
-	dir := filepath.Join(r.root, fmt.Sprintf("%06d", id))
+	scope := archiveScope(apiKeyID)
+	dir := filepath.Join(r.root, scope, fmt.Sprintf("%06d", id))
+	if legacy {
+		scope = ""
+		dir = filepath.Join(r.root, fmt.Sprintf("%06d", id))
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		r.mu.Lock()
 		delete(r.active, id)
 		r.mu.Unlock()
 		return nil, err
 	}
-	return &Round{ID: id, Dir: dir, StartedAt: time.Now(), recorder: r, written: map[string]struct{}{}}, nil
+	return &Round{ID: id, Dir: dir, APIKeyID: apiKeyID, StartedAt: time.Now(), recorder: r, written: map[string]struct{}{}}, nil
+}
+
+func archiveScope(apiKeyID string) string {
+	apiKeyID = strings.TrimSpace(apiKeyID)
+	if apiKeyID == "" {
+		return "anonymous"
+	}
+	original := apiKeyID
+	var b strings.Builder
+	for _, ch := range apiKeyID {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' {
+			b.WriteRune(ch)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "anonymous"
+	}
+	scope := b.String()
+	if scope != original {
+		sum := sha256.Sum256([]byte(original))
+		scope += "-" + hex.EncodeToString(sum[:4])
+	}
+	return scope
+}
+
+// RemoveAPIKeyScope removes all interaction archives for one client API key.
+// The caller should revoke the key before invoking this function.
+func RemoveAPIKeyScope(root, apiKeyID string) error {
+	root = strings.TrimSpace(root)
+	if root == "" || strings.TrimSpace(apiKeyID) == "" {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(root, archiveScope(apiKeyID)))
 }
 
 func (r *Round) WriteRequest(body []byte) error {
@@ -333,7 +396,7 @@ func (r *Round) WriteJSON(name string, value any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(r.Dir, name), encoded, 0o600); err != nil {
+	if err := writeFileAtomic(filepath.Join(r.Dir, name), encoded, 0o600); err != nil {
 		return err
 	}
 	r.markWritten(name)
@@ -350,7 +413,7 @@ func (r *Round) WriteResponse(name string, body []byte) error {
 	if name == "" {
 		name = "response.bin"
 	}
-	if err := os.WriteFile(filepath.Join(r.Dir, name), body, 0o600); err != nil {
+	if err := writeFileAtomic(filepath.Join(r.Dir, name), body, 0o600); err != nil {
 		return err
 	}
 	r.markWritten(name)
@@ -443,25 +506,89 @@ func (r *Recorder) cleanupLocked() error {
 	if r == nil || r.maxRounds <= 0 {
 		return nil
 	}
-	dirs, err := listNumericDirs(r.root)
+	dirs, err := listScopedNumericDirs(r.root)
 	if err != nil {
 		return err
 	}
-	removable := make([]archiveDir, 0, len(dirs))
+	byScope := map[string][]archiveDir{}
 	for _, dir := range dirs {
 		if _, ok := r.active[dir.id]; ok {
 			continue
 		}
-		removable = append(removable, dir)
+		byScope[dir.scope] = append(byScope[dir.scope], dir)
 	}
-	if len(removable) <= r.maxRounds {
-		return nil
+	for _, scoped := range byScope {
+		if len(scoped) <= r.maxRounds {
+			continue
+		}
+		sort.Slice(scoped, func(i, j int) bool { return scoped[i].id < scoped[j].id })
+		for _, dir := range scoped[:len(scoped)-r.maxRounds] {
+			path := filepath.Join(r.root, dir.name)
+			if dir.scope != "" {
+				path = filepath.Join(r.root, dir.scope, dir.name)
+			}
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+		}
 	}
-	sort.Slice(removable, func(i, j int) bool {
-		return removable[i].id < removable[j].id
-	})
-	for _, dir := range removable[:len(removable)-r.maxRounds] {
-		if err := os.RemoveAll(filepath.Join(r.root, dir.name)); err != nil {
+	return nil
+}
+
+func (r *Recorder) recoverIncompleteLocked() error {
+	dirs, err := listScopedNumericDirs(r.root)
+	if err != nil {
+		return err
+	}
+	for _, item := range dirs {
+		if item.scope == "" {
+			continue
+		}
+		dir := filepath.Join(r.root, item.scope, item.name)
+		metadataPath := filepath.Join(dir, "metadata.json")
+		if _, err := os.Stat(metadataPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			return err
+		}
+		meta := Metadata{
+			ID:                 item.id,
+			StartedAt:          info.ModTime(),
+			FinishedAt:         time.Now(),
+			APIKeyID:           item.scope,
+			HTTPStatus:         500,
+			Outcome:            "process_interrupted",
+			FullContentEnabled: r.fullContent,
+			Error:              "service restarted before interaction archive completed",
+		}
+		paths := []struct {
+			name   string
+			target *string
+		}{
+			{"request.json", &meta.RequestPath},
+			{"request.meta.json", &meta.RequestMetaPath},
+			{"upstream_request.json", &meta.UpstreamRequestPath},
+			{"upstream_response.json", &meta.UpstreamResponsePath},
+			{"response.sse", &meta.ResponsePath},
+			{"response.json", &meta.ResponsePath},
+			{"response.txt", &meta.ResponsePath},
+			{"response.bin", &meta.ResponsePath},
+		}
+		for _, path := range paths {
+			name, target := path.name, path.target
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				*target = name
+			}
+		}
+		encoded, err := marshalJSON(meta)
+		if err != nil {
+			return err
+		}
+		if err := writeFileAtomic(metadataPath, encoded, 0o600); err != nil {
 			return err
 		}
 	}
@@ -469,11 +596,12 @@ func (r *Recorder) cleanupLocked() error {
 }
 
 type archiveDir struct {
-	id   int
-	name string
+	scope string
+	id    int
+	name  string
 }
 
-func listNumericDirs(root string) ([]archiveDir, error) {
+func listScopedNumericDirs(root string) ([]archiveDir, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -483,23 +611,37 @@ func listNumericDirs(root string) ([]archiveDir, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		id, err := strconv.Atoi(entry.Name())
-		if err != nil {
+		scope := entry.Name()
+		if id, err := strconv.Atoi(scope); err == nil {
+			dirs = append(dirs, archiveDir{scope: "", id: id, name: scope})
 			continue
 		}
-		dirs = append(dirs, archiveDir{id: id, name: entry.Name()})
+		scopeEntries, err := os.ReadDir(filepath.Join(root, scope))
+		if err != nil {
+			return nil, err
+		}
+		for _, roundEntry := range scopeEntries {
+			if !roundEntry.IsDir() {
+				continue
+			}
+			id, err := strconv.Atoi(roundEntry.Name())
+			if err != nil {
+				continue
+			}
+			dirs = append(dirs, archiveDir{scope: scope, id: id, name: roundEntry.Name()})
+		}
 	}
 	return dirs, nil
 }
 
 func nextSequence(root string) (int, error) {
-	dirs, err := listNumericDirs(root)
+	dirs, err := listScopedNumericDirs(root)
 	if err != nil {
 		return 0, err
 	}
 	maxID := 0
 	for _, dir := range dirs {
-		if dir.id > maxID {
+		if dir.id >= maxID {
 			maxID = dir.id
 		}
 	}
@@ -509,13 +651,48 @@ func nextSequence(root string) (int, error) {
 func writeJSONOrRaw(path string, body []byte) error {
 	var value any
 	if err := json.Unmarshal(body, &value); err != nil {
-		return os.WriteFile(path, body, 0o600)
+		return writeFileAtomic(path, body, 0o600)
 	}
 	encoded, err := marshalJSON(value)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, encoded, 0o600)
+	return writeFileAtomic(path, encoded, 0o600)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".archive-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err = tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	if dirHandle, openErr := os.Open(dir); openErr == nil {
+		err = dirHandle.Sync()
+		_ = dirHandle.Close()
+	}
+	return err
 }
 
 func marshalJSON(value any) ([]byte, error) {

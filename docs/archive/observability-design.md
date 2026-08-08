@@ -21,7 +21,7 @@ Related:
 
 ## Purpose
 
-本文是 ai-proxy 可观测性能力的改进设计文档。当前 ai-proxy 已经具备基础的 per-interaction 落盘能力(`interactions/{round_id}/` 七件套 + `usage.csv` 追加写),但缺少聚合指标端点、时序统计、追踪 ID、告警能力,不便于从外部实时观察 cache 命中率、provider 故障率、延迟分位数等关键 SLO 指标。
+本文是 ai-proxy 可观测性能力的改进设计文档。当前 ai-proxy 已经具备基础的交互归档能力(`interactions/{api_key_id}/{round_id}/` 七件套 + `usage.csv` 追加写),但缺少聚合指标端点、时序统计、追踪 ID、告警能力,不便于从外部实时观察 cache 命中率、provider 故障率、延迟分位数等关键 SLO 指标。
 
 本文按 P0 → P3 优先级列出改造落点,供后续代码收口使用。
 
@@ -31,7 +31,7 @@ Related:
 
 | 能力 | 实现位置 | 落盘内容 |
 |---|---|---|
-| Per-interaction 全量归档 | `internal/pkg/aiproxyarchive/recorder.go:57-100` | `interactions/{round_id}/{metadata,request,request.meta,response,response.sse,upstream_request,upstream_response}.json` |
+| Per-request 全量归档 | `internal/pkg/aiproxyarchive/recorder.go` | `interactions/{api_key_id}/{round_id}/{metadata,request,request.meta,response,response.sse,upstream_request,upstream_response}.json` |
 | CSV 累计记录 | `internal/stats/recorder.go:36-40` | `usage.csv`(当前 6441 行,12 列:time / provider / model / input_tokens / output_tokens / total_tokens / duration_ms / stream / estimated / http_status,缺 cache 字段) |
 | Debug 日志 | `internal/modules/application/proxyapi/service/proxy/debug.go:63-67` (`debugf`) | stderr 文本日志,每 round 一组 `client_request / selected / upstream_request / upstream_response / [ai-proxy][OK] provider=...` |
 | SSE 流式跟踪 | `internal/modules/application/proxyapi/service/proxy/stream_archive.go:30,166` | `TrackSSELine` 累计 usage 与 content |
@@ -133,7 +133,7 @@ Related:
  - 客户端未带 → 用 `crypto/rand` 生成 16 字节 hex 字符串
 - 写入 `http.ResponseWriter.Header()` 响应头
 - 注入到 `context.Context`,供下游 archive / log / metrics 使用
-- 写入 `interactions/{round_id}/metadata.json` 的 `request_id` 字段(扩展 `archive.Metadata`)
+- 写入 `interactions/{api_key_id}/{round_id}/metadata.json` 的 `request_id` 字段(扩展 `archive.Metadata`)
 
 #### P0-3. `/metrics` Prometheus 端点
 
@@ -236,7 +236,7 @@ Related:
  - `upstream_error_rate_max`:默认 0.05
  - `p99_latency_max_ms`:默认 30000
 - 每次滑动窗口收尾时检查
-- 命中阈值 → 写 `slo_violation` event 到 interactions/{round_id}/ 中
+- 命中阈值 → 写 `slo_violation` event 到 interactions/{api_key_id}/{round_id}/ 中
 - 提供 webhook 配置:`slo_violation_webhook: https://...`(可选)
 
 #### P2-2. 实时 SSE 推送

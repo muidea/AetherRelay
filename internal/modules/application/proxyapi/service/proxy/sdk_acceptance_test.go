@@ -29,7 +29,7 @@ func startProxySDKServer(t *testing.T, cfg config.Config, upstream http.RoundTri
 	interactionDir := filepath.Join(t.TempDir(), "interactions")
 	cfg.InteractionDir = interactionDir
 	cfg.ListenAddr = "127.0.0.1:0"
-	cfg.DebugLog = false
+	cfg.VerboseLogging = false
 	rec, err := archive.NewRecorder(interactionDir)
 	if err != nil {
 		t.Fatal(err)

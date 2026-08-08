@@ -232,7 +232,7 @@
 - [x] **D-02.48** `AI_PROXY_USAGE_FILE` 可以覆盖 CSV 路径。
 - [x] **D-02.49** `AI_PROXY_INTERACTION_DIR` 可以覆盖归档目录。
 - [x] **D-02.50** `AI_PROXY_INTERACTION_RETENTION` 可以覆盖归档保留轮数。
-- [x] **D-02.51** `AI_PROXY_DEBUG_LOG` 可以覆盖调试日志开关。
+- [x] **D-02.51** `AI_PROXY_VERBOSE_LOGGING` 可以覆盖详细观测日志开关。
 - [x] **D-02.52** `AI_PROXY_LOG_FORMAT` 或 `LOG_FORMAT` 可以覆盖日志格式。
 - [x] **D-02.53** `AI_PROXY_REQUEST_TIMEOUT_SECONDS` 可以覆盖请求超时。
 - [x] **D-02.54** `AI_PROXY_STREAM_IDLE_TIMEOUT_SECONDS` 可以覆盖流空闲超时。
@@ -414,8 +414,8 @@
 
 ### D-08 交互归档与日志
 
-- [x] **D-08.01** `interaction_dir` 默认值为 `interactions`。
-- [x] **D-08.02** `interaction_retention` 默认值为 500。
+- [x] **D-08.01** 交互归档目录固定派生为 `state.dir/interactions/{api_key_id}/{round_id}/`。
+- [x] **D-08.02** `interaction_retention` 默认值为 500，按 API Key 独立保留。
 - [x] **D-08.03** round ID 在单进程内递增且并发安全。
 - [x] **D-08.04** round 目录使用六位补零数字名称。
 - [x] **D-08.05** 新建的 round 目录使用 `0700` 权限。

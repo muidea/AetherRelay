@@ -226,6 +226,9 @@ func (c client) RotateClientAPIKey(ctx context.Context, id, h string, t time.Tim
 func (c client) RevokeClientAPIKey(ctx context.Context, id string, t time.Time) error {
 	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyRevoke, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyRevokeCommand{ID: id, At: t}), "client key revoke")
 }
+func (c client) DeleteClientAPIKey(ctx context.Context, id string) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyDelete, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyDeleteCommand{ID: id}), "client key delete")
+}
 
 func (c client) sendEmpty(ev event.Event, name string) error {
 	_, err := send(c.hub, ev, name)

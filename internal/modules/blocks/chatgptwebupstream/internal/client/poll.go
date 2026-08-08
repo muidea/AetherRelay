@@ -48,8 +48,8 @@ func (c *Client) PollImageResults(ctx context.Context, conversationID string, in
 	result.ConversationID = conversationID
 	deadline := time.Now().Add(options.Timeout)
 	if options.InitialWait > 0 {
-		if err := waitForImagePoll(ctx, minDuration(options.InitialWait, time.Until(deadline))); err != nil {
-			return ImageStreamResult{}, err
+		if err := waitForPoll(ctx, minDuration(options.InitialWait, time.Until(deadline))); err != nil {
+			return ImageStreamResult{}, fmt.Errorf("image poll: %w", err)
 		}
 	}
 	for {
@@ -72,8 +72,8 @@ func (c *Client) PollImageResults(ctx context.Context, conversationID string, in
 		if remaining <= 0 {
 			break
 		}
-		if err := waitForImagePoll(ctx, minDuration(options.Interval, remaining)); err != nil {
-			return ImageStreamResult{}, err
+		if err := waitForPoll(ctx, minDuration(options.Interval, remaining)); err != nil {
+			return ImageStreamResult{}, fmt.Errorf("image poll: %w", err)
 		}
 	}
 	return ImageStreamResult{}, fmt.Errorf("image poll: timed out waiting for image results (%s)", conversationID)
@@ -238,7 +238,10 @@ func normalizedPollOptions(options ImagePollOptions) ImagePollOptions {
 	return options
 }
 
-func waitForImagePoll(ctx context.Context, duration time.Duration) error {
+// waitForPoll is shared by the image and search document pollers. Callers
+// add their operation name so cancellation errors do not claim that a search
+// was an image poll (or vice versa).
+func waitForPoll(ctx context.Context, duration time.Duration) error {
 	if duration <= 0 {
 		return nil
 	}

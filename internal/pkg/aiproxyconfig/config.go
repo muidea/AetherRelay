@@ -54,7 +54,7 @@ type Config struct {
 	State                StateConfig
 	InteractionDir       string
 	InteractionRetention int
-	DebugLog             bool
+	VerboseLogging       bool
 	LogFormat            string
 	RequestTimeout       time.Duration
 	StreamIdleTimeout    time.Duration
@@ -299,7 +299,7 @@ func Load(path string) (Config, error) {
 		ArchiveFullContent:       true,
 		InteractionDir:           "interactions",
 		InteractionRetention:     500,
-		DebugLog:                 true,
+		VerboseLogging:           true,
 		LogFormat:                "json",
 		RequestTimeout:           5 * time.Minute,
 		StreamIdleTimeout:        5 * time.Minute,
@@ -509,12 +509,12 @@ func setTopLevel(cfg *Config, key, value string) error {
 		return fmt.Errorf("%s is not supported; configure the state workspace instead", key)
 	case "inbound_api_key":
 		return fmt.Errorf("inbound_api_key is not supported; client API keys are managed in the state database")
-	case "debug_log":
+	case "verbose_logging":
 		b, err := parseStrictBool(value)
 		if err != nil {
-			return fmt.Errorf("debug_log: %w", err)
+			return fmt.Errorf("verbose_logging: %w", err)
 		}
-		cfg.DebugLog = b
+		cfg.VerboseLogging = b
 	case "log_format":
 		cfg.LogFormat = value
 	case "port":
@@ -1128,12 +1128,12 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.CodexOAuth.RefreshAccountIntervalMinute = n
 	}
-	if value := os.Getenv("AI_PROXY_DEBUG_LOG"); value != "" {
+	if value := os.Getenv("AI_PROXY_VERBOSE_LOGGING"); value != "" {
 		b, err := parseStrictBool(value)
 		if err != nil {
-			return fmt.Errorf("AI_PROXY_DEBUG_LOG: %w", err)
+			return fmt.Errorf("AI_PROXY_VERBOSE_LOGGING: %w", err)
 		}
-		cfg.DebugLog = b
+		cfg.VerboseLogging = b
 	}
 	if value := firstEnv("AI_PROXY_LOG_FORMAT", "LOG_FORMAT"); value != "" {
 		cfg.LogFormat = value

@@ -119,3 +119,19 @@ func (s *MemoryStore) RevokeClientAPIKey(_ context.Context, id string, t time.Ti
 	s.clientKeyRecords[id] = r
 	return nil
 }
+
+func (s *MemoryStore) DeleteClientAPIKey(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.clientKeyRecords[id]; !ok {
+		return errClientAPIKeyNotFound
+	}
+	delete(s.clientKeyRecords, id)
+	delete(s.clientKeys, id)
+	for eventID, item := range s.events {
+		if item != nil && item.APIKeyID == id {
+			delete(s.events, eventID)
+		}
+	}
+	return nil
+}

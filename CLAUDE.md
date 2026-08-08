@@ -50,7 +50,7 @@ internal/modules/application/adminapi  Provider 管理与 usage Application Modu
 internal/initiators/routeregistry  magicEngine RouteRegistry 与 HTTP listener Initiator
 
 internal/pkg/aiproxyconfig       配置加载、规范化、启动期校验；model_metadata 仅保存可选补充信息
-internal/pkg/aiproxyarchive      interactions/{round_id}/ 轮次归档与保留策略
+internal/pkg/aiproxyarchive      interactions/{api_key_id}/{round_id}/ 交互归档与保留策略
 internal/pkg/aiproxyclientauth   客户端 API Key 身份解析（SHA-256 索引，仅内存）
 internal/pkg/aiproxyusage        DuckDB 用量 Store（Start/Complete/Dashboard/Events/导出）
 internal/pkg/aiproxymetrics      Registry、Prometheus 投影、SLO 巡检与 webhook（无 HTTP adapter）
@@ -122,7 +122,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 ## 可观测与落盘
 
 - `state.database`（通常为 `state.dir/ai-proxy.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
-- `state.dir/interactions/{round_id}/`：request/upstream/response/metadata；默认保留最近 N 轮；`archive_full_content` 可关正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
+- `state.dir/interactions/{api_key_id}/{round_id}/`：request/upstream/response/metadata；每个 API Key 默认保留最近 N 轮；`archive_full_content` 可关正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
 - Prometheus 指标前缀 `ai_proxy_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
 
 ## 修改时注意

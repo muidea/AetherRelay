@@ -76,6 +76,16 @@ func (c *dashboardCache) put(key string, value Dashboard) {
 	c.touchOrder(key)
 }
 
+func (c *dashboardCache) clear() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*dashCacheEntry)
+	c.order = nil
+}
+
 func (c *dashboardCache) touchOrder(key string) {
 	c.removeOrder(key)
 	c.order = append(c.order, key)

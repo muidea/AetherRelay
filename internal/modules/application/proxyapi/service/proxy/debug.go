@@ -54,14 +54,14 @@ type upstreamResponseDebugInfo struct {
 }
 
 func (h *Handler) debugf(format string, args ...any) {
-	if !h.cfg.DebugLog {
+	if !h.cfg.VerboseLogging {
 		return
 	}
 	slog.Debug(fmt.Sprintf(format, args...))
 }
 
 func (h *Handler) debugfRound(round *archive.Round, r *http.Request, format string, args ...any) {
-	if !h.cfg.DebugLog {
+	if !h.cfg.VerboseLogging {
 		return
 	}
 	requestID := requestIDFromContext(r.Context())
@@ -225,7 +225,7 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 }
 
 func (h *Handler) logUpstreamAlert(round *archive.Round, providerName, protocol string, status int, duration time.Duration, errMessage string) {
-	if !h.cfg.DebugLog {
+	if !h.cfg.VerboseLogging {
 		return
 	}
 	if status < 400 && errMessage == "" {

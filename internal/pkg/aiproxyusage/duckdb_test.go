@@ -152,6 +152,31 @@ func TestStartInsertAndDuplicateReject(t *testing.T) {
 	}
 }
 
+func TestDeleteClientAPIKeyRemovesMetadataAndUsage(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := s.CreateClientAPIKey(ctx, ClientAPIKeyRecord{ID: "remove-me", Hash: "sha256:test", Enabled: true, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(ctx, StartRecord{EventID: "remove-event", StartedAt: now, APIKeyID: "remove-me"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteClientAPIKey(ctx, "remove-me"); err != nil {
+		t.Fatal(err)
+	}
+	var keys, events int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_api_key_metadata WHERE api_key_id='remove-me'`).Scan(&keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE api_key_id='remove-me'`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if keys != 0 || events != 0 {
+		t.Fatalf("remaining keys=%d events=%d", keys, events)
+	}
+}
+
 func TestCompleteOnlyUpdatesStarted(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

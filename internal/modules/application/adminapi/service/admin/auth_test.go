@@ -275,7 +275,7 @@ func TestAuthConfigHotUpdateClearsSessions(t *testing.T) {
 
 	// 无关配置热更新:会话保持
 	cfg := h.runtime.ConfigSnapshot()
-	cfg.DebugLog = true
+	cfg.VerboseLogging = true
 	if err := h.activateConfig(cfg); err != nil {
 		t.Fatal(err)
 	}

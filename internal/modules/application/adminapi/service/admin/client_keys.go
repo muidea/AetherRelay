@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-proxy/internal/pkg/aiproxyarchive"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxyusage"
 )
@@ -145,13 +146,19 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 			return
 		}
 		if !rotate && r.Method == http.MethodDelete {
-			if err := h.usageStore.RevokeClientAPIKey(r.Context(), id, time.Now().UTC()); err != nil {
+			if err := h.usageStore.DeleteClientAPIKey(r.Context(), id); err != nil {
 				writeError(w, 404, "client API key not found")
 				return
 			}
 			if err := h.refreshClientKeyRuntime(r.Context()); err != nil {
 				writeError(w, 500, "activate client API keys")
 				return
+			}
+			if h.runtime != nil {
+				if err := archive.RemoveAPIKeyScope(h.runtime.ConfigSnapshot().InteractionDir, id); err != nil {
+					writeError(w, http.StatusInternalServerError, "remove client interaction archives")
+					return
+				}
 			}
 			w.WriteHeader(204)
 			return
