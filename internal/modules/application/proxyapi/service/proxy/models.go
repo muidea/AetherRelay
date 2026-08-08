@@ -146,7 +146,11 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 			rec.Capabilities.Native = &NativeCapabilities{Responses: &NativeResponsesCapabilities{Tools: metadata.NativeResponsesTools, Images: metadata.NativeResponsesImages}}
 		}
 		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok {
-			for direction, capability := range metadata.ConversionCapabilities {
+			for endpoint, capability := range metadata.ConversionCapabilities {
+				direction, ok := config.ConversionDirectionForUpstreamEndpoint(endpoint)
+				if !ok {
+					continue
+				}
 				if !conversionCapabilityUsable(direction, capability) || !implementedConversionDirection(direction) || !modelHasConversionDirection(snap, id, direction) {
 					continue
 				}

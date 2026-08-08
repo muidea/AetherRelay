@@ -75,7 +75,7 @@ curl -sS http://127.0.0.1:8080/v1/models \
       "id": "model-id",
       "object": "model",
       "contextWindowTokens": 1000000,
-      "maxOutputTokens": 65536,
+      "maxOutputTokens": 29000,
       "supported_endpoints": [
         "/v1/responses",
         "/v1/messages"
@@ -132,7 +132,7 @@ curl -sS http://127.0.0.1:8080/v1/models \
 
 ### 2.2 Conversion Level
 
-`level` 描述某个转换方向经过验证的兼容等级，不是业务请求字段，也不是 reasoning 强度：
+`level` 是固定 endpoint profile 展开后的只读兼容等级，不是业务请求字段，也不是 reasoning 强度：
 
 | Level | 已开放的跨协议能力 |
 | --- | --- |
@@ -141,7 +141,19 @@ curl -sS http://127.0.0.1:8080/v1/models \
 | `2` | Level 1 + 纯文本 SSE |
 | `3` | Level 2 + 非流式 function tools |
 
-即使 `level` 足够，也必须同时检查对应布尔能力。例如 function tools 要求 `level >= 3` 且 `tools: true`；纯文本流式要求 `level >= 2` 且 `streaming: true`。
+业务应用仍必须检查对应布尔能力。例如 function tools 要求 `level >= 3` 且 `tools: true`；纯文本流式要求 `level >= 2` 且 `streaming: true`。
+
+管理配置使用固定 profile，其对外能力映射如下：
+
+| Profile | 对外 Level | `text` | `streaming` | `tools` | `reasoning` / `reasoning_mode` |
+| --- | ---: | --- | --- | --- | --- |
+| `level1` | 1 | true | false | false | false / 省略 |
+| `level2` | 2 | true | true | false | false / 省略 |
+| `level2_reasoning` | 2 | true | true | false | true / `degrade` |
+| `level3` | 3 | true | true | true | false / 省略 |
+| `level3_reasoning` | 3 | true | true | true | true / `degrade` |
+
+现有 profile 不开放 images、documents、structured output、continuation 或流式 tools。业务应用只消费 `/v1/models` 展开后的能力，不发送 profile 名，也不能在请求中选择或提升 Level。
 
 方向名称从客户端协议指向上游协议：
 
@@ -150,7 +162,7 @@ curl -sS http://127.0.0.1:8080/v1/models \
 | `POST /v1/responses` 路由到 Anthropic Messages 上游 | `responses_to_anthropic` |
 | `POST /v1/messages` 路由到 OpenAI Responses 上游 | `anthropic_to_responses` |
 
-转换能力只有在模型 metadata 声明、具体 Provider release 门闩通过且 release 方向与当前上游 protocol/endpoints 相容时才会出现在目录中。Provider 可以保留其他方向的 dormant release，但业务应用不会在 `/v1/models` 中看到它们，也不应依赖管理面保存的历史档案推断能力。
+转换能力只有在 exact model 的 metadata 为候选当前 upstream endpoint 配置固定 profile 时才会出现在目录中。能力不绑定 Provider；提供同一 exact model 和 endpoint 的所有候选共享模板。业务应用只依赖 `/v1/models` 的最终结果，不推断管理面配置。
 
 ## 3. 端点选择
 
@@ -185,9 +197,9 @@ Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。�
 
 `grok-4.5` 在 Krill Provider 上已分别通过 Anthropic Messages 与 OpenAI Responses transport 的文本、SSE、非流式 function tools、工具结果闭环及 reasoning/thinking 降级验证。当前模型元数据发布 `none/low/high/max`，转换固定降级目标为 `low`，图片与流式工具保持关闭。Krill 原生 Responses 接受 `store=false`、`reasoning.effort=high` 和 `text.verbosity=high`；但 hosted `web_search` 即使要求 `tool_choice=required` 也未产生真实搜索工具事件，因此 `web_search=live` 应由应用端工具能力负责，不能依据该配置推断上游已支持实时搜索。
 
-`gpt-5.6-luna` 在同一 Krill Provider 上也已完成双向 Level 3 验证；模型目录按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.6-luna) 发布 `1,050,000` context window 和 `128,000` max output tokens。reasoning 发布 `none/low/medium/high/xhigh/max`，默认与固定转换目标均为 `medium`。Krill Responses 会在 Luna output item 附加 `internal_chat_message_metadata_passthrough` 和 `metadata`；代理识别后省略，分别只记录对应的有界 degraded feature，不向 Anthropic 内容泄漏内部元数据。
+`gpt-5.6-luna` 已完成双向 Level 3 验证；模型目录发布 `272,000` context window 和 `128,000` max output tokens。reasoning 发布 `none/low/medium/high/xhigh/max`，默认与固定转换目标均为 `medium`。Responses output item 的私有 metadata 会被代理有界省略并记录 degraded feature，不向 Anthropic 内容泄漏内部元数据。
 
-`gpt-5.5` 由内建 `codexoauth` 发布原生 `/v1/responses`，模型目录按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.5) 返回 `1,050,000` context window 和 `128,000` max output tokens。实测 `none/low/medium/high/xhigh` reasoning、非流式文本、文本 SSE、function call、tool result 闭环和流式工具事件均可用；默认 effort 为 `medium`。不要发送 `max` effort。图片能力保持关闭；客户端 `max_output_tokens` 受固定 Codex OAuth transport 限制，会在调用上游前返回明确的 400。
+`gpt-5.5` 由内建 `codexoauth` 发布原生 `/v1/responses`，模型目录返回 `272,000` context window 和 `128,000` max output tokens。实测 `none/low/medium/high/xhigh` reasoning、非流式文本、文本 SSE、function call、tool result 闭环和流式工具事件均可用；默认 effort 为 `medium`。不要发送 `max` effort。图片能力保持关闭；客户端 `max_output_tokens` 受固定 Codex OAuth transport 限制，会在调用上游前返回明确的 400。
 
 ## 4. OpenAI Responses 集成
 
@@ -522,7 +534,7 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 ## 10. 目录缓存与刷新
 
-模型目录会随 Provider 启停、健康状态、模型匹配、端点变更和账号池发现结果变化。Provider 切换上游协议时，网关只摘取与当前 transport 一致的 active release；保留的其他方向记录不会进入业务目录。推荐策略：
+模型目录会随 Provider 启停、模型匹配、端点变更和账号池发现结果变化。Provider 切换上游协议或 endpoint 时，网关按 `exact model + upstream endpoint` 重新匹配固定模板；未匹配方向不会进入业务目录。推荐策略：
 
 - 进程启动时必须获取一次，获取失败时不要盲发模型请求；
 - 使用短时缓存，建议由应用按自身流量设置 30 至 300 秒 TTL；

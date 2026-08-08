@@ -142,10 +142,10 @@ func TestResponsesAnthropicLevel3RoundTripThroughHTTP(t *testing.T) {
 	}))
 	defer upstream.Close()
 	cfg := config.Config{Providers: map[string]config.Provider{
-		"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: upstream.URL, APIKey: "test", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: releasedConversions("claude-test", TransportModeResponsesToAnthropic)},
+		"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: upstream.URL, APIKey: "test", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}},
 	}, ModelMetadata: map[string]config.ModelMetadata{
 		"claude-test": {ID: "claude-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ReasoningSupported: true, ReasoningDeclared: true, ReasoningDefaultEffort: "low", ReasoningEfforts: []string{"low"}, ConversionCapabilities: map[string]config.ConversionCapability{
-			TransportModeResponsesToAnthropic: {Level: 3, Text: true, Tools: true},
+			config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true},
 		}},
 	}}
 	h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
@@ -182,10 +182,10 @@ func TestAnthropicResponsesLevel3RoundTripThroughHTTP(t *testing.T) {
 	}))
 	defer upstream.Close()
 	cfg := config.Config{Providers: map[string]config.Provider{
-		"openai": {Name: "openai", Protocol: "openai", BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses}, ConversionReleases: releasedConversions("gpt-test", TransportModeAnthropicToResponses)},
+		"openai": {Name: "openai", Protocol: "openai", BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses}},
 	}, ModelMetadata: map[string]config.ModelMetadata{
 		"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ConversionCapabilities: map[string]config.ConversionCapability{
-			TransportModeAnthropicToResponses: {Level: 3, Text: true, Tools: true},
+			config.ProviderEndpointResponses: {Level: 3, Text: true, Tools: true},
 		}},
 	}}
 	h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
@@ -257,12 +257,11 @@ func TestResponsesAnthropicLevel2StreamingThroughHTTP(t *testing.T) {
 			store := usage.NewMemoryStore()
 			registry := metrics.NewRegistry()
 			provider := tc.provider
-			provider.ConversionReleases = releasedConversions("shared-model", tc.capabilityDirection)
 			cfg := mustHandlerConfig(config.Config{
 				Providers: map[string]config.Provider{provider.Name: provider},
 				ModelMetadata: map[string]config.ModelMetadata{
 					"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{
-						tc.capabilityDirection: {Level: 2, Text: true, Streaming: true},
+						provider.Endpoints[0]: {Level: 2, Text: true, Streaming: true},
 					}},
 				},
 			})
@@ -321,11 +320,11 @@ func TestResponsesAnthropicConversionCancellationBeforeFirstEvent(t *testing.T) 
 			}
 			store := usage.NewMemoryStore()
 			registry := metrics.NewRegistry()
-			provider := config.Provider{Name: tc.providerName, Protocol: tc.providerProtocol, BaseURL: "https://upstream.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{tc.providerEndpoint}, ConversionReleases: releasedConversions("shared-model", tc.direction)}
+			provider := config.Provider{Name: tc.providerName, Protocol: tc.providerProtocol, BaseURL: "https://upstream.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{tc.providerEndpoint}}
 			cfg := mustHandlerConfig(config.Config{
 				Providers: map[string]config.Provider{tc.providerName: provider},
 				ModelMetadata: map[string]config.ModelMetadata{"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{
-					tc.direction: {Level: 2, Text: true, Streaming: true},
+					tc.providerEndpoint: {Level: 2, Text: true, Streaming: true},
 				}}},
 			})
 			cfg.StreamFirstEventTimeout = time.Second
@@ -377,9 +376,9 @@ func TestConvertedSSEClientWriteFailureIsSettled(t *testing.T) {
 	}
 	store := usage.NewMemoryStore()
 	cfg := mustHandlerConfig(config.Config{
-		Providers: map[string]config.Provider{"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: releasedConversions("shared-model", TransportModeResponsesToAnthropic)}},
+		Providers: map[string]config.Provider{"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointMessages}}},
 		ModelMetadata: map[string]config.ModelMetadata{"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{
-			TransportModeResponsesToAnthropic: {Level: 2, Text: true, Streaming: true},
+			config.ProviderEndpointMessages: {Level: 2, Text: true, Streaming: true},
 		}}},
 	})
 	h := NewHandler(cfg, store, recorder, metrics.NewRegistry())
@@ -404,15 +403,15 @@ func TestConvertedSSEClientWriteFailureIsSettled(t *testing.T) {
 func TestResponsesAnthropicConversionPreflightRejectsBeforeUpstream(t *testing.T) {
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.invalid", APIKey: "test", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: releasedConversions("claude-test", TransportModeResponsesToAnthropic)},
-			"openai":    {Name: "openai", Protocol: "openai", BaseURL: "https://openai.invalid", APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointResponses}, ConversionReleases: releasedConversions("gpt-test", TransportModeAnthropicToResponses)},
+			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.invalid", APIKey: "test", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}},
+			"openai":    {Name: "openai", Protocol: "openai", BaseURL: "https://openai.invalid", APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"claude-test": {ID: "claude-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeResponsesToAnthropic: {Level: 3, Text: true, Streaming: true, Tools: true},
+				config.ProviderEndpointMessages: {Level: 3, Text: true, Streaming: true, Tools: true},
 			}},
 			"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeAnthropicToResponses: {Level: 3, Text: true, Streaming: true, Tools: true},
+				config.ProviderEndpointResponses: {Level: 3, Text: true, Streaming: true, Tools: true},
 			}},
 		},
 	}
@@ -464,12 +463,12 @@ func TestResponsesNativeSelectionAndAnthropicFallback(t *testing.T) {
 			hosts := []string{}
 			cfg := config.Config{
 				Providers: map[string]config.Provider{
-					"conversion": {Name: "conversion", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointMessages}, Priority: 200, Fallback: true, ConversionReleases: releasedConversions("shared-model", TransportModeResponsesToAnthropic)},
+					"conversion": {Name: "conversion", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointMessages}, Priority: 200, Fallback: true},
 					"native":     {Name: "native", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointResponses}, Priority: 100, Fallback: true},
 				},
 				ModelMetadata: map[string]config.ModelMetadata{
 					"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{
-						TransportModeResponsesToAnthropic: {Level: 1, Text: true},
+						config.ProviderEndpointMessages: {Level: 1, Text: true},
 					}},
 				},
 			}
@@ -1037,11 +1036,11 @@ func TestConvertedSSEFirstEventFailureSettlesConversionMetricsOnce(t *testing.T)
 	registry := metrics.NewRegistry()
 	cfg := mustHandlerConfig(config.Config{
 		Providers: map[string]config.Provider{
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: upstream.URL, APIKey: "test", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: releasedConversions("claude-test", TransportModeResponsesToAnthropic)},
+			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: upstream.URL, APIKey: "test", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"claude-test": {ID: "claude-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeResponsesToAnthropic: {Level: 2, Text: true, Streaming: true},
+				config.ProviderEndpointMessages: {Level: 2, Text: true, Streaming: true},
 			}},
 		},
 	})

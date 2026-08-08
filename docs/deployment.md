@@ -72,7 +72,7 @@ state:
 
 model_metadata:
   gpt-5.5:
-    context_window_tokens: 1050000
+    context_window_tokens: 272000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium

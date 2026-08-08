@@ -1973,8 +1973,8 @@ func (h *Handler) declaredConversionCapability(plan TransportPlan) (config.Conve
 	if !ok {
 		return config.ConversionCapability{}, fmt.Errorf("conversion capability is not declared")
 	}
-	capability, ok := metadata.ConversionCapabilities[plan.Mode]
-	if !ok || !conversionCapabilityUsable(plan.Mode, capability) {
+	capability, ok := config.ModelConversionCapability(metadata, plan.UpstreamEndpoint, plan.Mode)
+	if !ok {
 		return config.ConversionCapability{}, fmt.Errorf("conversion capability is not available")
 	}
 	return capability, nil

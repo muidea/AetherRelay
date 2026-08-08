@@ -88,33 +88,22 @@ Responses→Anthropic 仅对显式 `reasoning.effort=none` 做关闭语义映射
 
 ### 5.2 能力声明
 
-模型能力应按方向声明，例如：
+模型能力按 exact model 与上游 endpoint 选择固定模板。方向由 endpoint 推导：`messages` 对应 Responses→Anthropic，`responses` 对应 Anthropic→Responses：
 
 ```yaml
 model_metadata:
   deepseek-v4-flash:
     reasoning_supported: true
+    reasoning_default_effort: low
     reasoning_efforts: [none, low, high, max]
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 3
-        text: true
-        streaming: true
-        tools: true
-        reasoning: true
-        reasoning_adapter: responses_to_anthropic_adaptive
-        reasoning_target_effort: low
-      anthropic_to_responses:
-        level: 3
-        text: true
-        streaming: true
-        tools: true
-        reasoning: true
-        reasoning_adapter: anthropic_to_responses_effort
-        reasoning_target_effort: low
+      messages:
+        profile: level3_reasoning
+      responses:
+        profile: level3_reasoning
 ```
 
-`reasoning=true` 必须同时有方向匹配的 adapter 和 `reasoning_target_effort`，目标 effort 必须出现在 `reasoning_efforts`。Responses→Anthropic 的 adapter 对显式 `none` 生成 `thinking: {"type":"disabled"}`，对其他 effort 生成 `thinking: {"type":"adaptive"}` 和配置的 `output_config.effort`；Anthropic→Responses 的 adapter 只生成配置的 `reasoning.effort`。客户端指定的其他 effort 不自动换算，Anthropic manual `thinking: {"type":"enabled","budget_tokens":...}` 也不转换。未声明 thinking 不触发降级适配；目标模型支持 `none` 时只显式关闭目标 reasoning，以保持源协议的未启用语义。
+`level3_reasoning` 自动展开 Level 3 的 text、streaming、tools 和方向匹配的 reasoning adapter，并使用模型 `reasoning_default_effort` 作为目标 effort。Responses→Anthropic 的 adapter 对显式 `none` 生成 `thinking: {"type":"disabled"}`，对其他 effort 生成 `thinking: {"type":"adaptive"}` 和默认 effort；Anthropic→Responses 的 adapter 生成固定的 `reasoning.effort`。客户端指定的其他 effort 不自动换算，Anthropic manual `thinking: {"type":"enabled","budget_tokens":...}` 也不转换。
 
 没有适配器或适配器不匹配时，在上游请求创建前返回：
 
@@ -264,7 +253,7 @@ Interaction metadata 只记录：
 - 独立能力开关和 provider 白名单；
 - 通过评测后按 model/direction 显式声明发布，不得由模型原生 tools 能力自动开启。
 
-在对应 Provider/model/direction 的真实回归和灰度完成前，不应把转换能力描述为完整无损互转；当前公开合同仍明确排除图片、结构化输出、continuation 和流式工具事件。reasoning/thinking 仅是显式降级适配，不是无损互转。
+在对应 model+upstream endpoint 的真实回归和灰度完成前，不应把转换能力描述为完整无损互转；当前公开合同仍明确排除图片、结构化输出、continuation 和流式工具事件。reasoning/thinking 仅是显式降级适配，不是无损互转。
 
 ## 12. 统一交互中间表示
 
@@ -287,34 +276,14 @@ IR 必须保留来源协议和原始语义等级，不能用一个字符串字�
 
 ## 13. 方向化能力协商
 
-`reasoning_supported` 只描述模型自身能力，不能代表跨协议转换能力。模型元数据应支持按转换方向声明能力：
+`reasoning_supported` 只描述模型自身能力，不能代表跨协议转换能力。模型元数据按上游 endpoint 选择模板：
 
 ```yaml
 conversion_capabilities:
-  responses_to_anthropic:
-    level: 2
-    text: true
-    images: false
-    documents: false
-    reasoning: true
-    reasoning_adapter: responses_to_anthropic_adaptive
-    reasoning_target_effort: low
-    tools: false
-    structured_output: false
-    streaming: true
-    continuation: false
-  anthropic_to_responses:
-    level: 2
-    text: true
-    images: false
-    documents: false
-    reasoning: true
-    reasoning_adapter: anthropic_to_responses_effort
-    reasoning_target_effort: low
-    tools: false
-    structured_output: false
-    streaming: true
-    continuation: false
+  messages:
+    profile: level2_reasoning
+  responses:
+    profile: level2_reasoning
 ```
 
 请求规划必须使用“客户端协议 + 请求能力 + 候选 Provider 能力 + 转换方向能力”共同筛选候选。能力不匹配的候选应被跳过；所有候选均不匹配时返回 `conversion_unsupported`，不能伪装为 provider unavailable。
@@ -456,7 +425,7 @@ client_canceled
 | Responses→Anthropic | Level 1 文本、Level 2 文本 SSE、Level 3 function tools 非流式；显式 adaptive reasoning 降级适配已实现 | 继续补齐图片、structured output、continuation；流式工具仍拒绝 |
 | Anthropic→Responses | Level 1 文本、Level 2 文本 SSE、Level 3 function tools 非流式；显式 adaptive thinking 降级适配已实现 | 继续补齐图片、structured output、continuation；manual thinking 与流式工具仍拒绝 |
 | Interaction IR | 未实现 | IR round-trip 和版本测试通过 |
-| 方向化 conversion capability | Level 1/2/3 模型实现门闩、Provider 发布门闩和 `/v1/models` 投影已接入 | 两层声明同时通过后才进入候选；继续做自动灰度和高级能力过滤 |
+| endpoint conversion profile | exact model + upstream endpoint 固定模板和 `/v1/models` 投影已接入 | 继续做高级能力过滤和模板级灰度 |
 | 双向文本 SSE | 状态机、首事件/空闲超时、双方向 Handler 级取消、EOF/截断、下游写失败、输出上限、多 text block、终止校验和失败唯一结算已实现 | 真实上游流式测试与归档证据 |
 | 双向 function tools | 非流式 function 定义/call/result、request-local 闭合生命周期、角色约束、双向 HTTP round-trip、字段白名单、schema/参数/result 预算已实现 | 多轮跨请求 session 状态、并行工具和真实 Provider 评测 |
 | reasoning 跨协议适配 | 仅允许显式 adapter；请求控制映射、推理输出省略、SSE 状态和降级审计已实现 | 绑定真实 Provider 灰度证据后再扩大模型声明 |
@@ -467,7 +436,7 @@ client_canceled
 
 ## 23. 正式配置 schema
 
-当前实现使用两层门闩：exact model metadata 描述转换器对该模型的实现上限，Provider 的 `conversion_releases` 描述具体 `provider/model/direction` 是否完成真实验证并允许发布。release 可以作为 dormant 档案跨 protocol/endpoints 切换保留；只有两层声明均通过且方向与 Provider 当前 transport 相容时才是 active。切换管理型 Provider 上游端点会为缺失的当前兼容方向追加关闭草稿，不复制其他方向的验证结论或证据。
+当前实现以 `exact model + upstream endpoint` 作为唯一转换能力键，不绑定 Provider。Provider 只声明连接、认证、模型和原生 endpoints；所有提供同一 exact model 和 endpoint 的候选共享同一固定模板。切换 Provider endpoint 会立即重新匹配模板，不保存发布门闩或 dormant 状态。
 
 ```yaml
 model_metadata:
@@ -478,30 +447,10 @@ model_metadata:
     reasoning_default_effort: low
     reasoning_efforts: [none, low, high, max]
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 2
-        text: true
-        images: false
-        documents: false
-        reasoning: true
-        reasoning_adapter: responses_to_anthropic_adaptive
-        reasoning_target_effort: low
-        tools: false
-        structured_output: false
-        streaming: true
-        continuation: false
-      anthropic_to_responses:
-        level: 2
-        text: true
-        images: false
-        documents: false
-        reasoning: true
-        reasoning_adapter: anthropic_to_responses_effort
-        reasoning_target_effort: low
-        tools: false
-        structured_output: false
-        streaming: true
-        continuation: false
+      messages:
+        profile: level2_reasoning
+      responses:
+        profile: level2_reasoning
 
 providers:
   anthropic:
@@ -510,35 +459,43 @@ providers:
     api_key: ${ANTHROPIC_API_KEY}
     models: [model-id]
     endpoints: [messages]
-    conversion_releases:
-      model-id:
-        responses_to_anthropic:
-          enabled: true
-          verified: true
-          evidence_id: provider-eval-2026-08-07
 ```
 
 字段规则：
 
-- `level` 只允许 `0`、`1`、`2`、`3`；未声明等同于 `0`；
-- `level=0` 不发布转换能力；
-- `level>=1` 必须声明 `text=true`；
-- `reasoning=true` 必须同时有已验证的 reasoning adapter；
-- `tools=true` 只允许在 function tools 合同完成后启用；
-- `streaming=true` 必须通过双向 SSE 状态机测试；
-- `default_effort` 必须属于同一模型的 `efforts`；
+- endpoint 只允许 `messages`、`responses`；
+- profile 只允许 `level1`、`level2`、`level2_reasoning`、`level3`、`level3_reasoning`；
+- Level 1 自动展开非流式 text；Level 2 增加 text SSE；Level 3 增加非流式 function tools；
+- `_reasoning` 模板要求模型支持 reasoning 且声明 `reasoning_default_effort`，adapter 按 endpoint 自动选择；
+- `reasoning_default_effort` 必须属于同一模型的 `reasoning_efforts`；
 - 未知字段默认拒绝，避免配置拼写错误导致能力误发布。
 
-Provider 发布记录规则：
+固定 profile 展开合同：
 
-- model key 必须是区分大小写的 exact model ID，且被该 Provider 的 `models` 匹配；
-- direction 只允许 `responses_to_anthropic`、`anthropic_to_responses`；
-- `enabled=true` 必须同时有 `verified=true`；`verified=true, enabled=false` 可保存验证证据但不发布；
-- 方向必须与 Provider protocol/endpoints 兼容，并存在可实现的模型级 capability；
-- `evidence_id` 是可选的有限审计引用，不得写入 API key、请求正文或其他秘密；
-- 未声明 Provider 发布记录时，旧配置按关闭处理，不做隐式兼容开启。
+| Profile | Level | text | streaming | tools | reasoning | 其他高级能力 |
+| --- | ---: | --- | --- | --- | --- | --- |
+| `level1` | 1 | true | false | false | false | false |
+| `level2` | 2 | true | true | false | false | false |
+| `level2_reasoning` | 2 | true | true | false | true | false |
+| `level3` | 3 | true | true | true | false | false |
+| `level3_reasoning` | 3 | true | true | true | true | false |
 
-`level` 是运维声明的“该转换方向经过验证的兼容等级”，不是业务请求字段，也不是 reasoning 强度。业务请求不携带 `level`；ai-proxy 根据请求实际使用的能力自动筛选候选：纯文本非流式要求 `level>=1`，纯文本流式要求 `level>=2`，function tools 或图片要求 `level>=3` 且对应能力为 true。未做真实验证时不配置，等同 `level=0`；只有完成对应 Provider/model/direction 的真实测试后才能提升等级。
+“其他高级能力”包括 `images`、`documents`、`structured_output` 和 `continuation`，当前所有 profile 均固定为 false；流式 tools 也不因 `streaming=true` 与 `tools=true` 同时出现而开放。`_reasoning` profile 对外发布 `reasoning_mode: degrade`，并按 endpoint 自动展开：
+
+| Upstream endpoint | 转换方向 | Reasoning adapter | 目标 effort |
+| --- | --- | --- | --- |
+| `messages` | `responses_to_anthropic` | `responses_to_anthropic_adaptive` | 模型 `reasoning_default_effort` |
+| `responses` | `anthropic_to_responses` | `anthropic_to_responses_effort` | 模型 `reasoning_default_effort` |
+
+profile 表示该 model+endpoint 已完成对应语义等级验证，不是功能开关的集合。后续若要开放图片、structured output、continuation 或流式 tools，必须新增 profile 或提升 capability schema 版本，不能改变现有 profile 的既有含义。
+
+Provider 规则：
+
+- Provider 不保存转换配置；
+- 候选 exact model 命中 metadata，且当前 endpoint 存在模板时才形成转换候选；
+- 同一 model+endpoint 在不同 Provider 上得到相同能力；Provider 优先级、健康度和 fallback 只影响候选选择。
+
+`level` 是 profile 展开后的只读兼容等级，不是业务请求字段，也不是 reasoning 强度。业务请求不携带 `level`；ai-proxy 根据请求实际需要的能力筛选候选。未完成 model+endpoint 验证时不配置 profile，等同 `level=0`。
 
 建议等级语义如下：
 
@@ -551,11 +508,24 @@ Provider 发布记录规则：
 
 `level` 与 `reasoning.effort` 独立：前者描述转换成熟度，后者描述模型推理策略。不得因为模型支持某个 reasoning effort 就自动提高 conversion level。
 
+### 23.1 模板完善与跟踪
+
+新增 profile、提高等级或开放新布尔能力时必须同时完成：
+
+1. 更新配置层 profile 枚举和展开逻辑，并提升 `capabilities_schema_version`（改变既有 profile 语义时必须提升）。
+2. 为两个 endpoint 分别补充配置解析、方向推导和非法手写字段拒绝测试。
+3. 补充请求预检、非流式转换、SSE 状态机、tools/reasoning 降级及错误边界测试。
+4. 补充 `/v1/models` 投影测试，确认只发布当前候选 endpoint 实际匹配的方向和布尔能力。
+5. 更新 `config.example.yaml`、配置文档、集成文档与本映射表。
+6. 使用真实 model+endpoint 完成功能矩阵验证；证据记录请求字段摘要、事件类型、终止状态、usage 和耗时，不记录密钥或完整正文。
+
+跟踪时以 `model ID + upstream endpoint + profile + capabilities_schema_version` 为稳定标识，不使用 Provider 名称。
+
 当前实现的有效门闩为：
 
 ```text
-model implementation capability
-    AND provider + exact model + direction verified release
+exact model endpoint template
+    AND candidate currently exposes that upstream endpoint
     > published candidate
 
 任一条件不满足
@@ -571,11 +541,10 @@ model implementation capability
 2. 提取请求能力：text/images/tools/reasoning/structured_output/streaming/continuation。
 3. 获取模型的 native 候选和 conversion 候选。
 4. native 候选优先检查原生协议能力。
-5. conversion 候选检查方向化 `conversion_capabilities`。
-6. 检查具体 Provider 的 exact model/direction 发布记录同时满足 enabled 与 verified。
-7. 过滤任一必需能力为 false/unknown 的候选。
-8. 对剩余候选执行健康度、优先级和 fallback 排序。
-9. 没有候选时返回 conversion_unsupported 或 endpoint_unsupported。
+5. conversion 候选按 exact model 与候选当前 upstream endpoint 查找固定 profile。
+6. 展开 profile 并过滤任一必需能力不满足的候选。
+7. 对剩余候选执行健康度、优先级和 fallback 排序。
+8. 没有候选时返回 conversion_unsupported 或 endpoint_unsupported。
 ```
 
 能力不匹配必须与 Provider 健康失败区分：
@@ -592,7 +561,7 @@ model implementation capability
 ```text
 ir_version: 1
 conversion_contract_version: 1
-capabilities_schema_version: 1
+capabilities_schema_version: 2
 ```
 
 版本升级规则：
@@ -685,7 +654,7 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 ## 30. 灰度、熔断与回滚
 
-转换能力默认关闭，按 `provider/model/direction` 通过 `conversion_releases` 灰度开启。Provider 管理热更新会原子重建有效目录，因此 `/v1/models` 与请求路由使用同一代 active 发布状态；与当前 transport 不相容的 dormant release 只保存在管理配置中。灰度期间监控：
+转换能力默认关闭，只有 exact model 的当前 upstream endpoint 配置固定 profile 时才开启。Provider endpoint 热更新会原子重建有效目录，因此 `/v1/models` 与请求路由使用同一代模板匹配结果。灰度期间监控：
 
 - conversion error rate；
 - upstream 400/422 rate；
@@ -695,4 +664,4 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 - estimated usage rate；
 - client cancellation rate。
 
-超过阈值时关闭对应 Provider release，保留模型实现声明和 native 候选；若无 native 候选则明确返回 `conversion_unsupported`。当前支持 Admin 手工热回滚，自动阈值回滚仍待实现。配置回滚必须恢复旧 runtime snapshot、旧 `/v1/models` 能力输出和旧路由候选，不能只回滚 YAML 文件。
+超过阈值时移除对应 model+endpoint profile 或将 Provider 切回原生 endpoint；其他提供相同 model+endpoint 的 Provider 会使用同一模板，因此模板回滚是模型端点级操作。若无 native 候选则明确返回 `conversion_unsupported`。配置回滚必须恢复旧 runtime snapshot、旧 `/v1/models` 能力输出和旧路由候选，不能只回滚 YAML 文件。

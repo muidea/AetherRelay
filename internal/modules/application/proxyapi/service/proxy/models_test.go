@@ -52,14 +52,13 @@ func TestModelsProjectsDegradedReasoningConversion(t *testing.T) {
 			"anthropic": {
 				Name: "anthropic", Protocol: "anthropic", BaseURL: "https://example.invalid", APIKey: "test",
 				Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages},
-				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"claude-test": {TransportModeResponsesToAnthropic: {Enabled: true, Verified: true}}},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"claude-test": {
 				ID: "claude-test", ReasoningDeclared: true, ReasoningSupported: true, ReasoningEfforts: []string{"low"},
 				ConversionCapabilities: map[string]config.ConversionCapability{
-					TransportModeResponsesToAnthropic: {
+					config.ProviderEndpointMessages: {
 						Level: 2, Text: true, Streaming: true, Reasoning: true,
 						ReasoningAdapter: config.ReasoningAdapterResponsesToAnthropicAdaptive, ReasoningTargetEffort: "low",
 					},
@@ -103,16 +102,12 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 			"responses": {
 				Name: "responses", Protocol: "openai", BaseURL: "https://example.invalid", APIKey: "test",
 				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
-				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"shared-model": {
-					TransportModeAnthropicToResponses: {Enabled: true, Verified: true},
-					TransportModeResponsesToAnthropic: {Enabled: true, Verified: true},
-				}},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"shared-model": {ID: "shared-model", ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeResponsesToAnthropic: {Level: 1, Text: true},
-				TransportModeAnthropicToResponses: {Level: 1, Text: true},
+				config.ProviderEndpointMessages:  {Level: 1, Text: true},
+				config.ProviderEndpointResponses: {Level: 1, Text: true},
 			}},
 		},
 	}

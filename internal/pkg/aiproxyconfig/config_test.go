@@ -286,16 +286,14 @@ func TestLoadModelConversionCapabilities(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 model_metadata:
   demo:
+    reasoning_supported: true
+    reasoning_default_effort: medium
+    reasoning_efforts: [low, medium]
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 1
-        text: true
-        streaming: false
-      anthropic_to_responses:
-        level: 3
-        text: true
-        tools: true
-        images: false
+      messages:
+        profile: level1
+      responses:
+        profile: level3_reasoning
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -304,12 +302,12 @@ model_metadata:
 		t.Fatal(err)
 	}
 	got := cfg.ModelMetadata["demo"].ConversionCapabilities
-	if got["responses_to_anthropic"].Level != 1 || !got["responses_to_anthropic"].Text || got["anthropic_to_responses"].Level != 3 || !got["anthropic_to_responses"].Tools {
+	if got[ProviderEndpointMessages].Level != 1 || !got[ProviderEndpointMessages].Text || got[ProviderEndpointResponses].Level != 3 || !got[ProviderEndpointResponses].Tools || got[ProviderEndpointResponses].ReasoningAdapter != ReasoningAdapterAnthropicToResponsesEffort {
 		t.Fatalf("conversion capabilities = %#v", got)
 	}
 }
 
-func TestLoadProviderConversionRelease(t *testing.T) {
+func TestLoadRejectsProviderConversionRelease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -319,118 +317,58 @@ providers:
     api_key: test
     endpoints: messages
     models: claude-demo
-    conversion_releases:
-      claude-demo:
-        responses_to_anthropic:
-          enabled: true
-          verified: true
-          evidence_id: eval-2026-08-07
-model_metadata:
-  claude-demo:
-    conversion_capabilities:
-      responses_to_anthropic:
-        level: 3
-        text: true
-        tools: true
-        streaming: true
+    conversion_releases: {}
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := cfg.Providers["anthropic"]
-	if !ProviderConversionReleased(provider, "claude-demo", ConversionDirectionResponsesToAnthropic) {
-		t.Fatalf("conversion release = %#v", provider.ConversionReleases)
-	}
-	if got := provider.ConversionReleases["claude-demo"][ConversionDirectionResponsesToAnthropic].EvidenceID; got != "eval-2026-08-07" {
-		t.Fatalf("evidence_id = %q", got)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown key \"conversion_releases\"") {
+		t.Fatalf("error = %v, want removed provider release rejection", err)
 	}
 }
 
-func TestLoadRejectsEnabledUnverifiedProviderConversionRelease(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(`
-providers:
-  anthropic:
-    protocol: anthropic
-    base_url: https://api.anthropic.com
-    api_key: test
-    endpoints: messages
-    models: claude-demo
-    conversion_releases:
-      claude-demo:
-        responses_to_anthropic:
-          enabled: true
-          verified: false
-model_metadata:
-  claude-demo:
-    conversion_capabilities:
-      responses_to_anthropic:
-        level: 2
-        text: true
-        streaming: true
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "enabled requires verified: true") {
-		t.Fatalf("error = %v, want verification gate rejection", err)
-	}
-}
-
-func TestReconcileProviderConversionReleasesPreservesDormantDirection(t *testing.T) {
-	cfg := Config{ModelMetadata: map[string]ModelMetadata{
-		"deepseek-v4-flash": {
-			ID: "deepseek-v4-flash",
-			ConversionCapabilities: map[string]ConversionCapability{
-				ConversionDirectionAnthropicToResponses: {Level: 3, Text: true, Tools: true},
-				ConversionDirectionResponsesToAnthropic: {Level: 3, Text: true, Tools: true},
-			},
-		},
+func TestModelConversionCapabilityMatchesEndpoint(t *testing.T) {
+	metadata := ModelMetadata{ConversionCapabilities: map[string]ConversionCapability{
+		ProviderEndpointMessages:  {Level: 3, Text: true, Tools: true},
+		ProviderEndpointResponses: {Level: 2, Text: true, Streaming: true},
 	}}
-	provider := Provider{
-		Name: "deepseek", Protocol: "anthropic", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "test",
-		Models: []string{"deepseek-v4-flash"}, Endpoints: []string{ProviderEndpointMessages},
-		ConversionReleases: map[string]map[string]ProviderConversionRelease{
-			"deepseek-v4-flash": {
-				ConversionDirectionAnthropicToResponses: {Enabled: true, Verified: true, EvidenceID: "responses-eval"},
-			},
-		},
+	if _, ok := ModelConversionCapability(metadata, "/v1/messages", ConversionDirectionResponsesToAnthropic); !ok {
+		t.Fatal("messages template did not enable Responses to Anthropic")
 	}
-	provider = ReconcileProviderConversionReleases(cfg, provider)
-	directions := provider.ConversionReleases["deepseek-v4-flash"]
-	if release := directions[ConversionDirectionAnthropicToResponses]; !release.Enabled || !release.Verified || release.EvidenceID != "responses-eval" {
-		t.Fatalf("dormant release changed: %#v", release)
-	}
-	if _, ok := directions[ConversionDirectionResponsesToAnthropic]; !ok {
-		t.Fatalf("compatible draft was not appended: %#v", directions)
-	}
-	if ProviderConversionActive(provider, "deepseek-v4-flash", ConversionDirectionAnthropicToResponses) {
-		t.Fatal("dormant Responses release became active on an Anthropic provider")
-	}
-	if ProviderConversionActive(provider, "deepseek-v4-flash", ConversionDirectionResponsesToAnthropic) {
-		t.Fatal("disabled draft became active")
-	}
-	if err := validateProviderConversionReleases(cfg, "deepseek", provider); err != nil {
-		t.Fatalf("dormant release rejected: %v", err)
+	if _, ok := ModelConversionCapability(metadata, "/v1/messages", ConversionDirectionAnthropicToResponses); ok {
+		t.Fatal("messages template enabled the opposite direction")
 	}
 }
 
-func TestLoadRejectsInvalidConversionLevel(t *testing.T) {
+func TestLoadRejectsInvalidConversionProfile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 model_metadata:
   demo:
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 4
+      messages:
+        profile: level4
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown profile") {
+		t.Fatalf("error = %v, want invalid conversion profile", err)
+	}
+}
+
+func TestLoadRejectsManualConversionCapabilityFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+model_metadata:
+  demo:
+    conversion_capabilities:
+      messages:
+        level: 3
         text: true
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "level must be 0, 1, 2 or 3") {
-		t.Fatalf("error = %v, want invalid conversion level", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown key \"level\"") {
+		t.Fatalf("error = %v, want manual capability rejection", err)
 	}
 }
 
@@ -440,20 +378,13 @@ func TestLoadModelConversionReasoningAdapter(t *testing.T) {
 model_metadata:
   demo:
     reasoning_supported: true
+    reasoning_default_effort: medium
     reasoning_efforts: [low, medium]
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 2
-        text: true
-        reasoning: true
-        reasoning_adapter: responses_to_anthropic_adaptive
-        reasoning_target_effort: medium
-      anthropic_to_responses:
-        level: 2
-        text: true
-        reasoning: true
-        reasoning_adapter: anthropic_to_responses_effort
-        reasoning_target_effort: low
+      messages:
+        profile: level2_reasoning
+      responses:
+        profile: level2_reasoning
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -461,13 +392,13 @@ model_metadata:
 	if err != nil {
 		t.Fatal(err)
 	}
-	capability := cfg.ModelMetadata["demo"].ConversionCapabilities[ConversionDirectionResponsesToAnthropic]
+	capability := cfg.ModelMetadata["demo"].ConversionCapabilities[ProviderEndpointMessages]
 	if !ConversionCapabilityUsable(ConversionDirectionResponsesToAnthropic, capability) || capability.ReasoningTargetEffort != "medium" {
 		t.Fatalf("capability = %#v", capability)
 	}
 }
 
-func TestLoadRejectsReasoningConversionWithoutAdapter(t *testing.T) {
+func TestLoadRejectsReasoningProfileWithoutDefaultEffort(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 model_metadata:
@@ -475,16 +406,13 @@ model_metadata:
     reasoning_supported: true
     reasoning_efforts: [low]
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 2
-        text: true
-        reasoning: true
-        reasoning_target_effort: low
+      messages:
+        profile: level2_reasoning
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "reasoning_adapter is invalid") {
-		t.Fatalf("error = %v, want missing adapter rejection", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "requires reasoning support and a default effort") {
+		t.Fatalf("error = %v, want missing default effort rejection", err)
 	}
 }
 

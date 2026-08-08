@@ -500,21 +500,12 @@ func TestHandlerPatchesOnlyTargetProviderAndPreservesCredential(t *testing.T) {
 	}
 }
 
-func TestHandlerPatchesProviderConversionReleaseAndPreservesCredential(t *testing.T) {
+func TestHandlerRejectsRemovedProviderConversionRelease(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
-	}
-	provider := cfg.Providers["openai"]
-	provider.Endpoints = []string{config.ProviderEndpointResponses}
-	cfg.Providers["openai"] = provider
-	cfg.ModelMetadata["gpt-4o"] = config.ModelMetadata{
-		ID: "gpt-4o",
-		ConversionCapabilities: map[string]config.ConversionCapability{
-			config.ConversionDirectionAnthropicToResponses: {Level: 3, Text: true, Tools: true, Streaming: true},
-		},
 	}
 	runtime := &testRuntime{cfg: cfg}
 	handler := NewHandler(path, runtime)
@@ -524,48 +515,17 @@ func TestHandlerPatchesProviderConversionReleaseAndPreservesCredential(t *testin
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown field") {
 		t.Fatalf("patch = %d %s", rec.Code, rec.Body.String())
-	}
-	updated := runtime.ConfigSnapshot().Providers["openai"]
-	if updated.APIKey != "secret-value" || updated.BaseURL != "https://api.openai.com/v1" {
-		t.Fatalf("provider fields changed = %+v", updated)
-	}
-	release := updated.ConversionReleases["gpt-4o"][config.ConversionDirectionAnthropicToResponses]
-	if !release.Enabled || !release.Verified || release.EvidenceID != "eval-admin" {
-		t.Fatalf("release = %#v", release)
-	}
-
-	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/providers", nil)
-	listReq.RemoteAddr = "127.0.0.1:1234"
-	listRec := httptest.NewRecorder()
-	handler.ServeHTTP(listRec, listReq)
-	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"evidence_id":"eval-admin"`) {
-		t.Fatalf("provider list = %d %s", listRec.Code, listRec.Body.String())
 	}
 }
 
-func TestHandlerSwitchesProviderTransportAndPreservesDormantReleases(t *testing.T) {
+func TestHandlerSwitchesProviderTransportWithoutReleaseState(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
-	}
-	provider := cfg.Providers["openai"]
-	provider.Endpoints = []string{config.ProviderEndpointResponses}
-	provider.ConversionReleases = map[string]map[string]config.ProviderConversionRelease{
-		"gpt-4o": {
-			config.ConversionDirectionAnthropicToResponses: {Enabled: true, Verified: true, EvidenceID: "responses-eval"},
-		},
-	}
-	cfg.Providers["openai"] = provider
-	cfg.ModelMetadata["gpt-4o"] = config.ModelMetadata{
-		ID: "gpt-4o",
-		ConversionCapabilities: map[string]config.ConversionCapability{
-			config.ConversionDirectionAnthropicToResponses: {Level: 3, Text: true, Tools: true},
-			config.ConversionDirectionResponsesToAnthropic: {Level: 3, Text: true, Tools: true},
-		},
 	}
 	runtime := &testRuntime{cfg: cfg}
 	handler := NewHandler(path, runtime)
@@ -580,13 +540,6 @@ func TestHandlerSwitchesProviderTransportAndPreservesDormantReleases(t *testing.
 	updated := runtime.ConfigSnapshot().Providers["openai"]
 	if updated.Protocol != "anthropic" || len(updated.Endpoints) != 1 || updated.Endpoints[0] != config.ProviderEndpointMessages || updated.APIKey != "secret-value" {
 		t.Fatalf("provider = %#v", updated)
-	}
-	directions := updated.ConversionReleases["gpt-4o"]
-	if old := directions[config.ConversionDirectionAnthropicToResponses]; !old.Enabled || !old.Verified || old.EvidenceID != "responses-eval" {
-		t.Fatalf("old release changed: %#v", old)
-	}
-	if draft, ok := directions[config.ConversionDirectionResponsesToAnthropic]; !ok || draft.Enabled || draft.Verified || draft.EvidenceID != "" {
-		t.Fatalf("new draft = %#v, exists=%t", draft, ok)
 	}
 }
 

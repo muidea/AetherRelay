@@ -889,9 +889,9 @@ func TestOpenAIResponsesRejectsAnthropicProvider(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key", Models: []string{"claude*"}, ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"claude-test": {"responses_to_anthropic": {Enabled: true, Verified: true}}}},
+			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key", Models: []string{"claude*"}, Endpoints: []string{config.ProviderEndpointMessages}},
 		},
-		ModelMetadata: map[string]config.ModelMetadata{"claude-test": {ID: "claude-test", ConversionCapabilities: map[string]config.ConversionCapability{"responses_to_anthropic": {Level: 1, Text: true}}}},
+		ModelMetadata: map[string]config.ModelMetadata{"claude-test": {ID: "claude-test", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 1, Text: true}}}},
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {

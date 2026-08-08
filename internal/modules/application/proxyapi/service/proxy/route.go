@@ -188,14 +188,14 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 			}
 		}
 		for _, plan := range applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner, provider) {
-			if (plan.Mode == TransportModeResponsesToAnthropic || plan.Mode == TransportModeAnthropicToResponses) && !conversionDeclared(cfg, provider, modelID, plan.Mode) {
+			if (plan.Mode == TransportModeResponsesToAnthropic || plan.Mode == TransportModeAnthropicToResponses) && !conversionDeclared(cfg, modelID, plan.UpstreamEndpoint, plan.Mode) {
 				continue
 			}
 			plan.Priority = candidate.Priority
 			plan.Fallback = candidate.Fallback
 			if plan.IsConversion() {
 				if metadata, ok := cfg.ModelMetadata[modelID]; ok {
-					if capability, ok := metadata.ConversionCapabilities[plan.Mode]; ok {
+					if capability, ok := config.ModelConversionCapability(metadata, plan.UpstreamEndpoint, plan.Mode); ok {
 						plan.ConversionLevel = capability.Level
 					}
 				}
@@ -226,7 +226,7 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 		if level, direction := configuredUnavailableConversion(cfg, modelID, clientEndpoint, clientProtocol); level > 0 {
 			return nil, &APIError{
 				Code:                ErrorCodeConversionUnsupported,
-				Message:             fmt.Sprintf("conversion level %d for %s is not released by a compatible provider", level, direction),
+				Message:             fmt.Sprintf("conversion level %d for %s has no compatible model endpoint template", level, direction),
 				Feature:             direction,
 				UnsupportedFeatures: []string{direction},
 				Model:               modelID, ClientEndpoint: clientEndpoint, ClientProtocol: clientProtocol,
@@ -272,21 +272,24 @@ func configuredUnavailableConversion(cfg config.Config, modelID, endpoint, proto
 	if direction == "" {
 		return 0, ""
 	}
-	capability, ok := metadata.ConversionCapabilities[direction]
+	upstreamEndpoint, ok := config.ConversionUpstreamEndpointForDirection(direction)
+	if !ok {
+		return 0, ""
+	}
+	capability, ok := config.ModelConversionCapability(metadata, upstreamEndpoint, direction)
 	if !ok {
 		return 0, ""
 	}
 	return capability.Level, direction
 }
 
-func conversionDeclared(cfg config.Config, provider config.Provider, modelID, mode string) bool {
+func conversionDeclared(cfg config.Config, modelID, upstreamEndpoint, mode string) bool {
 	metadata, ok := cfg.ModelMetadata[modelID]
 	if !ok {
 		return false
 	}
-	direction := mode
-	capability, ok := metadata.ConversionCapabilities[direction]
-	return ok && conversionCapabilityUsable(direction, capability) && config.ProviderConversionActive(provider, modelID, direction)
+	_, ok = config.ModelConversionCapability(metadata, upstreamEndpoint, mode)
+	return ok
 }
 
 // conversionCapabilityUsable keeps route and discovery policy aligned with

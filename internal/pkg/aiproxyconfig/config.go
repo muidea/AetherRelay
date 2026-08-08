@@ -190,32 +190,26 @@ type ModelMetadata struct {
 	ConversionCapabilities  map[string]ConversionCapability
 }
 
-// ConversionCapability is an explicitly verified protocol-conversion contract.
-// It is metadata only until a matching converter is wired into routing.
+// ConversionCapability is the runtime expansion of one fixed model+endpoint
+// profile. Provider identity is deliberately absent from this contract.
 type ConversionCapability struct {
-	Level     int
-	Text      bool
-	Images    bool
-	Documents bool
-	Reasoning bool
+	// Profile is the fixed configuration template selected for one upstream
+	// endpoint. Runtime capability fields are expanded from it during load.
+	Profile   string `json:"profile,omitempty"`
+	Level     int    `json:"level"`
+	Text      bool   `json:"text"`
+	Images    bool   `json:"images"`
+	Documents bool   `json:"documents"`
+	Reasoning bool   `json:"reasoning"`
 	// ReasoningAdapter is an explicit, direction-specific degraded adapter.
 	// It is required whenever Reasoning is enabled because the two APIs do not
 	// share a wire-compatible reasoning contract.
-	ReasoningAdapter      string
-	ReasoningTargetEffort string
-	Tools                 bool
-	StructuredOutput      bool
-	Streaming             bool
-	Continuation          bool
-}
-
-// ProviderConversionRelease is the provider-specific publication gate for an
-// implemented model conversion capability. Both Enabled and Verified must be
-// true before the capability is advertised or selected for routing.
-type ProviderConversionRelease struct {
-	Enabled    bool   `json:"enabled"`
-	Verified   bool   `json:"verified"`
-	EvidenceID string `json:"evidence_id,omitempty"`
+	ReasoningAdapter      string `json:"reasoning_adapter,omitempty"`
+	ReasoningTargetEffort string `json:"reasoning_target_effort,omitempty"`
+	Tools                 bool   `json:"tools"`
+	StructuredOutput      bool   `json:"structured_output"`
+	Streaming             bool   `json:"streaming"`
+	Continuation          bool   `json:"continuation"`
 }
 
 const (
@@ -224,6 +218,12 @@ const (
 
 	ReasoningAdapterResponsesToAnthropicAdaptive = "responses_to_anthropic_adaptive"
 	ReasoningAdapterAnthropicToResponsesEffort   = "anthropic_to_responses_effort"
+
+	ConversionProfileLevel1          = "level1"
+	ConversionProfileLevel2          = "level2"
+	ConversionProfileLevel2Reasoning = "level2_reasoning"
+	ConversionProfileLevel3          = "level3"
+	ConversionProfileLevel3Reasoning = "level3_reasoning"
 )
 
 // MaxModelMetadataIDLength 限制 model_metadata id 长度,避免异常配置与标签膨胀。
@@ -282,11 +282,7 @@ type Provider struct {
 	// AllowUnauthenticated 仅允许受信 loopback 上游在无 API Key 时启动。
 	// 远程 base_url 即使设置 true 也必须 fail-fast。
 	AllowUnauthenticated bool
-	// ConversionReleases binds model-level implementation metadata to a
-	// concrete, verified provider/model/direction rollout. Exact model IDs are
-	// case-sensitive; an absent record means conversion is disabled.
-	ConversionReleases map[string]map[string]ProviderConversionRelease
-	Disabled           bool
+	Disabled             bool
 }
 
 func Load(path string) (Config, error) {
@@ -377,11 +373,8 @@ func loadFile(path string, cfg *Config) error {
 	scanner := bufio.NewScanner(file)
 	section := ""
 	providerName := ""
-	providerConversionModel := ""
-	providerConversionDirection := ""
-	inProviderConversionReleases := false
 	modelName := ""
-	conversionDirection := ""
+	conversionEndpoint := ""
 	inConversionCapabilities := false
 	chatgptWebSub := ""
 	lineNo := 0
@@ -405,11 +398,8 @@ func loadFile(path string, cfg *Config) error {
 			case "server", "state", "providers", "model_metadata", "chatgpt_web", "codex_oauth":
 				section = key
 				providerName = ""
-				providerConversionModel = ""
-				providerConversionDirection = ""
-				inProviderConversionReleases = false
 				modelName = ""
-				conversionDirection = ""
+				conversionEndpoint = ""
 				inConversionCapabilities = false
 				chatgptWebSub = ""
 			default:
@@ -418,11 +408,8 @@ func loadFile(path string, cfg *Config) error {
 		case indent == 0:
 			section = ""
 			providerName = ""
-			providerConversionModel = ""
-			providerConversionDirection = ""
-			inProviderConversionReleases = false
 			modelName = ""
-			conversionDirection = ""
+			conversionEndpoint = ""
 			inConversionCapabilities = false
 			if key == "admin_password_hash" {
 				setErr = setTopLevel(cfg, key, expandDollarBraceOnly(value))
@@ -448,46 +435,26 @@ func loadFile(path string, cfg *Config) error {
 			setErr = setCodexOAuth(cfg, key, expand(value))
 		case section == "providers" && indent == 2 && !hasValue:
 			providerName = key
-			providerConversionModel = ""
-			providerConversionDirection = ""
-			inProviderConversionReleases = false
 			modelName = ""
 			ensureProvider(cfg, providerName)
-		case section == "providers" && indent == 4 && !hasValue && providerName != "" && key == "conversion_releases":
-			providerConversionModel = ""
-			providerConversionDirection = ""
-			inProviderConversionReleases = true
-		case section == "providers" && indent == 6 && !hasValue && providerName != "" && inProviderConversionReleases:
-			providerConversionModel = key
-			providerConversionDirection = ""
-		case section == "providers" && indent == 8 && !hasValue && providerName != "" && providerConversionModel != "" && inProviderConversionReleases:
-			if key != ConversionDirectionResponsesToAnthropic && key != ConversionDirectionAnthropicToResponses {
-				return fmt.Errorf("providers.%s.conversion_releases.%s: unknown direction %q", providerName, providerConversionModel, key)
-			}
-			providerConversionDirection = key
-		case section == "providers" && indent >= 10 && providerName != "" && providerConversionModel != "" && providerConversionDirection != "":
-			setErr = setProviderConversionRelease(cfg, providerName, providerConversionModel, providerConversionDirection, key, expand(value))
 		case section == "providers" && indent >= 4 && providerName != "":
-			providerConversionModel = ""
-			providerConversionDirection = ""
-			inProviderConversionReleases = false
 			setErr = setProvider(cfg, providerName, key, expand(value))
 		case section == "model_metadata" && indent == 2 && !hasValue:
 			modelName = key
 			providerName = ""
-			conversionDirection = ""
+			conversionEndpoint = ""
 			inConversionCapabilities = false
 			ensureModelMetadata(cfg, modelName)
 		case section == "model_metadata" && indent == 4 && !hasValue && modelName != "" && key == "conversion_capabilities":
-			conversionDirection = ""
+			conversionEndpoint = ""
 			inConversionCapabilities = true
 		case section == "model_metadata" && indent == 6 && !hasValue && modelName != "" && inConversionCapabilities:
-			if key != "responses_to_anthropic" && key != "anthropic_to_responses" {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities: unknown direction %q", modelName, key)
+			if _, ok := ConversionDirectionForUpstreamEndpoint(key); !ok {
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities: unknown upstream endpoint %q", modelName, key)
 			}
-			conversionDirection = key
-		case section == "model_metadata" && indent >= 8 && modelName != "" && conversionDirection != "":
-			setErr = setModelConversionCapability(cfg, modelName, conversionDirection, key, expand(value))
+			conversionEndpoint = key
+		case section == "model_metadata" && indent >= 8 && modelName != "" && conversionEndpoint != "":
+			setErr = setModelConversionCapability(cfg, modelName, conversionEndpoint, key, expand(value))
 		case section == "model_metadata" && indent >= 4 && modelName != "":
 			setErr = setModelMetadata(cfg, modelName, key, expand(value))
 		default:
@@ -835,38 +802,6 @@ func setProvider(cfg *Config, name, key, value string) error {
 	return nil
 }
 
-func setProviderConversionRelease(cfg *Config, providerName, modelID, direction, key, value string) error {
-	provider := ensureProvider(cfg, providerName)
-	if provider.ConversionReleases == nil {
-		provider.ConversionReleases = map[string]map[string]ProviderConversionRelease{}
-	}
-	directions := provider.ConversionReleases[modelID]
-	if directions == nil {
-		directions = map[string]ProviderConversionRelease{}
-	}
-	release := directions[direction]
-	switch key {
-	case "enabled", "verified":
-		parsed, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("providers.%s.conversion_releases.%s.%s.%s: %w", providerName, modelID, direction, key, err)
-		}
-		if key == "enabled" {
-			release.Enabled = parsed
-		} else {
-			release.Verified = parsed
-		}
-	case "evidence_id":
-		release.EvidenceID = strings.TrimSpace(value)
-	default:
-		return fmt.Errorf("providers.%s.conversion_releases.%s.%s: unknown key %q", providerName, modelID, direction, key)
-	}
-	directions[direction] = release
-	provider.ConversionReleases[modelID] = directions
-	cfg.Providers[providerName] = provider
-	return nil
-}
-
 func ensureProvider(cfg *Config, name string) Provider {
 	provider, ok := cfg.Providers[name]
 	if !ok {
@@ -946,52 +881,58 @@ func setModelMetadata(cfg *Config, id, key, value string) error {
 	return nil
 }
 
-func setModelConversionCapability(cfg *Config, id, direction, key, value string) error {
+func setModelConversionCapability(cfg *Config, id, endpoint, key, value string) error {
 	info := ensureModelMetadata(cfg, id)
 	if info.ConversionCapabilities == nil {
 		info.ConversionCapabilities = map[string]ConversionCapability{}
 	}
-	capability := info.ConversionCapabilities[direction]
+	capability := info.ConversionCapabilities[endpoint]
 	switch strings.ToLower(key) {
-	case "level":
-		n, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.level: %w", id, direction, err)
-		}
-		capability.Level = n
-	case "text", "images", "documents", "reasoning", "tools", "structured_output", "streaming", "continuation":
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.%s: %w", id, direction, key, err)
-		}
-		switch strings.ToLower(key) {
-		case "text":
-			capability.Text = b
-		case "images":
-			capability.Images = b
-		case "documents":
-			capability.Documents = b
-		case "reasoning":
-			capability.Reasoning = b
-		case "tools":
-			capability.Tools = b
-		case "structured_output":
-			capability.StructuredOutput = b
-		case "streaming":
-			capability.Streaming = b
-		case "continuation":
-			capability.Continuation = b
-		}
-	case "reasoning_adapter":
-		capability.ReasoningAdapter = strings.ToLower(strings.TrimSpace(value))
-	case "reasoning_target_effort":
-		capability.ReasoningTargetEffort = strings.ToLower(strings.TrimSpace(value))
+	case "profile":
+		capability.Profile = strings.ToLower(strings.TrimSpace(value))
 	default:
-		return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s: unknown key %q", id, direction, key)
+		return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s: unknown key %q", id, endpoint, key)
 	}
-	info.ConversionCapabilities[direction] = capability
+	info.ConversionCapabilities[endpoint] = capability
 	cfg.ModelMetadata[id] = info
 	return nil
+}
+
+func expandConversionProfile(metadata ModelMetadata, endpoint string, capability ConversionCapability) (ConversionCapability, error) {
+	profile := strings.ToLower(strings.TrimSpace(capability.Profile))
+	if profile == "" {
+		return capability, nil
+	}
+	result := ConversionCapability{Profile: profile, Text: true}
+	switch profile {
+	case ConversionProfileLevel1:
+		result.Level = 1
+	case ConversionProfileLevel2, ConversionProfileLevel2Reasoning:
+		result.Level, result.Streaming = 2, true
+	case ConversionProfileLevel3, ConversionProfileLevel3Reasoning:
+		result.Level, result.Streaming, result.Tools = 3, true, true
+	default:
+		return ConversionCapability{}, fmt.Errorf("unknown profile %q", profile)
+	}
+	if profile != ConversionProfileLevel2Reasoning && profile != ConversionProfileLevel3Reasoning {
+		return result, nil
+	}
+	if !metadata.ReasoningDeclared || !metadata.ReasoningSupported || metadata.ReasoningDefaultEffort == "" {
+		return ConversionCapability{}, fmt.Errorf("profile %q requires reasoning support and a default effort", profile)
+	}
+	direction, ok := ConversionDirectionForUpstreamEndpoint(endpoint)
+	if !ok {
+		return ConversionCapability{}, fmt.Errorf("unsupported upstream endpoint %q", endpoint)
+	}
+	result.Reasoning = true
+	result.ReasoningTargetEffort = metadata.ReasoningDefaultEffort
+	switch direction {
+	case ConversionDirectionResponsesToAnthropic:
+		result.ReasoningAdapter = ReasoningAdapterResponsesToAnthropicAdaptive
+	case ConversionDirectionAnthropicToResponses:
+		result.ReasoningAdapter = ReasoningAdapterAnthropicToResponsesEffort
+	}
+	return result, nil
 }
 
 // ConversionCapabilityUsable is the shared publication and routing gate for
@@ -1015,6 +956,41 @@ func ConversionCapabilityUsable(direction string, capability ConversionCapabilit
 		return capability.ReasoningAdapter == "" && capability.ReasoningTargetEffort == ""
 	}
 	return capability.Level >= 2 && conversionReasoningAdapterForDirection(direction, capability.ReasoningAdapter) && capability.ReasoningTargetEffort != ""
+}
+
+// ConversionDirectionForUpstreamEndpoint maps the concrete upstream endpoint
+// to the only cross-protocol direction it can serve. Conversion templates are
+// keyed by exact model ID and endpoint, never by provider identity.
+func ConversionDirectionForUpstreamEndpoint(endpoint string) (string, bool) {
+	switch strings.TrimPrefix(strings.TrimSpace(endpoint), "/v1/") {
+	case ProviderEndpointMessages:
+		return ConversionDirectionResponsesToAnthropic, true
+	case ProviderEndpointResponses:
+		return ConversionDirectionAnthropicToResponses, true
+	default:
+		return "", false
+	}
+}
+
+func ConversionUpstreamEndpointForDirection(direction string) (string, bool) {
+	switch strings.TrimSpace(direction) {
+	case ConversionDirectionResponsesToAnthropic:
+		return ProviderEndpointMessages, true
+	case ConversionDirectionAnthropicToResponses:
+		return ProviderEndpointResponses, true
+	default:
+		return "", false
+	}
+}
+
+func ModelConversionCapability(metadata ModelMetadata, upstreamEndpoint, direction string) (ConversionCapability, bool) {
+	expectedDirection, ok := ConversionDirectionForUpstreamEndpoint(upstreamEndpoint)
+	if !ok || expectedDirection != direction {
+		return ConversionCapability{}, false
+	}
+	endpoint := strings.TrimPrefix(strings.TrimSpace(upstreamEndpoint), "/v1/")
+	capability, ok := metadata.ConversionCapabilities[endpoint]
+	return capability, ok && ConversionCapabilityUsable(direction, capability)
 }
 
 func conversionReasoningAdapterForDirection(direction, adapter string) bool {
@@ -1295,6 +1271,13 @@ func normalize(cfg *Config, configPath string) error {
 		if prev, ok := metadata[id]; ok {
 			return fmt.Errorf("duplicate model_metadata id: %q (also seen as %q)", id, prev.ID)
 		}
+		for endpoint, capability := range info.ConversionCapabilities {
+			expanded, err := expandConversionProfile(info, endpoint, capability)
+			if err != nil {
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s: %w", id, endpoint, err)
+			}
+			info.ConversionCapabilities[endpoint] = expanded
+		}
 		metadata[id] = info
 	}
 	cfg.ModelMetadata = metadata
@@ -1333,26 +1316,9 @@ func normalizeProviders(providers map[string]Provider) (map[string]Provider, err
 			return nil, fmt.Errorf("provider %q endpoints: %w", key, err)
 		}
 		provider.Endpoints = endpoints
-		provider.ConversionReleases = cloneProviderConversionReleases(provider.ConversionReleases)
 		normalized[key] = provider
 	}
 	return normalized, nil
-}
-
-func cloneProviderConversionReleases(input map[string]map[string]ProviderConversionRelease) map[string]map[string]ProviderConversionRelease {
-	if input == nil {
-		return nil
-	}
-	result := make(map[string]map[string]ProviderConversionRelease, len(input))
-	for modelID, directions := range input {
-		copied := make(map[string]ProviderConversionRelease, len(directions))
-		for direction, release := range directions {
-			release.EvidenceID = strings.TrimSpace(release.EvidenceID)
-			copied[strings.TrimSpace(direction)] = release
-		}
-		result[strings.TrimSpace(modelID)] = copied
-	}
-	return result
 }
 
 // ConfigureProviderPolicy marks explicit managed values so zero priority and
@@ -1521,114 +1487,8 @@ func validateProviders(cfg Config) error {
 		if err := validateProtocolEndpoints(provider.Protocol, provider.Endpoints); err != nil {
 			return fmt.Errorf("provider %q: %w", name, err)
 		}
-		if err := validateProviderConversionReleases(cfg, name, provider); err != nil {
-			return err
-		}
 	}
 	return nil
-}
-
-func validateProviderConversionReleases(cfg Config, name string, provider Provider) error {
-	for modelID, directions := range provider.ConversionReleases {
-		if err := validateModelMetadataID(modelID); err != nil {
-			return fmt.Errorf("providers.%s.conversion_releases model %q: %w", name, modelID, err)
-		}
-		if !ProviderMatchesModel(name, provider, modelID) {
-			return fmt.Errorf("providers.%s.conversion_releases model %q is not matched by provider models", name, modelID)
-		}
-		metadata, metadataExists := cfg.ModelMetadata[modelID]
-		for direction, release := range directions {
-			if direction != ConversionDirectionResponsesToAnthropic && direction != ConversionDirectionAnthropicToResponses {
-				return fmt.Errorf("providers.%s.conversion_releases.%s: unknown direction %q", name, modelID, direction)
-			}
-			if release.Enabled && !release.Verified {
-				return fmt.Errorf("providers.%s.conversion_releases.%s.%s enabled requires verified: true", name, modelID, direction)
-			}
-			if len(release.EvidenceID) > 256 || strings.IndexFunc(release.EvidenceID, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
-				return fmt.Errorf("providers.%s.conversion_releases.%s.%s evidence_id is invalid", name, modelID, direction)
-			}
-			capability, capabilityExists := metadata.ConversionCapabilities[direction]
-			if !metadataExists || !capabilityExists || !ConversionCapabilityUsable(direction, capability) {
-				return fmt.Errorf("providers.%s.conversion_releases.%s.%s requires a usable model_metadata conversion capability", name, modelID, direction)
-			}
-		}
-	}
-	return nil
-}
-
-// ProviderSupportsConversionDirection reports whether the provider's current
-// protocol/endpoints can execute a stored conversion direction.
-func ProviderSupportsConversionDirection(provider Provider, direction string) bool {
-	for _, path := range ServiceableInboundPaths(provider) {
-		for _, transport := range ResolveProviderTransports(provider, path) {
-			if transport.Mode == direction {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// ReconcileProviderConversionReleases retains dormant release history and
-// appends a disabled draft for each currently compatible direction. Only exact
-// provider model IDs and already stored model IDs are materialized.
-func ReconcileProviderConversionReleases(cfg Config, provider Provider) Provider {
-	provider.ConversionReleases = cloneProviderConversionReleases(provider.ConversionReleases)
-	if provider.ConversionReleases == nil {
-		provider.ConversionReleases = map[string]map[string]ProviderConversionRelease{}
-	}
-	modelIDs := map[string]struct{}{}
-	for modelID := range provider.ConversionReleases {
-		modelIDs[modelID] = struct{}{}
-	}
-	for _, modelID := range provider.Models {
-		modelID = strings.TrimSpace(modelID)
-		if modelID != "" && !strings.Contains(modelID, "*") {
-			modelIDs[modelID] = struct{}{}
-		}
-	}
-	for modelID := range modelIDs {
-		metadata, ok := cfg.ModelMetadata[modelID]
-		if !ok || !ProviderMatchesModel(provider.Name, provider, modelID) {
-			continue
-		}
-		directions := provider.ConversionReleases[modelID]
-		if directions == nil {
-			directions = map[string]ProviderConversionRelease{}
-		}
-		for _, direction := range []string{ConversionDirectionResponsesToAnthropic, ConversionDirectionAnthropicToResponses} {
-			if _, exists := directions[direction]; exists || !ProviderSupportsConversionDirection(provider, direction) {
-				continue
-			}
-			capability, exists := metadata.ConversionCapabilities[direction]
-			if !exists || !ConversionCapabilityUsable(direction, capability) {
-				continue
-			}
-			directions[direction] = ProviderConversionRelease{}
-		}
-		if len(directions) > 0 {
-			provider.ConversionReleases[modelID] = directions
-		}
-	}
-	return provider
-}
-
-// ProviderConversionReleased returns true only for a concrete rollout that is
-// both enabled and backed by recorded provider verification.
-func ProviderConversionReleased(provider Provider, modelID, direction string) bool {
-	directions, ok := provider.ConversionReleases[modelID]
-	if !ok {
-		return false
-	}
-	release, ok := directions[direction]
-	return ok && release.Enabled && release.Verified
-}
-
-// ProviderConversionActive combines stored release state with the provider's
-// current transport. Dormant records remain preserved but cannot be routed or
-// advertised until the provider switches back to a compatible endpoint.
-func ProviderConversionActive(provider Provider, modelID, direction string) bool {
-	return ProviderSupportsConversionDirection(provider, direction) && ProviderConversionReleased(provider, modelID, direction)
 }
 
 // validateProviderAPIKey:远程上游必须有 API Key;仅 allow_unauthenticated + loopback base_url 允许空 Key。
@@ -1963,40 +1823,41 @@ func validateModelMetadata(cfg Config) error {
 				return fmt.Errorf("model_metadata.%s: reasoning_default_effort must be listed in reasoning_efforts", id)
 			}
 		}
-		for direction, capability := range info.ConversionCapabilities {
-			if direction != ConversionDirectionResponsesToAnthropic && direction != ConversionDirectionAnthropicToResponses {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities: unknown direction %q", id, direction)
+		for endpoint, capability := range info.ConversionCapabilities {
+			direction, ok := ConversionDirectionForUpstreamEndpoint(endpoint)
+			if !ok {
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities: unknown upstream endpoint %q", id, endpoint)
 			}
 			if capability.Level < 0 || capability.Level > 3 {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.level must be 0, 1, 2 or 3", id, direction)
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.level must be 0, 1, 2 or 3", id, endpoint)
 			}
 			if capability.Level >= 1 && !capability.Text {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.text must be true when level >= 1", id, direction)
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.text must be true when level >= 1", id, endpoint)
 			}
 			if capability.Level < 2 && capability.Streaming {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.streaming requires level >= 2", id, direction)
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.streaming requires level >= 2", id, endpoint)
 			}
 			if capability.Level < 3 && (capability.Tools || capability.Images) {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.tools/images require level >= 3", id, direction)
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.tools/images require level >= 3", id, endpoint)
 			}
 			if capability.Reasoning && capability.Level < 2 {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning requires level >= 2", id, direction)
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning requires level >= 2", id, endpoint)
 			}
 			if capability.Reasoning {
 				if !info.ReasoningDeclared || !info.ReasoningSupported {
-					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning requires model reasoning_supported", id, direction)
+					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning requires model reasoning_supported", id, endpoint)
 				}
 				if !conversionReasoningAdapterForDirection(direction, capability.ReasoningAdapter) {
-					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_adapter is invalid for direction", id, direction)
+					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_adapter is invalid for endpoint direction", id, endpoint)
 				}
 				if capability.ReasoningTargetEffort == "" {
-					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_target_effort is required", id, direction)
+					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_target_effort is required", id, endpoint)
 				}
 				if !containsString(info.ReasoningEfforts, capability.ReasoningTargetEffort) {
-					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_target_effort must be listed in reasoning_efforts", id, direction)
+					return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_target_effort must be listed in reasoning_efforts", id, endpoint)
 				}
 			} else if capability.ReasoningAdapter != "" || capability.ReasoningTargetEffort != "" {
-				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_adapter and reasoning_target_effort require reasoning: true", id, direction)
+				return fmt.Errorf("model_metadata.%s.conversion_capabilities.%s.reasoning_adapter and reasoning_target_effort require reasoning: true", id, endpoint)
 			}
 		}
 	}

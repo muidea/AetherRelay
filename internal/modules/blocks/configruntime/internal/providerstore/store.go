@@ -16,17 +16,16 @@ const (
 )
 
 type storedProvider struct {
-	Name                 string                                                 `json:"name"`
-	Protocol             string                                                 `json:"protocol"`
-	BaseURL              string                                                 `json:"base_url"`
-	APIKey               string                                                 `json:"api_key"`
-	Models               []string                                               `json:"models"`
-	Priority             int                                                    `json:"priority"`
-	Fallback             bool                                                   `json:"fallback"`
-	Endpoints            []string                                               `json:"endpoints"`
-	AllowUnauthenticated bool                                                   `json:"allow_unauthenticated"`
-	ConversionReleases   map[string]map[string]config.ProviderConversionRelease `json:"conversion_releases,omitempty"`
-	Disabled             bool                                                   `json:"disabled"`
+	Name                 string   `json:"name"`
+	Protocol             string   `json:"protocol"`
+	BaseURL              string   `json:"base_url"`
+	APIKey               string   `json:"api_key"`
+	Models               []string `json:"models"`
+	Priority             int      `json:"priority"`
+	Fallback             bool     `json:"fallback"`
+	Endpoints            []string `json:"endpoints"`
+	AllowUnauthenticated bool     `json:"allow_unauthenticated"`
+	Disabled             bool     `json:"disabled"`
 }
 
 type Store struct {
@@ -89,7 +88,7 @@ func (s *Store) Load() (map[string]config.Provider, bool, error) {
 	}
 	providers := make(map[string]config.Provider, len(stored))
 	for _, value := range stored {
-		provider := config.Provider{Name: value.Name, Protocol: value.Protocol, BaseURL: value.BaseURL, APIKey: value.APIKey, Models: append([]string(nil), value.Models...), Endpoints: append([]string(nil), value.Endpoints...), AllowUnauthenticated: value.AllowUnauthenticated, ConversionReleases: cloneConversionReleases(value.ConversionReleases), Disabled: value.Disabled}
+		provider := config.Provider{Name: value.Name, Protocol: value.Protocol, BaseURL: value.BaseURL, APIKey: value.APIKey, Models: append([]string(nil), value.Models...), Endpoints: append([]string(nil), value.Endpoints...), AllowUnauthenticated: value.AllowUnauthenticated, Disabled: value.Disabled}
 		config.ConfigureProviderPolicy(&provider, value.Priority, value.Fallback)
 		providers[value.Name] = provider
 	}
@@ -105,7 +104,7 @@ func (s *Store) Replace(providers map[string]config.Provider) error {
 	stored := make([]storedProvider, 0, len(names))
 	for _, name := range names {
 		provider := providers[name]
-		stored = append(stored, storedProvider{Name: name, Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, Models: append([]string(nil), provider.Models...), Priority: config.EffectiveProviderPriority(provider), Fallback: config.EffectiveProviderFallback(provider), Endpoints: append([]string(nil), provider.Endpoints...), AllowUnauthenticated: provider.AllowUnauthenticated, ConversionReleases: cloneConversionReleases(provider.ConversionReleases), Disabled: provider.Disabled})
+		stored = append(stored, storedProvider{Name: name, Protocol: provider.Protocol, BaseURL: provider.BaseURL, APIKey: provider.APIKey, Models: append([]string(nil), provider.Models...), Priority: config.EffectiveProviderPriority(provider), Fallback: config.EffectiveProviderFallback(provider), Endpoints: append([]string(nil), provider.Endpoints...), AllowUnauthenticated: provider.AllowUnauthenticated, Disabled: provider.Disabled})
 	}
 	payload, err := json.Marshal(stored)
 	if err != nil {
@@ -116,19 +115,4 @@ func (s *Store) Replace(providers map[string]config.Provider) error {
 		return err
 	}
 	return s.documents.ReplaceSecureDocuments(secureDocumentScope, []aiproxystate.SecureDocumentRow{{ID: catalogDocumentID, Payload: sealed}})
-}
-
-func cloneConversionReleases(input map[string]map[string]config.ProviderConversionRelease) map[string]map[string]config.ProviderConversionRelease {
-	if input == nil {
-		return nil
-	}
-	result := make(map[string]map[string]config.ProviderConversionRelease, len(input))
-	for modelID, directions := range input {
-		copied := make(map[string]config.ProviderConversionRelease, len(directions))
-		for direction, release := range directions {
-			copied[direction] = release
-		}
-		result[modelID] = copied
-	}
-	return result
 }

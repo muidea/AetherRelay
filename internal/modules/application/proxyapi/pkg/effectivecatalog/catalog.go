@@ -307,10 +307,10 @@ func serviceablePathsForModel(provider config.Provider, modelID string, metadata
 	for _, path := range paths {
 		available := false
 		for _, transport := range config.ResolveProviderTransports(provider, path) {
-			if transport.Mode == "responses_to_anthropic" && !conversionCapabilityAvailable(provider, modelID, metadata, "responses_to_anthropic") {
+			if transport.Mode == "responses_to_anthropic" && !conversionCapabilityAvailable(metadata, transport.UpstreamEndpoint, "responses_to_anthropic") {
 				continue
 			}
-			if transport.Mode == "anthropic_to_responses" && !conversionCapabilityAvailable(provider, modelID, metadata, "anthropic_to_responses") {
+			if transport.Mode == "anthropic_to_responses" && !conversionCapabilityAvailable(metadata, transport.UpstreamEndpoint, "anthropic_to_responses") {
 				continue
 			}
 			available = true
@@ -323,9 +323,9 @@ func serviceablePathsForModel(provider config.Provider, modelID string, metadata
 	return result
 }
 
-func conversionCapabilityAvailable(provider config.Provider, modelID string, metadata config.ModelMetadata, direction string) bool {
-	capability, ok := metadata.ConversionCapabilities[direction]
-	return ok && config.ConversionCapabilityUsable(direction, capability) && config.ProviderConversionActive(provider, modelID, direction)
+func conversionCapabilityAvailable(metadata config.ModelMetadata, upstreamEndpoint, direction string) bool {
+	_, ok := config.ModelConversionCapability(metadata, upstreamEndpoint, direction)
+	return ok
 }
 
 func conversionModesForModel(provider config.Provider, modelID string, metadata config.ModelMetadata) []string {
@@ -333,7 +333,7 @@ func conversionModesForModel(provider config.Provider, modelID string, metadata 
 	result := []string{}
 	for _, path := range config.ServiceableInboundPaths(provider) {
 		for _, transport := range config.ResolveProviderTransports(provider, path) {
-			if !conversionCapabilityAvailable(provider, modelID, metadata, transport.Mode) {
+			if !conversionCapabilityAvailable(metadata, transport.UpstreamEndpoint, transport.Mode) {
 				continue
 			}
 			if transport.Mode != config.ConversionDirectionResponsesToAnthropic && transport.Mode != config.ConversionDirectionAnthropicToResponses {

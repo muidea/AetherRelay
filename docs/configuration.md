@@ -16,7 +16,7 @@ state:
 
 model_metadata:
   gpt-5.5:
-    context_window_tokens: 1050000
+    context_window_tokens: 272000
     max_output_tokens: 128000
 ```
 
@@ -26,6 +26,23 @@ model_metadata:
 - `*`、`prefix-*` 等 pattern 只能参与匹配，不能枚举具体模型 ID；具体 ID 必须来自某个 enabled Provider 的精确 `models` 条目或账号池发现。
 - metadata 条目不会让模型进入 `/v1/models`，不会建立路由，也不要求当前存在匹配模型；模型以后被配置或发现时会自动获得对应 metadata。
 - `context_window_tokens` 与 `max_output_tokens` 都是可选元数据；省略或为 `0` 表示未知或不适用。两者都显式大于 `0` 时，`max_output_tokens` 必须小于 `context_window_tokens`。
+
+当前容量元数据：
+
+| Exact model ID | Context window | Max output |
+| --- | ---: | ---: |
+| `deepseek-v4-flash` / `DeepSeek-V4-Flash` | 1,000,000 | 29,000 |
+| `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 128,000 |
+| `gpt-5.4-mini` | 400,000 | 128,000 |
+| `gpt-5.4` | 1,050,000 | 128,000 |
+| `gpt-5.5` | 272,000 | 128,000 |
+| `gpt-5.3-codex-spark` / `gpt-5.3-codex` | 128,000 | 未声明 |
+| `codex-auto-review` | 1,050,000 | 128,000 |
+| `grok-4.5` | 500,000 | 未声明 |
+| `minimax-m3` | 1,050,000 | 131,100 |
+| `minimax-m2.7-highspeed` | 204,800 | 131,100 |
+
+表中 `/` 分隔的是大小写敏感的独立 exact ID，不是别名匹配规则。最大输出未声明时 `/v1/models` 省略 `maxOutputTokens`，应用不得自行推断。
 
 | 字段 | 层级 | 枚举 |
 | --- | --- | --- |
@@ -256,18 +273,28 @@ server:
 
 Admin usage API 的筛选参数、导出边界与响应格式以当前管理页、`internal/modules/application/adminapi/service/admin` 的合同测试和 DuckDB 查询实现为准。
 
-模型级 `model_metadata` 可声明 `reasoning_supported`、`reasoning_default_effort` 与 `reasoning_efforts`。`native_responses_tools` 和 `native_responses_images` 只描述模型原生 Responses 路径能力，不代表 Responses↔Anthropic 转换能力。转换器实现上限在 `conversion_capabilities` 下按方向声明；`level` 只能是 0–3，未声明等同 0，Level 1 必须有 `text: true`，`streaming` 需要 Level 2，`tools/images` 需要 Level 3。
+模型级 `model_metadata` 可声明 `reasoning_supported`、`reasoning_default_effort` 与 `reasoning_efforts`。`native_responses_tools` 和 `native_responses_images` 只描述模型原生 Responses 路径能力，不代表 Responses↔Anthropic 转换能力。转换能力以 `exact model + upstream endpoint` 为唯一配置键：`messages` 对应 Responses→Anthropic，`responses` 对应 Anthropic→Responses，不绑定 Provider。
 
-转换还必须通过具体 Provider 的发布门闩。管理型 Provider 可在管理页编辑 `conversion_releases`，结构为 `exact model -> direction -> {enabled, verified, evidence_id}`；静态 Provider 使用同名 YAML 字段。release 是可跨上游端点切换保留的方向化档案：只有 `enabled=true`、`verified=true`、模型被该 Provider 匹配、方向与当前 protocol/endpoints 相容，并且存在可实现的模型级 capability 时才会成为 active 并发布。切换管理型 Provider 的 protocol/endpoints 时，旧方向记录保持 dormant，当前兼容且模型已声明的缺失方向会自动追加为 `enabled=false, verified=false` 草稿；切回原端点后，原有兼容 release 可重新生效。未声明默认关闭；`verified=true, enabled=false` 可保留证据并用于灰度回滚。Provider 定义与 API key 由管理台加密保存在 DuckDB 时，发布门闩也随同一 Provider 记录持久化和热更新。
+endpoint 下只允许选择固定 profile：`level1`、`level2`、`level2_reasoning`、`level3`、`level3_reasoning`。模板自动展开 Level、text、streaming、tools 和方向匹配的 reasoning adapter，普通用户不能逐字段修改。`_reasoning` 模板使用模型的 `reasoning_default_effort`，因此要求该值已声明且包含在 `reasoning_efforts`。Provider 配置只保留模型、协议和原生 endpoints；切换 endpoint 后运行时自动重新匹配模板。
 
-跨协议 `reasoning/thinking` 只能显式降级开放，不能仅写 `reasoning: true`：必须同时声明方向匹配的 `reasoning_adapter` 和 `reasoning_target_effort`，且目标 effort 必须列在该模型的 `reasoning_efforts` 中。Responses→Anthropic 使用 `responses_to_anthropic_adaptive`：显式 `reasoning.effort=none` 映射为 `thinking.type=disabled`（不发送 `output_config`），其他 effort 生成 `thinking.type=adaptive` 与配置的 `output_config.effort`；Anthropic→Responses 使用 `anthropic_to_responses_effort`，生成配置的 `reasoning.effort`。客户端传入的具体 effort 或 manual `budget_tokens` 不会跨协议换算，Anthropic manual `thinking.type=enabled` 会拒绝。Anthropic 请求省略 `thinking` 时，若目标模型明确支持 `none`，转换器会显式设置 `reasoning.effort=none`，避免上游默认 reasoning 改变工具调用合同。DeepSeek Anthropic 接入在 thinking 开启时不接受指定 `tool_choice`；需要命名工具时，Responses 客户端必须显式传入 `reasoning.effort=none`。上游返回的 reasoning/thinking 块和 delta 只会被识别后省略，不会转成普通文本；归档和“最近调用明细”记录 `conversion_degraded=true` 及有限字段名。
+| Profile | Level | 非流式文本 | 文本 SSE | 非流式 function tools | Reasoning 降级适配 |
+| --- | ---: | --- | --- | --- | --- |
+| `level1` | 1 | 是 | 否 | 否 | 否 |
+| `level2` | 2 | 是 | 是 | 否 | 否 |
+| `level2_reasoning` | 2 | 是 | 是 | 否 | 是 |
+| `level3` | 3 | 是 | 是 | 是 | 否 |
+| `level3_reasoning` | 3 | 是 | 是 | 是 | 是 |
 
-当前转换实现覆盖纯文本非流式、纯文本 SSE，以及 Level 3 的 function tools 非流式请求/响应；图片、documents、JSON Schema/structured output、continuation 和流式工具事件仍会拒绝。只有模型实现声明与至少一个具体 Provider 发布门闩同时通过的 exact model 才会进入转换候选；`/v1/models` 会通过 `capabilities.reasoning`、`capabilities.native.responses` 和已验证的 `capabilities.conversions` 暴露能力，其中转换 reasoning 会标记 `reasoning_mode: "degrade"`，不代表无损保留。原生 Responses 请求中的 `reasoning.effort` 按模型枚举校验，未指定时使用默认值，不支持的值返回 400，不做静默降级。未声明能力的模型不会注入 `reasoning` 字段。
+所有现有 profile 的 images、documents、structured output、continuation 和流式 tools 均为不支持。`messages` endpoint 的 reasoning adapter 固定为 `responses_to_anthropic_adaptive`，`responses` endpoint 固定为 `anthropic_to_responses_effort`；二者的目标 effort 都取模型 `reasoning_default_effort`。不得通过 profile 名推断表中未列出的能力。
 
-当前 `grok-4.5` 的双向 Level 3 release 已分别在 Krill Anthropic Messages 与 OpenAI Responses transport 上验证；Provider 切换后仍只激活与当前 protocol/endpoints 相容的方向。其 hosted web search 未形成可验证工具事件，不属于 `native_responses_tools` 或转换 tools 的发布范围。
+跨协议 `reasoning/thinking` 只能通过 `_reasoning` 固定模板降级开放。模板按 endpoint 自动选择 adapter：Responses→Anthropic 使用 `responses_to_anthropic_adaptive`，Anthropic→Responses 使用 `anthropic_to_responses_effort`，目标 effort 固定为模型默认值。客户端传入的具体 effort 或 manual `budget_tokens` 不会跨协议换算，Anthropic manual `thinking.type=enabled` 会拒绝。上游返回的 reasoning/thinking 块和 delta 只会被识别后省略，不会转成普通文本；归档和“最近调用明细”记录降级状态。
 
-当前 `gpt-5.6-luna` 同样完成 Krill 双向 Level 3 验证。模型元数据按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.6-luna) 发布 `1,050,000` context window 和 `128,000` max output tokens。Luna 的 Responses output item 私有 metadata 会被有界省略并标记降级，不属于可转换内容。
+当前转换实现覆盖纯文本非流式、纯文本 SSE，以及 Level 3 的 function tools 非流式请求/响应；图片、documents、JSON Schema/structured output、continuation 和流式工具事件仍会拒绝。只有 exact model 存在与候选当前 upstream endpoint 匹配的固定模板时才会进入转换候选；`/v1/models` 会发布最终有效能力，其中转换 reasoning 标记 `reasoning_mode: "degrade"`。
 
-`gpt-5.5` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.5) 发布 `1,050,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `medium`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools、tool result 闭环及全部五档 reasoning；不据此开放跨协议转换或图片能力。
+当前 `grok-4.5` 的 `messages` 与 `responses` endpoint 均使用 `level3_reasoning` 模板；任意 Provider 只有在提供对应模型和 endpoint 时才激活相应方向。其 hosted web search 不属于转换 tools 的发布范围。
+
+当前 `gpt-5.6-luna` 同样完成双向 Level 3 验证。模型元数据发布 `272,000` context window 和 `128,000` max output tokens。Luna 的 Responses output item 私有 metadata 会被有界省略并标记降级，不属于可转换内容。
+
+`gpt-5.5` 发布 `272,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `medium`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools、tool result 闭环及全部五档 reasoning；不据此开放跨协议转换或图片能力。
 
 `gpt-5.4-mini` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 发布 `400,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `none`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools 与 tool result 闭环，不据此开放跨协议转换。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理会在上游调用前明确拒绝；目录中的 `maxOutputTokens` 仅表示模型输出能力上限。

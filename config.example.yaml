@@ -110,53 +110,46 @@ codex_oauth:
 # 直连 Provider 通过管理台创建；定义与 API Key 使用 AI_PROXY_CREDENTIAL_KEY
 # 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth
 # 是账号池注入的内建 Provider，模型来自账号池发现结果。
-# Responses↔Anthropic 转换除 model_metadata 实现声明外，还必须在对应管理型
-# Provider 的 conversion_releases 中按 exact model/direction 设置 enabled=true、
-# verified=true；该发布门闩可在 Provider 编辑页维护，未声明默认关闭。
+# Responses↔Anthropic 转换只按 exact model 与候选当前上游 endpoint 匹配固定
+# profile，不绑定 Provider。messages 对应 Responses→Anthropic，responses 对应
+# Anthropic→Responses；未声明 endpoint profile 时默认不开放该方向。
 
 # 可选模型元数据目录（所有 Provider 共用）。model ID 严格区分大小写（exact match）。
 # enabled provider 的精确 models 与账号池发现结果决定模型是否存在；
 # metadata 只按 exact ID 补充容量，不发布模型、不创建路由，也允许暂时未被使用。
+# 固定转换 profile：level1=text；level2=level1+文本 SSE；level3=level2+非流式
+# function tools；level2_reasoning/level3_reasoning 在对应等级上增加 reasoning 降级适配。
+# 所有现有 profile 均不开放图片、文档、结构化输出、continuation 或流式 tools。
 model_metadata:
   # 同一份 metadata 会覆盖所有同 ID 的管理型与内建候选。
   DeepSeek-V4-Flash:
     context_window_tokens: 1000000
-    max_output_tokens: 65536
-    reasoning_supported: true
-    reasoning_default_effort: low
-    reasoning_efforts: [none, low, high, max]
-    native_responses_tools: true
-    native_responses_images: false
-  deepseek-v4-flash:
-    context_window_tokens: 1000000
-    max_output_tokens: 65536
+    max_output_tokens: 29000
     reasoning_supported: true
     reasoning_default_effort: low
     reasoning_efforts: [none, low, high, max]
     native_responses_tools: true
     native_responses_images: false
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 3
-        text: true
-        tools: true
-        images: false
-        streaming: true
-        reasoning: true
-        reasoning_adapter: responses_to_anthropic_adaptive
-        reasoning_target_effort: low
-      anthropic_to_responses:
-        level: 3
-        text: true
-        tools: true
-        images: false
-        streaming: true
-        reasoning: true
-        reasoning_adapter: anthropic_to_responses_effort
-        reasoning_target_effort: low
+      messages:
+        profile: level3_reasoning
+      responses:
+        profile: level3_reasoning
+  deepseek-v4-flash:
+    context_window_tokens: 1000000
+    max_output_tokens: 29000
+    reasoning_supported: true
+    reasoning_default_effort: low
+    reasoning_efforts: [none, low, high, max]
+    native_responses_tools: true
+    native_responses_images: false
+    conversion_capabilities:
+      messages:
+        profile: level3_reasoning
+      responses:
+        profile: level3_reasoning
   gpt-5.5:
-    # OpenAI's model page publishes a 1,050,000-token context window.
-    context_window_tokens: 1050000
+    context_window_tokens: 272000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
@@ -172,8 +165,7 @@ model_metadata:
     native_responses_tools: true
     native_responses_images: false
   gpt-5.6-luna:
-    # OpenAI's model page publishes a 1,050,000-token context window.
-    context_window_tokens: 1050000
+    context_window_tokens: 272000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
@@ -181,66 +173,44 @@ model_metadata:
     native_responses_tools: true
     native_responses_images: false
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 3
-        text: true
-        tools: true
-        images: false
-        streaming: true
-        reasoning: true
-        reasoning_adapter: responses_to_anthropic_adaptive
-        reasoning_target_effort: medium
-      anthropic_to_responses:
-        level: 3
-        text: true
-        tools: true
-        images: false
-        streaming: true
-        reasoning: true
-        reasoning_adapter: anthropic_to_responses_effort
-        reasoning_target_effort: medium
+      messages:
+        profile: level3_reasoning
+      responses:
+        profile: level3_reasoning
   gpt-5.6-sol:
-    context_window_tokens: 1000000
+    context_window_tokens: 272000
     max_output_tokens: 128000
   gpt-5.6-terra:
-    context_window_tokens: 1000000
+    context_window_tokens: 272000
     max_output_tokens: 128000
-  MiniMax-M3:
-    context_window_tokens: 1000000
-    max_output_tokens: 32768
+  gpt-5.4:
+    context_window_tokens: 1050000
+    max_output_tokens: 128000
+  gpt-5.3-codex-spark:
+    context_window_tokens: 128000
   gpt-5.3-codex:
-    context_window_tokens: 400000
+    context_window_tokens: 128000
+  codex-auto-review:
+    context_window_tokens: 1050000
     max_output_tokens: 128000
   grok-4.5:
     context_window_tokens: 500000
-    max_output_tokens: 16384
     reasoning_supported: true
     reasoning_default_effort: low
     reasoning_efforts: [none, low, high, max]
     native_responses_tools: true
     native_responses_images: false
     conversion_capabilities:
-      responses_to_anthropic:
-        level: 3
-        text: true
-        tools: true
-        images: false
-        streaming: true
-        reasoning: true
-        reasoning_adapter: responses_to_anthropic_adaptive
-        reasoning_target_effort: low
-      anthropic_to_responses:
-        level: 3
-        text: true
-        tools: true
-        images: false
-        streaming: true
-        reasoning: true
-        reasoning_adapter: anthropic_to_responses_effort
-        reasoning_target_effort: low
-  MiniMax-M2.7-highspeed:
+      messages:
+        profile: level3_reasoning
+      responses:
+        profile: level3_reasoning
+  minimax-m3:
+    context_window_tokens: 1050000
+    max_output_tokens: 131100
+  minimax-m2.7-highspeed:
     context_window_tokens: 204800
-    max_output_tokens: 32768
+    max_output_tokens: 131100
 # 同名静态与自动模型会共同构成候选链：静态默认 priority=100，
 # Codex OAuth 固定为 90（可用于原生 /v1/responses 回退），
 # ChatGPT Web 固定为 10 且默认不作为回退。

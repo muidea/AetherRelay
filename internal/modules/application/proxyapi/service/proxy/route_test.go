@@ -36,16 +36,14 @@ func testRouteConfig() config.Config {
 			"openai-responses-only": {
 				Name: "openai-responses-only", Protocol: "openai", BaseURL: "https://responses.test/v1", APIKey: "k",
 				Models: []string{"responses-only-model"}, Endpoints: []string{config.ProviderEndpointResponses},
-				ConversionReleases: releasedConversions("responses-only-model", TransportModeAnthropicToResponses),
 			},
 			"anthropic": {
-				Name:               "anthropic",
-				Protocol:           "anthropic",
-				BaseURL:            "https://anthropic.test",
-				APIKey:             "k",
-				Models:             []string{"claude-*", "claude-test", "claude-level2", "claude-level3", "claude-tools"},
-				Endpoints:          []string{config.ProviderEndpointMessages},
-				ConversionReleases: releasedConversions("claude-test", TransportModeResponsesToAnthropic, "claude-level2", TransportModeResponsesToAnthropic, "claude-level3", TransportModeResponsesToAnthropic, "claude-tools", TransportModeResponsesToAnthropic),
+				Name:      "anthropic",
+				Protocol:  "anthropic",
+				BaseURL:   "https://anthropic.test",
+				APIKey:    "k",
+				Models:    []string{"claude-*", "claude-test", "claude-level2", "claude-level3", "claude-tools"},
+				Endpoints: []string{config.ProviderEndpointMessages},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
@@ -60,33 +58,23 @@ func testRouteConfig() config.Config {
 			},
 			"responses-only-model": {
 				ID: "responses-only-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
-				ConversionCapabilities: map[string]config.ConversionCapability{"anthropic_to_responses": {Level: 1, Text: true}},
+				ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 1, Text: true}},
 			},
 			"claude-test": {
 				ID: "claude-test", ContextWindowTokens: 200000, MaxOutputTokens: 8192,
-				ConversionCapabilities: map[string]config.ConversionCapability{"responses_to_anthropic": {Level: 1, Text: true}},
+				ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 1, Text: true}},
 			},
 			"claude-level2": {
-				ID: "claude-level2", ConversionCapabilities: map[string]config.ConversionCapability{"responses_to_anthropic": {Level: 2, Text: true, Streaming: true}},
+				ID: "claude-level2", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 2, Text: true, Streaming: true}},
 			},
 			"claude-level3": {
-				ID: "claude-level3", ConversionCapabilities: map[string]config.ConversionCapability{"responses_to_anthropic": {Level: 3, Text: true, Tools: true, Images: true}},
+				ID: "claude-level3", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true, Images: true}},
 			},
 			"claude-tools": {
-				ID: "claude-tools", ConversionCapabilities: map[string]config.ConversionCapability{"responses_to_anthropic": {Level: 3, Text: true, Tools: true, Streaming: true}},
+				ID: "claude-tools", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true, Streaming: true}},
 			},
 		},
 	}
-}
-
-func releasedConversions(pairs ...string) map[string]map[string]config.ProviderConversionRelease {
-	result := map[string]map[string]config.ProviderConversionRelease{}
-	for index := 0; index+1 < len(pairs); index += 2 {
-		result[pairs[index]] = map[string]config.ProviderConversionRelease{
-			pairs[index+1]: {Enabled: true, Verified: true, EvidenceID: "test"},
-		}
-	}
-	return result
 }
 
 func TestResolveTransportPlanMatrix(t *testing.T) {
@@ -167,7 +155,7 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 		},
 		{
 			name: "level 3 with unsupported images remains closed",
-			path: "/v1/responses", model: "claude-level3", wantCode: ErrorCodeConversionUnsupported,
+			path: "/v1/responses", model: "claude-level3", wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
 			name: "level 3 function tools conversion",
@@ -357,10 +345,10 @@ func TestValidateConversionRequestRejectsFeatures(t *testing.T) {
 
 func TestResolveTransportPlansCarriesConversionLevel(t *testing.T) {
 	cfg := config.Config{Providers: map[string]config.Provider{
-		"anthropic": {Name: "anthropic", Protocol: "anthropic", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: releasedConversions("claude-test", TransportModeResponsesToAnthropic)},
+		"anthropic": {Name: "anthropic", Protocol: "anthropic", Models: []string{"claude-test"}, Endpoints: []string{config.ProviderEndpointMessages}},
 	}, ModelMetadata: map[string]config.ModelMetadata{
 		"claude-test": {ID: "claude-test", ConversionCapabilities: map[string]config.ConversionCapability{
-			TransportModeResponsesToAnthropic: {Level: 3, Text: true, Tools: true},
+			config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true},
 		}},
 	}}
 	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/responses", "claude-test")
@@ -375,12 +363,12 @@ func TestResolveTransportPlansCarriesConversionLevel(t *testing.T) {
 func TestResolveTransportPlansPrefersNativeResponsesOverHigherPriorityConversion(t *testing.T) {
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"conversion": {Name: "conversion", Protocol: "anthropic", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointMessages}, Priority: 200, Fallback: true, ConversionReleases: releasedConversions("shared-model", TransportModeResponsesToAnthropic)},
+			"conversion": {Name: "conversion", Protocol: "anthropic", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointMessages}, Priority: 200, Fallback: true},
 			"native":     {Name: "native", Protocol: "openai", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointResponses}, Priority: 100, Fallback: true},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"shared-model": {ID: "shared-model", ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeResponsesToAnthropic: {Level: 2, Text: true, Streaming: true},
+				config.ProviderEndpointMessages: {Level: 2, Text: true, Streaming: true},
 			}},
 		},
 	}
@@ -399,13 +387,12 @@ func TestResolveTransportPlansExposesResponsesConversionBeforeLegacyChatForFullO
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", Models: []string{modelID},
-				Endpoints:          []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
-				ConversionReleases: releasedConversions(modelID, TransportModeAnthropicToResponses),
+				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeAnthropicToResponses: {Level: 3, Text: true, Tools: true, Streaming: true},
+				config.ProviderEndpointResponses: {Level: 3, Text: true, Tools: true, Streaming: true},
 			}},
 		},
 	}
@@ -421,7 +408,7 @@ func TestResolveTransportPlansExposesResponsesConversionBeforeLegacyChatForFullO
 	}
 }
 
-func TestResolveTransportPlansRequiresConcreteProviderRelease(t *testing.T) {
+func TestResolveTransportPlansRequiresMatchingEndpointTemplate(t *testing.T) {
 	const modelID = "claude-unreleased"
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
@@ -429,34 +416,31 @@ func TestResolveTransportPlansRequiresConcreteProviderRelease(t *testing.T) {
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeResponsesToAnthropic: {Level: 2, Text: true, Streaming: true},
+				config.ProviderEndpointResponses: {Level: 2, Text: true, Streaming: true},
 			}},
 		},
 	}
 	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/responses", modelID)
-	if len(plans) != 0 || apiErr == nil || apiErr.Code != ErrorCodeConversionUnsupported {
+	if len(plans) != 0 || apiErr == nil || apiErr.Code != ErrorCodeEndpointUnsupported {
 		t.Fatalf("plans=%+v err=%+v", plans, apiErr)
-	}
-	if !strings.Contains(apiErr.Message, "not released") {
-		t.Fatalf("message = %q", apiErr.Message)
 	}
 }
 
-func TestResolveTransportPlansProviderReleaseDoesNotLeakAcrossProviders(t *testing.T) {
+func TestResolveTransportPlansTemplateAppliesAcrossProviders(t *testing.T) {
 	const modelID = "claude-shared-release"
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"released": {Name: "released", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}, ConversionReleases: releasedConversions(modelID, TransportModeResponsesToAnthropic)},
-			"closed":   {Name: "closed", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}},
+			"first":  {Name: "first", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}},
+			"second": {Name: "second", Protocol: "anthropic", Models: []string{modelID}, Endpoints: []string{config.ProviderEndpointMessages}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{
-				TransportModeResponsesToAnthropic: {Level: 3, Text: true, Tools: true, Streaming: true},
+				config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true, Streaming: true},
 			}},
 		},
 	}
 	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/responses", modelID)
-	if apiErr != nil || len(plans) != 1 || plans[0].RouteOwner != "released" {
+	if apiErr != nil || len(plans) != 2 {
 		t.Fatalf("plans=%+v err=%+v", plans, apiErr)
 	}
 }

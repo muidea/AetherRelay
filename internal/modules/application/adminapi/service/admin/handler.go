@@ -130,18 +130,17 @@ type Handler struct {
 }
 
 type providerView struct {
-	Name                 string                                                 `json:"name"`
-	Protocol             string                                                 `json:"protocol"`
-	BaseURL              string                                                 `json:"base_url"`
-	Models               []string                                               `json:"models"`
-	Endpoints            []string                                               `json:"endpoints"`
-	AllowUnauthenticated bool                                                   `json:"allow_unauthenticated"`
-	Priority             int                                                    `json:"priority"`
-	Fallback             bool                                                   `json:"fallback"`
-	ConversionReleases   map[string]map[string]config.ProviderConversionRelease `json:"conversion_releases,omitempty"`
-	Enabled              bool                                                   `json:"enabled"`
-	APIKeyConfigured     bool                                                   `json:"api_key_configured"`
-	Availability         providerAvailability                                   `json:"availability"`
+	Name                 string               `json:"name"`
+	Protocol             string               `json:"protocol"`
+	BaseURL              string               `json:"base_url"`
+	Models               []string             `json:"models"`
+	Endpoints            []string             `json:"endpoints"`
+	AllowUnauthenticated bool                 `json:"allow_unauthenticated"`
+	Priority             int                  `json:"priority"`
+	Fallback             bool                 `json:"fallback"`
+	Enabled              bool                 `json:"enabled"`
+	APIKeyConfigured     bool                 `json:"api_key_configured"`
+	Availability         providerAvailability `json:"availability"`
 	// Source is a display-only classification derived from builtin + base_url
 	// (builtin / official / third_party). It is never read from or written to YAML.
 	Source string `json:"source"`
@@ -178,35 +177,33 @@ type providerAvailability struct {
 }
 
 type providerInput struct {
-	Name                 string                                                 `json:"name"`
-	Protocol             string                                                 `json:"protocol"`
-	BaseURL              string                                                 `json:"base_url"`
-	APIKey               string                                                 `json:"api_key"`
-	ClearAPIKey          bool                                                   `json:"clear_api_key"`
-	Models               []string                                               `json:"models"`
-	Endpoints            []string                                               `json:"endpoints"`
-	AllowUnauthenticated bool                                                   `json:"allow_unauthenticated"`
-	Priority             *int                                                   `json:"priority"`
-	Fallback             *bool                                                  `json:"fallback"`
-	ConversionReleases   map[string]map[string]config.ProviderConversionRelease `json:"conversion_releases"`
-	Enabled              bool                                                   `json:"enabled"`
+	Name                 string   `json:"name"`
+	Protocol             string   `json:"protocol"`
+	BaseURL              string   `json:"base_url"`
+	APIKey               string   `json:"api_key"`
+	ClearAPIKey          bool     `json:"clear_api_key"`
+	Models               []string `json:"models"`
+	Endpoints            []string `json:"endpoints"`
+	AllowUnauthenticated bool     `json:"allow_unauthenticated"`
+	Priority             *int     `json:"priority"`
+	Fallback             *bool    `json:"fallback"`
+	Enabled              bool     `json:"enabled"`
 }
 
 // providerPatchInput uses pointers so a single Provider update can distinguish
 // an omitted field from an explicit zero value. Provider names are immutable
 // and are taken exclusively from the request path.
 type providerPatchInput struct {
-	Protocol             *string                                                 `json:"protocol"`
-	BaseURL              *string                                                 `json:"base_url"`
-	APIKey               *string                                                 `json:"api_key"`
-	ClearAPIKey          *bool                                                   `json:"clear_api_key"`
-	Models               *[]string                                               `json:"models"`
-	Endpoints            *[]string                                               `json:"endpoints"`
-	AllowUnauthenticated *bool                                                   `json:"allow_unauthenticated"`
-	Priority             *int                                                    `json:"priority"`
-	Fallback             *bool                                                   `json:"fallback"`
-	ConversionReleases   *map[string]map[string]config.ProviderConversionRelease `json:"conversion_releases"`
-	Enabled              *bool                                                   `json:"enabled"`
+	Protocol             *string   `json:"protocol"`
+	BaseURL              *string   `json:"base_url"`
+	APIKey               *string   `json:"api_key"`
+	ClearAPIKey          *bool     `json:"clear_api_key"`
+	Models               *[]string `json:"models"`
+	Endpoints            *[]string `json:"endpoints"`
+	AllowUnauthenticated *bool     `json:"allow_unauthenticated"`
+	Priority             *int      `json:"priority"`
+	Fallback             *bool     `json:"fallback"`
+	Enabled              *bool     `json:"enabled"`
 }
 
 func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
@@ -818,7 +815,6 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 			AllowUnauthenticated: provider.AllowUnauthenticated,
 			Priority:             config.EffectiveProviderPriority(provider),
 			Fallback:             config.EffectiveProviderFallback(provider),
-			ConversionReleases:   cloneProviderConversionReleases(provider.ConversionReleases),
 			Enabled:              !provider.Disabled,
 			APIKeyConfigured:     strings.TrimSpace(provider.APIKey) != "",
 			Availability:         health[name],
@@ -1155,9 +1151,6 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request, rel stri
 	}
 	applyProviderPatch(&provider, input)
 	provider.Name = name
-	if input.Protocol != nil || input.Endpoints != nil {
-		provider = config.ReconcileProviderConversionReleases(current, provider)
-	}
 	next := make(map[string]config.Provider, len(current.Providers))
 	for id, item := range current.Providers {
 		next[id] = item
@@ -1215,7 +1208,7 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, rel string) {
 }
 
 func providerPatchEmpty(input providerPatchInput) bool {
-	return input.Protocol == nil && input.BaseURL == nil && input.APIKey == nil && input.ClearAPIKey == nil && input.Models == nil && input.Endpoints == nil && input.AllowUnauthenticated == nil && input.Priority == nil && input.Fallback == nil && input.ConversionReleases == nil && input.Enabled == nil
+	return input.Protocol == nil && input.BaseURL == nil && input.APIKey == nil && input.ClearAPIKey == nil && input.Models == nil && input.Endpoints == nil && input.AllowUnauthenticated == nil && input.Priority == nil && input.Fallback == nil && input.Enabled == nil
 }
 
 func applyProviderPatch(provider *config.Provider, input providerPatchInput) {
@@ -1239,9 +1232,6 @@ func applyProviderPatch(provider *config.Provider, input providerPatchInput) {
 	}
 	if input.AllowUnauthenticated != nil {
 		provider.AllowUnauthenticated = *input.AllowUnauthenticated
-	}
-	if input.ConversionReleases != nil {
-		provider.ConversionReleases = cloneProviderConversionReleases(*input.ConversionReleases)
 	}
 	priority := config.EffectiveProviderPriority(*provider)
 	if input.Priority != nil {
@@ -1279,26 +1269,11 @@ func buildManagedProviders(inputs []providerInput, existing map[string]config.Pr
 		if input.Fallback != nil {
 			fallback = *input.Fallback
 		}
-		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)), BaseURL: strings.TrimSpace(input.BaseURL), APIKey: apiKey, Models: append([]string(nil), input.Models...), Endpoints: append([]string(nil), input.Endpoints...), AllowUnauthenticated: input.AllowUnauthenticated, ConversionReleases: cloneProviderConversionReleases(input.ConversionReleases), Disabled: !input.Enabled}
+		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)), BaseURL: strings.TrimSpace(input.BaseURL), APIKey: apiKey, Models: append([]string(nil), input.Models...), Endpoints: append([]string(nil), input.Endpoints...), AllowUnauthenticated: input.AllowUnauthenticated, Disabled: !input.Enabled}
 		config.ConfigureProviderPolicy(&provider, priority, fallback)
 		providers[name] = provider
 	}
 	return providers, nil
-}
-
-func cloneProviderConversionReleases(input map[string]map[string]config.ProviderConversionRelease) map[string]map[string]config.ProviderConversionRelease {
-	if input == nil {
-		return nil
-	}
-	result := make(map[string]map[string]config.ProviderConversionRelease, len(input))
-	for modelID, directions := range input {
-		copied := make(map[string]config.ProviderConversionRelease, len(directions))
-		for direction, release := range directions {
-			copied[direction] = release
-		}
-		result[modelID] = copied
-	}
-	return result
 }
 
 func documentRoot(document *yaml.Node) (*yaml.Node, error) {
