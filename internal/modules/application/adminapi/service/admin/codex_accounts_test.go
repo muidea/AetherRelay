@@ -20,12 +20,14 @@ type codexAccountRuntimeStub struct {
 	usageStarted [][]string
 	exportedIDs  []string
 	exported     []codexevents.CredentialInput
+	imported     []codexevents.CredentialInput
 }
 
 func (s *codexAccountRuntimeStub) ListCodexAccounts(context.Context) ([]codexevents.AccountView, error) {
 	return nil, nil
 }
-func (s *codexAccountRuntimeStub) ImportCodexAccounts(context.Context, []codexevents.CredentialInput) (admincodex.ImportResult, error) {
+func (s *codexAccountRuntimeStub) ImportCodexAccounts(_ context.Context, accounts []codexevents.CredentialInput) (admincodex.ImportResult, error) {
+	s.imported = append([]codexevents.CredentialInput(nil), accounts...)
 	return admincodex.ImportResult{Added: 1, ModelDiscovery: &proxyevents.CodexDiscoveryProgress{ProgressID: "discovery-1", StartedAt: "2026-08-03T12:00:00Z"}, UsageRefresh: &proxyevents.CodexUsageProgress{ProgressID: "usage-1", StartedAt: "2026-08-03T12:00:00Z"}}, nil
 }
 func (s *codexAccountRuntimeStub) DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error) {
@@ -45,20 +47,15 @@ func (s *codexAccountRuntimeStub) StartCodexOAuth(context.Context, string, strin
 	return codexevents.OAuthStartResult{}, nil
 }
 
-func TestCodexAccountExportIsNoStoreAndImportable(t *testing.T) {
-	runtime := &codexAccountRuntimeStub{exported: []codexevents.CredentialInput{{AccessToken: "access-secret", RefreshToken: "refresh-secret", IDToken: "id-secret", AccountID: "account-header", Proxy: "http://127.0.0.1:8080"}}}
-	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+func TestCodexAccountSlotExportEndpointRemoved(t *testing.T) {
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(&codexAccountRuntimeStub{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/export", strings.NewReader(`{"ids":["account-1"]}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Header().Get("Content-Disposition"), "codex-oauth-accounts.json") {
-		t.Fatalf("export status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
-	}
-	var items []codexevents.CredentialInput
-	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil || len(items) != 1 || items[0].RefreshToken != "refresh-secret" || !reflect.DeepEqual(runtime.exportedIDs, []string{"account-1"}) {
-		t.Fatalf("export body=%s ids=%v items=%+v err=%v", rec.Body.String(), runtime.exportedIDs, items, err)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("slot export status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 func (s *codexAccountRuntimeStub) FinishCodexOAuth(context.Context, string, string) (admincodex.OAuthFinishResult, error) {

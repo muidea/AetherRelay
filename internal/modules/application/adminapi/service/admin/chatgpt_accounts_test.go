@@ -345,44 +345,15 @@ func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
 	}
 }
 
-func TestChatGPTAccountExportIsNoStoreAndImportable(t *testing.T) {
-	runtime := &chatGPTAccountRuntimeStub{exportedItems: []accevents.ExportItem{{
-		CredentialType: "chatgpt_web",
-		Type:           "codex", Email: "export@example.invalid", AccountID: "account-export",
-		AccessToken: "access-export", RefreshToken: "refresh-export", IDToken: "id-export",
-	}}}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+func TestChatGPTAccountSlotExportEndpointRemoved(t *testing.T) {
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(&chatGPTAccountRuntimeStub{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/export", strings.NewReader(`{"ids":["account-export"]}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AI-Proxy-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Header().Get("Content-Disposition"), "chatgpt-web-accounts.json") || len(runtime.exportedIDs) != 1 || runtime.exportedIDs[0] != "account-export" {
-		t.Fatalf("export status=%d headers=%v ids=%v body=%s", rec.Code, rec.Header(), runtime.exportedIDs, rec.Body.String())
-	}
-	var items []accevents.ExportItem
-	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil || len(items) != 1 || items[0].AccessToken != "access-export" || strings.Contains(rec.Body.String(), `"items"`) {
-		t.Fatalf("export payload=%s err=%v items=%+v", rec.Body.String(), err, items)
-	}
-
-	// The HTTP import contract uses an accounts wrapper, matching Codex.
-	importReq := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(`{"accounts":`+strings.TrimSpace(rec.Body.String())+`}`))
-	importReq.RemoteAddr = "127.0.0.1:1234"
-	importReq.Header.Set("X-AI-Proxy-Admin", "1")
-	importRec := httptest.NewRecorder()
-	handler.ServeHTTP(importRec, importReq)
-	if importRec.Code != http.StatusCreated || len(runtime.addedAccounts) != 1 || runtime.addedAccounts[0].RefreshToken != "refresh-export" || runtime.addedAccounts[0].IDToken != "id-export" {
-		t.Fatalf("import status=%d accounts=%+v body=%s", importRec.Code, runtime.addedAccounts, importRec.Body.String())
-	}
-
-	emptyHandler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(&chatGPTAccountRuntimeStub{})
-	emptyReq := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/export", strings.NewReader(`{"ids":["account-empty"]}`))
-	emptyReq.RemoteAddr = "127.0.0.1:1234"
-	emptyReq.Header.Set("X-AI-Proxy-Admin", "1")
-	emptyRec := httptest.NewRecorder()
-	emptyHandler.ServeHTTP(emptyRec, emptyReq)
-	if emptyRec.Code != http.StatusBadRequest || !strings.Contains(emptyRec.Body.String(), "no complete accounts") {
-		t.Fatalf("empty export status=%d body=%s", emptyRec.Code, emptyRec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("slot export status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

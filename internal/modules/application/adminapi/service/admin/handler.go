@@ -366,6 +366,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.createClientAPIKey(w, r)
 	case strings.HasPrefix(rel, "/api/client-api-keys/"):
 		h.clientAPIKeyAction(w, r, rel)
+	case rel == "/api/account-pool-bundle/export" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.exportAccountPoolBundle(w, r)
+		}
+	case rel == "/api/account-pool-bundle/import" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.importAccountPoolBundle(w, r)
+		}
 	case strings.HasPrefix(rel, "/api/usage/"):
 		h.usageAPI(w, r, rel)
 	case rel == "/api/codex/accounts" && r.Method == http.MethodGet:
@@ -385,10 +393,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case rel == "/api/codex/accounts/refresh" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
 			h.refreshCodexAccounts(w, r)
-		}
-	case rel == "/api/codex/accounts/export" && r.Method == http.MethodPost:
-		if h.requireAdminMutation(w, r) {
-			h.exportCodexAccounts(w, r)
 		}
 	case rel == "/api/codex/accounts/discovery" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {
@@ -423,10 +427,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(rel, "/api/chatgpt/accounts/") && r.Method == http.MethodPatch:
 		if h.requireAdminMutation(w, r) {
 			h.updateChatGPTAccount(w, r, rel)
-		}
-	case rel == "/api/chatgpt/accounts/export" && r.Method == http.MethodPost:
-		if h.requireAdminMutation(w, r) {
-			h.exportChatGPTAccounts(w, r)
 		}
 	case rel == "/api/chatgpt/accounts/refresh" && r.Method == http.MethodPost:
 		if h.requireAdminMutation(w, r) {

@@ -551,6 +551,8 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 Admin 系统信息中的“开放 API 端点”是实例级路由清单，不代表每个模型都支持该路径。普通业务应用只应依赖数据面的 `/v1/models`；Admin API 需要管理面认证，不应暴露给业务客户端。
 
+账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `ai-proxy.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`。同一账号的跨槽位归组优先使用规范化邮箱，不能使用不同上游 `account_id` 直接强行合并。
+
 ## 11. 推荐启动流程
 
 ```text
