@@ -175,6 +175,8 @@ curl -sS http://127.0.0.1:8080/v1/models \
      且 stream == false
 ```
 
+Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。若目标模型的 `reasoning_efforts` 明确包含 `none`，代理会显式发送 `reasoning.effort=none`，避免目标模型的默认 reasoning 模式改变工具选择语义；显式 `thinking.type=adaptive` 仍按 capability 中固定的目标 effort 降级映射。
+
 对于只实现 OpenAI Chat Completions 的旧应用，仅选择 `supported_endpoints` 包含 `/v1/chat/completions` 的模型。不要把 Provider 配置中的 `responses`、`messages` 等名称拼成 URL。
 
 ## 4. OpenAI Responses 集成

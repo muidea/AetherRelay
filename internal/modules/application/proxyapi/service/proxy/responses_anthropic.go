@@ -465,8 +465,14 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 		typ, _ := item["type"].(string)
 		switch typ {
 		case "message":
-			if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "role": {}, "status": {}, "content": {}}); err != nil {
+			if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "role": {}, "status": {}, "content": {}, "phase": {}}); err != nil {
 				return nil, tokenUsage{}, nil, fmt.Errorf("output.message.%w", err)
+			}
+			if phase, exists := item["phase"]; exists {
+				value, ok := phase.(string)
+				if !ok || value != "final_answer" {
+					return nil, tokenUsage{}, nil, fmt.Errorf("output.message.phase")
+				}
 			}
 			blocks, ok := item["content"].([]any)
 			if !ok {
@@ -481,11 +487,14 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 				if blockType != "output_text" {
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.%s", blockType)
 				}
-				if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "text": {}, "annotations": {}}); err != nil {
+				if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "text": {}, "annotations": {}, "logprobs": {}}); err != nil {
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.%w", err)
 				}
 				if hasNonEmptyConversionFeature(block["annotations"]) {
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.annotations")
+				}
+				if hasNonEmptyConversionFeature(block["logprobs"]) {
+					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.logprobs")
 				}
 				text, ok := block["text"].(string)
 				if !ok {
@@ -1043,6 +1052,34 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 	return encoded, ignored, err
 }
 
+// disableResponsesReasoningForOmittedAnthropicThinking preserves the source
+// protocol's opt-in thinking semantics when a Responses model defaults to
+// reasoning. It is applied only when the exact model explicitly supports none.
+func disableResponsesReasoningForOmittedAnthropicThinking(source map[string]any, encoded []byte, metadata config.ModelMetadata) ([]byte, error) {
+	if _, present := source["thinking"]; present || !metadata.ReasoningDeclared || !metadata.ReasoningSupported {
+		return encoded, nil
+	}
+	supportsNone := false
+	for _, effort := range metadata.ReasoningEfforts {
+		if strings.EqualFold(strings.TrimSpace(effort), "none") {
+			supportsNone = true
+			break
+		}
+	}
+	if !supportsNone {
+		return encoded, nil
+	}
+	var target map[string]any
+	if err := json.Unmarshal(encoded, &target); err != nil {
+		return nil, err
+	}
+	if _, present := target["reasoning"]; present {
+		return encoded, nil
+	}
+	target["reasoning"] = map[string]any{"effort": "none"}
+	return json.Marshal(target)
+}
+
 func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thinkingPresent bool, rawOutputConfig any, outputConfigPresent bool, capability config.ConversionCapability) ([]string, error) {
 	if !thinkingPresent {
 		if outputConfigPresent {
@@ -1160,7 +1197,24 @@ func anthropicToolChoiceToResponses(raw any) (any, error) {
 	}
 	name, _ := obj["name"].(string)
 	choiceType, _ := obj["type"].(string)
-	if choiceType != "" && choiceType != "tool" {
+	switch choiceType {
+	case "auto":
+		if name != "" {
+			return nil, fmt.Errorf("tool_choice.name")
+		}
+		return "auto", nil
+	case "any":
+		if name != "" {
+			return nil, fmt.Errorf("tool_choice.name")
+		}
+		return "required", nil
+	case "none":
+		if name != "" {
+			return nil, fmt.Errorf("tool_choice.name")
+		}
+		return "none", nil
+	case "tool", "":
+	default:
 		return nil, fmt.Errorf("tool_choice.type")
 	}
 	if name == "" {
@@ -1747,7 +1801,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			return nil, fmt.Errorf("response.output_text.delta")
 		}
 		out = append(out, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
-	case "response.reasoning.delta", "response.reasoning.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
+	case "response.reasoning.delta", "response.reasoning.done", "response.reasoning_text.delta", "response.reasoning_text.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
 		if !capability.Reasoning {
 			return nil, fmt.Errorf("responses stream event %q", typ)
 		}
@@ -1765,7 +1819,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 		if itemType != "" && itemType != "message" {
 			return nil, fmt.Errorf("responses stream item %q", itemType)
 		}
-	case "response.content_part.added":
+	case "response.content_part.added", "response.content_part.done":
 		part, _ := event["part"].(map[string]any)
 		partType, _ := part["type"].(string)
 		if partType == "reasoning_text" || partType == "reasoning_summary" {

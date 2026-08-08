@@ -521,6 +521,25 @@ func TestAnthropicResponsesLevel1TextConversion(t *testing.T) {
 	}
 }
 
+func TestResponsesToAnthropicAcceptsFinalAnswerPhaseAndEmptyLogprobs(t *testing.T) {
+	response, _, err := convertOpenAIResponsesToAnthropic([]byte(`{"id":"resp_1","model":"deepseek-v4-flash","status":"completed","output":[{"type":"message","phase":"final_answer","content":[{"type":"output_text","text":"world","annotations":[],"logprobs":[]}]}]}`), "deepseek-v4-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(response), "world") {
+		t.Fatalf("response = %s", response)
+	}
+
+	for _, body := range []string{
+		`{"output":[{"type":"message","phase":"commentary","content":[{"type":"output_text","text":"answer"}]}]}`,
+		`{"output":[{"type":"message","phase":"final_answer","content":[{"type":"output_text","text":"answer","logprobs":[{"token":"answer"}]}]}]}`,
+	} {
+		if _, _, err := convertOpenAIResponsesToAnthropic([]byte(body), "deepseek-v4-flash"); err == nil {
+			t.Fatalf("unsupported response was accepted: %s", body)
+		}
+	}
+}
+
 func TestResponsesAnthropicTextSSEEventConversion(t *testing.T) {
 	state := &textConversionStreamState{}
 	events, err := responsesEventToAnthropic([]byte(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`), state)
@@ -534,6 +553,34 @@ func TestResponsesAnthropicTextSSEEventConversion(t *testing.T) {
 	events, err = responsesEventToAnthropic([]byte(`{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":2}}}`), state)
 	if err != nil || len(events) != 3 || !state.Completed {
 		t.Fatalf("events=%#v state=%#v err=%v", events, state, err)
+	}
+}
+
+func TestResponsesToAnthropicSSEAcceptsBoundedReasoningEvents(t *testing.T) {
+	capability := config.ConversionCapability{Reasoning: true}
+	state := &textConversionStreamState{}
+	mapper := responsesEventToAnthropicWithCapability(capability)
+	if _, err := mapper([]byte(`{"type":"response.created","response":{"id":"resp_1","model":"deepseek-v4-flash"}}`), state); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{
+		`{"type":"response.content_part.added","part":{"type":"reasoning_text"}}`,
+		`{"type":"response.reasoning_text.delta","delta":"hidden"}`,
+		`{"type":"response.reasoning_text.done","text":"hidden"}`,
+		`{"type":"response.content_part.done","part":{"type":"reasoning_text"}}`,
+		`{"type":"response.content_part.done","part":{"type":"output_text"}}`,
+	} {
+		if _, err := mapper([]byte(event), state); err != nil {
+			t.Fatalf("event %s: %v", event, err)
+		}
+	}
+	if len(state.IgnoredFeatures) != 1 || state.IgnoredFeatures[0] != "reasoning_output" {
+		t.Fatalf("ignored features = %v", state.IgnoredFeatures)
+	}
+
+	strictState := &textConversionStreamState{Started: true}
+	if _, err := responsesEventToAnthropic([]byte(`{"type":"response.reasoning_text.delta","delta":"hidden"}`), strictState); err == nil {
+		t.Fatal("reasoning event must require an explicit conversion capability")
 	}
 }
 
@@ -1037,5 +1084,50 @@ func TestLevel3StrictToolAndResponseBounds(t *testing.T) {
 	}
 	if _, _, err := convertAnthropicToResponses([]byte(`{"content":[{"type":"text","text":"answer","citations":[{}]}]}`), "claude"); err == nil {
 		t.Fatal("Anthropic citations must be rejected")
+	}
+}
+
+func TestAnthropicObjectToolChoicesMapToResponses(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  any
+	}{
+		{input: `{"type":"auto"}`, want: "auto"},
+		{input: `{"type":"any"}`, want: "required"},
+		{input: `{"type":"none"}`, want: "none"},
+	} {
+		var input any
+		if err := json.Unmarshal([]byte(test.input), &input); err != nil {
+			t.Fatal(err)
+		}
+		got, err := anthropicToolChoiceToResponses(input)
+		if err != nil || got != test.want {
+			t.Fatalf("choice %s = %#v, %v; want %#v", test.input, got, err, test.want)
+		}
+	}
+	if _, err := anthropicToolChoiceToResponses(map[string]any{"type": "auto", "name": "lookup"}); err == nil {
+		t.Fatal("auto tool choice with a name must be rejected")
+	}
+}
+
+func TestOmittedAnthropicThinkingDisablesSupportedTargetReasoning(t *testing.T) {
+	metadata := config.ModelMetadata{ReasoningDeclared: true, ReasoningSupported: true, ReasoningEfforts: []string{"none", "low"}}
+	encoded, err := disableResponsesReasoningForOmittedAnthropicThinking(map[string]any{}, []byte(`{"model":"deepseek-v4-flash"}`), metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target map[string]any
+	if err := json.Unmarshal(encoded, &target); err != nil {
+		t.Fatal(err)
+	}
+	reasoning, _ := target["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+
+	unchanged := []byte(`{"model":"deepseek-v4-flash"}`)
+	encoded, err = disableResponsesReasoningForOmittedAnthropicThinking(map[string]any{"thinking": map[string]any{"type": "adaptive"}}, unchanged, metadata)
+	if err != nil || string(encoded) != string(unchanged) {
+		t.Fatalf("explicit thinking changed: %s, %v", encoded, err)
 	}
 }

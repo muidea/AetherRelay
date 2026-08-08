@@ -70,7 +70,7 @@ Level 3 在 Level 2 基础上增加 function tool 定义、`function_call`/`tool
 | `previous_response_id` | 无等价字段 | 拒绝；客户端应展开历史 |
 | `background` / realtime | 无等价字段 | 拒绝 |
 
-反向转换同理：Anthropic 的 `system`、纯文本 `messages` 和基础采样参数可以投影到 Responses；`thinking` 仅接受 `type=adaptive` 并映射到配置的 Responses effort。`tool_use`、复杂 content block 和 provider-specific beta 字段不得静默折叠成 Responses 普通文本。
+反向转换同理：Anthropic 的 `system`、纯文本 `messages` 和基础采样参数可以投影到 Responses；`thinking` 仅接受 `type=adaptive` 并映射到配置的 Responses effort。省略 `thinking` 时，若 exact model 的 `reasoning_efforts` 明确包含 `none`，转换器显式生成 `reasoning.effort=none`，避免目标模型的默认 reasoning 模式改变工具选择语义。`tool_use`、复杂 content block 和 provider-specific beta 字段不得静默折叠成 Responses 普通文本。
 
 ## 5. Reasoning 策略
 
@@ -112,7 +112,7 @@ model_metadata:
         reasoning_target_effort: low
 ```
 
-`reasoning=true` 必须同时有方向匹配的 adapter 和 `reasoning_target_effort`，目标 effort 必须出现在 `reasoning_efforts`。Responses→Anthropic 的 adapter 只生成 `thinking: {"type":"adaptive"}` 和配置的 `output_config.effort`；Anthropic→Responses 的 adapter 只生成配置的 `reasoning.effort`。客户端指定的 effort 不自动换算，Anthropic manual `thinking: {"type":"enabled","budget_tokens":...}` 也不转换。
+`reasoning=true` 必须同时有方向匹配的 adapter 和 `reasoning_target_effort`，目标 effort 必须出现在 `reasoning_efforts`。Responses→Anthropic 的 adapter 只生成 `thinking: {"type":"adaptive"}` 和配置的 `output_config.effort`；Anthropic→Responses 的 adapter 只生成配置的 `reasoning.effort`。客户端指定的 effort 不自动换算，Anthropic manual `thinking: {"type":"enabled","budget_tokens":...}` 也不转换。未声明 thinking 不触发降级适配；目标模型支持 `none` 时只显式关闭目标 reasoning，以保持源协议的未启用语义。
 
 没有适配器或适配器不匹配时，在上游请求创建前返回：
 

@@ -1820,6 +1820,16 @@ func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw [
 				}
 				continue
 			}
+			if metadata, ok := h.currentConfig().ModelMetadata[plan.ModelID]; ok {
+				encoded, err = disableResponsesReasoningForOmittedAnthropicThinking(conversionBody, encoded, metadata)
+				if err != nil {
+					apiErr := conversionAPIError(plan, err)
+					if firstErr == nil {
+						firstErr = &apiErr
+					}
+					continue
+				}
+			}
 			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
 		}
 	}
