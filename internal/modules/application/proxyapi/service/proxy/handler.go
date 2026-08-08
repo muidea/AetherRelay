@@ -1114,8 +1114,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		if injectDefaultReasoning {
 			if updated, err := json.Marshal(rawBody); err == nil {
 				body = updated
-				_ = h.writeArchiveRequest(round, body)
-				h.archiveAndLogClientRequest(round, r, len(body))
+				h.debugfRound(round, r, "native request default reasoning injected model=%s upstream_body_bytes=%d", rawModel, len(body))
 			}
 		}
 	}
@@ -1821,7 +1820,7 @@ func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw [
 				}
 				continue
 			}
-			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, RawQuery: rawQuery, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
 		}
 	}
 	return result, firstErr
@@ -1858,7 +1857,7 @@ func (h *Handler) prepareOpenAIResponsesCandidates(plans []TransportPlan, raw []
 				}
 				continue
 			}
-			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, RawQuery: rawQuery, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
+			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost, ConversionCapability: capability, DegradedFeatures: degraded})
 		}
 	}
 	return result, firstErr
@@ -2182,8 +2181,26 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 		}
 		return upstreamResult{}, err
 	}
+	if resp.StatusCode < http.StatusBadRequest {
+		isSSE := isEventStreamContentType(resp.Header.Get("Content-Type"))
+		if stream != isSSE {
+			_ = resp.Body.Close()
+			if cancel != nil {
+				cancel()
+			}
+			if h.metricsRegistry != nil {
+				h.metricsRegistry.RecordUpstreamAttempt(providerName, duration, metrics.AttemptHeader)
+				h.metricsRegistry.RecordUpstreamError(providerName, -1)
+			}
+			if stream {
+				return upstreamResult{}, fmt.Errorf("upstream_protocol_error: stream=true request returned non-event-stream response")
+			}
+			return upstreamResult{}, fmt.Errorf("upstream_protocol_error: stream=false request returned event-stream")
+		}
+	}
 
-	// 流式请求在写出首包前探测完整首行；失败直接返回，绝不切换 RouteOwner。
+	// 流式请求在写出首包前探测完整首行；失败返回调用方，由候选执行器
+	// 在尚未提交客户端响应时决定是否安全切换 RouteOwner。
 	if stream && resp.StatusCode < 400 {
 		_, maxLine := h.streamLimits()
 		primed, peekErr := primeStreamBody(resp, h.currentConfig().StreamFirstEventTimeout, maxLine)

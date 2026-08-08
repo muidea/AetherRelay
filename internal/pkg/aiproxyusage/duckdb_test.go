@@ -198,6 +198,34 @@ func TestCompleteOnlyUpdatesStarted(t *testing.T) {
 	}
 }
 
+func TestCompleteStoresUnknownUpstreamContentLengthAsNull(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if err := s.Start(ctx, StartRecord{EventID: "evt-stream", APIKeyID: "workorch"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Complete(ctx, CompleteRecord{
+		EventID:               "evt-stream",
+		HTTPStatus:            200,
+		Outcome:               "success",
+		Stream:                true,
+		UpstreamContentType:   "text/event-stream",
+		UpstreamContentLength: -1,
+	}); err != nil {
+		t.Fatalf("complete chunked SSE usage: %v", err)
+	}
+
+	var contentLength sql.NullInt64
+	if err := s.db.QueryRow(
+		`SELECT upstream_content_length FROM usage_events WHERE event_id = ?`, "evt-stream",
+	).Scan(&contentLength); err != nil {
+		t.Fatal(err)
+	}
+	if contentLength.Valid {
+		t.Fatalf("unknown upstream content length stored as %d, want NULL", contentLength.Int64)
+	}
+}
+
 func TestCompleteRequiresStatusAndOutcome(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

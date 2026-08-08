@@ -2048,6 +2048,34 @@ func TestAcceptEventStreamDoesNotEnableRawSSEWithoutStreamFlag(t *testing.T) {
 	}
 }
 
+func TestRawResponsesRejectsEventStreamWhenStreamIsFalse(t *testing.T) {
+	tmpDir := t.TempDir()
+	handler := testHandler("https://upstream.test", tmpDir, "openai")
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return testResponse(http.StatusOK, "text/event-stream", "data: {\"type\":\"response.completed\"}\n\n"), nil
+	})
+	rec := newResponseRecorder()
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":"hi","stream":false}`))
+
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "stream=false request returned event-stream") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRawResponsesRejectsJSONWhenStreamIsTrue(t *testing.T) {
+	tmpDir := t.TempDir()
+	handler := testHandler("https://upstream.test", tmpDir, "openai")
+	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(`{"id":"resp_1","object":"response","output":[]}`), nil
+	})
+	rec := newResponseRecorder()
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":"hi","stream":true}`))
+
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "stream=true request returned non-event-stream") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAcceptEventStreamDoesNotEnableAnthropicSSEWithoutStreamFlag(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := newTestHandler(config.Config{

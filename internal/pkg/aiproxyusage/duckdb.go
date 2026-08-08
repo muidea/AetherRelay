@@ -292,7 +292,7 @@ WHERE event_id = ?
 		rec.Estimated,
 		nullInt(rec.UpstreamStatus),
 		nullString(rec.UpstreamContentType),
-		nullInt64(rec.UpstreamContentLength),
+		nullPositiveInt64(rec.UpstreamContentLength),
 		nullString(rec.UpstreamTransferEncoding),
 		StateCompleted,
 		rec.EventID,
@@ -300,12 +300,12 @@ WHERE event_id = ?
 	)
 	if err != nil {
 		s.markDegraded()
-		return ErrStoreUnavailable
+		return fmt.Errorf("%w: complete usage event: %v", ErrStoreUnavailable, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		s.markDegraded()
-		return ErrStoreUnavailable
+		return fmt.Errorf("%w: inspect completed usage event: %v", ErrStoreUnavailable, err)
 	}
 	if n != 1 {
 		// 缺失或重复 Complete:不降级健康(业务一致性问题),但返回错误。
@@ -395,6 +395,15 @@ func nullString(s string) any {
 
 func nullInt64(v int64) any {
 	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+// net/http uses -1 when an upstream response has no declared Content-Length.
+// The usage schema represents every unknown length as NULL.
+func nullPositiveInt64(v int64) any {
+	if v <= 0 {
 		return nil
 	}
 	return v

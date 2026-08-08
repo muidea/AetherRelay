@@ -1561,9 +1561,10 @@ func validateProviderConversionReleases(cfg Config, name string, provider Provid
 
 func providerSupportsConversionDirection(provider Provider, direction string) bool {
 	for _, path := range ServiceableInboundPaths(provider) {
-		transport, ok := ResolveProviderTransport(provider, path)
-		if ok && transport.Mode == direction {
-			return true
+		for _, transport := range ResolveProviderTransports(provider, path) {
+			if transport.Mode == direction {
+				return true
+			}
 		}
 	}
 	return false
@@ -2147,66 +2148,79 @@ type ProviderTransport struct {
 	Mode             string
 }
 
-// ResolveProviderTransport combines inbound path, upstream protocol and the
-// provider's explicitly declared native endpoints. Matrix entries not listed
-// here are unsupported; callers must not infer endpoints from protocol alone.
-func ResolveProviderTransport(provider Provider, path string) (ProviderTransport, bool) {
+// ResolveProviderTransports combines an inbound path, upstream protocol and
+// the provider's explicitly declared native endpoints. A provider may expose
+// more than one semantically distinct target for the same client path.
+func ResolveProviderTransports(provider Provider, path string) []ProviderTransport {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	result := []ProviderTransport{}
 	switch path {
 	case "/v1/chat/completions":
 		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			return ProviderTransport{UpstreamEndpoint: "chatgptweb", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "chatgptweb", Mode: "native"})
 		}
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "native"})
 		}
 		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "openai_to_anthropic"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "openai_to_anthropic"})
 		}
 	case "/v1/messages":
 		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "native"})
+		}
+		// Prefer the released Responses conversion over the legacy text-only Chat
+		// conversion. Request-time release gates remove it when unavailable.
+		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/responses", Mode: "anthropic_to_responses"})
 		}
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"}, true
-		}
-		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/responses", Mode: "anthropic_to_responses"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"})
 		}
 	case "/v1/responses":
 		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
-			return ProviderTransport{UpstreamEndpoint: "chatgptweb_responses", Mode: "chatgptweb_responses"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "chatgptweb_responses", Mode: "chatgptweb_responses"})
 		}
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/responses", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/responses", Mode: "native"})
 		}
 		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "responses_to_anthropic"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "responses_to_anthropic"})
 		}
 		if provider.Protocol == "codexoauth" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
-			return ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "codex_oauth_responses"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "codex_oauth_responses"})
 		}
 	case "/v1/search":
 		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			return ProviderTransport{UpstreamEndpoint: "chatgptweb_search", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "chatgptweb_search", Mode: "native"})
 		}
 	case "/v1/completions":
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointCompletions) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/completions", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/completions", Mode: "native"})
 		}
 	case "/v1/embeddings":
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointEmbeddings) {
-			return ProviderTransport{UpstreamEndpoint: "/v1/embeddings", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/embeddings", Mode: "native"})
 		}
 	case "/v1/images/generations", "/v1/images/edits":
 		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointImages) {
-			return ProviderTransport{UpstreamEndpoint: "chatgptweb_images", Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: "chatgptweb_images", Mode: "native"})
 		}
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointImages) {
-			return ProviderTransport{UpstreamEndpoint: path, Mode: "native"}, true
+			result = append(result, ProviderTransport{UpstreamEndpoint: path, Mode: "native"})
 		}
 	}
-	return ProviderTransport{}, false
+	return result
+}
+
+// ResolveProviderTransport preserves the original first-match API for callers
+// that only need to determine whether a path is serviceable.
+func ResolveProviderTransport(provider Provider, path string) (ProviderTransport, bool) {
+	transports := ResolveProviderTransports(provider, path)
+	if len(transports) == 0 {
+		return ProviderTransport{}, false
+	}
+	return transports[0], true
 }
 
 func ProviderSupportsInboundPath(provider Provider, path string) bool {

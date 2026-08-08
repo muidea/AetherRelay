@@ -123,6 +123,8 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 // ResolveTransportPlans validates the inbound request and returns every
 // compatible candidate in deterministic priority order. It never creates an
 // upstream request and is shared by routing, fallback, and Admin projections.
+// HTTP candidates can use the complete chain before committing a response;
+// stateful builtin executors apply stricter no-duplicate fallback boundaries.
 func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) ([]TransportPlan, *APIError) {
 	clientEndpoint := NormalizeClientEndpoint(path)
 	clientProtocol := ClientProtocolForPath(clientEndpoint)
@@ -185,23 +187,21 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 				continue
 			}
 		}
-		plan, ok := applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner, provider)
-		if !ok {
-			continue
-		}
-		if (plan.Mode == TransportModeResponsesToAnthropic || plan.Mode == TransportModeAnthropicToResponses) && !conversionDeclared(cfg, provider, modelID, plan.Mode) {
-			continue
-		}
-		plan.Priority = candidate.Priority
-		plan.Fallback = candidate.Fallback
-		if plan.IsConversion() {
-			if metadata, ok := cfg.ModelMetadata[modelID]; ok {
-				if capability, ok := metadata.ConversionCapabilities[plan.Mode]; ok {
-					plan.ConversionLevel = capability.Level
+		for _, plan := range applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner, provider) {
+			if (plan.Mode == TransportModeResponsesToAnthropic || plan.Mode == TransportModeAnthropicToResponses) && !conversionDeclared(cfg, provider, modelID, plan.Mode) {
+				continue
+			}
+			plan.Priority = candidate.Priority
+			plan.Fallback = candidate.Fallback
+			if plan.IsConversion() {
+				if metadata, ok := cfg.ModelMetadata[modelID]; ok {
+					if capability, ok := metadata.ConversionCapabilities[plan.Mode]; ok {
+						plan.ConversionLevel = capability.Level
+					}
 				}
 			}
+			compatible = append(compatible, plan)
 		}
-		compatible = append(compatible, plan)
 	}
 	// Protocol-preserving candidates always lead cross-protocol conversion,
 	// regardless of provider priority. Provider priority and health still order
@@ -297,22 +297,18 @@ func conversionCapabilityUsable(direction string, capability config.ConversionCa
 }
 
 // applyTransportMatrix projects the shared routing contract into the
-// request-time plan. The matrix itself lives in config.ResolveProviderTransport
+// request-time plan. The matrix itself lives in config.ResolveProviderTransports
 // so startup validation and request routing cannot drift.
-func applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner string, provider config.Provider) (TransportPlan, bool) {
+func applyTransportMatrix(clientEndpoint, clientProtocol, modelID, owner string, provider config.Provider) []TransportPlan {
 	upstreamProtocol := strings.TrimSpace(provider.Protocol)
-	transport, ok := config.ResolveProviderTransport(provider, clientEndpoint)
-	if !ok {
-		return TransportPlan{}, false
+	transports := config.ResolveProviderTransports(provider, clientEndpoint)
+	result := make([]TransportPlan, 0, len(transports))
+	for _, transport := range transports {
+		result = append(result, TransportPlan{
+			ModelID: modelID, ClientProtocol: clientProtocol, ClientEndpoint: clientEndpoint,
+			RouteOwner: owner, UpstreamProtocol: upstreamProtocol,
+			UpstreamEndpoint: transport.UpstreamEndpoint, Mode: transport.Mode,
+		})
 	}
-	base := TransportPlan{
-		ModelID:          modelID,
-		ClientProtocol:   clientProtocol,
-		ClientEndpoint:   clientEndpoint,
-		RouteOwner:       owner,
-		UpstreamProtocol: upstreamProtocol,
-		UpstreamEndpoint: transport.UpstreamEndpoint,
-		Mode:             transport.Mode,
-	}
-	return base, true
+	return result
 }

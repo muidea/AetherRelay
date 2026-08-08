@@ -117,6 +117,9 @@ func TestResponsesAnthropicLevel3RoundTripThroughHTTP(t *testing.T) {
 		if r.URL.Path != "/v1/messages" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
 		}
+		if r.URL.RawQuery != "" {
+			t.Fatalf("conversion leaked client query upstream: %q", r.URL.RawQuery)
+		}
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
@@ -146,7 +149,7 @@ func TestResponsesAnthropicLevel3RoundTripThroughHTTP(t *testing.T) {
 		}},
 	}}
 	h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claude-test","input":[{"type":"message","role":"user","content":"look"},{"type":"function_call","call_id":"call_history","name":"lookup","arguments":"{\"q\":\"x\"}"},{"type":"function_call_output","call_id":"call_history","output":"history result"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses?beta=client-only", strings.NewReader(`{"model":"claude-test","input":[{"type":"message","role":"user","content":"look"},{"type":"function_call","call_id":"call_history","name":"lookup","arguments":"{\"q\":\"x\"}"},{"type":"function_call_output","call_id":"call_history","output":"history result"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -159,6 +162,9 @@ func TestAnthropicResponsesLevel3RoundTripThroughHTTP(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
+		}
+		if r.URL.RawQuery != "" {
+			t.Fatalf("conversion leaked client query upstream: %q", r.URL.RawQuery)
 		}
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -176,14 +182,14 @@ func TestAnthropicResponsesLevel3RoundTripThroughHTTP(t *testing.T) {
 	}))
 	defer upstream.Close()
 	cfg := config.Config{Providers: map[string]config.Provider{
-		"openai": {Name: "openai", Protocol: "openai", BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointResponses}, ConversionReleases: releasedConversions("gpt-test", TransportModeAnthropicToResponses)},
+		"openai": {Name: "openai", Protocol: "openai", BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses}, ConversionReleases: releasedConversions("gpt-test", TransportModeAnthropicToResponses)},
 	}, ModelMetadata: map[string]config.ModelMetadata{
 		"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ConversionCapabilities: map[string]config.ConversionCapability{
 			TransportModeAnthropicToResponses: {Level: 3, Text: true, Tools: true},
 		}},
 	}}
 	h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-test","max_tokens":32,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":[{"type":"tool_use","id":"call_history","name":"lookup","input":{"q":"x"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_history","content":"history result"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=client-only", strings.NewReader(`{"model":"gpt-test","max_tokens":32,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":[{"type":"tool_use","id":"call_history","name":"lookup","input":{"q":"x"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_history","content":"history result"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

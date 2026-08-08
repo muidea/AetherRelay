@@ -393,6 +393,34 @@ func TestResolveTransportPlansPrefersNativeResponsesOverHigherPriorityConversion
 	}
 }
 
+func TestResolveTransportPlansExposesResponsesConversionBeforeLegacyChatForFullOpenAIProvider(t *testing.T) {
+	const modelID = "gpt-full"
+	cfg := config.Config{
+		Providers: map[string]config.Provider{
+			"openai": {
+				Name: "openai", Protocol: "openai", Models: []string{modelID},
+				Endpoints:          []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
+				ConversionReleases: releasedConversions(modelID, TransportModeAnthropicToResponses),
+			},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{
+				TransportModeAnthropicToResponses: {Level: 3, Text: true, Tools: true, Streaming: true},
+			}},
+		},
+	}
+	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/messages", modelID)
+	if apiErr != nil || len(plans) != 2 {
+		t.Fatalf("plans=%+v err=%+v", plans, apiErr)
+	}
+	if plans[0].Mode != TransportModeAnthropicToResponses || plans[0].UpstreamEndpoint != "/v1/responses" || plans[0].ConversionLevel != 3 {
+		t.Fatalf("first plan=%+v, want released Level 3 Responses conversion", plans[0])
+	}
+	if plans[1].Mode != TransportModeAnthropicToOpenAI || plans[1].UpstreamEndpoint != "/v1/chat/completions" {
+		t.Fatalf("fallback plan=%+v, want legacy Chat conversion", plans[1])
+	}
+}
+
 func TestResolveTransportPlansRequiresConcreteProviderRelease(t *testing.T) {
 	const modelID = "claude-unreleased"
 	cfg := config.Config{

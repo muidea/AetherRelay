@@ -198,10 +198,9 @@ func implementedConversionDirection(direction string) bool {
 	return direction == "responses_to_anthropic" || direction == "anthropic_to_responses"
 }
 
-// modelSupportedEndpoints returns the client-facing paths that at least one
-// eligible candidate can serve. Provider endpoints are deliberately translated
-// through the same matrix during catalog construction so the model response
-// and request routing observe one immutable generation.
+// modelSupportedEndpoints returns paths exposed by at least one configured or
+// discovered catalog candidate. Request-time health and circuit state are
+// intentionally applied later and are not part of this stable generation.
 func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string) []string {
 	seen := map[string]bool{}
 	for _, candidate := range snap.CandidatesFor(modelID) {

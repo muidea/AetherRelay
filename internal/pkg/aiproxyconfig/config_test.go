@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1590,6 +1591,27 @@ model_metadata:
 	}
 	if !EffectiveProviderFallback(cfg.Providers["defaulted"]) || EffectiveProviderFallback(cfg.Providers["no-fallback"]) {
 		t.Fatalf("fallback defaults = defaulted:%t no-fallback:%t", EffectiveProviderFallback(cfg.Providers["defaulted"]), EffectiveProviderFallback(cfg.Providers["no-fallback"]))
+	}
+}
+
+func TestResolveProviderTransportsReturnsOrderedOpenAIMessagesCandidates(t *testing.T) {
+	provider := Provider{
+		Protocol:  "openai",
+		Endpoints: []string{ProviderEndpointChatCompletions, ProviderEndpointResponses},
+	}
+
+	got := ResolveProviderTransports(provider, "/v1/messages")
+	want := []ProviderTransport{
+		{UpstreamEndpoint: "/v1/responses", Mode: ConversionDirectionAnthropicToResponses},
+		{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("transports = %#v, want %#v", got, want)
+	}
+
+	first, ok := ResolveProviderTransport(provider, "/v1/messages")
+	if !ok || first != want[0] {
+		t.Fatalf("first transport = %#v, %t; want %#v, true", first, ok, want[0])
 	}
 }
 

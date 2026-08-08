@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"reflect"
 	"testing"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -81,7 +82,7 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 		Providers: map[string]config.Provider{
 			"responses": {
 				Name: "responses", Protocol: "openai", BaseURL: "https://example.invalid", APIKey: "test",
-				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointResponses},
+				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
 				ConversionReleases: map[string]map[string]config.ProviderConversionRelease{"shared-model": {TransportModeAnthropicToResponses: {Enabled: true, Verified: true}}},
 			},
 		},
@@ -102,5 +103,9 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 	}
 	if conversions.ResponsesToAnthropic != nil {
 		t.Fatalf("responses_to_anthropic projected without an Anthropic provider: %#v", conversions)
+	}
+	wantEndpoints := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"}
+	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, wantEndpoints) {
+		t.Fatalf("supported endpoints = %v, want %v", response.Data[0].SupportedEndpoints, wantEndpoints)
 	}
 }

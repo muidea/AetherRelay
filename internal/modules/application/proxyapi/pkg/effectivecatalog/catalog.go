@@ -299,17 +299,20 @@ func serviceablePathsForModel(provider config.Provider, modelID string, metadata
 	paths := config.ServiceableInboundPaths(provider)
 	result := make([]string, 0, len(paths))
 	for _, path := range paths {
-		transport, ok := config.ResolveProviderTransport(provider, path)
-		if !ok {
-			continue
+		available := false
+		for _, transport := range config.ResolveProviderTransports(provider, path) {
+			if transport.Mode == "responses_to_anthropic" && !conversionCapabilityAvailable(provider, modelID, metadata, "responses_to_anthropic") {
+				continue
+			}
+			if transport.Mode == "anthropic_to_responses" && !conversionCapabilityAvailable(provider, modelID, metadata, "anthropic_to_responses") {
+				continue
+			}
+			available = true
+			break
 		}
-		if transport.Mode == "responses_to_anthropic" && !conversionCapabilityAvailable(provider, modelID, metadata, "responses_to_anthropic") {
-			continue
+		if available {
+			result = append(result, path)
 		}
-		if transport.Mode == "anthropic_to_responses" && !conversionCapabilityAvailable(provider, modelID, metadata, "anthropic_to_responses") {
-			continue
-		}
-		result = append(result, path)
 	}
 	return result
 }
@@ -323,18 +326,19 @@ func conversionModesForModel(provider config.Provider, modelID string, metadata 
 	seen := map[string]struct{}{}
 	result := []string{}
 	for _, path := range config.ServiceableInboundPaths(provider) {
-		transport, ok := config.ResolveProviderTransport(provider, path)
-		if !ok || !conversionCapabilityAvailable(provider, modelID, metadata, transport.Mode) {
-			continue
+		for _, transport := range config.ResolveProviderTransports(provider, path) {
+			if !conversionCapabilityAvailable(provider, modelID, metadata, transport.Mode) {
+				continue
+			}
+			if transport.Mode != config.ConversionDirectionResponsesToAnthropic && transport.Mode != config.ConversionDirectionAnthropicToResponses {
+				continue
+			}
+			if _, exists := seen[transport.Mode]; exists {
+				continue
+			}
+			seen[transport.Mode] = struct{}{}
+			result = append(result, transport.Mode)
 		}
-		if transport.Mode != config.ConversionDirectionResponsesToAnthropic && transport.Mode != config.ConversionDirectionAnthropicToResponses {
-			continue
-		}
-		if _, exists := seen[transport.Mode]; exists {
-			continue
-		}
-		seen[transport.Mode] = struct{}{}
-		result = append(result, transport.Mode)
 	}
 	sort.Strings(result)
 	return result

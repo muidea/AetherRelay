@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | OpenAI / Anthropic 标准代理 | `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/completions`、`/v1/embeddings`、`/v1/models` | 管理页配置 Provider |
 | 模型路由候选链 | 请求体 exact `model` → 有序候选 | Provider 精确模型 / 账号池发现 + Provider pattern |
-| 协议转换 | OpenAI ↔ Anthropic 基础文本 | 候选链中跨协议 Provider 且语义可保留 |
+| 协议转换 | Chat↔Messages 文本、Responses↔Messages Level 1–3 | 候选链中跨协议 Provider且方向 capability 已发布 |
 | 客户端 API Key | 全部数据端点认证 | Admin 创建并保存到 DuckDB |
 | 用量统计与 DuckDB 持久化 | Admin「使用统计」、`/admin/api/usage/export.csv` | 默认启用（`state.database`） |
 | Admin 管理页 | `/admin`（默认 loopback-only） | 默认启用；远程访问需 `admin_auth_enabled` |
@@ -31,11 +31,12 @@
 
 - **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET|POST /v1/models`
 - **Anthropic**：`POST /v1/messages`
-- **ai-proxy 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）、`POST /v1/images/generations|edits`（路由到 `chatgptweb` 图片能力）
+- **ai-proxy 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
+- **OpenAI Images**：`POST /v1/images/generations|edits`（OpenAI native 或内建 `chatgptweb` 图片能力）
 
 `GET/POST /v1/models` **本地合成**，不访问上游；返回有效目录中的模型、已知的 `contextWindowTokens` / `maxOutputTokens`、已声明的 `capabilities.reasoning`，以及运行时推导的 `supported_endpoints`。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`supported_endpoints` 是客户端可调用的完整路径列表，由模型候选 Provider、Provider 原生 `endpoints` 和统一传输矩阵计算，不是静态模型元数据，也不暴露 provider 名、base URL 或密钥。
 
-`supported_endpoints` 只表示模型至少有一个当前可用候选可以服务的客户端路径。例如 Anthropic Provider 声明原生 `messages` 时，模型可以同时显示 `/v1/messages` 与经协议转换的 `/v1/chat/completions`；ChatGPT Web 的 `chat_completions` 还会派生 `/v1/search`，`images` 会派生图片生成和编辑两个路径。系统信息中的“开放 API 端点”是实例级路由清单，需与模型的 `supported_endpoints` 取交集后再发起请求。
+`supported_endpoints` 只表示模型至少有一个已配置或已发现的目录候选具备该客户端路径合同，不包含请求期健康度和熔断过滤。例如 Anthropic Provider 声明原生 `messages` 时，模型可以同时显示 `/v1/messages` 与经协议转换的 `/v1/chat/completions`；ChatGPT Web 的 `chat_completions` 还会派生 `/v1/search`，`images` 会派生图片生成和编辑两个路径。系统信息中的“开放 API 端点”是实例级路由清单，需与模型的 `supported_endpoints` 取交集后再发起请求；即使目录命中，全部候选临时熔断时仍会返回 `provider_unavailable`。
 
 转发矩阵（`endpoints` 只表示上游直连能力；客户端可服务 path 由矩阵决定，含跨协议基础转换）：
 
@@ -44,8 +45,10 @@
 | `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
 | `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
+| `/v1/messages` | openai | `responses` | `/v1/responses` | `anthropic_to_responses`（需发布 capability） |
 | `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
+| `/v1/responses` | anthropic | `messages` | `/v1/messages` | `responses_to_anthropic`（需发布 capability） |
 | `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
 | `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
 | `/v1/completions` | openai | `completions` | 同 path | native |
@@ -62,12 +65,12 @@
 - `model_metadata` 只按 exact ID 补充容量信息；它不发布模型、不创建候选，未匹配条目保持未使用状态。
 - 有效目录始终合成两个账号池的内建模型并参与同一候选链；同名模型保留全部候选，不相互覆盖。管理型 Provider 默认 `priority=100`，Codex OAuth 默认 `90`（可作原生 Responses 回退），ChatGPT Web 默认 `10` 且不作为回退候选。
 - 健康度与熔断：5 分钟有界样本窗口，少于 3 个样本显示 `unknown`；连续 3 次可重试失败打开 30 秒熔断，路由跳过熔断 / `unhealthy` / `credential_error` 候选。不替代账号池真实可用性判断。
-- 回退仅发生在客户端响应未提交时，且只针对网络错误、`408`、`429`、`5xx` 或流式首事件探测失败；一次已写出的 SSE/HTTP 响应绝不切换 Provider。图片任务一旦提交不回退，避免重复创建。
+- 回退仅发生在客户端响应未提交时，且只针对网络错误、`408`、`429`、`5xx` 或流式首事件探测失败；一次已写出的 SSE/HTTP 响应绝不切换 Provider。普通 HTTP 候选使用统一回退链；ChatGPT Web、Codex OAuth 和图片等可能创建上游状态的执行器只在专用路径能够证明尚未产生副作用时回退，避免重复执行。
 - 热更新：管理页保存 Provider 后经与启动期相同的完整校验激活；Client API Key 变更直接刷新认证索引；`state.database` 资源参数与账号定时刷新间隔不热切换。
 
 ## 协议转换
 
-跨协议转换只保证基础文本与基础 SSE。tools / function calling、多模态、`response_format` / JSON Schema 等能力在访问上游前返回 `conversion_unsupported`（typed error），不会被静默删改；若存在已验证可原生保留该语义的候选，可改用该候选。`responses` / `completions` / `embeddings` **不能**靠 chat/messages 转换派生。转换前后统一 SSE 响应头与边界，见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
+Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。Responses↔Messages 使用方向化 capability：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；图片、documents、JSON Schema、continuation 和流式 tools 仍在访问上游前返回 `conversion_unsupported`。同一 OpenAI Provider 同时声明 `chat_completions` 与 `responses` 且已发布 `anthropic_to_responses` 时，`/v1/messages` 优先使用 Responses Level 转换，旧 Chat 文本转换作为兼容后继。转换请求不把客户端 query 参数带到另一协议上游。转换前后统一 SSE 响应头与边界，见[Responses 与 Anthropic 双向转换](design/responses-anthropic-conversion.md)。
 
 标准推理端点只在请求体 `"stream": true` 时进入流式生命周期；`Accept: text/event-stream` 不能隐式改变请求模式。
 
@@ -173,9 +176,9 @@
 
 ## 限制与不支持项
 
-- 转换仅保证基础文本与基础 SSE；tools / function calling / 多模态 / `response_format` 等在访问上游前拒绝（`conversion_unsupported`）。
-- `responses` / `completions` / `embeddings` 不能由 chat/messages 转换派生，必须由具备对应 `endpoints` 的上游直连服务。
+- Chat Completions↔Messages 转换仅保证纯文本与纯文本 SSE；Responses↔Messages 可按公开 Level 3 合同支持非流式 function tools。多模态、JSON Schema、continuation 和流式 tools 在转换路径访问上游前拒绝。
+- `completions` / `embeddings` 不能由 chat/messages 转换派生，必须由具备对应 `endpoints` 的上游直连服务。
 - 不提供 WebSocket / OpenAI Realtime 代理、`responses/compact`；`/v1/search` 不是 OpenAI 官方端点别名。
-- 不提供请求侧 Provider 覆盖；候选顺序只由配置的 `priority` / `fallback` 决定。
+- 不提供请求侧 Provider 覆盖；候选顺序由语义等级、配置的 `priority` / `fallback`、请求期健康状态和稳定名称共同决定。
 - ChatGPT Web 不提供通用 function/tool calling、工具循环、深度研究、网页插件；Codex 不提供网页会话与插件能力。
 - 单进程单工作区：`state.database` 不可多实例共享；账号定时刷新间隔修改后必须重启。

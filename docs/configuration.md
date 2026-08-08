@@ -47,9 +47,9 @@ model_metadata:
 
 Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`config.yaml` 不应声明 Provider，尤其不得保存明文 Key。数据库已有 Provider 密文时，缺少或使用错误的 `AI_PROXY_CREDENTIAL_KEY` 会使启动失败，不会回退为空目录。
 
-每个实际模型按所有 enabled Provider 的 `models` 规则生成候选，并按 `priority` 降序排序；metadata 不参与这一步。请求到达后，再按入站 path 从候选的 `endpoints` 和共享 transport matrix 中筛选可服务 Provider。
+每个实际模型按所有 enabled Provider 的 `models` 规则生成候选；metadata 不参与模型成员资格。请求到达后，再按入站 path 从候选的 `endpoints` 和共享 transport matrix 中筛选可服务 Provider，并依次按语义等级（native/Codex OAuth、ChatGPT Web Responses 投影、跨协议转换）、`priority`、健康分数和名称稳定排序。
 
-回退只会发生在客户端响应尚未提交时，并且仅针对网络错误、`408`、`429`、`5xx` 或流式请求的首事件探测失败。一次已写出的 SSE/HTTP 响应绝不切换 Provider。转换候选会先做语义预检：不支持的 tools、多模态或结构化字段不会被静默删改；若后续存在可原生保留该语义的候选，可改用该候选，否则返回 `conversion_unsupported`。图片任务一旦提交不回退，避免重复创建。
+回退只会发生在客户端响应尚未提交时，并且仅针对网络错误、`408`、`429`、`5xx` 或流式请求的首事件探测失败。一次已写出的 SSE/HTTP 响应绝不切换 Provider。转换候选会先做语义预检：不支持的 tools、多模态或结构化字段不会被静默删改；若后续存在可原生保留该语义的候选，可改用该候选，否则返回 `conversion_unsupported`。ChatGPT Web、Codex OAuth 和图片等可能创建上游状态的执行器采用更严格的专用回退边界，避免重复执行。native 请求保留安全 query；跨协议转换清空客户端 query。
 
 运行时健康度是 5 分钟的有界样本窗口：少于 3 个样本显示 `unknown`；连续 3 次可重试失败会打开 30 秒熔断，路由会跳过熔断、`unhealthy` 或 `credential_error` 候选。健康度不替代账号池的真实可用性判断。管理页将可用性与健康度合并为单一状态视图，显示样本量、成功率、P95、熔断和账号池可路由原因。
 
@@ -78,7 +78,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
 | `request_timeout_seconds` | 非流式总超时及流式等待响应头超时。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
-| `stream_first_event_timeout_seconds` | 跨协议转换 SSE 首事件等待超时，默认 `30` 秒；用于防止上游迟迟不发送首事件。 |
+| `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `30` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
 | `debug_log`、`log_format` | 调试日志和 `json`/`text` 格式。 |
