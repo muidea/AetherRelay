@@ -102,7 +102,7 @@ func (s *chatGPTAccountRuntimeStub) StartChatGPTOAuth(context.Context, string) (
 func (s *chatGPTAccountRuntimeStub) FinishChatGPTOAuth(context.Context, string, string) (accevents.OAuthFinishResult, error) {
 	return accevents.OAuthFinishResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) ListChatGPTImages(context.Context, string, string, string) (imgevents.ListResult, error) {
+func (s *chatGPTAccountRuntimeStub) ListChatGPTImages(context.Context, string, string, string, string) (imgevents.ListResult, error) {
 	if s.imageListErr != nil {
 		return imgevents.ListResult{}, s.imageListErr
 	}
@@ -111,31 +111,37 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTImages(context.Context, string, s
 	}
 	return imgevents.ListResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) ChatGPTImageStorage(context.Context) (imgevents.StorageStatsResult, error) {
+func (s *chatGPTAccountRuntimeStub) ChatGPTImageStorage(context.Context, string) (imgevents.StorageStatsResult, error) {
 	return imgevents.StorageStatsResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) ListChatGPTImageTags(context.Context) (imgevents.ListTagsResult, error) {
+func (s *chatGPTAccountRuntimeStub) ListChatGPTImageTags(context.Context, string) (imgevents.ListTagsResult, error) {
 	return imgevents.ListTagsResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) SetChatGPTImageTags(context.Context, string, []string) (imgevents.SetTagsResult, error) {
+func (s *chatGPTAccountRuntimeStub) SetChatGPTImageTags(context.Context, string, string, []string) (imgevents.SetTagsResult, error) {
 	return imgevents.SetTagsResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) DeleteChatGPTImages(context.Context, []string) (imgevents.DeleteResult, error) {
+func (s *chatGPTAccountRuntimeStub) DeleteChatGPTImages(context.Context, string, []string) (imgevents.DeleteResult, error) {
 	return imgevents.DeleteResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) GetChatGPTImageBytes(_ context.Context, path string) ([]byte, error) {
+func (s *chatGPTAccountRuntimeStub) GetChatGPTImageBytes(_ context.Context, _ string, path string) ([]byte, error) {
 	s.imageBytes = append(s.imageBytes, path)
 	if s.imageBytesErr != nil {
 		return nil, s.imageBytesErr
 	}
 	return []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, nil
 }
-func (s *chatGPTAccountRuntimeStub) GetChatGPTImageThumbnail(_ context.Context, path string) ([]byte, error) {
+func (s *chatGPTAccountRuntimeStub) GetChatGPTImageThumbnail(_ context.Context, _ string, path string) ([]byte, error) {
 	s.imageThumbs = append(s.imageThumbs, path)
 	if s.imageBytesErr != nil {
 		return nil, s.imageBytesErr
 	}
 	return []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, nil
+}
+func (s *chatGPTAccountRuntimeStub) DeleteChatGPTImageScope(context.Context, string) error {
+	return nil
+}
+func (s *chatGPTAccountRuntimeStub) DeleteChatGPTImageTaskScope(context.Context, string) error {
+	return nil
 }
 func (s *chatGPTAccountRuntimeStub) SubmitChatGPTImageGeneration(context.Context, taskevents.SubmitGenerationCommand) (taskevents.SubmitResult, error) {
 	return taskevents.SubmitResult{}, nil

@@ -222,8 +222,8 @@ func (s *Admin) DeleteChatGPTImageTask(ctx context.Context, ownerID, taskID stri
 	return result, nil
 }
 
-func (s *Admin) ListChatGPTImages(ctx context.Context, baseURL, startDate, endDate string) (imgevents.ListResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicList, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.ListCommand{BaseURL: baseURL, StartDate: startDate, EndDate: endDate})).Get()
+func (s *Admin) ListChatGPTImages(ctx context.Context, apiKeyID, baseURL, startDate, endDate string) (imgevents.ListResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicList, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.ListCommand{APIKeyID: apiKeyID, BaseURL: baseURL, StartDate: startDate, EndDate: endDate})).Get()
 	if err != nil {
 		return imgevents.ListResult{}, fmt.Errorf("chatgpt image store unavailable")
 	}
@@ -234,8 +234,8 @@ func (s *Admin) ListChatGPTImages(ctx context.Context, baseURL, startDate, endDa
 	return result, nil
 }
 
-func (s *Admin) ChatGPTImageStorage(ctx context.Context) (imgevents.StorageStatsResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicStorageStats, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.StorageStatsCommand{})).Get()
+func (s *Admin) ChatGPTImageStorage(ctx context.Context, apiKeyID string) (imgevents.StorageStatsResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicStorageStats, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.StorageStatsCommand{APIKeyID: apiKeyID})).Get()
 	if err != nil {
 		return imgevents.StorageStatsResult{}, fmt.Errorf("chatgpt image store unavailable")
 	}
@@ -246,8 +246,8 @@ func (s *Admin) ChatGPTImageStorage(ctx context.Context) (imgevents.StorageStats
 	return result, nil
 }
 
-func (s *Admin) ListChatGPTImageTags(ctx context.Context) (imgevents.ListTagsResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicListTags, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.ListTagsCommand{})).Get()
+func (s *Admin) ListChatGPTImageTags(ctx context.Context, apiKeyID string) (imgevents.ListTagsResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicListTags, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.ListTagsCommand{APIKeyID: apiKeyID})).Get()
 	if err != nil {
 		return imgevents.ListTagsResult{}, fmt.Errorf("chatgpt image store unavailable")
 	}
@@ -258,8 +258,8 @@ func (s *Admin) ListChatGPTImageTags(ctx context.Context) (imgevents.ListTagsRes
 	return result, nil
 }
 
-func (s *Admin) SetChatGPTImageTags(ctx context.Context, path string, tags []string) (imgevents.SetTagsResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicSetTags, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SetTagsCommand{Path: path, Tags: tags})).Get()
+func (s *Admin) SetChatGPTImageTags(ctx context.Context, apiKeyID, path string, tags []string) (imgevents.SetTagsResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicSetTags, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SetTagsCommand{APIKeyID: apiKeyID, Path: path, Tags: tags})).Get()
 	if err != nil {
 		return imgevents.SetTagsResult{}, fmt.Errorf("chatgpt image tag update failed")
 	}
@@ -270,8 +270,8 @@ func (s *Admin) SetChatGPTImageTags(ctx context.Context, path string, tags []str
 	return result, nil
 }
 
-func (s *Admin) DeleteChatGPTImages(ctx context.Context, paths []string) (imgevents.DeleteResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicDelete, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.DeleteCommand{Paths: paths})).Get()
+func (s *Admin) DeleteChatGPTImages(ctx context.Context, apiKeyID string, paths []string) (imgevents.DeleteResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicDelete, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.DeleteCommand{APIKeyID: apiKeyID, Paths: paths})).Get()
 	if err != nil {
 		return imgevents.DeleteResult{}, fmt.Errorf("chatgpt image delete failed")
 	}
@@ -284,8 +284,8 @@ func (s *Admin) DeleteChatGPTImages(ctx context.Context, paths []string) (imgeve
 
 // GetChatGPTImageBytes returns original image bytes for a store-relative path.
 // Path validation and traversal rejection stay in the image store owner.
-func (s *Admin) GetChatGPTImageBytes(ctx context.Context, path string) ([]byte, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicGetBytes, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.GetBytesCommand{RelativePath: path})).Get()
+func (s *Admin) GetChatGPTImageBytes(ctx context.Context, apiKeyID, path string) ([]byte, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicGetBytes, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.GetBytesCommand{APIKeyID: apiKeyID, RelativePath: path})).Get()
 	if err != nil {
 		return nil, fmt.Errorf("chatgpt image content unavailable")
 	}
@@ -297,8 +297,8 @@ func (s *Admin) GetChatGPTImageBytes(ctx context.Context, path string) ([]byte, 
 }
 
 // GetChatGPTImageThumbnail returns a PNG thumbnail for a store-relative path.
-func (s *Admin) GetChatGPTImageThumbnail(ctx context.Context, path string) ([]byte, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicGetThumbnail, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.GetThumbnailCommand{RelativePath: path})).Get()
+func (s *Admin) GetChatGPTImageThumbnail(ctx context.Context, apiKeyID, path string) ([]byte, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicGetThumbnail, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.GetThumbnailCommand{APIKeyID: apiKeyID, RelativePath: path})).Get()
 	if err != nil {
 		return nil, fmt.Errorf("chatgpt image thumbnail unavailable")
 	}
@@ -307,6 +307,16 @@ func (s *Admin) GetChatGPTImageThumbnail(ctx context.Context, path string) ([]by
 		return nil, fmt.Errorf("invalid chatgpt image thumbnail result")
 	}
 	return result.Bytes, nil
+}
+
+func (s *Admin) DeleteChatGPTImageScope(ctx context.Context, apiKeyID string) error {
+	_, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicDeleteScope, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.DeleteScopeCommand{APIKeyID: apiKeyID})).Get()
+	return err
+}
+
+func (s *Admin) DeleteChatGPTImageTaskScope(ctx context.Context, apiKeyID string) error {
+	_, err := s.SendEvent(event.NewEventWithContext(taskevents.TopicDeleteOwner, s.ID(), taskcommon.UnitID, event.NewHeader(), ctx, taskevents.DeleteOwnerCommand{OwnerID: apiKeyID})).Get()
+	return err
 }
 
 func (s *Admin) ChatGPTEffectiveCatalog(ctx context.Context) (effectivecatalog.Snapshot, error) {

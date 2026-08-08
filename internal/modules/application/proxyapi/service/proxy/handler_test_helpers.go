@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ai-proxy/internal/pkg/aiproxyarchive"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetrics"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -233,7 +234,7 @@ func withClientKey(h *Handler, id, secret string) {
 	}
 	sum := sha256.Sum256([]byte(secret))
 	hash := "sha256:" + hex.EncodeToString(sum[:])
-	_ = h.usageStore.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: id, Hash: hash, Enabled: true, CreatedAt: time.Now().UTC()})
+	_ = h.usageStore.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: id, Hash: hash, Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()})
 	if records, err := h.usageStore.ListClientAPIKeys(context.Background()); err == nil {
 		h.clientKeyIndex.Store(buildClientKeyIndexFromRecords(records))
 	}

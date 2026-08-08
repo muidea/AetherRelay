@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
+	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetrics"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -26,6 +28,21 @@ type testRuntime struct {
 	updates   int
 	version   string
 	startedAt time.Time
+	keyIndex  *clientauth.Index
+}
+
+func (r *testRuntime) PrepareClientKeyIndex(records map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error) {
+	entries := make([]clientauth.KeyEntry, 0, len(records))
+	for _, record := range records {
+		entries = append(entries, clientauth.KeyEntry{ID: record.ID, APIKeyHash: record.Hash, Enabled: record.Enabled, ProviderAccess: record.ProviderAccess})
+	}
+	return clientauth.PrepareIndex(entries)
+}
+
+func (r *testRuntime) ActivateClientKeyIndex(index *clientauth.Index) { r.keyIndex = index }
+
+func (r *testRuntime) EffectiveCatalogSnapshot() effectivecatalog.Snapshot {
+	return effectivecatalog.FromStatic(r.ConfigSnapshot())
 }
 
 type rejectingRuntime struct{ cfg config.Config }
@@ -555,7 +572,7 @@ func TestHandlerDeletesOnlyTargetProvider(t *testing.T) {
 		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
 	}
 	runtime := &testRuntime{cfg: cfg}
-	handler := NewHandler(path, runtime)
+	handler := NewHandlerWithUsage(path, runtime, usage.NewMemoryStore())
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/providers/other", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AI-Proxy-Admin", "1")
@@ -882,7 +899,7 @@ func TestDeleteClientAPIKeyRemovesInteractionScope(t *testing.T) {
 	runtime := &testRuntime{cfg: cfg}
 	store := usage.NewMemoryStore()
 	now := time.Now().UTC()
-	if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "ci-agent", Hash: "sha256:test", Enabled: true, CreatedAt: now}); err != nil {
+	if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "ci-agent", Hash: "sha256:test", Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()}); err != nil {
 		t.Fatal(err)
 	}
 	scope := filepath.Join(cfg.InteractionDir, "ci-agent")
@@ -907,6 +924,80 @@ func TestDeleteClientAPIKeyRemovesInteractionScope(t *testing.T) {
 	}
 	if _, ok := keys["ci-agent"]; ok {
 		t.Fatal("client API key metadata still exists")
+	}
+}
+
+func TestClientAPIKeyProviderAccessAndEffectiveModels(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	store := usage.NewMemoryStore()
+	handler := NewHandlerWithUsage(path, runtime, store)
+
+	create := httptest.NewRequest(http.MethodPost, "/admin/api/client-api-keys", strings.NewReader(`{"id":"scoped","provider_access":{"mode":"selected","provider_ids":["openai"]}}`))
+	create.RemoteAddr = "127.0.0.1:1234"
+	create.Header.Set("X-AI-Proxy-Admin", "1")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"mode":"selected"`) {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+
+	models := httptest.NewRequest(http.MethodGet, "/admin/api/client-api-keys/scoped/models", nil)
+	models.RemoteAddr = "127.0.0.1:1234"
+	modelResponse := httptest.NewRecorder()
+	handler.ServeHTTP(modelResponse, models)
+	if modelResponse.Code != http.StatusOK || !strings.Contains(modelResponse.Body.String(), `"id":"gpt-4o"`) || !strings.Contains(modelResponse.Body.String(), `"provider_ids":["openai"]`) {
+		t.Fatalf("models = %d %s", modelResponse.Code, modelResponse.Body.String())
+	}
+
+	update := httptest.NewRequest(http.MethodPut, "/admin/api/client-api-keys/scoped/provider-access", strings.NewReader(`{"mode":"all","provider_ids":[]}`))
+	update.RemoteAddr = "127.0.0.1:1234"
+	update.Header.Set("X-AI-Proxy-Admin", "1")
+	updated := httptest.NewRecorder()
+	handler.ServeHTTP(updated, update)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"mode":"all"`) {
+		t.Fatalf("update = %d %s", updated.Code, updated.Body.String())
+	}
+
+	bad := httptest.NewRequest(http.MethodPut, "/admin/api/client-api-keys/scoped/provider-access", strings.NewReader(`{"mode":"selected","provider_ids":["missing"]}`))
+	bad.RemoteAddr = "127.0.0.1:1234"
+	bad.Header.Set("X-AI-Proxy-Admin", "1")
+	badResponse := httptest.NewRecorder()
+	handler.ServeHTTP(badResponse, bad)
+	if badResponse.Code != http.StatusBadRequest {
+		t.Fatalf("unknown provider = %d %s", badResponse.Code, badResponse.Body.String())
+	}
+}
+
+func TestDeleteProviderRejectsSelectedClientKeyReference(t *testing.T) {
+	cfg := config.Config{Providers: map[string]config.Provider{
+		"target": {Name: "target", Protocol: "openai", BaseURL: "https://target.test", APIKey: "k", Models: []string{"model"}, Endpoints: []string{config.ProviderEndpointResponses}},
+	}, ModelMetadata: map[string]config.ModelMetadata{"model": {ID: "model"}}}
+	runtime := &testRuntime{cfg: cfg}
+	store := usage.NewMemoryStore()
+	policy, err := clientaccess.Selected([]string{"target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "bound", Hash: "sha256:" + strings.Repeat("0", 64), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: policy}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandlerWithUsage("", runtime, store)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/providers/target", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "bound") {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := runtime.ConfigSnapshot().Providers["target"]; !ok {
+		t.Fatal("referenced provider was deleted")
 	}
 }
 

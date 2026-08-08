@@ -49,6 +49,9 @@ func (h *Handler) FeatureCatalog(ctx context.Context) proxyevents.FeatureCatalog
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if _, ok := internalFeatureIdentity(ctx); !ok {
+		ctx = withInternalFeatureIdentity(ctx, "feature-catalog")
+	}
 	snap := h.EffectiveCatalog()
 	ids := make([]string, 0, len(snap.Candidates))
 	for id := range snap.Candidates {
@@ -113,6 +116,12 @@ func transportSupportsFileAttachments(plan TransportPlan) bool {
 }
 
 func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.ExecuteFeatureTextCommand) (proxyevents.ExecuteFeatureTextResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := internalFeatureIdentity(ctx); !ok {
+		ctx = withInternalFeatureIdentity(ctx, "feature-text")
+	}
 	model := strings.TrimSpace(command.Model)
 	if model == "" || len(command.Messages) == 0 {
 		return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("feature text model and messages are required")
@@ -230,6 +239,12 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 // /v1/search. Keeping the Admin page on this endpoint guarantees that a
 // same-model third-party Provider cannot receive a search request.
 func (h *Handler) ExecuteFeatureSearch(ctx context.Context, command proxyevents.ExecuteFeatureSearchCommand) (proxyevents.ExecuteFeatureSearchResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := internalFeatureIdentity(ctx); !ok {
+		ctx = withInternalFeatureIdentity(ctx, "feature-search")
+	}
 	model, query := strings.TrimSpace(command.Model), strings.TrimSpace(command.Query)
 	if model == "" || query == "" {
 		return proxyevents.ExecuteFeatureSearchResult{}, fmt.Errorf("feature search model and query are required")
@@ -261,6 +276,12 @@ func (h *Handler) ExecuteFeatureSearch(ctx context.Context, command proxyevents.
 }
 
 func (h *Handler) ExecuteFeatureImage(ctx context.Context, command proxyevents.ExecuteFeatureImageCommand) (proxyevents.ExecuteFeatureImageResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := internalFeatureIdentity(ctx); !ok {
+		ctx = withInternalFeatureIdentity(ctx, "feature-image")
+	}
 	model := strings.TrimSpace(command.Model)
 	if model == "" {
 		return proxyevents.ExecuteFeatureImageResult{}, fmt.Errorf("feature image model is required")

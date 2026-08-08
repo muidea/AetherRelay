@@ -19,6 +19,7 @@ type Request struct {
 	N              int
 	Images         [][]byte
 	BaseURL        string
+	APIKeyID       string
 }
 
 type Data struct {
@@ -46,6 +47,12 @@ type Result struct {
 type Executor interface {
 	GenerateImage(context.Context, Request) (Result, error)
 	EditImage(context.Context, Request) (Result, error)
+}
+
+// ResponseArchiver persists image bytes already present in a native provider
+// response. Implementations must not fetch arbitrary response URLs.
+type ResponseArchiver interface {
+	ArchiveResponseImages(context.Context, string, []byte, string) error
 }
 
 // AsFailure extracts a typed Failure from err, if present.

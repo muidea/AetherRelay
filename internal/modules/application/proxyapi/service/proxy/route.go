@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -126,6 +127,12 @@ func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, met
 // HTTP candidates can use the complete chain before committing a response;
 // stateful builtin executors apply stricter no-duplicate fallback boundaries.
 func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) ([]TransportPlan, *APIError) {
+	return ResolveTransportPlansForAccess(cfg, snap, clientaccess.All(), method, path, modelID)
+}
+
+// ResolveTransportPlansForAccess applies the authenticated client's provider
+// policy before endpoint compatibility and request-time health are evaluated.
+func ResolveTransportPlansForAccess(cfg config.Config, snap effectivecatalog.Snapshot, policy clientaccess.Policy, method, path, modelID string) ([]TransportPlan, *APIError) {
 	clientEndpoint := NormalizeClientEndpoint(path)
 	clientProtocol := ClientProtocolForPath(clientEndpoint)
 	modelID = strings.TrimSpace(modelID)
@@ -160,7 +167,7 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 		}
 	}
 
-	if _, ok := snap.Lookup(modelID); !ok {
+	if _, ok := snap.LookupForAccess(modelID, policy); !ok {
 		return nil, &APIError{
 			Code:           ErrorCodeModelNotFound,
 			Message:        fmt.Sprintf("model %q was not found in the effective model catalog", modelID),
@@ -169,7 +176,7 @@ func ResolveTransportPlans(cfg config.Config, snap effectivecatalog.Snapshot, me
 			ClientProtocol: clientProtocol,
 		}
 	}
-	candidates := snap.CandidatesFor(modelID)
+	candidates := snap.CandidatesForAccess(modelID, policy)
 
 	compatible := make([]TransportPlan, 0, len(candidates))
 	for _, candidate := range candidates {

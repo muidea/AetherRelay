@@ -2,13 +2,18 @@ package biz
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	admincommon "ai-proxy/internal/modules/application/adminapi/pkg/common"
+	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
+	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	basebiz "ai-proxy/internal/modules/base/biz"
 	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
 	metricsevents "ai-proxy/internal/modules/blocks/metricsruntime/pkg/events"
 	usageevents "ai-proxy/internal/modules/blocks/usageruntime/pkg/events"
+	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -82,4 +87,32 @@ func (s *Admin) ReplaceProviders(providers map[string]config.Provider) error {
 func (s *Admin) ProviderStorageAvailable() bool {
 	bootstrap, err := configevents.RequestBootstrap(context.Background(), s.EventHub(), s.ID())
 	return err == nil && bootstrap.ProviderStorageAvailable
+}
+
+func (s *Admin) PrepareClientKeyIndex(records map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicPrepareClientKeyIndex, s.ID(), proxycommon.UnitID, event.NewHeader(), context.Background(), proxyevents.PrepareClientKeyIndexCommand{Records: records})).Get()
+	if err != nil {
+		return nil, fmt.Errorf("prepare client key index: %s", err.Message)
+	}
+	response, ok := value.(proxyevents.PrepareClientKeyIndexResult)
+	if !ok || response.Index == nil {
+		return nil, fmt.Errorf("invalid client key index result")
+	}
+	return response.Index, nil
+}
+
+func (s *Admin) ActivateClientKeyIndex(index *clientauth.Index) {
+	_, _ = s.SendEvent(event.NewEventWithContext(proxyevents.TopicActivateClientKeyIndex, s.ID(), proxycommon.UnitID, event.NewHeader(), context.Background(), proxyevents.ActivateClientKeyIndexCommand{Index: index})).Get()
+}
+
+func (s *Admin) EffectiveCatalogSnapshot() effectivecatalog.Snapshot {
+	value, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicEffectiveCatalog, s.ID(), proxycommon.UnitID, event.NewHeader(), context.Background(), proxyevents.EffectiveCatalogCommand{})).Get()
+	if err != nil {
+		return effectivecatalog.Snapshot{}
+	}
+	response, ok := value.(proxyevents.EffectiveCatalogResult)
+	if !ok {
+		return effectivecatalog.Snapshot{}
+	}
+	return response.Snapshot
 }

@@ -2,6 +2,8 @@
 
 功能域：入站端点、模型路由、协议转换与统一流式。对应正式合同见[配置参考](../configuration.md)与[功能说明](../features.md)；本设计说明最终机制与关键合同。演进历史：早期设计（2026-07-15 Provider Capability Contract）曾以单一 RouteOwner 为路由目标，后演进为按 `priority` 排序的有序候选链与安全回退，见[演进记录](#演进记录)。
 
+候选链按客户端 Key 限定 Provider 访问范围的收口合同见[客户端 API Key、Provider 与模型联动收口设计](client-api-key-provider-access.md)。
+
 ## 设计目标
 
 - 客户端只认标准 OpenAI / Anthropic 接口，请求形态不反向定义上游能力。
@@ -32,6 +34,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 - **两阶段解析**：启动期 `config.Load` 只规范化并校验配置；`effectivecatalog` 收集 enabled Provider 的精确 `models` 与账号池发现 ID，再按所有 Provider pattern 生成候选、按 `priority` 排序，最后按 exact ID 覆盖 `model_metadata`。metadata 与通配 pattern 都不能单独物化模型。请求期 `ResolveTransportPlan` 再按请求 path、候选 Provider 的 `endpoints` 与固定矩阵生成 TransportPlan。
 - **候选链**：一个 exact model 可对应多个 enabled Provider，按 `priority`（`-1000`~`1000`，默认 `100`）降序排列，同优先级按 Provider 名稳定排序。内建 Provider 参与同一候选链：静态默认 `100`，Codex OAuth 默认 `90`，ChatGPT Web 默认 `10` 且不作为回退候选。同名模型保留全部候选，不相互覆盖。
+- **客户端范围**：认证身份携带 ProviderAccess；`/v1/models` 和 `ResolveTransportPlansForAccess` 都先按该范围裁剪候选，再计算 endpoint/转换能力、priority/fallback 和健康度。未授权候选不能贡献能力，也不能成为故障转移目标。
 - **回退策略**：仅当客户端响应尚未提交时，对网络错误、`408`、`429`、`5xx` 与流式首事件探测失败，按候选 `fallback: true` 尝试下一项；一次已写出的 SSE/HTTP 响应绝不切换。图片任务一旦提交不回退。
 - **健康度与熔断**：5 分钟有界样本窗口；少于 3 个样本为 `unknown`；连续 3 次可重试失败打开 30 秒熔断；路由跳过熔断 / `unhealthy` / `credential_error` 候选。健康度不替代账号池的真实可用性判断。
 - **不变量**：不存在 `default_provider`、旧 `fallbacks` 列表、`X-AI-Provider`、`?provider=` 或 `provider/model` 前缀等任何请求侧覆盖手段；客户端认证头不转发上游。

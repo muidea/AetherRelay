@@ -81,6 +81,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - Key ID 匹配 `[a-z0-9][a-z0-9._-]{0,63}`；`default` 为历史用量保留 ID，不能配置。
 - 原始 Key 不写入日志、归档或管理 API，也不转发给上游；DuckDB 只保存 SHA-256 摘要。创建/轮换仅在成功响应中显示一次明文。
 - Admin 可创建、启停、轮换、删除 Key；创建时间和最后使用时间保存在 DuckDB 并在管理页展示。完整配置见[配置参考](configuration.md#客户端-api-key)。
+- 每个 Key 必须选择 `selected`（一个或多个具体 Provider）或 `all`（当前及未来 Provider）访问范围。模型目录、端点能力、转换能力、路由和 fallback 都先按该范围裁剪；零值/非法策略拒绝激活，不会隐式放宽。
 
 ## 用量统计
 
@@ -104,7 +105,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ### 客户端 Key
 
-创建、启停、轮换、删除客户端 API Key；管理端生成的 Key 仅以 SHA-256 摘要保存在 DuckDB。删除 Key 时同步删除其用量调用明细与 `interactions/{api_key_id}/` 交互归档。
+创建、启停、轮换、删除客户端 API Key，并可编辑 Provider 访问范围、查看当前有效 Provider 与去重模型目录。管理端生成的 Key 仅以 SHA-256 摘要保存在 DuckDB。删除 Key 时同步删除其 Provider 关联、用量调用明细与 `interactions/{api_key_id}/` 交互归档。静态 Provider 被 `selected` Key 引用时拒绝删除并列出引用 Key；先解除绑定后才能删除。
 
 ### 使用统计
 
@@ -134,8 +135,8 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - **临时对话**：Admin 服务端持久化的多轮文本对话（DuckDB 专用表，浏览器不落会话正文）；可附加图片（最多 4 张、合计 20 MiB，PNG/JPEG/GIF/WebP）、逐轮启用联网搜索；保留期 `temporary_chat.retention_days`（默认 30 天）；达到 `max_conversations` 拒绝新建，不静默删历史；重启时 `streaming` 消息标记 `interrupted`，会话进入 `recovery_required`。research / deep_research 专用模型不进入选择器。
 - **在线搜索**：隔离的强制 ChatGPT Web 搜索页面，结果（答案、查询、来源）服务端保存于 `state.database` 的 `chatgpt_web_search_history`，按登录管理员用户名隔离（未启用登录时用本地 `admin` 作用域）；每个作用域最多 200 条，自动清理 30 天前记录；搜索历史不写入浏览器存储。
-- **图片任务**：文生图 / 图生图任务提交与轮询；`size`、`quality` 可从常用值中选择，也允许输入上游模型支持的扩展值；按 `owner_id` 隔离。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：ai-proxy 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
-- **图片库**：图片列表、标签、删除（不可恢复）与缩略图；内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。
+- **图片任务**：文生图 / 图生图任务提交与轮询；`size`、`quality` 可从常用值中选择，也允许输入上游模型支持的扩展值；以 `api_key_id` 隔离。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：ai-proxy 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
+- **图片库**：图片列表、标签、删除（不可恢复）与缩略图均要求 `api_key_id`，只返回该 Key 的资产；内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。客户端 Key 删除时同步清除图片任务、图片资产、缩略图、标签和交互归档。
 
 两个账号池始终装配；没有可用账号时，页面显示空池状态，数据面返回明确的无可用账号或模型错误。
 
@@ -145,7 +146,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - **文本代理**：`/v1/chat/completions` 支持纯文本与 `text` / `image_url` content parts（仅 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图 ≤4000 万像素；不下载远程 URL，无 SSRF 通道；图片仅限 `user` 消息）。
 - **受限 Responses 投影**：`/v1/responses` 无状态投影，支持字符串/message-array `input`、`instructions`、`reasoning.effort`、`input_text`、data-URI `input_image` 与基础 buffered/SSE；不保存会话，不支持 tools（除 web_search）、JSON Schema、`previous_response_id`、realtime、远程图片 URL、file ID。可兼容忽略的字段在 `ignored_features` 中可审计；改变语义的字段返回 `conversion_unsupported`。
-- **图片**：`/v1/images/generations` / `/v1/images/edits` 代理上游生图；图片字节只存本地文件系统，DuckDB 只存元数据与 SHA-256 摘要；interaction archive 对 data URI / `b64_json` 只存 MIME、字节数与摘要；`rate_limit` / TLS / 超时 / 上游故障生成 60 秒生图冷却；`invalid_token` 先 OAuth 刷新，仅未创建 conversation 时重投一次。
+- **图片**：`/v1/images/generations` / `/v1/images/edits` 代理上游生图；成功响应中的图片字节按认证得到的 `api_key_id` 存储，原始 API Key 不进入路径、数据库或日志；仅对响应内 `b64_json` 归档，绝不主动下载任意 URL。
 - **在线搜索**：`/v1/search` 扩展端点（仅接受 `model` + 纯文本 `query`，返回 `search.result` 含 `output_text`、`sources`、估算 `usage`），只选择内建 `chatgptweb` 的已发现模型；协议内唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`（或 `web_search_options`），启动一次隔离的强制搜索会话，仅使用最后一条纯文本 user 消息作为 query。无可用搜索能力时返回明确错误，不降级为普通文本生成。`POST /v1/search` 保持无状态，不写搜索历史。
 
 ## Codex OAuth 账号池

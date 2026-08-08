@@ -52,6 +52,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(usageevents.TopicClientKeyRotate, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyRevoke, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyDelete, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyAccess, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyRefs, biz.handleClientKeyCommand)
 	return biz, nil
 }
 
@@ -79,6 +81,8 @@ func (s *UsageRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(usageevents.TopicClientKeyRotate)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyRevoke)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyDelete)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyAccess)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyRefs)
 	if s.runtime != nil {
 		s.runtime.Close(ctx)
 	}
@@ -309,6 +313,16 @@ func (s *UsageRuntime) handleClientKeyCommand(ev event.Event, result event.Resul
 		err = st.RevokeClientAPIKey(ev.Context(), c.ID, c.At)
 	case usageevents.ClientKeyDeleteCommand:
 		err = st.DeleteClientAPIKey(ev.Context(), c.ID)
+	case usageevents.ClientKeyAccessCommand:
+		err = st.SetClientAPIKeyProviderAccess(ev.Context(), c.ID, c.Policy)
+	case usageevents.ClientKeyProviderRefsCommand:
+		ids, e := st.ClientAPIKeyIDsForProvider(ev.Context(), c.ProviderID)
+		if e != nil {
+			err = e
+		} else {
+			result.Set(usageevents.ClientKeyProviderRefsResult{IDs: ids}, nil)
+			return
+		}
 	default:
 		err = fmt.Errorf("invalid client key command")
 	}

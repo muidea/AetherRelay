@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -412,6 +413,17 @@ func (s Snapshot) CandidatesFor(modelID string) []Candidate {
 	return result
 }
 
+func (s Snapshot) CandidatesForAccess(modelID string, policy clientaccess.Policy) []Candidate {
+	items := s.CandidatesFor(modelID)
+	result := make([]Candidate, 0, len(items))
+	for _, item := range items {
+		if policy.Allows(item.RouteOwner) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 // Lookup resolves the first ordered candidate for a model.
 func (s Snapshot) Lookup(modelID string) (Route, bool) {
 	modelID = strings.TrimSpace(modelID)
@@ -419,6 +431,18 @@ func (s Snapshot) Lookup(modelID string) (Route, bool) {
 		return Route{}, false
 	}
 	candidates := s.CandidatesFor(modelID)
+	if len(candidates) == 0 {
+		return Route{}, false
+	}
+	primary := candidates[0]
+	return Route{
+		ModelID: primary.ModelID, RouteOwner: primary.RouteOwner, Builtin: primary.Builtin,
+		CreatedAt: primary.CreatedAt, OwnedBy: primary.OwnedBy, ContextWindowTokens: primary.ContextWindowTokens, MaxOutputTokens: primary.MaxOutputTokens,
+	}, true
+}
+
+func (s Snapshot) LookupForAccess(modelID string, policy clientaccess.Policy) (Route, bool) {
+	candidates := s.CandidatesForAccess(modelID, policy)
 	if len(candidates) == 0 {
 		return Route{}, false
 	}
@@ -439,6 +463,32 @@ func (s Snapshot) SortedModelIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (s Snapshot) SortedModelIDsForAccess(policy clientaccess.Policy) []string {
+	ids := make([]string, 0, len(s.Candidates))
+	for id := range s.Candidates {
+		if len(s.CandidatesForAccess(id, policy)) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (s Snapshot) ProviderIDsForAccess(policy clientaccess.Policy) []string {
+	seen := map[string]struct{}{}
+	for modelID := range s.Candidates {
+		for _, candidate := range s.CandidatesForAccess(modelID, policy) {
+			seen[candidate.RouteOwner] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for id := range seen {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // BuiltinProviderView returns a synthetic Provider used by the transport matrix.

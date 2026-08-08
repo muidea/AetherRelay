@@ -29,6 +29,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"ai-proxy/internal/pkg/aiproxyarchive"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetrics"
@@ -127,7 +128,7 @@ func withInternalFeatureIdentity(ctx context.Context, ownerID string) context.Co
 	if ownerID == "" {
 		ownerID = "admin"
 	}
-	return context.WithValue(ctx, internalFeatureIdentityKey{}, clientauth.ClientIdentity{KeyID: "admin:" + ownerID})
+	return context.WithValue(ctx, internalFeatureIdentityKey{}, clientauth.ClientIdentity{KeyID: "admin:" + ownerID, ProviderAccess: clientaccess.All()})
 }
 
 func internalFeatureIdentity(ctx context.Context) (clientauth.ClientIdentity, bool) {
@@ -189,10 +190,18 @@ func (h *Handler) ReplaceEffectiveCatalog(snap effectivecatalog.Snapshot) {
 // Client API keys are reloaded from the usage store; the usage-store path is
 // not hot-swappable.
 func (h *Handler) UpdateConfig(cfg config.Config) error {
-	idx := clientauth.BuildIndex(nil)
+	idx, err := clientauth.PrepareIndex(nil)
+	if err != nil {
+		return err
+	}
 	if h.usageStore != nil {
-		if records, err := h.usageStore.ListClientAPIKeys(context.Background()); err == nil {
-			idx = buildClientKeyIndexFromRecords(records)
+		records, err := h.usageStore.ListClientAPIKeys(context.Background())
+		if err != nil {
+			return fmt.Errorf("load client api keys: %w", err)
+		}
+		idx, err = prepareClientKeyIndexFromRecords(records)
+		if err != nil {
+			return err
 		}
 	}
 	if err := requireResolvedConfig(cfg); err != nil {
@@ -246,7 +255,7 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 	if ms, ok := usageStore.(*usage.MemoryStore); ok {
 		if records, err := ms.ListClientAPIKeys(context.Background()); err == nil && len(records) == 0 {
 			sum := sha256.Sum256([]byte("test-client-key"))
-			_ = ms.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC()})
+			_ = ms.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()})
 		}
 	}
 	if usageStore != nil {
@@ -262,10 +271,18 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 		driftTracker:        NewFingerprintDriftTracker(2),
 		client:              newHTTPClient(cfg.RequestTimeout),
 	}
-	idx := clientauth.BuildIndex(nil)
+	idx, err := clientauth.PrepareIndex(nil)
+	if err != nil {
+		panic("proxy.NewHandler: prepare empty client key index: " + err.Error())
+	}
 	if usageStore != nil {
-		if records, err := usageStore.ListClientAPIKeys(context.Background()); err == nil {
-			idx = buildClientKeyIndexFromRecords(records)
+		records, err := usageStore.ListClientAPIKeys(context.Background())
+		if err != nil {
+			panic("proxy.NewHandler: load client api keys: " + err.Error())
+		}
+		idx, err = prepareClientKeyIndexFromRecords(records)
+		if err != nil {
+			panic("proxy.NewHandler: " + err.Error())
 		}
 	}
 	h.clientKeyIndex.Store(idx)
@@ -273,14 +290,37 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 	return h
 }
 
-func buildClientKeyIndexFromRecords(records map[string]usage.ClientAPIKeyRecord) *clientauth.Index {
+func prepareClientKeyIndexFromRecords(records map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error) {
 	keys := make([]clientauth.KeyEntry, 0, len(records))
 	for id, r := range records {
 		if r.Hash != "" && r.Enabled && r.RevokedAt == nil {
-			keys = append(keys, clientauth.KeyEntry{ID: id, APIKeyHash: r.Hash, Enabled: true})
+			keys = append(keys, clientauth.KeyEntry{ID: id, APIKeyHash: r.Hash, Enabled: true, ProviderAccess: r.ProviderAccess})
 		}
 	}
-	return clientauth.BuildIndex(keys)
+	return clientauth.PrepareIndex(keys)
+}
+
+func buildClientKeyIndexFromRecords(records map[string]usage.ClientAPIKeyRecord) *clientauth.Index {
+	idx, err := prepareClientKeyIndexFromRecords(records)
+	if err != nil {
+		return clientauth.BuildIndex(nil)
+	}
+	return idx
+}
+
+func (h *Handler) PrepareClientKeyIndex(records map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error) {
+	return prepareClientKeyIndexFromRecords(records)
+}
+
+func (h *Handler) ActivateClientKeyIndex(index *clientauth.Index) {
+	if index == nil {
+		index = clientauth.BuildIndex(nil)
+	}
+	h.clientKeyIndex.Store(index)
+}
+
+func (h *Handler) EffectiveCatalogSnapshot() effectivecatalog.Snapshot {
+	return h.EffectiveCatalog()
 }
 
 // requireResolvedConfig 要求 Config 已通过 config.Load 的 authority 合同。
@@ -441,7 +481,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Client key lifecycle metadata is persisted separately from the key
 	// definition. A failed metadata write must never block an authenticated
 	// request or expose storage details to the caller.
-	if h.usageStore != nil {
+	if h.usageStore != nil && !internal {
 		_ = h.usageStore.TouchClientAPIKey(r.Context(), identity.KeyID, time.Now().UTC())
 	}
 	r = r.WithContext(clientauth.WithClientIdentity(r.Context(), identity))
@@ -508,7 +548,10 @@ func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID str
 		})
 		return false
 	}
-	identity := clientauth.ClientIdentityFromContext(r.Context())
+	identity, internal := internalFeatureIdentity(r.Context())
+	if !internal {
+		identity = clientauth.ClientIdentityFromContext(r.Context())
+	}
 	path := NormalizeClientEndpoint(r.URL.Path)
 	rec := usage.StartRecord{
 		EventID:        eventID,
@@ -1457,6 +1500,15 @@ func (h *Handler) handleBufferedResponse(w http.ResponseWriter, resp *http.Respo
 	if readErr != nil {
 		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, readErr.Error())
 		return
+	}
+	if resp.StatusCode < http.StatusBadRequest && (r.URL.Path == "/v1/images/generations" || r.URL.Path == "/v1/images/edits") {
+		if archiver, ok := h.chatGPTImage.(chatgptimage.ResponseArchiver); ok {
+			identity := clientauth.ClientIdentityFromContext(r.Context())
+			if err := archiver.ArchiveResponseImages(r.Context(), identity.KeyID, responseBody, imageBaseURL(r)); err != nil {
+				h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, "image_archive_error: "+err.Error())
+				return
+			}
+		}
 	}
 	copyResponseHeader(w.Header(), responseHeader)
 	w.WriteHeader(resp.StatusCode)
@@ -2554,7 +2606,11 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 			path = r.URL.Path
 		}
 	}
-	plans, apiErr := ResolveTransportPlans(h.currentConfig(), h.EffectiveCatalog(), method, path, model)
+	identity, internal := internalFeatureIdentity(r.Context())
+	if !internal {
+		identity = clientauth.ClientIdentityFromContext(r.Context())
+	}
+	plans, apiErr := ResolveTransportPlansForAccess(h.currentConfig(), h.EffectiveCatalog(), identity.ProviderAccess, method, path, model)
 	if apiErr != nil {
 		return nil, apiErr
 	}

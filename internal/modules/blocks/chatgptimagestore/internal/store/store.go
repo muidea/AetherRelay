@@ -23,6 +23,7 @@ import (
 )
 
 type indexEntry struct {
+	APIKeyID  string `json:"api_key_id"`
 	Path      string `json:"path"`
 	Size      int64  `json:"size"`
 	Width     int    `json:"width,omitempty"`
@@ -35,7 +36,7 @@ type Store struct {
 	root      string
 	documents *aiproxystate.Documents
 	index     map[string]indexEntry
-	tags      map[string][]string
+	tags      map[string]map[string][]string
 }
 
 // Open creates the image-store owner's state store and reports startup errors.
@@ -43,7 +44,7 @@ func Open(root, databasePath, memoryLimit string, threads int) (*Store, error) {
 	s := &Store{
 		root:  root,
 		index: map[string]indexEntry{},
-		tags:  map[string][]string{},
+		tags:  map[string]map[string][]string{},
 	}
 	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
@@ -78,13 +79,22 @@ func (s *Store) loadTags() error {
 	if err != nil {
 		return err
 	}
-	for path, tags := range raw {
-		path = safeRel(path)
-		if path == "" {
+	for apiKeyID, scoped := range raw {
+		apiKeyID = cleanAPIKeyID(apiKeyID)
+		if apiKeyID == "" {
 			continue
 		}
-		if cleaned := cleanTags(tags); len(cleaned) > 0 {
-			s.tags[path] = cleaned
+		for path, tags := range scoped {
+			path = safeRel(path)
+			if path == "" {
+				continue
+			}
+			if cleaned := cleanTags(tags); len(cleaned) > 0 {
+				if s.tags[apiKeyID] == nil {
+					s.tags[apiKeyID] = map[string][]string{}
+				}
+				s.tags[apiKeyID][path] = cleaned
+			}
 		}
 	}
 	return nil
@@ -106,11 +116,12 @@ func (s *Store) loadIndex() error {
 		return err
 	}
 	for _, row := range rows {
+		apiKeyID := cleanAPIKeyID(row.APIKeyID)
 		path := safeRel(row.Path)
-		if path == "" {
+		if apiKeyID == "" || path == "" {
 			continue
 		}
-		s.index[path] = indexEntry{Path: path, Size: row.Size, Width: row.Width, Height: row.Height, CreatedAt: row.CreatedAt}
+		s.index[imageKey(apiKeyID, path)] = indexEntry{APIKeyID: apiKeyID, Path: path, Size: row.Size, Width: row.Width, Height: row.Height, CreatedAt: row.CreatedAt}
 	}
 	return nil
 }
@@ -120,12 +131,12 @@ func (s *Store) saveIndexLocked() error {
 		return fmt.Errorf("state documents are unavailable")
 	}
 	rows := make([]aiproxystate.ImageRow, 0, len(s.index))
-	for path, entry := range s.index {
+	for _, entry := range s.index {
 		payload, err := json.Marshal(entry)
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aiproxystate.ImageRow{Path: path, Size: entry.Size, Width: entry.Width, Height: entry.Height, CreatedAt: entry.CreatedAt, Payload: payload})
+		rows = append(rows, aiproxystate.ImageRow{APIKeyID: entry.APIKeyID, Path: entry.Path, Size: entry.Size, Width: entry.Width, Height: entry.Height, CreatedAt: entry.CreatedAt, Payload: payload})
 	}
 	return s.documents.ReplaceImages(rows)
 }
@@ -137,9 +148,17 @@ func (s *Store) Close() error {
 	return s.documents.Close()
 }
 
-func (s *Store) Save(payload []byte, baseURL string) (events.SaveResult, error) {
+func (s *Store) Save(payload []byte, baseURL string, scopes ...string) (events.SaveResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "" {
+		return events.SaveResult{}, fmt.Errorf("api_key_id is required")
+	}
 
 	now := time.Now().UTC()
 	sum := md5.Sum(payload)
@@ -149,7 +168,7 @@ func (s *Store) Save(payload []byte, baseURL string) (events.SaveResult, error) 
 		fmt.Sprintf("%02d", now.Day()),
 		fmt.Sprintf("%d_%s.png", now.UnixMilli(), hex.EncodeToString(sum[:8])),
 	))
-	full := filepath.Join(s.root, "images", filepath.FromSlash(rel))
+	full := filepath.Join(s.root, "images", scopeDir(apiKeyID), filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return events.SaveResult{}, err
 	}
@@ -158,34 +177,51 @@ func (s *Store) Save(payload []byte, baseURL string) (events.SaveResult, error) 
 	}
 	w, h := imageDims(payload)
 	entry := indexEntry{
+		APIKeyID:  apiKeyID,
 		Path:      rel,
 		Size:      int64(len(payload)),
 		Width:     w,
 		Height:    h,
 		CreatedAt: now.Format(time.RFC3339),
 	}
-	s.index[rel] = entry
+	s.index[imageKey(apiKeyID, rel)] = entry
 	if err := s.saveIndexLocked(); err != nil {
 		return events.SaveResult{}, err
 	}
 	return events.SaveResult{
 		RelativePath: rel,
-		PublicURL:    publicURL(baseURL, rel),
+		PublicURL:    publicURL(baseURL, apiKeyID, rel),
 		Width:        w,
 		Height:       h,
 		Size:         len(payload),
 	}, nil
 }
 
-func (s *Store) GetBytes(rel string) ([]byte, error) {
+func (s *Store) GetBytes(rel string, scopes ...string) ([]byte, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	rel = safeRel(rel)
-	full := filepath.Join(s.root, "images", filepath.FromSlash(rel))
+	if apiKeyID == "" || rel == "" {
+		return nil, fmt.Errorf("invalid image scope or path")
+	}
+	full := filepath.Join(s.root, "images", scopeDir(apiKeyID), filepath.FromSlash(rel))
 	return os.ReadFile(full)
 }
 
-func (s *Store) Exists(rel string) bool {
+func (s *Store) Exists(rel string, scopes ...string) bool {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	rel = safeRel(rel)
-	full := filepath.Join(s.root, "images", filepath.FromSlash(rel))
+	if apiKeyID == "" || rel == "" {
+		return false
+	}
+	full := filepath.Join(s.root, "images", scopeDir(apiKeyID), filepath.FromSlash(rel))
 	_, err := os.Stat(full)
 	return err == nil
 }
@@ -193,22 +229,27 @@ func (s *Store) Exists(rel string) bool {
 // EnsureThumbnail creates a PNG thumbnail whose longest side is at most 320
 // pixels. It uses a deterministic in-process scaler so image management has
 // no external image-service dependency.
-func (s *Store) EnsureThumbnail(rel, baseURL string) (events.EnsureThumbnailResult, error) {
+func (s *Store) EnsureThumbnail(rel, baseURL string, scopes ...string) (events.EnsureThumbnailResult, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	rel = safeRel(rel)
-	if rel == "" {
+	if apiKeyID == "" || rel == "" {
 		return events.EnsureThumbnailResult{}, fmt.Errorf("invalid image path")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	source := filepath.Join(s.root, "images", filepath.FromSlash(rel))
+	source := filepath.Join(s.root, "images", scopeDir(apiKeyID), filepath.FromSlash(rel))
 	info, err := os.Stat(source)
 	if err != nil {
 		return events.EnsureThumbnailResult{}, err
 	}
 	targetRel := rel + ".png"
-	target := filepath.Join(s.root, "image_thumbnails", filepath.FromSlash(targetRel))
+	target := filepath.Join(s.root, "image_thumbnails", scopeDir(apiKeyID), filepath.FromSlash(targetRel))
 	if thumbInfo, statErr := os.Stat(target); statErr == nil && !thumbInfo.ModTime().Before(info.ModTime()) {
-		return events.EnsureThumbnailResult{ThumbnailPath: targetRel, URL: publicThumbURL(baseURL, rel)}, nil
+		return events.EnsureThumbnailResult{ThumbnailPath: targetRel, URL: publicThumbURL(baseURL, apiKeyID, rel)}, nil
 	}
 	payload, err := os.ReadFile(source)
 	if err != nil {
@@ -241,35 +282,51 @@ func (s *Store) EnsureThumbnail(rel, baseURL string) (events.EnsureThumbnailResu
 		_ = os.Remove(tmp)
 		return events.EnsureThumbnailResult{}, err
 	}
-	return events.EnsureThumbnailResult{ThumbnailPath: targetRel, URL: publicThumbURL(baseURL, rel)}, nil
+	return events.EnsureThumbnailResult{ThumbnailPath: targetRel, URL: publicThumbURL(baseURL, apiKeyID, rel)}, nil
 }
 
-func (s *Store) GetThumbnailBytes(rel string) ([]byte, error) {
+func (s *Store) GetThumbnailBytes(rel string, scopes ...string) ([]byte, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	rel = safeRel(rel)
-	if rel == "" {
+	if apiKeyID == "" || rel == "" {
 		return nil, fmt.Errorf("invalid image path")
 	}
-	if _, err := s.EnsureThumbnail(rel, ""); err != nil {
+	if _, err := s.EnsureThumbnail(rel, "", apiKeyID); err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(s.root, "image_thumbnails", filepath.FromSlash(rel)+".png"))
+	return os.ReadFile(filepath.Join(s.root, "image_thumbnails", scopeDir(apiKeyID), filepath.FromSlash(rel)+".png"))
 }
 
-func (s *Store) Delete(paths []string) (int, error) {
+func (s *Store) Delete(paths []string, scopes ...string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "" {
+		return 0, fmt.Errorf("api_key_id is required")
+	}
 	deleted := 0
 	for _, p := range paths {
 		rel := safeRel(p)
-		full := filepath.Join(s.root, "images", filepath.FromSlash(rel))
+		if rel == "" {
+			continue
+		}
+		full := filepath.Join(s.root, "images", scopeDir(apiKeyID), filepath.FromSlash(rel))
 		if err := os.Remove(full); err == nil || os.IsNotExist(err) {
 			if err == nil {
 				deleted++
 			}
-			delete(s.index, rel)
-			delete(s.tags, rel)
+			delete(s.index, imageKey(apiKeyID, rel))
+			delete(s.tags[apiKeyID], rel)
 			// thumbnail
-			_ = os.Remove(filepath.Join(s.root, "image_thumbnails", filepath.FromSlash(rel)+".png"))
+			_ = os.Remove(filepath.Join(s.root, "image_thumbnails", scopeDir(apiKeyID), filepath.FromSlash(rel)+".png"))
 		}
 	}
 	if err := s.saveIndexLocked(); err != nil {
@@ -281,11 +338,19 @@ func (s *Store) Delete(paths []string) (int, error) {
 	return deleted, nil
 }
 
-func (s *Store) List(baseURL, startDate, endDate string) []events.ImageItem {
+func (s *Store) List(baseURL, startDate, endDate string, scopes ...string) []events.ImageItem {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	out := make([]events.ImageItem, 0, len(s.index))
 	for _, e := range s.index {
+		if e.APIKeyID != apiKeyID {
+			continue
+		}
 		if startDate != "" && e.CreatedAt < startDate {
 			continue
 		}
@@ -303,22 +368,27 @@ func (s *Store) List(baseURL, startDate, endDate string) []events.ImageItem {
 			Name:         name,
 			Date:         date,
 			Size:         e.Size,
-			URL:          publicURL(baseURL, e.Path),
-			ThumbnailURL: publicThumbURL(baseURL, e.Path),
+			URL:          publicURL(baseURL, apiKeyID, e.Path),
+			ThumbnailURL: publicThumbURL(baseURL, apiKeyID, e.Path),
 			CreatedAt:    e.CreatedAt,
 			Width:        e.Width,
 			Height:       e.Height,
-			Tags:         append([]string(nil), s.tags[e.Path]...),
+			Tags:         append([]string(nil), s.tags[apiKeyID][e.Path]...),
 		})
 	}
 	return out
 }
 
-func (s *Store) ListTags() []string {
+func (s *Store) ListTags(scopes ...string) []string {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	seen := map[string]struct{}{}
-	for _, tags := range s.tags {
+	for _, tags := range s.tags[apiKeyID] {
 		for _, tag := range tags {
 			seen[tag] = struct{}{}
 		}
@@ -331,18 +401,29 @@ func (s *Store) ListTags() []string {
 	return result
 }
 
-func (s *Store) SetTags(path string, tags []string) ([]string, error) {
+func (s *Store) SetTags(path string, tags []string, scopes ...string) ([]string, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	path = safeRel(path)
-	if path == "" {
+	if apiKeyID == "" || path == "" {
 		return nil, fmt.Errorf("invalid image path")
 	}
 	cleaned := cleanTags(tags)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.index[imageKey(apiKeyID, path)]; !exists {
+		return nil, fmt.Errorf("image not found")
+	}
+	if s.tags[apiKeyID] == nil {
+		s.tags[apiKeyID] = map[string][]string{}
+	}
 	if len(cleaned) == 0 {
-		delete(s.tags, path)
+		delete(s.tags[apiKeyID], path)
 	} else {
-		s.tags[path] = cleaned
+		s.tags[apiKeyID][path] = cleaned
 	}
 	if err := s.saveTagsLocked(); err != nil {
 		return nil, err
@@ -350,15 +431,20 @@ func (s *Store) SetTags(path string, tags []string) ([]string, error) {
 	return append([]string(nil), cleaned...), nil
 }
 
-func (s *Store) DeleteTag(tag string) (int, error) {
+func (s *Store) DeleteTag(tag string, scopes ...string) (int, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
 	tag = strings.TrimSpace(tag)
-	if tag == "" {
+	if apiKeyID == "" || tag == "" {
 		return 0, fmt.Errorf("tag is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := 0
-	for path, tags := range s.tags {
+	for path, tags := range s.tags[apiKeyID] {
 		updated := make([]string, 0, len(tags))
 		changed := false
 		for _, item := range tags {
@@ -373,9 +459,9 @@ func (s *Store) DeleteTag(tag string) (int, error) {
 		}
 		removed++
 		if len(updated) == 0 {
-			delete(s.tags, path)
+			delete(s.tags[apiKeyID], path)
 		} else {
-			s.tags[path] = updated
+			s.tags[apiKeyID][path] = updated
 		}
 	}
 	if removed > 0 {
@@ -386,12 +472,21 @@ func (s *Store) DeleteTag(tag string) (int, error) {
 	return removed, nil
 }
 
-func (s *Store) StorageStats() (events.StorageStatsResult, error) {
-	imagesRoot := filepath.Join(s.root, "images")
+func (s *Store) StorageStats(scopes ...string) (events.StorageStatsResult, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "" {
+		return events.StorageStatsResult{}, fmt.Errorf("api_key_id is required")
+	}
+	diskRoot := filepath.Join(s.root, "images")
+	imagesRoot := filepath.Join(diskRoot, scopeDir(apiKeyID))
 	if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
 		return events.StorageStatsResult{}, err
 	}
-	total, free, err := diskSpace(imagesRoot)
+	total, free, err := diskSpace(diskRoot)
 	if err != nil {
 		return events.StorageStatsResult{}, err
 	}
@@ -424,10 +519,18 @@ func (s *Store) StorageStats() (events.StorageStatsResult, error) {
 	}, nil
 }
 
-func (s *Store) CompressImages() (events.CompressResult, error) {
+func (s *Store) CompressImages(scopes ...string) (events.CompressResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	imagesRoot := filepath.Join(s.root, "images")
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "" {
+		return events.CompressResult{}, fmt.Errorf("api_key_id is required")
+	}
+	imagesRoot := filepath.Join(s.root, "images", scopeDir(apiKeyID))
 	var result events.CompressResult
 	changedIndex := false
 	err := filepath.WalkDir(imagesRoot, func(path string, entry os.DirEntry, walkErr error) error {
@@ -466,9 +569,10 @@ func (s *Store) CompressImages() (events.CompressResult, error) {
 		rel, err := filepath.Rel(imagesRoot, path)
 		if err == nil {
 			rel = filepath.ToSlash(rel)
-			if item, exists := s.index[rel]; exists {
+			key := imageKey(apiKeyID, rel)
+			if item, exists := s.index[key]; exists {
 				item.Size = int64(compressed.Len())
-				s.index[rel] = item
+				s.index[key] = item
 				changedIndex = true
 			}
 		}
@@ -486,17 +590,26 @@ func (s *Store) CompressImages() (events.CompressResult, error) {
 	return result, nil
 }
 
-func (s *Store) CleanupToTarget(targetFreeMB int64, dryRun bool) (events.CleanupToTargetResult, error) {
+func (s *Store) CleanupToTarget(targetFreeMB int64, dryRun bool, scopes ...string) (events.CleanupToTargetResult, error) {
 	if targetFreeMB < 0 {
 		return events.CleanupToTargetResult{}, fmt.Errorf("target_free_mb must not be negative")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	imagesRoot := filepath.Join(s.root, "images")
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "" {
+		return events.CleanupToTargetResult{}, fmt.Errorf("api_key_id is required")
+	}
+	diskRoot := filepath.Join(s.root, "images")
+	imagesRoot := filepath.Join(diskRoot, scopeDir(apiKeyID))
 	if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
 		return events.CleanupToTargetResult{}, err
 	}
-	_, free, err := diskSpace(imagesRoot)
+	_, free, err := diskSpace(diskRoot)
 	if err != nil {
 		return events.CleanupToTargetResult{}, err
 	}
@@ -549,9 +662,9 @@ func (s *Store) CleanupToTarget(targetFreeMB int64, dryRun bool) (events.Cleanup
 		if err := os.Remove(file.path); err != nil && !os.IsNotExist(err) {
 			continue
 		}
-		_ = os.Remove(filepath.Join(s.root, "image_thumbnails", filepath.FromSlash(file.rel)+".png"))
-		delete(s.index, file.rel)
-		delete(s.tags, file.rel)
+		_ = os.Remove(filepath.Join(s.root, "image_thumbnails", scopeDir(apiKeyID), filepath.FromSlash(file.rel)+".png"))
+		delete(s.index, imageKey(apiKeyID, file.rel))
+		delete(s.tags[apiKeyID], file.rel)
 		changed = true
 	}
 	if changed {
@@ -568,24 +681,98 @@ func (s *Store) CleanupToTarget(targetFreeMB int64, dryRun bool) (events.Cleanup
 	return result, nil
 }
 
+func (s *Store) DeleteScope(apiKeyID string) (int, error) {
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "" {
+		return 0, fmt.Errorf("api_key_id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deleted := 0
+	for key, entry := range s.index {
+		if entry.APIKeyID == apiKeyID {
+			delete(s.index, key)
+			deleted++
+		}
+	}
+	delete(s.tags, apiKeyID)
+	if err := os.RemoveAll(filepath.Join(s.root, "images", scopeDir(apiKeyID))); err != nil {
+		return 0, err
+	}
+	if err := os.RemoveAll(filepath.Join(s.root, "image_thumbnails", scopeDir(apiKeyID))); err != nil {
+		return 0, err
+	}
+	if err := s.saveIndexLocked(); err != nil {
+		return 0, err
+	}
+	if err := s.saveTagsLocked(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+// AbsolutePath is retained for module wiring; scoped callers should use the
+// event contracts, which always require an API key ID.
 func (s *Store) AbsolutePath(rel string) string {
 	return filepath.Join(s.root, "images", filepath.FromSlash(safeRel(rel)))
 }
 
-func publicURL(baseURL, rel string) string {
+func publicURL(baseURL, apiKeyID, rel string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
-	if baseURL == "" {
-		return "/images/" + rel
+	scoped := rel
+	if scope := scopeDir(apiKeyID); scope != "" {
+		scoped = scope + "/" + rel
 	}
-	return baseURL + "/images/" + rel
+	if baseURL == "" {
+		return "/images/" + scoped
+	}
+	return baseURL + "/images/" + scoped
 }
 
-func publicThumbURL(baseURL, rel string) string {
+func publicThumbURL(baseURL, apiKeyID, rel string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
-	if baseURL == "" {
-		return "/image-thumbnails/" + rel + ".png"
+	scoped := rel
+	if scope := scopeDir(apiKeyID); scope != "" {
+		scoped = scope + "/" + rel
 	}
-	return baseURL + "/image-thumbnails/" + rel + ".png"
+	if baseURL == "" {
+		return "/image-thumbnails/" + scoped + ".png"
+	}
+	return baseURL + "/image-thumbnails/" + scoped + ".png"
+}
+
+func imageKey(apiKeyID, rel string) string { return apiKeyID + "\x00" + rel }
+
+func cleanAPIKeyID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "default"
+	}
+	return value
+}
+
+func scopeDir(apiKeyID string) string {
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	if apiKeyID == "default" {
+		return ""
+	}
+	var out strings.Builder
+	for _, ch := range apiKeyID {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_' || ch == '.' {
+			out.WriteRune(ch)
+		} else {
+			out.WriteByte('_')
+		}
+	}
+	cleaned := strings.Trim(out.String(), ".")
+	if cleaned == apiKeyID && cleaned != "" {
+		return cleaned
+	}
+	sum := md5.Sum([]byte(apiKeyID))
+	if cleaned == "" {
+		cleaned = "key"
+	}
+	return cleaned + "-" + hex.EncodeToString(sum[:6])
 }
 
 func safeRel(rel string) string {

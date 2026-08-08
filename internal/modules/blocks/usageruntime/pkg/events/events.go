@@ -3,6 +3,7 @@ package events
 import (
 	"time"
 
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyusage"
 )
 
@@ -28,6 +29,8 @@ const (
 	TopicClientKeyRotate   = "aiproxy.usage.command.client-key-rotate"
 	TopicClientKeyRevoke   = "aiproxy.usage.command.client-key-revoke"
 	TopicClientKeyDelete   = "aiproxy.usage.command.client-key-delete"
+	TopicClientKeyAccess   = "aiproxy.usage.command.client-key-access"
+	TopicClientKeyRefs     = "aiproxy.usage.command.client-key-provider-refs"
 )
 
 type AcquireCommand struct{}
@@ -81,3 +84,9 @@ type ClientKeyRevokeCommand struct {
 	At time.Time
 }
 type ClientKeyDeleteCommand struct{ ID string }
+type ClientKeyAccessCommand struct {
+	ID     string
+	Policy clientaccess.Policy
+}
+type ClientKeyProviderRefsCommand struct{ ProviderID string }
+type ClientKeyProviderRefsResult struct{ IDs []string }

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -156,7 +157,7 @@ func TestDeleteClientAPIKeyRemovesMetadataAndUsage(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if err := s.CreateClientAPIKey(ctx, ClientAPIKeyRecord{ID: "remove-me", Hash: "sha256:test", Enabled: true, CreatedAt: now}); err != nil {
+	if err := s.CreateClientAPIKey(ctx, ClientAPIKeyRecord{ID: "remove-me", Hash: "sha256:test", Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Start(ctx, StartRecord{EventID: "remove-event", StartedAt: now, APIKeyID: "remove-me"}); err != nil {
@@ -165,15 +166,80 @@ func TestDeleteClientAPIKeyRemovesMetadataAndUsage(t *testing.T) {
 	if err := s.DeleteClientAPIKey(ctx, "remove-me"); err != nil {
 		t.Fatal(err)
 	}
-	var keys, events int
+	var keys, events, access int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_api_key_metadata WHERE api_key_id='remove-me'`).Scan(&keys); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE api_key_id='remove-me'`).Scan(&events); err != nil {
 		t.Fatal(err)
 	}
-	if keys != 0 || events != 0 {
-		t.Fatalf("remaining keys=%d events=%d", keys, events)
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_api_key_provider_access WHERE api_key_id='remove-me'`).Scan(&access); err != nil {
+		t.Fatal(err)
+	}
+	if keys != 0 || events != 0 || access != 0 {
+		t.Fatalf("remaining keys=%d events=%d access=%d", keys, events, access)
+	}
+}
+
+func TestClientAPIKeyProviderAccessLifecycle(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	selected, err := clientaccess.Selected([]string{"deepseek", "codexoauth", "deepseek"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := ClientAPIKeyRecord{ID: "scoped", Hash: "sha256:scoped", Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: selected}
+	if err := s.CreateClientAPIKey(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	records, err := s.ListClientAPIKeys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := records["scoped"].ProviderAccess
+	if got.Mode != clientaccess.ModeSelected || len(got.ProviderIDs) != 2 || got.ProviderIDs[0] != "codexoauth" || got.ProviderIDs[1] != "deepseek" {
+		t.Fatalf("provider access=%+v", got)
+	}
+	references, err := s.ClientAPIKeyIDsForProvider(ctx, "DEEPSEEK")
+	if err != nil || len(references) != 1 || references[0] != "scoped" {
+		t.Fatalf("references=%v err=%v", references, err)
+	}
+	if err := s.SetClientAPIKeyProviderAccess(ctx, "scoped", clientaccess.All()); err != nil {
+		t.Fatal(err)
+	}
+	records, err = s.ListClientAPIKeys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = records["scoped"].ProviderAccess
+	if got.Mode != clientaccess.ModeAll || len(got.ProviderIDs) != 0 {
+		t.Fatalf("provider access=%+v", got)
+	}
+	references, err = s.ClientAPIKeyIDsForProvider(ctx, "deepseek")
+	if err != nil || len(references) != 0 {
+		t.Fatalf("references=%v err=%v", references, err)
+	}
+}
+
+func TestMemoryClientAPIKeyProviderAccessMatchesDuckDBSemantics(t *testing.T) {
+	s := NewMemoryStore()
+	selected, err := clientaccess.Selected([]string{"deepseek"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateClientAPIKey(context.Background(), ClientAPIKeyRecord{ID: "memory", Hash: "sha256:memory", Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: selected}); err != nil {
+		t.Fatal(err)
+	}
+	references, err := s.ClientAPIKeyIDsForProvider(context.Background(), "deepseek")
+	if err != nil || len(references) != 1 || references[0] != "memory" {
+		t.Fatalf("references=%v err=%v", references, err)
+	}
+	if err := s.SetClientAPIKeyProviderAccess(context.Background(), "memory", clientaccess.All()); err != nil {
+		t.Fatal(err)
+	}
+	records, err := s.ListClientAPIKeys(context.Background())
+	if err != nil || records["memory"].ProviderAccess.Mode != clientaccess.ModeAll {
+		t.Fatalf("records=%+v err=%v", records, err)
 	}
 }
 

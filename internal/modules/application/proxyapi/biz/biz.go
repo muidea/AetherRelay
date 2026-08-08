@@ -13,6 +13,7 @@ import (
 	metricsevents "ai-proxy/internal/modules/blocks/metricsruntime/pkg/events"
 	usageevents "ai-proxy/internal/modules/blocks/usageruntime/pkg/events"
 	"ai-proxy/internal/pkg/aiproxyarchive"
+	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -38,6 +39,11 @@ type FeatureExecutor interface {
 	ExecuteFeatureImage(context.Context, proxyevents.ExecuteFeatureImageCommand) (proxyevents.ExecuteFeatureImageResult, error)
 }
 
+type ClientKeyRuntime interface {
+	PrepareClientKeyIndex(map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error)
+	ActivateClientKeyIndex(*clientauth.Index)
+}
+
 type Proxy struct {
 	basebiz.Base
 	config   config.Config
@@ -49,6 +55,7 @@ type Proxy struct {
 	mu                 sync.RWMutex
 	updater            ConfigUpdater
 	featureExecutor    FeatureExecutor
+	clientKeyRuntime   ClientKeyRuntime
 	catalogPublisher   CatalogPublisher
 	catalog            effectivecatalog.Snapshot
 	discoveryMu        sync.Mutex
@@ -100,6 +107,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicListFeatureSearchHistory, biz.handleListFeatureSearchHistory)
 	biz.SubscribeFunc(proxyevents.TopicGetFeatureSearchHistory, biz.handleGetFeatureSearchHistory)
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureImage, biz.handleExecuteFeatureImage)
+	biz.SubscribeFunc(proxyevents.TopicPrepareClientKeyIndex, biz.handlePrepareClientKeyIndex)
+	biz.SubscribeFunc(proxyevents.TopicActivateClientKeyIndex, biz.handleActivateClientKeyIndex)
 	return biz, nil
 }
 
@@ -121,9 +130,12 @@ func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicListFeatureSearchHistory)
 	s.UnsubscribeFunc(proxyevents.TopicGetFeatureSearchHistory)
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureImage)
+	s.UnsubscribeFunc(proxyevents.TopicPrepareClientKeyIndex)
+	s.UnsubscribeFunc(proxyevents.TopicActivateClientKeyIndex)
 	s.mu.Lock()
 	s.updater = nil
 	s.featureExecutor = nil
+	s.clientKeyRuntime = nil
 	s.catalogPublisher = nil
 	s.catalog = effectivecatalog.Snapshot{}
 	s.mu.Unlock()
@@ -145,6 +157,50 @@ func (s *Proxy) BindFeatureExecutor(executor FeatureExecutor) {
 	s.mu.Lock()
 	s.featureExecutor = executor
 	s.mu.Unlock()
+}
+
+func (s *Proxy) BindClientKeyRuntime(runtime ClientKeyRuntime) {
+	s.mu.Lock()
+	s.clientKeyRuntime = runtime
+	s.mu.Unlock()
+}
+
+func (s *Proxy) handlePrepareClientKeyIndex(ev event.Event, result event.Result) {
+	command, ok := ev.Data().(proxyevents.PrepareClientKeyIndexCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid client key index command"))
+		return
+	}
+	s.mu.RLock()
+	runtime := s.clientKeyRuntime
+	s.mu.RUnlock()
+	if runtime == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "client key runtime is unavailable"))
+		return
+	}
+	index, err := runtime.PrepareClientKeyIndex(command.Records)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
+		return
+	}
+	result.Set(proxyevents.PrepareClientKeyIndexResult{Index: index}, nil)
+}
+
+func (s *Proxy) handleActivateClientKeyIndex(ev event.Event, result event.Result) {
+	command, ok := ev.Data().(proxyevents.ActivateClientKeyIndexCommand)
+	if !ok || command.Index == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid client key activation command"))
+		return
+	}
+	s.mu.RLock()
+	runtime := s.clientKeyRuntime
+	s.mu.RUnlock()
+	if runtime == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "client key runtime is unavailable"))
+		return
+	}
+	runtime.ActivateClientKeyIndex(command.Index)
+	result.Set(struct{}{}, nil)
 }
 
 func (s *Proxy) handleFeatureCatalog(ev event.Event, result event.Result) {

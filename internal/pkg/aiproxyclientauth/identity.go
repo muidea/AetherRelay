@@ -6,21 +6,26 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 )
 
 // ClientIdentity 是请求期只读调用方身份；只暴露稳定 KeyID，不含原始密钥。
 type ClientIdentity struct {
-	KeyID string
+	KeyID          string
+	ProviderAccess clientaccess.Policy
 }
 
 // KeyEntry 描述配置中的一个客户端 API Key（校验后视图）。
 type KeyEntry struct {
-	ID         string
-	APIKey     string
-	APIKeyHash string
-	Enabled    bool
+	ID             string
+	APIKey         string
+	APIKeyHash     string
+	Enabled        bool
+	ProviderAccess clientaccess.Policy
 }
 
 // Index 是密钥 digests 到身份的只读查找表。
@@ -38,6 +43,22 @@ var ErrAuthenticationFailed = errors.New("authentication failed")
 
 // BuildIndex 从配置条目构造只读索引。调用前配置层应已完成唯一性与格式校验。
 func BuildIndex(entries []KeyEntry) *Index {
+	idx, err := PrepareIndex(entries)
+	if err != nil {
+		return emptyIndex()
+	}
+	return idx
+}
+
+func emptyIndex() *Index {
+	return &Index{
+		byDigest: make(map[[32]byte]ClientIdentity),
+		enabled:  make(map[[32]byte]ClientIdentity),
+		disabled: make(map[[32]byte]struct{}),
+	}
+}
+
+func PrepareIndex(entries []KeyEntry) (*Index, error) {
 	idx := &Index{
 		byDigest: make(map[[32]byte]ClientIdentity, len(entries)),
 		enabled:  make(map[[32]byte]ClientIdentity, len(entries)),
@@ -48,6 +69,10 @@ func BuildIndex(entries []KeyEntry) *Index {
 		if id == "" {
 			continue
 		}
+		policy, err := clientaccess.Normalize(e.ProviderAccess)
+		if err != nil {
+			return nil, fmt.Errorf("client api key %q provider access: %w", id, err)
+		}
 		var d [32]byte
 		key := strings.TrimSpace(e.APIKey)
 		if key != "" {
@@ -55,7 +80,7 @@ func BuildIndex(entries []KeyEntry) *Index {
 		} else if !parseHash(e.APIKeyHash, &d) {
 			continue
 		}
-		ident := ClientIdentity{KeyID: id}
+		ident := ClientIdentity{KeyID: id, ProviderAccess: clientaccess.Clone(policy)}
 		idx.byDigest[d] = ident
 		if e.Enabled {
 			idx.enabled[d] = ident
@@ -63,7 +88,7 @@ func BuildIndex(entries []KeyEntry) *Index {
 			idx.disabled[d] = struct{}{}
 		}
 	}
-	return idx
+	return idx, nil
 }
 
 func parseHash(value string, target *[32]byte) bool {
@@ -128,6 +153,7 @@ func lookupKey(raw string, idx *Index) (ClientIdentity, error) {
 		return ClientIdentity{}, ErrAuthenticationFailed
 	}
 	if ident, ok := idx.enabled[d]; ok {
+		ident.ProviderAccess = clientaccess.Clone(ident.ProviderAccess)
 		return ident, nil
 	}
 	// 未知 Key。
@@ -141,6 +167,7 @@ func WithClientIdentity(ctx context.Context, identity ClientIdentity) context.Co
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	identity.ProviderAccess = clientaccess.Clone(identity.ProviderAccess)
 	return context.WithValue(ctx, identityContextKey{}, identity)
 }
 
@@ -151,6 +178,7 @@ func ClientIdentityFromContext(ctx context.Context) ClientIdentity {
 		return ClientIdentity{}
 	}
 	if v, ok := ctx.Value(identityContextKey{}).(ClientIdentity); ok && v.KeyID != "" {
+		v.ProviderAccess = clientaccess.Clone(v.ProviderAccess)
 		return v
 	}
 	return ClientIdentity{}

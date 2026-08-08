@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -74,6 +75,32 @@ func testRouteConfig() config.Config {
 				ID: "claude-tools", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true, Streaming: true}},
 			},
 		},
+	}
+}
+
+func TestResolveTransportPlansScopesCandidatesBeforePriority(t *testing.T) {
+	cfg := config.Config{Providers: map[string]config.Provider{
+		"primary": {Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"shared"}, Priority: 200, Endpoints: []string{config.ProviderEndpointResponses}},
+		"backup":  {Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"shared"}, Priority: 100, Endpoints: []string{config.ProviderEndpointResponses}},
+	}}
+	policy, err := clientaccess.Selected([]string{"backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, apiErr := ResolveTransportPlansForAccess(cfg, effectivecatalog.FromStatic(cfg), policy, http.MethodPost, "/v1/responses", "shared")
+	if apiErr != nil {
+		t.Fatalf("ResolveTransportPlansForAccess: %#v", apiErr)
+	}
+	if len(plans) != 1 || plans[0].RouteOwner != "backup" {
+		t.Fatalf("plans=%+v", plans)
+	}
+	policy, err = clientaccess.Selected([]string{"missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, apiErr = ResolveTransportPlansForAccess(cfg, effectivecatalog.FromStatic(cfg), policy, http.MethodPost, "/v1/responses", "shared")
+	if apiErr == nil || apiErr.Code != ErrorCodeModelNotFound {
+		t.Fatalf("unauthorized model error=%#v", apiErr)
 	}
 }
 

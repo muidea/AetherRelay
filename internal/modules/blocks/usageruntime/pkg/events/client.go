@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ai-proxy/internal/modules/blocks/usageruntime/pkg/common"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyusage"
 
 	"github.com/muidea/magicCommon/event"
@@ -228,6 +229,25 @@ func (c client) RevokeClientAPIKey(ctx context.Context, id string, t time.Time) 
 }
 func (c client) DeleteClientAPIKey(ctx context.Context, id string) error {
 	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyDelete, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyDeleteCommand{ID: id}), "client key delete")
+}
+func (c client) SetClientAPIKeyProviderAccess(ctx context.Context, id string, policy clientaccess.Policy) error {
+	return c.sendEmpty(event.NewEventWithContext(TopicClientKeyAccess, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyAccessCommand{ID: id, Policy: policy}), "client key provider access")
+}
+func (c client) ClientAPIKeyIDsForProvider(ctx context.Context, providerID string) ([]string, error) {
+	ev := event.NewEventWithContext(TopicClientKeyRefs, c.source, common.UnitID, event.NewHeader(), ctx, ClientKeyProviderRefsCommand{ProviderID: providerID})
+	result, err := send(c.hub, ev, "client key provider references")
+	if err != nil {
+		return nil, err
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return nil, fmt.Errorf("client key provider references failed: %s", getErr.Message)
+	}
+	response, ok := data.(ClientKeyProviderRefsResult)
+	if !ok {
+		return nil, fmt.Errorf("invalid client key provider references response")
+	}
+	return response.IDs, nil
 }
 
 func (c client) sendEmpty(ev event.Event, name string) error {

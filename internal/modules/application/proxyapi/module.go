@@ -45,6 +45,7 @@ func (m *Module) Setup(ctx context.Context, hub event.Hub, background task.Backg
 	bizPtr.BindConfigUpdater(m.handler)
 	bizPtr.BindCatalogPublisher(m.handler)
 	bizPtr.BindFeatureExecutor(m.handler)
+	bizPtr.BindClientKeyRuntime(m.handler)
 	m.routes = routes
 	m.bizPtr = bizPtr
 	return nil

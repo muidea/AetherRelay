@@ -23,6 +23,7 @@ import (
 	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
 	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
 	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
 	"ai-proxy/internal/pkg/aiproxyusage"
@@ -48,6 +49,15 @@ type managedProviderRuntime interface {
 	ProviderStorageAvailable() bool
 }
 
+type clientKeyRuntime interface {
+	PrepareClientKeyIndex(map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error)
+	ActivateClientKeyIndex(*clientauth.Index)
+}
+
+type effectiveCatalogRuntime interface {
+	EffectiveCatalogSnapshot() effectivecatalog.Snapshot
+}
+
 type ChatGPTRuntime interface {
 	ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error)
 	AddChatGPTAccounts(context.Context, []string, []accevents.ExportItem, string) (accevents.AddResult, error)
@@ -58,13 +68,6 @@ type ChatGPTRuntime interface {
 	ChatGPTAccountRefreshProgress(context.Context, string) (accevents.RefreshProgress, error)
 	StartChatGPTOAuth(context.Context, string) (accevents.OAuthStartResult, error)
 	FinishChatGPTOAuth(context.Context, string, string) (accevents.OAuthFinishResult, error)
-	ListChatGPTImages(context.Context, string, string, string) (imgevents.ListResult, error)
-	ChatGPTImageStorage(context.Context) (imgevents.StorageStatsResult, error)
-	ListChatGPTImageTags(context.Context) (imgevents.ListTagsResult, error)
-	SetChatGPTImageTags(context.Context, string, []string) (imgevents.SetTagsResult, error)
-	DeleteChatGPTImages(context.Context, []string) (imgevents.DeleteResult, error)
-	GetChatGPTImageBytes(context.Context, string) ([]byte, error)
-	GetChatGPTImageThumbnail(context.Context, string) ([]byte, error)
 	SubmitChatGPTImageGeneration(context.Context, taskevents.SubmitGenerationCommand) (taskevents.SubmitResult, error)
 	SubmitChatGPTImageEdit(context.Context, taskevents.SubmitEditCommand) (taskevents.SubmitResult, error)
 	ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error)
@@ -82,6 +85,18 @@ type ChatGPTRuntime interface {
 	PullTemporaryTurn(context.Context, tempevents.PullTurnCommand) (tempevents.PullTurnResult, error)
 	CancelTemporaryTurn(context.Context, tempevents.CancelTurnCommand) (tempevents.CancelTurnResult, error)
 	DeleteTemporaryConversation(context.Context, tempevents.DeleteConversationCommand) (tempevents.DeleteConversationResult, error)
+}
+
+type chatGPTImageRuntime interface {
+	ListChatGPTImages(context.Context, string, string, string, string) (imgevents.ListResult, error)
+	ChatGPTImageStorage(context.Context, string) (imgevents.StorageStatsResult, error)
+	ListChatGPTImageTags(context.Context, string) (imgevents.ListTagsResult, error)
+	SetChatGPTImageTags(context.Context, string, string, []string) (imgevents.SetTagsResult, error)
+	DeleteChatGPTImages(context.Context, string, []string) (imgevents.DeleteResult, error)
+	GetChatGPTImageBytes(context.Context, string, string) ([]byte, error)
+	GetChatGPTImageThumbnail(context.Context, string, string) ([]byte, error)
+	DeleteChatGPTImageScope(context.Context, string) error
+	DeleteChatGPTImageTaskScope(context.Context, string) error
 }
 
 // CodexRuntime is intentionally independent from ChatGPTRuntime: the two
@@ -515,25 +530,35 @@ func (h *Handler) featureCatalog(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listChatGPTImages(w http.ResponseWriter, r *http.Request) {
-	if h.chatGPT == nil {
+	runtime, available := h.chatGPT.(chatGPTImageRuntime)
+	if !available {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
 	// BaseURL is unused for public serving; rewrite below to Admin-authenticated content URLs.
-	out, err := h.chatGPT.ListChatGPTImages(r.Context(), "", strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")))
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	if !ok {
+		return
+	}
+	out, err := runtime.ListChatGPTImages(r.Context(), apiKeyID, "", strings.TrimSpace(r.URL.Query().Get("start_date")), strings.TrimSpace(r.URL.Query().Get("end_date")))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	rewriteChatGPTImageURLs(h.adminBasePath(), &out)
+	rewriteChatGPTImageURLs(h.adminBasePath(), apiKeyID, &out)
 	writeJSON(w, http.StatusOK, out)
 }
 
 // serveChatGPTImageContent is a minimal Admin-authenticated, path-validated image
 // reader. It does not expose a general /files/** surface.
 func (h *Handler) serveChatGPTImageContent(w http.ResponseWriter, r *http.Request) {
-	if h.chatGPT == nil {
+	runtime, available := h.chatGPT.(chatGPTImageRuntime)
+	if !available {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	if !ok {
 		return
 	}
 	path := strings.TrimSpace(r.URL.Query().Get("path"))
@@ -553,9 +578,9 @@ func (h *Handler) serveChatGPTImageContent(w http.ResponseWriter, r *http.Reques
 		err     error
 	)
 	if thumb {
-		payload, err = h.chatGPT.GetChatGPTImageThumbnail(r.Context(), clean)
+		payload, err = runtime.GetChatGPTImageThumbnail(r.Context(), apiKeyID, clean)
 	} else {
-		payload, err = h.chatGPT.GetChatGPTImageBytes(r.Context(), clean)
+		payload, err = runtime.GetChatGPTImageBytes(r.Context(), apiKeyID, clean)
 	}
 	if err != nil {
 		writeError(w, http.StatusNotFound, "image not found")
@@ -576,7 +601,7 @@ func (h *Handler) serveChatGPTImageContent(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write(payload)
 }
 
-func rewriteChatGPTImageURLs(adminBase string, out *imgevents.ListResult) {
+func rewriteChatGPTImageURLs(adminBase, apiKeyID string, out *imgevents.ListResult) {
 	if out == nil {
 		return
 	}
@@ -589,16 +614,25 @@ func rewriteChatGPTImageURLs(adminBase string, out *imgevents.ListResult) {
 		if path == "" {
 			continue
 		}
-		out.Items[i].URL = adminBase + "/api/chatgpt/images/content?path=" + url.QueryEscape(path)
-		out.Items[i].ThumbnailURL = adminBase + "/api/chatgpt/images/content?path=" + url.QueryEscape(path) + "&thumb=1"
+		keyQuery := ""
+		if apiKeyID != "" && apiKeyID != "default" {
+			keyQuery = "api_key_id=" + url.QueryEscape(apiKeyID) + "&"
+		}
+		out.Items[i].URL = adminBase + "/api/chatgpt/images/content?" + keyQuery + "path=" + url.QueryEscape(path)
+		out.Items[i].ThumbnailURL = adminBase + "/api/chatgpt/images/content?" + keyQuery + "path=" + url.QueryEscape(path) + "&thumb=1"
 	}
 }
 func (h *Handler) chatGPTImageStorage(w http.ResponseWriter, r *http.Request) {
-	if h.chatGPT == nil {
+	runtime, available := h.chatGPT.(chatGPTImageRuntime)
+	if !available {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
-	out, err := h.chatGPT.ChatGPTImageStorage(r.Context())
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	if !ok {
+		return
+	}
+	out, err := runtime.ChatGPTImageStorage(r.Context(), apiKeyID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -606,11 +640,16 @@ func (h *Handler) chatGPTImageStorage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 func (h *Handler) listChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
-	if h.chatGPT == nil {
+	runtime, available := h.chatGPT.(chatGPTImageRuntime)
+	if !available {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
-	out, err := h.chatGPT.ListChatGPTImageTags(r.Context())
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	if !ok {
+		return
+	}
+	out, err := runtime.ListChatGPTImageTags(r.Context(), apiKeyID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -618,15 +657,25 @@ func (h *Handler) listChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 func (h *Handler) setChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
+	runtime, available := h.chatGPT.(chatGPTImageRuntime)
+	if !available {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
 	var body struct {
-		Path string   `json:"path"`
-		Tags []string `json:"tags"`
+		APIKeyID string   `json:"api_key_id"`
+		Path     string   `json:"path"`
+		Tags     []string `json:"tags"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&body) != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	out, err := h.chatGPT.SetChatGPTImageTags(r.Context(), body.Path, body.Tags)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, "")
+	if !ok {
+		return
+	}
+	out, err := runtime.SetChatGPTImageTags(r.Context(), apiKeyID, body.Path, body.Tags)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -634,14 +683,24 @@ func (h *Handler) setChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 func (h *Handler) deleteChatGPTImages(w http.ResponseWriter, r *http.Request) {
+	runtime, available := h.chatGPT.(chatGPTImageRuntime)
+	if !available {
+		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
+		return
+	}
 	var body struct {
-		Paths []string `json:"paths"`
+		APIKeyID string   `json:"api_key_id"`
+		Paths    []string `json:"paths"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&body) != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	out, err := h.chatGPT.DeleteChatGPTImages(r.Context(), body.Paths)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, "")
+	if !ok {
+		return
+	}
+	out, err := runtime.DeleteChatGPTImages(r.Context(), apiKeyID, body.Paths)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1193,6 +1252,19 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, rel string) {
 	}
 	if name == "chatgptweb" || name == "codexoauth" {
 		writeError(w, http.StatusBadRequest, "builtin providers cannot be deleted")
+		return
+	}
+	if h.usageStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "client API key store unavailable")
+		return
+	}
+	references, err := h.usageStore.ClientAPIKeyIDsForProvider(context.Background(), name)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "client API key store unavailable")
+		return
+	}
+	if len(references) > 0 {
+		writeError(w, http.StatusConflict, fmt.Sprintf("provider %q is referenced by client API keys: %s", name, strings.Join(references, ", ")))
 		return
 	}
 	current := h.runtime.ConfigSnapshot()

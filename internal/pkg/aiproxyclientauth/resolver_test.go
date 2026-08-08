@@ -5,14 +5,16 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 )
 
 func testIndex(t *testing.T) *Index {
 	t.Helper()
 	return BuildIndex([]KeyEntry{
-		{ID: "codex", APIKey: "sk-codex-secret", Enabled: true},
-		{ID: "workorch", APIKey: "sk-workorch-secret", Enabled: true},
-		{ID: "disabled-bot", APIKey: "sk-disabled", Enabled: false},
+		{ID: "codex", APIKey: "sk-codex-secret", Enabled: true, ProviderAccess: clientaccess.All()},
+		{ID: "workorch", APIKey: "sk-workorch-secret", Enabled: true, ProviderAccess: clientaccess.Policy{Mode: clientaccess.ModeSelected, ProviderIDs: []string{"deepseek"}}},
+		{ID: "disabled-bot", APIKey: "sk-disabled", Enabled: false, ProviderAccess: clientaccess.All()},
 	})
 }
 
@@ -39,6 +41,15 @@ func TestResolveAnthropicXAPIKey(t *testing.T) {
 	}
 	if id.KeyID != "workorch" {
 		t.Fatalf("got %q", id.KeyID)
+	}
+	if !id.ProviderAccess.Allows("deepseek") || id.ProviderAccess.Allows("openai") {
+		t.Fatalf("provider access=%+v", id.ProviderAccess)
+	}
+}
+
+func TestPrepareIndexRejectsMissingProviderAccess(t *testing.T) {
+	if _, err := PrepareIndex([]KeyEntry{{ID: "missing", APIKey: "secret", Enabled: true}}); err == nil {
+		t.Fatal("missing provider access unexpectedly accepted")
 	}
 }
 
@@ -155,7 +166,7 @@ func TestAuthErrorDoesNotContainSecrets(t *testing.T) {
 }
 
 func TestContextRoundTrip(t *testing.T) {
-	ctx := WithClientIdentity(context.Background(), ClientIdentity{KeyID: "codex"})
+	ctx := WithClientIdentity(context.Background(), ClientIdentity{KeyID: "codex", ProviderAccess: clientaccess.All()})
 	got := ClientIdentityFromContext(ctx)
 	if got.KeyID != "codex" {
 		t.Fatalf("got %+v", got)

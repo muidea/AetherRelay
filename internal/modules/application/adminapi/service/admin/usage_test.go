@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxyusage"
 )
@@ -75,9 +76,9 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 	store := usage.NewMemoryStore()
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
-	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "codex", Hash: "sha256:codex", Enabled: true, CreatedAt: now})
-	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "unused-key", Hash: "sha256:unused", Enabled: false, CreatedAt: now})
-	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "retired", Hash: "sha256:retired", Enabled: true, CreatedAt: now})
+	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "codex", Hash: "sha256:codex", Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()})
+	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "unused-key", Hash: "sha256:unused", Enabled: false, CreatedAt: now, ProviderAccess: clientaccess.All()})
+	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "retired", Hash: "sha256:retired", Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()})
 	_ = store.Start(context.Background(), usage.StartRecord{
 		EventID: "e1", StartedAt: now, APIKeyID: "codex", Provider: "openai", Model: "gpt-4o",
 	})
@@ -224,7 +225,7 @@ func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 
 func TestUsageFilterOptionsStoreFailureDegrades(t *testing.T) {
 	store := usage.NewMemoryStore()
-	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "codex", Hash: "sha256:codex", Enabled: true, CreatedAt: time.Now().UTC()})
+	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "codex", Hash: "sha256:codex", Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()})
 	_ = store.Close()
 	rt := &fakeRuntime{cfg: config.Config{
 		Providers: map[string]config.Provider{

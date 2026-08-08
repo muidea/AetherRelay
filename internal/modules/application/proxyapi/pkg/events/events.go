@@ -7,7 +7,9 @@ import (
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/common"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
+	"ai-proxy/internal/pkg/aiproxyusage"
 	"ai-proxy/internal/pkg/chatattachment"
 	"ai-proxy/internal/pkg/chatgpttokenusage"
 
@@ -27,6 +29,8 @@ const (
 	TopicListFeatureSearchHistory = "aiproxy.proxy.query.feature_search_history"
 	TopicGetFeatureSearchHistory  = "aiproxy.proxy.query.feature_search_history_detail"
 	TopicExecuteFeatureImage      = "aiproxy.proxy.command.execute_feature_image"
+	TopicPrepareClientKeyIndex    = "aiproxy.proxy.command.prepare_client_key_index"
+	TopicActivateClientKeyIndex   = "aiproxy.proxy.command.activate_client_key_index"
 )
 
 type UpdateConfigCommand struct{ Config config.Config }
@@ -37,6 +41,12 @@ type UpdateConfigCommand struct{ Config config.Config }
 type EffectiveCatalogCommand struct{}
 
 type EffectiveCatalogResult struct{ Snapshot effectivecatalog.Snapshot }
+
+type PrepareClientKeyIndexCommand struct {
+	Records map[string]usage.ClientAPIKeyRecord
+}
+type PrepareClientKeyIndexResult struct{ Index *clientauth.Index }
+type ActivateClientKeyIndexCommand struct{ Index *clientauth.Index }
 
 // FeatureCatalog is the proxy-owned projection used by Admin feature pages.
 // It is derived from the same request-time transport plans as /v1 endpoints,

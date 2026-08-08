@@ -15,6 +15,7 @@ import (
 	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	archive "ai-proxy/internal/pkg/aiproxyarchive"
+	clientauth "ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/chatgptimageinput"
 )
@@ -118,7 +119,8 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	if body.ResponseFormat == "" {
 		body.ResponseFormat = "b64_json"
 	}
-	request := chatgptimage.Request{Prompt: body.Prompt, Model: body.Model, N: body.N, Size: body.Size, Quality: body.Quality, ResponseFormat: body.ResponseFormat, BaseURL: imageBaseURL(r)}
+	identity := clientauth.ClientIdentityFromContext(r.Context())
+	request := chatgptimage.Request{Prompt: body.Prompt, Model: body.Model, N: body.N, Size: body.Size, Quality: body.Quality, ResponseFormat: body.ResponseFormat, BaseURL: imageBaseURL(r), APIKeyID: identity.KeyID}
 	var result chatgptimage.Result
 	var err error
 	if r.URL.Path == "/v1/images/edits" {

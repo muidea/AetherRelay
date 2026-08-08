@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	config "ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -15,7 +16,7 @@ func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 			{ModelID: "claude", RouteOwner: "openai", SupportedEndpoints: []string{"/v1/responses"}},
 		},
 	}}
-	got := modelSupportedEndpoints(snap, "claude")
+	got := modelSupportedEndpoints(snap, "claude", clientaccess.All())
 	want := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"}
 	if len(got) != len(want) {
 		t.Fatalf("supported endpoints=%v, want %v", got, want)
@@ -31,7 +32,7 @@ func TestModelSupportedEndpointsIncludesChatGPTWebSearchAndImages(t *testing.T) 
 	snap := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
 		"gpt": {{ModelID: "gpt", RouteOwner: effectivecatalog.BuiltinProviderID, Builtin: true, SupportedEndpoints: []string{"/v1/chat/completions", "/v1/responses", "/v1/search", "/v1/images/generations", "/v1/images/edits"}}},
 	}}
-	got := modelSupportedEndpoints(snap, "gpt")
+	got := modelSupportedEndpoints(snap, "gpt", clientaccess.All())
 	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/search", "/v1/images/generations", "/v1/images/edits"} {
 		found := false
 		for _, item := range got {
@@ -66,7 +67,7 @@ func TestModelsProjectsDegradedReasoningConversion(t *testing.T) {
 			},
 		},
 	}
-	response := buildModelsListResponse(effectivecatalog.Build(cfg, 0, 0, nil, ""))
+	response := buildModelsListResponse(effectivecatalog.Build(cfg, 0, 0, nil, ""), clientaccess.All())
 	if len(response.Data) != 1 || response.Data[0].Capabilities == nil || response.Data[0].Capabilities.Conversions == nil {
 		t.Fatalf("models = %#v", response)
 	}
@@ -86,7 +87,7 @@ func TestModelsProjectsMetadataForCodexOAuthDiscoveredModel(t *testing.T) {
 	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
 		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-pool"}},
 	})
-	response := buildModelsListResponse(snapshot)
+	response := buildModelsListResponse(snapshot, clientaccess.All())
 	if len(response.Data) != 1 || response.Data[0].ID != "gpt-pool" {
 		t.Fatalf("models=%#v", response.Data)
 	}
@@ -111,7 +112,7 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 			}},
 		},
 	}
-	response := buildModelsListResponse(effectivecatalog.Build(cfg, 0, 0, nil, ""))
+	response := buildModelsListResponse(effectivecatalog.Build(cfg, 0, 0, nil, ""), clientaccess.All())
 	if len(response.Data) != 1 || response.Data[0].Capabilities == nil || response.Data[0].Capabilities.Conversions == nil {
 		t.Fatalf("models = %#v", response)
 	}
@@ -125,5 +126,39 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 	wantEndpoints := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"}
 	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, wantEndpoints) {
 		t.Fatalf("supported endpoints = %v, want %v", response.Data[0].SupportedEndpoints, wantEndpoints)
+	}
+}
+
+func TestModelsAreScopedToAuthorizedProviders(t *testing.T) {
+	snap := effectivecatalog.Snapshot{
+		Candidates: map[string][]effectivecatalog.Candidate{
+			"shared": {
+				{ModelID: "shared", RouteOwner: "primary", ContextWindowTokens: 100, SupportedEndpoints: []string{"/v1/responses"}, ConversionModes: []string{"anthropic_to_responses"}},
+				{ModelID: "shared", RouteOwner: "backup", ContextWindowTokens: 50, SupportedEndpoints: []string{"/v1/chat/completions"}},
+			},
+			"private": {{ModelID: "private", RouteOwner: "primary", SupportedEndpoints: []string{"/v1/responses"}}},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{
+			"shared": {ID: "shared", ConversionCapabilities: map[string]config.ConversionCapability{
+				config.ProviderEndpointResponses: {Level: 1, Text: true},
+			}},
+		},
+	}
+	policy, err := clientaccess.Selected([]string{"backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := buildModelsListResponse(snap, policy)
+	if len(response.Data) != 1 || response.Data[0].ID != "shared" {
+		t.Fatalf("models=%#v", response.Data)
+	}
+	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, []string{"/v1/chat/completions"}) {
+		t.Fatalf("endpoints=%v", response.Data[0].SupportedEndpoints)
+	}
+	if response.Data[0].ContextWindowTokens != 50 {
+		t.Fatalf("context window=%d", response.Data[0].ContextWindowTokens)
+	}
+	if response.Data[0].Capabilities != nil && response.Data[0].Capabilities.Conversions != nil {
+		t.Fatalf("unauthorized provider contributed conversion=%#v", response.Data[0].Capabilities.Conversions)
 	}
 }

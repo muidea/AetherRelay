@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
+	"ai-proxy/internal/pkg/aiproxyclientauth"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 	"ai-proxy/internal/pkg/aiproxymetricsport"
 )
@@ -104,7 +106,8 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	}
 	h.archiveAndLogClientRequest(round, r, len(bodyBytes))
 
-	payload := buildModelsListResponse(h.EffectiveCatalog())
+	identity := clientauth.ClientIdentityFromContext(r.Context())
+	payload := buildModelsListResponse(h.EffectiveCatalog(), identity.ProviderAccess)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		h.writeArchivedError(w, round, r, start, "", "", false, http.StatusInternalServerError, err.Error())
@@ -123,11 +126,11 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	h.writeArchiveMetadata(round, "", "", false, http.StatusOK, duration, tokenUsage{}, "response.json", "", "", "success")
 }
 
-func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse {
-	ids := snap.SortedModelIDs()
+func buildModelsListResponse(snap effectivecatalog.Snapshot, policy clientaccess.Policy) ModelsListResponse {
+	ids := snap.SortedModelIDsForAccess(policy)
 	data := make([]ModelRecord, 0, len(ids))
 	for _, id := range ids {
-		route, ok := snap.Lookup(id)
+		route, ok := snap.LookupForAccess(id, policy)
 		if !ok {
 			continue
 		}
@@ -135,7 +138,7 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 			ID:     route.ModelID,
 			Object: "model",
 		}
-		rec.SupportedEndpoints = modelSupportedEndpoints(snap, id)
+		rec.SupportedEndpoints = modelSupportedEndpoints(snap, id, policy)
 		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.ReasoningDeclared {
 			rec.Capabilities = &ModelCapabilities{Reasoning: &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}}
 		}
@@ -151,7 +154,7 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 				if !ok {
 					continue
 				}
-				if !conversionCapabilityUsable(direction, capability) || !implementedConversionDirection(direction) || !modelHasConversionDirection(snap, id, direction) {
+				if !conversionCapabilityUsable(direction, capability) || !implementedConversionDirection(direction) || !modelHasConversionDirection(snap, id, direction, policy) {
 					continue
 				}
 				if rec.Capabilities == nil {
@@ -184,8 +187,8 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot) ModelsListResponse 
 	return ModelsListResponse{Object: "list", Data: data}
 }
 
-func modelHasConversionDirection(snap effectivecatalog.Snapshot, modelID, direction string) bool {
-	for _, candidate := range snap.CandidatesFor(modelID) {
+func modelHasConversionDirection(snap effectivecatalog.Snapshot, modelID, direction string, policy clientaccess.Policy) bool {
+	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
 		for _, mode := range candidate.ConversionModes {
 			if mode == direction {
 				return true
@@ -205,9 +208,9 @@ func implementedConversionDirection(direction string) bool {
 // modelSupportedEndpoints returns paths exposed by at least one configured or
 // discovered catalog candidate. Request-time health and circuit state are
 // intentionally applied later and are not part of this stable generation.
-func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string) []string {
+func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string, policy clientaccess.Policy) []string {
 	seen := map[string]bool{}
-	for _, candidate := range snap.CandidatesFor(modelID) {
+	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
 		for _, path := range candidate.SupportedEndpoints {
 			seen[path] = true
 		}

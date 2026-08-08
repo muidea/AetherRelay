@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"time"
+
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 )
 
 // 持久化状态。
@@ -121,13 +123,14 @@ type ClientAPIKeyMetadata struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 type ClientAPIKeyRecord struct {
-	ID            string
-	Hash          string
-	Enabled       bool
-	CreatedAt     time.Time
-	LastUsedAt    *time.Time
-	LastRotatedAt *time.Time
-	RevokedAt     *time.Time
+	ID             string
+	Hash           string
+	Enabled        bool
+	CreatedAt      time.Time
+	LastUsedAt     *time.Time
+	LastRotatedAt  *time.Time
+	RevokedAt      *time.Time
+	ProviderAccess clientaccess.Policy
 }
 
 // Dashboard 是 Web / Admin API 的主查询结果。
@@ -242,4 +245,6 @@ type Store interface {
 	RotateClientAPIKey(context.Context, string, string, time.Time) error
 	RevokeClientAPIKey(context.Context, string, time.Time) error
 	DeleteClientAPIKey(context.Context, string) error
+	SetClientAPIKeyProviderAccess(context.Context, string, clientaccess.Policy) error
+	ClientAPIKeyIDsForProvider(context.Context, string) ([]string, error)
 }

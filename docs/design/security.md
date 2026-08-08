@@ -2,6 +2,8 @@
 
 功能域：客户端 API Key 身份与用量归属、Admin 账号密码登录、访问控制边界。对应正式合同见[配置参考](../configuration.md)与[功能说明](../features.md)。
 
+客户端 Key 与 Provider/模型访问范围的最终合同见[客户端 API Key、Provider 与模型联动收口设计](client-api-key-provider-access.md)。
+
 ## 设计目标
 
 - 客户端 Key 是数据端点的必需认证，也是用量归属的唯一身份来源；明文只在创建/轮换响应中出现一次，DuckDB 只保存摘要。
@@ -23,15 +25,16 @@
 - OpenAI 用 `Authorization: Bearer <key>`，Anthropic 用 `X-API-Key: <key>`；两种 Header 可兼容，同时出现必须为同一 Key。
 - 缺失、空白、未知、禁用、格式错误或冲突 Header 均返回 401，且**不产生用量记录**（401 发生在 `UsageStore.Start` 之前）。
 - 所有持久化、指标、日志、归档与 Admin 查询只出现 `api_key_id`，原始 Key 绝不出现。
+- `ClientIdentity` 携带不可变 ProviderAccess 快照；零值为 deny-all。`selected` 只允许明确 Provider，`all` 允许当前和未来 Provider。模型发现、能力投影、路由候选和 fallback 必须先执行同一权限过滤，未授权模型统一返回 `model_not_found`。
 
 ### Admin 管理
 
-- 创建与轮换不接受客户端提供的明文或摘要（服务端生成）；PATCH 只允许改 `enabled`；轮换保持同一 `api_key_id`，激活后新请求只接受新 Key，在途旧快照请求允许完成，无宽限期；禁用与撤销均使新请求 401，不删除历史 usage；删除 `default` 返回 400。
-- 列表只暴露 `id`、`enabled`、`created_at`、`last_used_at`，不暴露摘要、长度或环境变量名；不存在凭据来源分类。
+- 创建与轮换不接受客户端提供的明文或摘要（服务端生成）；创建必须提供完整 `provider_access`，PUT 替换访问范围，PATCH 只允许改 `enabled`；轮换保持同一 `api_key_id` 和 ProviderAccess，激活后新请求只接受新 Key，在途旧快照请求允许完成，无宽限期；禁用与撤销均使新请求 401，不删除历史 usage；删除 `default` 返回 400。
+- 列表暴露策略、当前有效/不可用 Provider ID 和去重模型数，但不暴露摘要、base URL、凭据来源或账号 ID；有效模型接口只返回模型、候选 Provider ID、客户端端点与容量。
 
 ### 配置写入与激活事务
 
-客户端 Key 管理直接使用 DuckDB 事务并刷新运行时认证索引，不修改配置文件，也不依赖配置文件 revision。
+客户端 Key 管理直接使用 DuckDB 事务并刷新运行时认证索引，不修改配置文件，也不依赖配置文件 revision。写入顺序固定为 prospective records → prepare immutable index → Store transaction → atomic activate；任何准备失败都不能写库或返回一次性明文。
 
 ## Admin 登录（可选）
 

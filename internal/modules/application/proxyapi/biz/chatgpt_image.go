@@ -3,6 +3,7 @@ package biz
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -90,7 +91,7 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 			// storage or client delivery later fails. Those local errors must not
 			// poison account health or leave quota feedback stale.
 			s.markChatGPTImageResult(ctx, account.AccessToken, request.Model, true, "")
-			data, err := s.presentChatGPTImages(ctx, outputs, request.ResponseFormat, request.BaseURL)
+			data, err := s.presentChatGPTImages(ctx, request.APIKeyID, outputs, request.ResponseFormat, request.BaseURL)
 			if err != nil {
 				return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, err
 			}
@@ -181,13 +182,25 @@ func addTokenUsage(base, extra *tokenusage.Usage) *tokenusage.Usage {
 	return base
 }
 
-func (s *Proxy) presentChatGPTImages(ctx context.Context, outputs []upevents.ImageOutput, responseFormat, baseURL string) ([]chatgptimage.Data, error) {
+func (s *Proxy) presentChatGPTImages(ctx context.Context, apiKeyID string, outputs []upevents.ImageOutput, responseFormat, baseURL string) ([]chatgptimage.Data, error) {
 	if len(outputs) == 0 {
 		return nil, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt image upstream returned no image"))
 	}
 	data := make([]chatgptimage.Data, 0, len(outputs))
 	for _, output := range outputs {
 		item := chatgptimage.Data{RevisedPrompt: output.RevisedPrompt}
+		var saved imgevents.SaveResult
+		if len(output.Bytes) > 0 {
+			value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{APIKeyID: apiKeyID, Bytes: output.Bytes, BaseURL: baseURL})).Get()
+			if err != nil {
+				return nil, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("save chatgpt image failed"))
+			}
+			var ok bool
+			saved, ok = value.(imgevents.SaveResult)
+			if !ok {
+				return nil, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid saved image result"))
+			}
+		}
 		if responseFormat == "b64_json" {
 			item.B64JSON = output.B64JSON
 			if item.B64JSON == "" && len(output.Bytes) > 0 {
@@ -197,12 +210,7 @@ func (s *Proxy) presentChatGPTImages(ctx context.Context, outputs []upevents.Ima
 				return nil, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt image has no content"))
 			}
 		} else if len(output.Bytes) > 0 {
-			value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{Bytes: output.Bytes, BaseURL: baseURL})).Get()
-			if err != nil {
-				return nil, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("save chatgpt image failed"))
-			}
-			saved, ok := value.(imgevents.SaveResult)
-			if !ok || strings.TrimSpace(saved.PublicURL) == "" {
+			if strings.TrimSpace(saved.PublicURL) == "" {
 				return nil, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid saved image result"))
 			}
 			item.URL = saved.PublicURL
@@ -214,6 +222,31 @@ func (s *Proxy) presentChatGPTImages(ctx context.Context, outputs []upevents.Ima
 		data = append(data, item)
 	}
 	return data, nil
+}
+
+func (s *Proxy) ArchiveResponseImages(ctx context.Context, apiKeyID string, responseBody []byte, baseURL string) error {
+	var response struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return fmt.Errorf("decode native image response: %w", err)
+	}
+	for _, item := range response.Data {
+		encoded := strings.TrimSpace(item.B64JSON)
+		if encoded == "" {
+			continue
+		}
+		payload, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return fmt.Errorf("decode native image payload: %w", err)
+		}
+		if _, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{APIKeyID: apiKeyID, Bytes: payload, BaseURL: baseURL})).Get(); err != nil {
+			return fmt.Errorf("save native image: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Proxy) releaseChatGPTImageSlot(ctx context.Context, token string) {

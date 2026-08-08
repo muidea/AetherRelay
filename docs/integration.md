@@ -65,6 +65,12 @@ curl -sS http://127.0.0.1:8080/v1/models \
   -H 'Authorization: Bearer <client-api-key>'
 ```
 
+返回目录已经按当前客户端 API Key 的 Provider 访问范围裁剪。同一个实例中，不同 Key 调用 `/v1/models` 可能得到不同模型、端点和转换能力；应用不得缓存或复用其他 Key 的目录。请求一个全局存在但当前 Key 未授权任何候选的模型时，网关统一返回 `model_not_found`，不会泄露模型是否由其他 Provider 提供。
+
+### 图片资产作用域
+
+`POST /v1/images/generations` 与 `POST /v1/images/edits` 成功产生的图片，按认证凭据解析出的稳定 `api_key_id` 存储。应用只需继续使用自己的 API Key，不需要也不能在请求体中指定作用域。`b64_json` 响应会在返回前归档图片字节；上游仅返回 URL 且没有图片字节时，代理不会主动下载该 URL。Admin 图片任务和图片库要求显式选择已存在的客户端 `api_key_id`，任务、原图、缩略图、标签和读取/删除操作均严格限制在该 Key 内。删除客户端 Key 会同步清理其图片任务、图片资产和 `interactions/{api_key_id}/` 交互归档。
+
 响应结构：
 
 ```json
@@ -128,7 +134,7 @@ curl -sS http://127.0.0.1:8080/v1/models \
 
 `supported_endpoints` 是目录候选的并集。它综合 Provider 启停状态、模型匹配、原生端点、转换合同及账号池发现结果动态生成，不是静态配置的原样输出；运行时健康度和熔断在实际请求时另行过滤，因此目录列出的模型仍可能暂时返回 `provider_unavailable`。
 
-`/v1/models` 不返回 Provider 名称，业务应用不能锁定某个 Provider，也不能假定同一模型、同一客户端端点每次都使用 native 路径。网关负责在候选中路由，应用必须以公开能力合同构造请求。
+`/v1/models` 不返回 Provider 名称，业务应用不能锁定某个 Provider，也不能假定同一模型、同一客户端端点每次都使用 native 路径。网关只会在当前 Key 获准的候选中路由和 fallback，绝不会因未授权 Provider 更健康或优先级更高而越权使用；应用必须以当前 Key 的公开能力合同构造请求。
 
 ### 2.2 Conversion Level
 

@@ -430,6 +430,30 @@ func (s *Store) DeleteTerminal(ownerID, taskID string) (bool, error) {
 	return true, nil
 }
 
+func (s *Store) DeleteOwner(ownerID string) (int, error) {
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return 0, fmt.Errorf("owner_id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := map[string]taskRecord{}
+	for key, rec := range s.items {
+		if rec.OwnerID != ownerID {
+			continue
+		}
+		removed[key] = rec
+		delete(s.items, key)
+	}
+	if err := s.saveLocked(); err != nil {
+		for key, rec := range removed {
+			s.items[key] = rec
+		}
+		return 0, err
+	}
+	return len(removed), nil
+}
+
 // RetryGeneration resets a terminal generation task. Eligibility belongs to
 // the image-task biz, which understands the upstream failure stage.
 func (s *Store) RetryGeneration(ownerID, taskID string) (events.TaskView, bool, error) {

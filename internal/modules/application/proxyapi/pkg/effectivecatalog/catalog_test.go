@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"ai-proxy/internal/pkg/aiproxyclientaccess"
 	"ai-proxy/internal/pkg/aiproxyconfig"
 )
 
@@ -122,6 +123,42 @@ func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 	ids := snap.SortedModelIDs()
 	if len(ids) != 3 {
 		t.Fatalf("ids=%v", ids)
+	}
+}
+
+func TestSnapshotScopesCandidatesAndModelsByProviderAccess(t *testing.T) {
+	cfg := config.Config{
+		ChatGPTWeb: config.ChatGPTWebConfig{},
+		Providers: map[string]config.Provider{
+			"first":  {Name: "first", Protocol: "openai", Models: []string{"shared", "first-only"}, Endpoints: []string{config.ProviderEndpointResponses}, Priority: 200},
+			"second": {Name: "second", Protocol: "anthropic", Models: []string{"shared", "second-only"}, Endpoints: []string{config.ProviderEndpointMessages}, Priority: 100},
+		},
+	}
+	snapshot := Build(cfg, 1, 1, []PoolModel{{ID: "builtin-only"}}, "")
+	policy, err := clientaccess.Selected([]string{"second", BuiltinProviderID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := snapshot.CandidatesForAccess("shared", policy)
+	if len(candidates) != 1 || candidates[0].RouteOwner != "second" {
+		t.Fatalf("candidates=%+v", candidates)
+	}
+	if route, ok := snapshot.LookupForAccess("shared", policy); !ok || route.RouteOwner != "second" {
+		t.Fatalf("route=%+v ok=%v", route, ok)
+	}
+	ids := snapshot.SortedModelIDsForAccess(policy)
+	if len(ids) != 3 || ids[0] != "builtin-only" || ids[1] != "second-only" || ids[2] != "shared" {
+		t.Fatalf("ids=%v", ids)
+	}
+	providers := snapshot.ProviderIDsForAccess(policy)
+	if len(providers) != 2 || providers[0] != BuiltinProviderID || providers[1] != "second" {
+		t.Fatalf("providers=%v", providers)
+	}
+	if _, ok := snapshot.LookupForAccess("first-only", policy); ok {
+		t.Fatal("unauthorized model was visible")
+	}
+	if len(snapshot.SortedModelIDsForAccess(clientaccess.Policy{})) != 0 {
+		t.Fatal("zero policy must expose no models")
 	}
 }
 

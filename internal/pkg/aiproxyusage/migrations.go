@@ -10,7 +10,7 @@ import (
 
 const (
 	currentSchemaVersion = 1
-	currentSchemaName    = "usage_final_v1"
+	currentSchemaName    = "usage_provider_access_v1"
 )
 
 // migrate owns only the usage runtime tables. Historical schemas are not
@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 	for _, statement := range []string{
 		`DROP TABLE IF EXISTS usage_events_v2`,
+		`DROP TABLE IF EXISTS client_api_key_provider_access`,
 		`DROP TABLE IF EXISTS usage_events`,
 		`DROP TABLE IF EXISTS client_api_key_metadata`,
 		`DELETE FROM schema_migrations`,
@@ -138,8 +139,16 @@ func createFinalSchema(ctx context.Context, tx *sql.Tx) error {
     key_hash        VARCHAR,
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     last_rotated_at TIMESTAMPTZ,
-    revoked_at      TIMESTAMPTZ
+    revoked_at      TIMESTAMPTZ,
+    provider_access_mode VARCHAR NOT NULL,
+    CHECK (provider_access_mode IN ('all', 'selected'))
 )`,
+		`CREATE TABLE client_api_key_provider_access (
+    api_key_id  VARCHAR NOT NULL,
+    provider_id VARCHAR NOT NULL,
+    PRIMARY KEY (api_key_id, provider_id)
+)`,
+		`CREATE INDEX idx_client_api_key_provider_access_provider ON client_api_key_provider_access(provider_id)`,
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {

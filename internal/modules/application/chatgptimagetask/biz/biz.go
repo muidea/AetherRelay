@@ -62,6 +62,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 		events.TopicRetryGeneration,
 		events.TopicCancel,
 		events.TopicDelete,
+		events.TopicDeleteOwner,
 	}
 	b.SubscribeFunc(events.TopicSubmitGeneration, b.handleSubmitGeneration)
 	b.SubscribeFunc(events.TopicSubmitEdit, b.handleSubmitEdit)
@@ -70,6 +71,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b.SubscribeFunc(events.TopicRetryGeneration, b.handleRetryGeneration)
 	b.SubscribeFunc(events.TopicCancel, b.handleCancel)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
+	b.SubscribeFunc(events.TopicDeleteOwner, b.handleDeleteOwner)
 	return b, nil
 }
 
@@ -277,6 +279,46 @@ func (s *ImageTask) handleDelete(ev event.Event, result event.Result) {
 	result.Set(events.DeleteResult{Deleted: true}, nil)
 }
 
+func (s *ImageTask) handleDeleteOwner(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.DeleteOwnerCommand)
+	if !ok || strings.TrimSpace(cmd.OwnerID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid delete owner command"))
+		return
+	}
+	s.runMu.Lock()
+	for key, run := range s.running {
+		if strings.HasPrefix(key, cmd.OwnerID+"\x00") {
+			run.cancel()
+		}
+	}
+	s.runMu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.runMu.Lock()
+		active := false
+		for key := range s.running {
+			if strings.HasPrefix(key, cmd.OwnerID+"\x00") {
+				active = true
+				break
+			}
+		}
+		s.runMu.Unlock()
+		if !active {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	deleted, err := s.store.DeleteOwner(cmd.OwnerID)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.DeleteOwnerResult{Deleted: deleted}, nil)
+}
+
 func imageTaskRunKey(ownerID, taskID string) string { return ownerID + "\x00" + taskID }
 
 func (s *ImageTask) startTask(ownerID, taskID string, execute func(context.Context)) {
@@ -359,7 +401,7 @@ func (s *ImageTask) runGeneration(ctx context.Context, ownerID, taskID, prompt, 
 	for _, item := range generated.Data {
 		outputs = append(outputs, featureImageOutput(item))
 	}
-	data, persistErr := s.persistImageOutputs(ctx, outputs, baseURL)
+	data, persistErr := s.persistImageOutputs(ctx, ownerID, outputs, baseURL)
 	if persistErr != nil {
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
@@ -429,7 +471,7 @@ func (s *ImageTask) runEdit(ctx context.Context, ownerID, taskID, prompt, model,
 	for _, item := range edited.Data {
 		outputs = append(outputs, featureImageOutput(item))
 	}
-	data, persistErr := s.persistImageOutputs(ctx, outputs, baseURL)
+	data, persistErr := s.persistImageOutputs(ctx, ownerID, outputs, baseURL)
 	if persistErr != nil {
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), "")
 		return
@@ -484,7 +526,7 @@ func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversa
 		conversationID = resumed.ConversationID
 	}
 	s.store.MarkProgress(ownerID, taskID, "receiving_image")
-	data, persistErr := s.persistImageOutputs(ctx, resumed.Images, baseURL)
+	data, persistErr := s.persistImageOutputs(ctx, ownerID, resumed.Images, baseURL)
 	if persistErr != nil {
 		s.markImageResult(token, "", true, "")
 		s.store.MarkError(ownerID, taskID, persistErr.Error(), conversationID)
@@ -494,7 +536,7 @@ func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversa
 	s.store.MarkSuccess(ownerID, taskID, data, conversationID, nil, time.Since(start).Milliseconds())
 }
 
-func (s *ImageTask) persistImageOutputs(ctx context.Context, images []upevents.ImageOutput, baseURL string) ([]events.ImageData, error) {
+func (s *ImageTask) persistImageOutputs(ctx context.Context, apiKeyID string, images []upevents.ImageOutput, baseURL string) ([]events.ImageData, error) {
 	data := make([]events.ImageData, 0, len(images))
 	for _, image := range images {
 		if err := ctx.Err(); err != nil {
@@ -502,7 +544,7 @@ func (s *ImageTask) persistImageOutputs(ctx context.Context, images []upevents.I
 		}
 		item := events.ImageData{URL: image.URL, B64JSON: image.B64JSON, RevisedPrompt: image.RevisedPrompt}
 		if len(image.Bytes) > 0 {
-			saveEv := event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{Bytes: image.Bytes, BaseURL: baseURL})
+			saveEv := event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{APIKeyID: apiKeyID, Bytes: image.Bytes, BaseURL: baseURL})
 			saveVal, saveErr := s.SendEvent(saveEv).Get()
 			if saveErr != nil {
 				return nil, saveErr

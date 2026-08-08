@@ -56,6 +56,8 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 - 启用后任意来源都必须登录；不再保留 loopback 特权旁路。
 - 修改密码哈希、账号或开关并成功热更新后，全部内存会话立即失效。
 - 管理接口成功修改 Provider 后，旧 transport 产生的健康样本和熔断会在 PATCH 返回前同步清除；恢复上游后无需等待原 30 秒 cooldown。未修改 Provider 的普通配置热更新不会重置其健康状态。
+- 客户端 Key 的 Provider 范围修改在 Admin 临界区内按“准备认证索引 → Store 事务 → 原子激活”执行。Provider 被 `selected` Key 引用时删除返回 409 并列出 Key ID；先在“客户端 Key”中编辑权限。`all` Key 不形成删除引用。
+- `/v1/models` 缺少预期模型时，先用同一客户端 Key复查目录，再在 Admin 查看该 Key 的有效 Provider、不可用 Provider 和有效模型。目录不按瞬时熔断过滤；目录存在但调用返回 503 时再排查 Provider 健康度，目录中完全不可见则排查 Key 绑定、Provider 启停和账号模型发现。
 - `admin_base_path` 是启动期路由；变更后必须重启进程，并同步反向代理路径规则。
 - 连续 5 次登录失败会按对端 IP 锁定 15 分钟（不信任 forwarded IP）。
 - `AI_PROXY_CREDENTIAL_KEY`、客户端 Key 哈希、Admin 密码哈希与 DuckDB 文件仍需主机权限保护；不要把主密钥写入 `config.yaml`、数据库、日志或版本库。
@@ -119,7 +121,7 @@ Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图
 - **账号导入/导出**：ChatGPT Web 与 Codex OAuth 均可直接选择导出的 JSON 文件重新导入，也支持粘贴 `accounts` 对象数组；ChatGPT Web 另支持纯 access token 文本。文件和粘贴内容不能同时使用，限制 1 MiB、单次 1000 个账号，提交或关闭后页面会清空输入。两个导出接口是仅有的明文凭据出口，必须二次确认且响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图，下载后立即销毁本地副本。
 - **OAuth 导入**：授权 URL、callback 与 session id 只应停留在管理员当前浏览器会话的内存中；不要把它们写进 URL 书签、共享剪贴板记录或监控日志。
 - **图片删除**：图片库删除不可恢复；批量删除前确认路径列表。图片内容通过 Admin 鉴权同源端点 `GET .../api/chatgpt/images/content?path=` 读取（可选 `thumb=1`），路径经严格校验，不提供通用 `/files/**`。
-- **owner_id**：图片任务以 `owner_id` 为隔离边界。运维代提任务时必须显式指定，不要共用一个长期固定 owner 混放不同业务方的任务。
+- **api_key_id**：图片任务和图片库所有接口都以已存在的客户端 `api_key_id` 为隔离边界。Admin 页面从客户端 Key 选择器提交，不接受任意 owner 字符串；图片资产、缩略图、标签和任务不可跨 Key 读取。
 - **失败处理**：失败任务已有 `conversation_id` 时，可使用“恢复轮询”继续读取同一上游任务；该操作不会重新提交生成，适用于轮询超时及历史版本误记为 `"<nil>"` 的记录。`bootstrap` 阶段的 TLS/超时失败尚未建立上游会话，页面会有限退避重试一次；仍失败时显示“重新提交”，以原任务参数重新发起。其它失败不提供盲目重试，避免重复生成或重复扣除额度。
 - **取消与清理**：排队或运行中的任务可从操作列取消。取消会先持久化 `cancelled` 终态，再取消 ai-proxy 内部等待上下文，因此迟到的成功或失败结果不会覆盖取消状态；上游已受理的请求仍可能继续并产生额度消耗。成功、失败和已取消等终态记录可删除，删除任务记录不会联动删除图片库资产。所有状态均可从“查看”打开完整任务参数、进度、错误、用量和结果。
 - 账号池组件始终装配；若管理 API 返回 `503`，应检查模块启动错误和 DuckDB/主密钥状态，而不是通过配置开关启用。

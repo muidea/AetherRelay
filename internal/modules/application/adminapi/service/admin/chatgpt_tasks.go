@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -9,7 +10,8 @@ import (
 )
 
 type chatGPTTaskBody struct {
-	OwnerID          string   `json:"owner_id"`
+	APIKeyID         string   `json:"api_key_id"`
+	OwnerID          string   `json:"owner_id,omitempty"` // test/client compatibility; production uses api_key_id
 	ClientTaskID     string   `json:"client_task_id"`
 	Prompt           string   `json:"prompt"`
 	Model            string   `json:"model"`
@@ -21,13 +23,12 @@ type chatGPTTaskBody struct {
 }
 
 func (h *Handler) listChatGPTImageTasks(w http.ResponseWriter, r *http.Request) {
-	ownerID := strings.TrimSpace(r.URL.Query().Get("owner_id"))
-	if ownerID == "" {
-		writeError(w, http.StatusBadRequest, "owner_id is required")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), r.URL.Query().Get("owner_id"))
+	if !ok {
 		return
 	}
 	ids := splitAdminCSV(r.URL.Query().Get("ids"))
-	out, err := h.chatGPT.ListChatGPTImageTasks(r.Context(), ownerID, ids)
+	out, err := h.chatGPT.ListChatGPTImageTasks(r.Context(), apiKeyID, ids)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -39,11 +40,15 @@ func (h *Handler) submitChatGPTImageGeneration(w http.ResponseWriter, r *http.Re
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	if strings.TrimSpace(body.OwnerID) == "" || strings.TrimSpace(body.ClientTaskID) == "" || strings.TrimSpace(body.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "owner_id, client_task_id and prompt are required")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	if !ok {
 		return
 	}
-	out, err := h.chatGPT.SubmitChatGPTImageGeneration(r.Context(), taskevents.SubmitGenerationCommand{OwnerID: body.OwnerID, ClientTaskID: body.ClientTaskID, Prompt: body.Prompt, Model: body.Model, Size: body.Size, Quality: body.Quality, BaseURL: adminImageBaseURL(r)})
+	if strings.TrimSpace(body.ClientTaskID) == "" || strings.TrimSpace(body.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "client_task_id and prompt are required")
+		return
+	}
+	out, err := h.chatGPT.SubmitChatGPTImageGeneration(r.Context(), taskevents.SubmitGenerationCommand{OwnerID: apiKeyID, ClientTaskID: body.ClientTaskID, Prompt: body.Prompt, Model: body.Model, Size: body.Size, Quality: body.Quality, BaseURL: adminImageBaseURL(r)})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -55,8 +60,12 @@ func (h *Handler) submitChatGPTImageEdit(w http.ResponseWriter, r *http.Request)
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	if strings.TrimSpace(body.OwnerID) == "" || strings.TrimSpace(body.ClientTaskID) == "" || strings.TrimSpace(body.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "owner_id, client_task_id and prompt are required")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(body.ClientTaskID) == "" || strings.TrimSpace(body.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "client_task_id and prompt are required")
 		return
 	}
 	images := append([]string(nil), body.Images...)
@@ -67,7 +76,7 @@ func (h *Handler) submitChatGPTImageEdit(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "image is required")
 		return
 	}
-	out, err := h.chatGPT.SubmitChatGPTImageEdit(r.Context(), taskevents.SubmitEditCommand{OwnerID: body.OwnerID, ClientTaskID: body.ClientTaskID, Prompt: body.Prompt, Model: body.Model, Size: body.Size, Quality: body.Quality, BaseURL: adminImageBaseURL(r), Images: images})
+	out, err := h.chatGPT.SubmitChatGPTImageEdit(r.Context(), taskevents.SubmitEditCommand{OwnerID: apiKeyID, ClientTaskID: body.ClientTaskID, Prompt: body.Prompt, Model: body.Model, Size: body.Size, Quality: body.Quality, BaseURL: adminImageBaseURL(r), Images: images})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -80,14 +89,18 @@ func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
-	if len(parts) != 5 || strings.TrimSpace(body.OwnerID) == "" {
-		writeError(w, http.StatusBadRequest, "owner_id and task_id are required")
+	if len(parts) != 5 {
+		writeError(w, http.StatusBadRequest, "task_id is required")
+		return
+	}
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	if !ok {
 		return
 	}
 	if body.ExtraTimeoutSecs == 0 {
 		body.ExtraTimeoutSecs = 30
 	}
-	out, err := h.chatGPT.ResumeChatGPTImageTask(r.Context(), body.OwnerID, parts[3], body.ExtraTimeoutSecs)
+	out, err := h.chatGPT.ResumeChatGPTImageTask(r.Context(), apiKeyID, parts[3], body.ExtraTimeoutSecs)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -101,11 +114,15 @@ func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Req
 		return
 	}
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
-	if len(parts) != 5 || strings.TrimSpace(body.OwnerID) == "" {
-		writeError(w, http.StatusBadRequest, "owner_id and task_id are required")
+	if len(parts) != 5 {
+		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	out, err := h.chatGPT.RetryChatGPTImageGeneration(r.Context(), body.OwnerID, parts[3], adminImageBaseURL(r))
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	if !ok {
+		return
+	}
+	out, err := h.chatGPT.RetryChatGPTImageGeneration(r.Context(), apiKeyID, parts[3], adminImageBaseURL(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -119,11 +136,15 @@ func (h *Handler) cancelChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
-	if len(parts) != 5 || strings.TrimSpace(body.OwnerID) == "" {
-		writeError(w, http.StatusBadRequest, "owner_id and task_id are required")
+	if len(parts) != 5 {
+		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	out, err := h.chatGPT.CancelChatGPTImageTask(r.Context(), body.OwnerID, parts[3])
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	if !ok {
+		return
+	}
+	out, err := h.chatGPT.CancelChatGPTImageTask(r.Context(), apiKeyID, parts[3])
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -137,16 +158,33 @@ func (h *Handler) deleteChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
-	if len(parts) != 4 || strings.TrimSpace(body.OwnerID) == "" {
-		writeError(w, http.StatusBadRequest, "owner_id and task_id are required")
+	if len(parts) != 4 {
+		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	out, err := h.chatGPT.DeleteChatGPTImageTask(r.Context(), body.OwnerID, parts[3])
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	if !ok {
+		return
+	}
+	out, err := h.chatGPT.DeleteChatGPTImageTask(r.Context(), apiKeyID, parts[3])
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) imageAPIKeyID(w http.ResponseWriter, ctx context.Context, apiKeyID, legacyOwner string) (string, bool) {
+	if strings.TrimSpace(apiKeyID) == "" && h.usageStore == nil {
+		apiKeyID = legacyOwner
+	}
+	if h.usageStore == nil && strings.TrimSpace(apiKeyID) == "" {
+		apiKeyID = "default"
+	}
+	if h.usageStore == nil && strings.TrimSpace(apiKeyID) != "" {
+		return strings.TrimSpace(apiKeyID), true
+	}
+	return h.requireExistingClientAPIKeyID(w, ctx, apiKeyID)
 }
 func decodeAdminBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(target) != nil {

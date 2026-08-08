@@ -5,6 +5,7 @@ const (
 	TopicSave            = "aiproxy.chatgpt.imagestore.command.save"
 	TopicGetBytes        = "aiproxy.chatgpt.imagestore.command.get_bytes"
 	TopicDelete          = "aiproxy.chatgpt.imagestore.command.delete"
+	TopicDeleteScope     = "aiproxy.chatgpt.imagestore.command.delete_scope"
 	TopicList            = "aiproxy.chatgpt.imagestore.command.list"
 	TopicEnsureThumbnail = "aiproxy.chatgpt.imagestore.command.ensure_thumbnail"
 	TopicGetThumbnail    = "aiproxy.chatgpt.imagestore.command.get_thumbnail"
@@ -18,8 +19,9 @@ const (
 )
 
 type SaveCommand struct {
-	Bytes   []byte
-	BaseURL string
+	APIKeyID string
+	Bytes    []byte
+	BaseURL  string
 }
 type SaveResult struct {
 	RelativePath string
@@ -28,11 +30,20 @@ type SaveResult struct {
 	Height       int
 	Size         int
 }
-type GetBytesCommand struct{ RelativePath string }
+type GetBytesCommand struct {
+	APIKeyID     string
+	RelativePath string
+}
 type GetBytesResult struct{ Bytes []byte }
-type DeleteCommand struct{ Paths []string }
+type DeleteCommand struct {
+	APIKeyID string
+	Paths    []string
+}
 type DeleteResult struct{ Deleted int }
+type DeleteScopeCommand struct{ APIKeyID string }
+type DeleteScopeResult struct{ Deleted int }
 type ListCommand struct {
+	APIKeyID  string
 	BaseURL   string
 	StartDate string
 	EndDate   string
@@ -52,33 +63,44 @@ type ImageItem struct {
 type ListResult struct {
 	Items []ImageItem `json:"items"`
 }
-type EnsureThumbnailCommand struct{ RelativePath string }
+type EnsureThumbnailCommand struct {
+	APIKeyID     string
+	RelativePath string
+}
 type EnsureThumbnailResult struct {
 	ThumbnailPath string
 	URL           string
 }
-type GetThumbnailCommand struct{ RelativePath string }
+type GetThumbnailCommand struct {
+	APIKeyID     string
+	RelativePath string
+}
 type GetThumbnailResult struct{ Bytes []byte }
-type ExistsCommand struct{ RelativePath string }
+type ExistsCommand struct {
+	APIKeyID     string
+	RelativePath string
+}
 type ExistsResult struct{ Exists bool }
-type ListTagsCommand struct{}
+type ListTagsCommand struct{ APIKeyID string }
 type ListTagsResult struct {
 	Tags []string `json:"tags"`
 }
 type SetTagsCommand struct {
-	Path string   `json:"path"`
-	Tags []string `json:"tags"`
+	APIKeyID string
+	Path     string   `json:"path"`
+	Tags     []string `json:"tags"`
 }
 type SetTagsResult struct {
 	Tags []string `json:"tags"`
 }
 type DeleteTagCommand struct {
-	Tag string `json:"tag"`
+	APIKeyID string
+	Tag      string `json:"tag"`
 }
 type DeleteTagResult struct {
 	RemovedFrom int `json:"removed_from"`
 }
-type StorageStatsCommand struct{}
+type StorageStatsCommand struct{ APIKeyID string }
 type StorageStatsResult struct {
 	DiskTotalMB    int64 `json:"disk_total_mb"`
 	DiskUsedMB     int64 `json:"disk_used_mb"`
@@ -87,15 +109,16 @@ type StorageStatsResult struct {
 	ImageSizeMB    int64 `json:"image_size_mb"`
 	ImageSizeBytes int64 `json:"image_size_bytes"`
 }
-type CompressCommand struct{}
+type CompressCommand struct{ APIKeyID string }
 type CompressResult struct {
 	Compressed int   `json:"compressed"`
 	SavedBytes int64 `json:"saved_bytes"`
 	SavedMB    int64 `json:"saved_mb"`
 }
 type CleanupToTargetCommand struct {
-	TargetFreeMB int64 `json:"target_free_mb"`
-	DryRun       bool  `json:"dry_run"`
+	APIKeyID     string `json:"-"`
+	TargetFreeMB int64  `json:"target_free_mb"`
+	DryRun       bool   `json:"dry_run"`
 }
 type CleanupToTargetResult struct {
 	Removed       int   `json:"removed"`

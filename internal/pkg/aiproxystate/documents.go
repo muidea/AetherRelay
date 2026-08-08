@@ -33,6 +33,7 @@ type ImageTaskRow struct {
 // ImageRow contains the queryable image index fields as columns. Payload is
 // retained only for owner-private image metadata, not as a whole-store blob.
 type ImageRow struct {
+	APIKeyID  string
 	Path      string
 	Size      int64
 	Width     int
@@ -201,6 +202,26 @@ func openDatabase(path, memoryLimit string, threads int) (*sql.DB, error) {
 }
 
 func migrate(db *sql.DB) error {
+	// The image store schema is intentionally reset when the final scoped
+	// columns are absent. Historical image rows are not part of the current
+	// contract and must never be interpreted as globally readable assets.
+	if rows, err := db.Query(`PRAGMA table_info('chatgpt_images')`); err == nil {
+		hasScope := false
+		for rows.Next() {
+			var cid int
+			var name, typ string
+			var notNull, dflt, pk any
+			if scanErr := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); scanErr == nil && name == "api_key_id" {
+				hasScope = true
+			}
+		}
+		_ = rows.Close()
+		if !hasScope {
+			if _, err := db.Exec(`DROP TABLE IF EXISTS chatgpt_image_tags; DROP TABLE IF EXISTS chatgpt_images`); err != nil {
+				return fmt.Errorf("reset unscoped image schema: %w", err)
+			}
+		}
+	}
 	statements := []string{
 		`DROP TABLE IF EXISTS chatgpt_accounts`,
 		`DROP TABLE IF EXISTS codex_oauth_accounts`,
@@ -220,18 +241,22 @@ func migrate(db *sql.DB) error {
             PRIMARY KEY (owner_id, task_id)
         )`,
 		`CREATE TABLE IF NOT EXISTS chatgpt_images (
-            path VARCHAR PRIMARY KEY,
+			api_key_id VARCHAR NOT NULL,
+			path VARCHAR NOT NULL,
             size BIGINT NOT NULL,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
             created_at VARCHAR NOT NULL,
             payload JSON NOT NULL,
-            updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
-        )`,
+			updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+			PRIMARY KEY (api_key_id, path)
+		)`,
 		`CREATE TABLE IF NOT EXISTS chatgpt_image_tags (
-            path VARCHAR PRIMARY KEY,
-            tags JSON NOT NULL,
-            updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+			api_key_id VARCHAR NOT NULL,
+			path VARCHAR NOT NULL,
+			tags JSON NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+			PRIMARY KEY (api_key_id, path)
         )`,
 		`CREATE TABLE IF NOT EXISTS chatgpt_temporary_conversations (
             owner_id VARCHAR NOT NULL,
@@ -421,7 +446,7 @@ func (s *Documents) ReplaceImageTasks(values []ImageTaskRow) error {
 }
 
 func (s *Documents) LoadImages() ([]ImageRow, error) {
-	rows, err := s.queryRows(`SELECT path, size, width, height, created_at, CAST(payload AS VARCHAR) FROM chatgpt_images ORDER BY created_at DESC, path`)
+	rows, err := s.queryRows(`SELECT api_key_id, path, size, width, height, created_at, CAST(payload AS VARCHAR) FROM chatgpt_images ORDER BY api_key_id, created_at DESC, path`)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +455,7 @@ func (s *Documents) LoadImages() ([]ImageRow, error) {
 	for rows.Next() {
 		var row ImageRow
 		var payload string
-		if err := rows.Scan(&row.Path, &row.Size, &row.Width, &row.Height, &row.CreatedAt, &payload); err != nil {
+		if err := rows.Scan(&row.APIKeyID, &row.Path, &row.Size, &row.Width, &row.Height, &row.CreatedAt, &payload); err != nil {
 			return nil, err
 		}
 		row.Payload = json.RawMessage(payload)
@@ -442,7 +467,7 @@ func (s *Documents) LoadImages() ([]ImageRow, error) {
 func (s *Documents) ReplaceImages(values []ImageRow) error {
 	return s.replace("DELETE FROM chatgpt_images", func(tx *sql.Tx) error {
 		for _, value := range values {
-			if _, err := tx.Exec(`INSERT INTO chatgpt_images(path, size, width, height, created_at, payload, updated_at) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), NOW())`, value.Path, value.Size, value.Width, value.Height, value.CreatedAt, string(value.Payload)); err != nil {
+			if _, err := tx.Exec(`INSERT INTO chatgpt_images(api_key_id, path, size, width, height, created_at, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), NOW())`, value.APIKeyID, value.Path, value.Size, value.Width, value.Height, value.CreatedAt, string(value.Payload)); err != nil {
 				return err
 			}
 		}
@@ -450,37 +475,43 @@ func (s *Documents) ReplaceImages(values []ImageRow) error {
 	})
 }
 
-func (s *Documents) LoadImageTags() (map[string][]string, error) {
-	rows, err := s.queryRows(`SELECT path, CAST(tags AS VARCHAR) FROM chatgpt_image_tags ORDER BY path`)
+func (s *Documents) LoadImageTags() (map[string]map[string][]string, error) {
+	rows, err := s.queryRows(`SELECT api_key_id, path, CAST(tags AS VARCHAR) FROM chatgpt_image_tags ORDER BY api_key_id, path`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := map[string][]string{}
+	result := map[string]map[string][]string{}
 	for rows.Next() {
+		var apiKeyID string
 		var path string
 		var raw string
-		if err := rows.Scan(&path, &raw); err != nil {
+		if err := rows.Scan(&apiKeyID, &path, &raw); err != nil {
 			return nil, err
 		}
 		var tags []string
 		if err := json.Unmarshal([]byte(raw), &tags); err != nil {
 			return nil, fmt.Errorf("decode image tags for %q: %w", path, err)
 		}
-		result[path] = tags
+		if result[apiKeyID] == nil {
+			result[apiKeyID] = map[string][]string{}
+		}
+		result[apiKeyID][path] = tags
 	}
 	return result, rows.Err()
 }
 
-func (s *Documents) ReplaceImageTags(values map[string][]string) error {
+func (s *Documents) ReplaceImageTags(values map[string]map[string][]string) error {
 	return s.replace("DELETE FROM chatgpt_image_tags", func(tx *sql.Tx) error {
-		for path, tags := range values {
-			payload, err := json.Marshal(tags)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`INSERT INTO chatgpt_image_tags(path, tags, updated_at) VALUES (?, CAST(? AS JSON), NOW())`, path, string(payload)); err != nil {
-				return err
+		for apiKeyID, scoped := range values {
+			for path, tags := range scoped {
+				payload, err := json.Marshal(tags)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`INSERT INTO chatgpt_image_tags(api_key_id, path, tags, updated_at) VALUES (?, ?, CAST(? AS JSON), NOW())`, apiKeyID, path, string(payload)); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

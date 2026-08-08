@@ -74,6 +74,8 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 客户端 API Key 不属于 YAML 配置。Key 由 Admin 创建并保存在 `state.database` 的 DuckDB 中，初始数据库可以没有任何 Key。
 
+创建时 `provider_access` 必填：`mode: selected` 要求至少一个已知 Provider ID，`mode: all` 要求 `provider_ids` 为空。已禁用或暂时无模型的 Provider 仍可预授权；内建 ID 为 `chatgptweb`、`codexoauth`。`selected` 绑定不会随未来 Provider 自动扩展，`all` 会。权限更新、启停和轮换使用专用认证索引原子热切换，不重载 Provider 配置。
+
 - Key ID 需匹配 `[a-z0-9][a-z0-9._-]{0,63}`，`default` 为历史用量保留 ID，不能配置。
 - 每个数据请求必须携带 Key；缺失、空 Header、未知、禁用、格式错误或两个身份 Header 冲突时均返回 401，且不产生用量记录。
 - OpenAI 使用 `Authorization: Bearer <key>`，Anthropic 使用 `X-API-Key: <key>`；两种 Header 可兼容，但同时出现时必须为同一 Key。
@@ -139,11 +141,11 @@ state:
 
 `state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
 
-Usage runtime 当前使用重新基线化的最终 schema v1（版本名 `usage_final_v1`），不再执行历史增量 migration。首次遇到旧 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v1 并保留新产生的数据。升级前如需回查旧数据，应先备份整个 `state.database`。
+Usage runtime 当前使用重新基线化的最终 schema v1（版本名 `usage_provider_access_v1`），不再执行历史增量 migration。首次遇到旧 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata`、`client_api_key_provider_access` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v1 并保留新产生的数据。升级前如需回查旧数据，应先备份整个 `state.database`。
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 
-工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/{api_key_id}/{round_id}/`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
+工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/{api_key_id}/{round_id}/`。图片任务与图片资产同样以客户端 API Key ID 作用域隔离：磁盘目录为 `images/{安全作用域}/{日期路径}` 和 `image_thumbnails/{安全作用域}/{日期路径}.png`，数据库索引与标签主键为 `(api_key_id, path)`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 
 ## ChatGPT Web 本地数据
 

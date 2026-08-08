@@ -11,6 +11,7 @@ const (
 	TopicRetryGeneration  = "imagetask/retry_generation"
 	TopicCancel           = "imagetask/cancel"
 	TopicDelete           = "imagetask/delete"
+	TopicDeleteOwner      = "imagetask/delete_owner"
 )
 
 const (
@@ -114,3 +115,6 @@ type DeleteCommand struct {
 type DeleteResult struct {
 	Deleted bool `json:"deleted"`
 }
+
+type DeleteOwnerCommand struct{ OwnerID string }
+type DeleteOwnerResult struct{ Deleted int }
