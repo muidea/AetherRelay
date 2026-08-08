@@ -292,7 +292,7 @@
             <div class="field full">
               <label class="label required" for="cgTaskPrompt">prompt</label>
               <div class="feature-input-wrap">
-                <textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off"></textarea>
+                <textarea id="cgTaskPrompt" class="control" required rows="3" autocomplete="off" placeholder="输入图片描述。Enter 换行，Ctrl+Enter 提交"></textarea>
                 <button type="submit" class="btn btn-primary feature-submit-inside" id="cgTaskSubmit">提交任务</button>
               </div>
             </div>
@@ -336,7 +336,7 @@
             <div class="field full">
               <label class="label required" for="cgSearchQuery">搜索内容</label>
               <div class="feature-input-wrap">
-                <textarea id="cgSearchQuery" class="control" required rows="4" autocomplete="off" placeholder="输入需要检索的问题或关键词"></textarea>
+                <textarea id="cgSearchQuery" class="control" required rows="4" autocomplete="off" placeholder="输入需要检索的问题或关键词。Enter 换行，Ctrl+Enter 提交"></textarea>
                 <button type="submit" class="btn btn-primary feature-submit-inside" id="cgSearchSubmit">开始搜索</button>
               </div>
               <div class="help">每次提交创建一个独立搜索会话，仅支持纯文本输入。</div>
@@ -379,7 +379,7 @@
               <div id="tcRecovery" class="notice" style="display:none;margin:0">此对话需要恢复：上一轮生成已中断，无法继续当前分支。请创建新对话。</div>
               <div id="tcImagePreview" class="tc-composer-images" aria-live="polite"></div>
               <div class="tc-search-option"><label class="check"><input id="tcWebSearch" type="checkbox" disabled> 联网搜索</label><span>本轮强制使用 ChatGPT Web 联网搜索；不支持图片或文件附件。</span></div>
-              <div class="tc-input-wrap"><textarea id="tcInput" class="control" rows="3" placeholder="输入消息，可附加图片、PDF、TXT、Markdown 或 CSV。Enter 发送，Shift+Enter 换行" autocomplete="off" disabled></textarea><input id="tcImages" class="tc-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/markdown,text/csv,.md,.markdown,.csv" multiple disabled><button type="button" class="btn tc-attach-inside" id="tcAttach" title="添加附件" aria-label="添加附件" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 12.8 14.8 6.5a3 3 0 1 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.5-8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m7.1 14.2 8.1-8.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button><button type="button" class="btn btn-primary tc-send-inside" id="tcSend" disabled>发送</button><button type="button" class="btn tc-send-inside hidden" id="tcCancel" disabled>停止生成</button></div>
+              <div class="tc-input-wrap"><textarea id="tcInput" class="control" rows="3" placeholder="输入消息，可附加图片、PDF、TXT、Markdown 或 CSV。Enter 换行，Ctrl+Enter 发送" autocomplete="off" disabled></textarea><input id="tcImages" class="tc-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,text/markdown,text/csv,.md,.markdown,.csv" multiple disabled><button type="button" class="btn tc-attach-inside" id="tcAttach" title="添加附件" aria-label="添加附件" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 12.8 14.8 6.5a3 3 0 1 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.5-8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m7.1 14.2 8.1-8.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button><button type="button" class="btn btn-primary tc-send-inside" id="tcSend" disabled>发送</button><button type="button" class="btn tc-send-inside hidden" id="tcCancel" disabled>停止生成</button></div>
             </div>
           </section>
         </div>
@@ -627,7 +627,7 @@ const languageCookieName="ai_proxy_admin_lang";
 // Keep stable Chinese source keys in one small runtime dictionary. Static DOM
 // is localized through the same dictionary, while dynamic labels use t().
 const enUS={
-  "添加附件":"Add attachment","输入消息，可附加图片、PDF、TXT、Markdown 或 CSV。Enter 发送，Shift+Enter 换行":"Enter a message or attach an image, PDF, TXT, Markdown, or CSV file. Enter sends; Shift+Enter adds a line.","移除附件":"Remove attachment","联网搜索":"Web search","本轮强制使用 ChatGPT Web 联网搜索；不支持图片或文件附件。":"This turn forces ChatGPT Web search. Images and file attachments are unavailable.","联网搜索不支持图片或文件附件":"Web search does not support image or file attachments",
+  "添加附件":"Add attachment","输入消息，可附加图片、PDF、TXT、Markdown 或 CSV。Enter 换行，Ctrl+Enter 发送":"Enter a message or attach an image, PDF, TXT, Markdown, or CSV file. Enter adds a line; Ctrl+Enter sends.","移除附件":"Remove attachment","联网搜索":"Web search","本轮强制使用 ChatGPT Web 联网搜索；不支持图片或文件附件。":"This turn forces ChatGPT Web search. Images and file attachments are unavailable.","联网搜索不支持图片或文件附件":"Web search does not support image or file attachments",
   "管理控制台":"Administration console","Provider 管理":"Providers","客户端 Key":"Client keys","使用统计":"Usage","账号池":"Account pools","功能集":"Features","系统信息":"System information","本地管理模式":"Local administration","退出登录":"Log out","语言":"Language","显示语言":"Display language","简体中文":"Simplified Chinese","设为默认":"Set as default","设为实例默认语言":"Set as the instance default language",
   "新增 Provider":"Add provider","当前实例没有关联可写配置文件，只能查看 Provider。":"This instance has no writable configuration file; providers are read-only.","当前实例未配置凭据主密钥，Provider 安全存储不可写。":"No credential master key is configured; secure Provider storage is read-only.","Provider 总数":"Providers","已启用":"Enabled","官方":"Official","第三方":"Third party","Provider 列表":"Provider list","搜索名称 / 来源 / 模型":"Search name, source, or model","正在加载配置…":"Loading configuration…",
   "客户端 API Key":"Client API keys","创建、启停、轮换调用 ai-proxy 的客户端身份。明文 Key 仅在创建或轮换时显示一次。":"Create, enable, rotate, or disable identities that call ai-proxy. Plaintext keys are shown only when created or rotated.","＋ 新建 Key":"＋ New key","Key 列表":"Key list",
@@ -643,6 +643,7 @@ const enUS={
 };
 Object.assign(enUS,{
   "搜索历史":"Search history","按管理员账号隔离，最多保留 30 天":"Isolated per administrator; retained for up to 30 days","正在加载搜索历史…":"Loading search history…","暂无搜索历史":"No search history","无法加载搜索历史":"Could not load search history","未命名搜索":"Untitled search",
+  "输入图片描述。Enter 换行，Ctrl+Enter 提交":"Describe the image. Enter adds a line; Ctrl+Enter submits.","输入需要检索的问题或关键词。Enter 换行，Ctrl+Enter 提交":"Enter a question or keywords to search. Enter adds a line; Ctrl+Enter submits.",
 });
 Object.assign(enUS,{
   "导入凭据":"Import credentials","导入 ChatGPT Web 凭据":"Import ChatGPT Web credentials","凭据":"Credentials","每行一个 access token，或粘贴 ChatGPT Web 导出的 JSON 数组":"One access token per line, or paste a JSON array exported by ChatGPT Web","支持纯 access token 文本、JSON 字符串数组，以及完整 OAuth 账号数组或 {accounts:[...]}。完整对象会保留 refresh_token、id_token 和 proxy，且必须带 credential_type=chatgpt_web；凭据不会回显。":"Accepts plain access-token text, JSON string arrays, complete OAuth account arrays, or {accounts:[...]}. Complete objects retain refresh_token, id_token, and proxy, and must contain credential_type=chatgpt_web; credentials are never echoed.",
@@ -2939,7 +2940,7 @@ $("cgTaskOwner").onchange=()=>{
 $("cgTaskForm").onsubmit=submitTask;
 $("cgSearchForm").onsubmit=submitFeatureSearch;
 function submitTextareaOnEnter(event,formID){
-  if(event.key!=="Enter"||event.shiftKey||event.isComposing)return;
+  if(event.key!=="Enter"||!event.ctrlKey||event.shiftKey||event.altKey||event.metaKey||event.isComposing||event.repeat)return;
   const form=$(formID);
   const submit=form?.querySelector('button[type="submit"],input[type="submit"]');
   if(!form||submit?.disabled)return;
@@ -2977,7 +2978,7 @@ $("tcMessages").addEventListener("scroll",e=>{
   if(e.currentTarget.scrollTop<48)loadOlderTemporaryMessages();
 });
 $("tcInput").addEventListener("keydown",e=>{
-  if(e.key!=="Enter"||e.shiftKey||e.isComposing)return;
+  if(e.key!=="Enter"||!e.ctrlKey||e.shiftKey||e.altKey||e.metaKey||e.isComposing||e.repeat)return;
   e.preventDefault();sendTemporaryTurn();
 });
 
