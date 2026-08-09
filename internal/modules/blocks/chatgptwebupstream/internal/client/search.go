@@ -379,8 +379,8 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 	mapping, _ := root["mapping"].(map[string]any)
 	var latest map[string]any
 	latestTime := float64(-1)
-	var latestWithText map[string]any
-	latestWithTextTime := float64(-1)
+	var latestWithAnswer map[string]any
+	latestWithAnswerTime := float64(-1)
 	for _, rawNode := range mapping {
 		node, _ := rawNode.(map[string]any)
 		message, _ := node["message"].(map[string]any)
@@ -393,21 +393,24 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 		if latest == nil || created >= latestTime {
 			latest, latestTime = message, created
 		}
-		// The Web document can append a newer assistant bookkeeping node
-		// without content after the answer-bearing node. Keep the newest
-		// non-empty message separately so that node cannot hide the answer.
-		if searchMessageText(message) != "" && (latestWithText == nil || created >= latestWithTextTime) {
-			latestWithText, latestWithTextTime = message, created
+		// Search tool invocations are represented by assistant nodes containing
+		// text such as search("query"). They are control-plane placeholders, not
+		// user-visible answers; do not let one terminate polling or hide the
+		// latest answer-bearing node.
+		text := searchMessageText(message)
+		if text != "" && !isSearchInvocationPlaceholder(text) && (latestWithAnswer == nil || created >= latestWithAnswerTime) {
+			latestWithAnswer, latestWithAnswerTime = message, created
 		}
 	}
-	if searchMessageText(latest) == "" && latestWithText != nil {
-		latest = latestWithText
+	if latest == nil || isSearchInvocationPlaceholder(searchMessageText(latest)) || searchMessageText(latest) == "" {
+		latest = latestWithAnswer
 	}
 	if latest == nil {
 		return SearchResult{ConversationID: bounded(conversationID, 512)}, false, nil
 	}
 	metadata, _ := latest["metadata"].(map[string]any)
-	result := SearchResult{ConversationID: bounded(conversationID, 512), ActualModel: bounded(searchMapString(metadata, "model_slug"), 256), Text: bounded(searchMessageText(latest), maxSearchTextBytes)}
+	answerText := searchMessageText(latest)
+	result := SearchResult{ConversationID: bounded(conversationID, 512), ActualModel: bounded(searchMapString(metadata, "model_slug"), 256), Text: bounded(answerText, maxSearchTextBytes)}
 	result.Sources = collectSearchSources(latest)
 	for _, found := range searchURLPattern.FindAllString(result.Text, -1) {
 		result.Sources = appendSearchSource(result.Sources, SearchSource{URL: found})
@@ -420,6 +423,18 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 		terminal = strings.TrimSpace(searchMapString(metadata, "status")) == "completed"
 	}
 	return result, terminal, nil
+}
+
+// isSearchInvocationPlaceholder identifies the assistant control message that
+// ChatGPT Web may persist while a forced search is still running. It must not
+// be surfaced as the final answer when the upstream marks that node complete.
+func isSearchInvocationPlaceholder(text string) bool {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "search(") || !strings.HasSuffix(text, ")") {
+		return false
+	}
+	var query string
+	return json.Unmarshal([]byte(strings.TrimSpace(text[len("search("):len(text)-1])), &query) == nil
 }
 
 func searchMessageText(message map[string]any) string {

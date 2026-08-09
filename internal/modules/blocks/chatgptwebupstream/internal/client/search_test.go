@@ -94,3 +94,34 @@ func TestParseSearchDocumentKeepsAnswerWhenNewerAssistantNodeIsEmpty(t *testing.
 		t.Fatalf("result=%+v terminal=%v err=%v", result, terminal, err)
 	}
 }
+
+func TestParseSearchDocumentDoesNotTreatSearchInvocationAsAnswer(t *testing.T) {
+	document := []byte(`{"mapping":{"tool":{"message":{"create_time":3,"author":{"role":"assistant"},"content":{"parts":["search(\"latest news\")"]},"metadata":{"model_slug":"gpt-5-search","status":"completed"}}}}}`)
+	result, terminal, err := parseSearchDocument("conversation", document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal || result.Text != "" {
+		t.Fatalf("search invocation was surfaced as answer: result=%+v terminal=%v", result, terminal)
+	}
+}
+
+func TestParseSearchDocumentPrefersAnswerOverNewerSearchInvocation(t *testing.T) {
+	document := []byte(`{"mapping":{
+		"answer":{"message":{"create_time":2,"author":{"role":"assistant"},"content":{"parts":["final answer"]},"metadata":{"model_slug":"gpt-5-search","status":"completed"}}},
+		"tool":{"message":{"create_time":3,"author":{"role":"assistant"},"content":{"parts":["search(\"latest news\")"]},"metadata":{"model_slug":"gpt-5-search","status":"completed"}}}
+	}}`)
+	result, terminal, err := parseSearchDocument("conversation", document)
+	if err != nil || !terminal || result.Text != "final answer" {
+		t.Fatalf("search invocation hid answer: result=%+v terminal=%v err=%v", result, terminal, err)
+	}
+}
+
+func TestIsSearchInvocationPlaceholder(t *testing.T) {
+	if !isSearchInvocationPlaceholder(`search("为我搜索\\n最新消息")`) {
+		t.Fatal("expected escaped search invocation to be recognized")
+	}
+	if isSearchInvocationPlaceholder(`search(latest news)`) {
+		t.Fatal("unquoted search text must not be treated as an invocation placeholder")
+	}
+}

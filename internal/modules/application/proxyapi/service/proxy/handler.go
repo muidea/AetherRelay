@@ -2637,13 +2637,21 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 	for _, plan := range plans {
 		providerValue, providerOK := health[plan.RouteOwner]
 		specific, specificOK := h.metricsRegistry.ProviderModelHealth(plan.RouteOwner, plan.ModelID)
-		if specificOK && (specific.Status == "unhealthy" || specific.Status == "credential_error" || specific.CircuitState == "open") {
+		// Health status is a rolling quality score, not a routing quarantine. An
+		// unhealthy score (for example, one truncated stream in a small window)
+		// must remain routable so the provider can receive a recovery probe. Only
+		// an active circuit or an explicit model-scoped credential failure may
+		// block this exact model.
+		if specificOK && (specific.Status == "credential_error" || specific.CircuitState == "open") {
 			continue
 		}
 		// Credential failures are model-scoped: one Provider key may be
 		// authorized for some exact models but not others. Transport failures
 		// and open provider circuits remain shared across all models.
-		if providerOK && (providerValue.Status == "unhealthy" || providerValue.CircuitState == "open") {
+		// Provider-level rolling scores are used for ordering/observability. Do
+		// not turn them into a permanent fail-fast gate; an active circuit is the
+		// authoritative availability decision.
+		if providerOK && providerValue.CircuitState == "open" {
 			continue
 		}
 		eligible = append(eligible, plan)

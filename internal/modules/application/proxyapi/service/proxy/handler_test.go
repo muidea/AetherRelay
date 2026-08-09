@@ -3304,3 +3304,42 @@ func TestCredentialFailureDoesNotQuarantineSiblingModel(t *testing.T) {
 		t.Fatalf("allowed status=%d body=%s", allowed.Code, allowed.Body.String())
 	}
 }
+
+func TestRollingUnhealthyScoreDoesNotBlockRecoveryRequest(t *testing.T) {
+	tmpDir := t.TempDir()
+	recorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustHandlerConfig(config.Config{
+		ListenAddr: ":0", InteractionDir: filepath.Join(tmpDir, "interactions"),
+		Providers: map[string]config.Provider{
+			"deepseek": {
+				Name: "deepseek", Protocol: "anthropic", BaseURL: "https://deepseek.test", APIKey: "k",
+				Models: []string{"deepseek-test"}, Endpoints: []string{config.ProviderEndpointMessages},
+			},
+		},
+		ModelMetadata: map[string]config.ModelMetadata{"deepseek-test": {ID: "deepseek-test"}},
+	})
+	registry := metrics.NewRegistry()
+	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, registry)
+	for range 3 {
+		registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusOK, time.Millisecond, "success", "", "", "", "")
+	}
+	registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusOK, time.Millisecond, "upstream_truncated", "", "", "", "")
+	before := registry.ProviderHealthSnapshot()["deepseek"]
+	if before.Status != "unhealthy" || before.CircuitState != "closed" {
+		t.Fatalf("test requires a closed circuit with an unhealthy rolling score: %#v", before)
+	}
+
+	called := false
+	handler.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return testResponse(http.StatusOK, "application/json", `{"id":"m1","type":"message","role":"assistant","model":"deepseek-test","content":[{"type":"text","text":"recovered"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`), nil
+	})
+	rec := newResponseRecorder()
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/messages", `{"model":"deepseek-test","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if rec.Code != http.StatusOK || !called {
+		t.Fatalf("rolling health score blocked recovery request: status=%d called=%v body=%s", rec.Code, called, rec.Body.String())
+	}
+}
