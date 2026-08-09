@@ -551,6 +551,8 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 Admin 系统信息中的“开放 API 端点”是实例级路由清单，不代表每个模型都支持该路径。普通业务应用只应依赖数据面的 `/v1/models`；Admin API 需要管理面认证，不应暴露给业务客户端。
 
+自定义 Provider 支持整体配置迁移：`POST /admin/api/providers/export` 导出安全配置（默认不包含 API Key），请求体设置 `{"include_api_keys":true}` 才导出完整凭据；`POST /admin/api/providers/import` 导入 `ai-proxy.provider-bundle` v1 文件，默认按 `merge` 合并同名 Provider，也支持 `skip` 和 `replace`。安全导出不会覆盖目标实例已有 API Key；完整导出需要 Admin 权限、二次确认并使用 `Cache-Control: no-store`。Provider bundle 只包含 Provider 自身的协议、Base URL、模型、端点、路由优先级和启用状态，不包含健康度、模型元数据、转换能力、用量或账号池信息。
+
 账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `ai-proxy.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`。同一账号的跨槽位归组优先使用规范化邮箱，不能使用不同上游 `account_id` 直接强行合并。
 
 ## 11. 推荐启动流程

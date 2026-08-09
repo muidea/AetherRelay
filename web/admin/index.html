@@ -80,6 +80,8 @@
     @media(max-width:900px){.tc-layout{grid-template-columns:1fr}.tc-list{min-height:220px}.tc-main{min-height:420px}.tc-messages{padding:14px}.tc-bubble{max-width:calc(100% - 37px)}}
     .feature-input-wrap{position:relative}.feature-input-wrap textarea.control{display:block;min-height:108px;padding:10px 126px 48px 12px}.feature-submit-inside{position:absolute;right:10px;bottom:10px;min-width:104px;box-shadow:0 2px 5px rgba(22,119,255,.24)}
     .task-status-cancelled{color:#595959;background:#f5f5f5;border-color:#bfbfbf}.task-action-list{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.task-detail-results{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.task-detail-results img{width:112px;height:112px;object-fit:cover;border:1px solid var(--line);border-radius:6px;cursor:pointer}.task-detail-prompt,.task-detail-error{white-space:pre-wrap;word-break:break-word}.task-detail-error{color:var(--danger)}
+    .account-menu{position:relative}.account-menu summary{list-style:none;cursor:pointer}.account-menu summary::-webkit-details-marker{display:none}.account-menu[open]{z-index:20}.account-menu-panel{position:absolute;right:0;top:calc(100% + 6px);min-width:190px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:var(--shadow);display:grid;gap:4px}.account-menu-panel .menu-label{padding:4px 8px;color:var(--muted);font-size:11px}.account-menu-panel .btn{width:100%;text-align:left;white-space:nowrap}.unified-slot{display:grid;gap:8px;min-width:0;width:100%}.unified-slot-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.unified-slot-title{display:flex;align-items:center;gap:6px;font-weight:600}.unified-slot-primary{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;width:100%}.unified-slot-primary-value{font-size:14px;font-weight:400;color:var(--text)}.unified-slot-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;color:var(--muted);font-size:12px;width:100%}.unified-slot-meta>span{min-width:0}.unified-slot-meta>span:not(.tag){font-size:14px;color:var(--text)}.unified-slot .actions{gap:6px;flex-wrap:wrap;align-items:center;width:100%;padding-top:8px;border-top:1px solid var(--line)}.unified-slot .link-btn{padding:4px 8px;border:1px solid var(--line);border-radius:5px;background:#fff}.unified-slot .link-btn:hover{background:#f5f9ff;border-color:#91caff}.unified-usage{display:grid;gap:4px;width:100%}.unified-usage-head{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--text)}.unified-usage-head strong{font-weight:500;font-variant-numeric:tabular-nums}.unified-usage-meter{height:7px;overflow:hidden;border-radius:99px;background:#edf0f3}.unified-usage-meter i{display:block;height:100%;border-radius:inherit;background:var(--success);transition:width .2s ease}.unified-usage-meter.warning i{background:var(--warning)}.unified-usage-meter.exhausted i{background:var(--danger)}.unified-account-table{min-width:900px}.unified-account-table th,.unified-account-table td{padding:14px 16px;vertical-align:top;white-space:normal;overflow:visible}.unified-account-table th:nth-child(1){width:27%}.unified-account-table th:nth-child(2),.unified-account-table th:nth-child(3){width:36.5%}.unified-account-table td:first-child{border-right:1px solid var(--line)}.unified-account-table .unified-account-identity{min-width:0}.unified-account-table .unified-account-email{font-weight:600;line-height:1.4;overflow-wrap:anywhere;word-break:break-word}.unified-account-table .unified-account-ref{margin-top:5px;overflow-wrap:anywhere}.unified-account-table .account-refresh-state{margin-top:7px}.unified-account-table .unified-slot-meta>span{max-width:100%;overflow-wrap:anywhere}.unified-slot-empty{min-height:108px;display:flex;align-items:center;padding:12px;border:1px dashed var(--border);border-radius:7px;color:var(--muted);background:#fafafa;font-size:12px}
+    @media(max-width:760px){.unified-account-table{min-width:760px}.unified-account-table th,.unified-account-table td{padding:10px}.unified-account-table th:nth-child(1){width:30%}.unified-account-table th:nth-child(2),.unified-account-table th:nth-child(3){width:35%}.unified-account-table .unified-slot-meta{grid-template-columns:1fr}.unified-account-table .unified-slot .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.unified-account-table .unified-slot .link-btn{text-align:center}}
   </style>
 </head>
 <body>
@@ -100,7 +102,7 @@
     <section id="panelProviders" class="panel active">
       <section class="hero">
         <div><h2>Provider 管理</h2><p>查看并维护上游服务与原生端点；来源按 Base URL 自动识别为内建 / 官方 / 第三方，保存后立即生效。</p></div>
-        <button id="addButton" class="btn btn-primary"><span class="icon">＋</span>新增 Provider</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button id="addButton" class="btn btn-primary"><span class="icon">＋</span>新增 Provider</button><details class="account-menu"><summary class="btn">Provider 导入 ▾</summary><div class="account-menu-panel"><span class="menu-label">配置文件</span><button type="button" class="btn" id="providerBundleImport">导入安全配置</button><button type="button" class="btn" id="providerBundleImportSecrets">导入完整配置</button></div></details><details class="account-menu"><summary class="btn">Provider 导出 ▾</summary><div class="account-menu-panel"><span class="menu-label">导出内容</span><button type="button" class="btn" id="providerBundleExport">导出安全配置</button><button type="button" class="btn link-danger" id="providerBundleExportSecrets">导出完整配置（含 API Key）</button></div></details></div>
       </section>
       <div id="readonlyNotice" class="notice">当前实例未配置凭据主密钥，Provider 安全存储不可写。</div>
       <section class="stats">
@@ -197,12 +199,16 @@
           <input id="uaSearch" class="search" type="search" autocomplete="off" placeholder="搜索脱敏邮箱或本地 ID">
           <div class="cg-toolbar-actions">
             <button type="button" class="btn" id="uaReload">重新加载</button>
-            <button type="button" class="btn" id="uaWebOAuth">ChatGPT Web OAuth</button>
-            <button type="button" class="btn" id="uaWebImport">导入 Web 凭据</button>
-            <button type="button" class="btn" id="uaCodexOAuth">Codex OAuth</button>
-            <button type="button" class="btn btn-primary" id="uaCodexImport">导入 Codex 凭据</button>
-            <button type="button" class="btn" id="uaBundleImport">导入整体账号池</button>
-            <button type="button" class="btn btn-primary" id="uaBundleExport">导出整体账号池</button>
+            <details class="account-menu"><summary class="btn">导入账号 ▾</summary><div class="account-menu-panel"><span class="menu-label">选择账号类型和导入方式</span>
+              <button type="button" class="btn" id="uaWebOAuth">ChatGPT Web · OAuth 导入</button>
+              <button type="button" class="btn" id="uaWebImport">ChatGPT Web · 文件导入</button>
+              <button type="button" class="btn" id="uaCodexOAuth">Codex CLI · OAuth 导入</button>
+              <button type="button" class="btn" id="uaCodexImport">Codex CLI · 文件导入</button>
+              <button type="button" class="btn" id="uaBundleImport">整体账号池 · 文件导入</button>
+            </div></details>
+            <details class="account-menu"><summary class="btn btn-primary">账号迁移 ▾</summary><div class="account-menu-panel"><span class="menu-label">整体账号池文件</span>
+              <button type="button" class="btn btn-primary" id="uaBundleExport">导出整体账号池</button>
+            </div></details>
           </div>
         </div>
         <div id="uaAccountTable" class="loading"><div class="spin"></div><div>正在加载账号…</div></div>
@@ -445,6 +451,14 @@
     <div class="modal-head"><span class="modal-title">导入整体账号池</span><button class="close" type="button" id="accountBundleImportClose">×</button></div>
     <div class="modal-body"><div class="field"><label class="label required" for="accountBundleImportFile">整体账号池 JSON</label><input id="accountBundleImportFile" class="control" type="file" accept=".json,application/json"><div class="help">仅接受 ai-proxy.account-pool-bundle v2；文件包含 ChatGPT Web 和 Codex 两类槽位，最大 1 MiB、最多 1000 个统一账号。</div></div></div>
     <div class="modal-foot"><button class="btn" type="button" id="accountBundleImportCancel">取消</button><button class="btn btn-primary" type="submit" id="accountBundleImportSubmit">导入</button></div>
+  </form>
+</dialog>
+
+<dialog id="providerBundleDialog">
+  <form id="providerBundleForm" autocomplete="off">
+    <div class="modal-head"><span class="modal-title" id="providerBundleTitle">导入 Provider 配置</span><button class="close" type="button" id="providerBundleClose">×</button></div>
+    <div class="modal-body"><div class="field"><label class="label required" for="providerBundleFile">Provider bundle JSON</label><input id="providerBundleFile" class="control" type="file" accept=".json,application/json"><div class="help">仅接受 ai-proxy.provider-bundle v1。安全配置不包含 API Key；导入时会保留目标实例同名 Provider 的现有 API Key。</div></div><div class="field"><label class="label" for="providerBundleMode">同名 Provider 处理方式</label><select id="providerBundleMode" class="control"><option value="merge">合并更新（推荐）</option><option value="skip">跳过同名 Provider</option><option value="replace">完整替换 Provider 集合</option></select></div></div>
+    <div class="modal-foot"><button class="btn" type="button" id="providerBundleCancel">取消</button><button class="btn btn-primary" type="submit" id="providerBundleSubmit">开始导入</button></div>
   </form>
 </dialog>
 
@@ -1213,6 +1227,11 @@ function unifiedIdentityKey(slot,kind){
   const identity=String(slot?.identity_key||"").trim();
   return identity||`${kind}:${String(slot?.id||"")}`;
 }
+function unifiedAccountIdentity(account){
+  const email=String(account?.email||"").trim();
+  const id=String(account?.id||"").trim();
+  return `<div class="unified-account-identity"><div class="unified-account-email" title="${esc(email)}">${esc(email||"未提供邮箱")}</div>${email?"":`<div class="unified-account-ref mono subtle" title="${esc(id)}">${esc(id||"—")}</div>`}</div>`;
+}
 function unifiedAccounts(){
   const rows=new Map();
   for(const web of state.cg.accounts||[]){
@@ -1234,13 +1253,25 @@ function unifiedAccountStatus(row){
   return statuses.length?"异常":"—";
 }
 function unifiedWebSlot(account){
-  if(!account)return `<div class="subtle">未配置 ChatGPT Web 凭据</div>`;
+  if(!account)return `<div class="unified-slot-empty">尚未配置 ChatGPT Web 凭据</div>`;
   const restore=formatRestoreAt(account.restore_at);
-  return `<div class="codex-account-state"><div class="tags"><span class="tag tag-purple">chatgpt_web</span>${statusTag(account.status)}</div>${tokenRefreshBadge(account)}<div class="subtle">图片额度 ${Math.max(0,Number(account.quota)||0)}${restore.relative?` · ${esc(restore.relative)}`:""}</div><div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}">刷新额度/凭据</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}">删除槽位</button></div></div>`;
+  const failure=String(account.last_token_refresh_error_class||"").trim();
+  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div></div><div class="unified-slot-primary"><span class="unified-slot-primary-value">图片额度 ${Math.max(0,Number(account.quota)||0)}</span>${restore.relative?`<span class="subtle">恢复 ${esc(restore.relative)}</span>`:""}</div>${failure?`<div class="unified-slot-meta"><span class="tag tag-refresh-failure">刷新失败 · ${esc(failure)}</span></div>`:""}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}">刷新凭据</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}">删除槽位</button></div></div>`;
+}
+function unifiedCodexSummary(account){
+  const models=Array.isArray(account?.model_snapshot?.models)?account.model_snapshot.models:[];
+  const windows=Array.isArray(account?.usage_snapshot?.windows)?account.usage_snapshot.windows:[];
+  const first=windows.find(item=>item&&item.used_percent_known);
+  const remaining=first?Math.max(0,Math.min(100,100-(Number(first.used_percent)||0))):null;
+  const usage=first?`剩余 ${Math.round(remaining)}%`:(windows.length?"用量未知":"用量未同步");
+  const usageClass=remaining===null?"":remaining<=0?" exhausted":remaining<=30?" warning":"";
+  const usageView=remaining===null?`<span class="unified-slot-meta-text">${esc(usage)}</span>`:`<div class="unified-usage"><div class="unified-usage-head"><span>用量</span><strong>${esc(usage)}</strong></div><div class="unified-usage-meter${usageClass}"><i style="width:${Math.round(remaining)}%"></i></div></div>`;
+  const failure=String(account?.last_token_refresh_error_class||"").trim();
+  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span>${usageView}${failure?`<span class="tag tag-refresh-failure">刷新失败 · ${esc(failure)}</span>`:""}</div>`;
 }
 function unifiedCodexSlot(account){
-  if(!account)return `<div class="subtle">未配置 Codex CLI 凭据</div>`;
-  return `<div class="codex-account-state"><div class="tags"><span class="tag tag-purple">codex_cli</span>${codexStatusTag(account.status)}</div>${codexRefreshBadge(account)}${codexUsageSnapshotBadge(account)}${codexModelSnapshotBadge(account)}<div class="actions"><button class="link-btn" data-ua-codex-discovery="${esc(account.id)}">同步模型</button><button class="link-btn" data-ua-codex-usage="${esc(account.id)}">刷新用量</button><button class="link-btn" data-ua-codex-refresh="${esc(account.id)}">刷新凭据</button><button class="link-btn link-danger" data-ua-codex-delete="${esc(account.id)}">删除槽位</button></div></div>`;
+  if(!account)return `<div class="unified-slot-empty">尚未配置 Codex CLI 凭据</div>`;
+  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">Codex CLI</span>${codexStatusTag(account.status)}</div></div>${unifiedCodexSummary(account)}<div class="actions"><button class="link-btn" data-ua-codex-discovery="${esc(account.id)}">同步模型</button><button class="link-btn" data-ua-codex-usage="${esc(account.id)}">刷新用量</button><button class="link-btn" data-ua-codex-refresh="${esc(account.id)}">刷新凭据</button><button class="link-btn link-danger" data-ua-codex-delete="${esc(account.id)}">删除槽位</button></div></div>`;
 }
 function renderUnifiedAccounts(){
   const all=unifiedAccounts(),q=String(state.unified.query||"").trim().toLowerCase();
@@ -1252,7 +1283,7 @@ function renderUnifiedAccounts(){
   $("uaIdentityCount").textContent=`${all.length} / ${dualCount}`;$("uaCredentialCount").textContent=`${webCount} / ${codexCount}`;$("uaImageQuota").textContent=imageQuota;$("uaNormalLimited").textContent=`${statusCounts["正常"]} / ${statusCounts["限流"]}`;$("uaAbnormalDisabled").textContent=`${statusCounts["异常"]} / ${statusCounts["禁用"]}`;$("uaRefreshFailureCount").textContent=`${webRefreshFailures} / ${codexRefreshFailures}`;$("uaMeta").textContent=`显示 ${rows.length} / ${all.length}`;
   const box=$("uaAccountTable");box.className="";
   if(!rows.length){box.innerHTML=`<div class="empty">${all.length?"未找到匹配账号":"尚未导入账号凭据"}</div>`;return}
-  box.innerHTML=`<div class="table-wrap"><table class="codex-account-table"><thead><tr><th>账号</th><th>ChatGPT Web 凭据槽</th><th>Codex CLI 凭据槽</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${codexAccountIdentity({id:row.id,email:row.email})}<div class="account-refresh-state">${statusTag(unifiedAccountStatus(row))}</div></td><td>${unifiedWebSlot(row.web)}</td><td>${unifiedCodexSlot(row.codex)}</td></tr>`).join("")}</tbody></table></div>`;
+  box.innerHTML=`<div class="table-wrap"><table class="unified-account-table"><thead><tr><th>统一账号</th><th>ChatGPT Web 凭据</th><th>Codex CLI 凭据</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${unifiedAccountIdentity({id:row.id,email:row.email})}<div class="account-refresh-state">${statusTag(unifiedAccountStatus(row))}</div></td><td>${unifiedWebSlot(row.web)}</td><td>${unifiedCodexSlot(row.codex)}</td></tr>`).join("")}</tbody></table></div>`;
   document.querySelectorAll("[data-ua-web-refresh]").forEach(el=>el.onclick=()=>refreshAccounts([el.dataset.uaWebRefresh]));
   document.querySelectorAll("[data-ua-web-delete]").forEach(el=>el.onclick=()=>deleteAccounts([el.dataset.uaWebDelete]));
   document.querySelectorAll("[data-ua-codex-discovery]").forEach(el=>el.onclick=()=>startCodexModelDiscovery([el.dataset.uaCodexDiscovery]));
@@ -2155,6 +2186,11 @@ function renderClientKeyModels(){const query=$("clientKeyModelsSearch").value.tr
 
 async function loadProviders(){try{const data=await request(apiURL("/api/providers"));state.providers=data.providers||[];state.providerWritable=Boolean(data.provider_writable);state.configWritable=Boolean(data.config_writable);$("readonlyNotice").style.display=state.providerWritable?"none":"block";$("addButton").disabled=!state.providerWritable;renderProviders()}catch(e){$("content").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 function providerAvailabilityMeta(a){const status=a?.status||"unknown";const map={healthy:[t("正常"),"healthy"],degraded:[t("降级"),"degraded"],unhealthy:[t("异常"),"unhealthy"],unavailable:[t("不可用"),"unhealthy"],credential_error:[t("凭据异常"),"unhealthy"],endpoint_drift:[t("端点漂移"),"degraded"],disabled:[t("已禁用"),"disabled"],unknown:[t("待观测"),"unknown"]};const [label,tone]=map[status]||map.unknown;const detail=a?.last_success_at?`${t("最近成功")}：${formatDate(a.last_success_at)}`:t("尚无成功请求");return {status,label,tone,detail}}
+let providerBundleImportSecrets=false;
+function clearProviderBundleImport(){$("providerBundleFile").value="";providerBundleImportSecrets=false}
+function openProviderBundleImport(includeSecrets){providerBundleImportSecrets=Boolean(includeSecrets);$("providerBundleTitle").textContent=includeSecrets?"导入完整 Provider 配置":"导入安全 Provider 配置";clearProviderBundleImport();providerBundleImportSecrets=Boolean(includeSecrets);$("providerBundleDialog").showModal()}
+async function exportProviderBundle(includeSecrets){if(includeSecrets&&!confirm("完整配置包含所有自定义 Provider 的 API Key。确认继续导出？"))return;try{const result=await request(apiURL("/api/providers/export"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({include_api_keys:Boolean(includeSecrets)})});const blob=new Blob([JSON.stringify(result)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`ai-proxy-providers-${includeSecrets?"complete":"safe"}-${new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")}.json`;a.rel="noopener";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),0);toast(includeSecrets?"完整 Provider 配置已开始下载":"安全 Provider 配置已开始下载")}catch(e){toast(e.message,"error")}}
+async function submitProviderBundleImport(event){event.preventDefault();$("providerBundleSubmit").disabled=true;try{const file=$("providerBundleFile").files&&$("providerBundleFile").files[0];if(!file||!file.size)throw new Error("请选择 Provider bundle JSON 文件");if(file.size>accountImportMaxBytes)throw new Error("JSON 文件不能超过 1 MiB");const payload=JSON.parse(await file.text());if(!payload||payload.format!=="ai-proxy.provider-bundle"||Number(payload.schema_version)!==1)throw new Error("只支持 ai-proxy.provider-bundle v1");payload.mode=$("providerBundleMode").value;const result=await request(apiURL("/api/providers/import"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});const failure=(result.items||[]).filter(item=>item.status!=="ok");toast(failure.length?`Provider 导入完成，但有 ${failure.length} 项失败`:`Provider 导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`,failure.length?"error":"success");$("providerBundleDialog").close();await loadProviders()}catch(e){toast(e.message,"error")}finally{clearProviderBundleImport();$("providerBundleSubmit").disabled=false}}
 function providerStatusSummary(p){const a=p?.availability||{};const meta=providerAvailabilityMeta(a);const samples=Math.max(0,Number(a.sample_count)||0);const hasSamples=samples>0;const routeUnavailable=Boolean(p?.builtin)&&["disabled","unavailable"].includes(meta.status);const rawScore=Number(a.score);const score=hasSamples&&!routeUnavailable&&Number.isFinite(rawScore)?Math.max(0,Math.min(100,Math.round(rawScore))):null;const scoreText=score===null?"—":String(score);const successRate=`${formatNumber((Number(a.success_rate)||0)*100,{maximumFractionDigits:1})}%`;const p95=`${formatNumber(a.p95_ms,{maximumFractionDigits:1})} ms`;const metrics=hasSamples?`<div class="health-metric-grid"><div class="health-metric"><strong>${esc(formatNumber(samples))}</strong><span>${esc(t("样本"))}</span></div><div class="health-metric"><strong>${esc(successRate)}</strong><span>${esc(t("成功率"))}</span></div><div class="health-metric"><strong>${esc(p95)}</strong><span>${esc(t("P95 延迟"))}</span></div></div>`:`<div class="health-empty-message">${esc(t("暂无请求样本，健康度将在真实调用后形成。"))}</div>`;let circuit="";if(a.circuit_state==="open"){const label=a.circuit_retry_at?t("熔断中，恢复于 {time}",{time:formatDate(a.circuit_retry_at)}):t("熔断中");circuit=`<div class="health-alert">${esc(label)}</div>`}else if(a.circuit_state==="half_open"){circuit=`<div class="health-note">${esc(t("半开"))}</div>`}const reason=String(p?.unavailable_reason||"").trim();const reasonHTML=reason?`<div class="health-alert">${esc(t("不可用原因：{reason}",{reason}))}</div>`:"";const failure=a.last_failure_at?`<div class="health-alert">${esc(t("最近失败 · HTTP {status} · {outcome} · {time}",{status:a.last_status||"—",outcome:a.last_outcome||t("失败"),time:formatDate(a.last_failure_at)}))}</div>`:"";const success=a.last_success_at&&!a.last_failure_at?`<div class="health-note">${esc(`${t("最近成功")}：${formatDate(a.last_success_at)}`)}</div>`:"";const pool=[];if(p?.builtin){if(Number.isFinite(Number(p.available_accounts)))pool.push(t("可路由账号 {count}",{count:Number(p.available_accounts)||0}));if(Number.isFinite(Number(p.model_count)))pool.push(t("模型 {count}",{count:Number(p.model_count)||0}));if(p.updated_at)pool.push(t("最近发现 {time}",{time:formatDate(p.updated_at)}))}const poolHTML=pool.length?`<div class="health-pool">${esc(pool.join(" · "))}</div>`:"";return `<section class="provider-health is-${meta.tone}${score===null?" is-unscored":""}" title="${esc(meta.detail)}"><div class="provider-health-head"><div class="provider-health-state"><span class="provider-health-indicator"></span><span>${esc(meta.label)}</span></div><div class="provider-health-score"><span>${esc(t("健康评分"))}</span><strong>${esc(scoreText)}</strong><small>${score===null?esc(t("不可计算")):"/100"}</small></div></div><div class="health-meter"><span class="health-meter-fill" style="width:${score===null?0:score}%"></span></div>${metrics}${circuit}${reasonHTML}${failure}${success}${poolHTML}</section>`}
 function providerSourceMeta(p){
   const requested=p?.source||(p?.builtin?"builtin":"third_party");
@@ -2330,6 +2366,13 @@ function showUsageEvent(event){const labels={event_id:"Event ID",started_at:"开
 
 // events
 $("addButton").onclick=()=>openDialog(-1);
+$("providerBundleImport").onclick=()=>openProviderBundleImport(false);
+$("providerBundleImportSecrets").onclick=()=>openProviderBundleImport(true);
+$("providerBundleExport").onclick=()=>exportProviderBundle(false);
+$("providerBundleExportSecrets").onclick=()=>exportProviderBundle(true);
+$("providerBundleClose").onclick=$("providerBundleCancel").onclick=()=>{$("providerBundleDialog").close();clearProviderBundleImport()};
+$("providerBundleDialog").addEventListener("close",clearProviderBundleImport);
+$("providerBundleForm").onsubmit=submitProviderBundleImport;
 $("closeDialog").onclick=closeDialog;$("cancelDialog").onclick=closeDialog;
 $("closeBuiltinDialog").onclick=closeBuiltinDialog;$("cancelBuiltinDialog").onclick=closeBuiltinDialog;
 $("protocol").onchange=()=>renderEndpoints();
@@ -2995,6 +3038,9 @@ $("uaCodexOAuth").onclick=openCodexOAuth;
 $("uaCodexImport").onclick=openCodexImport;
 $("uaBundleImport").onclick=openAccountBundleImport;
 $("uaBundleExport").onclick=exportAccountPoolBundle;
+document.querySelectorAll(".account-menu-panel button,.slot-menu-panel button").forEach(button=>button.addEventListener("click",()=>{const menu=button.closest("details");if(menu)menu.open=false}));
+document.addEventListener("click",event=>{if(event.target.closest("details.account-menu,details.slot-menu"))return;document.querySelectorAll("details.account-menu[open],details.slot-menu[open]").forEach(menu=>{menu.open=false})});
+document.addEventListener("keydown",event=>{if(event.key!=="Escape")return;document.querySelectorAll("details.account-menu[open],details.slot-menu[open]").forEach(menu=>{menu.open=false})});
 document.querySelectorAll("[data-feature-sub]").forEach(btn=>btn.onclick=()=>{showFeatureSub(btn.dataset.featureSub)});
 $("codexRetry").onclick=loadCodexAccounts;
 $("codexAccReload").onclick=loadCodexAccounts;

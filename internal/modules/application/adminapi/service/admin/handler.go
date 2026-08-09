@@ -328,6 +328,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, r)
 	case rel == "/api/providers" && r.Method == http.MethodGet:
 		h.listProviders(w)
+	case rel == "/api/providers/export" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.exportProviderBundle(w, r)
+		}
+	case rel == "/api/providers/import" && r.Method == http.MethodPost:
+		if h.requireAdminMutation(w, r) {
+			h.importProviderBundle(w, r)
+		}
 	case rel == "/api/providers" && r.Method == http.MethodPost:
 		if !h.requireAdminMutation(w, r) {
 			return
