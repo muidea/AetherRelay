@@ -216,15 +216,45 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		seenAccess[input.AccessToken] = struct{}{}
 		normalized = append(normalized, input)
 	}
-	changed := false
-	for _, input := range normalized {
-		var existing *account
+	resolved := make([]*account, len(normalized))
+	seenTargets := make(map[string]struct{}, len(normalized))
+	seenAccounts := make(map[string]struct{}, len(normalized))
+	for i, input := range normalized {
+		var byTarget *account
+		if targetID := strings.TrimSpace(input.TargetID); targetID != "" {
+			if _, duplicate := seenTargets[targetID]; duplicate {
+				return 0, 0, 0, nil, fmt.Errorf("multiple credentials target the same Codex account")
+			}
+			seenTargets[targetID] = struct{}{}
+			byTarget = s.items[targetID]
+			if byTarget == nil {
+				return 0, 0, 0, nil, fmt.Errorf("Codex account target is unavailable")
+			}
+		}
+		var byCredential *account
 		for _, candidate := range s.items {
 			if candidate.RefreshToken == input.RefreshToken || candidate.AccessToken == input.AccessToken {
-				existing = candidate
+				byCredential = candidate
 				break
 			}
 		}
+		if byTarget != nil && byCredential != nil && byTarget != byCredential {
+			return 0, 0, 0, nil, fmt.Errorf("Codex account target conflicts with credential")
+		}
+		resolved[i] = byTarget
+		if resolved[i] == nil {
+			resolved[i] = byCredential
+		}
+		if resolved[i] != nil {
+			if _, duplicate := seenAccounts[resolved[i].ID]; duplicate {
+				return 0, 0, 0, nil, fmt.Errorf("multiple credentials resolve to the same Codex account")
+			}
+			seenAccounts[resolved[i].ID] = struct{}{}
+		}
+	}
+	changed := false
+	for i, input := range normalized {
+		existing := resolved[i]
 		if existing == nil {
 			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal}
 			s.items[existing.ID] = existing

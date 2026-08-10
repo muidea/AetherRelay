@@ -169,6 +169,33 @@ func TestImportRestoresCompleteOAuthExport(t *testing.T) {
 	}
 }
 
+func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
+	first := events.ExportItem{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh"}
+	if added, _, _, err := s.Import(nil, []events.ExportItem{first}, ""); err != nil || added != 1 {
+		t.Fatalf("initial import added=%d err=%v", added, err)
+	}
+	items := s.List()
+	if len(items) != 1 {
+		t.Fatalf("items=%+v", items)
+	}
+	version := s.CatalogVersion()
+	second := events.ExportItem{AccountID: "new-upstream-account", AccessToken: "new-access", RefreshToken: "new-refresh", TargetID: items[0].ID}
+	if added, updated, _, err := s.Import(nil, []events.ExportItem{second}, ""); err != nil || added != 0 || updated != 1 {
+		t.Fatalf("replacement added=%d updated=%d err=%v", added, updated, err)
+	}
+	if got := s.CatalogVersion(); got <= version {
+		t.Fatalf("replacement did not invalidate catalog generation: before=%d after=%d", version, got)
+	}
+	if got := s.List(); len(got) != 1 {
+		t.Fatalf("replacement created a duplicate: %+v", got)
+	}
+	exported := s.ExportByIDs([]string{items[0].ID})
+	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].AccountID != "new-upstream-account" {
+		t.Fatalf("replacement export=%+v", exported)
+	}
+}
+
 func TestImportRejectsPartialOAuthCredential(t *testing.T) {
 	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
 	_, _, _, err := s.Import(nil, []events.ExportItem{{AccessToken: "access", IDToken: "id-without-refresh"}}, "")

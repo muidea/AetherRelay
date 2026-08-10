@@ -20,8 +20,10 @@ import (
 )
 
 type chatGPTAccountRuntimeStub struct {
+	accounts           []accevents.AccountView
 	addedTokens        []string
 	addedAccounts      []accevents.ExportItem
+	addErr             error
 	deletedIDs         []string
 	updated            accevents.UpdateByIDCommand
 	imageBytes         []string
@@ -54,6 +56,9 @@ type chatGPTAccountRuntimeStub struct {
 }
 
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
+	if s.accounts != nil {
+		return append([]accevents.AccountView(nil), s.accounts...), nil
+	}
 	return []accevents.AccountView{{
 		ID:                         "account-1",
 		Email:                      "operator@example.invalid",
@@ -76,6 +81,9 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]acce
 func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, accounts []accevents.ExportItem, _ string) (accevents.AddResult, error) {
 	s.addedTokens = append([]string(nil), tokens...)
 	s.addedAccounts = append([]accevents.ExportItem(nil), accounts...)
+	if s.addErr != nil {
+		return accevents.AddResult{}, s.addErr
+	}
 	return accevents.AddResult{Added: len(tokens) + len(accounts)}, nil
 }
 func (s *chatGPTAccountRuntimeStub) DeleteChatGPTAccounts(_ context.Context, ids []string) (accevents.DeleteResult, error) {

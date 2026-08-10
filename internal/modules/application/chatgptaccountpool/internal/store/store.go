@@ -887,6 +887,27 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 	}
 
 	seen := make(map[string]struct{}, len(inputs))
+	seenTargets := make(map[string]struct{}, len(inputs))
+	// Resolve all explicit local targets before mutating state. The Admin
+	// bundle importer uses TargetID to apply the documented account_id/email
+	// match without exposing local IDs in the external bundle format.
+	for _, entry := range inputs {
+		if entry.account == nil || trim(entry.account.TargetID) == "" {
+			continue
+		}
+		targetID := trim(entry.account.TargetID)
+		if _, duplicate := seenTargets[targetID]; duplicate {
+			return 0, 0, 0, fmt.Errorf("multiple credentials target the same ChatGPT account")
+		}
+		seenTargets[targetID] = struct{}{}
+		targetToken, found := s.tokenForIDLocked(targetID)
+		if !found {
+			return 0, 0, 0, fmt.Errorf("ChatGPT account target is unavailable")
+		}
+		if existing, exists := s.items[entry.token]; exists && existing != s.items[targetToken] {
+			return 0, 0, 0, fmt.Errorf("ChatGPT account target conflicts with access credential")
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	changed := false
 	for _, entry := range inputs {
@@ -895,7 +916,14 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 			continue
 		}
 		seen[entry.token] = struct{}{}
-		acc, exists := s.items[entry.token]
+		var acc *Account
+		var exists bool
+		if entry.account != nil && trim(entry.account.TargetID) != "" {
+			targetToken, _ := s.tokenForIDLocked(trim(entry.account.TargetID))
+			acc, exists = s.items[targetToken]
+		} else {
+			acc, exists = s.items[entry.token]
+		}
 		if entry.account == nil || entry.account.RefreshToken == "" {
 			if exists {
 				skipped++
@@ -917,6 +945,29 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 		} else {
 			updated++
 		}
+		if acc.AccessToken != entry.token {
+			oldToken := acc.AccessToken
+			if existing, occupied := s.items[entry.token]; occupied && existing != acc {
+				return 0, 0, 0, fmt.Errorf("ChatGPT access credential belongs to another account")
+			}
+			delete(s.items, oldToken)
+			s.items[entry.token] = acc
+			for i, token := range s.order {
+				if token == oldToken {
+					s.order[i] = entry.token
+					break
+				}
+			}
+			if s.aliases == nil {
+				s.aliases = map[string]string{}
+			}
+			s.aliases[oldToken] = entry.token
+			if inflight := s.imageInflight[oldToken]; inflight > 0 {
+				s.imageInflight[entry.token] += inflight
+				delete(s.imageInflight, oldToken)
+			}
+			acc.AccessToken = entry.token
+		}
 		acc.RefreshToken = item.RefreshToken
 		acc.Email = trim(item.Email)
 		acc.Password = item.Password
@@ -930,6 +981,9 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 		acc.Extra["export_type"] = trim(item.Type)
 		acc.Extra["expired"] = trim(item.Expired)
 		acc.Extra["last_refresh"] = trim(item.LastRefresh)
+		// Imported OAuth data invalidates any catalog discovered with the
+		// previous credential, even when the access token string is unchanged.
+		acc.ModelSnapshot = nil
 		changed = true
 	}
 	if !changed {
@@ -938,9 +992,11 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 	if err = s.saveLocked(); err != nil {
 		return 0, 0, 0, err
 	}
-	if added > 0 {
-		s.bumpCatalogLocked()
-	}
+	// A replacement invalidates the account's discovered model capability even
+	// when the local slot count is unchanged. Bump the catalog generation for
+	// every successful complete OAuth mutation so the routing projection will
+	// promptly discard the old credential's snapshot.
+	s.bumpCatalogLocked()
 	return added, updated, skipped, nil
 }
 

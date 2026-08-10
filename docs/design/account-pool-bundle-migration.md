@@ -74,6 +74,7 @@ accountidentity.Key(account_id, email)
 
 1. 有邮箱的槽位按 `trim + strings.ToLower(email)` 分组。这样即使 ChatGPT Web 与 Codex 的上游 `account_id` 不同，只要邮箱相同，仍会进入同一个 `account_ref`。
 2. 无邮箱的槽位按其 `identity_key` 分组。
+   如果管理列表缺少身份摘要，导出会从完整凭据中的 `account_id`/邮箱生成回退摘要后再分组，避免可合并槽位被拆开。
 3. 同一组内每种槽位最多一个；发现重复槽位时导出失败并报告冲突，不静默覆盖。
 4. `account_ref` 使用随机生成的 `acct_` 引用，不能使用邮箱，也不能使用任一上游账号 ID。
 
@@ -81,16 +82,18 @@ accountidentity.Key(account_id, email)
 
 ## 导入匹配规则
 
+导入在调用任一账号 Store 前先完成整包预检和规范化；只要文件存在格式错误或文件内冲突，就不会写入任何一个 Store。预检会校验 `account_ref` 唯一、每个账号至少一个槽位、槽位 `credential_type` 与槽位名称一致、凭据字段完整、代理地址可接受、双槽位邮箱一致，以及不能重复使用同一槽位凭据或将同一邮箱分配给多个 `account_ref`。Token 只用于校验和传递，错误响应不会回显其内容。
+
 每个槽位仍交给现有对应 Store 的导入流程，两个槽位不会写入同一张账号表。统一账号关系按以下顺序恢复：
 
 1. 文件内 `account_ref` 将同一文件中的槽位归为一组。
-2. 目标实例已有账号优先按槽位 `account_id` 匹配。
-3. 无法按 ID 匹配时，按槽位邮箱匹配；再按 `identity.email` 匹配。
+2. 目标实例已有账号优先按槽位 `account_id` 匹配；明确提供相同 `account_id` 的凭据允许更新同一槽位。
+3. 未提供 `account_id` 或无法按 ID 匹配时，按槽位邮箱匹配；再按 `identity.email` 匹配。仅有邮箱时不因目标的身份摘要由另一个上游 `account_id` 生成而误报冲突。
 4. 匹配不到时创建新槽位，并将其挂载到该 `account_ref` 对应的统一账号组。
-5. 同一个统一账号已有同类型槽位时，默认返回冲突；只有显式 `replace=true` 才允许替换。
+5. 同一个统一账号已有同类型槽位且上游 `account_id` 不同，默认返回冲突；只有显式 `replace=true` 才允许按邮箱替换。一个 bundle 中的多个账号不能指向同一个已有槽位。
 6. 不能因为邮箱相同而合并两个已有不同 `account_id` 且已有不同 `account_ref` 的账号，冲突必须交给管理员处理。
 
-两个 Store 不具备跨 Store 事务。导入结果必须分别返回 `chatgpt_web`、`codex_cli` 的 added/updated/skipped/conflicts，并标明统一账号是否完整或部分成功。
+两个 Store 不具备跨 Store 事务。预检通过后，导入结果分别返回 `chatgpt_web`、`codex_cli` 的 added/updated/skipped/conflicts，并标明统一账号是否完整或部分成功；如果一个 Store 已成功写入而另一个 Store 失败，响应中的 `partial_success` 为 `true`，不会回滚已经成功的槽位。
 
 ## 对外接口
 
@@ -101,7 +104,9 @@ POST /admin/api/account-pool-bundle/export
 POST /admin/api/account-pool-bundle/import
 ```
 
-整体导出一次导出当前完整账号池；整体导入先完成文件和槽位级校验，再按槽位调用内部导入逻辑，最后返回逐账号、逐槽位结果。ChatGPT Web 和 Codex 的槽位导出按钮、槽位导出路由以及槽位导出响应均不属于最终对外合同。
+整体导出一次导出当前完整账号池，因此两个 Store 都必须可用；整体导入先完成文件和槽位级校验，再读取目标 Store 的脱敏列表建立匹配计划，最后按槽位调用内部导入逻辑。只包含一种槽位的 bundle 只要求对应 Store 可用。导入请求可在 bundle 顶层设置 `"replace": true`，仅用于显式接受“同邮箱但上游 `account_id` 不同”的替换；默认值为 `false`。内部计划通过不序列化的本地 `TargetID` 传递给对应 owner，绝不会出现在外部 JSON、列表 API 或日志中。ChatGPT Web 和 Codex 的槽位导出按钮、槽位导出路由以及槽位导出响应均不属于最终对外合同。
+
+导入成功响应包含两个 Store 的 `added`、`updated`、`skipped` 和 `error`；文件或目标匹配冲突返回 HTTP `409`，响应中的 `conflicts` 只包含 `account_ref`、槽位和安全原因。任一 Store 写入失败时不回滚另一 Store，返回 `partial_success: true` 并保留已完成结果。
 
 ## Web 管理端设计
 
@@ -117,7 +122,7 @@ POST /admin/api/account-pool-bundle/import
 - `chatgpt_web` 和 `codex_cli` 槽位分别显示存在/缺失、状态和刷新操作。
 - 槽位操作使用各自 Store 的本地 `id`，不能使用 `account_ref` 直接调用底层账号接口。
 - 页面不显示访问令牌、刷新令牌或 ID Token。
-- 页面提供一个“整体导出”按钮，导出当前选择的统一账号及其全部槽位；不提供“导出 ChatGPT Web 槽位”和“导出 Codex 槽位”按钮。
+- 账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，菜单内集中提供“导入整体账号池”和“导出整体账号池”；不提供“导出 ChatGPT Web 槽位”和“导出 Codex 槽位”按钮。
 
 ### 分槽位导入
 
@@ -126,6 +131,8 @@ POST /admin/api/account-pool-bundle/import
 - “导入 ChatGPT Web 账号”：只接受 `chatgpt_web` 凭据，调用 ChatGPT Web 内部导入流程；
 - “导入 Codex 账号”：只接受 `codex_oauth`/`codex_cli` 凭据，调用 Codex OAuth 内部导入流程；
 - “导入整体账号池”：只接受 `ai-proxy.account-pool-bundle` 文件，并按文件中的槽位分别导入。
+
+整体导入弹窗默认采用安全合并；仅勾选“允许替换已有的不同上游账号”时才向 bundle 写入 `replace: true`。发生 `409` 冲突时保留弹窗并提示冲突数量，管理员修正文件或重新确认替换后再提交。
 
 分槽位导入成功后，页面重新加载两个 Store 的列表并重新计算统一账号行。为了弥补两个上游 `account_id` 不同导致的运行时 `identity_key` 不同，Web 展示聚合采用以下顺序：
 

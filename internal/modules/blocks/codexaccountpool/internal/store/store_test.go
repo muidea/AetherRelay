@@ -78,6 +78,28 @@ func TestExportByIDsReturnsOnlySelectedCredentials(t *testing.T) {
 	}
 }
 
+func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
+	store := openTestStore(t)
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh"}}); err != nil || added != 1 {
+		t.Fatalf("initial import added=%d err=%v", added, err)
+	}
+	items := store.List()
+	if len(items) != 1 {
+		t.Fatalf("items=%+v", items)
+	}
+	input := events.CredentialInput{AccountID: "new-upstream-account", AccessToken: "new-access", RefreshToken: "new-refresh", TargetID: items[0].ID}
+	if added, updated, _, err := store.Import([]events.CredentialInput{input}); err != nil || added != 0 || updated != 1 {
+		t.Fatalf("replacement added=%d updated=%d err=%v", added, updated, err)
+	}
+	if got := store.List(); len(got) != 1 {
+		t.Fatalf("replacement created a duplicate: %+v", got)
+	}
+	exported := store.ExportByIDs([]string{items[0].ID})
+	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].AccountID != "new-upstream-account" {
+		t.Fatalf("replacement export=%+v", exported)
+	}
+}
+
 func TestCooldownAndRefreshDue(t *testing.T) {
 	store := openTestStore(t)
 	now := time.Now().UTC()

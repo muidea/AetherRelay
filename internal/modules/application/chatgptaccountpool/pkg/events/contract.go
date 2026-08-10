@@ -319,6 +319,9 @@ type ExportItem struct {
 	LastRefresh    string `json:"last_refresh"`
 	Password       string `json:"password,omitempty"`
 	Proxy          string `json:"proxy,omitempty"`
+	// TargetID is an internal import selector. It is populated only by the
+	// Admin account-bundle orchestration and is never serialized or exported.
+	TargetID string `json:"-"`
 }
 type ExportCommand struct{ AccessTokens []string }
 type ExportResult struct {

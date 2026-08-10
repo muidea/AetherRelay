@@ -16,18 +16,23 @@ import (
 )
 
 type codexAccountRuntimeStub struct {
+	accounts     []codexevents.AccountView
 	started      [][]string
 	usageStarted [][]string
 	exportedIDs  []string
 	exported     []codexevents.CredentialInput
 	imported     []codexevents.CredentialInput
+	importErr    error
 }
 
 func (s *codexAccountRuntimeStub) ListCodexAccounts(context.Context) ([]codexevents.AccountView, error) {
-	return nil, nil
+	return append([]codexevents.AccountView(nil), s.accounts...), nil
 }
 func (s *codexAccountRuntimeStub) ImportCodexAccounts(_ context.Context, accounts []codexevents.CredentialInput) (admincodex.ImportResult, error) {
 	s.imported = append([]codexevents.CredentialInput(nil), accounts...)
+	if s.importErr != nil {
+		return admincodex.ImportResult{}, s.importErr
+	}
 	return admincodex.ImportResult{Added: 1, ModelDiscovery: &proxyevents.CodexDiscoveryProgress{ProgressID: "discovery-1", StartedAt: "2026-08-03T12:00:00Z"}, UsageRefresh: &proxyevents.CodexUsageProgress{ProgressID: "usage-1", StartedAt: "2026-08-03T12:00:00Z"}}, nil
 }
 func (s *codexAccountRuntimeStub) DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error) {

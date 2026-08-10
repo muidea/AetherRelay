@@ -96,6 +96,9 @@ type CredentialInput struct {
 	Email          string `json:"email,omitempty"`
 	Expired        string `json:"expired,omitempty"`
 	Proxy          string `json:"proxy,omitempty"`
+	// TargetID is an internal import selector. It is populated only by the
+	// Admin account-bundle orchestration and is never serialized or exported.
+	TargetID string `json:"-"`
 }
 
 type ListCommand struct{}
