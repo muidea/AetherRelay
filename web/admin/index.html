@@ -706,7 +706,7 @@ const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[
     tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{apiKeyID:"",items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
     search:{busy:false,result:null,items:[],currentID:"",historyBusy:false},
-    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[]}},
+    chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[],generation:0,listGeneration:0,listAbort:null,detailAbort:null,historyAbort:null,sendAbort:null,pollAbort:null,cancelAbort:null,createAbort:null,pollGeneration:0}},
   codex:{available:true,accounts:[],selected:new Set(),query:"",busy:false,discovery:{progressId:"",timer:null,dismissTimer:null,failures:0,done:true},usage:{progressId:"",timer:null,dismissTimer:null,failures:0,done:true},oauth:{sessionId:"",authorizeURL:"",expiresIn:0}}};
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
@@ -918,7 +918,7 @@ function setHash(){
   location.hash="#/"+state.tab;
 }
 function showTab(tab){
-  if(state.tab==="features"&&tab!=="features"){stopAllTaskPolling();stopTemporaryChatPolling();}
+  if(state.tab==="features"&&tab!=="features"){stopAllTaskPolling();invalidateTemporaryChatContext();}
   state.tab=tab;
   $("panelProviders").classList.toggle("active",tab==="providers");
   $("panelClientKeys").classList.toggle("active",tab==="client-keys");
@@ -963,7 +963,7 @@ function showFeatureSub(sub){
 function showChatGPTSub(sub){
   if(state.tab==="features"&&(sub==="tasks"||sub==="images"))loadClientKeys().then(()=>{renderImageKeySelectors();if(state.cg.sub!==sub)return;if(sub==="tasks")loadChatGPTTasks(false);else loadChatGPTImages()}).catch(()=>{});
   if(state.cg.sub==="tasks"&&sub!=="tasks")stopAllTaskPolling();
-  if(state.cg.sub==="chat"&&sub!=="chat")stopTemporaryChatPolling();
+  if(state.cg.sub==="chat"&&sub!=="chat")invalidateTemporaryChatContext();
   state.cg.sub=sub||"accounts";
   $("cgPanelAccounts").classList.toggle("hidden",state.cg.sub!=="accounts");
   $("cgPanelTasks").classList.toggle("hidden",state.cg.sub!=="tasks");
@@ -2448,13 +2448,50 @@ window.addEventListener("hashchange",()=>{
   applyChatGPTState(p);
   showTab(p.tab);
 });
-window.addEventListener("pagehide",()=>{stopAllTaskPolling();stopTemporaryChatPolling();clearTemporaryPendingImages();clearOAuthMemory();clearCodexOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+window.addEventListener("pagehide",()=>{stopAllTaskPolling();invalidateTemporaryChatContext();clearTemporaryPendingImages();clearOAuthMemory();clearCodexOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
 
 
 // Temporary chat (server-persisted; no Web Storage)
+function temporaryChatAbortError(error){
+  return error?.name==="AbortError"||error?.code==="ERR_ABORTED"||String(error?.message||"").toLowerCase()==="the operation was aborted";
+}
+function abortTemporaryChatRequest(name){
+  const controller=state.cg.chat[name];
+  if(controller&&typeof controller.abort==="function")controller.abort();
+  state.cg.chat[name]=null;
+}
 function stopTemporaryChatPolling(){
   if(state.cg.chat.pollTimer){clearTimeout(state.cg.chat.pollTimer);state.cg.chat.pollTimer=null}
+  state.cg.chat.pollGeneration=(Number(state.cg.chat.pollGeneration)||0)+1;
+  abortTemporaryChatRequest("pollAbort");
   state.cg.chat.polling=false;
+}
+function invalidateTemporaryChatContext(){
+  const chat=state.cg.chat;
+  chat.generation=(Number(chat.generation)||0)+1;
+  chat.listGeneration=(Number(chat.listGeneration)||0)+1;
+  abortTemporaryChatRequest("listAbort");
+  abortTemporaryChatRequest("detailAbort");
+  abortTemporaryChatRequest("historyAbort");
+  abortTemporaryChatRequest("sendAbort");
+  abortTemporaryChatRequest("cancelAbort");
+  abortTemporaryChatRequest("createAbort");
+  stopTemporaryChatPolling();
+  chat.sending=false;
+  chat.loadingOlder=false;
+  return chat.generation;
+}
+function temporaryChatIsCurrent(conversationID,generation){
+  const current=state.cg.chat.current;
+  return Number(generation)===Number(state.cg.chat.generation)&&String(current?.id||"")===String(conversationID||"");
+}
+function temporaryChatSetController(name,controller){
+  abortTemporaryChatRequest(name);
+  state.cg.chat[name]=controller;
+  return controller;
+}
+function temporaryChatClearController(name,controller){
+  if(state.cg.chat[name]===controller)state.cg.chat[name]=null;
 }
 function temporaryChatStatusLabel(status){
   const map={idle:"空闲",streaming:"生成中",recovery_required:"需恢复",closed:"已关闭"};
@@ -2795,9 +2832,15 @@ function renderTemporaryMessages(){
 }
 async function loadTemporaryConversations(selectFromHash){
   const box=$("tcList");
+  const chat=state.cg.chat;
+  const listGeneration=(Number(chat.listGeneration)||0)+1;
+  chat.listGeneration=listGeneration;
+  abortTemporaryChatRequest("listAbort");
+  const controller=temporaryChatSetController("listAbort",new AbortController());
   box.innerHTML=`<div class="loading"><div class="spin"></div><div>正在加载对话…</div></div>`;
   try{
-    const data=await request(apiURL("/api/chatgpt/temporary-conversations?limit=50"));
+    const data=await request(apiURL("/api/chatgpt/temporary-conversations?limit=50"),{signal:controller.signal});
+    if(listGeneration!==Number(chat.listGeneration)||controller.signal.aborted)return;
     setChatGPTAvailable();
     state.cg.chat.items=Array.isArray(data.items)?data.items:[];
     renderTemporaryConversationList();
@@ -2812,58 +2855,89 @@ async function loadTemporaryConversations(selectFromHash){
     else if(!state.cg.chat.current&&state.cg.chat.items[0])await openTemporaryConversation(state.cg.chat.items[0].id);
     else renderTemporaryMessages();
   }catch(e){
+    if(temporaryChatAbortError(e)||listGeneration!==Number(chat.listGeneration))return;
     if(e.status===503){setChatGPTUnavailable(e.message);box.innerHTML=`<div class="empty">${esc(e.message||"临时对话当前不可用")}</div>`;return}
     box.innerHTML=`<div class="empty">${esc(e.message||"无法加载对话")}</div>`;
+  }finally{
+    temporaryChatClearController("listAbort",controller);
   }
 }
 async function openTemporaryConversation(id){
   if(!id)return;
-  stopTemporaryChatPolling();
-  if(!state.cg.chat.current||state.cg.chat.current.id!==id)clearTemporaryPendingImages();
+  const chat=state.cg.chat;
+  const previousID=String(chat.current?.id||"");
+  const generation=invalidateTemporaryChatContext();
+  if(previousID!==String(id))clearTemporaryPendingImages();
+  // Do not leave the previous conversation visible while its detail request is
+  // in flight. This prevents a stale response from looking like the selected
+  // conversation even before the request race guard runs.
+  if(previousID!==String(id)){
+    chat.current=null;chat.messages=[];chat.turnId="";chat.content="";chat.hasMore=false;
+    renderTemporaryConversationList();
+    renderTemporaryMessages();
+  }
+  const controller=temporaryChatSetController("detailAbort",new AbortController());
   try{
-    const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(id)}?limit=100`));
+    const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(id)}?limit=100`),{signal:controller.signal});
+    if(generation!==Number(chat.generation)||controller.signal.aborted)return;
     setChatGPTAvailable();
-    state.cg.chat.current=data.conversation||null;
-    state.cg.chat.messages=Array.isArray(data.messages)?data.messages:[];
-    state.cg.chat.hasMore=Boolean(data.has_more);
-    state.cg.chat.turnId="";
-    state.cg.chat.content="";
+    const nextConversation=data.conversation||null;
+    if(!nextConversation||String(nextConversation.id||"")!==String(id))throw new Error("temporary chat returned a different conversation");
+    chat.current=nextConversation;
+    chat.messages=Array.isArray(data.messages)?data.messages:[];
+    chat.hasMore=Boolean(data.has_more);
+    chat.turnId="";
+    chat.content="";
     // refresh list item snapshot
-    if(state.cg.chat.current){
-      const idx=state.cg.chat.items.findIndex(x=>x.id===state.cg.chat.current.id);
-      if(idx>=0)state.cg.chat.items[idx]=state.cg.chat.current;
+    if(chat.current){
+      const idx=chat.items.findIndex(x=>x.id===chat.current.id);
+      if(idx>=0)chat.items[idx]=chat.current;
     }
     renderTemporaryConversationList();
     renderTemporaryMessages();
     setHash();
-    if(state.cg.chat.current&&state.cg.chat.current.status==="streaming"){
-      const last= [...state.cg.chat.messages].reverse().find(m=>m.role==="assistant"&&m.status==="streaming");
-      if(last){state.cg.chat.turnId=last.turn_id||last.id;pollTemporaryTurn()}
+    if(chat.current&&chat.current.status==="streaming"){
+      const last= [...chat.messages].reverse().find(m=>m.role==="assistant"&&m.status==="streaming");
+      if(last){chat.turnId=last.turn_id||last.id;pollTemporaryTurn()}
     }
   }catch(e){
+    if(temporaryChatAbortError(e)||generation!==Number(chat.generation))return;
     toast(e.message||"读取会话失败","error");
+  }finally{
+    temporaryChatClearController("detailAbort",controller);
   }
 }
 async function loadOlderTemporaryMessages(){
-  const conv=state.cg.chat.current;
-  const messages=state.cg.chat.messages||[];
-  if(!conv||!state.cg.chat.hasMore||state.cg.chat.loadingOlder||!messages.length)return;
+  const chat=state.cg.chat;
+  const conv=chat.current;
+  const messages=chat.messages||[];
+  if(!conv||!chat.hasMore||chat.loadingOlder||!messages.length)return;
   const oldest=messages[0];
   if(!oldest||!oldest.sequence)return;
   const box=$("tcMessages");
   const previousHeight=box.scrollHeight;
-  state.cg.chat.loadingOlder=true;
+  const conversationID=conv.id;
+  const generation=chat.generation;
+  chat.loadingOlder=true;
+  const controller=temporaryChatSetController("historyAbort",new AbortController());
   try{
-    const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}?before_sequence=${encodeURIComponent(oldest.sequence)}&limit=100`));
+    const data=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conversationID)}?before_sequence=${encodeURIComponent(oldest.sequence)}&limit=100`),{signal:controller.signal});
+    if(!temporaryChatIsCurrent(conversationID,generation)||controller.signal.aborted)return;
     const older=Array.isArray(data.messages)?data.messages:[];
-    state.cg.chat.messages=[...older,...messages];
-    state.cg.chat.hasMore=Boolean(data.has_more);
+    // A new turn or a detail reload may have replaced the message array while
+    // this request was in flight.  Only prepend to the exact snapshot that
+    // initiated this request.
+    if(chat.messages!==messages)return;
+    chat.messages=[...older,...messages];
+    chat.hasMore=Boolean(data.has_more);
     renderTemporaryMessages();
     box.scrollTop=Math.max(0,box.scrollHeight-previousHeight);
   }catch(e){
+    if(temporaryChatAbortError(e)||!temporaryChatIsCurrent(conversationID,generation))return;
     toast(e.message||"加载更早消息失败","error");
   }finally{
-    state.cg.chat.loadingOlder=false;
+    temporaryChatClearController("historyAbort",controller);
+    if(temporaryChatIsCurrent(conversationID,generation))chat.loadingOlder=false;
   }
 }
 function openTemporaryCreateDialog(){
@@ -2873,6 +2947,9 @@ async function createTemporaryConversation(event){
   event.preventDefault();
   const model=($("tcModel").value||"").trim();
   if(!model){toast("请选择模型","error");return}
+  const chat=state.cg.chat;
+  const generation=chat.generation;
+  const controller=temporaryChatSetController("createAbort",new AbortController());
   try{
     const conv=await request(apiURL("/api/chatgpt/temporary-conversations"),{
       method:"POST",
@@ -2881,143 +2958,189 @@ async function createTemporaryConversation(event){
         model,
         thinking_effort:($("tcEffort").value||"").trim(),
         system_prompt:($("tcSystem").value||"").trim()
-      })
+      }),signal:controller.signal
     });
+    if(generation!==Number(chat.generation)||controller.signal.aborted)return;
     $("tcCreateDialog").close();
     $("tcSystem").value="";
     toast("对话已创建");
-    state.cg.chat.items=[conv,...state.cg.chat.items.filter(x=>x.id!==conv.id)];
-    state.cg.chat.current=conv;
-    state.cg.chat.messages=[];
+    invalidateTemporaryChatContext();
+    chat.items=[conv,...chat.items.filter(x=>x.id!==conv.id)];
+    chat.current=conv;
+    chat.messages=[];
+    chat.turnId="";chat.content="";chat.hasMore=false;chat.loadingOlder=false;
     clearTemporaryPendingImages();
     renderTemporaryConversationList();
     renderTemporaryMessages();
     setHash();
     $("tcInput").focus();
   }catch(e){
+    if(temporaryChatAbortError(e)||generation!==Number(chat.generation))return;
     toast(e.message||"创建失败","error");
+  }finally{
+    temporaryChatClearController("createAbort",controller);
   }
 }
 async function sendTemporaryTurn(){
-  const conv=state.cg.chat.current;
+  const chat=state.cg.chat;
+  const conv=chat.current;
   if(!conv)return;
+  const conversationID=String(conv.id||"");
+  const generation=chat.generation;
   const content=($("tcInput").value||"").trim();
-  const images=state.cg.chat.pendingImages||[];
+  const images=chat.pendingImages||[];
   const webSearch=!!$("tcWebSearch").checked;
   if(!content&&!images.length){toast("请输入消息或添加附件","error");return}
   if(webSearch&&images.length){toast(t("联网搜索不支持图片或文件附件"),"error");return}
-  if(state.cg.chat.sending||state.cg.chat.polling)return;
-  state.cg.chat.sending=true;
+  if(chat.sending||chat.polling)return;
+  chat.sending=true;
   renderTemporaryMessages();
+  const controller=temporaryChatSetController("sendAbort",new AbortController());
   try{
-    const endpoint=apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns`);
+    const endpoint=apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conversationID)}/turns`);
     let options;
     if(images.length){
       const body=new FormData();
       body.append("content",content);
       body.append("web_search",String(webSearch));
       images.forEach(item=>body.append(item.kind==="image"?"images":"attachments",item.file,item.file.name));
-      options={method:"POST",headers:authHeaders(),body};
-    }else options={method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({content,web_search:webSearch})};
+      options={method:"POST",headers:authHeaders(),body,signal:controller.signal};
+    }else options={method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({content,web_search:webSearch}),signal:controller.signal};
     const out=await request(endpoint,options);
+    if(!temporaryChatIsCurrent(conversationID,generation)||controller.signal.aborted)return;
+    if(out.conversation&&String(out.conversation.id||"")!==conversationID){
+      throw new Error("temporary chat returned a different conversation");
+    }
     $("tcInput").value="";
     $("tcWebSearch").checked=false;
     clearTemporaryPendingImages();
-    state.cg.chat.current=out.conversation||state.cg.chat.current;
-    if(out.user_message)state.cg.chat.messages=[...state.cg.chat.messages,out.user_message];
-    if(out.assistant_message)state.cg.chat.messages=[...state.cg.chat.messages,out.assistant_message];
-    state.cg.chat.turnId=out.turn_id||(out.assistant_message&&out.assistant_message.id)||"";
-    state.cg.chat.content=(out.assistant_message&&out.assistant_message.content)||"";
+    chat.current=out.conversation||chat.current;
+    if(out.user_message)chat.messages=[...chat.messages,out.user_message];
+    if(out.assistant_message)chat.messages=[...chat.messages,out.assistant_message];
+    chat.turnId=out.turn_id||(out.assistant_message&&out.assistant_message.id)||"";
+    chat.content=(out.assistant_message&&out.assistant_message.content)||"";
     renderTemporaryConversationList();
     renderTemporaryMessages();
     pollTemporaryTurn();
   }catch(e){
+    if(temporaryChatAbortError(e)||!temporaryChatIsCurrent(conversationID,generation))return;
     toast(e.message||"发送失败","error");
-    if(e.status===409)await openTemporaryConversation(conv.id);
+    if(e.status===409)await openTemporaryConversation(conversationID);
   }finally{
-    state.cg.chat.sending=false;
-    renderTemporaryMessages();
+    temporaryChatClearController("sendAbort",controller);
+    if(temporaryChatIsCurrent(conversationID,generation)){
+      chat.sending=false;
+      renderTemporaryMessages();
+    }
   }
 }
 function pollTemporaryTurn(){
   stopTemporaryChatPolling();
-  const conv=state.cg.chat.current;
-  const turnId=state.cg.chat.turnId;
+  const chat=state.cg.chat;
+  const conv=chat.current;
+  const turnId=chat.turnId;
   if(!conv||!turnId)return;
-  state.cg.chat.polling=true;
+  const conversationID=String(conv.id||"");
+  const generation=chat.generation;
+  const pollGeneration=chat.pollGeneration;
+  const controller=temporaryChatSetController("pollAbort",new AbortController());
+  const active=()=>!controller.signal.aborted&&pollGeneration===Number(chat.pollGeneration)&&temporaryChatIsCurrent(conversationID,generation)&&String(chat.turnId||"")===String(turnId);
+  chat.polling=true;
   renderTemporaryMessages();
   const tick=async()=>{
+    if(!active())return;
     try{
-      const out=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns/${encodeURIComponent(turnId)}/events?timeout_ms=2000`));
-      if(out.actual_model&&state.cg.chat.current){
-        state.cg.chat.current={...state.cg.chat.current,actual_model:out.actual_model};
+      const out=await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conversationID)}/turns/${encodeURIComponent(turnId)}/events?timeout_ms=2000`),{signal:controller.signal});
+      if(!active())return;
+      if(out.actual_model&&chat.current){
+        chat.current={...chat.current,actual_model:out.actual_model};
       }
       if(out.delta){
-        state.cg.chat.content=(state.cg.chat.content||"")+out.delta;
-        const idx=state.cg.chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
+        chat.content=(chat.content||"")+out.delta;
+        const idx=chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
         if(idx>=0){
-          state.cg.chat.messages[idx]={...state.cg.chat.messages[idx],content:state.cg.chat.content,status:"streaming",actual_model:out.actual_model||state.cg.chat.messages[idx].actual_model||""};
+          chat.messages[idx]={...chat.messages[idx],content:chat.content,status:"streaming",actual_model:out.actual_model||chat.messages[idx].actual_model||""};
         }
         renderTemporaryMessages();
       }
       if(out.done){
         if(out.message){
-          const idx=state.cg.chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
-          if(idx>=0)state.cg.chat.messages[idx]=out.message;
-          else state.cg.chat.messages.push(out.message);
+          const idx=chat.messages.findIndex(m=>m.id===turnId||m.turn_id===turnId);
+          if(idx>=0)chat.messages[idx]=out.message;
+          else chat.messages.push(out.message);
         }
-        state.cg.chat.polling=false;
-        state.cg.chat.turnId="";
-        await openTemporaryConversation(conv.id);
+        chat.polling=false;
+        chat.turnId="";
+        temporaryChatClearController("pollAbort",controller);
+        await openTemporaryConversation(conversationID);
         if(out.error_class&&out.error_class!=="cancelled")toast(out.error_message||out.error_class,"error");
         return;
       }
-      state.cg.chat.pollTimer=setTimeout(tick,300);
+      if(active())chat.pollTimer=setTimeout(tick,300);
     }catch(e){
-      state.cg.chat.polling=false;
+      if(temporaryChatAbortError(e)||!active())return;
+      chat.polling=false;
+      temporaryChatClearController("pollAbort",controller);
       toast(e.message||"无法获取对话增量","error");
-      await openTemporaryConversation(conv.id);
+      await openTemporaryConversation(conversationID);
     }
   };
-  state.cg.chat.pollTimer=setTimeout(tick,50);
+  chat.pollTimer=setTimeout(tick,50);
 }
 async function cancelTemporaryTurn(){
-  const conv=state.cg.chat.current;
-  const turnId=state.cg.chat.turnId;
+  const chat=state.cg.chat;
+  const conv=chat.current;
+  const turnId=chat.turnId;
   if(!conv||!turnId)return;
+  const conversationID=String(conv.id||"");
+  const generation=chat.generation;
+  const controller=temporaryChatSetController("cancelAbort",new AbortController());
   try{
-    await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}/turns/${encodeURIComponent(turnId)}/cancel`),{
+    await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conversationID)}/turns/${encodeURIComponent(turnId)}/cancel`),{
       method:"POST",
       headers:authHeaders({"Content-Type":"application/json"}),
-      body:"{}"
+      body:"{}",signal:controller.signal
     });
+    if(!temporaryChatIsCurrent(conversationID,generation)||controller.signal.aborted)return;
     toast("已发送取消请求");
     stopTemporaryChatPolling();
-    await openTemporaryConversation(conv.id);
+    await openTemporaryConversation(conversationID);
   }catch(e){
+    if(temporaryChatAbortError(e)||!temporaryChatIsCurrent(conversationID,generation))return;
     toast(e.message||"取消失败","error");
+  }finally{
+    temporaryChatClearController("cancelAbort",controller);
   }
 }
 async function deleteTemporaryConversation(){
-  const conv=state.cg.chat.current;
+  const chat=state.cg.chat;
+  const conv=chat.current;
   if(!conv)return;
   if(!confirm(`确认删除会话「${conv.title||conv.id}」？此操作不可恢复。`))return;
+  const conversationID=String(conv.id||"");
+  const generation=chat.generation;
+  const controller=temporaryChatSetController("detailAbort",new AbortController());
   try{
-    stopTemporaryChatPolling();
-    await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conv.id)}`),{
+    await request(apiURL(`/api/chatgpt/temporary-conversations/${encodeURIComponent(conversationID)}`),{
       method:"DELETE",
-      headers:authHeaders()
+      headers:authHeaders(),signal:controller.signal
     });
+    if(!temporaryChatIsCurrent(conversationID,generation)||controller.signal.aborted)return;
     toast("对话已删除");
-    state.cg.chat.items=state.cg.chat.items.filter(x=>x.id!==conv.id);
-    state.cg.chat.current=null;
-    state.cg.chat.messages=[];
+    invalidateTemporaryChatContext();
+    chat.items=chat.items.filter(x=>x.id!==conversationID);
+    chat.current=null;
+    chat.messages=[];
+    chat.turnId="";chat.content="";chat.hasMore=false;
     clearTemporaryPendingImages();
     renderTemporaryConversationList();
     renderTemporaryMessages();
     setHash();
   }catch(e){
+    if(temporaryChatAbortError(e)||!temporaryChatIsCurrent(conversationID,generation))return;
     toast(e.message||"删除失败","error");
+  }finally{
+    temporaryChatClearController("detailAbort",controller);
   }
 }
 function copyText(value){

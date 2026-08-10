@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -16,6 +17,19 @@ type searchDoer struct {
 	run         *http.Request
 	runBody     string
 	poll        *http.Request
+}
+
+func jsonStringField(t *testing.T, body, field string) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("decode %s payload: %v", field, err)
+	}
+	value, ok := payload[field].(string)
+	if !ok {
+		t.Fatalf("%s field missing or not string in %s", field, body)
+	}
+	return value
 }
 
 func (d *searchDoer) Do(request *http.Request) (*http.Response, error) {
@@ -61,12 +75,69 @@ func TestSearchUsesPrepareRequirementsForcedConversationAndBoundedPoll(t *testin
 	if doer.prepare == nil || doer.prepare.Header.Get("X-Conduit-Token") != "no-token" || doer.prepare.Header.Get("Openai-Sentinel-Chat-Requirements-Token") != "" || !strings.Contains(doer.prepareBody, `"system_hints":["search"]`) || !strings.Contains(doer.prepareBody, "latest news") {
 		t.Fatalf("prepare headers=%v body=%s", doer.prepare.Header, doer.prepareBody)
 	}
+	prepareRoot := jsonStringField(t, doer.prepareBody, "parent_message_id")
+	if prepareRoot == "" || strings.Contains(doer.prepareBody, `"parent_message_id":"client-created-root"`) {
+		t.Fatalf("search prepare reused a static root: %s", doer.prepareBody)
+	}
+	var preparePayload map[string]any
+	if err := json.Unmarshal([]byte(doer.prepareBody), &preparePayload); err != nil {
+		t.Fatal(err)
+	}
+	if disabled, ok := preparePayload["history_and_training_disabled"].(bool); !ok || !disabled {
+		t.Fatalf("search prepare did not disable history/training: %s", doer.prepareBody)
+	}
 	if doer.run == nil || doer.run.Header.Get("X-Conduit-Token") != "conduit-1" || doer.run.Header.Get("Openai-Sentinel-Chat-Requirements-Token") != "requirements" || doer.run.Header.Get("Openai-Sentinel-So-Token") != "so" || !strings.Contains(doer.runBody, `"force_use_search":true`) {
 		t.Fatalf("run headers=%v body=%s", doer.run.Header, doer.runBody)
+	}
+	runRoot := jsonStringField(t, doer.runBody, "parent_message_id")
+	if runRoot != prepareRoot {
+		t.Fatalf("prepare/start roots differ: prepare=%q run=%q", prepareRoot, runRoot)
+	}
+	var runPayload map[string]any
+	if err := json.Unmarshal([]byte(doer.runBody), &runPayload); err != nil {
+		t.Fatal(err)
+	}
+	if disabled, ok := runPayload["history_and_training_disabled"].(bool); !ok || !disabled {
+		t.Fatalf("search start did not disable history/training: %s", doer.runBody)
 	}
 	if doer.poll == nil || doer.poll.Header.Get("Authorization") != "Bearer token" {
 		t.Fatalf("poll request=%v", doer.poll)
 	}
+}
+
+func TestSearchUsesDifferentRootForEachRequest(t *testing.T) {
+	first, second := &searchDoer{}, &searchDoer{}
+	client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", &multiSearchDoer{doers: []*searchDoer{first, second}})
+	if _, err := client.Search(context.Background(), SearchRequest{Model: "gpt-5", Query: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Search(context.Background(), SearchRequest{Model: "gpt-5", Query: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	firstRoot := jsonStringField(t, first.prepareBody, "parent_message_id")
+	secondRoot := jsonStringField(t, second.prepareBody, "parent_message_id")
+	if firstRoot == secondRoot {
+		t.Fatalf("separate searches reused root %q", firstRoot)
+	}
+}
+
+type multiSearchDoer struct {
+	doers []*searchDoer
+	index int
+}
+
+func (d *multiSearchDoer) Do(request *http.Request) (*http.Response, error) {
+	if d.index >= len(d.doers) {
+		return nil, fmt.Errorf("unexpected extra search request %s", request.URL.Path)
+	}
+	// Each Search performs the same deterministic sequence of setup calls. A
+	// small routing wrapper keeps the test focused on the generated roots.
+	current := d.doers[d.index]
+	response, err := current.Do(request)
+	if request.URL.Path == "/backend-api/conversation/search-1" {
+		d.index++
+	}
+	return response, err
 }
 
 func TestParseSearchDocumentDeduplicatesAndBoundsSources(t *testing.T) {

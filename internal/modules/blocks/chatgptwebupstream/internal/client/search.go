@@ -60,7 +60,13 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResul
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	conduit, err := c.prepareSearch(ctx, request.Model, query)
+	// A search is a standalone upstream interaction.  Never use the static
+	// browser root (or let two requests share one) because ChatGPT Web may use
+	// that root to associate requests with account-level conversation state.
+	// The same root is intentionally reused only for the prepare/start pair of
+	// this one request.
+	rootMessageID := uuid.NewString()
+	conduit, err := c.prepareSearch(ctx, request.Model, query, rootMessageID)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -68,14 +74,14 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResul
 	if err != nil {
 		return SearchResult{}, err
 	}
-	conversationID, err := c.startSearch(ctx, request.Model, query, conduit, requirements)
+	conversationID, err := c.startSearch(ctx, request.Model, query, conduit, rootMessageID, requirements)
 	if err != nil {
 		return SearchResult{}, err
 	}
 	return c.pollSearch(ctx, conversationID)
 }
 
-func (c *Client) prepareSearch(ctx context.Context, model, query string) (string, error) {
+func (c *Client) prepareSearch(ctx context.Context, model, query, rootMessageID string) (string, error) {
 	type message struct {
 		ID     string `json:"id"`
 		Author struct {
@@ -97,18 +103,22 @@ func (c *Client) prepareSearch(ctx context.Context, model, query string) (string
 		ConversationMode   struct {
 			Kind string `json:"kind"`
 		} `json:"conversation_mode"`
-		SystemHints          []string `json:"system_hints"`
-		PartialQuery         message  `json:"partial_query"`
-		SupportsBuffering    bool     `json:"supports_buffering"`
-		SupportedEncodings   []string `json:"supported_encodings"`
-		ClientContextualInfo struct {
+		SystemHints                []string `json:"system_hints"`
+		PartialQuery               message  `json:"partial_query"`
+		SupportsBuffering          bool     `json:"supports_buffering"`
+		SupportedEncodings         []string `json:"supported_encodings"`
+		HistoryAndTrainingDisabled bool     `json:"history_and_training_disabled"`
+		ClientContextualInfo       struct {
 			AppName string `json:"app_name"`
 		} `json:"client_contextual_info"`
 	}
 	p := payload{
-		Action: "next", ParentMessageID: "client-created-root", Model: textModelSlug(model), ClientPrepareState: "success",
+		Action: "next", ParentMessageID: strings.TrimSpace(rootMessageID), Model: textModelSlug(model), ClientPrepareState: "success",
 		TimezoneOffsetMins: -480, Timezone: "Asia/Shanghai", SystemHints: []string{"search"}, SupportsBuffering: true,
-		SupportedEncodings: []string{"v1"},
+		SupportedEncodings: []string{"v1"}, HistoryAndTrainingDisabled: true,
+	}
+	if p.ParentMessageID == "" {
+		p.ParentMessageID = uuid.NewString()
 	}
 	p.ConversationMode.Kind = "primary_assistant"
 	p.PartialQuery.ID = uuid.NewString()
@@ -136,7 +146,7 @@ func (c *Client) prepareSearch(ctx context.Context, model, query string) (string
 	return strings.TrimSpace(decoded.ConduitToken), nil
 }
 
-func (c *Client) startSearch(ctx context.Context, model, query, conduit string, requirements Requirements) (string, error) {
+func (c *Client) startSearch(ctx context.Context, model, query, conduit, rootMessageID string, requirements Requirements) (string, error) {
 	type message struct {
 		ID     string `json:"id"`
 		Author struct {
@@ -168,13 +178,14 @@ func (c *Client) startSearch(ctx context.Context, model, query, conduit string, 
 		ConversationMode   struct {
 			Kind string `json:"kind"`
 		} `json:"conversation_mode"`
-		EnableFollowups      bool     `json:"enable_message_followups"`
-		SystemHints          []string `json:"system_hints"`
-		SupportsBuffering    bool     `json:"supports_buffering"`
-		SupportedEncodings   []string `json:"supported_encodings"`
-		ForceUseSearch       bool     `json:"force_use_search"`
-		ClientReportedSource string   `json:"client_reported_search_source"`
-		ClientContextualInfo struct {
+		EnableFollowups            bool     `json:"enable_message_followups"`
+		SystemHints                []string `json:"system_hints"`
+		SupportsBuffering          bool     `json:"supports_buffering"`
+		SupportedEncodings         []string `json:"supported_encodings"`
+		ForceUseSearch             bool     `json:"force_use_search"`
+		ClientReportedSource       string   `json:"client_reported_search_source"`
+		HistoryAndTrainingDisabled bool     `json:"history_and_training_disabled"`
+		ClientContextualInfo       struct {
 			IsDarkMode      bool    `json:"is_dark_mode"`
 			TimeSinceLoaded int     `json:"time_since_loaded"`
 			PageHeight      int     `json:"page_height"`
@@ -195,11 +206,15 @@ func (c *Client) startSearch(ctx context.Context, model, query, conduit string, 
 	msg.Metadata.SystemHints = []string{"search"}
 	msg.Metadata.SerializationMetadata.CustomSymbolOffsets = []int{}
 	p := payload{
-		Action: "next", Messages: []message{msg}, ParentMessageID: "client-created-root", Model: textModelSlug(model),
+		Action: "next", Messages: []message{msg}, ParentMessageID: strings.TrimSpace(rootMessageID), Model: textModelSlug(model),
 		ClientPrepareState: "success", TimezoneOffsetMins: -480, Timezone: "Asia/Shanghai", EnableFollowups: true,
 		SystemHints: []string{}, SupportsBuffering: true, SupportedEncodings: []string{"v1"}, ForceUseSearch: true,
 		ClientReportedSource: "conversation_composer_web_icon", ParagenOverride: "allow", ForceParallelSwitch: "auto",
 	}
+	if p.ParentMessageID == "" {
+		p.ParentMessageID = uuid.NewString()
+	}
+	p.HistoryAndTrainingDisabled = true
 	p.ConversationMode.Kind = "primary_assistant"
 	p.ClientContextualInfo = struct {
 		IsDarkMode      bool    `json:"is_dark_mode"`

@@ -133,8 +133,8 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ### 功能集
 
-- **临时对话**：Admin 服务端持久化的多轮文本对话（DuckDB 专用表，浏览器不落会话正文）；可附加图片（最多 4 张、合计 20 MiB，PNG/JPEG/GIF/WebP）、逐轮启用联网搜索；保留期 `temporary_chat.retention_days`（默认 30 天）；达到 `max_conversations` 拒绝新建，不静默删历史；重启时 `streaming` 消息标记 `interrupted`，会话进入 `recovery_required`。research / deep_research 专用模型不进入选择器。
-- **在线搜索**：隔离的强制 ChatGPT Web 搜索页面，结果（答案、查询、来源）服务端保存于 `state.database` 的 `chatgpt_web_search_history`，按登录管理员用户名隔离（未启用登录时用本地 `admin` 作用域）；每个作用域最多 200 条，自动清理 30 天前记录；搜索历史不写入浏览器存储。
+- **临时对话**：Admin 服务端持久化的多轮文本对话（DuckDB 专用表，浏览器不落会话正文）；历史严格按 `(owner_id, conversation_id)` 读取，管理页切换会话时会取消旧详情/历史/发送/轮询请求，并用会话代际拒绝迟到响应回写，因此一个气泡不会因前端竞态混入另一会话的消息；可附加图片（最多 4 张、合计 20 MiB，PNG/JPEG/GIF/WebP）、逐轮启用联网搜索；保留期 `temporary_chat.retention_days`（默认 30 天）；达到 `max_conversations` 拒绝新建，不静默删历史；重启时 `streaming` 消息标记 `interrupted`，会话进入 `recovery_required`。research / deep_research 专用模型不进入选择器。上游 ChatGPT Web 请求每轮使用独立根并发送 `history_and_training_disabled=true`；账号级 Memory 仍由上游控制，不能宣称绝对隔离。
+- **在线搜索**：隔离的强制 ChatGPT Web 搜索页面；每次上游搜索使用独立随机根和 `history_and_training_disabled=true`，结果（答案、查询、来源）服务端保存于 `state.database` 的 `chatgpt_web_search_history`，按登录管理员用户名隔离（未启用登录时用本地 `admin` 作用域）；每个作用域最多 200 条，自动清理 30 天前记录；搜索历史不写入浏览器存储。ChatGPT Web 账号级 Memory/Reference history 仍可能由上游注入，发现跨主题回答时需结合账号设置排查。
 - **图片任务**：文生图 / 图生图任务提交与轮询；`size`、`quality` 可从常用值中选择，也允许输入上游模型支持的扩展值；以 `api_key_id` 隔离。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：AetherRelay 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
 - **图片库**：图片列表、标签、删除（不可恢复）与缩略图均要求 `api_key_id`，只返回该 Key 的资产；内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。客户端 Key 删除时同步清除图片任务、图片资产、缩略图、标签和交互归档。
 

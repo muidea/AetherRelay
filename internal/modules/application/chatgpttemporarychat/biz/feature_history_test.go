@@ -65,3 +65,42 @@ func TestBuildFeatureMessagesSkipsFailedTurnsAndReloadsHistoricalFiles(t *testin
 		}
 	}
 }
+
+func TestBuildFeatureMessagesNeverReadsAnotherConversation(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "aetherrelay.duckdb"), "64MB", 1, store.Config{RetentionDays: 30, MaxConversations: 10, MaxMessagesPerConversation: 50, MaxMessageBytes: 8192})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	first, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignTurn, err := s.StartTurn("ops", first.ID, "foreign conversation marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteFeatureTurn("ops", first.ID, foreignTurn.UserSequence, foreignTurn.AssistantSequence, "foreign assistant marker", "gpt-5", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.StartTurn("ops", second.ID, "second conversation question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := s.GetConversation("ops", second.ID, nil, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := &TemporaryChat{store: s}
+	messages, err := temporary.buildFeatureMessages("ops", second.ID, detail, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Content != "second conversation question" {
+		t.Fatalf("conversation history leaked: %+v", messages)
+	}
+}
