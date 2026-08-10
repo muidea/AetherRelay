@@ -8,7 +8,10 @@ import (
 	config "ai-proxy/internal/pkg/aiproxyconfig"
 )
 
-const providerBundleFormat = "ai-proxy.provider-bundle"
+const (
+	providerBundleFormat        = "ai-proxy.provider-bundle"
+	providerBundleSchemaVersion = 1
+)
 
 type providerBundle struct {
 	Format        string               `json:"format"`
@@ -73,9 +76,14 @@ func (h *Handler) exportProviderBundle(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item)
 	}
-	payload := providerBundle{Format: providerBundleFormat, SchemaVersion: 1, ExportedAt: time.Now().UTC().Format(time.RFC3339), Providers: items}
+	exportedAt := time.Now().UTC().Truncate(time.Second)
+	profile := bundleExportProfileSafe
+	if includeSecrets {
+		profile = bundleExportProfileComplete
+	}
+	payload := providerBundle{Format: providerBundleFormat, SchemaVersion: providerBundleSchemaVersion, ExportedAt: exportedAt.Format(time.RFC3339), Providers: items}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Disposition", `attachment; filename="ai-proxy-providers.json"`)
+	w.Header().Set("Content-Disposition", bundleExportContentDisposition(bundleExportArtifactProvider, providerBundleSchemaVersion, profile, exportedAt))
 	writeJSON(w, http.StatusOK, payload)
 }
 
@@ -89,7 +97,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 	if !decodeAdminBody(w, r, &payload) {
 		return
 	}
-	if payload.Format != providerBundleFormat || payload.SchemaVersion != 1 {
+	if payload.Format != providerBundleFormat || payload.SchemaVersion != providerBundleSchemaVersion {
 		writeError(w, http.StatusBadRequest, "unsupported provider bundle format or schema_version")
 		return
 	}
@@ -112,7 +120,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 	for name, provider := range current.Providers {
 		next[name] = provider
 	}
-	result := providerBundleResult{Format: "ai-proxy.provider-bundle-result", SchemaVersion: 1, Items: make([]providerBundleItemResult, 0, len(payload.Providers))}
+	result := providerBundleResult{Format: "ai-proxy.provider-bundle-result", SchemaVersion: providerBundleSchemaVersion, Items: make([]providerBundleItemResult, 0, len(payload.Providers))}
 	seen := make(map[string]struct{}, len(payload.Providers))
 	for _, item := range payload.Providers {
 		name := strings.ToLower(strings.TrimSpace(item.Name))

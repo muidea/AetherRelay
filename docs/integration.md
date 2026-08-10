@@ -555,6 +555,8 @@ Admin 系统信息中的“开放 API 端点”是实例级路由清单，不代
 
 账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `ai-proxy.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据；统一账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，集中放置整体导入与导出，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`，要求两个 Store 都可用。整体导入会先完成整包预检，校验失败或发现重复 `account_ref`、重复槽位凭据、同一邮箱被多个 `account_ref` 使用时返回 `409`，并在 `conflicts` 中给出账号引用、槽位和安全原因，不会写入任一 Store；只包含一种槽位的 bundle 只要求对应 Store 可用。预检通过后先按槽位 `account_id` 匹配目标账号；未提供 `account_id` 时按唯一邮箱回退匹配，不会因为目标摘要来自另一个上游账号而误报冲突。同邮箱但明确不同上游 `account_id` 默认返回 `409`，只有在 bundle 顶层显式设置 `"replace": true` 时才允许替换目标槽位；一个 bundle 中的多个账号不能指向同一个已有槽位。跨 Store 无法事务回滚，若一侧成功、另一侧失败，响应的 `partial_success` 为 `true`。同一账号的跨槽位归组优先使用规范化邮箱，不能使用不同上游 `account_id` 直接强行合并。
 
+两类迁移导出均遵循统一下载名 `ai-proxy-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json`：Provider 分别生成 `ai-proxy-provider-bundle-v1-safe-...` 或 `ai-proxy-provider-bundle-v1-complete-...`，账号池整体迁移生成 `ai-proxy-account-pool-bundle-v2-complete-...`。时间戳来自服务端返回的 `exported_at`，管理页下载名与 HTTP `Content-Disposition` 一致。文件名只用于识别和整理，导入始终按 JSON 内的 `format` 与 `schema_version` 校验，详见[管理面迁移 Bundle 文件命名](design/bundle-file-naming.md)。
+
 ## 11. 推荐启动流程
 
 ```text

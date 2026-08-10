@@ -3,10 +3,12 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
 	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
@@ -71,6 +73,18 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	if payload.Accounts[0].Slots.ChatGPT.IdentityKey == "" || payload.Accounts[0].Slots.Codex.IdentityKey == "" {
 		t.Fatalf("export did not retain fallback identity keys: %+v", payload.Accounts[0].Slots)
+	}
+	exportedAt, err := time.Parse(time.RFC3339, payload.ExportedAt)
+	if err != nil {
+		t.Fatalf("exported_at=%q: %v", payload.ExportedAt, err)
+	}
+	mediaType, params, err := mime.ParseMediaType(rec.Header().Get("Content-Disposition"))
+	if err != nil {
+		t.Fatalf("parse Content-Disposition: %v", err)
+	}
+	wantFilename := bundleExportFilename(bundleExportArtifactAccountPool, accountPoolBundleSchemaVersion, bundleExportProfileComplete, exportedAt)
+	if mediaType != "attachment" || params["filename"] != wantFilename {
+		t.Fatalf("Content-Disposition=%q, want attachment filename %q", rec.Header().Get("Content-Disposition"), wantFilename)
 	}
 }
 

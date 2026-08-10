@@ -68,6 +68,16 @@ accountidentity.Key(account_id, email)
 - 凭据字段只允许出现在明确的凭据导出接口响应中；导出文件必须按凭据文件处理，禁止写入日志。
 - 不导出状态、额度、刷新错误、冷却、模型快照、用量、Provider、API Key、图片和交互记录。
 
+## 导出文件名
+
+账号池整体迁移导出固定使用 `complete` profile，文件名为：
+
+```text
+ai-proxy-account-pool-bundle-v2-complete-{YYYYMMDDTHHMMSSZ}.json
+```
+
+时间戳由响应中的 `exported_at` 生成；服务端 `Content-Disposition` 与管理页下载名保持一致。该文件包含 OAuth 凭据，必须按敏感文件管理。文件名不参与导入校验，导入仍以 JSON 内的 `format` 和 `schema_version` 为准；Provider bundle 的同一套命名规则见[管理面迁移 Bundle 文件命名](bundle-file-naming.md)。
+
 ## 导出分组规则
 
 导出时先建立统一账号组：

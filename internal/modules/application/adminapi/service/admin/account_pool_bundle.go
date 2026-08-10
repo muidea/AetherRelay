@@ -14,7 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const accountPoolBundleFormat = "ai-proxy.account-pool-bundle"
+const (
+	accountPoolBundleFormat        = "ai-proxy.account-pool-bundle"
+	accountPoolBundleSchemaVersion = 2
+)
 
 type accountPoolBundle struct {
 	Format        string                   `json:"format"`
@@ -174,9 +177,10 @@ func (h *Handler) exportAccountPoolBundle(w http.ResponseWriter, r *http.Request
 	for _, key := range order {
 		accounts = append(accounts, *groups[key])
 	}
-	payload := accountPoolBundle{Format: accountPoolBundleFormat, SchemaVersion: 2, ExportedAt: time.Now().UTC().Format(time.RFC3339), Accounts: accounts}
+	exportedAt := time.Now().UTC().Truncate(time.Second)
+	payload := accountPoolBundle{Format: accountPoolBundleFormat, SchemaVersion: accountPoolBundleSchemaVersion, ExportedAt: exportedAt.Format(time.RFC3339), Accounts: accounts}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Disposition", `attachment; filename="account-pool-bundle.json"`)
+	w.Header().Set("Content-Disposition", bundleExportContentDisposition(bundleExportArtifactAccountPool, accountPoolBundleSchemaVersion, bundleExportProfileComplete, exportedAt))
 	writeJSON(w, http.StatusOK, payload)
 }
 
@@ -192,7 +196,7 @@ func bundleTextValid(value string, max int) bool {
 // two stores do not share a transaction: malformed data must not allow the
 // first store to be modified before the second store is checked.
 func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents.ExportItem, codex []codexevents.CredentialInput, conflicts []accountPoolBundleConflict, err error) {
-	if payload.Format != accountPoolBundleFormat || payload.SchemaVersion != 2 {
+	if payload.Format != accountPoolBundleFormat || payload.SchemaVersion != accountPoolBundleSchemaVersion {
 		return nil, nil, nil, fmt.Errorf("unsupported account pool bundle format or schema_version")
 	}
 	if len(payload.Accounts) == 0 || len(payload.Accounts) > maxAccountImportItems {
