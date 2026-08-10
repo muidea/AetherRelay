@@ -4,8 +4,8 @@ package metricsruntime
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/metricsruntime/biz"
-	metricscommon "ai-proxy/internal/modules/blocks/metricsruntime/pkg/common"
+	"aetherrelay/internal/modules/blocks/metricsruntime/biz"
+	metricscommon "aetherrelay/internal/modules/blocks/metricsruntime/pkg/common"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

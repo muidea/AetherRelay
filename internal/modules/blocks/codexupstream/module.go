@@ -4,8 +4,8 @@ package codexupstream
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/codexupstream/biz"
-	"ai-proxy/internal/modules/blocks/codexupstream/pkg/common"
+	"aetherrelay/internal/modules/blocks/codexupstream/biz"
+	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/framework/plugin/module"

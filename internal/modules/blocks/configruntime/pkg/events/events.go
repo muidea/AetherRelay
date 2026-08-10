@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	"ai-proxy/internal/modules/blocks/configruntime/pkg/common"
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/modules/blocks/configruntime/pkg/common"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 
 	"github.com/muidea/magicCommon/event"
 )
 
 const (
-	TopicBootstrap        = "aiproxy.config.command.bootstrap"
-	TopicActivate         = "aiproxy.config.command.activate"
-	TopicReplaceProviders = "aiproxy.config.command.replace-providers"
+	TopicBootstrap        = "aetherrelay.config.command.bootstrap"
+	TopicActivate         = "aetherrelay.config.command.activate"
+	TopicReplaceProviders = "aetherrelay.config.command.replace-providers"
 )
 
 type Bootstrap struct {

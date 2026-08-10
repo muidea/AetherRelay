@@ -2,13 +2,13 @@
 
 ## 目标
 
-`ai-proxy` 使用 `github.com/muidea/magicCommon/framework/application` 管理进程生命周期。项目保持单 Go module、单 HTTP gateway 进程：路由与 listener 属于 Initiator，技术运行时属于 Block，入站业务聚合属于 Application Module。
+`AetherRelay` 使用 `github.com/muidea/magicCommon/framework/application` 管理进程生命周期。项目保持单 Go module、单 HTTP gateway 进程：路由与 listener 属于 Initiator，技术运行时属于 Block，入站业务聚合属于 Application Module。
 
 生命周期为：
 
 ```text
-cmd/ai-proxy（显式 side-effect import）
-  → internal/services/aiproxy.Runtime
+cmd/aetherrelay（显式 side-effect import）
+  → internal/services/aetherrelay.Runtime
   → magicCommon application.Startup → Initiator.Setup → Module.Setup
   → magicCommon application.Run     → Initiator.Run   → Module.Run
   → magicCommon application.Shutdown → Module.Teardown → Initiator.Teardown
@@ -20,12 +20,12 @@ cmd/ai-proxy（显式 side-effect import）
 
 ```text
 cmd/
-  ai-proxy/               版本注入、framework 组件显式加载和进程退出码
-  ai-proxy-probe/         独立 probe 入口
-  ai-proxy-usage-import/  独立历史导入入口
+  aetherrelay/               版本注入、framework 组件显式加载和进程退出码
+  aetherrelay-probe/         独立 probe 入口
+  aetherrelay-usage-import/  独立历史导入入口
 
 internal/services/
-  aiproxy/                主 gateway 的配置、信号处理、framework lifecycle shell 与 listener 等待
+  aetherrelay/                主 gateway 的配置、信号处理、framework lifecycle shell 与 listener 等待
   probe/                  Provider live probe 进程服务
   usageimport/            CSV → DuckDB 一次性导入进程服务
 
@@ -73,14 +73,14 @@ internal/modules/
     pkg/events/                  图片存储 owner 的 typed EventHub 合同
 
 internal/pkg/
-  aiproxybootstrap/       process service → framework 启动基础设施的单次启动快照桥接
-  aiproxyconfig/          YAML 配置、统一 state 工作区派生与启动期 route 校验
-  aiproxystate/           共享 DuckDB 连接、owner 表迁移与引用计数关闭
-  aiproxyarchive/         interaction round 归档
-  aiproxyclientauth/      客户端 API Key 身份索引与解析（由 Proxy Module 持有）
-  aiproxyusage/           DuckDB usage store、查询、导出与迁移
-  aiproxymetrics/         Registry、Prometheus 投影、SLO evaluator（无 HTTP route）
-  aiproxymetricsport/     Metrics Block 的 EventHub-backed 读写端口
+  aetherrelaybootstrap/       process service → framework 启动基础设施的单次启动快照桥接
+  aetherrelayconfig/          YAML 配置、统一 state 工作区派生与启动期 route 校验
+  aetherrelaystate/           共享 DuckDB 连接、owner 表迁移与引用计数关闭
+  aetherrelayarchive/         interaction round 归档
+  aetherrelayclientauth/      客户端 API Key 身份索引与解析（由 Proxy Module 持有）
+  aetherrelayusage/           DuckDB usage store、查询、导出与迁移
+  aetherrelaymetrics/         Registry、Prometheus 投影、SLO evaluator（无 HTTP route）
+  aetherrelaymetricsport/     Metrics Block 的 EventHub-backed 读写端口
   chatgptwebpaths/        ChatGPT Web 本地数据布局（无 lifecycle）
 
 internal/initiators/
@@ -91,13 +91,13 @@ web/admin/                嵌入二进制的管理页
 ## 边界决策
 
 - `cmd/*` 不承载业务装配、HTTP server、存储或 CLI 业务逻辑；它们只调用对应 process service。
-- `internal/services/aiproxy` 是进程级 service，不是 plugin module：它只驱动 application lifecycle，并通过 RouteRegistry Initiator 等待 HTTP listener 退出。
+- `internal/services/aetherrelay` 是进程级 service，不是 plugin module：它只驱动 application lifecycle，并通过 RouteRegistry Initiator 等待 HTTP listener 退出。
 - Config Block 是启动配置与 Provider 热更新后的当前配置 owner。`routeregistry` Initiator 是 magicEngine RouteRegistry 与 listener 的进程级基础设施 owner；它只暴露窄的 `RouteRegistryHelper`，不承载任何业务状态。listener 由 process service 在所有 Module 路由注册后启动，避免启动窗口 404。
 - Usage 与 Metrics/SLO 是独立技术 Block，不暴露 HTTP route 或可变资源对象。Metrics Block 经 `MetricsPort` 接收记录事件和返回只读投影；Proxy 直接持有其唯一使用的 Client API Key 索引与 interaction archive。
 - Codex OAuth 账号池是单一凭据、模型快照与上游用量快照资源 owner，因此位于 `blocks/codexaccountpool`，而不是 ChatGPT Web 的编排 Module；它以 typed EventHub 命令提供脱敏管理视图、短时 request credential、账号模型/用量快照、额度/冷却结果反馈与单飞刷新。`blocks/codexupstream` 只拥有 Codex Responses HTTP/SSE、`wham/usage` 用量投影、额度受限投影和账号作用域模型枚举技术执行，不持有账号池状态。`proxyapi` 负责编排定时与手动发现、显式用量刷新（均含有界进度）、有效目录合成、获取账号、401 刷新后安全重试一次、429 切换账号及 usage/归档结算，HTTP handler 不直接访问 token、store 或上游 client。
 - Proxy API 与 Provider Admin 是有状态业务聚合 Module：它们通过 EventHub 获取 Block 依赖，并在 `Setup` 中注入 `RouteRegistryHelper`、在 `Run` 中注册各自路由。Admin 请求 Config Block 激活新配置，Config Block 同步命令 Proxy 应用新快照。Proxy 仅注册协议白名单路径，不依赖 Module Weight 确保路由优先级。
-- `internal/pkg/aiproxyarchive`、`internal/pkg/aiproxyclientauth`、`internal/pkg/aiproxyconfig`、`internal/pkg/aiproxystate`、`internal/pkg/aiproxyusage`、`internal/pkg/aiproxymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。`aiproxystate` 只提供同一 `state.database` 的受限连接与 owner 表，不承载跨 owner 的业务读写。
-- EventHub topic、Command、Data、Result 与 handler 由维护资源、状态或能力的 owner 在其 `pkg/events` 定义：调用方只导入并使用 owner 合同，不得按投递方复制 DTO 或 topic；`aiproxymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。
+- `internal/pkg/aetherrelayarchive`、`internal/pkg/aetherrelayclientauth`、`internal/pkg/aetherrelayconfig`、`internal/pkg/aetherrelaystate`、`internal/pkg/aetherrelayusage`、`internal/pkg/aetherrelaymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。`aetherrelaystate` 只提供同一 `state.database` 的受限连接与 owner 表，不承载跨 owner 的业务读写。
+- EventHub topic、Command、Data、Result 与 handler 由维护资源、状态或能力的 owner 在其 `pkg/events` 定义：调用方只导入并使用 owner 合同，不得按投递方复制 DTO 或 topic；`aetherrelaymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。
 - 新增 magicCommon plugin module 的前提是：具备独立 Setup/Run/Teardown、正式状态 owner、route/listener 或 EventHub 订阅，并由 `cmd` 显式加载；不得仅为缩短文件而创建 module。
 
 ## 变更规则

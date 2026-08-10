@@ -5,10 +5,10 @@ import (
 	"context"
 	"fmt"
 
-	basebiz "ai-proxy/internal/modules/base/biz"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	usagecommon "ai-proxy/internal/modules/blocks/usageruntime/pkg/common"
-	usageevents "ai-proxy/internal/modules/blocks/usageruntime/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	usagecommon "aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
+	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

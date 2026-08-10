@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxymetricsport"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 )
 
 // StreamHandlerOptions 控制 /stats/stream 端点的行为。

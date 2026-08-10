@@ -6,20 +6,20 @@ Type: closure-plan
 
 Last Updated: 2026-07-15
 
-> 本文为 2026-07-15 的跨项目收口记录，不描述当前 ai-proxy 或 WorkOrch 合同。文中的外部路径、计划状态和现场结论均不应作为现行依据；当前 ai-proxy 运行语义以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。
+> 本文为 2026-07-15 的跨项目收口记录，不描述当前 AetherRelay 或 WorkOrch 合同。文中的外部路径、计划状态和现场结论均不应作为现行依据；当前 AetherRelay 运行语义以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。
 
 ## 1. 文档目的
 
-本文定义 ai-proxy 为 WorkOrch 提供模型自动枚举、上下文容量和 operation readiness 时必须完成的
+本文定义 AetherRelay 为 WorkOrch 提供模型自动枚举、上下文容量和 operation readiness 时必须完成的
 上游合同收口。对应 WorkOrch 设计文档为：
 
-`/home/rangh/aispace/workorch/docs/70-roadmap/active/ai-proxy-primary-llm-provider-cutover-design-2026-07-15.md`
+`/home/rangh/aispace/workorch/docs/70-roadmap/active/AetherRelay-primary-llm-provider-cutover-design-2026-07-15.md`
 
 provider capability、模型 operation、协议转换及客户端使用的独立功能设计，见
 [`provider-capability-contract-design-2026-07-15.md`](provider-capability-contract-design-2026-07-15.md)。
 
 本次不保留缺少 operation 的旧 `model_catalog` 合同，也不通过模型名、默认 provider 或上游请求失败
-猜测模型能力。完成后，ai-proxy 的 `model_catalog` 必须同时成为模型容量、operation 和确定路由的权威。
+猜测模型能力。完成后，AetherRelay 的 `model_catalog` 必须同时成为模型容量、operation 和确定路由的权威。
 
 ## 2. 当前核对结论
 
@@ -37,18 +37,18 @@ provider capability、模型 operation、协议转换及客户端使用的独立
 8. `NewHandler.requireResolvedConfig` 全量 fail-fast（含 table-driven 畸形配置覆盖）。
 9. GET/POST `/v1/models` `reflect.DeepEqual` 全 payload 一致；首事件失败、5xx/408/429/网络错误仅访问唯一 RouteOwner。
 10. `api_error.go`、`handler_test_helpers.go`、probe 与本文档已纳入当前代码变更集。
-11. ai-proxy 全量 Go 测试、vet、gofmt、diff check 已通过；本地 `config.yaml` 成功加载到监听阶段。
+11. AetherRelay 全量 Go 测试、vet、gofmt、diff check 已通过；本地 `config.yaml` 成功加载到监听阶段。
 
 待 live 手工验证（§12）与跨仓 WorkOrch catalog refresh 联调后，可将本文 status 改为 `completed`。
 
 ## 3. 目标语义
 
-收口完成后，ai-proxy 必须满足：
+收口完成后，AetherRelay 必须满足：
 
 1. `/v1/models` 只返回规范化、可路由的具体模型。
 2. 每个模型明确提供容量、operations 和确定 route owner。
 3. 所有模型请求在访问上游前校验 exact model 与 requested operation。
-4. operation 不支持时由 ai-proxy 本地返回稳定 4xx，不依赖上游错误发现能力。
+4. operation 不支持时由 AetherRelay 本地返回稳定 4xx，不依赖上游错误发现能力。
 5. catalog、路由和执行使用同一份规范化 `ModelInfo` authority。
 6. WorkOrch 可以只依赖 `/v1/models` 判断新 Run 是否可使用某个 target/operation 的 canonical 执行路径。
 7. HTTP Handler 只消费已经 normalize/validate 的只读 authority，不合成 model、不补默认容量、不补默认
@@ -264,7 +264,7 @@ providers:
 
 1. enabled provider 的 capability 非空，只允许已知枚举，去重并稳定排序。
 2. 直通能力必须由 provider 显式声明；不得因为 `protocol: openai` 默认补齐所有 OpenAI endpoint。
-3. 协议转换能力由 ai-proxy 的已实现转换矩阵派生：
+3. 协议转换能力由 AetherRelay 的已实现转换矩阵派生：
    - OpenAI provider 声明 `chat_completions` 后，可通过转换服务 `/v1/messages`。
    - Anthropic provider 声明 `messages` 后，可通过转换服务 `/v1/chat/completions`。
    - responses、completions、embeddings 不允许通过上述转换隐式获得。
@@ -286,7 +286,7 @@ providers:
 
 README 不得继续声明“代理本身不按 operations 拒绝 path”。最终说明应明确：
 
-> operations 是 ai-proxy 执行合同；请求在访问上游前按 exact model 和入站 operation 校验。
+> operations 是 AetherRelay 执行合同；请求在访问上游前按 exact model 和入站 operation 校验。
 
 配置示例：
 
@@ -330,7 +330,7 @@ model_catalog:
 
 涉及：
 
-- `internal/pkg/aiproxyconfig/config.go`
+- `internal/pkg/aetherrelayconfig/config.go`
 - `internal/modules/application/proxyapi/service/proxy/models.go`
 - provider routing helper
 
@@ -373,7 +373,7 @@ model_catalog:
 
 涉及：
 
-- `internal/pkg/aiproxyconfig/config.go`
+- `internal/pkg/aetherrelayconfig/config.go`
 - endpoint capability 解析、规范化和配置校验
 - `config.example.yaml` / 部署 `config.yaml`
 
@@ -400,7 +400,7 @@ error 拒绝，不会访问错误 endpoint 或其它 provider。
 4. README 删除任何将 RouteOwner/`owned_by` 暴露给客户端的旧说明。
 5. README、config example 和代码注释不再声明 catalog 与 provider 路由独立/解耦。
 6. 文档补充 provider endpoint capability、canonical operation readiness 和无 fallback 语义。
-7. 删除“仅用环境变量即可启动”、`AI_PROXY_DEFAULT_PROVIDER` 路由兜底、`API_KEY/API_BASE_URL` 创建 custom
+7. 删除“仅用环境变量即可启动”、`AETHERRELAY_DEFAULT_PROVIDER` 路由兜底、`API_KEY/API_BASE_URL` 创建 custom
    provider 等已失效说明。
 8. README/PRD 中 provider 示例全部补齐 endpoint capabilities。
 9. 删除 fallback 成功切换、fallback 指标和 fallback 归档用途等产品合同。
@@ -452,9 +452,9 @@ error 拒绝，不会访问错误 endpoint 或其它 provider。
 ```bash
 gofmt -l $(rg --files -g '*.go')
 git diff --check
-go test ./internal/pkg/aiproxyconfig -count=1
+go test ./internal/pkg/aetherrelayconfig -count=1
 go test ./internal/proxy -count=1
-go test ./cmd/ai-proxy -count=1
+go test ./cmd/aetherrelay -count=1
 go test ./... -count=1
 go vet ./...
 ```
@@ -526,7 +526,7 @@ live 验证至少覆盖：
 - [x] protocol/capability 不兼容、完整 Handler fail-fast、单 RouteOwner retryable failure/首事件失败测试补齐。
 - [x] README、example、prd 与代码最终语义一致；不再保留 fallback 执行、指标或归档合同。
 - [x] 新增错误 DTO、测试 helper 和 closure plan 已纳入 Git 变更集。
-- [ ] ai-proxy live chat/embedding/negative operation 验证通过。（代码就绪，待手工 live）
+- [ ] AetherRelay live chat/embedding/negative operation 验证通过。（代码就绪，待手工 live）
 - [ ] WorkOrch catalog refresh、模型过滤和 activation readiness 验证通过。（跨仓，待联调）
 
 只有以上项目全部完成后，本文状态才可以改为 `completed`。
@@ -535,7 +535,7 @@ live 验证至少覆盖：
 
 收口完成后的唯一语义是：
 
-> ai-proxy 的 `model_catalog` 明确声明每个具体模型的容量、operations 和确定 route owner；
+> AetherRelay 的 `model_catalog` 明确声明每个具体模型的容量、operations 和确定 route owner；
 > `/v1/models` 使用具体稳定 DTO 输出该 authority；所有 chat/embedding 请求在访问上游前按 exact model
 > 和 requested operation 校验；Handler 不合成或修补 catalog；provider path capability 来自显式、可审计合同；
 > 每个 operation 的 canonical readiness 在启动时与唯一 RouteOwner 交叉验证；请求期再校验具体 path；不存在

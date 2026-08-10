@@ -1,4 +1,4 @@
-# ai-proxy
+# AetherRelay
 
 > 历史验收记录，更新时间：2026-07-16。本文的 Goal/DoD ID 可用于追溯当时验收，不描述当前配置或运行合同；现行行为以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。
 
@@ -15,7 +15,7 @@
 
 ### G-01 统一客户端接入
 
-- **G-01.01** 客户端只需配置一个本地 ai-proxy 地址即可访问已配置的上游模型。
+- **G-01.01** 客户端只需配置一个本地 AetherRelay 地址即可访问已配置的上游模型。
 - **G-01.02** OpenAI-compatible 客户端使用标准 OpenAI 路径接入。
 - **G-01.03** Anthropic 客户端使用标准 Messages 路径接入。
 - **G-01.04** 客户端只提交裸模型 ID，不感知 provider 名称、上游 URL 或上游密钥。
@@ -184,7 +184,7 @@
 
 - [x] **D-02.01** 未指定配置路径时优先读取工作目录的 `config.yaml`。
 - [x] **D-02.02** `-config` 可以指定配置文件。
-- [x] **D-02.03** `AI_PROXY_CONFIG` 可以指定配置文件。
+- [x] **D-02.03** `AETHERRELAY_CONFIG` 可以指定配置文件。
 - [x] **D-02.04** 配置值支持 `${ENV}` 展开。
 - [x] **D-02.05** 未知顶层 section 导致配置加载失败。
 - [x] **D-02.06** 未知配置 key 导致配置加载失败。
@@ -221,24 +221,24 @@
 - [x] **D-02.37** 配置出现 `default_provider` 时启动失败。
 - [x] **D-02.38** 配置出现 `fallbacks` 时启动失败。
 - [x] **D-02.39** provider 不能通过环境变量动态创建。
-- [x] **D-02.40** `AI_PROXY_PORT` 生成 `127.0.0.1:<port>`。
-- [x] **D-02.41** `AI_PROXY_LISTEN_ADDR` 可以覆盖监听地址。
-- [x] **D-02.42** `AI_PROXY_INBOUND_API_KEY` 可以覆盖入站 API Key。
-- [x] **D-02.43** `AI_PROXY_MAX_REQUEST_BODY_BYTES` 可以覆盖请求体上限。
-- [x] **D-02.44** `AI_PROXY_MAX_UPSTREAM_RESPONSE_BYTES` 可以覆盖上游响应上限。
-- [x] **D-02.45** `AI_PROXY_MAX_STREAM_BYTES` 可以覆盖 SSE 累计输出上限。
-- [x] **D-02.46** `AI_PROXY_MAX_SSE_LINE_BYTES` 可以覆盖单条 SSE 行上限。
-- [x] **D-02.47** `AI_PROXY_ARCHIVE_FULL_CONTENT` 可以覆盖完整正文归档开关。
-- [x] **D-02.48** `AI_PROXY_USAGE_FILE` 可以覆盖 CSV 路径。
-- [x] **D-02.49** `AI_PROXY_INTERACTION_DIR` 可以覆盖归档目录。
-- [x] **D-02.50** `AI_PROXY_INTERACTION_RETENTION` 可以覆盖归档保留轮数。
-- [x] **D-02.51** `AI_PROXY_VERBOSE_LOGGING` 可以覆盖详细观测日志开关。
-- [x] **D-02.52** `AI_PROXY_LOG_FORMAT` 或 `LOG_FORMAT` 可以覆盖日志格式。
-- [x] **D-02.53** `AI_PROXY_REQUEST_TIMEOUT_SECONDS` 可以覆盖请求超时。
-- [x] **D-02.54** `AI_PROXY_STREAM_IDLE_TIMEOUT_SECONDS` 可以覆盖流空闲超时。
-- [x] **D-02.55** `AI_PROXY_METRICS_REMOTE_ACCESS` 可以覆盖远程观测访问开关。
-- [x] **D-02.56** `AI_PROXY_METRICS_ALLOWED_CIDRS` 可以覆盖观测访问白名单。
-- [x] **D-02.57** `AI_PROXY_STREAM_IDLE_TIMEOUT_SECONDS=0` 可以关闭流空闲超时。
+- [x] **D-02.40** `AETHERRELAY_PORT` 生成 `127.0.0.1:<port>`。
+- [x] **D-02.41** `AETHERRELAY_LISTEN_ADDR` 可以覆盖监听地址。
+- [x] **D-02.42** `AETHERRELAY_INBOUND_API_KEY` 可以覆盖入站 API Key。
+- [x] **D-02.43** `AETHERRELAY_MAX_REQUEST_BODY_BYTES` 可以覆盖请求体上限。
+- [x] **D-02.44** `AETHERRELAY_MAX_UPSTREAM_RESPONSE_BYTES` 可以覆盖上游响应上限。
+- [x] **D-02.45** `AETHERRELAY_MAX_STREAM_BYTES` 可以覆盖 SSE 累计输出上限。
+- [x] **D-02.46** `AETHERRELAY_MAX_SSE_LINE_BYTES` 可以覆盖单条 SSE 行上限。
+- [x] **D-02.47** `AETHERRELAY_ARCHIVE_FULL_CONTENT` 可以覆盖完整正文归档开关。
+- [x] **D-02.48** `AETHERRELAY_USAGE_FILE` 可以覆盖 CSV 路径。
+- [x] **D-02.49** `AETHERRELAY_INTERACTION_DIR` 可以覆盖归档目录。
+- [x] **D-02.50** `AETHERRELAY_INTERACTION_RETENTION` 可以覆盖归档保留轮数。
+- [x] **D-02.51** `AETHERRELAY_VERBOSE_LOGGING` 可以覆盖详细观测日志开关。
+- [x] **D-02.52** `AETHERRELAY_LOG_FORMAT` 或 `LOG_FORMAT` 可以覆盖日志格式。
+- [x] **D-02.53** `AETHERRELAY_REQUEST_TIMEOUT_SECONDS` 可以覆盖请求超时。
+- [x] **D-02.54** `AETHERRELAY_STREAM_IDLE_TIMEOUT_SECONDS` 可以覆盖流空闲超时。
+- [x] **D-02.55** `AETHERRELAY_METRICS_REMOTE_ACCESS` 可以覆盖远程观测访问开关。
+- [x] **D-02.56** `AETHERRELAY_METRICS_ALLOWED_CIDRS` 可以覆盖观测访问白名单。
+- [x] **D-02.57** `AETHERRELAY_STREAM_IDLE_TIMEOUT_SECONDS=0` 可以关闭流空闲超时。
 - [x] **D-02.58** 非法布尔值环境变量导致加载失败。
 - [x] **D-02.59** 非法数字环境变量导致加载失败。
 - [x] **D-02.60** 非法 CIDR 导致加载失败。
@@ -545,7 +545,7 @@
 - [x] **D-11.04** HTTP server 优雅关闭超时为 10 秒。
 - [x] **D-11.05** 关闭过程先停止 SLO 巡检。
 - [x] **D-11.06** 关闭过程等待 SLO Run goroutine 退出。
-- [x] **D-11.07** `ai-proxy-probe` 与主服务使用独立入口。
+- [x] **D-11.07** `AetherRelay-probe` 与主服务使用独立入口。
 - [x] **D-11.08** probe 要求显式 provider、capability 和 exact model。
 - [x] **D-11.09** probe 拒绝缺失或 disabled provider。
 - [x] **D-11.10** probe 拒绝 provider 未声明的直连 capability。
@@ -624,10 +624,10 @@
 
 ### DoD
 
-- [x] **D-USAGE.01** 配置拒绝 `inbound_api_key` / `usage_file` / `AI_PROXY_INBOUND_API_KEY` / `AI_PROXY_USAGE_FILE`。
+- [x] **D-USAGE.01** 配置拒绝 `inbound_api_key` / `usage_file` / `AETHERRELAY_INBOUND_API_KEY` / `AETHERRELAY_USAGE_FILE`。
 - [x] **D-USAGE.02** `clientauth` 解析 OpenAI Bearer 与 Anthropic X-API-Key；原始 Key 不落盘。
 - [x] **D-USAGE.03** `internal/usage` DuckDB Store：migration、Start/Complete、RecoverInterrupted、Dashboard、Events、ExportCSV。
 - [x] **D-USAGE.04** 代理路径接线 Start/Complete；401 不计 usage；Start 失败 503。
 - [x] **D-USAGE.05** `/admin/api/usage/*` 与 Web `#/usage` 页签可用。
-- [x] **D-USAGE.06** `cmd/ai-proxy-usage-import` 提供旧 CSV 一次性导入。
+- [x] **D-USAGE.06** `cmd/aetherrelay-usage-import` 提供旧 CSV 一次性导入。
 - [x] **D-USAGE.07** `go test ./...` / `go vet` / `gofmt` 门禁通过。

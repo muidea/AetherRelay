@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 	"github.com/muidea/magicCommon/task"
 )
 

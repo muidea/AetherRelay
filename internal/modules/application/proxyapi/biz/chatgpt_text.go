@@ -7,12 +7,12 @@ import (
 	"log/slog"
 	"strings"
 
-	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 

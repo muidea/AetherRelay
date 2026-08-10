@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 
-	basebiz "ai-proxy/internal/modules/base/biz"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	metricscommon "ai-proxy/internal/modules/blocks/metricsruntime/pkg/common"
-	metricsevents "ai-proxy/internal/modules/blocks/metricsruntime/pkg/events"
-	usageevents "ai-proxy/internal/modules/blocks/usageruntime/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	metricscommon "aetherrelay/internal/modules/blocks/metricsruntime/pkg/common"
+	metricsevents "aetherrelay/internal/modules/blocks/metricsruntime/pkg/events"
+	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

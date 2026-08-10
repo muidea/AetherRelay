@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/modules/application/adminapi/service/observability"
-	"ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/modules/application/adminapi/service/observability"
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 // combineWriter 把所有写入委托到内部的 strings.Builder,
@@ -1512,11 +1512,11 @@ func TestMetricsEndpointRecordedThroughHandler(t *testing.T) {
 		t.Fatalf("metrics status = %d, want 200", metricsRec.Code)
 	}
 	body := metricsRec.Body.String()
-	wantMetric := `ai_proxy_requests_total{provider="openai",model="gpt-test",route="chat_completions",status="2xx",outcome="success",client_endpoint="/v1/chat/completions",upstream_protocol="openai",upstream_endpoint="/v1/chat/completions",conversion_mode="native",conversion_level="0"} 2`
+	wantMetric := `aetherrelay_requests_total{provider="openai",model="gpt-test",route="chat_completions",status="2xx",outcome="success",client_endpoint="/v1/chat/completions",upstream_protocol="openai",upstream_endpoint="/v1/chat/completions",conversion_mode="native",conversion_level="0"} 2`
 	if !strings.Contains(body, wantMetric) {
 		t.Fatalf("expected chat_completions 2xx TransportPlan counter, got:\n%s", body)
 	}
-	if !strings.Contains(body, `ai_proxy_cache_hit_rate{provider="openai",model="gpt-test"}`) {
+	if !strings.Contains(body, `aetherrelay_cache_hit_rate{provider="openai",model="gpt-test"}`) {
 		t.Fatalf("expected cache_hit_rate metric, got:\n%s", body)
 	}
 }

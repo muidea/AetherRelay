@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	admincodex "ai-proxy/internal/modules/application/adminapi/pkg/codexmanagement"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	admincodex "aetherrelay/internal/modules/application/adminapi/pkg/codexmanagement"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
 
 type codexAccountRuntimeStub struct {
@@ -56,7 +56,7 @@ func TestCodexAccountSlotExportEndpointRemoved(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(&codexAccountRuntimeStub{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/export", strings.NewReader(`{"ids":["account-1"]}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -86,7 +86,7 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
 	importRequest := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts", strings.NewReader(`{"accounts":[{"credential_type":"codex_cli","access_token":"access","refresh_token":"refresh"}]}`))
 	importRequest.RemoteAddr = "127.0.0.1:1234"
-	importRequest.Header.Set("X-AI-Proxy-Admin", "1")
+	importRequest.Header.Set("X-AetherRelay-Admin", "1")
 	importRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(importRecorder, importRequest)
 	if importRecorder.Code != http.StatusCreated || len(runtime.started) != 0 {
@@ -99,7 +99,7 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 
 	startRequest := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/discovery", strings.NewReader(`{"account_ids":["account-1"]}`))
 	startRequest.RemoteAddr = "127.0.0.1:1234"
-	startRequest.Header.Set("X-AI-Proxy-Admin", "1")
+	startRequest.Header.Set("X-AetherRelay-Admin", "1")
 	startRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(startRecorder, startRequest)
 	if startRecorder.Code != http.StatusAccepted || !reflect.DeepEqual(runtime.started, [][]string{[]string{"account-1"}}) {
@@ -116,7 +116,7 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 
 	usageRequest := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/usage", strings.NewReader(`{"account_ids":["account-1"]}`))
 	usageRequest.RemoteAddr = "127.0.0.1:1234"
-	usageRequest.Header.Set("X-AI-Proxy-Admin", "1")
+	usageRequest.Header.Set("X-AetherRelay-Admin", "1")
 	usageRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(usageRecorder, usageRequest)
 	if usageRecorder.Code != http.StatusAccepted || !reflect.DeepEqual(runtime.usageStarted, [][]string{{"account-1"}}) {
@@ -142,7 +142,7 @@ func TestCodexAccountImportRejectsMoreThanLimit(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts", &body)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 1000") {

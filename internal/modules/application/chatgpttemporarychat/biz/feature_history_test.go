@@ -4,12 +4,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai-proxy/internal/modules/application/chatgpttemporarychat/internal/store"
-	"ai-proxy/internal/pkg/chatattachment"
+	"aetherrelay/internal/modules/application/chatgpttemporarychat/internal/store"
+	"aetherrelay/internal/pkg/chatattachment"
 )
 
 func TestBuildFeatureMessagesSkipsFailedTurnsAndReloadsHistoricalFiles(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "64MB", 1, store.Config{RetentionDays: 30, MaxConversations: 10, MaxMessagesPerConversation: 50, MaxMessageBytes: 8192})
+	s, err := store.Open(filepath.Join(t.TempDir(), "aetherrelay.duckdb"), "64MB", 1, store.Config{RetentionDays: 30, MaxConversations: 10, MaxMessagesPerConversation: 50, MaxMessageBytes: 8192})
 	if err != nil {
 		t.Fatal(err)
 	}

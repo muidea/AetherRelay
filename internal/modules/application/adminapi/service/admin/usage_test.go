@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 type fakeRuntime struct {

@@ -5,12 +5,12 @@ import (
 	"reflect"
 	"testing"
 
-	admincommon "ai-proxy/internal/modules/application/adminapi/pkg/common"
-	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	basebiz "ai-proxy/internal/modules/base/biz"
-	accountcommon "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
-	accountevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	admincommon "aetherrelay/internal/modules/application/adminapi/pkg/common"
+	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	accountcommon "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
+	accountevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )

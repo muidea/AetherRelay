@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	config "ai-proxy/internal/pkg/aiproxyconfig"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 const (
-	providerBundleFormat        = "ai-proxy.provider-bundle"
+	providerBundleFormat        = "aetherrelay.provider-bundle"
 	providerBundleSchemaVersion = 1
 )
 
@@ -90,7 +90,7 @@ func (h *Handler) exportProviderBundle(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 	providerRuntime, ok := h.runtime.(managedProviderRuntime)
 	if !ok || !providerRuntime.ProviderStorageAvailable() {
-		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AETHERRELAY_CREDENTIAL_KEY")
 		return
 	}
 	var payload providerBundle
@@ -120,7 +120,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 	for name, provider := range current.Providers {
 		next[name] = provider
 	}
-	result := providerBundleResult{Format: "ai-proxy.provider-bundle-result", SchemaVersion: providerBundleSchemaVersion, Items: make([]providerBundleItemResult, 0, len(payload.Providers))}
+	result := providerBundleResult{Format: "aetherrelay.provider-bundle-result", SchemaVersion: providerBundleSchemaVersion, Items: make([]providerBundleItemResult, 0, len(payload.Providers))}
 	seen := make(map[string]struct{}, len(payload.Providers))
 	for _, item := range payload.Providers {
 		name := strings.ToLower(strings.TrimSpace(item.Name))

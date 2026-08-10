@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/pkg/chatgptwebantibot"
+	"aetherrelay/internal/pkg/chatgptwebantibot"
 	"github.com/google/uuid"
 )
 

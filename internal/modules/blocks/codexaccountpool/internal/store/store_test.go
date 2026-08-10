@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "256MB", 1, encryptedTestCodec(t))
+	store, err := Open(filepath.Join(t.TempDir(), "aetherrelay.duckdb"), "256MB", 1, encryptedTestCodec(t))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ai-proxy/internal/pkg/aiproxystate"
+	"aetherrelay/internal/pkg/aetherrelaystate"
 
 	"github.com/google/uuid"
 )
@@ -33,7 +33,7 @@ type Config struct {
 }
 
 type Store struct {
-	docs *aiproxystate.Documents
+	docs *aetherrelaystate.Documents
 	cfg  Config
 	mu   sync.Mutex
 }
@@ -73,7 +73,7 @@ type Detail struct {
 }
 
 func Open(database, memoryLimit string, threads int, cfg Config) (*Store, error) {
-	docs, err := aiproxystate.Open(database, memoryLimit, threads)
+	docs, err := aetherrelaystate.Open(database, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (s *Store) Record(input Record) (Detail, error) {
 	if _, err := s.docs.PurgeExpiredWebSearchHistory(now); err != nil {
 		return Detail{}, err
 	}
-	row := aiproxystate.WebSearchHistoryRow{
+	row := aetherrelaystate.WebSearchHistoryRow{
 		OwnerID: input.OwnerID, SearchID: uuid.NewString(), Model: input.Model, ActualModel: input.ActualModel,
 		Query: input.Query, OutputText: input.OutputText, Provider: input.Provider, Sources: rawSources,
 		CreatedAt: now, ExpiresAt: now.AddDate(0, 0, s.cfg.RetentionDays),
@@ -181,14 +181,14 @@ func (s *Store) Get(ownerID, id string) (Detail, error) {
 	return detail(row, sources), nil
 }
 
-func item(row aiproxystate.WebSearchHistoryRow) Item {
+func item(row aetherrelaystate.WebSearchHistoryRow) Item {
 	return Item{
 		ID: row.SearchID, Model: row.Model, ActualModel: row.ActualModel, Query: row.Query, Provider: row.Provider,
 		CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339Nano), ExpiresAt: row.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
-func detail(row aiproxystate.WebSearchHistoryRow, sources []Source) Detail {
+func detail(row aetherrelaystate.WebSearchHistoryRow, sources []Source) Detail {
 	return Detail{Item: item(row), OutputText: row.OutputText, Sources: append([]Source(nil), sources...)}
 }
 

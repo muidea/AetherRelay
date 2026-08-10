@@ -22,7 +22,7 @@ accountidentity.Key(account_id, email)
 
 ```json
 {
-  "format": "ai-proxy.account-pool-bundle",
+  "format": "aetherrelay.account-pool-bundle",
   "schema_version": 2,
   "exported_at": "2026-08-08T00:00:00Z",
   "accounts": [
@@ -59,7 +59,7 @@ accountidentity.Key(account_id, email)
 
 ### 字段约束
 
-- `format` 必须精确为 `ai-proxy.account-pool-bundle`。
+- `format` 必须精确为 `aetherrelay.account-pool-bundle`。
 - `schema_version` 当前为 `2`，整体格式不承诺旧版本兼容。
 - `account_ref` 是文件内统一账号的稳定引用；导入目标实例不得把它直接当作本地账号 ID，可重新生成本地引用。
 - `identity.email` 明文保留，用于展示和跨槽位匹配；邮箱为空时允许仅有一个槽位，但不能据此强行合并两个不同账号。
@@ -73,7 +73,7 @@ accountidentity.Key(account_id, email)
 账号池整体迁移导出固定使用 `complete` profile，文件名为：
 
 ```text
-ai-proxy-account-pool-bundle-v2-complete-{YYYYMMDDTHHMMSSZ}.json
+aetherrelay-account-pool-bundle-v2-complete-{YYYYMMDDTHHMMSSZ}.json
 ```
 
 时间戳由响应中的 `exported_at` 生成；服务端 `Content-Disposition` 与管理页下载名保持一致。该文件包含 OAuth 凭据，必须按敏感文件管理。文件名不参与导入校验，导入仍以 JSON 内的 `format` 和 `schema_version` 为准；Provider bundle 的同一套命名规则见[管理面迁移 Bundle 文件命名](bundle-file-naming.md)。
@@ -140,7 +140,7 @@ POST /admin/api/account-pool-bundle/import
 
 - “导入 ChatGPT Web 账号”：只接受 `chatgpt_web` 凭据，调用 ChatGPT Web 内部导入流程；
 - “导入 Codex 账号”：只接受 `codex_oauth`/`codex_cli` 凭据，调用 Codex OAuth 内部导入流程；
-- “导入整体账号池”：只接受 `ai-proxy.account-pool-bundle` 文件，并按文件中的槽位分别导入。
+- “导入整体账号池”：只接受 `aetherrelay.account-pool-bundle` 文件，并按文件中的槽位分别导入。
 
 整体导入弹窗默认采用安全合并；仅勾选“允许替换已有的不同上游账号”时才向 bundle 写入 `replace: true`。发生 `409` 冲突时保留弹窗并提示冲突数量，管理员修正文件或重新确认替换后再提交。
 

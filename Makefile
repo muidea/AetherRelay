@@ -1,14 +1,14 @@
 .PHONY: help run build test fmt vet check release-package release clean
 
-BINARY ?= ai-proxy
-CMD ?= ./cmd/ai-proxy
+BINARY ?= AetherRelay
+CMD ?= ./cmd/aetherrelay
 GO ?= go
-GOFLAGS ?= -buildvcs=false
+GOFLAGS ?= -buildvcs=false -trimpath
 
 help:
 	@printf '%s\n' 'targets:'
-	@printf '  %-10s %s\n' 'run' 'run ai-proxy locally'
-	@printf '  %-10s %s\n' 'build' 'build the ai-proxy binary'
+	@printf '  %-10s %s\n' 'run' 'run AetherRelay locally'
+	@printf '  %-10s %s\n' 'build' 'build the AetherRelay binary'
 	@printf '  %-10s %s\n' 'test' 'run all Go tests'
 	@printf '  %-10s %s\n' 'fmt' 'format Go source files'
 	@printf '  %-10s %s\n' 'vet' 'run go vet'

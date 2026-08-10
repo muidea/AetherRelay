@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
@@ -21,7 +21,7 @@ import (
 	openaioption "github.com/openai/openai-go/option"
 )
 
-// SDK 验收：官方 OpenAI / Anthropic Go SDK 对真实 ai-proxy HTTP server 的主路径与 typed error 可解析性。
+// SDK 验收：官方 OpenAI / Anthropic Go SDK 对真实 AetherRelay HTTP server 的主路径与 typed error 可解析性。
 // 上游用 mock Transport，不产生外部费用。
 
 func startProxySDKServer(t *testing.T, cfg config.Config, upstream http.RoundTripper) *httptest.Server {

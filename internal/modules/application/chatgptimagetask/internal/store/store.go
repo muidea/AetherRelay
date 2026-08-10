@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	events "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
-	"ai-proxy/internal/pkg/aiproxystate"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	events "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaystate"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 type taskRecord struct {
@@ -115,14 +115,14 @@ func knownTaskField(key string) bool {
 
 type Store struct {
 	mu        sync.Mutex
-	documents *aiproxystate.Documents
+	documents *aetherrelaystate.Documents
 	items     map[string]taskRecord // key = owner:taskID
 }
 
 // Open creates the image-task owner's state store and reports startup errors.
 func Open(databasePath, memoryLimit string, threads int) (*Store, error) {
 	s := &Store{items: map[string]taskRecord{}}
-	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	documents, err := aetherrelaystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -183,14 +183,14 @@ func (s *Store) saveLocked() error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	rows := make([]aiproxystate.ImageTaskRow, 0, len(keys))
+	rows := make([]aetherrelaystate.ImageTaskRow, 0, len(keys))
 	for _, key := range keys {
 		task := s.items[key]
 		payload, err := json.Marshal(task)
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aiproxystate.ImageTaskRow{OwnerID: task.OwnerID, TaskID: task.ID, Payload: payload})
+		rows = append(rows, aetherrelaystate.ImageTaskRow{OwnerID: task.OwnerID, TaskID: task.ID, Payload: payload})
 	}
 	return s.documents.ReplaceImageTasks(rows)
 }

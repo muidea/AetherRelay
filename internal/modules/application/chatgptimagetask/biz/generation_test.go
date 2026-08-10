@@ -5,13 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai-proxy/internal/modules/application/chatgptimagetask/internal/store"
-	imgcommon "ai-proxy/internal/modules/application/chatgptimagetask/pkg/common"
-	imgevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
-	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	basebiz "ai-proxy/internal/modules/base/biz"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/modules/application/chatgptimagetask/internal/store"
+	imgcommon "aetherrelay/internal/modules/application/chatgptimagetask/pkg/common"
+	imgevents "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
+	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -23,7 +23,7 @@ func TestRunGenerationRecordsSuccessfulUpstreamResult(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(context.Background())
 
-	tasks := store.New(filepath.Join(t.TempDir(), "ai-proxy.duckdb"))
+	tasks := store.New(filepath.Join(t.TempDir(), "aetherrelay.duckdb"))
 	defer tasks.Close()
 	if _, created, err := tasks.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "", ""); err != nil || !created {
 		t.Fatalf("create task: created=%v err=%v", created, err)
@@ -59,7 +59,7 @@ func TestRunGenerationRecordsRecoveryMetadataOnFailure(t *testing.T) {
 	defer hub.Terminate(context.Background())
 	defer background.Shutdown(context.Background())
 
-	tasks := store.New(filepath.Join(t.TempDir(), "ai-proxy.duckdb"))
+	tasks := store.New(filepath.Join(t.TempDir(), "aetherrelay.duckdb"))
 	defer tasks.Close()
 	if _, created, err := tasks.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "", ""); err != nil || !created {
 		t.Fatalf("create task: created=%v err=%v", created, err)

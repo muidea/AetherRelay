@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	codexcommon "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
-	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
-	codexupcommon "ai-proxy/internal/modules/blocks/codexupstream/pkg/common"
-	codexupevents "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	codexcommon "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
+	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	codexupcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
+	codexupevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"github.com/google/uuid"
 	"github.com/muidea/magicCommon/event"
 )

@@ -4,8 +4,8 @@ package chatgptwebupstream
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/chatgptwebupstream/biz"
-	"ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
+	"aetherrelay/internal/modules/blocks/chatgptwebupstream/biz"
+	"aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/framework/plugin/module"

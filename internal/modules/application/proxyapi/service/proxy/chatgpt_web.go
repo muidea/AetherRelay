@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	archive "ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/chatgptimageinput"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/chatgptimageinput"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, body map[string]any) {

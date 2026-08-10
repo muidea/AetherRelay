@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	"ai-proxy/internal/pkg/aiproxyclientauth"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetricsport"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 )
 
 // ModelsListResponse 是 GET/POST /v1/models 的具体外部协议 DTO。

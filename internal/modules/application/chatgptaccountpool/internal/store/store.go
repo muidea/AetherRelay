@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	"ai-proxy/internal/pkg/accountidentity"
-	"ai-proxy/internal/pkg/aiproxycredential"
-	"ai-proxy/internal/pkg/aiproxystate"
+	events "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	"aetherrelay/internal/pkg/accountidentity"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
+	"aetherrelay/internal/pkg/aetherrelaystate"
 )
 
 const (
@@ -63,8 +63,8 @@ type Account struct {
 
 type Store struct {
 	mu            sync.Mutex
-	documents     *aiproxystate.Documents
-	credentials   *aiproxycredential.Codec
+	documents     *aetherrelaystate.Documents
+	credentials   *aetherrelaycredential.Codec
 	items         map[string]*Account // access_token -> account
 	aliases       map[string]string   // retired access token -> current token
 	order         []string
@@ -78,7 +78,7 @@ type Store struct {
 
 // Open creates the account owner's state store and reports every DuckDB
 // failure to the module startup path.
-func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aiproxycredential.Codec) (*Store, error) {
+func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aetherrelaycredential.Codec) (*Store, error) {
 	if codec == nil {
 		return nil, fmt.Errorf("account credential codec is required")
 	}
@@ -92,7 +92,7 @@ func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aip
 		concurrency:   concurrency,
 	}
 	s.credentials = codec
-	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	documents, err := aetherrelaystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aip
 
 // New is retained for direct package tests. Production startup must call Open
 // so a state failure is returned to the module lifecycle instead of hidden.
-func New(databasePath string, concurrency int, codec *aiproxycredential.Codec) *Store {
+func New(databasePath string, concurrency int, codec *aetherrelaycredential.Codec) *Store {
 	s, err := Open(databasePath, "128MB", 1, concurrency, codec)
 	if err != nil {
 		panic(err)
@@ -215,7 +215,7 @@ func (s *Store) saveLocked() error {
 }
 
 func (s *Store) saveEncryptedLocked() error {
-	rows := make([]aiproxystate.SecureDocumentRow, 0, len(s.order))
+	rows := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
 	for position, token := range s.order {
 		acc := s.items[token]
 		if acc == nil {
@@ -232,7 +232,7 @@ func (s *Store) saveEncryptedLocked() error {
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aiproxystate.SecureDocumentRow{ID: acc.ID, Position: position, Payload: sealed})
+		rows = append(rows, aetherrelaystate.SecureDocumentRow{ID: acc.ID, Position: position, Payload: sealed})
 	}
 	return s.documents.ReplaceSecureDocuments(secureDocumentScope, rows)
 }

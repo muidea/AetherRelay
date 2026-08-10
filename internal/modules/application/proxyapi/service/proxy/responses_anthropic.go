@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	archive "ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 type toolCallRegistry struct {

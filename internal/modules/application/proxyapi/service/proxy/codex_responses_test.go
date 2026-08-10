@@ -8,11 +8,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	config "ai-proxy/internal/pkg/aiproxyconfig"
-	aiproxymetrics "ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	aetherrelaymetrics "aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 type codexResponsesExecutorStub struct {
@@ -81,7 +81,7 @@ func TestCodexOAuthResponsesPreservesNativeRequestAndSettlesUsage(t *testing.T) 
 func TestCodexOAuthInvalidRequestReturnsClientError(t *testing.T) {
 	failure := codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("Codex upstream rejected the request"))
 	failure.HTTPStatus = http.StatusBadRequest
-	registry := aiproxymetrics.NewRegistry()
+	registry := aetherrelaymetrics.NewRegistry()
 	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{}})
 	handler := NewHandler(cfg, usage.NewMemoryStore(), nil, registry).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
 		return codexresponses.Result{}, failure

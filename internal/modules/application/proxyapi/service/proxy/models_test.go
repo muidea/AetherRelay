@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	config "ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {

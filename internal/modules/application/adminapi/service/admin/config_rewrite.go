@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -55,7 +55,7 @@ func prepareConfigRewrite(path, expectedAdminBasePath string, mutate func(*yaml.
 	if err != nil {
 		return nil, fmt.Errorf("stat config: %w", err)
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".ai-proxy-config-*.yaml")
+	temp, err := os.CreateTemp(filepath.Dir(path), ".aetherrelay-config-*.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary config: %w", err)
 	}

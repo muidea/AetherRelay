@@ -1,0 +1,29 @@
+// Package aetherrelaybootstrap 保存单次进程启动时由 entry 注入的只读快照。
+// 只有 framework 启动基础设施（Initiator 与 Config Block）可消费该快照；
+// 业务 Module 必须通过 EventHub 获取当前配置。
+package aetherrelaybootstrap
+
+import (
+	"sync"
+
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+)
+
+var state struct {
+	sync.RWMutex
+	value configevents.Bootstrap
+	set   bool
+}
+
+func Configure(value configevents.Bootstrap) {
+	state.Lock()
+	defer state.Unlock()
+	state.value = value
+	state.set = true
+}
+
+func Current() (configevents.Bootstrap, bool) {
+	state.RLock()
+	defer state.RUnlock()
+	return state.value, state.set
+}

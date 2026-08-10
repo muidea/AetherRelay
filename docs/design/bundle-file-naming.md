@@ -12,7 +12,7 @@
 ## 命名格式
 
 ```text
-ai-proxy-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json
+aetherrelay-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json
 ```
 
 其中时间戳使用导出服务端生成的 UTC `exported_at`，精确到秒，且采用文件系统安全格式。HTTP 响应的 `Content-Disposition` 与管理页触发的浏览器下载必须使用完全相同的名称。
@@ -27,9 +27,9 @@ ai-proxy-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json
 当前有效文件名示例：
 
 ```text
-ai-proxy-provider-bundle-v1-safe-20260810T123456Z.json
-ai-proxy-provider-bundle-v1-complete-20260810T123456Z.json
-ai-proxy-account-pool-bundle-v2-complete-20260810T123456Z.json
+aetherrelay-provider-bundle-v1-safe-20260810T123456Z.json
+aetherrelay-provider-bundle-v1-complete-20260810T123456Z.json
+aetherrelay-account-pool-bundle-v2-complete-20260810T123456Z.json
 ```
 
 ## Profile 与安全边界

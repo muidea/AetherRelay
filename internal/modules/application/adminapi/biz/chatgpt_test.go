@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	admincommon "ai-proxy/internal/modules/application/adminapi/pkg/common"
-	accountcommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
-	accountevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	basebiz "ai-proxy/internal/modules/base/biz"
+	admincommon "aetherrelay/internal/modules/application/adminapi/pkg/common"
+	accountcommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
+	accountevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )

@@ -1,7 +1,7 @@
 package client
 
 import (
-	"ai-proxy/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatattachment"
 	"bytes"
 	"context"
 	"errors"

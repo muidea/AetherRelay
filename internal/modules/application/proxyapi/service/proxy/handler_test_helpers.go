@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 // mustHandlerConfig 为测试构造已解析 Config:补齐 endpoints，并将历史夹具中的

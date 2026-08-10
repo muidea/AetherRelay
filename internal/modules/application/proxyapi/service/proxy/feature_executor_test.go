@@ -6,15 +6,15 @@ import (
 	"strings"
 	"testing"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxyusage"
-	"ai-proxy/internal/pkg/chatattachment"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelayusage"
+	"aetherrelay/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {

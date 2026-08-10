@@ -1,8 +1,8 @@
 package chatgpttemporarychat
 
 import (
-	"ai-proxy/internal/modules/application/chatgpttemporarychat/biz"
-	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
+	"aetherrelay/internal/modules/application/chatgpttemporarychat/biz"
+	"aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/common"
 	"context"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

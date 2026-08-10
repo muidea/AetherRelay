@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	archive "ai-proxy/internal/pkg/aiproxyarchive"
-	clientauth "ai-proxy/internal/pkg/aiproxyclientauth"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/chatgptimageinput"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/chatgptimageinput"
 )
 
 type chatGPTImageBody struct {

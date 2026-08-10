@@ -1,4 +1,4 @@
-# ai-proxy Observability Improvement Design
+# AetherRelay Observability Improvement Design
 
 Status: superseded
 
@@ -14,14 +14,14 @@ Related:
 
 - [README.md](../../README.md)
 - [prd.md](../../prd.md)
-- `internal/pkg/aiproxyconfig/config.go`
-- `internal/pkg/aiproxyarchive/recorder.go`
-- `internal/pkg/aiproxyusage/`（当前实现；本文其余 CSV 内容为历史记录）
+- `internal/pkg/aetherrelayconfig/config.go`
+- `internal/pkg/aetherrelayarchive/recorder.go`
+- `internal/pkg/aetherrelayusage/`（当前实现；本文其余 CSV 内容为历史记录）
 - `internal/modules/application/proxyapi/service/proxy/handler.go`
 
 ## Purpose
 
-本文是 ai-proxy 可观测性能力的改进设计文档。当前 ai-proxy 已经具备基础的交互归档能力(`interactions/{api_key_id}/{round_id}/` 七件套 + `usage.csv` 追加写),但缺少聚合指标端点、时序统计、追踪 ID、告警能力,不便于从外部实时观察 cache 命中率、provider 故障率、延迟分位数等关键 SLO 指标。
+本文是 AetherRelay 可观测性能力的改进设计文档。当前 AetherRelay 已经具备基础的交互归档能力(`interactions/{api_key_id}/{round_id}/` 七件套 + `usage.csv` 追加写),但缺少聚合指标端点、时序统计、追踪 ID、告警能力,不便于从外部实时观察 cache 命中率、provider 故障率、延迟分位数等关键 SLO 指标。
 
 本文按 P0 → P3 优先级列出改造落点,供后续代码收口使用。
 
@@ -31,9 +31,9 @@ Related:
 
 | 能力 | 实现位置 | 落盘内容 |
 |---|---|---|
-| Per-request 全量归档 | `internal/pkg/aiproxyarchive/recorder.go` | `interactions/{api_key_id}/{round_id}/{metadata,request,request.meta,response,response.sse,upstream_request,upstream_response}.json` |
+| Per-request 全量归档 | `internal/pkg/aetherrelayarchive/recorder.go` | `interactions/{api_key_id}/{round_id}/{metadata,request,request.meta,response,response.sse,upstream_request,upstream_response}.json` |
 | CSV 累计记录 | `internal/stats/recorder.go:36-40` | `usage.csv`(当前 6441 行,12 列:time / provider / model / input_tokens / output_tokens / total_tokens / duration_ms / stream / estimated / http_status,缺 cache 字段) |
-| Debug 日志 | `internal/modules/application/proxyapi/service/proxy/debug.go:63-67` (`debugf`) | stderr 文本日志,每 round 一组 `client_request / selected / upstream_request / upstream_response / [ai-proxy][OK] provider=...` |
+| Debug 日志 | `internal/modules/application/proxyapi/service/proxy/debug.go:63-67` (`debugf`) | stderr 文本日志,每 round 一组 `client_request / selected / upstream_request / upstream_response / [AetherRelay][OK] provider=...` |
 | SSE 流式跟踪 | `internal/modules/application/proxyapi/service/proxy/stream_archive.go:30,166` | `TrackSSELine` 累计 usage 与 content |
 | Health 端点 | `internal/modules/application/proxyapi/service/proxy/handler.go:52-58` | `GET /healthz` 返回 `{"status":"ok"}` |
 
@@ -43,13 +43,13 @@ Related:
 |---|---|---|
 | **无 `/metrics` 端点** | 外部无法通过 Prometheus / Grafana 拉取指标 | P0 |
 | **无聚合统计** | cache 命中率、provider 故障率、延迟分位数只能事后扫 CSV | P0 |
-| **无 request_id / correlation_id** | 无法串联 workorch run → ai-proxy round 链路 | P0 |
+| **无 request_id / correlation_id** | 无法串联 workorch run → AetherRelay round 链路 | P0 |
 | **无 p50 / p95 / p99 延迟** | 只记录单次 `duration_ms`,无滑动窗口 | P1 |
 | **无 cache hit rate 时序** | cache 命中率无法按时间窗口观察 | P1 |
 | **无结构化日志** | 文本 `debugf` 难被 Loki / Elastic 消费 | P1 |
 | **无告警阈值** | provider 失败、cache 命中率突降无人值守 | P2 |
 | **无实时流式指标推送** | TUI / 监控面板只能轮询 CSV | P2 |
-| **无 stable prefix 指纹** | 无法在 ai-proxy 端发现 workorch 的 prompt 漂移 | P2 |
+| **无 stable prefix 指纹** | 无法在 AetherRelay 端发现 workorch 的 prompt 漂移 | P2 |
 | **无 OpenTelemetry / Prometheus 集成** | 只能走文件 + 文本日志,无法对接现代监控栈 | P3 |
 | **usage.csv 无 cache 字段** | `internal/stats/recorder.go:11` 的 Record 结构已含 CachedInputTokens / CacheCreationInputTokens / CacheHitRate,但 CSV 输出只 10 列(没写 cache 字段) | P0 |
 
@@ -65,7 +65,7 @@ Related:
 ### Goals
 
 1. 提供 Prometheus 兼容的 `/metrics` 端点,支持外部监控拉取
-2. 增加 request_id / correlation_id 串联 workorch 与 ai-proxy 调用链
+2. 增加 request_id / correlation_id 串联 workorch 与 AetherRelay 调用链
 3. 实时聚合 cache hit rate / provider error rate / 延迟分位数
 4. usage.csv 补全 cache 字段,允许 CSV-based 复盘
 5. 提供 stable prefix 指纹字段,便于 workorch 侧 drift 检测
@@ -76,9 +76,9 @@ Related:
 
 1. 不引入完整的 OpenTelemetry SDK(P3 才考虑,先做轻量 Prometheus)
 2. 不做分布式追踪(P3 之后)
-3. 不修改 ai-proxy 现有协议处理路径,仅在观测层叠加
+3. 不修改 AetherRelay 现有协议处理路径,仅在观测层叠加
 4. 不替换 stats/recorder.go 现有的 CSV 写入,只是补字段与并行追加
-5. 不为 ai-proxy 增加新的对外协议端点(仅 `/metrics` / `/stats` / 内部 SSE 推送)
+5. 不为 AetherRelay 增加新的对外协议端点(仅 `/metrics` / `/stats` / 内部 SSE 推送)
 
 ## Design Overview
 
@@ -137,19 +137,19 @@ Related:
 
 #### P0-3. `/metrics` Prometheus 端点
 
-**位置**:`cmd/ai-proxy/main.go` 启动入口,新增路由
+**位置**:`cmd/aetherrelay/main.go` 启动入口,新增路由
 
 **实现**:
-- 新建 `internal/pkg/aiproxymetrics/prometheus.go`,实现轻量 Prometheus 文本格式输出(不引入 `github.com/prometheus/client_golang`,直接手写 minimal exposition format)
+- 新建 `internal/pkg/aetherrelaymetrics/prometheus.go`,实现轻量 Prometheus 文本格式输出(不引入 `github.com/prometheus/client_golang`,直接手写 minimal exposition format)
 - 暴露以下 metric:
- - `ai_proxy_requests_total{provider,model,route,status}` Counter
- - `ai_proxy_request_duration_seconds{provider,model,route}` Histogram
- - `ai_proxy_input_tokens_total{provider,model}` Counter
- - `ai_proxy_output_tokens_total{provider,model}` Counter
- - `ai_proxy_cached_input_tokens_total{provider,model}` Counter
- - `ai_proxy_cache_creation_input_tokens_total{provider,model}` Counter
- - `ai_proxy_cache_hit_rate{provider,model}` Gauge
- - `ai_proxy_upstream_errors_total{provider,status_code}` Counter
+ - `aetherrelay_requests_total{provider,model,route,status}` Counter
+ - `aetherrelay_request_duration_seconds{provider,model,route}` Histogram
+ - `aetherrelay_input_tokens_total{provider,model}` Counter
+ - `aetherrelay_output_tokens_total{provider,model}` Counter
+ - `aetherrelay_cached_input_tokens_total{provider,model}` Counter
+ - `aetherrelay_cache_creation_input_tokens_total{provider,model}` Counter
+ - `aetherrelay_cache_hit_rate{provider,model}` Gauge
+ - `aetherrelay_upstream_errors_total{provider,status_code}` Counter
 - 路由:`GET /metrics`,返回 `Content-Type: text/plain; version=0.0.4`
 - 限流:仅本机 / localhost 可访问(默认开启,可在 config.yaml 加 `metrics_remote_access: true` 关闭)
 
@@ -192,7 +192,7 @@ Related:
 
 #### P1-1. 滑动窗口聚合器
 
-**位置**:`internal/pkg/aiproxymetrics/rolling.go`(新建)
+**位置**:`internal/pkg/aetherrelaymetrics/rolling.go`(新建)
 
 **实现**:
 - 滑动窗口:默认 5min / 15min / 1h / 24h 四个粒度
@@ -205,7 +205,7 @@ Related:
 
 #### P1-2. 延迟分位数估算
 
-**位置**:`internal/pkg/aiproxymetrics/quantile.go`(新建)
+**位置**:`internal/pkg/aetherrelaymetrics/quantile.go`(新建)
 
 **实现**:
 - 轻量 t-digest 或 HDR Histogram 实现(不引入第三方库,或仅引入 `github.com/beorn7/perks/quantile`)
@@ -228,7 +228,7 @@ Related:
 
 #### P2-1. SLO 告警阈值
 
-**位置**:`internal/pkg/aiproxymetrics/slo.go`(新建)
+**位置**:`internal/pkg/aetherrelaymetrics/slo.go`(新建)
 
 **实现**:
 - 启动时读取 config 中的 SLO 阈值
@@ -250,19 +250,19 @@ Related:
 
 #### P2-3. Stable prefix 指纹
 
-**位置**:`internal/modules/application/proxyapi/service/proxy/handler.go` 与 `internal/pkg/aiproxyarchive/recorder.go`
+**位置**:`internal/modules/application/proxyapi/service/proxy/handler.go` 与 `internal/pkg/aetherrelayarchive/recorder.go`
 
 **实现**:
 - 在收到请求时,对 `request.json` 的 system 段或稳定前 N 字节计算 `sha256`
 - 写入 `metadata.json` 新增字段 `request_fingerprint` 与 `stable_prefix_hash`
-- 允许 workorch 端跨 run 比对(若 ai-proxy 与 workorch 共享同一 hash 算法,workorch 端 P1-2 的 invariant assertion 可直接复用)
+- 允许 workorch 端跨 run 比对(若 AetherRelay 与 workorch 共享同一 hash 算法,workorch 端 P1-2 的 invariant assertion 可直接复用)
 - 新增检测策略:若发现连续 N 个请求的 stable_prefix_hash 与上一个不同,记 `stable_prefix_drift` 事件
 
 ### P3 — 完整可观测性栈
 
 #### P3-1. OpenTelemetry 接入(可选)
 
-**位置**:`internal/pkg/aiproxymetrics/otel.go`(新建)
+**位置**:`internal/pkg/aetherrelaymetrics/otel.go`(新建)
 
 **实现**:
 - 引入 `go.opentelemetry.io/otel` SDK(可选,P3 阶段再决定是否引入)
@@ -271,7 +271,7 @@ Related:
 
 #### P3-2. 分布式 trace 关联
 
-**位置**:`internal/pkg/aiproxymetrics/trace.go`(新建)
+**位置**:`internal/pkg/aetherrelaymetrics/trace.go`(新建)
 
 **实现**:
 - 解析 `traceparent` / `tracestate` 头(W3C Trace Context)
@@ -285,19 +285,19 @@ Related:
 |---|---|---|
 | `internal/stats/recorder.go` | P0-1 | usage.csv 追加 cache 三列 |
 | `internal/modules/application/proxyapi/service/proxy/handler.go` | P0-2 | 注入 request_id |
-| `internal/pkg/aiproxyarchive/recorder.go` | P0-2 | Metadata 增加 request_id 字段 |
-| `internal/pkg/aiproxymetrics/prometheus.go`(新建) | P0-3 | Prometheus /metrics 端点 |
-| `internal/pkg/aiproxymetrics/stats.go`(新建) | P0-4 | /stats JSON 端点 |
-| `cmd/ai-proxy/main.go` | P0-3, P0-4 | 注册新路由 |
-| `internal/pkg/aiproxymetrics/rolling.go`(新建) | P1-1 | 滑动窗口聚合器 |
-| `internal/pkg/aiproxymetrics/quantile.go`(新建) | P1-2 | 延迟分位数 |
+| `internal/pkg/aetherrelayarchive/recorder.go` | P0-2 | Metadata 增加 request_id 字段 |
+| `internal/pkg/aetherrelaymetrics/prometheus.go`(新建) | P0-3 | Prometheus /metrics 端点 |
+| `internal/pkg/aetherrelaymetrics/stats.go`(新建) | P0-4 | /stats JSON 端点 |
+| `cmd/aetherrelay/main.go` | P0-3, P0-4 | 注册新路由 |
+| `internal/pkg/aetherrelaymetrics/rolling.go`(新建) | P1-1 | 滑动窗口聚合器 |
+| `internal/pkg/aetherrelaymetrics/quantile.go`(新建) | P1-2 | 延迟分位数 |
 | `internal/modules/application/proxyapi/service/proxy/debug.go` | P1-3 | 切到 slog |
-| `internal/pkg/aiproxymetrics/slo.go`(新建) | P2-1 | SLO 告警 |
+| `internal/pkg/aetherrelaymetrics/slo.go`(新建) | P2-1 | SLO 告警 |
 | `internal/modules/application/adminapi/service/observability/stream.go`(新建) | P2-2 | SSE 推送 |
 | `internal/modules/application/proxyapi/service/proxy/handler.go` | P2-3 | stable prefix 指纹 |
-| `internal/pkg/aiproxyarchive/recorder.go` | P2-3 | Metadata 增加 stable_prefix_hash 字段 |
-| `internal/pkg/aiproxymetrics/otel.go`(新建) | P3-1 | OpenTelemetry 接入 |
-| `internal/pkg/aiproxymetrics/trace.go`(新建) | P3-2 | 分布式 trace 关联 |
+| `internal/pkg/aetherrelayarchive/recorder.go` | P2-3 | Metadata 增加 stable_prefix_hash 字段 |
+| `internal/pkg/aetherrelaymetrics/otel.go`(新建) | P3-1 | OpenTelemetry 接入 |
+| `internal/pkg/aetherrelaymetrics/trace.go`(新建) | P3-2 | 分布式 trace 关联 |
 | `config.example.yaml` | P0~P3 | 增 SLO 阈值 / metrics 配置 |
 | `README.md` | P0~P3 | 文档更新 |
 
@@ -305,9 +305,9 @@ Related:
 
 ### 单元测试
 
-- `internal/pkg/aiproxymetrics/prometheus_test.go`:文本格式输出与基本 metric 计数
-- `internal/pkg/aiproxymetrics/rolling_test.go`:滑动窗口数据正确性
-- `internal/pkg/aiproxymetrics/quantile_test.go`:分位数误差
+- `internal/pkg/aetherrelaymetrics/prometheus_test.go`:文本格式输出与基本 metric 计数
+- `internal/pkg/aetherrelaymetrics/rolling_test.go`:滑动窗口数据正确性
+- `internal/pkg/aetherrelaymetrics/quantile_test.go`:分位数误差
 - `internal/stats/recorder_test.go`:usage.csv 新增列写入与解析
 
 ### 集成测试
@@ -334,7 +334,7 @@ Related:
 
 1. usage.csv 补 cache 字段(纯结构改动,向后兼容)
 2. request_id 注入(请求入口加 middleware)
-3. 新建 `internal/pkg/aiproxymetrics/` 目录骨架
+3. 新建 `internal/pkg/aetherrelaymetrics/` 目录骨架
 4. /metrics 与 /stats 端点
 5. README 增 "/metrics" 章节
 
@@ -386,17 +386,17 @@ Related:
 ## Open Questions
 
 1. 是否引入 `github.com/prometheus/client_golang` 依赖(完整 client)还是手写 minimal exposition format?
-2. request_id 命名空间是否区分 ai-proxy 自生成 vs workorch 透传(前缀如 `ai-` vs `wc-`)?
+2. request_id 命名空间是否区分 AetherRelay 自生成 vs workorch 透传(前缀如 `ai-` vs `wc-`)?
 3. SLO 告警的事件落点:`slo_violation` event 应写入 interactions/ 还是单独的 alerts/?
-4. stable prefix 指纹算法与 workorch 端 P1-2 保持一致(同样的 sha256 范围),还是 ai-proxy 端独立定义?
+4. stable prefix 指纹算法与 workorch 端 P1-2 保持一致(同样的 sha256 范围),还是 AetherRelay 端独立定义?
 5. SSE 实时推送与 Prometheus pull 模式冲突吗?是否需要同时支持?
 
 ## Reference
 
-- `internal/pkg/aiproxyconfig/config.go` L12-32
-- `internal/pkg/aiproxyarchive/recorder.go` L17-100
+- `internal/pkg/aetherrelayconfig/config.go` L12-32
+- `internal/pkg/aetherrelayarchive/recorder.go` L17-100
 - `internal/stats/recorder.go` L11-40
 - `internal/modules/application/proxyapi/service/proxy/handler.go`（唯一 RouteOwner 上游执行）
 - `internal/modules/application/proxyapi/service/proxy/debug.go` L63-67(debugf), L190(upstream alert)
-- `cmd/ai-proxy/main.go`(启动入口)
+- `cmd/aetherrelay/main.go`(启动入口)
 - 配套 workorch 端设计:`workorch/docs/30-module-architecture/llm-cache-improvement-design.md`

@@ -4,10 +4,10 @@ package adminapi
 import (
 	"context"
 
-	registrycommon "ai-proxy/internal/initiators/routeregistry/pkg/common"
-	"ai-proxy/internal/modules/application/adminapi/biz"
-	admincommon "ai-proxy/internal/modules/application/adminapi/pkg/common"
-	"ai-proxy/internal/modules/application/adminapi/service/admin"
+	registrycommon "aetherrelay/internal/initiators/routeregistry/pkg/common"
+	"aetherrelay/internal/modules/application/adminapi/biz"
+	admincommon "aetherrelay/internal/modules/application/adminapi/pkg/common"
+	"aetherrelay/internal/modules/application/adminapi/service/admin"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

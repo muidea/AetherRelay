@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	events "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
-	"ai-proxy/internal/pkg/aiproxystate"
+	events "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaystate"
 )
 
 type indexEntry struct {
@@ -34,7 +34,7 @@ type indexEntry struct {
 type Store struct {
 	mu        sync.Mutex
 	root      string
-	documents *aiproxystate.Documents
+	documents *aetherrelaystate.Documents
 	index     map[string]indexEntry
 	tags      map[string]map[string][]string
 }
@@ -46,7 +46,7 @@ func Open(root, databasePath, memoryLimit string, threads int) (*Store, error) {
 		index: map[string]indexEntry{},
 		tags:  map[string]map[string][]string{},
 	}
-	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	documents, err := aetherrelaystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func Open(root, databasePath, memoryLimit string, threads int) (*Store, error) {
 
 // New is retained for direct package tests. Production startup must call Open.
 func New(root string) *Store {
-	s, err := Open(root, filepath.Join(root, "ai-proxy.duckdb"), "128MB", 1)
+	s, err := Open(root, filepath.Join(root, "aetherrelay.duckdb"), "128MB", 1)
 	if err != nil {
 		panic(err)
 	}
@@ -130,13 +130,13 @@ func (s *Store) saveIndexLocked() error {
 	if s.documents == nil {
 		return fmt.Errorf("state documents are unavailable")
 	}
-	rows := make([]aiproxystate.ImageRow, 0, len(s.index))
+	rows := make([]aetherrelaystate.ImageRow, 0, len(s.index))
 	for _, entry := range s.index {
 		payload, err := json.Marshal(entry)
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aiproxystate.ImageRow{APIKeyID: entry.APIKeyID, Path: entry.Path, Size: entry.Size, Width: entry.Width, Height: entry.Height, CreatedAt: entry.CreatedAt, Payload: payload})
+		rows = append(rows, aetherrelaystate.ImageRow{APIKeyID: entry.APIKeyID, Path: entry.Path, Size: entry.Size, Width: entry.Width, Height: entry.Height, CreatedAt: entry.CreatedAt, Payload: payload})
 	}
 	return s.documents.ReplaceImages(rows)
 }

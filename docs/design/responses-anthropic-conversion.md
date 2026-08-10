@@ -1,6 +1,6 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
-本文定义 ai-proxy 对 OpenAI Responses API 与 Anthropic Messages API 的双向协议转换边界。设计目标是提供可验证的纯文本兼容子集，并对无法保持语义的字段显式拒绝；不把两个协议包装成字段名称相似的“无损互换”。
+本文定义 AetherRelay 对 OpenAI Responses API 与 Anthropic Messages API 的双向协议转换边界。设计目标是提供可验证的纯文本兼容子集，并对无法保持语义的字段显式拒绝；不把两个协议包装成字段名称相似的“无损互换”。
 
 参考规范：
 
@@ -367,7 +367,7 @@ Failed
 
 ## 18. 多轮状态与结构化输出
 
-没有统一持久化状态时，`previous_response_id` 不得伪装为 Anthropic 历史；Anthropic 历史也不得隐式变成 Responses session。无状态转换要求客户端提供完整历史；有状态转换必须由 ai-proxy 明确拥有 conversation state。
+没有统一持久化状态时，`previous_response_id` 不得伪装为 Anthropic 历史；Anthropic 历史也不得隐式变成 Responses session。无状态转换要求客户端提供完整历史；有状态转换必须由 AetherRelay 明确拥有 conversation state。
 
 `text.format`、JSON object 和 JSON Schema 必须区分处理。只有目标协议和目标模型都声明等价结构化输出能力时才允许转换；strict schema、递归 schema 或无法表达的关键字必须返回 `conversion_unsupported`，不能把 schema 拼进 prompt 后宣称仍然结构化。
 
@@ -495,7 +495,7 @@ Provider 规则：
 - 候选 exact model 命中 metadata，且当前 endpoint 存在模板时才形成转换候选；
 - 同一 model+endpoint 在不同 Provider 上得到相同能力；Provider 优先级、健康度和 fallback 只影响候选选择。
 
-`level` 是 profile 展开后的只读兼容等级，不是业务请求字段，也不是 reasoning 强度。业务请求不携带 `level`；ai-proxy 根据请求实际需要的能力筛选候选。未完成 model+endpoint 验证时不配置 profile，等同 `level=0`。
+`level` 是 profile 展开后的只读兼容等级，不是业务请求字段，也不是 reasoning 强度。业务请求不携带 `level`；AetherRelay 根据请求实际需要的能力筛选候选。未完成 model+endpoint 验证时不配置 profile，等同 `level=0`。
 
 建议等级语义如下：
 
@@ -628,10 +628,10 @@ estimated
 Prometheus 使用以下低基数指标，不把错误文本、请求正文或任意 feature 值作为 label：
 
 ```text
-ai_proxy_conversion_requests_total
-ai_proxy_conversion_duration_seconds_sum
-ai_proxy_conversion_duration_seconds_count
-ai_proxy_conversion_features_total
+aetherrelay_conversion_requests_total
+aetherrelay_conversion_duration_seconds_sum
+aetherrelay_conversion_duration_seconds_count
+aetherrelay_conversion_features_total
 ```
 
 主 conversion 指标只使用 provider、model、client/upstream protocol、mode、level、upstream status、degraded 和 estimated；feature 指标只接受固定白名单，未知值统一收敛为 `_other`，同一次结算中的重复 feature 只计一次。转换首事件前失败、流中失败和正常完成都通过 usage completion 门闩只记录一次 conversion observation。

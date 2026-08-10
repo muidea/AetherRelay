@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	metricscommon "ai-proxy/internal/modules/blocks/metricsruntime/pkg/common"
-	metricsevents "ai-proxy/internal/modules/blocks/metricsruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	metricscommon "aetherrelay/internal/modules/blocks/metricsruntime/pkg/common"
+	metricsevents "aetherrelay/internal/modules/blocks/metricsruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 
 	"github.com/muidea/magicCommon/event"
 )

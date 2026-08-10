@@ -4,7 +4,7 @@ Date: 2026-07-15
 
 Status: archived historical evidence snapshot
 
-Scope: `/home/rangh/aispace/ai-proxy`。WorkOrch 后续按 ai-proxy 合同单独同步，不在本审计中伪造跨仓联调结论。
+Scope: `/home/rangh/aispace/AetherRelay`。WorkOrch 后续按 AetherRelay 合同单独同步，不在本审计中伪造跨仓联调结论。
 
 > 本文只保留 2026-07-15 的现场证据，表中的实例、账号和上游结论均不代表当前运行状态。当前 Provider 配置与能力应使用当前配置重新执行 live probe；运行合同以 `README.md`、`docs/configuration.md` 与 `docs/operations.md` 为准。
 
@@ -17,7 +17,7 @@ Scope: `/home/rangh/aispace/ai-proxy`。WorkOrch 后续按 ai-proxy 合同单独
 - 2xx=`success`；401/403=`credential_issue`；404/405 或上游明确的“not implemented / unsupported /
   current base URL does not support”=`capability_drift`；timeout、408、429、520 或无语义的 5xx
   =`environment_undetermined`。
-- SDK mock 验收证明 ai-proxy 客户端合同可解析，不能替代真实 provider capability live。
+- SDK mock 验收证明 AetherRelay 客户端合同可解析，不能替代真实 provider capability live。
 - probe 输出和本文不记录 API Key、Authorization 或完整敏感上游 body。
 
 ## 2. 验证任务与环境
@@ -28,13 +28,13 @@ Scope: `/home/rangh/aispace/ai-proxy`。WorkOrch 后续按 ai-proxy 合同单独
 | PC-SDK-20260715-01 | OpenAI/Anthropic Go SDK + mock upstream | completed | 仅客户端兼容性证据 |
 | PC-LIVE-20260715-DIRECT-02 | 每个 RouteOwner × direct capability non-stream | completed | 见 §4；发现多项 capability drift 和一项环境不确定 |
 | PC-LIVE-20260715-STREAM-03 | 成功 direct capability 的 streaming | completed | 见 §5；MiniMax non-stream 出现一次 529，stream 成功 |
-| PC-GATEWAY-20260715-04 | 经部署 ai-proxy 的 native/conversion 转发 | completed | chat、completions、responses、Anthropic conversion 均 200 |
+| PC-GATEWAY-20260715-04 | 经部署 AetherRelay 的 native/conversion 转发 | completed | chat、completions、responses、Anthropic conversion 均 200 |
 | PC-CONFIG-20260715-05 | 根据 live 证据收口 config.yaml | completed | 本地 source config 已更新并成功加载到监听阶段 |
 | PC-REDEPLOY-20260715-06 | 部署收口后的 config.yaml 并复验 `/v1/models` | completed | 当前 8090 实例已反映 7-model 目录与最小公开 DTO |
 | PC-LIVE-20260715-KRILL-07 | `krill-ai.completions` 520 重测 | active | 最新复测仍为 Cloudflare 520，等待上游恢复 |
 | PC-DOC-20260715-01 | provider 官方文档/内部合同来源 | completed | 见 `provider-profile-contracts-2026-07-15.md`；含来源、版本、责任与复验规则 |
 
-环境：已部署的 ai-proxy `127.0.0.1:8090`；`GET /healthz` 返回 200，`GET /v1/models` 返回 7 个
+环境：已部署的 AetherRelay `127.0.0.1:8090`；`GET /healthz` 返回 200，`GET /v1/models` 返回 7 个
 已解析 chat catalog model。两条大小写不同的 DeepSeek model 仍同时存在；公开目录不返回内部 RouteOwner、
 `owned_by` 或无业务含义的 `created`。
 
@@ -91,7 +91,7 @@ base URL 的响应误归为临时环境故障；无语义的 520 仍保守地保
 已明确 drift 的 endpoint 不再做 stream probe；`krill-ai.completions` 要等 520 恢复后先完成 non-stream，再验证
 stream。
 
-## 6. 已部署 ai-proxy gateway 验证
+## 6. 已部署 AetherRelay gateway 验证
 
 | Client endpoint | Model | Result | Transport |
 | --- | --- | --- | --- |

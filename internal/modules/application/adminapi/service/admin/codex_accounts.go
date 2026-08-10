@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
 
 func (h *Handler) listCodexAccounts(w http.ResponseWriter, r *http.Request) {

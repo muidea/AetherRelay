@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxybootstrap"
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaybootstrap"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 type testAddr string
@@ -26,7 +26,7 @@ func (l *testListener) Addr() net.Addr            { return testAddr("127.0.0.1:0
 func TestSetupFailsWhenListenerCannotBind(t *testing.T) {
 	oldListen := routeRegistryListen
 	t.Cleanup(func() { routeRegistryListen = oldListen })
-	aiproxybootstrap.Configure(configevents.Bootstrap{Config: config.Config{ListenAddr: "127.0.0.1:0"}})
+	aetherrelaybootstrap.Configure(configevents.Bootstrap{Config: config.Config{ListenAddr: "127.0.0.1:0"}})
 	routeRegistryListen = func(string, string) (net.Listener, error) { return nil, errors.New("listen failed") }
 
 	if err := New().Setup(context.Background(), nil, nil); err == nil {
@@ -37,7 +37,7 @@ func TestSetupFailsWhenListenerCannotBind(t *testing.T) {
 func TestTeardownClosesHTTPListener(t *testing.T) {
 	oldListen := routeRegistryListen
 	t.Cleanup(func() { routeRegistryListen = oldListen })
-	aiproxybootstrap.Configure(configevents.Bootstrap{Config: config.Config{ListenAddr: "127.0.0.1:0"}})
+	aetherrelaybootstrap.Configure(configevents.Bootstrap{Config: config.Config{ListenAddr: "127.0.0.1:0"}})
 	listener := &testListener{}
 	routeRegistryListen = func(string, string) (net.Listener, error) { return listener, nil }
 
@@ -57,7 +57,7 @@ func TestTeardownClosesHTTPListener(t *testing.T) {
 func TestRunDefersServingUntilStart(t *testing.T) {
 	oldListen := routeRegistryListen
 	t.Cleanup(func() { routeRegistryListen = oldListen })
-	aiproxybootstrap.Configure(configevents.Bootstrap{Config: config.Config{ListenAddr: "127.0.0.1:0"}})
+	aetherrelaybootstrap.Configure(configevents.Bootstrap{Config: config.Config{ListenAddr: "127.0.0.1:0"}})
 	listener := &testListener{}
 	routeRegistryListen = func(string, string) (net.Listener, error) { return listener, nil }
 

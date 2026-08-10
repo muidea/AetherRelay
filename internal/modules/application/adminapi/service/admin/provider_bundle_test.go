@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	config "ai-proxy/internal/pkg/aiproxyconfig"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 func TestProviderBundleExportUsesPayloadTimestampAndProfileFilename(t *testing.T) {
@@ -31,7 +31,7 @@ func TestProviderBundleExportUsesPayloadTimestampAndProfileFilename(t *testing.T
 		}
 		req := httptest.NewRequest(http.MethodPost, "/admin/api/providers/export", strings.NewReader(`{"include_api_keys":`+boolString(includeSecrets)+`}`))
 		req.RemoteAddr = "127.0.0.1:1234"
-		req.Header.Set("X-AI-Proxy-Admin", "1")
+		req.Header.Set("X-AetherRelay-Admin", "1")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

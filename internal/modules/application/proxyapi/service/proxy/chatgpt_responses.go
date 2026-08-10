@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	"ai-proxy/internal/pkg/chatattachment"
-	"ai-proxy/internal/pkg/chatgptimageinput"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"aetherrelay/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatgptimageinput"
 )
 
 // handleChatGPTWebResponses implements the deliberately small, stateless

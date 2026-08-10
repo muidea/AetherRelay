@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxycredential"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 )
 
-func codec(t *testing.T, fill byte) *aiproxycredential.Codec {
+func codec(t *testing.T, fill byte) *aetherrelaycredential.Codec {
 	t.Helper()
 	value := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))
-	result, err := aiproxycredential.New(value)
+	result, err := aetherrelaycredential.New(value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func codec(t *testing.T, fill byte) *aiproxycredential.Codec {
 }
 
 func TestStoreEncryptsProviderCatalogAndRestoresIt(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	initialized, err := Initialized(path, "256MB", 1)
 	if err != nil || initialized {
 		t.Fatalf("new store initialized=%t err=%v", initialized, err)
@@ -63,7 +63,7 @@ func TestStoreEncryptsProviderCatalogAndRestoresIt(t *testing.T) {
 }
 
 func TestStoreRejectsWrongCredentialKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	store, err := Open(path, "256MB", 1, codec(t, 4))
 	if err != nil {
 		t.Fatal(err)

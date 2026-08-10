@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"go.yaml.in/yaml/v4"
 )
 

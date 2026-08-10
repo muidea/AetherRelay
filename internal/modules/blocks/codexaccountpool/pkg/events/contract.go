@@ -2,31 +2,31 @@
 package events
 
 const (
-	TopicList         = "aiproxy.codex.accountpool.command.list"
-	TopicImport       = "aiproxy.codex.accountpool.command.import"
-	TopicDelete       = "aiproxy.codex.accountpool.command.delete"
-	TopicUpdate       = "aiproxy.codex.accountpool.command.update"
-	TopicAcquire      = "aiproxy.codex.accountpool.command.acquire"
-	TopicRecordResult = "aiproxy.codex.accountpool.command.record_result"
-	TopicRefreshToken = "aiproxy.codex.accountpool.command.refresh_token"
-	TopicRefreshByID  = "aiproxy.codex.accountpool.command.refresh_by_id"
-	TopicExportByID   = "aiproxy.codex.accountpool.command.export_by_id"
-	TopicHealth       = "aiproxy.codex.accountpool.command.health"
-	TopicOAuthStart   = "aiproxy.codex.accountpool.command.oauth_start"
-	TopicOAuthFinish  = "aiproxy.codex.accountpool.command.oauth_finish"
+	TopicList         = "aetherrelay.codex.accountpool.command.list"
+	TopicImport       = "aetherrelay.codex.accountpool.command.import"
+	TopicDelete       = "aetherrelay.codex.accountpool.command.delete"
+	TopicUpdate       = "aetherrelay.codex.accountpool.command.update"
+	TopicAcquire      = "aetherrelay.codex.accountpool.command.acquire"
+	TopicRecordResult = "aetherrelay.codex.accountpool.command.record_result"
+	TopicRefreshToken = "aetherrelay.codex.accountpool.command.refresh_token"
+	TopicRefreshByID  = "aetherrelay.codex.accountpool.command.refresh_by_id"
+	TopicExportByID   = "aetherrelay.codex.accountpool.command.export_by_id"
+	TopicHealth       = "aetherrelay.codex.accountpool.command.health"
+	TopicOAuthStart   = "aetherrelay.codex.accountpool.command.oauth_start"
+	TopicOAuthFinish  = "aetherrelay.codex.accountpool.command.oauth_finish"
 	// Discovery contracts keep the constrained, account-scoped model cache in
 	// the account-pool owner. Tokens only cross the EventHub for the discovery
 	// request and are never exposed through the Admin HTTP API.
-	TopicListDiscoveryCandidates     = "aiproxy.codex.accountpool.command.list_discovery_candidates"
-	TopicPutModelSnapshot            = "aiproxy.codex.accountpool.command.put_model_snapshot"
-	TopicRecordModelDiscoveryFailure = "aiproxy.codex.accountpool.command.record_model_discovery_failure"
-	TopicCatalogSnapshot             = "aiproxy.codex.accountpool.command.catalog_snapshot"
+	TopicListDiscoveryCandidates     = "aetherrelay.codex.accountpool.command.list_discovery_candidates"
+	TopicPutModelSnapshot            = "aetherrelay.codex.accountpool.command.put_model_snapshot"
+	TopicRecordModelDiscoveryFailure = "aetherrelay.codex.accountpool.command.record_model_discovery_failure"
+	TopicCatalogSnapshot             = "aetherrelay.codex.accountpool.command.catalog_snapshot"
 	// Usage contracts preserve a redacted, bounded account-level projection of
 	// Codex's upstream usage windows. Credentials are available only to the
 	// proxyapi orchestration path and are never included in AccountView.
-	TopicListUsageCandidates = "aiproxy.codex.accountpool.command.list_usage_candidates"
-	TopicPutUsageSnapshot    = "aiproxy.codex.accountpool.command.put_usage_snapshot"
-	TopicRecordUsageFailure  = "aiproxy.codex.accountpool.command.record_usage_failure"
+	TopicListUsageCandidates = "aetherrelay.codex.accountpool.command.list_usage_candidates"
+	TopicPutUsageSnapshot    = "aetherrelay.codex.accountpool.command.put_usage_snapshot"
+	TopicRecordUsageFailure  = "aetherrelay.codex.accountpool.command.record_usage_failure"
 )
 
 const (

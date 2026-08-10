@@ -8,14 +8,14 @@ import (
 	"time"
 	"unicode"
 
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
-	"ai-proxy/internal/pkg/accountidentity"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	"aetherrelay/internal/pkg/accountidentity"
 	"github.com/google/uuid"
 )
 
 const (
-	accountPoolBundleFormat        = "ai-proxy.account-pool-bundle"
+	accountPoolBundleFormat        = "aetherrelay.account-pool-bundle"
 	accountPoolBundleSchemaVersion = 2
 )
 

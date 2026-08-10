@@ -11,12 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
-	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	taskevents "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
+	tempevents "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	imgevents "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
 )
 
 type chatGPTAccountRuntimeStub struct {
@@ -263,7 +263,7 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 
 	add := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(`{"tokens":["new-token"]}`))
 	add.RemoteAddr = "127.0.0.1:1234"
-	add.Header.Set("X-AI-Proxy-Admin", "1")
+	add.Header.Set("X-AetherRelay-Admin", "1")
 	addRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(addRecorder, add)
 	if addRecorder.Code != http.StatusCreated || len(runtime.addedTokens) != 1 {
@@ -272,7 +272,7 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 
 	update := httptest.NewRequest(http.MethodPatch, "/admin/api/chatgpt/accounts/account-1", strings.NewReader(`{"status":"禁用","proxy":""}`))
 	update.RemoteAddr = "127.0.0.1:1234"
-	update.Header.Set("X-AI-Proxy-Admin", "1")
+	update.Header.Set("X-AetherRelay-Admin", "1")
 	updateRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(updateRecorder, update)
 	if updateRecorder.Code != http.StatusOK || runtime.updated.ID != "account-1" || runtime.updated.Status == nil || *runtime.updated.Status != "禁用" || runtime.updated.Proxy == nil || *runtime.updated.Proxy != "" || strings.Contains(updateRecorder.Body.String(), "very-secret") {
@@ -285,7 +285,7 @@ func TestChatGPTImageTaskRetryGeneration(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/retry-generation", strings.NewReader(`{"owner_id":"owner-1"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted || runtime.retryOwner != "owner-1" || runtime.retryTaskID != "task-1" || runtime.retryBaseURL != "http://example.com" || !strings.Contains(rec.Body.String(), `"retrying_submission"`) {
@@ -299,7 +299,7 @@ func TestChatGPTImageTaskCancelAndDelete(t *testing.T) {
 
 	cancel := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/cancel", strings.NewReader(`{"owner_id":"owner-1"}`))
 	cancel.RemoteAddr = "127.0.0.1:1234"
-	cancel.Header.Set("X-AI-Proxy-Admin", "1")
+	cancel.Header.Set("X-AetherRelay-Admin", "1")
 	cancelRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(cancelRecorder, cancel)
 	if cancelRecorder.Code != http.StatusOK || runtime.cancelOwner != "owner-1" || runtime.cancelTaskID != "task-1" || !strings.Contains(cancelRecorder.Body.String(), `"status":"cancelled"`) {
@@ -308,7 +308,7 @@ func TestChatGPTImageTaskCancelAndDelete(t *testing.T) {
 
 	deleteRequest := httptest.NewRequest(http.MethodDelete, "/admin/api/chatgpt/image-tasks/task-1", strings.NewReader(`{"owner_id":"owner-1"}`))
 	deleteRequest.RemoteAddr = "127.0.0.1:1234"
-	deleteRequest.Header.Set("X-AI-Proxy-Admin", "1")
+	deleteRequest.Header.Set("X-AetherRelay-Admin", "1")
 	deleteRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRecorder, deleteRequest)
 	if deleteRecorder.Code != http.StatusOK || runtime.deleteOwner != "owner-1" || runtime.deleteTaskID != "task-1" || !strings.Contains(deleteRecorder.Body.String(), `"deleted":true`) {
@@ -321,7 +321,7 @@ func TestAdminFeatureSearchUsesScopedProxyCommand(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/features/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || runtime.searchCommand.OwnerID != "admin" || runtime.searchCommand.Model != "gpt-5" || runtime.searchCommand.Query != "latest news" || !strings.Contains(rec.Body.String(), `"output_text":"answer"`) || !strings.Contains(rec.Body.String(), `"url":"https://example.test"`) {
@@ -337,7 +337,7 @@ func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
 	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/features/search/history", nil)
 	listReq.RemoteAddr = "127.0.0.1:1234"
-	listReq.Header.Set("X-AI-Proxy-Admin", "1")
+	listReq.Header.Set("X-AetherRelay-Admin", "1")
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK || runtime.searchHistoryList.OwnerID != "admin" || runtime.searchHistoryList.Limit != 50 || !strings.Contains(listRec.Body.String(), `"search-1"`) {
@@ -345,7 +345,7 @@ func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
 	}
 	detailReq := httptest.NewRequest(http.MethodGet, "/admin/api/features/search/history/search-1", nil)
 	detailReq.RemoteAddr = "127.0.0.1:1234"
-	detailReq.Header.Set("X-AI-Proxy-Admin", "1")
+	detailReq.Header.Set("X-AetherRelay-Admin", "1")
 	detailRec := httptest.NewRecorder()
 	handler.ServeHTTP(detailRec, detailReq)
 	if detailRec.Code != http.StatusOK || runtime.searchHistoryGet.OwnerID != "admin" || runtime.searchHistoryGet.ID != "search-1" || !strings.Contains(detailRec.Body.String(), `"output_text":"answer"`) {
@@ -357,7 +357,7 @@ func TestChatGPTAccountSlotExportEndpointRemoved(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(&chatGPTAccountRuntimeStub{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/export", strings.NewReader(`{"ids":["account-export"]}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -375,7 +375,7 @@ func TestChatGPTAccountImportRejectsMoreThanLimit(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", &body)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 1000") || len(runtime.addedAccounts) != 0 {
@@ -457,7 +457,7 @@ func TestTemporaryChatAdminUsesServerOwnerAndNoStore(t *testing.T) {
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/temporary-conversations", strings.NewReader(`{"model":"gpt-5","owner_id":"forged-owner"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || rec.Header().Get("Cache-Control") != "no-store" || runtime.temporaryCreate.OwnerID != "admin" || runtime.temporaryCreate.Model != "gpt-5" {
@@ -497,7 +497,7 @@ func TestTemporaryChatTurnAcceptsMultipartImagesAndServesOwnerScopedContent(t *t
 	}
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/temporary-conversations/conversation-1/turns", &body)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

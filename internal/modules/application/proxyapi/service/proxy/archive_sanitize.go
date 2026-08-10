@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	archive "ai-proxy/internal/pkg/aiproxyarchive"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	"github.com/gabriel-vasile/mimetype"
 )
 

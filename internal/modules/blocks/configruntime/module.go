@@ -4,8 +4,8 @@ package configruntime
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/configruntime/biz"
-	configcommon "ai-proxy/internal/modules/blocks/configruntime/pkg/common"
+	"aetherrelay/internal/modules/blocks/configruntime/biz"
+	configcommon "aetherrelay/internal/modules/blocks/configruntime/pkg/common"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

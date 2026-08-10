@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"ai-proxy/internal/modules/application/adminapi/pkg/codexmanagement"
-	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	common "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
-	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	"aetherrelay/internal/modules/application/adminapi/pkg/codexmanagement"
+	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	common "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
+	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 

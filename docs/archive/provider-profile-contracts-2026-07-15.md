@@ -29,7 +29,7 @@ The detailed result matrix is maintained in
 | --- | --- |
 | Source version | Use vendor version when published; otherwise record `unversioned` plus access date, or this contract version for internal gateways. |
 | Evidence | Every declared direct capability needs a `PC-LIVE-*` task result; streaming is recorded separately where applicable. |
-| Owner | `ai-proxy provider-integration owner` owns config and revalidation. `external-provider liaison` owns vendor/gateway escalation. |
+| Owner | `AetherRelay provider-integration owner` owns config and revalidation. `external-provider liaison` owns vendor/gateway escalation. |
 | Cadence | Revalidate before a production release and at least every 7 calendar days while the profile is enabled. |
 | Trigger | Revalidate immediately after a provider docs/release change, base URL/protocol/model pattern/capability change, credential rotation that changes behavior, or a live drift/5xx incident. |
 | Change rule | Do not add a capability from documentation alone. Update config only after a successful direct probe, or remove it after explicit drift evidence. |
@@ -46,7 +46,7 @@ The detailed result matrix is maintained in
 | Approved direct capabilities | `chat_completions`, `completions` |
 | Exact evidence model | `gpt-5.5` |
 | Exclusions | `embeddings` was removed after 404; no embedding model is currently published |
-| Revalidation owner | ai-proxy provider-integration owner |
+| Revalidation owner | AetherRelay provider-integration owner |
 | Next revalidation | Before next release, within 7 days, or when the internal gateway contract changes |
 
 ### `deepseek`
@@ -60,7 +60,7 @@ The detailed result matrix is maintained in
 | Approved direct capabilities | `chat_completions` |
 | Exact evidence model | `deepseek-v4-flash` |
 | Exclusions | `responses` returned 404. `completions` requires the vendor beta API; it remains excluded until a dedicated, fully revalidated beta profile is introduced. |
-| Revalidation owner | ai-proxy provider-integration owner; external-provider liaison for beta profile changes |
+| Revalidation owner | AetherRelay provider-integration owner; external-provider liaison for beta profile changes |
 | Next revalidation | Before next release, within 7 days, or when DeepSeek API documentation/beta routing changes |
 
 ### `krill-ai`
@@ -74,7 +74,7 @@ The detailed result matrix is maintained in
 | Verified direct capabilities | `chat_completions`, `responses` |
 | Exact evidence model | `grok-4.5` |
 | Pending exception | `completions` remains declared but is not an approved capability conclusion: three probes returned Cloudflare 520. Do not advertise it as verified; revalidate when the gateway recovers. |
-| Revalidation owner | external-provider liaison for 520 escalation; ai-proxy provider-integration owner for probe/config decision |
+| Revalidation owner | external-provider liaison for 520 escalation; AetherRelay provider-integration owner for probe/config decision |
 | Next revalidation | Immediately after the 520 incident clears; otherwise before release and within 7 days |
 
 ### `aiapi-minimax`
@@ -88,7 +88,7 @@ The detailed result matrix is maintained in
 | Approved direct capabilities | `chat_completions` |
 | Exact evidence model | `MiniMax-M3` |
 | Exclusions | `responses` was `not implemented`; `completions` and `embeddings` returned unsupported relay modes. |
-| Revalidation owner | ai-proxy provider-integration owner; external-provider liaison for relay-mode changes |
+| Revalidation owner | AetherRelay provider-integration owner; external-provider liaison for relay-mode changes |
 | Next revalidation | Before release, within 7 days, or after New API relay/model mapping changes |
 
 ### `aiapi-deepseek`
@@ -102,7 +102,7 @@ The detailed result matrix is maintained in
 | Approved direct capabilities | `chat_completions` |
 | Exact evidence model | `DeepSeek-V4-Flash` |
 | Exclusions | `responses` and `embeddings` were `not implemented`; `completions` returned 404. |
-| Revalidation owner | ai-proxy provider-integration owner; external-provider liaison for relay-mode changes |
+| Revalidation owner | AetherRelay provider-integration owner; external-provider liaison for relay-mode changes |
 | Next revalidation | Before release, within 7 days, or after New API relay/model mapping changes |
 
 ## 4. Change procedure

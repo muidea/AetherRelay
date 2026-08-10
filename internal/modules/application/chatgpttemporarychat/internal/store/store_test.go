@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
-	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
-	"ai-proxy/internal/pkg/chatattachment"
+	"aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/common"
+	events "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"aetherrelay/internal/pkg/chatattachment"
 )
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	s, err := Open(path, "64MB", 1, Config{
 		RetentionDays:              30,
 		MaxConversations:           2,

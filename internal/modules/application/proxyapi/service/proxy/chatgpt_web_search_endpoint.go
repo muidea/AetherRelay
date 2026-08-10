@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 )
 
-// webSearchRequest is ai-proxy's intentionally narrow /v1/search contract.
+// webSearchRequest is AetherRelay's intentionally narrow /v1/search contract.
 // It is not an OpenAI endpoint alias: one plain-text query becomes one
 // isolated, forced ChatGPT Web search conversation.
 type webSearchRequest struct {

@@ -8,7 +8,7 @@ import (
 
 func TestBundleExportFilenameUsesUTCAndStableProfile(t *testing.T) {
 	exportedAt := time.Date(2026, time.August, 10, 20, 34, 56, 987654321, time.FixedZone("CST", 8*60*60))
-	want := "ai-proxy-provider-bundle-v1-safe-20260810T123456Z.json"
+	want := "aetherrelay-provider-bundle-v1-safe-20260810T123456Z.json"
 	if got := bundleExportFilename(bundleExportArtifactProvider, 1, bundleExportProfileSafe, exportedAt); got != want {
 		t.Fatalf("filename=%q, want %q", got, want)
 	}
@@ -28,7 +28,7 @@ func TestBundleExportFilenameDistinguishesProfilesAndArtifacts(t *testing.T) {
 	if safe, complete := bundleExportFilename(bundleExportArtifactProvider, 1, bundleExportProfileSafe, exportedAt), bundleExportFilename(bundleExportArtifactProvider, 1, bundleExportProfileComplete, exportedAt); safe == complete {
 		t.Fatalf("safe and complete filenames unexpectedly match: %q", safe)
 	}
-	if got := bundleExportFilename(bundleExportArtifactAccountPool, 2, bundleExportProfileComplete, exportedAt); got != "ai-proxy-account-pool-bundle-v2-complete-20260810T123456Z.json" {
+	if got := bundleExportFilename(bundleExportArtifactAccountPool, 2, bundleExportProfileComplete, exportedAt); got != "aetherrelay-account-pool-bundle-v2-complete-20260810T123456Z.json" {
 		t.Fatalf("account-pool filename=%q", got)
 	}
 }

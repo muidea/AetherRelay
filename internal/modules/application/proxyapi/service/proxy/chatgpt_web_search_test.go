@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 type chatGPTSearchExecutorStub struct {

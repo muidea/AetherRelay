@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	taskevents "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
 )
 
 type chatGPTTaskBody struct {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"ai-proxy/internal/modules/application/adminapi/service/observability"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetricsport"
+	"aetherrelay/internal/modules/application/adminapi/service/observability"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 
 	enginehttp "github.com/muidea/magicEngine/http"
 )

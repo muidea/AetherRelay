@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 func TestBuildProbeRequest(t *testing.T) {

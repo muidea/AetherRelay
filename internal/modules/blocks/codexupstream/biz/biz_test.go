@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	events "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
+	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 )
 
 func TestForceStreamPreservesNativeResponseFields(t *testing.T) {

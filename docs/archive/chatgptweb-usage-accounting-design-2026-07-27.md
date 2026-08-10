@@ -2,14 +2,14 @@
 
 > 状态：implemented
 >
-> 范围：将 ChatGPT Web 相关调用正确写入 `aiproxyusage` 用量权威，使 Admin「使用统计」可观测
+> 范围：将 ChatGPT Web 相关调用正确写入 `aetherrelayusage` 用量权威，使 Admin「使用统计」可观测
 > 代理与管理台调试流量，并使 Prometheus 客户端用量镜像可观测代理 `chatgptweb` 流量。
 > 本文是实现与验收依据；不覆盖账号池 success/fail 计数、临时会话正文表或图片任务详情内的
 > `tokenusage` 投影（那些仍由各自 owner 维护）。
 
 ## 1. 决策摘要
 
-用量权威唯一且已存在：`internal/pkg/aiproxyusage`（DuckDB `usage_events`），跨组件经
+用量权威唯一且已存在：`internal/pkg/aetherrelayusage`（DuckDB `usage_events`），跨组件经
 `usageruntime` EventHub 的 `Start` / `Complete` 合同写入。ChatGPT Web **不新建**平行用量表，
 不扩展通用 document/KV API，也不让 Admin HTTP 或上游 client 直接写 DuckDB。
 
@@ -46,11 +46,11 @@ owner 合同映射成自己的窄端口。
 5. usage / metrics label / 错误 envelope 不出现会话正文、access token、上游 `conversation_id`、
    `parent_message_id` 或原始 SSE。
 6. 跨 Module 写入只经 `usageruntime` typed EventHub；`chatgpttemporarychat` / `chatgptimagetask`
-   不直接依赖 `aiproxyusage` 实现或 DuckDB 连接。
+   不直接依赖 `aetherrelayusage` 实现或 DuckDB 连接。
 
 ### 2.2 非目标
 
-1. 不修改 `aiproxyusage` schema 主键或新增第二套统计 authority。
+1. 不修改 `aetherrelayusage` schema 主键或新增第二套统计 authority。
 2. 不把临时对话历史表、图片任务表改造成 usage 读模型。
 3. 不在本轮实现上游 SSE 真实 token 解析（可后续增强；字段预留 `Estimated=false` 路径）。
 4. 不回溯修复本设计落地前已被 `completePendingUsage` 误记为 error 的历史行。
@@ -60,8 +60,8 @@ owner 合同映射成自己的窄端口。
 
 | 数据 | 权威 owner | 写入路径 |
 | --- | --- | --- |
-| 请求级用量明细与聚合 | `usageruntime` / `aiproxyusage` | EventHub `Start`/`Complete` 或 proxy 持有的 EventHub-backed Store |
-| 客户端 Key 身份 | `proxyapi` + `aiproxyclientauth` | 仅代理入站；Admin 路径不用客户端 Key |
+| 请求级用量明细与聚合 | `usageruntime` / `aetherrelayusage` | EventHub `Start`/`Complete` 或 proxy 持有的 EventHub-backed Store |
+| 客户端 Key 身份 | `proxyapi` + `aetherrelayclientauth` | 仅代理入站；Admin 路径不用客户端 Key |
 | ChatGPT 账号 success/fail | `chatgptaccountpool` | `RecordTextResult` / `MarkImageResult`（与 usage 并行，不替代） |
 | 临时会话正文与续聊锚点 | `chatgpttemporarychat` | 专用 DuckDB 表；不进 usage |
 | 图片任务状态与任务内 Usage | `chatgptimagetask` | 任务 payload；可选再投影一条全局 usage |
@@ -224,7 +224,7 @@ Estimated = true
 | `proxyapi/service/proxy/handler.go` | 仅为复用结算与 metrics 做最小接线；让 outcome/error code 独立；**禁止**把成功路径继续交给 `completePendingUsage` |
 | `chatgpttemporarychat/biz` | Setup 获取 EventHub-backed usage port；StartTurn 登记/早期失败结算，runTurn 唯一结算已注册 runtime，Cancel/Teardown 只驱动终态 |
 | `chatgpttokenusage` | 复用估计函数；本轮原则上不改 API |
-| `usageruntime` / `aiproxyusage` | 无合同变更；可加测试夹具帮助调用方 |
+| `usageruntime` / `aetherrelayusage` | 无合同变更；可加测试夹具帮助调用方 |
 | `docs/operations.md` / `docs/configuration.md`（若有相关说明） | 记录 `chatgptweb` 与 `admin:*` 维度、估计 token 含义 |
 | 本文 | 实现完成后状态改为 `implemented` 并记录验证结果 |
 
@@ -267,7 +267,7 @@ ErrorClass、actual model 或有界 Usage，由调用方 owner 再映射。
 
 1. `TemporaryChat` Setup：当 chatgpt_web + temporary_chat 启用时同步调用
    `usageevents.RequestStore`；失败直接 fail-fast。该 port 只保存 EventHub/source 与 typed mapping，不得
-   返回或持有 `aiproxyusage` owner 的 DuckDB/store 实现。
+   返回或持有 `aetherrelayusage` owner 的 DuckDB/store 实现。
 2. `StartTurn` 固定采用以下顺序：
 
    ```text
@@ -324,7 +324,7 @@ proxy 路径必须通过 `recordAndPrintFail`（或等价统一入口）调用�
 ### 7.3 账号池计数
 
 `RecordTextResult` / `MarkImageResult` **继续保留**，表示账号健康与配额行为，不替代
-`aiproxyusage` 请求级统计。
+`aetherrelayusage` 请求级统计。
 
 ### 7.4 历史数据
 
@@ -369,8 +369,8 @@ proxy 路径必须通过 `recordAndPrintFail`（或等价统一入口）调用�
 
 ### 全量
 
-- 相关包测试：`proxyapi`、`chatgpttemporarychat`、`aiproxyusage`（及 Phase 4 时 imagetask）
-- `GOCACHE=/tmp/ai-proxy-gocache go test ./... -count=1`
+- 相关包测试：`proxyapi`、`chatgpttemporarychat`、`aetherrelayusage`（及 Phase 4 时 imagetask）
+- `GOCACHE=/tmp/AetherRelay-gocache go test ./... -count=1`
 - `make build`
 - `scripts/check-format.sh`
 
@@ -413,7 +413,7 @@ proxy 路径必须通过 `recordAndPrintFail`（或等价统一入口）调用�
 ### 验证
 
 - `scripts/check-format.sh` 通过
-- `GOCACHE=/tmp/ai-proxy-closure-gocache go vet ./...` 通过
-- `GOCACHE=/tmp/ai-proxy-closure-gocache go test ./... -count=1` 通过
-- `GOCACHE=/tmp/ai-proxy-closure-race-gocache go test -race ./internal/modules/application/chatgpttemporarychat/biz ./internal/modules/application/proxyapi/service/proxy -run 'Test(StartTurnSuccessStartsUsageThenWorkerCompletes|ChatGPTWebText|ChatGPTImage)' -count=1` 通过
+- `GOCACHE=/tmp/AetherRelay-closure-gocache go vet ./...` 通过
+- `GOCACHE=/tmp/AetherRelay-closure-gocache go test ./... -count=1` 通过
+- `GOCACHE=/tmp/AetherRelay-closure-race-gocache go test -race ./internal/modules/application/chatgpttemporarychat/biz ./internal/modules/application/proxyapi/service/proxy -run 'Test(StartTurnSuccessStartsUsageThenWorkerCompletes|ChatGPTWebText|ChatGPTImage)' -count=1` 通过
 - `make build` 通过

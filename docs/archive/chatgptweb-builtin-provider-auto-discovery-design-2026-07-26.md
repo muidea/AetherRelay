@@ -8,7 +8,7 @@ Last Updated: 2026-07-26
 
 ## 1. 目标与结论
 
-启用 `chatgpt_web.enabled` 后，ai-proxy 必须自动提供一个固定 ID 为 `chatgptweb` 的内建 Provider。管理员不再在 `providers` 配置、`model_catalog` 或 Provider 管理页中手工创建该 Provider、填写模型匹配、上游地址、API Key 或端点能力。
+启用 `chatgpt_web.enabled` 后，AetherRelay 必须自动提供一个固定 ID 为 `chatgptweb` 的内建 Provider。管理员不再在 `providers` 配置、`model_catalog` 或 Provider 管理页中手工创建该 Provider、填写模型匹配、上游地址、API Key 或端点能力。
 
 该 Provider 的模型与模型级 operation 来自当前账号池中可用账号的 ChatGPT Web 模型枚举结果。有效模型目录同时驱动：
 
@@ -67,7 +67,7 @@ providers:
 | `base_url` / `api_key` | 不存在；账号凭据只由账号池 owner 管理 |
 | 直连能力 | `chat_completions`、`images` |
 | 外部路径 | `/v1/chat/completions`、`/v1/images/generations`、`/v1/images/edits` |
-| 客户端鉴权 | 仅 ai-proxy Client API Key |
+| 客户端鉴权 | 仅 AetherRelay Client API Key |
 | 无账号或无可用模型 | Provider 不可用；不把失效账号泄露给客户端 |
 
 模型 operation 是模型级而非 Provider 级：只有上游明确支持文本的模型可提供 `chat_completions`，只有明确支持图片的模型可提供 `image_generations`。图片 operation 同时覆盖 generation 与 edit 路径，沿用当前 operation 合同。
@@ -226,12 +226,12 @@ Snapshot
 | `application/proxyapi/pkg/effectivecatalog` | 静态+内建并集纯读模型；静态 exact 冲突优先 |
 | `application/proxyapi/biz` | 有界发现任务（立即/30s watch/5m full）、原子发布有效目录 |
 | `application/proxyapi/service/proxy` | `/v1/models` 与 `ResolveTransportPlan` 共用 effective catalog |
-| `pkg/aiproxyconfig` | 拒绝显式 `providers.*.protocol: chatgptweb` / 名称 `chatgptweb` |
+| `pkg/aetherrelayconfig` | 拒绝显式 `providers.*.protocol: chatgptweb` / 名称 `chatgptweb` |
 | `application/adminapi` + `web/admin` | Provider 列表只读内建行（账号数/模型数/冲突/不可用原因），禁止编辑删除探测 |
 
 ### 验证
 
-- `go test`：aiproxyconfig、effectivecatalog、proxyapi、adminapi、accountpool、chatgptwebupstream client 相关包通过
+- `go test`：aetherrelayconfig、effectivecatalog、proxyapi、adminapi、accountpool、chatgptwebupstream client 相关包通过
 - 配置合同：显式 chatgptweb Provider 启动失败
 - 账号快照：持久化、过期剔除、按模型选号
 - 有效目录：静态优先、冲突摘要、disabled/empty/discovering/ready 状态

@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/oauth"
-	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/store"
-	"ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
-	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	basebiz "ai-proxy/internal/modules/base/biz"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxycredential"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/oauth"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/store"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
+	events "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -62,7 +62,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err := os.MkdirAll(bootstrap.Config.State.Dir, 0o700); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "create chatgpt web data directory: "+err.Error())
 	}
-	credentialCodec, err := aiproxycredential.FromEnvironment()
+	credentialCodec, err := aetherrelaycredential.FromEnvironment()
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}

@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
-	"ai-proxy/internal/pkg/chatattachment"
-	"ai-proxy/internal/pkg/chatgptimageinput"
+	tempevents "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"aetherrelay/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatgptimageinput"
 )
 
 type temporaryConversationBody struct {

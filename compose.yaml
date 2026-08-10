@@ -1,6 +1,6 @@
 services:
-  ai-proxy:
-    image: ${AI_PROXY_IMAGE:-ghcr.io/muidea/ai-proxy:latest}
+  aetherrelay:
+    image: ${AETHERRELAY_IMAGE:-ghcr.io/muidea/aetherrelay:latest}
     # For local image development, replace image with: build: .
     restart: unless-stopped
     ports:
@@ -8,16 +8,16 @@ services:
       # or change this binding only after reviewing the access-control notes.
       - "127.0.0.1:8080:8080"
     environment:
-      AI_PROXY_CONFIG: /etc/ai-proxy/config.yaml
+      AETHERRELAY_CONFIG: /etc/aetherrelay/config.yaml
       # Bootstrap environment references remain supported. Admin-managed
       # Provider and account-pool credentials are encrypted in DuckDB.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      AI_PROXY_CREDENTIAL_KEY: ${AI_PROXY_CREDENTIAL_KEY:?set AI_PROXY_CREDENTIAL_KEY in .env}
-      AI_PROXY_ADMIN_PASSWORD_HASH: ${AI_PROXY_ADMIN_PASSWORD_HASH:-}
+      AETHERRELAY_CREDENTIAL_KEY: ${AETHERRELAY_CREDENTIAL_KEY:?set AETHERRELAY_CREDENTIAL_KEY in .env}
+      AETHERRELAY_ADMIN_PASSWORD_HASH: ${AETHERRELAY_ADMIN_PASSWORD_HASH:-}
     volumes:
       # Mount the directory (rather than a single file): Admin writes replace
       # config.yaml atomically when saving writable settings.
-      - ./deploy/config:/etc/ai-proxy
-      - ./deploy/data:/var/lib/ai-proxy
+      - ./deploy/config:/etc/aetherrelay
+      - ./deploy/data:/var/lib/aetherrelay

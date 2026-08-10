@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	archivepkg "ai-proxy/internal/pkg/aiproxyarchive"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	archivepkg "aetherrelay/internal/pkg/aetherrelayarchive"
 )
 
 // handleCodexOAuthResponses relays the native Responses object rather than

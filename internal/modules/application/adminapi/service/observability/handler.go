@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxymetricsport"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 )
 
 // HandlerOptions 控制 /metrics、/stats 端点的访问策略。

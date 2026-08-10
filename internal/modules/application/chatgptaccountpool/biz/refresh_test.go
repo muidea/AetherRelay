@@ -11,20 +11,20 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/oauth"
-	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/store"
-	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
-	"ai-proxy/internal/pkg/aiproxycredential"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/oauth"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/store"
+	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
 
-func refreshTestCodec(t *testing.T) *aiproxycredential.Codec {
+func refreshTestCodec(t *testing.T) *aetherrelaycredential.Codec {
 	t.Helper()
-	codec, err := aiproxycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
+	codec, err := aetherrelaycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)))
 	if err != nil {
 		t.Fatal(err)
 	}

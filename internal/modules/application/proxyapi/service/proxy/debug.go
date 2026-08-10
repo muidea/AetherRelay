@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 type requestDebugInfo struct {

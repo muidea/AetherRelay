@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 type anthropicMessage struct {
@@ -285,7 +285,7 @@ func (h *Handler) writeConversionUpstreamError(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 按客户端协议转换错误 envelope;无法安全解析时输出 ai-proxy typed error。
+	// 按客户端协议转换错误 envelope;无法安全解析时输出 AetherRelay typed error。
 	outBody, contentType := convertUpstreamErrorForClient(plan, resp.StatusCode, responseBody, providerName)
 	header := responseHeader.Clone()
 	header.Del("Content-Length")

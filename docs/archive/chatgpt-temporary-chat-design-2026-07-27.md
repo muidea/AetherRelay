@@ -58,7 +58,7 @@ Admin 页面
 | `chatgpttemporarychat/internal/store` | 此 owner 的 DuckDB 会话与消息读写、分页、保留期清理；不向其它 Module 导出。 |
 | `chatgpttemporarychat/pkg/common` | Unit ID、状态与边界常量。 |
 | `chatgpttemporarychat/pkg/events` | 对外 typed EventHub topic、command、result、view。 |
-| `internal/pkg/aiproxystate` | 仅增加临时会话 owner 所需的专用 schema 与窄 CRUD 方法；不建立通用 document/KV API。 |
+| `internal/pkg/aetherrelaystate` | 仅增加临时会话 owner 所需的专用 schema 与窄 CRUD 方法；不建立通用 document/KV API。 |
 | `adminapi/biz` | 通过 temporarychat 事件合同实现窄 runtime 方法。 |
 | `adminapi/service/admin` | 受保护 HTTP 路由、请求验证与 SSE/长轮询适配，不包含会话策略。 |
 | `web/admin/index.html` | 历史列表、聊天视图、受控轮询/取消与纯文本安全渲染；不持久化会话数据。 |
@@ -95,7 +95,7 @@ chatgpt_web:
 
 ### 5.3 DuckDB schema
 
-`aiproxystate.migrate` 增加以下专用表，所有正文使用参数化写入。字段名可随实现微调，但语义不得减少：
+`aetherrelaystate.migrate` 增加以下专用表，所有正文使用参数化写入。字段名可随实现微调，但语义不得减少：
 
 ```sql
 CREATE TABLE chatgpt_temporary_conversations (
@@ -218,7 +218,7 @@ RecordTextResultResult{Account}
 
 ## 9. Admin HTTP 合同
 
-所有路径相对于 `ADMIN_BASE`，且沿用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin: 1` 写保护。会话 owner 由服务端认证 principal 推导，HTTP body 和 query 不接受 `owner_id`。
+所有路径相对于 `ADMIN_BASE`，且沿用 Admin 会话、CSRF 与 `X-AetherRelay-Admin: 1` 写保护。会话 owner 由服务端认证 principal 推导，HTTP body 和 query 不接受 `owner_id`。
 
 | 方法 | 路径 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
@@ -290,7 +290,7 @@ RecordTextResultResult{Account}
 - Biz：固定账号、失效账号、单会话串行、取消/完成竞态、invalid token 与 transient failure 的账号结果。
 - Admin HTTP：认证/CSRF、参数上限、404/409/410/503/502、安全错误、no-store 与正文不泄露。
 - 浏览器：历史加载、刷新恢复、流增量、取消、删除、无 Web Storage 写入。
-- 全量：`scripts/check-format.sh`、`GOCACHE=/tmp/ai-proxy-gocache go test ./... -count=1`、`make build`。
+- 全量：`scripts/check-format.sh`、`GOCACHE=/tmp/AetherRelay-gocache go test ./... -count=1`、`make build`。
 
 ## 14. 后续文档收口
 

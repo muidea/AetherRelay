@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"ai-proxy/internal/modules/blocks/usageruntime/pkg/common"
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 
 	"github.com/muidea/magicCommon/event"
 )

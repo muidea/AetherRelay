@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 // Runtime is the Usage Block's private DuckDB lifecycle owner.

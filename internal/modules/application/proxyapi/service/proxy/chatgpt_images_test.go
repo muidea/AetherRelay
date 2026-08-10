@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 func TestParseChatGPTImageMultipartReadsImageAndMask(t *testing.T) {

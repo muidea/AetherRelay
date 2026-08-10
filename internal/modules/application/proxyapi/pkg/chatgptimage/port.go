@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 // Request is normalized at the HTTP boundary before image orchestration.

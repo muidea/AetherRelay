@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxycredential"
-	"ai-proxy/internal/pkg/aiproxystate"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
+	"aetherrelay/internal/pkg/aetherrelaystate"
 )
 
 const (
@@ -28,15 +28,15 @@ type storedProvider struct {
 }
 
 type Store struct {
-	documents *aiproxystate.Documents
-	codec     *aiproxycredential.Codec
+	documents *aetherrelaystate.Documents
+	codec     *aetherrelaycredential.Codec
 }
 
 // Initialized checks only whether an encrypted Provider catalog exists. It
 // never reads plaintext and is used to distinguish a new installation from a
 // missing-key recovery failure.
 func Initialized(databasePath, memoryLimit string, threads int) (bool, error) {
-	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	documents, err := aetherrelaystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return false, err
 	}
@@ -48,11 +48,11 @@ func Initialized(databasePath, memoryLimit string, threads int) (bool, error) {
 	return len(rows) != 0, nil
 }
 
-func Open(databasePath, memoryLimit string, threads int, codec *aiproxycredential.Codec) (*Store, error) {
+func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycredential.Codec) (*Store, error) {
 	if codec == nil {
 		return nil, fmt.Errorf("provider credential codec is required")
 	}
-	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	documents, err := aetherrelaystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -113,5 +113,5 @@ func (s *Store) Replace(providers map[string]config.Provider) error {
 	if err != nil {
 		return err
 	}
-	return s.documents.ReplaceSecureDocuments(secureDocumentScope, []aiproxystate.SecureDocumentRow{{ID: catalogDocumentID, Payload: sealed}})
+	return s.documents.ReplaceSecureDocuments(secureDocumentScope, []aetherrelaystate.SecureDocumentRow{{ID: catalogDocumentID, Payload: sealed}})
 }

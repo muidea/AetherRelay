@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	events "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 )
 
 func TestAccountPoolAcquireAndMark(t *testing.T) {

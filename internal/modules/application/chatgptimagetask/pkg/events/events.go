@@ -1,7 +1,7 @@
 // Package events defines the ImageTask Module's typed EventHub contract.
 package events
 
-import "ai-proxy/internal/pkg/chatgpttokenusage"
+import "aetherrelay/internal/pkg/chatgpttokenusage"
 
 const (
 	TopicSubmitGeneration = "imagetask/submit_generation"

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	events "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
-	"ai-proxy/internal/pkg/accountidentity"
-	"ai-proxy/internal/pkg/aiproxycredential"
-	"ai-proxy/internal/pkg/aiproxystate"
+	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	"aetherrelay/internal/pkg/accountidentity"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
+	"aetherrelay/internal/pkg/aetherrelaystate"
 	"github.com/google/uuid"
 )
 
@@ -72,8 +72,8 @@ type account struct {
 
 type Store struct {
 	mu          sync.Mutex
-	documents   *aiproxystate.Documents
-	credentials *aiproxycredential.Codec
+	documents   *aetherrelaystate.Documents
+	credentials *aetherrelaycredential.Codec
 	items       map[string]*account
 	order       []string
 	index       int
@@ -82,11 +82,11 @@ type Store struct {
 	catalogVersion uint64
 }
 
-func Open(databasePath, memoryLimit string, threads int, codec *aiproxycredential.Codec) (*Store, error) {
+func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycredential.Codec) (*Store, error) {
 	if codec == nil {
 		return nil, fmt.Errorf("account credential codec is required")
 	}
-	documents, err := aiproxystate.Open(databasePath, memoryLimit, threads)
+	documents, err := aetherrelaystate.Open(databasePath, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (s *Store) saveLocked() error {
 }
 
 func (s *Store) saveEncryptedLocked() error {
-	rows := make([]aiproxystate.SecureDocumentRow, 0, len(s.order))
+	rows := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
 	for position, id := range s.order {
 		item := s.items[id]
 		if item == nil {
@@ -157,7 +157,7 @@ func (s *Store) saveEncryptedLocked() error {
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aiproxystate.SecureDocumentRow{ID: id, Position: position, Payload: sealed})
+		rows = append(rows, aetherrelaystate.SecureDocumentRow{ID: id, Position: position, Payload: sealed})
 	}
 	return s.documents.ReplaceSecureDocuments(secureDocumentScope, rows)
 }

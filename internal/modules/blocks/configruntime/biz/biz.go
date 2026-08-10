@@ -7,14 +7,14 @@ import (
 	"strings"
 	"sync"
 
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	basebiz "ai-proxy/internal/modules/base/biz"
-	"ai-proxy/internal/modules/blocks/configruntime/internal/providerstore"
-	"ai-proxy/internal/modules/blocks/configruntime/pkg/common"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxybootstrap"
-	config "ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxycredential"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	"aetherrelay/internal/modules/blocks/configruntime/internal/providerstore"
+	"aetherrelay/internal/modules/blocks/configruntime/pkg/common"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaybootstrap"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -31,9 +31,9 @@ type ConfigRuntime struct {
 }
 
 func New(hub event.Hub, background task.BackgroundRoutine) (*ConfigRuntime, *cd.Error) {
-	bootstrap, ok := aiproxybootstrap.Current()
+	bootstrap, ok := aetherrelaybootstrap.Current()
 	if !ok {
-		return nil, cd.NewError(cd.IllegalParam, "ai-proxy bootstrap is not configured")
+		return nil, cd.NewError(cd.IllegalParam, "AetherRelay bootstrap is not configured")
 	}
 	if hub == nil {
 		return nil, cd.NewError(cd.IllegalParam, "event hub is unavailable")
@@ -43,8 +43,8 @@ func New(hub event.Hub, background task.BackgroundRoutine) (*ConfigRuntime, *cd.
 		Base:      basebiz.New(common.UnitID, hub, background),
 		bootstrap: configevents.Bootstrap{Config: bootstrap.Config, ConfigPath: bootstrap.ConfigPath, Version: bootstrap.Version, StartedAt: bootstrap.StartedAt},
 	}
-	if strings.TrimSpace(os.Getenv(aiproxycredential.EnvironmentKey)) != "" {
-		codec, codecErr := aiproxycredential.FromEnvironment()
+	if strings.TrimSpace(os.Getenv(aetherrelaycredential.EnvironmentKey)) != "" {
+		codec, codecErr := aetherrelaycredential.FromEnvironment()
 		if codecErr != nil {
 			return nil, cd.NewError(cd.IllegalParam, codecErr.Error())
 		}
@@ -74,7 +74,7 @@ func New(hub event.Hub, background task.BackgroundRoutine) (*ConfigRuntime, *cd.
 			return nil, cd.NewError(cd.Unexpected, "inspect provider catalog: "+storeErr.Error())
 		}
 		if initialized {
-			return nil, cd.NewError(cd.IllegalParam, aiproxycredential.EnvironmentKey+" is required to load the stored provider catalog")
+			return nil, cd.NewError(cd.IllegalParam, aetherrelaycredential.EnvironmentKey+" is required to load the stored provider catalog")
 		}
 	}
 	biz.SubscribeFunc(configevents.TopicBootstrap, biz.handleBootstrap)
@@ -108,7 +108,7 @@ func (s *ConfigRuntime) handleReplaceProviders(ev event.Event, result event.Resu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.providers == nil {
-		result.Set(nil, cd.NewError(cd.IllegalParam, aiproxycredential.EnvironmentKey+" is required for managed Provider storage"))
+		result.Set(nil, cd.NewError(cd.IllegalParam, aetherrelaycredential.EnvironmentKey+" is required for managed Provider storage"))
 		return
 	}
 	current := s.bootstrap.Config
@@ -186,10 +186,10 @@ func (s *ConfigRuntime) handleActivate(ev event.Event, result event.Result) {
 func validateHotReload(current, next config.Config) error {
 	if current.ChatGPTWeb.RefreshAccountIntervalMinute != next.ChatGPTWeb.RefreshAccountIntervalMinute ||
 		current.ChatGPTWeb.TemporaryChat != next.ChatGPTWeb.TemporaryChat {
-		return fmt.Errorf("chatgpt_web runtime settings require an ai-proxy restart")
+		return fmt.Errorf("chatgpt_web runtime settings require an AetherRelay restart")
 	}
 	if current.CodexOAuth.RefreshAccountIntervalMinute != next.CodexOAuth.RefreshAccountIntervalMinute {
-		return fmt.Errorf("codex_oauth.refresh_account_interval_minute requires an ai-proxy restart")
+		return fmt.Errorf("codex_oauth.refresh_account_interval_minute requires an AetherRelay restart")
 	}
 	return nil
 }

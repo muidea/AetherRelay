@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
 )
 
 type featureSearchBody struct {

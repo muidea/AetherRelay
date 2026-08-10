@@ -31,9 +31,9 @@ EOF
   exit 2
 fi
 
-name="ai-proxy_${VERSION}_${GOOS}_${GOARCH}"
+name="AetherRelay_${VERSION}_${GOOS}_${GOARCH}"
 stage="$OUT_DIR/.stage/$name"
-binary="ai-proxy"
+binary="AetherRelay"
 if [[ "$GOOS" == "windows" ]]; then
   binary+=".exe"
 fi
@@ -45,7 +45,7 @@ trap 'rm -rf "$stage"' EXIT
 GOOS="$GOOS" GOARCH="$GOARCH" "$GO_CMD" build \
   -trimpath -buildvcs=false \
   -ldflags "-s -w -X main.version=v$VERSION" \
-  -o "$stage/$binary" ./cmd/ai-proxy
+  -o "$stage/$binary" ./cmd/aetherrelay
 
 cp README.md config.example.yaml "$stage/"
 archive="$OUT_DIR/$name.tar.gz"

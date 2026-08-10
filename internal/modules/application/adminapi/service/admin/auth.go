@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 const (
-	adminSessionCookieName = "ai_proxy_admin_session"
-	adminCSRFHeader        = "X-AI-Proxy-CSRF"
-	adminWriteHeader       = "X-AI-Proxy-Admin"
+	adminSessionCookieName = "aetherrelay_admin_session"
+	adminCSRFHeader        = "X-AetherRelay-CSRF"
+	adminWriteHeader       = "X-AetherRelay-Admin"
 	maxAdminSessions       = 64
 	loginFailLimit         = 5
 	loginLockoutDuration   = 15 * time.Minute
@@ -396,7 +396,7 @@ func (h *Handler) requireCSRF(w http.ResponseWriter, r *http.Request, sess *admi
 	return true
 }
 
-// requireAdminMutation 在认证开启时要求会话+CSRF;关闭时要求 X-AI-Proxy-Admin: 1。
+// requireAdminMutation 在认证开启时要求会话+CSRF;关闭时要求 X-AetherRelay-Admin: 1。
 func (h *Handler) requireAdminMutation(w http.ResponseWriter, r *http.Request) bool {
 	if h.authEnabled() {
 		sess := h.requireSession(w, r)
@@ -520,7 +520,7 @@ func loginPageHTML(basePath, defaultLanguage string) []byte {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>AI Proxy · 登录</title>
+<title>AetherRelay · 登录</title>
 <style>
 :root{--primary:#1677ff;--border:#d9d9d9;--bg:#f5f7fa;--text:#1f1f1f;--muted:#8c8c8c;--danger:#ff4d4f}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -534,7 +534,7 @@ button{width:100%;height:36px;border:0;border-radius:6px;background:var(--primar
 <body>
 <div class="card">
   <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><label for="language" style="font-size:12px;margin:0">语言 <select id="language" style="width:auto;height:28px;padding:2px 5px"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label></div>
-  <h1 data-i18n="title">AI Proxy 管理登录</h1>
+  <h1 data-i18n="title">AetherRelay 管理登录</h1>
   <p data-i18n="subtitle">请输入管理员账号与密码</p>
   <form id="f">
     <div class="field"><label for="u" data-i18n="username">用户名</label><input id="u" name="username" autocomplete="username" required></div>
@@ -544,18 +544,18 @@ button{width:100%;height:36px;border:0;border-radius:6px;background:var(--primar
   </form>
 </div>
 <script>
-window.__AI_PROXY_ADMIN_BASE_PATH__=BASE_PATH_JSON;
-window.__AI_PROXY_ADMIN_DEFAULT_LANGUAGE__=DEFAULT_LANGUAGE_JSON;
-const base=window.__AI_PROXY_ADMIN_BASE_PATH__||"/admin";
-const supported=new Set(["zh-CN","en-US"]),cookieName="ai_proxy_admin_lang";
-const zh={title:"AI Proxy 管理登录",subtitle:"请输入管理员账号与密码",username:"用户名",password:"密码",login:"登录",language:"语言"};
-const en={title:"Sign in to AI Proxy",subtitle:"Enter the administrator username and password",username:"Username",password:"Password",login:"Sign in",language:"Language"};
+window.__AETHERRELAY_ADMIN_BASE_PATH__=BASE_PATH_JSON;
+window.__AETHERRELAY_ADMIN_DEFAULT_LANGUAGE__=DEFAULT_LANGUAGE_JSON;
+const base=window.__AETHERRELAY_ADMIN_BASE_PATH__||"/admin";
+const supported=new Set(["zh-CN","en-US"]),cookieName="aetherrelay_admin_lang";
+const zh={title:"AetherRelay 管理登录",subtitle:"请输入管理员账号与密码",username:"用户名",password:"密码",login:"登录",language:"语言"};
+const en={title:"Sign in to AetherRelay",subtitle:"Enter the administrator username and password",username:"Username",password:"Password",login:"Sign in",language:"Language"};
 function validLanguage(value){return supported.has(String(value||"").trim())?String(value).trim():""}
 function cookieLanguage(){const found=document.cookie.split(";").map(v=>v.trim()).find(v=>v.startsWith(cookieName+"="));return found?validLanguage(decodeURIComponent(found.slice(cookieName.length+1))):""}
 function urlLanguage(){return validLanguage(new URLSearchParams(location.search).get("lang"))}
 function browserLanguage(){for(const value of [...(navigator.languages||[]),navigator.language]){if(String(value||"").toLowerCase().startsWith("en"))return "en-US";if(String(value||"").toLowerCase().startsWith("zh"))return "zh-CN"}return "zh-CN"}
-let locale=urlLanguage()||cookieLanguage()||validLanguage(window.__AI_PROXY_ADMIN_DEFAULT_LANGUAGE__)||browserLanguage();
-function renderLanguage(){const dict=locale==="en-US"?en:zh;document.documentElement.lang=locale;document.title=locale==="en-US"?"AI Proxy · Sign in":"AI Proxy · 登录";document.querySelectorAll("[data-i18n]").forEach(el=>el.textContent=dict[el.dataset.i18n]||"");document.querySelector("label[for=language]").firstChild.nodeValue=dict.language+" ";document.getElementById("language").value=locale;}
+let locale=urlLanguage()||cookieLanguage()||validLanguage(window.__AETHERRELAY_ADMIN_DEFAULT_LANGUAGE__)||browserLanguage();
+function renderLanguage(){const dict=locale==="en-US"?en:zh;document.documentElement.lang=locale;document.title=locale==="en-US"?"AetherRelay · Sign in":"AetherRelay · 登录";document.querySelectorAll("[data-i18n]").forEach(el=>el.textContent=dict[el.dataset.i18n]||"");document.querySelector("label[for=language]").firstChild.nodeValue=dict.language+" ";document.getElementById("language").value=locale;}
 document.getElementById("language").onchange=e=>{const selected=validLanguage(e.target.value)||"zh-CN";document.cookie=cookieName+"="+encodeURIComponent(selected)+"; Path="+base+"; SameSite=Strict; Max-Age=31536000";locale=urlLanguage()||selected;renderLanguage();};
 renderLanguage();
 const errEl=document.getElementById("err");

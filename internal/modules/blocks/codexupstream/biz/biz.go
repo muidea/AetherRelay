@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	basebiz "ai-proxy/internal/modules/base/biz"
-	"ai-proxy/internal/modules/blocks/codexupstream/pkg/common"
-	events "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
+	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ai-proxy/internal/pkg/aiproxycredential"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 )
 
-func encryptedTestCodec(t *testing.T) *aiproxycredential.Codec {
+func encryptedTestCodec(t *testing.T) *aetherrelaycredential.Codec {
 	t.Helper()
-	codec, err := aiproxycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
+	codec, err := aetherrelaycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,13 +20,13 @@ func encryptedTestCodec(t *testing.T) *aiproxycredential.Codec {
 }
 
 func TestOpenRequiresCredentialCodec(t *testing.T) {
-	if _, err := Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "256MB", 1, 3, nil); err == nil {
+	if _, err := Open(filepath.Join(t.TempDir(), "aetherrelay.duckdb"), "256MB", 1, 3, nil); err == nil {
 		t.Fatal("store accepted a missing credential codec")
 	}
 }
 
 func TestEncryptedAccountPersistenceDoesNotExposeTokens(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	store, err := Open(path, "256MB", 1, 3, encryptedTestCodec(t))
 	if err != nil {
 		t.Fatal(err)

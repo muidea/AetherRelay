@@ -9,13 +9,13 @@ import (
 	"strings"
 	"testing"
 
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	basebiz "ai-proxy/internal/modules/base/biz"
-	"ai-proxy/internal/modules/blocks/configruntime/internal/providerstore"
-	"ai-proxy/internal/modules/blocks/configruntime/pkg/common"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	config "ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxycredential"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	basebiz "aetherrelay/internal/modules/base/biz"
+	"aetherrelay/internal/modules/blocks/configruntime/internal/providerstore"
+	"aetherrelay/internal/modules/blocks/configruntime/pkg/common"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -38,9 +38,9 @@ func testConfig(providers map[string]config.Provider) config.Config {
 	}
 }
 
-func testCredentialCodec(t *testing.T) *aiproxycredential.Codec {
+func testCredentialCodec(t *testing.T) *aetherrelaycredential.Codec {
 	t.Helper()
-	codec, err := aiproxycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{6}, 32)))
+	codec, err := aetherrelaycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{6}, 32)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func testCredentialCodec(t *testing.T) *aiproxycredential.Codec {
 }
 
 func proxyUpdateObserver(hub event.Hub, failure error, captured *config.Config) event.SimpleObserver {
-	observer := event.NewSimpleObserver("aiproxy.proxy.module", hub)
+	observer := event.NewSimpleObserver("aetherrelay.proxy.module", hub)
 	observer.Subscribe(proxyevents.TopicUpdateConfig, func(ev event.Event, result event.Result) {
 		if command, ok := ev.Data().(proxyevents.UpdateConfigCommand); ok && captured != nil {
 			*captured = command.Config
@@ -101,7 +101,7 @@ func TestReplaceProvidersRollsBackStoreWhenActivationFails(t *testing.T) {
 	hub := event.NewHub(8)
 	defer hub.Terminate(context.Background())
 	_ = proxyUpdateObserver(hub, errors.New("rejected"), nil)
-	store, err := providerstore.Open(filepath.Join(t.TempDir(), "ai-proxy.duckdb"), "256MB", 1, testCredentialCodec(t))
+	store, err := providerstore.Open(filepath.Join(t.TempDir(), "aetherrelay.duckdb"), "256MB", 1, testCredentialCodec(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,20 +2,20 @@
 package events
 
 const (
-	TopicSave            = "aiproxy.chatgpt.imagestore.command.save"
-	TopicGetBytes        = "aiproxy.chatgpt.imagestore.command.get_bytes"
-	TopicDelete          = "aiproxy.chatgpt.imagestore.command.delete"
-	TopicDeleteScope     = "aiproxy.chatgpt.imagestore.command.delete_scope"
-	TopicList            = "aiproxy.chatgpt.imagestore.command.list"
-	TopicEnsureThumbnail = "aiproxy.chatgpt.imagestore.command.ensure_thumbnail"
-	TopicGetThumbnail    = "aiproxy.chatgpt.imagestore.command.get_thumbnail"
-	TopicExists          = "aiproxy.chatgpt.imagestore.command.exists"
-	TopicListTags        = "aiproxy.chatgpt.imagestore.command.list_tags"
-	TopicSetTags         = "aiproxy.chatgpt.imagestore.command.set_tags"
-	TopicDeleteTag       = "aiproxy.chatgpt.imagestore.command.delete_tag"
-	TopicStorageStats    = "aiproxy.chatgpt.imagestore.command.storage_stats"
-	TopicCompress        = "aiproxy.chatgpt.imagestore.command.compress"
-	TopicCleanupToTarget = "aiproxy.chatgpt.imagestore.command.cleanup_to_target"
+	TopicSave            = "aetherrelay.chatgpt.imagestore.command.save"
+	TopicGetBytes        = "aetherrelay.chatgpt.imagestore.command.get_bytes"
+	TopicDelete          = "aetherrelay.chatgpt.imagestore.command.delete"
+	TopicDeleteScope     = "aetherrelay.chatgpt.imagestore.command.delete_scope"
+	TopicList            = "aetherrelay.chatgpt.imagestore.command.list"
+	TopicEnsureThumbnail = "aetherrelay.chatgpt.imagestore.command.ensure_thumbnail"
+	TopicGetThumbnail    = "aetherrelay.chatgpt.imagestore.command.get_thumbnail"
+	TopicExists          = "aetherrelay.chatgpt.imagestore.command.exists"
+	TopicListTags        = "aetherrelay.chatgpt.imagestore.command.list_tags"
+	TopicSetTags         = "aetherrelay.chatgpt.imagestore.command.set_tags"
+	TopicDeleteTag       = "aetherrelay.chatgpt.imagestore.command.delete_tag"
+	TopicStorageStats    = "aetherrelay.chatgpt.imagestore.command.storage_stats"
+	TopicCompress        = "aetherrelay.chatgpt.imagestore.command.compress"
+	TopicCleanupToTarget = "aetherrelay.chatgpt.imagestore.command.cleanup_to_target"
 )
 
 type SaveCommand struct {

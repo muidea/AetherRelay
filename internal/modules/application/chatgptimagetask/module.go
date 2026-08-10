@@ -1,8 +1,8 @@
 package chatgptimagetask
 
 import (
-	"ai-proxy/internal/modules/application/chatgptimagetask/biz"
-	"ai-proxy/internal/modules/application/chatgptimagetask/pkg/common"
+	"aetherrelay/internal/modules/application/chatgptimagetask/biz"
+	"aetherrelay/internal/modules/application/chatgptimagetask/pkg/common"
 	"context"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

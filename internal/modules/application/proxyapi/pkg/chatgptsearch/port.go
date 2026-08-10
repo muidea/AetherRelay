@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 )
 
 type Request struct {

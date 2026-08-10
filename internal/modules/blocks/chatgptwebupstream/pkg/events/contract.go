@@ -2,21 +2,21 @@
 package events
 
 import (
-	"ai-proxy/internal/pkg/chatattachment"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 const (
-	TopicGetUserInfo   = "aiproxy.chatgpt.webupstream.command.get_user_info"
-	TopicListModels    = "aiproxy.chatgpt.webupstream.command.list_models"
-	TopicGenerateImage = "aiproxy.chatgpt.webupstream.command.generate_image"
-	TopicEditImage     = "aiproxy.chatgpt.webupstream.command.edit_image"
-	TopicResumeImage   = "aiproxy.chatgpt.webupstream.command.resume_image"
-	TopicCompleteText  = "aiproxy.chatgpt.webupstream.command.complete_text"
-	TopicSearch        = "aiproxy.chatgpt.webupstream.command.search"
-	TopicStartText     = "aiproxy.chatgpt.webupstream.command.start_text"
-	TopicPullText      = "aiproxy.chatgpt.webupstream.command.pull_text"
-	TopicCancelText    = "aiproxy.chatgpt.webupstream.command.cancel_text"
+	TopicGetUserInfo   = "aetherrelay.chatgpt.webupstream.command.get_user_info"
+	TopicListModels    = "aetherrelay.chatgpt.webupstream.command.list_models"
+	TopicGenerateImage = "aetherrelay.chatgpt.webupstream.command.generate_image"
+	TopicEditImage     = "aetherrelay.chatgpt.webupstream.command.edit_image"
+	TopicResumeImage   = "aetherrelay.chatgpt.webupstream.command.resume_image"
+	TopicCompleteText  = "aetherrelay.chatgpt.webupstream.command.complete_text"
+	TopicSearch        = "aetherrelay.chatgpt.webupstream.command.search"
+	TopicStartText     = "aetherrelay.chatgpt.webupstream.command.start_text"
+	TopicPullText      = "aetherrelay.chatgpt.webupstream.command.pull_text"
+	TopicCancelText    = "aetherrelay.chatgpt.webupstream.command.cancel_text"
 )
 
 // ModelCapability is the restricted set of capabilities the upstream models

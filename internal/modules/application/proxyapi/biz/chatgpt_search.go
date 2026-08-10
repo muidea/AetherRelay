@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 

@@ -23,18 +23,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptimage"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyarchive"
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	"ai-proxy/internal/pkg/aiproxyclientauth"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxymetricsport"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 type Handler struct {
@@ -2509,7 +2509,7 @@ func applyUpstreamHeaders(req *http.Request, client *http.Request, provider conf
 
 	switch strings.ToLower(strings.TrimSpace(provider.Protocol)) {
 	case "anthropic":
-		// Anthropic-Version 由 ai-proxy 固定生成,不信任客户端。
+		// Anthropic-Version 由 AetherRelay 固定生成,不信任客户端。
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 		if stream {
 			req.Header.Set("Accept", "text/event-stream")
@@ -3001,7 +3001,7 @@ func (h *Handler) printSummary(round *archive.Round, provider, model string, str
 		}
 		attrs = append(attrs, slog.String(key, errMessage))
 	}
-	slog.LogAttrs(context.Background(), level, "ai-proxy", toAttrs(attrs)...)
+	slog.LogAttrs(context.Background(), level, "AetherRelay", toAttrs(attrs)...)
 }
 
 func roundIDValue(round *archive.Round) int {

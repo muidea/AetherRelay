@@ -1,3 +1,3 @@
 package common
 
-const UnitID = "aiproxy.proxy.module"
+const UnitID = "aetherrelay.proxy.module"

@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目定位
 
-`ai-proxy` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 解析有序上游候选链；必要时做基础协议转换，并仅在响应未提交的可重试失败时回退。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
+`AetherRelay` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 解析有序上游候选链；必要时做基础协议转换，并仅在响应未提交的可重试失败时回退。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
 
 当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
 
 ## 常用命令
 
 ```bash
-make run          # go run ./cmd/ai-proxy（读 config.yaml / AI_PROXY_CONFIG）
-make build        # 产出 ./ai-proxy；可用 BINARY=bin/ai-proxy
+make run          # go run ./cmd/aetherrelay（读 config.yaml / AETHERRELAY_CONFIG）
+make build        # 产出 ./AetherRelay；可用 BINARY=bin/AetherRelay
 make test         # go test ./...
 make fmt          # go fmt ./...
 make vet          # go vet ./...
@@ -22,10 +22,10 @@ make clean
 # 单包 / 单测
 go test ./internal/modules/application/proxyapi/service/proxy -count=1
 go test ./internal/modules/application/proxyapi/service/proxy -run TestResolveTransportPlan -count=1
-go test ./internal/pkg/aiproxyconfig -run TestValidateModelRoutes -count=1
+go test ./internal/pkg/aetherrelayconfig -run TestValidateModelRoutes -count=1
 
 # 上游 endpoint 现场探测（独立入口，不在服务启动时跑）
-go run ./cmd/ai-proxy-probe -config config.yaml \
+go run ./cmd/aetherrelay-probe -config config.yaml \
   -provider <route-owner> -endpoint chat_completions -model <exact-model-id>
 ```
 
@@ -34,11 +34,11 @@ go run ./cmd/ai-proxy-probe -config config.yaml \
 ## 架构总览
 
 ```
-cmd/ai-proxy          主服务入口：参数/信号 → internal/services/aiproxy Runtime
-cmd/ai-proxy-probe    运维探针入口：调用 internal/services/probe
-cmd/ai-proxy-usage-import  历史 CSV 导入入口：调用 internal/services/usageimport
+cmd/aetherrelay          主服务入口：参数/信号 → internal/services/aetherrelay Runtime
+cmd/aetherrelay-probe    运维探针入口：调用 internal/services/probe
+cmd/aetherrelay-usage-import  历史 CSV 导入入口：调用 internal/services/usageimport
 
-internal/services/aiproxy  主 gateway process service：驱动 magicCommon application 生命周期并等待 HTTP listener
+internal/services/aetherrelay  主 gateway process service：驱动 magicCommon application 生命周期并等待 HTTP listener
 internal/services/probe    Provider live probe process service
 internal/services/usageimport  CSV → DuckDB 一次性导入 process service
 
@@ -49,18 +49,18 @@ internal/modules/application/proxyapi  OpenAI/Anthropic Application Module：Pro
 internal/modules/application/adminapi  Provider 管理与 usage Application Module
 internal/initiators/routeregistry  magicEngine RouteRegistry 与 HTTP listener Initiator
 
-internal/pkg/aiproxyconfig       配置加载、规范化、启动期校验；model_metadata 仅保存可选补充信息
-internal/pkg/aiproxyarchive      interactions/{api_key_id}/{round_id}/ 交互归档与保留策略
-internal/pkg/aiproxyclientauth   客户端 API Key 身份解析（SHA-256 索引，仅内存）
-internal/pkg/aiproxyusage        DuckDB 用量 Store（Start/Complete/Dashboard/Events/导出）
-internal/pkg/aiproxymetrics      Registry、Prometheus 投影、SLO 巡检与 webhook（无 HTTP adapter）
-internal/pkg/aiproxymetricsport  Metrics Block 的 EventHub-backed 读写端口
+internal/pkg/aetherrelayconfig       配置加载、规范化、启动期校验；model_metadata 仅保存可选补充信息
+internal/pkg/aetherrelayarchive      interactions/{api_key_id}/{round_id}/ 交互归档与保留策略
+internal/pkg/aetherrelayclientauth   客户端 API Key 身份解析（SHA-256 索引，仅内存）
+internal/pkg/aetherrelayusage        DuckDB 用量 Store（Start/Complete/Dashboard/Events/导出）
+internal/pkg/aetherrelaymetrics      Registry、Prometheus 投影、SLO 巡检与 webhook（无 HTTP adapter）
+internal/pkg/aetherrelaymetricsport  Metrics Block 的 EventHub-backed 读写端口
 
 web/admin             嵌入二进制的管理页（Provider、客户端 Key、使用统计、ChatGPT Web 账号/图片任务/图片库；go:embed，无 Node 构建链）
-cmd/ai-proxy-usage-import  旧 usage.csv 一次性导入 DuckDB
+cmd/aetherrelay-usage-import  旧 usage.csv 一次性导入 DuckDB
 ```
 
-装配入口在 `internal/services/aiproxy/runtime.go`：通过 magicCommon `framework/application` + `framework/service.DefaultService` 管理 Initiator / Block / Module 生命周期。`cmd/ai-proxy/main.go` 显式 side-effect import 所需 Initiator、Block、Application Module；不得由业务包间接注册。Config、Usage、Metrics 和 Proxy 各自的 `pkg/events` 拥有 EventHub topic 与 typed DTO；Config Block 提供启动快照与配置激活；`routeregistry` Initiator 提供 magicEngine RouteRegistry 与 listener；Proxy、Admin Module 经 EventHub 获取 Usage 与 Metrics 端口，并经 `initiator.GetEntity` 注入 RouteRegistry 后注册路由。`cmd/` 不放业务装配。
+装配入口在 `internal/services/aetherrelay/runtime.go`：通过 magicCommon `framework/application` + `framework/service.DefaultService` 管理 Initiator / Block / Module 生命周期。`cmd/aetherrelay/main.go` 显式 side-effect import 所需 Initiator、Block、Application Module；不得由业务包间接注册。Config、Usage、Metrics 和 Proxy 各自的 `pkg/events` 拥有 EventHub topic 与 typed DTO；Config Block 提供启动快照与配置激活；`routeregistry` Initiator 提供 magicEngine RouteRegistry 与 listener；Proxy、Admin Module 经 EventHub 获取 Usage 与 Metrics 端口，并经 `initiator.GetEntity` 注入 RouteRegistry 后注册路由。`cmd/` 不放业务装配。
 
 ## 路由与协议合同（核心）
 
@@ -112,7 +112,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 ## 安全与资源边界
 
-- 默认 `127.0.0.1:8080`。Client API Key 是数据端点的必需认证；非 loopback 仍需由网络层保护。**已删除** `inbound_api_key` / `AI_PROXY_INBOUND_API_KEY` / `usage_file`。
+- 默认 `127.0.0.1:8080`。Client API Key 是数据端点的必需认证；非 loopback 仍需由网络层保护。**已删除** `inbound_api_key` / `AETHERRELAY_INBOUND_API_KEY` / `usage_file`。
 - 客户端 Key 不转上游；上游鉴权只来自 provider 配置。原始客户端 Key 不进日志/DuckDB/Web。
 - Admin 默认位于 `/admin` 且 loopback-only；启用 `admin_auth_enabled` 后可用 `admin_base_path` 设定入口，并以 HTTPS 登录方式远程访问。Provider API Key 只显示“已配置”，不回显明文。
 - `/metrics`、`/stats` 默认 loopback；`metrics_remote_access` 可放开。
@@ -121,14 +121,14 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 ## 可观测与落盘
 
-- `state.database`（通常为 `state.dir/ai-proxy.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
+- `state.database`（通常为 `state.dir/aetherrelay.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
 - `state.dir/interactions/{api_key_id}/{round_id}/`：request/upstream/response/metadata；每个 API Key 默认保留最近 N 轮；`archive_full_content` 可关正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
-- Prometheus 指标前缀 `ai_proxy_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
+- Prometheus 指标前缀 `aetherrelay_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
 
 ## 修改时注意
 
 - **model id 严格大小写敏感**；catalog 与 body 必须原文 exact 匹配。
-- 改路由/能力矩阵时同步：`internal/pkg/aiproxyconfig` 校验、`ResolveTransportPlan`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
+- 改路由/能力矩阵时同步：`internal/pkg/aetherrelayconfig` 校验、`ResolveTransportPlan`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
 - 不引入请求侧 provider override、`default_provider`、旧 `fallbacks` 列表，或从 protocol 推断 `endpoints`。`priority` / `fallback` 是唯一的静态候选策略配置。
 - `Makefile` 默认 `-buildvcs=false`，避免非完整 git worktree 下 build 失败。
 - 文档、管理 UI 文案以中文为主；代码标识符保持英文。

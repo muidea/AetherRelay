@@ -1,4 +1,4 @@
-# ai-proxy
+# AetherRelay
 
 一个本地运行的 AI 网关：一个地址、一套标准接口，就能接入多家 AI 服务。现有 OpenAI 或 Anthropic 客户端改一下 base URL 即可使用；网关负责挑选服务商、在故障时自动切换，并记录每一次调用的用量。单进程、无外部依赖，开箱即用，附带本地管理页面。
 
@@ -19,7 +19,7 @@
 
 ```bash
 cp config.example.yaml config.yaml
-export AI_PROXY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
+export AETHERRELAY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
 make run
 ```
 
@@ -42,16 +42,16 @@ Anthropic API base: http://127.0.0.1:8080
 
 ## 容器快速开始
 
-发布镜像位于 `ghcr.io/muidea/ai-proxy`，提供 Linux amd64 与 arm64 清单。**一条命令完成部署**（引导生成配置、初始化 Admin 凭据并启动容器）：
+发布镜像位于 `ghcr.io/muidea/aetherrelay`，提供 Linux amd64 与 arm64 清单。**一条命令完成部署**（引导生成配置、初始化 Admin 凭据并启动容器）：
 
 ```bash
-git clone https://github.com/muidea/ai-proxy.git && cd ai-proxy && ./scripts/deploy-docker.sh
+git clone https://github.com/muidea/AetherRelay.git && cd AetherRelay && ./scripts/deploy-docker.sh
 ```
 
 不想 clone 仓库时，也可以直接运行自包含部署脚本（产物全部落在 `./deploy`，不依赖仓库文件）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/muidea/ai-proxy/main/scripts/deploy-docker.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/muidea/AetherRelay/main/scripts/deploy-docker.sh)
 ```
 
 脚本会实时提示输入两次 Admin 密码（输入不回显，密码不进入参数、环境变量或日志），完成后登录管理台添加 Provider 或导入账号池凭据。无交互场景用 `--admin-password-hash '...'` 注入预生成哈希，或 `--skip-admin` 跳过；完整参数见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
@@ -61,8 +61,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/muidea/ai-proxy/main/scripts
 ```bash
 mkdir -p deploy/config deploy/data
 cp config.example.yaml deploy/config/config.yaml
-# 编辑 deploy/config/config.yaml：listen_addr=0.0.0.0:8080，state.dir=/var/lib/ai-proxy
-# compose.yaml 会将 deploy/data 映射为容器内 /var/lib/ai-proxy。
+# 编辑 deploy/config/config.yaml：listen_addr=0.0.0.0:8080，state.dir=/var/lib/aetherrelay
+# compose.yaml 会将 deploy/data 映射为容器内 /var/lib/aetherrelay。
 # 同时配置实际启用 Provider 的环境变量与客户端 Key。
 docker compose up -d
 ```
@@ -75,10 +75,10 @@ docker compose up -d
 make run                         # 使用 config.yaml 启动
 make check                       # 格式、vet、全量测试
 make build                       # 构建当前平台二进制
-docker build -t ai-proxy:dev .   # 构建本地容器镜像
+docker build -t aetherrelay:dev .   # 构建本地容器镜像
 make release-package VERSION=v1.2.3
-ai-proxy admin password-hash     # 交互式生成 Admin Argon2id 密码哈希
-ai-proxy admin set-credentials --username ops-admin --config config.yaml # 创建或重置 Admin 登录凭据
+AetherRelay admin password-hash     # 交互式生成 Admin Argon2id 密码哈希
+AetherRelay admin set-credentials --username ops-admin --config config.yaml # 创建或重置 Admin 登录凭据
 ```
 
 完整多平台发布由推送 `vX.Y.Z` tag 的 GitHub Actions 完成；详情见[运维与发布说明](docs/operations.md#构建与发布)。

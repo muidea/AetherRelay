@@ -42,24 +42,24 @@
 
 - `server.admin_auth_enabled` 是唯一开关，默认 `false`（保持 loopback-only）。
 - 开启时必须配置单管理员账号与 Argon2id PHC 哈希（唯一允许参数 `m=65536,t=3,p=1`、salt ≥ 16 bytes、输出 ≥ 32 bytes）；缺失、非法或弱参数使进程在监听前启动失败。只接受哈希，拒绝明文与可逆加密。
-- 提供 `ai-proxy admin password-hash`（交互式，TTY 两次读密码）与 `admin set-credentials`（直接创建/重置凭据，自动写入配置）两个子命令；密码不进入 argv / 环境变量 / 日志。
+- 提供 `AetherRelay admin password-hash`（交互式，TTY 两次读密码）与 `admin set-credentials`（直接创建/重置凭据，自动写入配置）两个子命令；密码不进入 argv / 环境变量 / 日志。
 - `admin_base_path` 是启动期路由（默认 `/admin`）；页面、认证端点、业务 API 与 Cookie Path 均从其派生，变更必须重启。
 
 ### 会话模型
 
-- 服务端内存 SessionStore：32 bytes 随机 session ID 与 CSRF token；Cookie 名 `ai_proxy_admin_session`，`HttpOnly` + `SameSite=Strict`，`Max-Age` 等于 TTL，`Secure` 由 `admin_session_cookie_secure` 决定（默认 false，HTTPS 反向代理部署应开启）。
+- 服务端内存 SessionStore：32 bytes 随机 session ID 与 CSRF token；Cookie 名 `aetherrelay_admin_session`，`HttpOnly` + `SameSite=Strict`，`Max-Age` 等于 TTL，`Secure` 由 `admin_session_cookie_secure` 决定（默认 false，HTTPS 反向代理部署应开启）。
 - 绝对 TTL 默认 28800 秒（范围 300~86400），不因访问续期；会话上限 64，满时新登录 503，不驱逐活跃会话。
 
 ### CSRF 与滥用防护
 
-- 认证开启时，所有状态变更请求须会话 Cookie + `X-AI-Proxy-CSRF` + Origin 精确匹配（非浏览器缺失 Origin 允许）；`X-AI-Proxy-Admin` 保留但不作为身份凭据。
+- 认证开启时，所有状态变更请求须会话 Cookie + `X-AetherRelay-CSRF` + Origin 精确匹配（非浏览器缺失 Origin 允许）；`X-AetherRelay-Admin` 保留但不作为身份凭据。
 - 登录失败统一返回 `invalid username or password`（不泄露账号存在性）；按实际对端地址内存限速：连续 5 次失败后 15 分钟内 429 + `Retry-After`，成功登录清零。
 - 认证相关配置热更新成功激活后清空全部会话与登录限速记录；仅热更新无关配置时已登录会话保持有效。
 
 ## 访问控制边界
 
 - **默认 loopback-only**：`/admin`、`/metrics`、`/stats` 在认证关闭时仅 loopback；远程访问分别由 `admin_auth_enabled` 与 `metrics_remote_access` + `metrics_allowed_cidrs` 控制。
-- 未登录写接口仍需 `X-AI-Proxy-Admin: 1` 意图头；它只是浏览器请求意图的表达，可被本机进程伪造，不作身份凭据。
+- 未登录写接口仍需 `X-AetherRelay-Admin: 1` 意图头；它只是浏览器请求意图的表达，可被本机进程伪造，不作身份凭据。
 - **不信任任何 forwarded header**（`X-Forwarded-For` / `X-Forwarded-Proto` 等）作身份或协议判断；不基于 RemoteAddr/CIDR 跳过认证；反向代理部署须保留外部 `Host`。
 - Provider Key 只显示“已配置”，不回显明文；日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header。
 
@@ -67,7 +67,7 @@
 
 - Provider 完整目录、ChatGPT Web 账号和 Codex OAuth 账号以 owner-scoped 安全文档保存到 DuckDB；access token 不再作为数据库主键。
 - 安全文档使用 AES-256-GCM 和随机 nonce 加密，并将 scope 与稳定记录 ID 作为附加认证数据，防止密文跨记录替换。
-- 主密钥 `AI_PROXY_CREDENTIAL_KEY` 必须是 Base64 编码的 32 字节随机值，只从进程环境或编排 secret 注入。它不得写入 `config.yaml`、DuckDB、日志或版本库。
+- 主密钥 `AETHERRELAY_CREDENTIAL_KEY` 必须是 Base64 编码的 32 字节随机值，只从进程环境或编排 secret 注入。它不得写入 `config.yaml`、DuckDB、日志或版本库。
 - 主密钥缺失时账号池启动失败；尚无 Provider 目录的新实例只读，已有 Provider 密文的实例启动失败。密钥错误时解密明确失败，不得回退为空目录或读取明文。
 
 ## 演进记录

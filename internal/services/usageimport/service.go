@@ -18,13 +18,13 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 var apiKeyIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// Main 保持既有 CLI 行为；cmd/ai-proxy-usage-import 只负责调用该进程服务。
+// Main 保持既有 CLI 行为；cmd/aetherrelay-usage-import 只负责调用该进程服务。
 func Main() {
 	source := flag.String("source", "usage.csv", "source usage.csv path")
 	database := flag.String("database", "usage.duckdb", "target DuckDB path")

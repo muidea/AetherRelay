@@ -1,4 +1,4 @@
-# ai-proxy Provider Capability Contract 功能设计
+# AetherRelay Provider Capability Contract 功能设计
 
 Status: implemented historical design reference
 
@@ -12,8 +12,8 @@ Review State: archived 2026-07-15 closure record
 
 ## 0. 2026-07-15 代码评审与收口结论
 
-本文是 ai-proxy 独立拥有的完整功能设计，不由 WorkOrch 或具体 SDK 反向推导。WorkOrch 后续按本合同单独
-同步，本轮不把跨仓联调计入 ai-proxy 代码修改范围。
+本文是 AetherRelay 独立拥有的完整功能设计，不由 WorkOrch 或具体 SDK 反向推导。WorkOrch 后续按本合同单独
+同步，本轮不把跨仓联调计入 AetherRelay 代码修改范围。
 
 C01–C05 的实现收口与 C06 的 SDK/mock 验收已经落入代码；全量门禁和 provider direct capability live matrix
 仍需按本文与 `archive/provider-capability-audit-2026-07-15.md` 复核。因此本文保持 `active`，不得把部分 chat live
@@ -42,7 +42,7 @@ C01–C05 的实现收口与 C06 的 SDK/mock 验收已经落入代码；全量�
 7. invalid JSON、request too large、代理内部失败和上游网络失败仍有自由文本错误。
 8. 已增加 OpenAI SDK / Anthropic SDK 验收测试和独立 live probe；probe 输出包含 provider、protocol、
    capability、exact model、path、stream、status、duration 与 conclusion，并做摘要脱敏。
-9. WorkOrch 的合同同步留待其后续独立调整；ai-proxy 本身不实现 fallback。
+9. WorkOrch 的合同同步留待其后续独立调整；AetherRelay 本身不实现 fallback。
 
 最终收口必须重新通过以下代码门禁：
 
@@ -52,40 +52,40 @@ C01–C05 的实现收口与 C06 的 SDK/mock 验收已经落入代码；全量�
 - `git diff --check`
 
 上述门禁通过只证明当前测试集没有回归；只有 direct capability live matrix 的已验证项也被准确归档后，
-才能更新相应 live 状态。WorkOrch 联调状态必须单独记录，不得由 ai-proxy 单仓测试代替。
+才能更新相应 live 状态。WorkOrch 联调状态必须单独记录，不得由 AetherRelay 单仓测试代替。
 
 Related:
 
 - [WorkOrch 模型目录与 Operation 合同收口计划](workorch-model-catalog-operation-closure-plan-2026-07-15.md)
-- `/home/rangh/aispace/workorch/docs/70-roadmap/active/ai-proxy-primary-llm-provider-cutover-design-2026-07-15.md`
-- `internal/pkg/aiproxyconfig/config.go`
+- `/home/rangh/aispace/workorch/docs/70-roadmap/active/AetherRelay-primary-llm-provider-cutover-design-2026-07-15.md`
+- `internal/pkg/aetherrelayconfig/config.go`
 - `internal/modules/application/proxyapi/service/proxy/route.go`
 - `internal/modules/application/proxyapi/service/proxy/handler.go`
 - `internal/modules/application/proxyapi/service/proxy/anthropic.go`
 
 ## 1. 功能定位
 
-Provider Capability Contract 是 ai-proxy 自己拥有的路由与执行能力。它负责：
+Provider Capability Contract 是 AetherRelay 自己拥有的路由与执行能力。它负责：
 
-1. 对外发布 ai-proxy 支持的标准入站端点和模型业务能力。
+1. 对外发布 AetherRelay 支持的标准入站端点和模型业务能力。
 2. 根据请求中的 exact model 解析唯一上游 provider。
 3. 根据入站端点、模型 operation、上游协议和 provider 直连端点生成唯一转发计划。
-4. 在客户端协议与上游协议不同时执行 ai-proxy 明确实现的协议转换。
+4. 在客户端协议与上游协议不同时执行 AetherRelay 明确实现的协议转换。
 5. 在访问上游前拒绝不支持的模型、operation、endpoint 或转换特性。
 6. 为配置校验、模型目录、请求执行、归档、metrics 和 WorkOrch catalog refresh 提供同一份 authority。
 
 OpenAI SDK、Anthropic SDK 和 WorkOrch 都是该功能合同的消费者。客户端请求形态不会反向定义 provider
-能力，也不能通过 SDK 类型、header、query 或模型名称猜测 ai-proxy 的路由与转换能力。
+能力，也不能通过 SDK 类型、header、query 或模型名称猜测 AetherRelay 的路由与转换能力。
 
 ## 2. 目标与非目标
 
 ### 2.1 目标
 
-- 客户端可使用标准 OpenAI 或 Anthropic SDK 接入 ai-proxy。
+- 客户端可使用标准 OpenAI 或 Anthropic SDK 接入 AetherRelay。
 - provider 及其上游协议、模型范围、直连 endpoint 和认证只由配置文件声明。
 - 请求只按 exact model 路由到唯一 RouteOwner。
 - OpenAI Chat Completions 与 Anthropic Messages 支持基础文本协议双向转换。
-- `/v1/models` 发布 ai-proxy 已完成启动校验的模型 operation 和容量合同。
+- `/v1/models` 发布 AetherRelay 已完成启动校验的模型 operation 和容量合同。
 - 所有路由与转换拒绝在创建上游请求前完成，并返回稳定 typed error。
 - 不存在 default provider、provider fallback 或失败后重新选择 provider。
 
@@ -143,7 +143,7 @@ OpenAI SDK、Anthropic SDK 和 WorkOrch 都是该功能合同的消费者。客�
 ### 4.3 入站认证
 
 - 客户端身份由 DuckDB 客户端 Key 记录解析；每个数据请求都必须携带已启用 Key，而不是使用上游 provider API Key。
-- ai-proxy 接受 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
+- AetherRelay 接受 `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
 - 客户端认证头不得原样作为上游认证转发；上游认证由 RouteOwner 配置重新生成。
 
 ## 5. Model Operation 合同
@@ -440,7 +440,7 @@ typed conversion error。usage、metadata 和 metrics 必须在首次记录时�
 
 - Anthropic upstream → OpenAI client：输出 OpenAI-compatible `error` object。
 - OpenAI upstream → Anthropic client：输出 Anthropic-compatible `error` object。
-- 无法安全解析上游错误时，输出 ai-proxy typed upstream error，不能把另一种协议的原始错误结构直接交给
+- 无法安全解析上游错误时，输出 AetherRelay typed upstream error，不能把另一种协议的原始错误结构直接交给
   客户端 SDK。
 - 转换后的错误只保留安全摘要、status、RouteOwner 和 request ID；不得包含 Authorization、API Key、带凭据
   URL 或不受限的完整上游 body。
@@ -493,7 +493,7 @@ type APIError struct {
 
 ## 14. `/v1/models` 客户端发现合同
 
-`/v1/models` 只发布 ai-proxy 自己已经校验的模型 authority：
+`/v1/models` 只发布 AetherRelay 自己已经校验的模型 authority：
 
 - model ID、容量和 operations。
 - 稳定排序、具体 DTO、GET/POST 一致。
@@ -550,13 +550,13 @@ live probe 是显式运维动作，不属于服务启动：
 [`provider-capability-audit-2026-07-15.md`](provider-capability-audit-2026-07-15.md)。
 
 为了让验证可重复，代码收口必须提供一个独立运维入口，建议使用
-`cmd/ai-proxy-probe`：
+`cmd/aetherrelay-probe`：
 
 ```text
-go run ./cmd/ai-proxy-probe -config ./config.yaml -provider <route-owner> -capability <capability> -model <model>
+go run ./cmd/aetherrelay-probe -config ./config.yaml -provider <route-owner> -capability <capability> -model <model>
 ```
 
-该入口只读取并校验现有配置，不修改 provider/catalog，不由 ai-proxy server 启动链调用。
+该入口只读取并校验现有配置，不修改 provider/catalog，不由 AetherRelay server 启动链调用。
 每次发布的审计结果归档到 `docs/archive/provider-capability-audit-<date>.md`，至少包含：
 
 - RouteOwner、protocol、direct capability、model、验证时间和环境。
@@ -569,10 +569,10 @@ go run ./cmd/ai-proxy-probe -config ./config.yaml -provider <route-owner> -capab
 - TransportPlan 按 upstream protocol 生成 header allowlist，删除客户端认证、provider override、
   hop-by-hop header 和不适用于上游协议的版本 header。
 - 构造上游请求时不得先复制全部入站 header 再做 blocklist 删除。允许透传的通用语义
-  header 仅包括 `Content-Type`、`Accept` 和经过验证的 `X-Request-ID`；其它 header 必须由 ai-proxy
+  header 仅包括 `Content-Type`、`Accept` 和经过验证的 `X-Request-ID`；其它 header 必须由 AetherRelay
   或 RouteOwner 配置重建。
 - OpenAI upstream 必须删除 `Anthropic-Version`、`Anthropic-Beta`、`X-API-Key` 及 Anthropic SDK
-  私有 header。Anthropic upstream 的 `Anthropic-Version` 由 ai-proxy 固定值或未来显式 provider
+  私有 header。Anthropic upstream 的 `Anthropic-Version` 由 AetherRelay 固定值或未来显式 provider
   配置生成，不直接信任客户端传入值。
 - OpenAI upstream 使用 RouteOwner 的 Bearer/API Key 合同；Anthropic upstream 使用 RouteOwner 的 API Key 和
   Anthropic version 合同。不得根据客户端使用的 SDK 复用认证方式。
@@ -592,18 +592,18 @@ go run ./cmd/ai-proxy-probe -config ./config.yaml -provider <route-owner> -capab
 
 ### 18.1 OpenAI SDK
 
-- Base URL 指向 `http://<ai-proxy>/v1`。
-- API Key 使用 ai-proxy inbound API Key。
+- Base URL 指向 `http://<AetherRelay>/v1`。
+- API Key 使用 AetherRelay inbound API Key。
 - 使用 `/v1/models` 返回的裸 model ID。
 - 可调用 chat completions、responses、completions、embeddings；是否可执行由 model operation 和
   TransportPlan 决定。
 
 ### 18.2 Anthropic SDK
 
-- Base URL 指向 `http://<ai-proxy>`，由 SDK 调用 `/v1/messages`。
-- API Key 使用 ai-proxy inbound API Key。
+- Base URL 指向 `http://<AetherRelay>`，由 SDK 调用 `/v1/messages`。
+- API Key 使用 AetherRelay inbound API Key。
 - 使用 `/v1/models` 返回的裸 model ID。
-- RouteOwner 为 OpenAI protocol 时，ai-proxy 自动执行基础文本 Anthropic→OpenAI 转换。
+- RouteOwner 为 OpenAI protocol 时，AetherRelay 自动执行基础文本 Anthropic→OpenAI 转换。
 
 ### 18.3 客户端通用规则
 
@@ -618,15 +618,15 @@ go run ./cmd/ai-proxy-probe -config ./config.yaml -provider <route-owner> -capab
 
 不新增 framework module，沿用现有 focused package：
 
-- `internal/pkg/aiproxyconfig/config.go`：配置解析、normalize、RouteOwner 和 canonical readiness。
+- `internal/pkg/aetherrelayconfig/config.go`：配置解析、normalize、RouteOwner 和 canonical readiness。
 - `internal/modules/application/proxyapi/service/proxy/route.go`：Client Endpoint/Operation 解析和 TransportPlan 矩阵。
 - `internal/modules/application/proxyapi/service/proxy/handler.go`：公共请求生命周期、authority 查找、native 转发。
 - `internal/modules/application/proxyapi/service/proxy/anthropic.go`：OpenAI↔Anthropic 请求、响应和 SSE 转换器。
 - `internal/modules/application/proxyapi/service/proxy/api_error.go`：稳定 typed error DTO 和 code。
 - `internal/modules/application/proxyapi/service/proxy/models.go`：模型目录外部 DTO。
-- `internal/pkg/aiproxyusage/`：DuckDB usage event、聚合查询、导出与 schema migration。
-- `internal/pkg/aiproxymetrics/registry.go`：有界 TransportPlan request label 与 RouteOwner SLO 聚合数据。
-- `cmd/ai-proxy-probe`：独立运维 probe 入口；不参与 ai-proxy server 运行时路由。
+- `internal/pkg/aetherrelayusage/`：DuckDB usage event、聚合查询、导出与 schema migration。
+- `internal/pkg/aetherrelaymetrics/registry.go`：有界 TransportPlan request label 与 RouteOwner SLO 聚合数据。
+- `cmd/aetherrelay-probe`：独立运维 probe 入口；不参与 AetherRelay server 运行时路由。
 
 Handler 只消费已解析 authority 和 TransportPlan。转换器不选择 provider，config 包不解析请求 body，models
 handler 不构造 route。
@@ -684,11 +684,11 @@ TransportPlan 或由该 plan 一次性投影出的不可变 observation DTO。
 
 ### 客户端验收
 
-- 使用官方 OpenAI SDK 对真实 ai-proxy HTTP server 执行 models、chat 和 embeddings 主路径；
+- 使用官方 OpenAI SDK 对真实 AetherRelay HTTP server 执行 models、chat 和 embeddings 主路径；
   不能仅用手写 HTTP request 代替。
-- 使用官方 Anthropic SDK 对真实 ai-proxy HTTP server 执行 messages 主路径，并验证
+- 使用官方 Anthropic SDK 对真实 AetherRelay HTTP server 执行 messages 主路径，并验证
   native/conversion 两种 RouteOwner。
-- 两类 SDK 使用相同裸 model ID 时均由 ai-proxy 决定 RouteOwner 和是否转换。
+- 两类 SDK 使用相同裸 model ID 时均由 AetherRelay 决定 RouteOwner 和是否转换。
 - 客户端不配置或传递 provider override。
 - SDK 验收必须覆盖客户端可解析的本地 typed error 与转换模式上游错误。
 
@@ -738,11 +738,11 @@ conversion preflight、基础双向转换和转换模式上游错误 envelope。
 - [x] 真实 OpenAI SDK 与 Anthropic SDK 不需了解 provider 配置或上游协议即可完成主路径与错误解析。
 - [ ] 每个 enabled provider 的每个已声明 direct capability 都有文档来源和可审计 live 结论；streaming
   支持项单独记录。（当前仅部分 `chat_completions` 已 live）
-- [x] 独立 probe 入口（cmd/ai-proxy-probe）输出完整合同字段并对摘要脱敏。
-- [x] README、PRD、配置示例、部署配置、closure plan 与 ai-proxy 本仓合同一致；WorkOrch 标记为后续同步。
+- [x] 独立 probe 入口（cmd/aetherrelay-probe）输出完整合同字段并对摘要脱敏。
+- [x] README、PRD、配置示例、部署配置、closure plan 与 AetherRelay 本仓合同一致；WorkOrch 标记为后续同步。
 - [x] 当前代码重新通过 `go test ./...`、`go vet ./...`、`gofmt -l` 和 `git diff --check`；正式
   `config.yaml` 成功加载到监听阶段（沙箱 bind 被拒绝不属于配置错误）。
-- [ ] 完成 ai-proxy 代码门禁与 direct capability live 审计后归档最终证据；WorkOrch 联调单独验收。
+- [ ] 完成 AetherRelay 代码门禁与 direct capability live 审计后归档最终证据；WorkOrch 联调单独验收。
 
 只有上述所有条目勾选后，才能将本文 `Status` 从 `active` 更新为 `completed`，
 并删除 `Review State: code-closure-required`。

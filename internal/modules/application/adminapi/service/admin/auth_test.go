@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 func enabledAuthConfig(t *testing.T, username, password string) config.AdminAuthConfig {
@@ -19,7 +19,7 @@ func enabledAuthConfig(t *testing.T, username, password string) config.AdminAuth
 	}
 	return config.AdminAuthConfig{
 		Enabled:           true,
-		BasePath:          "/ops/ai-proxy",
+		BasePath:          "/ops/AetherRelay",
 		Username:          username,
 		PasswordHash:      hash,
 		SessionTTLSeconds: 3600,
@@ -52,16 +52,16 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	h := newAuthHandler(t, auth)
 
 	// unauthenticated page -> 303 login
-	req := httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/ops/ai-proxy/login" {
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/ops/AetherRelay/login" {
 		t.Fatalf("page redirect = %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 
 	// unauthenticated API -> 401 JSON
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/api/providers", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/api/providers", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -70,7 +70,7 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	}
 
 	// wrong password
-	req = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"wrong"}`))
+	req = httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"wrong"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	rec = httptest.NewRecorder()
@@ -80,7 +80,7 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	}
 
 	// correct login
-	req = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	req = httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	rec = httptest.NewRecorder()
@@ -96,12 +96,12 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 		t.Fatalf("session = %+v", sess)
 	}
 	cookie := rec.Result().Cookies()
-	if len(cookie) == 0 || cookie[0].Name != adminSessionCookieName || !cookie[0].HttpOnly || cookie[0].Secure || cookie[0].Path != "/ops/ai-proxy" {
+	if len(cookie) == 0 || cookie[0].Name != adminSessionCookieName || !cookie[0].HttpOnly || cookie[0].Secure || cookie[0].Path != "/ops/AetherRelay" {
 		t.Fatalf("cookie = %+v", cookie)
 	}
 
 	// session endpoint
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/api/auth/session", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/api/auth/session", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie[0])
 	rec = httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	}
 
 	// mutation without CSRF -> 403
-	req = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/providers", strings.NewReader(`{}`))
+	req = httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/providers", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie[0])
@@ -122,7 +122,7 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	}
 
 	// logout with CSRF
-	req = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/logout", nil)
+	req = httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/logout", nil)
 	req.Header.Set(adminCSRFHeader, sess.CSRFToken)
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie[0])
@@ -133,7 +133,7 @@ func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	}
 
 	// old cookie invalid
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/api/providers", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/api/providers", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie[0])
 	rec = httptest.NewRecorder()
@@ -147,7 +147,7 @@ func TestAuthLoginRateLimit(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)
 	for i := 0; i < loginFailLimit; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"bad"}`))
+		req := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"bad"}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "198.51.100.2:1"
 		rec := httptest.NewRecorder()
@@ -156,7 +156,7 @@ func TestAuthLoginRateLimit(t *testing.T) {
 			t.Fatalf("fail %d = %d", i, rec.Code)
 		}
 	}
-	req := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	req := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "198.51.100.2:1"
 	rec := httptest.NewRecorder()
@@ -173,7 +173,7 @@ func TestAuthCSRFAllowsHTTPSOriginWhenTLSTerminatesAtProxy(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)
 
-	login := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	login := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	login.Header.Set("Content-Type", "application/json")
 	login.RemoteAddr = "203.0.113.8:9"
 	login.Host = "admin.example.test"
@@ -189,7 +189,7 @@ func TestAuthCSRFAllowsHTTPSOriginWhenTLSTerminatesAtProxy(t *testing.T) {
 	cookie := loginRec.Result().Cookies()[0]
 
 	// 后端连接是 HTTP（TLS 在代理终止），浏览器仍发送外部 HTTPS Origin。
-	logout := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/logout", nil)
+	logout := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/logout", nil)
 	logout.RemoteAddr = "203.0.113.8:9"
 	logout.Host = "admin.example.test"
 	logout.Header.Set("Origin", "https://admin.example.test")
@@ -202,7 +202,7 @@ func TestAuthCSRFAllowsHTTPSOriginWhenTLSTerminatesAtProxy(t *testing.T) {
 	}
 
 	// 同一 Host 的 HTTP 部署也被支持。
-	login = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	login = httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	login.Header.Set("Content-Type", "application/json")
 	login.RemoteAddr = "203.0.113.8:9"
 	login.Host = "admin.example.test"
@@ -215,7 +215,7 @@ func TestAuthCSRFAllowsHTTPSOriginWhenTLSTerminatesAtProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie = loginRec.Result().Cookies()[0]
-	logout = httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/logout", nil)
+	logout = httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/logout", nil)
 	logout.RemoteAddr = "203.0.113.8:9"
 	logout.Host = "admin.example.test"
 	logout.Header.Set("Origin", "http://admin.example.test")
@@ -232,7 +232,7 @@ func TestAuthSessionCookieSecureFollowsConfig(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	auth.SessionCookieSecure = true
 	h := newAuthHandler(t, auth)
-	req := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	req := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	rec := httptest.NewRecorder()
@@ -254,7 +254,7 @@ func TestAuthRejectsAdminBasePathHotUpdate(t *testing.T) {
 	if err := h.activateConfig(cfg); err != errAdminBasePathRestart {
 		t.Fatalf("activateConfig error = %v, want %v", err, errAdminBasePathRestart)
 	}
-	if got := h.adminBasePath(); got != "/ops/ai-proxy" {
+	if got := h.adminBasePath(); got != "/ops/AetherRelay" {
 		t.Fatalf("base path changed to %q", got)
 	}
 }
@@ -263,7 +263,7 @@ func TestAuthConfigHotUpdateClearsSessions(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)
 
-	req := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	req := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	rec := httptest.NewRecorder()
@@ -279,7 +279,7 @@ func TestAuthConfigHotUpdateClearsSessions(t *testing.T) {
 	if err := h.activateConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/api/auth/session", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/api/auth/session", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
@@ -294,7 +294,7 @@ func TestAuthConfigHotUpdateClearsSessions(t *testing.T) {
 	if err := h.activateConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/api/auth/session", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/api/auth/session", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
@@ -311,7 +311,7 @@ func TestAuthSessionExpiry(t *testing.T) {
 	now := time.Now()
 	h.auth.clock = func() time.Time { return now }
 
-	req := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	req := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "203.0.113.8:9"
 	rec := httptest.NewRecorder()
@@ -322,7 +322,7 @@ func TestAuthSessionExpiry(t *testing.T) {
 	cookie := rec.Result().Cookies()[0]
 
 	now = now.Add(301 * time.Second)
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/api/providers", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/api/providers", nil)
 	req.RemoteAddr = "203.0.113.8:9"
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
@@ -336,14 +336,14 @@ func TestAuthIndexInjectsBasePath(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)
 	// login first
-	req := httptest.NewRequest(http.MethodPost, "/ops/ai-proxy/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
+	req := httptest.NewRequest(http.MethodPost, "/ops/AetherRelay/api/auth/login", strings.NewReader(`{"username":"ops-admin","password":"s3cret-pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:1"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	cookie := rec.Result().Cookies()[0]
 
-	req = httptest.NewRequest(http.MethodGet, "/ops/ai-proxy/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/ops/AetherRelay/", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
@@ -351,7 +351,7 @@ func TestAuthIndexInjectsBasePath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("index = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `window.__AI_PROXY_ADMIN_BASE_PATH__="/ops/ai-proxy"`) {
+	if !strings.Contains(rec.Body.String(), `window.__AETHERRELAY_ADMIN_BASE_PATH__="/ops/AetherRelay"`) {
 		t.Fatalf("missing base path injection")
 	}
 	if !strings.Contains(rec.Body.String(), "apiURL") {
@@ -360,11 +360,11 @@ func TestAuthIndexInjectsBasePath(t *testing.T) {
 }
 
 func TestLoginPageInjectsInstanceDefaultLanguage(t *testing.T) {
-	page := string(loginPageHTML("/ops/ai-proxy", "en-US"))
-	if !strings.Contains(page, `window.__AI_PROXY_ADMIN_DEFAULT_LANGUAGE__="en-US"`) {
+	page := string(loginPageHTML("/ops/AetherRelay", "en-US"))
+	if !strings.Contains(page, `window.__AETHERRELAY_ADMIN_DEFAULT_LANGUAGE__="en-US"`) {
 		t.Fatalf("missing default language injection: %s", page)
 	}
-	if !strings.Contains(page, `const en={title:"Sign in to AI Proxy"`) {
+	if !strings.Contains(page, `const en={title:"Sign in to AetherRelay"`) {
 		t.Fatal("login page is missing English translations")
 	}
 }
@@ -384,7 +384,7 @@ func TestAuthOldAdminPathNotFoundWhenCustomBase(t *testing.T) {
 func TestAuthBasePathDoesNotPrefixMatchSibling(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)
-	req := httptest.NewRequest(http.MethodGet, "/ops/ai-proxy-extra", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ops/AetherRelay-extra", nil)
 	req.RemoteAddr = "127.0.0.1:1"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

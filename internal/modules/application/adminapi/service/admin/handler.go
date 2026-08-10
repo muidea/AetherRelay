@@ -15,20 +15,20 @@ import (
 	"sync"
 	"time"
 
-	"ai-proxy/internal/modules/application/adminapi/pkg/codexmanagement"
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	taskevents "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
-	tempevents "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	imgevents "ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/events"
-	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
-	"ai-proxy/internal/pkg/aiproxyclientauth"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetricsport"
-	"ai-proxy/internal/pkg/aiproxyusage"
-	"ai-proxy/internal/services/probe"
-	adminweb "ai-proxy/web"
+	"aetherrelay/internal/modules/application/adminapi/pkg/codexmanagement"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	taskevents "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
+	tempevents "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	imgevents "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
+	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
+	"aetherrelay/internal/pkg/aetherrelayusage"
+	"aetherrelay/internal/services/probe"
+	adminweb "aetherrelay/web"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -853,7 +853,7 @@ func injectAdminBasePath(html []byte, basePath string) []byte {
 	if err != nil {
 		bp = []byte(`"/admin"`)
 	}
-	injection := []byte("<script>window.__AI_PROXY_ADMIN_BASE_PATH__=" + string(bp) + ";</script>")
+	injection := []byte("<script>window.__AETHERRELAY_ADMIN_BASE_PATH__=" + string(bp) + ";</script>")
 	// 插在 <head> 后,保证脚本尽早可用。
 	lower := strings.ToLower(string(html))
 	idx := strings.Index(lower, "<head>")
@@ -1129,7 +1129,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 
 	providerRuntime, ok := h.runtime.(managedProviderRuntime)
 	if !ok || !providerRuntime.ProviderStorageAvailable() {
-		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AETHERRELAY_CREDENTIAL_KEY")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
@@ -1182,7 +1182,7 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request, rel stri
 
 	providerRuntime, ok := h.runtime.(managedProviderRuntime)
 	if !ok || !providerRuntime.ProviderStorageAvailable() {
-		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AETHERRELAY_CREDENTIAL_KEY")
 		return
 	}
 	name := strings.ToLower(strings.Trim(strings.TrimPrefix(rel, "/api/providers/"), "/"))
@@ -1246,7 +1246,7 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, rel string) {
 
 	providerRuntime, ok := h.runtime.(managedProviderRuntime)
 	if !ok || !providerRuntime.ProviderStorageAvailable() {
-		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AI_PROXY_CREDENTIAL_KEY")
+		writeError(w, http.StatusConflict, "managed Provider storage is unavailable; configure AETHERRELAY_CREDENTIAL_KEY")
 		return
 	}
 	name := strings.ToLower(strings.Trim(strings.TrimPrefix(rel, "/api/providers/"), "/"))

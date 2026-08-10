@@ -46,8 +46,8 @@ server:
   # admin_default_language: zh-CN
   # 单管理员账号（区分大小写）。
   # admin_username: ops-admin
-  # 仅接受 Argon2id PHC 哈希；用 `ai-proxy admin password-hash` 生成后注入。
-  # admin_password_hash: ${AI_PROXY_ADMIN_PASSWORD_HASH}
+  # 仅接受 Argon2id PHC 哈希；用 `AetherRelay admin password-hash` 生成后注入。
+  # admin_password_hash: ${AETHERRELAY_ADMIN_PASSWORD_HASH}
   # true 时会话 Cookie 仅随 HTTPS 请求发送；默认 false，兼容 HTTP。
   # admin_session_cookie_secure: false
   # 会话绝对有效期（秒），默认 28800（8h），范围 300~86400。
@@ -70,7 +70,7 @@ server:
 # 原始图片、缩略图和交互归档保存在固定子目录。每个实例必须独占该目录。
 state:
   dir: var
-  database: ai-proxy.duckdb
+  database: aetherrelay.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
@@ -107,7 +107,7 @@ codex_oauth:
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
   refresh_account_interval_minute: 0
 
-# 直连 Provider 通过管理台创建；定义与 API Key 使用 AI_PROXY_CREDENTIAL_KEY
+# 直连 Provider 通过管理台创建；定义与 API Key 使用 AETHERRELAY_CREDENTIAL_KEY
 # 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth
 # 是账号池注入的内建 Provider，模型来自账号池发现结果。
 # Responses↔Anthropic 转换只按 exact model 与候选当前上游 endpoint 匹配固定

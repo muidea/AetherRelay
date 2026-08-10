@@ -1,4 +1,4 @@
-module ai-proxy
+module aetherrelay
 
 go 1.24.1
 

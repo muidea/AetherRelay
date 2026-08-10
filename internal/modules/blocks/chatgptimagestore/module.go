@@ -4,8 +4,8 @@ package chatgptimagestore
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/chatgptimagestore/biz"
-	"ai-proxy/internal/modules/blocks/chatgptimagestore/pkg/common"
+	"aetherrelay/internal/modules/blocks/chatgptimagestore/biz"
+	"aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/framework/plugin/module"

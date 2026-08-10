@@ -63,7 +63,7 @@ func (h *Handler) systemInfo(w http.ResponseWriter) {
 	if startedAt.IsZero() || startedAt.After(now) {
 		startedAt = now
 	}
-	service := systemServiceInfo{Name: "ai-proxy", Version: version, GoVersion: runtime.Version()}
+	service := systemServiceInfo{Name: "AetherRelay", Version: version, GoVersion: runtime.Version()}
 	if build, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range build.Settings {
 			switch setting.Key {
@@ -94,7 +94,7 @@ func (h *Handler) systemInfo(w http.ResponseWriter) {
 		AccessMethods: []systemAccessInfo{
 			{ID: "openai", Name: "OpenAI-compatible REST", Protocol: "openai", Authentication: clientAuth, Endpoints: []string{"/v1/models", "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits"}, Description: "Compatible with OpenAI-style REST clients; model availability is reported by /v1/models."},
 			{ID: "anthropic", Name: "Anthropic-compatible Messages", Protocol: "anthropic", Authentication: clientAuth, Endpoints: []string{"/v1/messages"}, Description: "Accepts Anthropic Messages requests and routes directly or through supported protocol conversion."},
-			{ID: "search", Name: "Web search REST", Protocol: "ai-proxy", Authentication: clientAuth, Endpoints: []string{"/v1/search"}, Description: "Runs the restricted ChatGPT Web search contract."},
+			{ID: "search", Name: "Web search REST", Protocol: "AetherRelay", Authentication: clientAuth, Endpoints: []string{"/v1/search"}, Description: "Runs the restricted ChatGPT Web search contract."},
 		},
 		Endpoints: []systemEndpoint{
 			{Method: http.MethodGet, Path: "/healthz", Protocol: "health", Authentication: "none", RemoteAccess: "listener", Description: "Service health check."},
@@ -107,7 +107,7 @@ func (h *Handler) systemInfo(w http.ResponseWriter) {
 			{Method: http.MethodPost, Path: "/v1/embeddings", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "OpenAI Embeddings."},
 			{Method: http.MethodPost, Path: "/v1/images/generations", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "Image generation."},
 			{Method: http.MethodPost, Path: "/v1/images/edits", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "Image editing."},
-			{Method: http.MethodPost, Path: "/v1/search", Protocol: "ai-proxy", Authentication: "client_api_key", RemoteAccess: "listener", Description: "Restricted Web search."},
+			{Method: http.MethodPost, Path: "/v1/search", Protocol: "AetherRelay", Authentication: "client_api_key", RemoteAccess: "listener", Description: "Restricted Web search."},
 			{Method: http.MethodGet, Path: "/metrics", Protocol: "prometheus", Authentication: "network_policy", RemoteAccess: metricsAccess, Description: "Prometheus metrics."},
 			{Method: http.MethodHead, Path: "/metrics", Protocol: "prometheus", Authentication: "network_policy", RemoteAccess: metricsAccess, Description: "Prometheus metrics headers."},
 			{Method: http.MethodGet, Path: "/stats", Protocol: "json", Authentication: "network_policy", RemoteAccess: metricsAccess, Description: "Runtime statistics snapshot."},

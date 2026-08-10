@@ -2,20 +2,20 @@
 package events
 
 import (
-	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
-	"ai-proxy/internal/pkg/chatattachment"
+	"aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/common"
+	"aetherrelay/internal/pkg/chatattachment"
 )
 
 const (
-	TopicCreate        = "aiproxy.chatgpt.temporarychat.command.create"
-	TopicList          = "aiproxy.chatgpt.temporarychat.command.list"
-	TopicGet           = "aiproxy.chatgpt.temporarychat.command.get"
-	TopicStartTurn     = "aiproxy.chatgpt.temporarychat.command.start_turn"
-	TopicPullTurn      = "aiproxy.chatgpt.temporarychat.command.pull_turn"
-	TopicCancelTurn    = "aiproxy.chatgpt.temporarychat.command.cancel_turn"
-	TopicDelete        = "aiproxy.chatgpt.temporarychat.command.delete"
-	TopicGetImage      = "aiproxy.chatgpt.temporarychat.command.get_image"
-	TopicGetAttachment = "aiproxy.chatgpt.temporarychat.command.get_attachment"
+	TopicCreate        = "aetherrelay.chatgpt.temporarychat.command.create"
+	TopicList          = "aetherrelay.chatgpt.temporarychat.command.list"
+	TopicGet           = "aetherrelay.chatgpt.temporarychat.command.get"
+	TopicStartTurn     = "aetherrelay.chatgpt.temporarychat.command.start_turn"
+	TopicPullTurn      = "aetherrelay.chatgpt.temporarychat.command.pull_turn"
+	TopicCancelTurn    = "aetherrelay.chatgpt.temporarychat.command.cancel_turn"
+	TopicDelete        = "aetherrelay.chatgpt.temporarychat.command.delete"
+	TopicGetImage      = "aetherrelay.chatgpt.temporarychat.command.get_image"
+	TopicGetAttachment = "aetherrelay.chatgpt.temporarychat.command.get_attachment"
 )
 
 const (

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 
 	"go.yaml.in/yaml/v4"
 )

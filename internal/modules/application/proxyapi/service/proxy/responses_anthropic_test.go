@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	archive "ai-proxy/internal/pkg/aiproxyarchive"
-	config "ai-proxy/internal/pkg/aiproxyconfig"
-	metrics "ai-proxy/internal/pkg/aiproxymetrics"
-	usage "ai-proxy/internal/pkg/aiproxyusage"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	metrics "aetherrelay/internal/pkg/aetherrelaymetrics"
+	usage "aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 type contextBlockingReadCloser struct{ ctx context.Context }
@@ -361,7 +361,7 @@ func TestResponsesAnthropicConversionCancellationBeforeFirstEvent(t *testing.T) 
 			if err := registry.WritePrometheus(&prometheus); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(prometheus.String(), `ai_proxy_upstream_errors_total{provider="`+tc.providerName+`"`) {
+			if strings.Contains(prometheus.String(), `aetherrelay_upstream_errors_total{provider="`+tc.providerName+`"`) {
 				t.Fatalf("client cancellation counted as upstream error:\n%s", prometheus.String())
 			}
 		})
@@ -1058,7 +1058,7 @@ func TestConvertedSSEFirstEventFailureSettlesConversionMetricsOnce(t *testing.T)
 	if err := registry.WritePrometheus(&prometheus); err != nil {
 		t.Fatal(err)
 	}
-	metric := `ai_proxy_conversion_requests_total{provider="anthropic",model="claude-test",client_protocol="openai",upstream_protocol="anthropic",conversion_mode="responses_to_anthropic",conversion_level="2",upstream_status="200",degraded="false",estimated="false"} 1`
+	metric := `aetherrelay_conversion_requests_total{provider="anthropic",model="claude-test",client_protocol="openai",upstream_protocol="anthropic",conversion_mode="responses_to_anthropic",conversion_level="2",upstream_status="200",degraded="false",estimated="false"} 1`
 	if count := strings.Count(prometheus.String(), metric); count != 1 {
 		t.Fatalf("conversion metric count=%d, want 1:\n%s", count, prometheus.String())
 	}

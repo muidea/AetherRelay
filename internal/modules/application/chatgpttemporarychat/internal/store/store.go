@@ -9,11 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
-	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
-	"ai-proxy/internal/pkg/aiproxystate"
-	"ai-proxy/internal/pkg/chatattachment"
-	"ai-proxy/internal/pkg/chatgptimageinput"
+	"aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/common"
+	events "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaystate"
+	"aetherrelay/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatgptimageinput"
 
 	"github.com/google/uuid"
 )
@@ -26,13 +26,13 @@ type Config struct {
 }
 
 type Store struct {
-	docs *aiproxystate.Documents
+	docs *aetherrelaystate.Documents
 	cfg  Config
 	mu   sync.Mutex
 }
 
 func Open(database, memoryLimit string, threads int, cfg Config) (*Store, error) {
-	docs, err := aiproxystate.Open(database, memoryLimit, threads)
+	docs, err := aetherrelaystate.Open(database, memoryLimit, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (s *Store) CreateConversation(ownerID, model, thinkingEffort, systemPrompt,
 	if count >= s.cfg.MaxConversations {
 		return events.ConversationView{}, fmt.Errorf("conversation limit reached; delete old conversations first")
 	}
-	row := aiproxystate.TemporaryConversationRow{
+	row := aetherrelaystate.TemporaryConversationRow{
 		OwnerID:        ownerID,
 		ConversationID: uuid.NewString(),
 		Title:          "新对话",
@@ -172,7 +172,7 @@ func (s *Store) GetConversation(ownerID, conversationID string, beforeSequence *
 	return detail, nil
 }
 
-func (s *Store) LoadConversationRow(ownerID, conversationID string) (aiproxystate.TemporaryConversationRow, bool, error) {
+func (s *Store) LoadConversationRow(ownerID, conversationID string) (aetherrelaystate.TemporaryConversationRow, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.docs.LoadTemporaryConversation(ownerID, conversationID)
@@ -286,11 +286,11 @@ func (s *Store) startTurn(ownerID, conversationID, content string, inputs []even
 	userID := uuid.NewString()
 	assistantID := uuid.NewString()
 	metadata := make([]temporaryImageMetadata, 0, len(images))
-	imageRows := make([]aiproxystate.TemporaryMessageImageRow, 0, len(images))
+	imageRows := make([]aetherrelaystate.TemporaryMessageImageRow, 0, len(images))
 	for _, image := range images {
 		imageID := uuid.NewString()
 		metadata = append(metadata, temporaryImageMetadata{ID: imageID, ContentType: image.ContentType, SizeBytes: int64(len(image.Bytes))})
-		imageRows = append(imageRows, aiproxystate.TemporaryMessageImageRow{
+		imageRows = append(imageRows, aetherrelaystate.TemporaryMessageImageRow{
 			OwnerID: ownerID, ConversationID: conversationID, MessageID: userID, ImageID: imageID, ContentType: image.ContentType, Bytes: image.Bytes,
 		})
 	}
@@ -299,17 +299,17 @@ func (s *Store) startTurn(ownerID, conversationID, content string, inputs []even
 		return TurnStart{}, fmt.Errorf("encode image metadata: %w", err)
 	}
 	attachmentMetadata := make([]temporaryAttachmentMetadata, 0, len(attachments))
-	attachmentRows := make([]aiproxystate.TemporaryMessageAttachmentRow, 0, len(attachments))
+	attachmentRows := make([]aetherrelaystate.TemporaryMessageAttachmentRow, 0, len(attachments))
 	for _, attachment := range attachments {
 		attachmentID := uuid.NewString()
 		attachmentMetadata = append(attachmentMetadata, temporaryAttachmentMetadata{ID: attachmentID, FileName: attachment.Name, ContentType: attachment.ContentType, SizeBytes: int64(len(attachment.Bytes))})
-		attachmentRows = append(attachmentRows, aiproxystate.TemporaryMessageAttachmentRow{OwnerID: ownerID, ConversationID: conversationID, MessageID: userID, AttachmentID: attachmentID, FileName: attachment.Name, ContentType: attachment.ContentType, Bytes: attachment.Bytes})
+		attachmentRows = append(attachmentRows, aetherrelaystate.TemporaryMessageAttachmentRow{OwnerID: ownerID, ConversationID: conversationID, MessageID: userID, AttachmentID: attachmentID, FileName: attachment.Name, ContentType: attachment.ContentType, Bytes: attachment.Bytes})
 	}
 	encodedAttachments, err := json.Marshal(attachmentMetadata)
 	if err != nil {
 		return TurnStart{}, fmt.Errorf("encode attachment metadata: %w", err)
 	}
-	user := aiproxystate.TemporaryMessageRow{
+	user := aetherrelaystate.TemporaryMessageRow{
 		OwnerID:            ownerID,
 		ConversationID:     conversationID,
 		Sequence:           next,
@@ -321,7 +321,7 @@ func (s *Store) startTurn(ownerID, conversationID, content string, inputs []even
 		Status:             common.MessageStatusStreaming,
 		CreatedAt:          now,
 	}
-	assistant := aiproxystate.TemporaryMessageRow{
+	assistant := aetherrelaystate.TemporaryMessageRow{
 		OwnerID:        ownerID,
 		ConversationID: conversationID,
 		Sequence:       next + 1,
@@ -469,7 +469,7 @@ func (s *Store) completeTurn(ownerID, conversationID string, userSequence, assis
 	if err != nil {
 		return TurnComplete{}, err
 	}
-	var userRow, assistantRow aiproxystate.TemporaryMessageRow
+	var userRow, assistantRow aetherrelaystate.TemporaryMessageRow
 	for _, message := range messages {
 		if message.Sequence == userSequence {
 			userRow = message
@@ -522,7 +522,7 @@ func (s *Store) UpdateAssistantDelta(ownerID, conversationID string, assistantSe
 	if err != nil {
 		return err
 	}
-	var assistantRow aiproxystate.TemporaryMessageRow
+	var assistantRow aetherrelaystate.TemporaryMessageRow
 	for _, message := range messages {
 		if message.Sequence == assistantSequence {
 			assistantRow = message
@@ -575,34 +575,34 @@ func (s *Store) DeleteConversation(ownerID, conversationID string) error {
 	return s.docs.DeleteTemporaryConversation(ownerID, conversationID)
 }
 
-func (s *Store) GetMessageImage(ownerID, conversationID, messageID, imageID string) (aiproxystate.TemporaryMessageImageRow, bool, error) {
+func (s *Store) GetMessageImage(ownerID, conversationID, messageID, imageID string) (aetherrelaystate.TemporaryMessageImageRow, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(messageID) == "" || strings.TrimSpace(imageID) == "" {
-		return aiproxystate.TemporaryMessageImageRow{}, false, fmt.Errorf("invalid image reference")
+		return aetherrelaystate.TemporaryMessageImageRow{}, false, fmt.Errorf("invalid image reference")
 	}
 	conversation, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
 	if err != nil {
-		return aiproxystate.TemporaryMessageImageRow{}, false, err
+		return aetherrelaystate.TemporaryMessageImageRow{}, false, err
 	}
 	if !found || !time.Now().UTC().Before(conversation.ExpiresAt) {
-		return aiproxystate.TemporaryMessageImageRow{}, false, nil
+		return aetherrelaystate.TemporaryMessageImageRow{}, false, nil
 	}
 	return s.docs.GetTemporaryMessageImage(ownerID, conversationID, messageID, imageID)
 }
 
-func (s *Store) GetMessageAttachment(ownerID, conversationID, messageID, attachmentID string) (aiproxystate.TemporaryMessageAttachmentRow, bool, error) {
+func (s *Store) GetMessageAttachment(ownerID, conversationID, messageID, attachmentID string) (aetherrelaystate.TemporaryMessageAttachmentRow, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if strings.TrimSpace(ownerID) == "" || strings.TrimSpace(conversationID) == "" || strings.TrimSpace(messageID) == "" || strings.TrimSpace(attachmentID) == "" {
-		return aiproxystate.TemporaryMessageAttachmentRow{}, false, fmt.Errorf("invalid attachment reference")
+		return aetherrelaystate.TemporaryMessageAttachmentRow{}, false, fmt.Errorf("invalid attachment reference")
 	}
 	conversation, found, err := s.docs.LoadTemporaryConversation(ownerID, conversationID)
 	if err != nil {
-		return aiproxystate.TemporaryMessageAttachmentRow{}, false, err
+		return aetherrelaystate.TemporaryMessageAttachmentRow{}, false, err
 	}
 	if !found || !time.Now().UTC().Before(conversation.ExpiresAt) {
-		return aiproxystate.TemporaryMessageAttachmentRow{}, false, nil
+		return aetherrelaystate.TemporaryMessageAttachmentRow{}, false, nil
 	}
 	return s.docs.GetTemporaryMessageAttachment(ownerID, conversationID, messageID, attachmentID)
 }
@@ -613,7 +613,7 @@ func (s *Store) PurgeExpired(now time.Time) (int, error) {
 	return s.docs.PurgeExpiredTemporaryConversations(now)
 }
 
-func conversationView(row aiproxystate.TemporaryConversationRow) events.ConversationView {
+func conversationView(row aetherrelaystate.TemporaryConversationRow) events.ConversationView {
 	return events.ConversationView{
 		ID:             row.ConversationID,
 		Title:          row.Title,
@@ -645,7 +645,7 @@ func maskAccountID(value string) string {
 	return value[:4] + "…" + value[len(value)-4:]
 }
 
-func messageView(row aiproxystate.TemporaryMessageRow) events.MessageView {
+func messageView(row aetherrelaystate.TemporaryMessageRow) events.MessageView {
 	view := events.MessageView{
 		ID:           row.MessageID,
 		Sequence:     row.Sequence,

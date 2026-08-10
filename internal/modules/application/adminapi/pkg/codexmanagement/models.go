@@ -4,8 +4,8 @@
 package codexmanagement
 
 import (
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	codexevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
 
 type ImportResult struct {

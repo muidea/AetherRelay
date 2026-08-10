@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"ai-proxy/internal/modules/blocks/metricsruntime/pkg/common"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxymetricsport"
+	"aetherrelay/internal/modules/blocks/metricsruntime/pkg/common"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 
 	"github.com/muidea/magicCommon/event"
 )

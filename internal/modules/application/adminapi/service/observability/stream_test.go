@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
 )
 
 func TestStreamHandlerSendsInitialSnapshot(t *testing.T) {

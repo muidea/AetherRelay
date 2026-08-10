@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"ai-proxy/internal/pkg/aiproxymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
 )
 
 func TestHandlerAccessPolicyAndHead(t *testing.T) {

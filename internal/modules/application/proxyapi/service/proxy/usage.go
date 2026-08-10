@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 type tokenUsage struct {

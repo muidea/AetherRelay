@@ -16,7 +16,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 - **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET|POST /v1/models`
 - **Anthropic**：`POST /v1/messages`
-- **扩展**：`POST /v1/search`（ai-proxy 自有搜索端点）、`POST /v1/images/generations|edits`（ChatGPT Web 图片）
+- **扩展**：`POST /v1/search`（AetherRelay 自有搜索端点）、`POST /v1/images/generations|edits`（ChatGPT Web 图片）
 
 `GET/POST /v1/models` 本地合成，不访问上游；返回模型、已知容量和运行时派生的 `supported_endpoints`，不暴露 provider 名、base URL 或密钥。`supported_endpoints` 由候选 Provider 的原生 `endpoints` 经过统一 transport matrix 计算，表达客户端可调用路径；它不属于静态模型元数据。
 

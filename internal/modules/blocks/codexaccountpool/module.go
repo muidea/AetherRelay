@@ -4,8 +4,8 @@ package codexaccountpool
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/codexaccountpool/biz"
-	"ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
+	"aetherrelay/internal/modules/blocks/codexaccountpool/biz"
+	"aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/framework/plugin/module"

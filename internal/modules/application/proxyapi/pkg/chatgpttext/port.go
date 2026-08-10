@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/pkg/chatattachment"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/pkg/chatattachment"
 )
 
 type Message struct {

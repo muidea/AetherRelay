@@ -2,39 +2,39 @@
 package events
 
 const (
-	TopicList   = "aiproxy.chatgpt.accountpool.command.list"
-	TopicAdd    = "aiproxy.chatgpt.accountpool.command.add"
-	TopicDelete = "aiproxy.chatgpt.accountpool.command.delete"
-	TopicUpdate = "aiproxy.chatgpt.accountpool.command.update"
+	TopicList   = "aetherrelay.chatgpt.accountpool.command.list"
+	TopicAdd    = "aetherrelay.chatgpt.accountpool.command.add"
+	TopicDelete = "aetherrelay.chatgpt.accountpool.command.delete"
+	TopicUpdate = "aetherrelay.chatgpt.accountpool.command.update"
 	// The ID-based commands are the public management contract. Access-token
 	// selectors are retained only for owner-local compatibility flows.
-	TopicDeleteByID          = "aiproxy.chatgpt.accountpool.command.delete_by_id"
-	TopicUpdateByID          = "aiproxy.chatgpt.accountpool.command.update_by_id"
-	TopicExportByID          = "aiproxy.chatgpt.accountpool.command.export_by_id"
-	TopicRefreshByID         = "aiproxy.chatgpt.accountpool.command.refresh_by_id"
-	TopicAcquireImageToken   = "aiproxy.chatgpt.accountpool.command.acquire_image_token"
-	TopicAcquireImageAccount = "aiproxy.chatgpt.accountpool.command.acquire_image_account"
-	TopicReleaseImageSlot    = "aiproxy.chatgpt.accountpool.command.release_image_slot"
-	TopicMarkImageResult     = "aiproxy.chatgpt.accountpool.command.mark_image_result"
-	TopicAcquireTextToken    = "aiproxy.chatgpt.accountpool.command.acquire_text_token"
-	TopicAcquireTextAccount  = "aiproxy.chatgpt.accountpool.command.acquire_text_account"
-	TopicRecordTextResult    = "aiproxy.chatgpt.accountpool.command.record_text_result"
+	TopicDeleteByID          = "aetherrelay.chatgpt.accountpool.command.delete_by_id"
+	TopicUpdateByID          = "aetherrelay.chatgpt.accountpool.command.update_by_id"
+	TopicExportByID          = "aetherrelay.chatgpt.accountpool.command.export_by_id"
+	TopicRefreshByID         = "aetherrelay.chatgpt.accountpool.command.refresh_by_id"
+	TopicAcquireImageToken   = "aetherrelay.chatgpt.accountpool.command.acquire_image_token"
+	TopicAcquireImageAccount = "aetherrelay.chatgpt.accountpool.command.acquire_image_account"
+	TopicReleaseImageSlot    = "aetherrelay.chatgpt.accountpool.command.release_image_slot"
+	TopicMarkImageResult     = "aetherrelay.chatgpt.accountpool.command.mark_image_result"
+	TopicAcquireTextToken    = "aetherrelay.chatgpt.accountpool.command.acquire_text_token"
+	TopicAcquireTextAccount  = "aetherrelay.chatgpt.accountpool.command.acquire_text_account"
+	TopicRecordTextResult    = "aetherrelay.chatgpt.accountpool.command.record_text_result"
 	// TopicRefreshTextToken renews an OAuth-backed text credential after the
 	// upstream has classified it as invalid. The account pool keeps refresh
 	// credentials private and coalesces concurrent refreshes for one account.
-	TopicRefreshTextToken = "aiproxy.chatgpt.accountpool.command.refresh_text_token"
-	TopicRemoveInvalid    = "aiproxy.chatgpt.accountpool.command.remove_invalid"
-	TopicHealth           = "aiproxy.chatgpt.accountpool.command.health"
-	TopicOAuthStart       = "aiproxy.chatgpt.accountpool.command.oauth_start"
-	TopicOAuthFinish      = "aiproxy.chatgpt.accountpool.command.oauth_finish"
-	TopicExport           = "aiproxy.chatgpt.accountpool.command.export"
-	TopicRefresh          = "aiproxy.chatgpt.accountpool.command.refresh"
-	TopicRefreshProgress  = "aiproxy.chatgpt.accountpool.command.refresh_progress"
+	TopicRefreshTextToken = "aetherrelay.chatgpt.accountpool.command.refresh_text_token"
+	TopicRemoveInvalid    = "aetherrelay.chatgpt.accountpool.command.remove_invalid"
+	TopicHealth           = "aetherrelay.chatgpt.accountpool.command.health"
+	TopicOAuthStart       = "aetherrelay.chatgpt.accountpool.command.oauth_start"
+	TopicOAuthFinish      = "aetherrelay.chatgpt.accountpool.command.oauth_finish"
+	TopicExport           = "aetherrelay.chatgpt.accountpool.command.export"
+	TopicRefresh          = "aetherrelay.chatgpt.accountpool.command.refresh"
+	TopicRefreshProgress  = "aetherrelay.chatgpt.accountpool.command.refresh_progress"
 	// Discovery / capability snapshot contracts owned by the account pool.
-	TopicListDiscoveryCandidates     = "aiproxy.chatgpt.accountpool.command.list_discovery_candidates"
-	TopicPutModelSnapshot            = "aiproxy.chatgpt.accountpool.command.put_model_snapshot"
-	TopicRecordModelDiscoveryFailure = "aiproxy.chatgpt.accountpool.command.record_model_discovery_failure"
-	TopicCatalogSnapshot             = "aiproxy.chatgpt.accountpool.command.catalog_snapshot"
+	TopicListDiscoveryCandidates     = "aetherrelay.chatgpt.accountpool.command.list_discovery_candidates"
+	TopicPutModelSnapshot            = "aetherrelay.chatgpt.accountpool.command.put_model_snapshot"
+	TopicRecordModelDiscoveryFailure = "aetherrelay.chatgpt.accountpool.command.record_model_discovery_failure"
+	TopicCatalogSnapshot             = "aetherrelay.chatgpt.accountpool.command.catalog_snapshot"
 )
 
 // Model capabilities mirrored from the upstream models enumeration contract.

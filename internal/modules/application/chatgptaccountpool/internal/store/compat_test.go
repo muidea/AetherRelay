@@ -7,7 +7,7 @@ import (
 )
 
 func TestAccountsPersistInStateDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	s := New(path, 1, encryptedTestCodec(t))
 	defer s.Close()
 	if _, _, err := s.Add([]string{"token"}, "oauth_login"); err != nil {

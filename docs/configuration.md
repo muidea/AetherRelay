@@ -1,8 +1,8 @@
 # 配置参考
 
-本文描述当前 `ai-proxy` 的运行配置。完整可复制示例见仓库根目录的 [`config.example.yaml`](../config.example.yaml)。配置路径默认是 `config.yaml`，也可用 `-config` 或 `AI_PROXY_CONFIG` 指定。
+本文描述当前 `AetherRelay` 的运行配置。完整可复制示例见仓库根目录的 [`config.example.yaml`](../config.example.yaml)。配置路径默认是 `config.yaml`，也可用 `-config` 或 `AETHERRELAY_CONFIG` 指定。
 
-`config.yaml` 只描述进程启动与静态模型元数据。管理页创建的 Provider 和两类账号池凭据使用 `AI_PROXY_CREDENTIAL_KEY` 加密后写入 `state.database`，不会写回配置文件。
+`config.yaml` 只描述进程启动与静态模型元数据。管理页创建的 Provider 和两类账号池凭据使用 `AETHERRELAY_CREDENTIAL_KEY` 加密后写入 `state.database`，不会写回配置文件。
 
 ## 最小配置
 
@@ -12,7 +12,7 @@ server:
 
 state:
   dir: var
-  database: ai-proxy.duckdb
+  database: aetherrelay.duckdb
 
 model_metadata:
   gpt-5.5:
@@ -62,7 +62,7 @@ model_metadata:
 - `fallback`：可选布尔值，默认 `true`；Provider 位于非首候选时，是否允许在安全条件下作为回退目标。
 - `api_key`：所有 Provider 必填。API Key 只进入加密 Provider 目录，不进入 YAML。
 
-Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`config.yaml` 不应声明 Provider，尤其不得保存明文 Key。数据库已有 Provider 密文时，缺少或使用错误的 `AI_PROXY_CREDENTIAL_KEY` 会使启动失败，不会回退为空目录。
+Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`config.yaml` 不应声明 Provider，尤其不得保存明文 Key。数据库已有 Provider 密文时，缺少或使用错误的 `AETHERRELAY_CREDENTIAL_KEY` 会使启动失败，不会回退为空目录。
 
 每个实际模型按所有 enabled Provider 的 `models` 规则生成候选；metadata 不参与模型成员资格。请求到达后，再按入站 path 从候选的 `endpoints` 和共享 transport matrix 中筛选可服务 Provider，并依次按语义等级（native/Codex OAuth、ChatGPT Web Responses 投影、跨协议转换）、`priority`、健康分数和名称稳定排序。
 
@@ -82,7 +82,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 - 原始客户端 Key 不写入日志、DuckDB、归档或管理 API，也不会转发给上游。
 - Admin 可创建、启停、轮换或删除客户端 Key。创建和轮换仅在成功响应中显示一次明文；Key 摘要由运行时存储管理。
 - Key 的摘要、启用状态、创建时间、轮换/撤销时间和最后使用时间均保存在 DuckDB；Admin 列表只展示非敏感管理字段。
-- `inbound_api_key`、`AI_PROXY_INBOUND_API_KEY`、`usage_file` 与 `AI_PROXY_USAGE_FILE` 已删除，配置中出现会启动失败。
+- `inbound_api_key`、`AETHERRELAY_INBOUND_API_KEY`、`usage_file` 与 `AETHERRELAY_USAGE_FILE` 已删除，配置中出现会启动失败。
 
 客户端 Key 是必需的应用层认证；若监听 `0.0.0.0:8080` 或 `:8080`，仍应在防火墙、反向代理或私有网络层实施额外访问控制。
 
@@ -90,10 +90,10 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 | 配置或环境变量 | 说明 |
 | --- | --- |
-| `server.listen_addr` / `AI_PROXY_LISTEN_ADDR` | 完整监听地址，默认 `127.0.0.1:8080`。 |
-| `AI_PROXY_PORT` | 仅替换端口，生成 `127.0.0.1:<port>`。 |
-| `max_request_body_bytes` / `AI_PROXY_MAX_REQUEST_BODY_BYTES` | 客户端请求体上限。 |
-| `max_upstream_response_bytes` / `AI_PROXY_MAX_UPSTREAM_RESPONSE_BYTES` | 非流式上游响应上限。 |
+| `server.listen_addr` / `AETHERRELAY_LISTEN_ADDR` | 完整监听地址，默认 `127.0.0.1:8080`。 |
+| `AETHERRELAY_PORT` | 仅替换端口，生成 `127.0.0.1:<port>`。 |
+| `max_request_body_bytes` / `AETHERRELAY_MAX_REQUEST_BODY_BYTES` | 客户端请求体上限。 |
+| `max_upstream_response_bytes` / `AETHERRELAY_MAX_UPSTREAM_RESPONSE_BYTES` | 非流式上游响应上限。 |
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
 | `request_timeout_seconds` | 非流式总超时及流式等待响应头超时。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
@@ -102,15 +102,15 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
 | `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
-| `admin_auth_enabled` / `AI_PROXY_ADMIN_AUTH_ENABLED` | Admin 登录开关，默认 `false`（保持 loopback-only）。 |
-| `admin_base_path` / `AI_PROXY_ADMIN_BASE_PATH` | Admin 页面与 API 前缀，默认 `/admin`；启动期路由，变更需重启。 |
+| `admin_auth_enabled` / `AETHERRELAY_ADMIN_AUTH_ENABLED` | Admin 登录开关，默认 `false`（保持 loopback-only）。 |
+| `admin_base_path` / `AETHERRELAY_ADMIN_BASE_PATH` | Admin 页面与 API 前缀，默认 `/admin`；启动期路由，变更需重启。 |
 | `admin_default_language` | Admin Web 的实例默认语言，仅 `zh-CN` 或 `en-US`，默认 `zh-CN`；可在管理页热更新。 |
-| `admin_username` / `AI_PROXY_ADMIN_USERNAME` | 单管理员账号（开启认证时必填，区分大小写）。 |
-| `admin_password_hash` / `AI_PROXY_ADMIN_PASSWORD_HASH` | Argon2id PHC 哈希（开启认证时必填；禁止明文）。 |
-| `admin_session_cookie_secure` / `AI_PROXY_ADMIN_SESSION_COOKIE_SECURE` | 会话 Cookie 是否仅随 HTTPS 请求发送，默认 `false`。 |
-| `admin_session_ttl_seconds` / `AI_PROXY_ADMIN_SESSION_TTL_SECONDS` | 会话绝对有效期，默认 `28800`（8h），范围 `300~86400`。 |
+| `admin_username` / `AETHERRELAY_ADMIN_USERNAME` | 单管理员账号（开启认证时必填，区分大小写）。 |
+| `admin_password_hash` / `AETHERRELAY_ADMIN_PASSWORD_HASH` | Argon2id PHC 哈希（开启认证时必填；禁止明文）。 |
+| `admin_session_cookie_secure` / `AETHERRELAY_ADMIN_SESSION_COOKIE_SECURE` | 会话 Cookie 是否仅随 HTTPS 请求发送，默认 `false`。 |
+| `admin_session_ttl_seconds` / `AETHERRELAY_ADMIN_SESSION_TTL_SECONDS` | 会话绝对有效期，默认 `28800`（8h），范围 `300~86400`。 |
 
-环境变量与配置键的完整默认值、上限和校验以 [`config.example.yaml`](../config.example.yaml) 与 `internal/pkg/aiproxyconfig` 为准。
+环境变量与配置键的完整默认值、上限和校验以 [`config.example.yaml`](../config.example.yaml) 与 `internal/pkg/aetherrelayconfig` 为准。
 
 ## 模型流式 SSE
 
@@ -119,7 +119,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 - `/v1/chat/completions` 返回 OpenAI Chat Completions SSE，必要时转换 Anthropic 上游事件；转换期间识别并省略上游 thinking 块及 delta，不将推理内容折叠为 assistant 文本。
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
-- `/v1/search` 是 ai-proxy 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
+- `/v1/search` 是 AetherRelay 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
 - 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；需要可切换上游端点时应创建管理型直连 Provider。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
 - 跨协议转换按模型方向化 capability 开放：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；流式工具、多模态、结构化输出、continuation 仍在访问上游前拒绝。thinking/reasoning 只有配置方向专用 adapter 时才以降级模式开放。最近调用、usage 与 Prometheus 请求指标会同时记录 `conversion_mode`、`conversion_level`、转换耗时和拒绝/降级能力。
 
@@ -130,7 +130,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 ```yaml
 state:
   dir: var
-  database: ai-proxy.duckdb
+  database: aetherrelay.duckdb
   memory_limit: 256MB
   threads: 2
   query_cache_seconds: 15
@@ -203,7 +203,7 @@ codex_oauth:
 - 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新、模型发现、`https://chatgpt.com/backend-api/wham/usage` 和 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新、发现、用量读取与实际调用的出口 IP 不一致。
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
-- `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 ai-proxy；账号池本身始终启用。
+- `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
 
 ## 本地管理页
 
@@ -237,7 +237,7 @@ POST   <base>/api/codex/accounts/export            # {"ids":[...]}；返回可�
 ### 默认模式（`admin_auth_enabled: false`）
 
 - `<admin_base_path>` 及 API **永远限制 loopback**，即使代理监听在非 loopback 地址。
-- 写接口仍要求浏览器意图头 `X-AI-Proxy-Admin: 1`（不是身份凭据）。
+- 写接口仍要求浏览器意图头 `X-AetherRelay-Admin: 1`（不是身份凭据）。
 - Provider API Key 只显示“已配置”，从不回显明文；保存时保留未修改值，并将完整 Provider 目录重新加密写入 DuckDB。
 - 使用统计页查询 DuckDB，并支持按时间、API Key、Provider、Model、Outcome 和估算标记筛选。
 
@@ -247,20 +247,20 @@ POST   <base>/api/codex/accounts/export            # {"ids":[...]}；返回可�
 
 ```bash
 # 交互式生成 Argon2id 密码哈希（仅 TTY；密码不进参数/日志）
-ai-proxy admin password-hash
-export AI_PROXY_ADMIN_PASSWORD_HASH='...'
+AetherRelay admin password-hash
+export AETHERRELAY_ADMIN_PASSWORD_HASH='...'
 
 # 或直接创建/重置账号密码：自动写入 admin_auth_enabled、账号与哈希，并要求重启生效。
-ai-proxy admin set-credentials --username ops-admin --config config.yaml
+AetherRelay admin set-credentials --username ops-admin --config config.yaml
 ```
 
 ```yaml
 server:
   admin_auth_enabled: true
-  admin_base_path: /ops/ai-proxy   # 可选；默认 /admin；变更需重启
+  admin_base_path: /ops/AetherRelay   # 可选；默认 /admin；变更需重启
   admin_default_language: zh-CN    # 可选；zh-CN 或 en-US，可在管理页热更新
   admin_username: ops-admin
-  admin_password_hash: ${AI_PROXY_ADMIN_PASSWORD_HASH}
+  admin_password_hash: ${AETHERRELAY_ADMIN_PASSWORD_HASH}
   admin_session_cookie_secure: true # 可选；开启后仅 HTTPS 可携带会话 Cookie
   admin_session_ttl_seconds: 28800
 ```
@@ -269,7 +269,7 @@ server:
 
 - 必须配置合法 Argon2id PHC（固定参数 `m=65536,t=3,p=1`）；缺失或非法哈希会使进程在监听前启动失败。
 - 会话为进程内内存 Cookie（`HttpOnly` + `SameSite=Strict`）；`admin_session_cookie_secure=true` 时额外带 `Secure`，浏览器仅会在 HTTPS 请求中携带会话。HTTP 仅适用于受信网络，生产环境推荐 HTTPS。代理部署时应保留外部 `Host`；应用不信任 forwarded header。
-- 状态变更请求需要会话 Cookie 与 `X-AI-Proxy-CSRF`；未登录 API 返回 JSON `401`，页面 `303` 到 `<basePath>/login`。
+- 状态变更请求需要会话 Cookie 与 `X-AetherRelay-CSRF`；未登录 API 返回 JSON `401`，页面 `303` 到 `<basePath>/login`。
 - 认证相关配置热更新成功后清空全部会话；`admin_base_path` 变更必须重启。
 - 该模式不替代 TLS、主机账户隔离或配置文件权限保护。
 

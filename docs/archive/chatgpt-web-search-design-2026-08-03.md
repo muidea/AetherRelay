@@ -19,7 +19,7 @@ OpenAI Chat / Responses / `POST /v1/search` 或 Admin 功能集 / 临时对话
 
 - Chat Completions 仅接受唯一的 `web_search`、`web_search_preview` 或 `web_search_preview_2025_03_11` 工具；Chat 的 `web_search_options` 可作为搜索显式开关，但其调优字段只记录为受限降级，不会被伪造为已执行。
 - Responses 仅接受上述单一搜索工具。
-- `POST /v1/search` 是 ai-proxy 的非流式简化入口，请求体严格为 `model` 和纯文本 `query`；它返回 `search.result`、答案、来源与估算用量。该入口只保留 ChatGPT Web 候选，静态 Provider 的同名模型与路由优先级不参与选择。
+- `POST /v1/search` 是 AetherRelay 的非流式简化入口，请求体严格为 `model` 和纯文本 `query`；它返回 `search.result`、答案、来源与估算用量。该入口只保留 ChatGPT Web 候选，静态 Provider 的同名模型与路由优先级不参与选择。
 - 只取最后一条纯文本 user 消息作为 query；图片、文件、function、混合工具、tool call、结构化输出和工具循环都会在上游请求前返回 `conversion_unsupported`。
 - 请求 `model` 同时用于账号模型目录筛选和上游请求；没有硬编码搜索模型。
 

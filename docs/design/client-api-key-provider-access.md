@@ -1,6 +1,6 @@
 # 客户端 API Key、Provider 与模型联动收口设计
 
-本文定义 ai-proxy 为客户端 API Key 绑定 Provider 访问范围，并在业务调用时按该范围发布模型目录、限制路由候选的最终设计。本文是后续代码收口的实施依据，覆盖 schema、存储、认证快照、模型目录、请求路由、Admin API、Web 管理端、测试与文档更新。
+本文定义 AetherRelay 为客户端 API Key 绑定 Provider 访问范围，并在业务调用时按该范围发布模型目录、限制路由候选的最终设计。本文是后续代码收口的实施依据，覆盖 schema、存储、认证快照、模型目录、请求路由、Admin API、Web 管理端、测试与文档更新。
 
 相关正式设计：
 
@@ -170,7 +170,7 @@ ON client_api_key_provider_access(provider_id);
 
 ### 4.3 Go 领域模型
 
-新增独立小包 `internal/pkg/aiproxyclientaccess`，避免 usage、clientauth、effectivecatalog 之间形成反向依赖：
+新增独立小包 `internal/pkg/aetherrelayclientaccess`，避免 usage、clientauth、effectivecatalog 之间形成反向依赖：
 
 ```go
 type Mode string
@@ -633,8 +633,8 @@ ProviderAccess 创建、更新、启停、轮换和删除的最终一致顺序�
 
 ### 8.1 后端
 
-- [x] 新增 `internal/pkg/aiproxyclientaccess` 及单元测试。
-- [x] 调整 `internal/pkg/aiproxyusage/migrations.go` 最终 schema、名称和 reset 顺序。
+- [x] 新增 `internal/pkg/aetherrelayclientaccess` 及单元测试。
+- [x] 调整 `internal/pkg/aetherrelayusage/migrations.go` 最终 schema、名称和 reset 顺序。
 - [x] 扩展 `usage.ClientAPIKeyRecord`、`usage.Store`。
 - [x] 完成 DuckDB Store 的批量读取、创建、替换策略、引用查询和删除事务。
 - [x] 完成 MemoryStore 语义对齐。

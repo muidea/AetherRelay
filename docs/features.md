@@ -1,6 +1,6 @@
 # 功能说明
 
-本文按功能域说明 `ai-proxy` 当前提供的能力：入口、启用条件与使用方式。外部应用接入模型能力发现请参阅[外部应用集成指南](integration.md)。配置项的完整含义见[配置参考](configuration.md)，安装部署见[安装与部署](deployment.md)，运行期观测、备份与发布见[运维与发布](operations.md)。
+本文按功能域说明 `AetherRelay` 当前提供的能力：入口、启用条件与使用方式。外部应用接入模型能力发现请参阅[外部应用集成指南](integration.md)。配置项的完整含义见[配置参考](configuration.md)，安装部署见[安装与部署](deployment.md)，运行期观测、备份与发布见[运维与发布](operations.md)。
 
 ## 功能总览
 
@@ -23,7 +23,7 @@
 | Prometheus 指标 / 统计快照 | `/metrics`、`/stats`、`/stats/stream` | 默认 loopback-only |
 | SLO 违规 webhook | 状态变化时异步 POST | `slo_violation_webhook` 配置 |
 | 交互归档 | `state.dir/interactions/{api_key_id}/{round_id}/` | 默认启用 |
-| Provider live probe | `cmd/ai-proxy-probe` / Admin「检查」按钮 | 独立命令，不进启动流程 |
+| Provider live probe | `cmd/aetherrelay-probe` / Admin「检查」按钮 | 独立命令，不进启动流程 |
 
 ## 标准数据端点
 
@@ -31,7 +31,7 @@
 
 - **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET|POST /v1/models`
 - **Anthropic**：`POST /v1/messages`
-- **ai-proxy 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
+- **AetherRelay 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
 - **OpenAI Images**：`POST /v1/images/generations|edits`（OpenAI native 或内建 `chatgptweb` 图片能力）
 
 `GET/POST /v1/models` **本地合成**，不访问上游；返回有效目录中的模型、已知的 `contextWindowTokens` / `maxOutputTokens`、已声明的 `capabilities.reasoning`，以及运行时推导的 `supported_endpoints`。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`supported_endpoints` 是客户端可调用的完整路径列表，由模型候选 Provider、Provider 原生 `endpoints` 和统一传输矩阵计算，不是静态模型元数据，也不暴露 provider 名、base URL 或密钥。
@@ -89,11 +89,11 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - Admin「使用统计」支持按时间（今日 / 7 天 / 30 天 / 自定义）、API Key、Provider、Model、Outcome 与估算标记筛选，并导出 CSV（单次最大 31 天、100,000 行）。
 - ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 临时对话归 `admin:<用户名>`，不是客户端 API Key。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
-- 旧 `usage.csv` 只能一次性显式导入（`cmd/ai-proxy-usage-import`）；`usage_file` 配置已删除。
+- 旧 `usage.csv` 只能一次性显式导入（`cmd/aetherrelay-usage-import`）；`usage_file` 配置已删除。
 
 ## Admin 管理页
 
-默认位于 `http://127.0.0.1:8080/admin/`（`admin_base_path` 可改，默认 loopback-only）。支持简体中文与英文（URL `?lang=` > 浏览器偏好 > `admin_default_language` > 浏览器语言 > `zh-CN`）。未登录时写接口需要 `X-AI-Proxy-Admin: 1` 意图头；启用登录后需要会话 Cookie 与 `X-AI-Proxy-CSRF`。
+默认位于 `http://127.0.0.1:8080/admin/`（`admin_base_path` 可改，默认 loopback-only）。支持简体中文与英文（URL `?lang=` > 浏览器偏好 > `admin_default_language` > 浏览器语言 > `zh-CN`）。未登录时写接口需要 `X-AetherRelay-Admin: 1` 意图头；启用登录后需要会话 Cookie 与 `X-AetherRelay-CSRF`。
 
 ### Provider
 
@@ -135,7 +135,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - **临时对话**：Admin 服务端持久化的多轮文本对话（DuckDB 专用表，浏览器不落会话正文）；可附加图片（最多 4 张、合计 20 MiB，PNG/JPEG/GIF/WebP）、逐轮启用联网搜索；保留期 `temporary_chat.retention_days`（默认 30 天）；达到 `max_conversations` 拒绝新建，不静默删历史；重启时 `streaming` 消息标记 `interrupted`，会话进入 `recovery_required`。research / deep_research 专用模型不进入选择器。
 - **在线搜索**：隔离的强制 ChatGPT Web 搜索页面，结果（答案、查询、来源）服务端保存于 `state.database` 的 `chatgpt_web_search_history`，按登录管理员用户名隔离（未启用登录时用本地 `admin` 作用域）；每个作用域最多 200 条，自动清理 30 天前记录；搜索历史不写入浏览器存储。
-- **图片任务**：文生图 / 图生图任务提交与轮询；`size`、`quality` 可从常用值中选择，也允许输入上游模型支持的扩展值；以 `api_key_id` 隔离。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：ai-proxy 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
+- **图片任务**：文生图 / 图生图任务提交与轮询；`size`、`quality` 可从常用值中选择，也允许输入上游模型支持的扩展值；以 `api_key_id` 隔离。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：AetherRelay 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
 - **图片库**：图片列表、标签、删除（不可恢复）与缩略图均要求 `api_key_id`，只返回该 Key 的资产；内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。客户端 Key 删除时同步清除图片任务、图片资产、缩略图、标签和交互归档。
 
 两个账号池始终装配；没有可用账号时，页面显示空池状态，数据面返回明确的无可用账号或模型错误。
@@ -162,10 +162,10 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ## 可观测性
 
-- **Prometheus 指标**（前缀 `ai_proxy_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
+- **Prometheus 指标**（前缀 `aetherrelay_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
 - **SLO webhook**：配置阈值（缓存命中率、上游错误率、p99 延迟）与巡检周期后，状态变化时异步 POST `entered` / `resolved` 事件，带 `instance_id`、递增 `seq`、`generation` 与稳定 `event_id`；消费方按 `event_id` 幂等。有界队列 + 单 worker，429 优先遵循 `Retry-After`。
 - **交互归档**：`state.dir/interactions/{api_key_id}/{round_id}/` 按客户端 API Key 作用域保存脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`；`archive_full_content: false` 可禁止正文落盘；每个 API Key 默认保留最近 N 轮（`interaction_retention`）。目录名使用 API Key ID，不包含原始密钥。
-- **Provider live probe**：`go run ./cmd/ai-proxy-probe -config config.yaml -provider <owner> -endpoint chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `endpoint_drift` / `environment_undetermined`；不在服务启动时运行。
+- **Provider live probe**：`go run ./cmd/aetherrelay-probe -config config.yaml -provider <owner> -endpoint chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `endpoint_drift` / `environment_undetermined`；不在服务启动时运行。
 
 ## 安全与隐私边界
 

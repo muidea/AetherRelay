@@ -8,7 +8,7 @@ Last Updated: 2026-07-26
 
 ## 1. 目的与结论
 
-`ai-proxy` 已迁移 ChatGPT Web 上游、账号池、图片任务和本地图片管理能力，但 Admin Web 当前只提供 Provider、客户端 Key 与使用统计。结果是已存在的管理 API 没有可用的操作入口，管理员必须直接调用 HTTP API 才能维护 ChatGPT 账号和图片。
+`AetherRelay` 已迁移 ChatGPT Web 上游、账号池、图片任务和本地图片管理能力，但 Admin Web 当前只提供 Provider、客户端 Key 与使用统计。结果是已存在的管理 API 没有可用的操作入口，管理员必须直接调用 HTTP API 才能维护 ChatGPT 账号和图片。
 
 本设计将既有单页 Admin 管理台扩展为同时承载通用代理管理和 ChatGPT Web 运维的页面；不把旧 `chatgpt2api` Web 原样搬运，也不改变当前 Go 模块划分、事件 owner 或上游调用路径。
 
@@ -125,7 +125,7 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 
 ## 5. 现有 API 合同与前端映射
 
-所有路径以下均相对于 `ADMIN_BASE`，即通常的 `/admin`。GET 也必须使用既有管理认证请求封装；所有写操作必须附带 `X-AI-Proxy-Admin: 1`、当前 CSRF Header 和 JSON `Content-Type`。
+所有路径以下均相对于 `ADMIN_BASE`，即通常的 `/admin`。GET 也必须使用既有管理认证请求封装；所有写操作必须附带 `X-AetherRelay-Admin: 1`、当前 CSRF Header 和 JSON `Content-Type`。
 
 | 页面操作 | 方法和路径 | 请求关键字段 | 前端处理 |
 | --- | --- | --- | --- |
@@ -162,7 +162,7 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 
 ## 7. 安全与交互不变量
 
-1. 延续 Admin 的认证与写操作保护：未登录返回认证错误，非 loopback 的未启用认证访问被拒绝，写请求必须通过 CSRF/`X-AI-Proxy-Admin` 校验。
+1. 延续 Admin 的认证与写操作保护：未登录返回认证错误，非 loopback 的未启用认证访问被拒绝，写请求必须通过 CSRF/`X-AetherRelay-Admin` 校验。
 2. 全部 Admin HTML 和 API 响应使用 `Cache-Control: no-store`；页面不得把账号、任务、图片 URL、OAuth 数据或导出内容写入 localStorage/sessionStorage。
 3. 所有动态文本通过既有转义函数渲染；不得将 prompt、邮箱、错误信息、标签或上游字段插入 `innerHTML`。
 4. 页面错误只展示安全的服务端错误 envelope，禁止显示完整请求体、OAuth callback、token、data URL 或上游原始响应。
@@ -219,7 +219,7 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 
 ### 验证方式
 
-- Go：`GOCACHE=/tmp/ai-proxy-gocache go test ./... -count=1`；
+- Go：`GOCACHE=/tmp/AetherRelay-gocache go test ./... -count=1`；
 - 新增 Admin HTTP 合同测试，覆盖所有页面调用的成功、400、401/403、503 和敏感字段脱敏；
 - 浏览器冒烟：账号 CRUD/刷新/OAuth mock、图片任务 submit/poll/resume、图片标签/删除；
 - 使用指定的本地账号数据进行一次受控 live 验证，仅记录状态码、任务 ID/脱敏账号标识和功能结论，不记录账号凭据、OAuth URL、上游 URL、图片正文或上游响应正文。

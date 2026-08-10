@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/oauth"
-	"ai-proxy/internal/modules/application/chatgptaccountpool/internal/store"
-	events "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/oauth"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/store"
+	events "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 

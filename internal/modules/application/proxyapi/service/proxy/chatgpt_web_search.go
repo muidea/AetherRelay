@@ -9,10 +9,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptfail"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgpttext"
-	archive "ai-proxy/internal/pkg/aiproxyarchive"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 )
 
 var chatGPTWebSearchToolTypes = map[string]struct{}{

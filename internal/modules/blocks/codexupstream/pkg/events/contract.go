@@ -2,12 +2,12 @@
 package events
 
 const (
-	TopicComplete   = "aiproxy.codex.upstream.command.complete"
-	TopicStart      = "aiproxy.codex.upstream.command.start"
-	TopicPull       = "aiproxy.codex.upstream.command.pull"
-	TopicCancel     = "aiproxy.codex.upstream.command.cancel"
-	TopicListModels = "aiproxy.codex.upstream.command.list_models"
-	TopicGetUsage   = "aiproxy.codex.upstream.command.get_usage"
+	TopicComplete   = "aetherrelay.codex.upstream.command.complete"
+	TopicStart      = "aetherrelay.codex.upstream.command.start"
+	TopicPull       = "aetherrelay.codex.upstream.command.pull"
+	TopicCancel     = "aetherrelay.codex.upstream.command.cancel"
+	TopicListModels = "aetherrelay.codex.upstream.command.list_models"
+	TopicGetUsage   = "aetherrelay.codex.upstream.command.get_usage"
 )
 
 type Header struct {

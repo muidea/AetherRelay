@@ -4,7 +4,7 @@
 
 ```bash
 make run
-AI_PROXY_CONFIG=/etc/ai-proxy/config.yaml make run
+AETHERRELAY_CONFIG=/etc/aetherrelay/config.yaml make run
 ```
 
 默认服务地址为 `127.0.0.1:8080`。客户端使用标准入站地址：
@@ -26,9 +26,9 @@ curl http://127.0.0.1:8080/stats
 
 容器部署的完整步骤（Docker Compose 与直接运行镜像、目录权限、Admin 登录、数据持久化、升级与回滚）见[安装与部署](deployment.md#容器部署)。此处仅列出运维要点：
 
-- 镜像发布到 GitHub Container Registry：`ghcr.io/muidea/ai-proxy`。`main` 成功构建后更新 `latest` 与 `main`，发布 `vX.Y.Z` tag 后会推送对应的 `X.Y.Z`、`X.Y` 与 Git SHA 标签；生产部署应固定到完整版本或 SHA，不要仅依赖 `latest`。每个标签同时提供 Linux `amd64` 与 `arm64` 镜像。
-- 容器内程序最终以 UID/GID `10001`（`ai-proxy`）运行。入口程序只在启动时以 root 初始化 `/var/lib/ai-proxy` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。
-- 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图与交互归档；DuckDB 内的 Provider、ChatGPT Web 和 Codex OAuth 可恢复凭据均由外部主密钥加密。`deploy/.env` 中的 `AI_PROXY_CREDENTIAL_KEY` 必须与数据目录一起安全备份，任一丢失都无法恢复凭据。
+- 镜像发布到 GitHub Container Registry：`ghcr.io/muidea/aetherrelay`。`main` 成功构建后更新 `latest` 与 `main`，发布 `vX.Y.Z` tag 后会推送对应的 `X.Y.Z`、`X.Y` 与 Git SHA 标签；生产部署应固定到完整版本或 SHA，不要仅依赖 `latest`。每个标签同时提供 Linux `amd64` 与 `arm64` 镜像。
+- 容器内程序最终以 UID/GID `10001`（`aetherrelay`）运行。入口程序只在启动时以 root 初始化 `/var/lib/aetherrelay` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。
+- 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图与交互归档；DuckDB 内的 Provider、ChatGPT Web 和 Codex OAuth 可恢复凭据均由外部主密钥加密。`deploy/.env` 中的 `AETHERRELAY_CREDENTIAL_KEY` 必须与数据目录一起安全备份，任一丢失都无法恢复凭据。
 - 先按[备份与维护](#备份与维护)停止写入并备份，再进行跨大版本升级或迁移宿主机。不要并发运行两个容器指向同一个数据目录。
 
 ## Admin 登录安全（可选）
@@ -37,14 +37,14 @@ curl http://127.0.0.1:8080/stats
 
 ```bash
 # 1. 交互式生成哈希（密码不进入 argv / 环境变量 / 日志）
-ai-proxy admin password-hash
-export AI_PROXY_ADMIN_PASSWORD_HASH='...'
+AetherRelay admin password-hash
+export AETHERRELAY_ADMIN_PASSWORD_HASH='...'
 
 # 或直接创建/重置 Admin 登录凭据（自动启用 admin_auth_enabled）
-ai-proxy admin set-credentials --username ops-admin --config config.yaml
+AetherRelay admin set-credentials --username ops-admin --config config.yaml
 
 # 2. 配置 server.admin_auth_enabled=true 与账号，或使用环境变量
-#    AI_PROXY_ADMIN_AUTH_ENABLED / AI_PROXY_ADMIN_USERNAME / AI_PROXY_ADMIN_PASSWORD_HASH
+#    AETHERRELAY_ADMIN_AUTH_ENABLED / AETHERRELAY_ADMIN_USERNAME / AETHERRELAY_ADMIN_PASSWORD_HASH
 
 # 3. 通过 HTTP 或 HTTPS 对外暴露 <admin_base_path>（默认 /admin）
 #    生产环境推荐 HTTPS；若要浏览器仅在 HTTPS 携带会话，设置 admin_session_cookie_secure=true。
@@ -60,13 +60,13 @@ ai-proxy admin set-credentials --username ops-admin --config config.yaml
 - `/v1/models` 缺少预期模型时，先用同一客户端 Key复查目录，再在 Admin 查看该 Key 的有效 Provider、不可用 Provider 和有效模型。目录不按瞬时熔断过滤；目录存在但调用返回 503 时再排查 Provider 健康度，目录中完全不可见则排查 Key 绑定、Provider 启停和账号模型发现。
 - `admin_base_path` 是启动期路由；变更后必须重启进程，并同步反向代理路径规则。
 - 连续 5 次登录失败会按对端 IP 锁定 15 分钟（不信任 forwarded IP）。
-- `AI_PROXY_CREDENTIAL_KEY`、客户端 Key 哈希、Admin 密码哈希与 DuckDB 文件仍需主机权限保护；不要把主密钥写入 `config.yaml`、数据库、日志或版本库。
+- `AETHERRELAY_CREDENTIAL_KEY`、客户端 Key 哈希、Admin 密码哈希与 DuckDB 文件仍需主机权限保护；不要把主密钥写入 `config.yaml`、数据库、日志或版本库。
 
 设计细节见[安全与认证设计](design/security.md#admin-登录可选)。
 
 ## ChatGPT Web 用量统计
 
-ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`aiproxyusage` / 使用统计页）：
+ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`aetherrelayusage` / 使用统计页）：
 
 | 路径 | `provider` | `api_key_id` | token |
 | --- | --- | --- | --- |
@@ -106,7 +106,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ai
 
 ## ChatGPT Web 管理页运维注意
 
-Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AI-Proxy-Admin` 写保护。
+Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图片任务与图片库操作入口，调用既有 `/api/chatgpt/**` 管理 API。页面与 API 共用 Admin 会话、CSRF 与 `X-AetherRelay-Admin` 写保护。
 
 ### 临时对话正文保留与删除
 
@@ -123,20 +123,20 @@ Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图
 - **图片删除**：图片库删除不可恢复；批量删除前确认路径列表。图片内容通过 Admin 鉴权同源端点 `GET .../api/chatgpt/images/content?path=` 读取（可选 `thumb=1`），路径经严格校验，不提供通用 `/files/**`。
 - **api_key_id**：图片任务和图片库所有接口都以已存在的客户端 `api_key_id` 为隔离边界。Admin 页面从客户端 Key 选择器提交，不接受任意 owner 字符串；图片资产、缩略图、标签和任务不可跨 Key 读取。
 - **失败处理**：失败任务已有 `conversation_id` 时，可使用“恢复轮询”继续读取同一上游任务；该操作不会重新提交生成，适用于轮询超时及历史版本误记为 `"<nil>"` 的记录。`bootstrap` 阶段的 TLS/超时失败尚未建立上游会话，页面会有限退避重试一次；仍失败时显示“重新提交”，以原任务参数重新发起。其它失败不提供盲目重试，避免重复生成或重复扣除额度。
-- **取消与清理**：排队或运行中的任务可从操作列取消。取消会先持久化 `cancelled` 终态，再取消 ai-proxy 内部等待上下文，因此迟到的成功或失败结果不会覆盖取消状态；上游已受理的请求仍可能继续并产生额度消耗。成功、失败和已取消等终态记录可删除，删除任务记录不会联动删除图片库资产。所有状态均可从“查看”打开完整任务参数、进度、错误、用量和结果。
+- **取消与清理**：排队或运行中的任务可从操作列取消。取消会先持久化 `cancelled` 终态，再取消 AetherRelay 内部等待上下文，因此迟到的成功或失败结果不会覆盖取消状态；上游已受理的请求仍可能继续并产生额度消耗。成功、失败和已取消等终态记录可删除，删除任务记录不会联动删除图片库资产。所有状态均可从“查看”打开完整任务参数、进度、错误、用量和结果。
 - 账号池组件始终装配；若管理 API 返回 `503`，应检查模块启动错误和 DuckDB/主密钥状态，而不是通过配置开关启用。
 
 设计与页面合同见[ChatGPT Web 能力设计](design/chatgpt-web.md)。
 
 ## 指标与统计
 
-Prometheus 指标均以 `ai_proxy_` 为前缀：
+Prometheus 指标均以 `aetherrelay_` 为前缀：
 
-- `ai_proxy_requests_total{provider,model,route,status,outcome}`：请求完成数。
-- `ai_proxy_request_duration_seconds_{sum,count}`：请求耗时。
-- `ai_proxy_input_tokens_total`、`ai_proxy_output_tokens_total`、缓存 Token 与命中率：Provider/模型维度 Token 数据。
-- `ai_proxy_client_requests_total{api_key_id}` 与 `ai_proxy_client_*_tokens_total{api_key_id}`：客户端 Key 维度累计数据。
-- `ai_proxy_usage_store_*`：DuckDB 写入、查询、恢复、checkpoint 与健康状态。
+- `aetherrelay_requests_total{provider,model,route,status,outcome}`：请求完成数。
+- `aetherrelay_request_duration_seconds_{sum,count}`：请求耗时。
+- `aetherrelay_input_tokens_total`、`aetherrelay_output_tokens_total`、缓存 Token 与命中率：Provider/模型维度 Token 数据。
+- `aetherrelay_client_requests_total{api_key_id}` 与 `aetherrelay_client_*_tokens_total{api_key_id}`：客户端 Key 维度累计数据。
+- `aetherrelay_usage_store_*`：DuckDB 写入、查询、恢复、checkpoint 与健康状态。
 
 `/stats` 返回进程统计、延迟分位数、缓存、上游错误与 all-time `usage` 视图。DuckDB 是用量最终 authority；Prometheus 与 `/stats` 的 Key 累计镜像在启动时由 DuckDB 初始化，并在成功结算请求后更新。
 
@@ -161,9 +161,9 @@ Prometheus 指标均以 `ai_proxy_` 为前缀：
 
 - 消费方应按 `event_id` 幂等，且只在同一 `instance_id` 内比较 `seq`。
 - 投递为有界队列与单 worker；网络、408、425、429、5xx 最多重试三次，429 优先遵循 `Retry-After`。
-- shutdown 会取消在途投递，并将剩余队列计入 `ai_proxy_slo_webhook_dropped_total`。
+- shutdown 会取消在途投递，并将剩余队列计入 `aetherrelay_slo_webhook_dropped_total`。
 
-相关指标：`ai_proxy_slo_webhook_dropped_total`、`ai_proxy_slo_webhook_queue_length`、`ai_proxy_slo_webhook_requests_total{result}`。
+相关指标：`aetherrelay_slo_webhook_dropped_total`、`aetherrelay_slo_webhook_queue_length`、`aetherrelay_slo_webhook_requests_total{result}`。
 
 ## 用量、导出与归档
 
@@ -172,13 +172,13 @@ Prometheus 指标均以 `ai_proxy_` 为前缀：
 旧 `usage.csv` 只可显式一次性导入：
 
 ```bash
-go run ./cmd/ai-proxy-usage-import \
+go run ./cmd/aetherrelay-usage-import \
   -source usage.csv \
-  -database var/ai-proxy.duckdb \
+  -database var/aetherrelay.duckdb \
   -api-key-id default
 ```
 
-将示例中的 `var/ai-proxy.duckdb` 替换为实际的 `state.database` 完整路径。交互归档位于 `state.dir/interactions/{api_key_id}/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
+将示例中的 `var/aetherrelay.duckdb` 替换为实际的 `state.database` 完整路径。交互归档位于 `state.dir/interactions/{api_key_id}/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
 
 ## 备份与维护
 
@@ -189,7 +189,7 @@ go run ./cmd/ai-proxy-usage-import \
 Probe 不会在服务启动时运行，可用于验证某个已配置 Provider 的 direct endpoint：
 
 ```bash
-go run ./cmd/ai-proxy-probe -config config.yaml \
+go run ./cmd/aetherrelay-probe -config config.yaml \
   -provider <route-owner> -endpoint chat_completions -model <exact-model-id>
 ```
 

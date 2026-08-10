@@ -4,8 +4,8 @@ package chatgptaccountpool
 import (
 	"context"
 
-	"ai-proxy/internal/modules/application/chatgptaccountpool/biz"
-	"ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/biz"
+	"aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/framework/plugin/module"

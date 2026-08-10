@@ -1,6 +1,6 @@
 # 外部应用集成指南
 
-本文说明业务应用如何接入 `ai-proxy`、发现模型能力、选择客户端协议，并正确处理流式响应、工具调用和错误。Provider 配置见[配置参考](configuration.md)，服务端点矩阵见[功能说明](features.md)，跨协议转换的内部设计见[Responses 与 Anthropic 双向转换](design/responses-anthropic-conversion.md)。
+本文说明业务应用如何接入 `AetherRelay`、发现模型能力、选择客户端协议，并正确处理流式响应、工具调用和错误。Provider 配置见[配置参考](configuration.md)，服务端点矩阵见[功能说明](features.md)，跨协议转换的内部设计见[Responses 与 Anthropic 双向转换](design/responses-anthropic-conversion.md)。
 
 ## 1. 接入地址与鉴权
 
@@ -24,7 +24,7 @@ X-API-Key: <client-api-key>
 Anthropic-Version: 2023-06-01
 ```
 
-`client-api-key` 由 ai-proxy 管理端创建。它不是 Provider 的上游 API Key，也不是 ChatGPT Web 或 Codex OAuth 凭据；网关不会把客户端 Key 作为上游凭据转发。
+`client-api-key` 由 AetherRelay 管理端创建。它不是 Provider 的上游 API Key，也不是 ChatGPT Web 或 Codex OAuth 凭据；网关不会把客户端 Key 作为上游凭据转发。
 
 `codexoauth` 是账号池注入的只读内建 Provider，只提供固定 Codex OAuth 上游的原生 `/v1/responses`。业务端不能通过 Provider 配置切换其 protocol、base URL 或 endpoints；需要切换上游接入端点时，应使用独立的管理型直连 Provider。Codex OAuth 边界会把 Responses 标准字符串 `input` 等价展开为消息数组，并强制上游 `stream=true`、`store=false`；这些属于固定传输适配，不改变业务端发布的客户端端点。模型目录中的 `maxOutputTokens` 表示模型输出能力上限，不代表该固定 transport 接受客户端 `max_output_tokens` 参数；当前传入该字段会在上游调用前明确返回 400，不会静默省略。
 
@@ -551,16 +551,16 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 Admin 系统信息中的“开放 API 端点”是实例级路由清单，不代表每个模型都支持该路径。普通业务应用只应依赖数据面的 `/v1/models`；Admin API 需要管理面认证，不应暴露给业务客户端。
 
-自定义 Provider 支持整体配置迁移：`POST /admin/api/providers/export` 导出安全配置（默认不包含 API Key），请求体设置 `{"include_api_keys":true}` 才导出完整凭据；`POST /admin/api/providers/import` 导入 `ai-proxy.provider-bundle` v1 文件，默认按 `merge` 合并同名 Provider，也支持 `skip` 和 `replace`。所有新建或导入的 Provider 都必须包含 API Key；安全导出仅能更新目标实例已有 Provider 并保留其密钥，不能用于新增无密钥 Provider。完整导出需要 Admin 权限、二次确认并使用 `Cache-Control: no-store`。Provider bundle 只包含 Provider 自身的协议、Base URL、模型、端点、路由优先级和启用状态，不包含健康度、模型元数据、转换能力、用量或账号池信息。
+自定义 Provider 支持整体配置迁移：`POST /admin/api/providers/export` 导出安全配置（默认不包含 API Key），请求体设置 `{"include_api_keys":true}` 才导出完整凭据；`POST /admin/api/providers/import` 导入 `aetherrelay.provider-bundle` v1 文件，默认按 `merge` 合并同名 Provider，也支持 `skip` 和 `replace`。所有新建或导入的 Provider 都必须包含 API Key；安全导出仅能更新目标实例已有 Provider 并保留其密钥，不能用于新增无密钥 Provider。完整导出需要 Admin 权限、二次确认并使用 `Cache-Control: no-store`。Provider bundle 只包含 Provider 自身的协议、Base URL、模型、端点、路由优先级和启用状态，不包含健康度、模型元数据、转换能力、用量或账号池信息。
 
-账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `ai-proxy.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据；统一账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，集中放置整体导入与导出，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`，要求两个 Store 都可用。整体导入会先完成整包预检，校验失败或发现重复 `account_ref`、重复槽位凭据、同一邮箱被多个 `account_ref` 使用时返回 `409`，并在 `conflicts` 中给出账号引用、槽位和安全原因，不会写入任一 Store；只包含一种槽位的 bundle 只要求对应 Store 可用。预检通过后先按槽位 `account_id` 匹配目标账号；未提供 `account_id` 时按唯一邮箱回退匹配，不会因为目标摘要来自另一个上游账号而误报冲突。同邮箱但明确不同上游 `account_id` 默认返回 `409`，只有在 bundle 顶层显式设置 `"replace": true` 时才允许替换目标槽位；一个 bundle 中的多个账号不能指向同一个已有槽位。跨 Store 无法事务回滚，若一侧成功、另一侧失败，响应的 `partial_success` 为 `true`。同一账号的跨槽位归组优先使用规范化邮箱，不能使用不同上游 `account_id` 直接强行合并。
+账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `aetherrelay.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据；统一账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，集中放置整体导入与导出，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`，要求两个 Store 都可用。整体导入会先完成整包预检，校验失败或发现重复 `account_ref`、重复槽位凭据、同一邮箱被多个 `account_ref` 使用时返回 `409`，并在 `conflicts` 中给出账号引用、槽位和安全原因，不会写入任一 Store；只包含一种槽位的 bundle 只要求对应 Store 可用。预检通过后先按槽位 `account_id` 匹配目标账号；未提供 `account_id` 时按唯一邮箱回退匹配，不会因为目标摘要来自另一个上游账号而误报冲突。同邮箱但明确不同上游 `account_id` 默认返回 `409`，只有在 bundle 顶层显式设置 `"replace": true` 时才允许替换目标槽位；一个 bundle 中的多个账号不能指向同一个已有槽位。跨 Store 无法事务回滚，若一侧成功、另一侧失败，响应的 `partial_success` 为 `true`。同一账号的跨槽位归组优先使用规范化邮箱，不能使用不同上游 `account_id` 直接强行合并。
 
-两类迁移导出均遵循统一下载名 `ai-proxy-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json`：Provider 分别生成 `ai-proxy-provider-bundle-v1-safe-...` 或 `ai-proxy-provider-bundle-v1-complete-...`，账号池整体迁移生成 `ai-proxy-account-pool-bundle-v2-complete-...`。时间戳来自服务端返回的 `exported_at`，管理页下载名与 HTTP `Content-Disposition` 一致。文件名只用于识别和整理，导入始终按 JSON 内的 `format` 与 `schema_version` 校验，详见[管理面迁移 Bundle 文件命名](design/bundle-file-naming.md)。
+两类迁移导出均遵循统一下载名 `aetherrelay-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json`：Provider 分别生成 `aetherrelay-provider-bundle-v1-safe-...` 或 `aetherrelay-provider-bundle-v1-complete-...`，账号池整体迁移生成 `aetherrelay-account-pool-bundle-v2-complete-...`。时间戳来自服务端返回的 `exported_at`，管理页下载名与 HTTP `Content-Disposition` 一致。文件名只用于识别和整理，导入始终按 JSON 内的 `format` 与 `schema_version` 校验，详见[管理面迁移 Bundle 文件命名](design/bundle-file-naming.md)。
 
 ## 11. 推荐启动流程
 
 ```text
-加载 ai-proxy 地址和 client API Key
+加载 AetherRelay 地址和 client API Key
   -> GET /v1/models
   -> 按 exact model ID 建立本地目录
   -> 校验 endpoint + 所需 capability

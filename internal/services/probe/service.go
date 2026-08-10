@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
-// Main 保持既有 CLI 行为；cmd/ai-proxy-probe 只负责调用该进程服务。
+// Main 保持既有 CLI 行为；cmd/aetherrelay-probe 只负责调用该进程服务。
 func Main() {
-	configPath := flag.String("config", os.Getenv("AI_PROXY_CONFIG"), "config file path")
+	configPath := flag.String("config", os.Getenv("AETHERRELAY_CONFIG"), "config file path")
 	providerName := flag.String("provider", "", "provider name")
 	endpoint := flag.String("endpoint", "", "direct endpoint (chat_completions|messages|responses|completions|embeddings)")
 	model := flag.String("model", "", "model id (exact)")
@@ -32,7 +32,7 @@ func Main() {
 		*configPath = "config.yaml"
 	}
 	if *providerName == "" || *endpoint == "" || *model == "" {
-		fmt.Fprintln(os.Stderr, "usage: ai-proxy-probe -config config.yaml -provider <route-owner> -endpoint <endpoint> -model <model>")
+		fmt.Fprintln(os.Stderr, "usage: AetherRelay-probe -config config.yaml -provider <route-owner> -endpoint <endpoint> -model <model>")
 		os.Exit(2)
 	}
 

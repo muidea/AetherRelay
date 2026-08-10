@@ -13,7 +13,7 @@ import (
 	"net/url"
 	"strings"
 
-	"ai-proxy/internal/pkg/chatattachment"
+	"aetherrelay/internal/pkg/chatattachment"
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/gabriel-vasile/mimetype"
 )

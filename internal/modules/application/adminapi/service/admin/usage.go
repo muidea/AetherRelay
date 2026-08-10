@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 const (

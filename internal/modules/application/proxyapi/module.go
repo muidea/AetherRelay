@@ -4,10 +4,10 @@ package proxyapi
 import (
 	"context"
 
-	registrycommon "ai-proxy/internal/initiators/routeregistry/pkg/common"
-	"ai-proxy/internal/modules/application/proxyapi/biz"
-	proxycommon "ai-proxy/internal/modules/application/proxyapi/pkg/common"
-	"ai-proxy/internal/modules/application/proxyapi/service/proxy"
+	registrycommon "aetherrelay/internal/initiators/routeregistry/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/biz"
+	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/service/proxy"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

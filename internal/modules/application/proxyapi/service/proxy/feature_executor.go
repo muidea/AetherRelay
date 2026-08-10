@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/chatgptsearch"
-	proxyevents "ai-proxy/internal/modules/application/proxyapi/pkg/events"
-	"ai-proxy/internal/pkg/chatgpttokenusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
 
 type featureResponse struct {

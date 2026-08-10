@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/codexresponses"
-	acccommon "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/common"
-	accevents "ai-proxy/internal/modules/blocks/codexaccountpool/pkg/events"
-	upcommon "ai-proxy/internal/modules/blocks/codexupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/codexupstream/pkg/events"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	acccommon "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
+	accevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
 )
 

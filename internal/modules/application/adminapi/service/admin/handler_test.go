@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"ai-proxy/internal/modules/application/proxyapi/pkg/effectivecatalog"
-	"ai-proxy/internal/pkg/aiproxyclientaccess"
-	"ai-proxy/internal/pkg/aiproxyclientauth"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxymetrics"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 type testRuntime struct {
@@ -399,7 +399,7 @@ func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers/openai/probe", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"conclusion":"success"`) {
@@ -425,7 +425,7 @@ func TestHandlerProbesBuiltinProviderFromCatalogWithoutRecordingMetrics(t *testi
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers/chatgptweb/probe", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"conclusion":"success"`) || !strings.Contains(rec.Body.String(), `"status":200`) {
@@ -462,7 +462,7 @@ func TestHandlerCreatesProviderWithoutRewritingConfigAndHotReloads(t *testing.T)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -502,7 +502,7 @@ func TestHandlerRejectsProviderCreationWithoutAPIKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers", strings.NewReader(`{"name":"gateway","protocol":"openai","base_url":"http://127.0.0.1:8081/v1","models":["gpt-*"],"endpoints":["chat_completions"],"enabled":false}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "api_key is required") {
@@ -530,7 +530,7 @@ func TestHandlerPatchesOnlyTargetProviderAndPreservesCredential(t *testing.T) {
 	body := `{"base_url":"https://gateway.example.com/v1","api_key":"","enabled":false}`
 	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/OPENAI", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -557,7 +557,7 @@ func TestHandlerRejectsRemovedProviderConversionRelease(t *testing.T) {
 	body := `{"conversion_releases":{"gpt-4o":{"anthropic_to_responses":{"enabled":true,"verified":true,"evidence_id":"eval-admin"}}}}`
 	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown field") {
@@ -576,7 +576,7 @@ func TestHandlerSwitchesProviderTransportWithoutReleaseState(t *testing.T) {
 	handler := NewHandler(path, runtime)
 	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", strings.NewReader(`{"protocol":"anthropic","base_url":"https://api.deepseek.com/anthropic","endpoints":["messages"]}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -603,7 +603,7 @@ func TestHandlerDeletesOnlyTargetProvider(t *testing.T) {
 	handler := NewHandlerWithUsage(path, runtime, usage.NewMemoryStore())
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/providers/other", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -631,7 +631,7 @@ func TestHandlerProviderPatchCredentialAndErrorSemantics(t *testing.T) {
 	patch := func(path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPatch, path, strings.NewReader(body))
 		req.RemoteAddr = "127.0.0.1:1234"
-		req.Header.Set("X-AI-Proxy-Admin", "1")
+		req.Header.Set("X-AetherRelay-Admin", "1")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		return rec
@@ -674,7 +674,7 @@ func TestHandlerProviderPatchReportsActivationFailure(t *testing.T) {
 	handler := NewHandler(path, &rejectingRuntime{cfg: cfg})
 	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", strings.NewReader(`{"enabled":false}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "activation rejected") {
@@ -714,7 +714,7 @@ codex_oauth:
 	}
 	req := httptest.NewRequest(http.MethodPatch, "/admin/api/builtin-providers/chatgptweb", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -791,7 +791,7 @@ func TestHandlerManagesAdminDefaultLanguage(t *testing.T) {
 	put := httptest.NewRequest(http.MethodPut, "/admin/api/admin/preferences", strings.NewReader(`{"default_language":"en-US"}`))
 	put.RemoteAddr = "127.0.0.1:1234"
 	put.Header.Set("Content-Type", "application/json")
-	put.Header.Set("X-AI-Proxy-Admin", "1")
+	put.Header.Set("X-AetherRelay-Admin", "1")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, put)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"default_language":"en-US"`) {
@@ -823,7 +823,7 @@ func TestHandlerRejectsUnsupportedAdminDefaultLanguageWithoutWriting(t *testing.
 	handler := NewHandler(path, &testRuntime{cfg: cfg})
 	req := httptest.NewRequest(http.MethodPut, "/admin/api/admin/preferences", strings.NewReader(`{"default_language":"fr-FR"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -853,7 +853,7 @@ func TestHandlerDoesNotPersistPreferencesWhenActivationFails(t *testing.T) {
 	handler := NewHandler(path, runtime)
 	req := httptest.NewRequest(http.MethodPut, "/admin/api/admin/preferences", strings.NewReader(`{"default_language":"en-US"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
@@ -884,7 +884,7 @@ func TestLegacyClientAPIKeyConfigManagementRemoved(t *testing.T) {
 
 	create := httptest.NewRequest(http.MethodPost, "/admin/api/client-api-keys", strings.NewReader(`{"id":"ci-agent"}`))
 	create.RemoteAddr = "127.0.0.1:1234"
-	create.Header.Set("X-AI-Proxy-Admin", "1")
+	create.Header.Set("X-AetherRelay-Admin", "1")
 	create.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, create)
@@ -913,7 +913,7 @@ func TestLegacyClientAPIKeyConfigManagementRemoved(t *testing.T) {
 
 	disable := httptest.NewRequest(http.MethodPatch, "/admin/api/client-api-keys/ci-agent", strings.NewReader(`{"enabled":false}`))
 	disable.RemoteAddr = "127.0.0.1:1234"
-	disable.Header.Set("X-AI-Proxy-Admin", "1")
+	disable.Header.Set("X-AetherRelay-Admin", "1")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, disable)
 	if rec.Code != http.StatusOK {
@@ -937,7 +937,7 @@ func TestDeleteClientAPIKeyRemovesInteractionScope(t *testing.T) {
 	handler := NewHandlerWithUsage("", runtime, store)
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/client-api-keys/ci-agent", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -968,7 +968,7 @@ func TestClientAPIKeyProviderAccessAndEffectiveModels(t *testing.T) {
 
 	create := httptest.NewRequest(http.MethodPost, "/admin/api/client-api-keys", strings.NewReader(`{"id":"scoped","provider_access":{"mode":"selected","provider_ids":["openai"]}}`))
 	create.RemoteAddr = "127.0.0.1:1234"
-	create.Header.Set("X-AI-Proxy-Admin", "1")
+	create.Header.Set("X-AetherRelay-Admin", "1")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, create)
 	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"mode":"selected"`) {
@@ -985,7 +985,7 @@ func TestClientAPIKeyProviderAccessAndEffectiveModels(t *testing.T) {
 
 	update := httptest.NewRequest(http.MethodPut, "/admin/api/client-api-keys/scoped/provider-access", strings.NewReader(`{"mode":"all","provider_ids":[]}`))
 	update.RemoteAddr = "127.0.0.1:1234"
-	update.Header.Set("X-AI-Proxy-Admin", "1")
+	update.Header.Set("X-AetherRelay-Admin", "1")
 	updated := httptest.NewRecorder()
 	handler.ServeHTTP(updated, update)
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"mode":"all"`) {
@@ -994,7 +994,7 @@ func TestClientAPIKeyProviderAccessAndEffectiveModels(t *testing.T) {
 
 	bad := httptest.NewRequest(http.MethodPut, "/admin/api/client-api-keys/scoped/provider-access", strings.NewReader(`{"mode":"selected","provider_ids":["missing"]}`))
 	bad.RemoteAddr = "127.0.0.1:1234"
-	bad.Header.Set("X-AI-Proxy-Admin", "1")
+	bad.Header.Set("X-AetherRelay-Admin", "1")
 	badResponse := httptest.NewRecorder()
 	handler.ServeHTTP(badResponse, bad)
 	if badResponse.Code != http.StatusBadRequest {
@@ -1018,7 +1018,7 @@ func TestDeleteProviderRejectsSelectedClientKeyReference(t *testing.T) {
 	handler := NewHandlerWithUsage("", runtime, store)
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/providers/target", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "bound") {
@@ -1044,7 +1044,7 @@ func TestHandlerAllowsProviderChangeThatLeavesUnusedMetadata(t *testing.T) {
 	body := []byte(`{"models":["other-*"]}`)
 	req := httptest.NewRequest(http.MethodPatch, "/admin/api/providers/openai", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-AI-Proxy-Admin", "1")
+	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 )
 
 func (h *Handler) refreshChatGPTAccounts(w http.ResponseWriter, r *http.Request) {

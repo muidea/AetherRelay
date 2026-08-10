@@ -1,3 +1,3 @@
 package common
 
-const UnitID = "aiproxy.usage.block"
+const UnitID = "aetherrelay.usage.block"

@@ -3,7 +3,7 @@ package biz
 import (
 	"testing"
 
-	events "ai-proxy/internal/modules/application/chatgptimagetask/pkg/events"
+	events "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
 )
 
 func TestRetryableBootstrapFailure(t *testing.T) {

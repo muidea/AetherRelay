@@ -4,8 +4,8 @@ package usageruntime
 import (
 	"context"
 
-	"ai-proxy/internal/modules/blocks/usageruntime/biz"
-	usagecommon "ai-proxy/internal/modules/blocks/usageruntime/pkg/common"
+	"aetherrelay/internal/modules/blocks/usageruntime/biz"
+	usagecommon "aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"

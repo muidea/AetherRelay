@@ -5,7 +5,7 @@
 
 ## 1. 决策
 
-`ai-proxy` 统一使用 Server-Sent Events（SSE）承载文本生成的增量输出，不在本阶段提供 WebSocket 或 OpenAI Realtime 代理。
+`AetherRelay` 统一使用 Server-Sent Events（SSE）承载文本生成的增量输出，不在本阶段提供 WebSocket 或 OpenAI Realtime 代理。
 
 “统一”指传输与生命周期合同统一，不指把 OpenAI 和 Anthropic 的事件 JSON 合并为代理私有格式：
 

@@ -7,18 +7,18 @@ import (
 	"testing"
 	"time"
 
-	acccommon "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/common"
-	accevents "ai-proxy/internal/modules/application/chatgptaccountpool/pkg/events"
-	tempcommon "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/common"
-	events "ai-proxy/internal/modules/application/chatgpttemporarychat/pkg/events"
-	upcommon "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "ai-proxy/internal/modules/blocks/chatgptwebupstream/pkg/events"
-	configcommon "ai-proxy/internal/modules/blocks/configruntime/pkg/common"
-	configevents "ai-proxy/internal/modules/blocks/configruntime/pkg/events"
-	usagecommon "ai-proxy/internal/modules/blocks/usageruntime/pkg/common"
-	usageevents "ai-proxy/internal/modules/blocks/usageruntime/pkg/events"
-	"ai-proxy/internal/pkg/aiproxyconfig"
-	"ai-proxy/internal/pkg/aiproxyusage"
+	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
+	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
+	tempcommon "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/common"
+	events "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
+	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	configcommon "aetherrelay/internal/modules/blocks/configruntime/pkg/common"
+	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	usagecommon "aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
+	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -82,7 +82,7 @@ func TestCompleteTurnUsageWritesEstimatedAdminEvent(t *testing.T) {
 
 func wireBootstrap(hub event.Hub, t *testing.T) (dbPath string) {
 	t.Helper()
-	dbPath = filepath.Join(t.TempDir(), "ai-proxy.duckdb")
+	dbPath = filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	stateDir := t.TempDir()
 	cfgObs := event.NewSimpleObserver(configcommon.UnitID, hub)
 	cfgObs.Subscribe(configevents.TopicBootstrap, func(_ event.Event, result event.Result) {

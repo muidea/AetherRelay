@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"ai-proxy/internal/initiators/routeregistry/pkg/common"
-	"ai-proxy/internal/pkg/aiproxybootstrap"
+	"aetherrelay/internal/initiators/routeregistry/pkg/common"
+	"aetherrelay/internal/pkg/aetherrelaybootstrap"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -40,9 +40,9 @@ func New() *routeRegistry { return &routeRegistry{} }
 func (r *routeRegistry) ID() string { return common.RouteRegistryInitiator }
 
 func (r *routeRegistry) Setup(_ context.Context, _ event.Hub, _ task.BackgroundRoutine) *cd.Error {
-	bootstrap, ok := aiproxybootstrap.Current()
+	bootstrap, ok := aetherrelaybootstrap.Current()
 	if !ok {
-		return cd.NewError(cd.IllegalParam, "ai-proxy bootstrap is not configured")
+		return cd.NewError(cd.IllegalParam, "AetherRelay bootstrap is not configured")
 	}
 	if bootstrap.Config.ListenAddr == "" {
 		return cd.NewError(cd.IllegalParam, "http listen address is empty")

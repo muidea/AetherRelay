@@ -3,17 +3,17 @@ package events
 import (
 	"time"
 
-	"ai-proxy/internal/pkg/aiproxymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
 )
 
 const (
-	TopicAcquire        = "aiproxy.metrics.command.acquire"
-	TopicRecord         = "aiproxy.metrics.event.record"
-	TopicPrometheus     = "aiproxy.metrics.command.prometheus"
-	TopicStats          = "aiproxy.metrics.command.stats"
-	TopicProviderHealth = "aiproxy.metrics.command.provider_health"
-	TopicProviderModel  = "aiproxy.metrics.command.provider_model_health"
-	TopicResetHealth    = "aiproxy.metrics.command.reset_provider_health"
+	TopicAcquire        = "aetherrelay.metrics.command.acquire"
+	TopicRecord         = "aetherrelay.metrics.event.record"
+	TopicPrometheus     = "aetherrelay.metrics.command.prometheus"
+	TopicStats          = "aetherrelay.metrics.command.stats"
+	TopicProviderHealth = "aetherrelay.metrics.command.provider_health"
+	TopicProviderModel  = "aetherrelay.metrics.command.provider_model_health"
+	TopicResetHealth    = "aetherrelay.metrics.command.reset_provider_health"
 )
 
 type AcquireCommand struct{}
