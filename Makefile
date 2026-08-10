@@ -3,7 +3,7 @@
 BINARY ?= AetherRelay
 CMD ?= ./cmd/aetherrelay
 GO ?= go
-GOFLAGS ?= -buildvcs=false -trimpath
+GOFLAGS ?= -buildvcs=false
 
 help:
 	@printf '%s\n' 'targets:'
