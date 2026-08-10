@@ -147,17 +147,16 @@ type Handler struct {
 }
 
 type providerView struct {
-	Name                 string               `json:"name"`
-	Protocol             string               `json:"protocol"`
-	BaseURL              string               `json:"base_url"`
-	Models               []string             `json:"models"`
-	Endpoints            []string             `json:"endpoints"`
-	AllowUnauthenticated bool                 `json:"allow_unauthenticated"`
-	Priority             int                  `json:"priority"`
-	Fallback             bool                 `json:"fallback"`
-	Enabled              bool                 `json:"enabled"`
-	APIKeyConfigured     bool                 `json:"api_key_configured"`
-	Availability         providerAvailability `json:"availability"`
+	Name             string               `json:"name"`
+	Protocol         string               `json:"protocol"`
+	BaseURL          string               `json:"base_url"`
+	Models           []string             `json:"models"`
+	Endpoints        []string             `json:"endpoints"`
+	Priority         int                  `json:"priority"`
+	Fallback         bool                 `json:"fallback"`
+	Enabled          bool                 `json:"enabled"`
+	APIKeyConfigured bool                 `json:"api_key_configured"`
+	Availability     providerAvailability `json:"availability"`
 	// Source is a display-only classification derived from builtin + base_url
 	// (builtin / official / third_party). It is never read from or written to YAML.
 	Source string `json:"source"`
@@ -194,33 +193,31 @@ type providerAvailability struct {
 }
 
 type providerInput struct {
-	Name                 string   `json:"name"`
-	Protocol             string   `json:"protocol"`
-	BaseURL              string   `json:"base_url"`
-	APIKey               string   `json:"api_key"`
-	ClearAPIKey          bool     `json:"clear_api_key"`
-	Models               []string `json:"models"`
-	Endpoints            []string `json:"endpoints"`
-	AllowUnauthenticated bool     `json:"allow_unauthenticated"`
-	Priority             *int     `json:"priority"`
-	Fallback             *bool    `json:"fallback"`
-	Enabled              bool     `json:"enabled"`
+	Name        string   `json:"name"`
+	Protocol    string   `json:"protocol"`
+	BaseURL     string   `json:"base_url"`
+	APIKey      string   `json:"api_key"`
+	ClearAPIKey bool     `json:"clear_api_key"`
+	Models      []string `json:"models"`
+	Endpoints   []string `json:"endpoints"`
+	Priority    *int     `json:"priority"`
+	Fallback    *bool    `json:"fallback"`
+	Enabled     bool     `json:"enabled"`
 }
 
 // providerPatchInput uses pointers so a single Provider update can distinguish
 // an omitted field from an explicit zero value. Provider names are immutable
 // and are taken exclusively from the request path.
 type providerPatchInput struct {
-	Protocol             *string   `json:"protocol"`
-	BaseURL              *string   `json:"base_url"`
-	APIKey               *string   `json:"api_key"`
-	ClearAPIKey          *bool     `json:"clear_api_key"`
-	Models               *[]string `json:"models"`
-	Endpoints            *[]string `json:"endpoints"`
-	AllowUnauthenticated *bool     `json:"allow_unauthenticated"`
-	Priority             *int      `json:"priority"`
-	Fallback             *bool     `json:"fallback"`
-	Enabled              *bool     `json:"enabled"`
+	Protocol    *string   `json:"protocol"`
+	BaseURL     *string   `json:"base_url"`
+	APIKey      *string   `json:"api_key"`
+	ClearAPIKey *bool     `json:"clear_api_key"`
+	Models      *[]string `json:"models"`
+	Endpoints   *[]string `json:"endpoints"`
+	Priority    *int      `json:"priority"`
+	Fallback    *bool     `json:"fallback"`
+	Enabled     *bool     `json:"enabled"`
 }
 
 func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
@@ -884,18 +881,17 @@ func (h *Handler) listProviders(w http.ResponseWriter) {
 	for _, name := range names {
 		provider := cfg.Providers[name]
 		providers = append(providers, providerView{
-			Name:                 name,
-			Protocol:             provider.Protocol,
-			BaseURL:              provider.BaseURL,
-			Models:               append([]string(nil), provider.Models...),
-			Endpoints:            append([]string(nil), provider.Endpoints...),
-			AllowUnauthenticated: provider.AllowUnauthenticated,
-			Priority:             config.EffectiveProviderPriority(provider),
-			Fallback:             config.EffectiveProviderFallback(provider),
-			Enabled:              !provider.Disabled,
-			APIKeyConfigured:     strings.TrimSpace(provider.APIKey) != "",
-			Availability:         health[name],
-			Source:               classifyProviderSource(false, provider.BaseURL),
+			Name:             name,
+			Protocol:         provider.Protocol,
+			BaseURL:          provider.BaseURL,
+			Models:           append([]string(nil), provider.Models...),
+			Endpoints:        append([]string(nil), provider.Endpoints...),
+			Priority:         config.EffectiveProviderPriority(provider),
+			Fallback:         config.EffectiveProviderFallback(provider),
+			Enabled:          !provider.Disabled,
+			APIKeyConfigured: strings.TrimSpace(provider.APIKey) != "",
+			Availability:     health[name],
+			Source:           classifyProviderSource(false, provider.BaseURL),
 		})
 	}
 	// Builtin rows remain visible while disabled so operators can re-enable
@@ -1215,8 +1211,8 @@ func (h *Handler) patchProvider(w http.ResponseWriter, r *http.Request, rel stri
 		writeError(w, http.StatusBadRequest, "at least one provider field is required")
 		return
 	}
-	if input.ClearAPIKey != nil && *input.ClearAPIKey && input.APIKey != nil && strings.TrimSpace(*input.APIKey) != "" {
-		writeError(w, http.StatusBadRequest, "api_key and clear_api_key cannot be set together")
+	if input.ClearAPIKey != nil && *input.ClearAPIKey {
+		writeError(w, http.StatusBadRequest, "provider API key is required and cannot be cleared")
 		return
 	}
 
@@ -1298,7 +1294,7 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, rel string) {
 }
 
 func providerPatchEmpty(input providerPatchInput) bool {
-	return input.Protocol == nil && input.BaseURL == nil && input.APIKey == nil && input.ClearAPIKey == nil && input.Models == nil && input.Endpoints == nil && input.AllowUnauthenticated == nil && input.Priority == nil && input.Fallback == nil && input.Enabled == nil
+	return input.Protocol == nil && input.BaseURL == nil && input.APIKey == nil && input.ClearAPIKey == nil && input.Models == nil && input.Endpoints == nil && input.Priority == nil && input.Fallback == nil && input.Enabled == nil
 }
 
 func applyProviderPatch(provider *config.Provider, input providerPatchInput) {
@@ -1319,9 +1315,6 @@ func applyProviderPatch(provider *config.Provider, input providerPatchInput) {
 	}
 	if input.Endpoints != nil {
 		provider.Endpoints = append([]string(nil), (*input.Endpoints)...)
-	}
-	if input.AllowUnauthenticated != nil {
-		provider.AllowUnauthenticated = *input.AllowUnauthenticated
 	}
 	priority := config.EffectiveProviderPriority(*provider)
 	if input.Priority != nil {
@@ -1348,8 +1341,14 @@ func buildManagedProviders(inputs []providerInput, existing map[string]config.Pr
 			return nil, fmt.Errorf("duplicate provider %q", name)
 		}
 		apiKey := strings.TrimSpace(input.APIKey)
+		if apiKey == "" && existing == nil {
+			return nil, fmt.Errorf("provider %q api_key is required", name)
+		}
 		if apiKey == "" && !input.ClearAPIKey {
 			apiKey = existing[name].APIKey
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("provider %q api_key is required", name)
 		}
 		priority := config.DefaultProviderPriority
 		if input.Priority != nil {
@@ -1359,7 +1358,7 @@ func buildManagedProviders(inputs []providerInput, existing map[string]config.Pr
 		if input.Fallback != nil {
 			fallback = *input.Fallback
 		}
-		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)), BaseURL: strings.TrimSpace(input.BaseURL), APIKey: apiKey, Models: append([]string(nil), input.Models...), Endpoints: append([]string(nil), input.Endpoints...), AllowUnauthenticated: input.AllowUnauthenticated, Disabled: !input.Enabled}
+		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(input.Protocol)), BaseURL: strings.TrimSpace(input.BaseURL), APIKey: apiKey, Models: append([]string(nil), input.Models...), Endpoints: append([]string(nil), input.Endpoints...), Disabled: !input.Enabled}
 		config.ConfigureProviderPolicy(&provider, priority, fallback)
 		providers[name] = provider
 	}

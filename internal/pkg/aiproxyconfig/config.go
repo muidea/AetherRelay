@@ -279,10 +279,7 @@ type Provider struct {
 	// Endpoints 为 provider 显式声明的直通端点(非 protocol 推断)。
 	// 取值: chat_completions / messages / responses / completions / embeddings / images。
 	Endpoints []string
-	// AllowUnauthenticated 仅允许受信 loopback 上游在无 API Key 时启动。
-	// 远程 base_url 即使设置 true 也必须 fail-fast。
-	AllowUnauthenticated bool
-	Disabled             bool
+	Disabled  bool
 }
 
 func Load(path string) (Config, error) {
@@ -783,12 +780,6 @@ func setProvider(cfg *Config, name, key, value string) error {
 			return fmt.Errorf("providers.%s.endpoints: %w", name, err)
 		}
 		provider.Endpoints = endpoints
-	case "allow_unauthenticated":
-		b, err := parseStrictBool(value)
-		if err != nil {
-			return fmt.Errorf("providers.%s.allow_unauthenticated: %w", name, err)
-		}
-		provider.AllowUnauthenticated = b
 	case "enabled":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -1443,6 +1434,11 @@ func validateProviders(cfg Config) error {
 		if strings.EqualFold(strings.TrimSpace(name), "chatgptweb") || strings.TrimSpace(provider.Protocol) == "chatgptweb" {
 			return fmt.Errorf("provider %q: protocol chatgptweb is reserved for the builtin provider; remove providers.%s and enable chatgpt_web instead", name, name)
 		}
+		// Credentials are required even for a disabled entry so re-enabling a
+		// Provider can never silently create an unauthenticated upstream request.
+		if err := validateProviderAPIKey(name, provider); err != nil {
+			return err
+		}
 		if provider.Disabled {
 			continue
 		}
@@ -1466,9 +1462,6 @@ func validateProviders(cfg Config) error {
 		if err := validateHTTPBaseURL(provider.BaseURL); err != nil {
 			return fmt.Errorf("provider %q base_url: %w", name, err)
 		}
-		if err := validateProviderAPIKey(name, provider); err != nil {
-			return err
-		}
 		if len(provider.Models) == 0 {
 			return fmt.Errorf("provider %q models is required (explicit; not inferred from provider name or protocol)", name)
 		}
@@ -1491,45 +1484,13 @@ func validateProviders(cfg Config) error {
 	return nil
 }
 
-// validateProviderAPIKey:远程上游必须有 API Key;仅 allow_unauthenticated + loopback base_url 允许空 Key。
+// validateProviderAPIKey requires credentials for every managed upstream.
 func validateProviderAPIKey(name string, provider Provider) error {
 	key := strings.TrimSpace(provider.APIKey)
-	if provider.AllowUnauthenticated && key != "" {
-		return fmt.Errorf("provider %q allow_unauthenticated requires empty api_key; authenticated and unauthenticated modes are mutually exclusive", name)
+	if key == "" {
+		return fmt.Errorf("provider %q has empty api_key; every provider requires explicit credentials", name)
 	}
-	if key != "" {
-		return nil
-	}
-	loopback, err := isLoopbackBaseURL(provider.BaseURL)
-	if err != nil {
-		return fmt.Errorf("provider %q base_url: %w", name, err)
-	}
-	if provider.AllowUnauthenticated {
-		if !loopback {
-			return fmt.Errorf("provider %q allow_unauthenticated requires loopback base_url; remote empty api_key is not allowed", name)
-		}
-		return nil
-	}
-	if loopback {
-		return fmt.Errorf("provider %q has empty api_key; set api_key or allow_unauthenticated=true for trusted loopback upstream", name)
-	}
-	return fmt.Errorf("provider %q has empty api_key; remote providers require explicit credentials", name)
-}
-
-func isLoopbackBaseURL(raw string) (bool, error) {
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil {
-		return false, err
-	}
-	host := parsed.Hostname()
-	if host == "" {
-		return false, fmt.Errorf("missing host")
-	}
-	if host == "localhost" {
-		return true, nil
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback(), nil
+	return nil
 }
 
 func validateSLO(slo SLOConfig) error {

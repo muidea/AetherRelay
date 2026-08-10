@@ -485,6 +485,29 @@ func TestHandlerCreatesProviderWithoutRewritingConfigAndHotReloads(t *testing.T)
 	}
 }
 
+func TestHandlerRejectsProviderCreationWithoutAPIKey(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandler(path, runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers", strings.NewReader(`{"name":"gateway","protocol":"openai","base_url":"http://127.0.0.1:8081/v1","models":["gpt-*"],"endpoints":["chat_completions"],"enabled":false}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AI-Proxy-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "api_key is required") {
+		t.Fatalf("create without key = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, exists := runtime.ConfigSnapshot().Providers["gateway"]; exists {
+		t.Fatal("provider without API key was created")
+	}
+}
+
 func TestHandlerPatchesOnlyTargetProviderAndPreservesCredential(t *testing.T) {
 	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
 	path := writeAdminTestConfig(t)
@@ -614,11 +637,11 @@ func TestHandlerProviderPatchCredentialAndErrorSemantics(t *testing.T) {
 	if got := runtime.ConfigSnapshot().Providers["openai"].APIKey; got != "replacement" {
 		t.Fatalf("credential = %q", got)
 	}
-	if rec := patch("/admin/api/providers/openai", `{"base_url":"http://127.0.0.1:8081/v1","clear_api_key":true,"allow_unauthenticated":true}`); rec.Code != http.StatusOK {
+	if rec := patch("/admin/api/providers/openai", `{"base_url":"http://127.0.0.1:8081/v1","clear_api_key":true}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("clear credential = %d %s", rec.Code, rec.Body.String())
 	}
-	if got := runtime.ConfigSnapshot().Providers["openai"]; got.APIKey != "" || !got.AllowUnauthenticated {
-		t.Fatalf("cleared provider = %+v", got)
+	if got := runtime.ConfigSnapshot().Providers["openai"]; got.APIKey != "replacement" || got.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("provider changed after rejected clear = %+v", got)
 	}
 	for _, tc := range []struct {
 		path string

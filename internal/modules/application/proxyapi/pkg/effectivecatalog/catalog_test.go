@@ -20,7 +20,7 @@ providers:
     enabled: true
     protocol: openai
     base_url: http://127.0.0.1:8081
-    allow_unauthenticated: true
+    api_key: test-key
     endpoints: chat_completions
     models: static-model
 model_metadata:
@@ -55,7 +55,7 @@ providers:
     enabled: true
     protocol: openai
     base_url: http://127.0.0.1:8081
-    allow_unauthenticated: true
+    api_key: test-key
     endpoints: chat_completions
     models: gpt-5.3-codex
 model_metadata:

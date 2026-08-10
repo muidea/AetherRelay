@@ -60,7 +60,7 @@ model_metadata:
 - `models`：精确条目会发布可路由模型；pattern 只匹配由其他精确条目或账号池发现提供的具体模型 ID。多个 enabled Provider 可以匹配同一 exact model。
 - `priority`：可选整数，范围 `-1000`~`1000`，默认 `100`；数值越高越先被选择，名称只用于同优先级稳定排序。显式 `0` 有效。
 - `fallback`：可选布尔值，默认 `true`；Provider 位于非首候选时，是否允许在安全条件下作为回退目标。
-- `api_key`：远程 Provider 必填；仅 loopback 上游可显式 `allow_unauthenticated: true`。API Key 只进入加密 Provider 目录，不进入 YAML。
+- `api_key`：所有 Provider 必填。API Key 只进入加密 Provider 目录，不进入 YAML。
 
 Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`config.yaml` 不应声明 Provider，尤其不得保存明文 Key。数据库已有 Provider 密文时，缺少或使用错误的 `AI_PROXY_CREDENTIAL_KEY` 会使启动失败，不会回退为空目录。
 
@@ -209,7 +209,7 @@ codex_oauth:
 
 访问 `http://127.0.0.1:8080/admin/`（或自定义 `admin_base_path`）可管理 Provider、客户端 Key、查看 API Key 用量；「账号池」使用统一账号列表展示 ChatGPT Web 与 Codex CLI 两个凭据槽，「功能集」提供图片任务、图片库、在线搜索与临时对话。账号关联使用不可逆 `identity_key`，不向 Admin 暴露上游 account ID；每个槽分别展示凭据刷新、额度、模型缓存、用量窗口和能力故障，不能跨槽共享 refresh token。统一页面统计正常/限流、异常/禁用账号数、正常或限流 ChatGPT Web 槽的可用图片额度合计，以及凭据刷新失败槽位数（ChatGPT Web / Codex CLI 分开统计）；禁用或异常槽不计入图片额度。内建 Provider 会直接显示不可用原因、可路由账号数和模型数。槽位操作仍通过该 Admin 前缀下的受鉴权账号 API 执行。
 
-管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好；“设为默认”通过 `PUT <admin_base_path>/api/admin/preferences` 更新实例默认语言并立即热加载。该设置不影响代理请求、账号池或 OAuth 行为。
+管理页支持简体中文与 English。语言选择优先级为 URL `?lang=zh-CN|en-US`（仅当前访问）> 浏览器语言偏好 Cookie > `server.admin_default_language` > 浏览器语言 > `zh-CN`。页面顶部选择器会保存非敏感的浏览器偏好。该设置不影响代理请求、账号池或 OAuth 行为。
 
 Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。管理型 Provider 使用单项接口新增（`POST <admin_base_path>/api/providers`）、局部更新（`PATCH <admin_base_path>/api/providers/{name}`）和删除（`DELETE <admin_base_path>/api/providers/{name}`）；Web 编辑表单只提交实际变化的字段。PATCH 请求未提供 API Key 或提供空字符串时保留原凭据，只有显式 `clear_api_key: true` 才会清空。Provider 名称是不可变标识，改名需要删除旧项后新增。内建 Provider 不可删除，通过独立接口热更新路由启停与优先级。状态列合并账号池可用性与请求健康度，避免同一 Provider 出现两套相互矛盾的状态。
 

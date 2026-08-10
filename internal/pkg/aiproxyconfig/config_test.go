@@ -471,7 +471,6 @@ providers:
   local:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
-    allow_unauthenticated: true
     endpoints: chat_completions
     models: local-*
 `), 0o644); err != nil {
@@ -1672,7 +1671,7 @@ providers:
 	}
 }
 
-func TestLoadRejectsAllowUnauthenticatedOnRemote(t *testing.T) {
+func TestLoadRejectsRemovedUnauthenticatedSetting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1686,12 +1685,12 @@ providers:
 		t.Fatal(err)
 	}
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "loopback") {
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestLoadRejectsAllowUnauthenticatedWithAPIKey(t *testing.T) {
+func TestLoadRejectsRemovedUnauthenticatedSettingWithAPIKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -1706,19 +1705,19 @@ providers:
 		t.Fatal(err)
 	}
 	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestLoadAllowsLoopbackUnauthenticated(t *testing.T) {
+func TestLoadRequiresAPIKeyForLoopback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
   local:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
-    allow_unauthenticated: true
+    api_key: local-key
     endpoints: chat_completions
     models: local-*
 model_metadata:
@@ -1732,8 +1731,8 @@ model_metadata:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Providers["local"].AllowUnauthenticated {
-		t.Fatal("expected allow_unauthenticated")
+	if cfg.Providers["local"].APIKey != "local-key" {
+		t.Fatal("expected local API key")
 	}
 }
 
@@ -1768,7 +1767,7 @@ providers:
   local:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
-    allow_unauthenticated: true
+    api_key: local-key
     endpoints: chat_completions
     models: local-*
 `), 0o644); err != nil {
@@ -1798,7 +1797,7 @@ providers:
   local:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
-    allow_unauthenticated: true
+    api_key: local-key
     endpoints: chat_completions
     models: local-*
 `), 0o644); err != nil {

@@ -200,9 +200,9 @@
 - [x] **D-02.16** OpenAI provider 不允许声明 `messages` 直连能力。
 - [x] **D-02.17** Anthropic provider 不允许声明 OpenAI 直连能力。
 - [x] **D-02.18** 远程 provider 缺少 API Key 时启动失败。
-- [x] **D-02.19** loopback provider 只有在 `allow_unauthenticated=true` 时允许空 API Key。
-- [x] **D-02.20** `allow_unauthenticated=true` 与非空 API Key 不能同时使用。
-- [x] **D-02.21** `allow_unauthenticated=true` 不能用于远程 provider。
+- [x] **D-02.19** 所有 Provider 均要求显式 API Key，loopback 上游也不例外。
+- [x] **D-02.20** 已移除无认证 Provider 配置选项，避免产生未认证上游请求。
+- [x] **D-02.21** Provider 管理页和导入格式均拒绝无 API Key 的新 Provider。
 - [x] **D-02.22** 非 loopback `listen_addr` 缺少入站 API Key 时启动失败。
 - [x] **D-02.23** `model_catalog` 的 exact ID 必须唯一。
 - [x] **D-02.24** 大小写不同的模型 ID 允许同时存在。

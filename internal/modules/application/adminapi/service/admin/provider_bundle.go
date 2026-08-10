@@ -19,17 +19,16 @@ type providerBundle struct {
 }
 
 type providerBundleItem struct {
-	Name                 string   `json:"name"`
-	Protocol             string   `json:"protocol"`
-	BaseURL              string   `json:"base_url"`
-	APIKey               *string  `json:"api_key,omitempty"`
-	APIKeyConfigured     bool     `json:"api_key_configured,omitempty"`
-	Models               []string `json:"models,omitempty"`
-	Endpoints            []string `json:"endpoints,omitempty"`
-	Priority             int      `json:"priority,omitempty"`
-	Fallback             bool     `json:"fallback,omitempty"`
-	Enabled              bool     `json:"enabled"`
-	AllowUnauthenticated bool     `json:"allow_unauthenticated,omitempty"`
+	Name             string   `json:"name"`
+	Protocol         string   `json:"protocol"`
+	BaseURL          string   `json:"base_url"`
+	APIKey           *string  `json:"api_key,omitempty"`
+	APIKeyConfigured bool     `json:"api_key_configured,omitempty"`
+	Models           []string `json:"models,omitempty"`
+	Endpoints        []string `json:"endpoints,omitempty"`
+	Priority         int      `json:"priority,omitempty"`
+	Fallback         bool     `json:"fallback,omitempty"`
+	Enabled          bool     `json:"enabled"`
 }
 
 type providerBundleItemResult struct {
@@ -67,7 +66,7 @@ func (h *Handler) exportProviderBundle(w http.ResponseWriter, r *http.Request) {
 		if name == "chatgptweb" || name == "codexoauth" || provider.Protocol == "chatgptweb" || provider.Protocol == "codexoauth" {
 			continue
 		}
-		item := providerBundleItem{Name: name, Protocol: provider.Protocol, BaseURL: provider.BaseURL, Models: append([]string(nil), provider.Models...), Endpoints: append([]string(nil), provider.Endpoints...), Priority: provider.Priority, Fallback: provider.Fallback, Enabled: !provider.Disabled, AllowUnauthenticated: provider.AllowUnauthenticated, APIKeyConfigured: strings.TrimSpace(provider.APIKey) != ""}
+		item := providerBundleItem{Name: name, Protocol: provider.Protocol, BaseURL: provider.BaseURL, Models: append([]string(nil), provider.Models...), Endpoints: append([]string(nil), provider.Endpoints...), Priority: provider.Priority, Fallback: provider.Fallback, Enabled: !provider.Disabled, APIKeyConfigured: strings.TrimSpace(provider.APIKey) != ""}
 		if includeSecrets && item.APIKeyConfigured {
 			value := provider.APIKey
 			item.APIKey = &value
@@ -150,15 +149,30 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 			result.Items = append(result.Items, itemResult)
 			continue
 		}
-		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(item.Protocol)), BaseURL: strings.TrimSpace(item.BaseURL), Models: append([]string(nil), item.Models...), Endpoints: append([]string(nil), item.Endpoints...), Priority: item.Priority, Fallback: item.Fallback, Disabled: !item.Enabled, AllowUnauthenticated: item.AllowUnauthenticated}
+		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(item.Protocol)), BaseURL: strings.TrimSpace(item.BaseURL), Models: append([]string(nil), item.Models...), Endpoints: append([]string(nil), item.Endpoints...), Priority: item.Priority, Fallback: item.Fallback, Disabled: !item.Enabled}
 		if item.APIKey != nil {
 			provider.APIKey = strings.TrimSpace(*item.APIKey)
+			if provider.APIKey == "" {
+				itemResult.Status, itemResult.Action, itemResult.Error = "error", "rejected", "api_key is required"
+				result.Failed++
+				result.Items = append(result.Items, itemResult)
+				continue
+			}
 			itemResult.APIKey = "replaced"
 		} else if exists {
 			provider.APIKey = old.APIKey
+			if strings.TrimSpace(provider.APIKey) == "" {
+				itemResult.Status, itemResult.Action, itemResult.Error = "error", "rejected", "api_key is required"
+				result.Failed++
+				result.Items = append(result.Items, itemResult)
+				continue
+			}
 			itemResult.APIKey = "preserved"
 		} else {
-			itemResult.APIKey = "omitted"
+			itemResult.Status, itemResult.Action, itemResult.Error = "error", "rejected", "api_key is required for new providers"
+			result.Failed++
+			result.Items = append(result.Items, itemResult)
+			continue
 		}
 		next[name] = provider
 		if exists {
