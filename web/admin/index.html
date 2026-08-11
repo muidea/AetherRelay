@@ -4,6 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AetherRelay · 管理控制台</title>
+  <link id="aetherrelaySiteIcon" rel="icon" type="image/png">
+  <link id="aetherrelayAppleTouchIcon" rel="apple-touch-icon">
+  <script>
+    for(const id of ["aetherrelaySiteIcon","aetherrelayAppleTouchIcon"]){
+      const icon=document.getElementById(id);
+      if(icon)icon.href=(window.__AETHERRELAY_ADMIN_BASE_PATH__||"/admin")+"/assets/aetherrelay.png";
+    }
+  </script>
   <style>
     :root{--primary:#1677ff;--primary-hover:#4096ff;--success:#52c41a;--warning:#faad14;--danger:#ff4d4f;--text:#1f1f1f;--muted:#8c8c8c;--border:#d9d9d9;--line:#f0f0f0;--bg:#f5f7fa;--card:#fff;--radius:8px;--shadow:0 6px 16px rgba(0,0,0,.08)}
     *{box-sizing:border-box}body{margin:0;color:var(--text);background:var(--bg);font:14px/1.5715 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
@@ -699,11 +707,11 @@ Object.assign(enUS,{"刷新所选账号":"Refresh selected accounts","刷新账�
 Object.assign(enUS,{"允许按邮箱替换已有的不同上游账号":"Allow replacing an existing slot with a different upstream account","默认遇到不同 account_id 会报告冲突；仅在确认目标槽位应被替换时启用。":"Different account_id values produce a conflict by default; enable this only when the target slot should be replaced.","导出响应缺少有效 exported_at":"Export response is missing a valid exported_at"});
 Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。":"Manage separate ChatGPT Web and Codex CLI credential slots under one account identity. Each slot is renewed only by its matching OAuth client.","统一账号 / 双凭据账号":"Unified / dual-credential accounts","ChatGPT Web / Codex CLI 凭据":"ChatGPT Web / Codex CLI credentials","可用图片额度":"Available image quota","凭据刷新失败（Web / Codex）":"Credential refresh failures (Web / Codex)","导入 Web 凭据":"Import Web credentials","导入 Codex 凭据":"Import Codex credentials","ChatGPT Web 凭据槽":"ChatGPT Web credential slot","Codex CLI 凭据槽":"Codex CLI credential slot","未配置 ChatGPT Web 凭据":"ChatGPT Web credentials not configured","未配置 Codex CLI 凭据":"Codex CLI credentials not configured","刷新额度/凭据":"Refresh quota/credentials","删除槽位":"Delete slot","导入账号 ▾":"Import credentials ▾","选择账号类型和导入方式":"Choose a credential type and import method","导入整体账号池":"Import account pool bundle","账号池迁移 ▾":"Account pool migration ▾","整体账号池文件":"Account pool bundle file","导出整体账号池":"Export account pool bundle","整体账号池 JSON":"Account pool bundle JSON","仅接受 aetherrelay.account-pool-bundle v2；文件包含 ChatGPT Web 和 Codex 两类槽位，最大 1 MiB、最多 1000 个统一账号。":"Only aetherrelay.account-pool-bundle v2 is accepted. The file may contain ChatGPT Web and Codex slots; the limit is 1 MiB and 1,000 unified accounts.","请选择整体账号池 JSON 文件":"Choose an account pool bundle JSON file","JSON 文件不能超过 1 MiB":"The JSON file must not exceed 1 MiB","只支持 aetherrelay.account-pool-bundle v2":"Only aetherrelay.account-pool-bundle v2 is supported","整体账号池 accounts 数量无效":"The account pool bundle accounts count is invalid","整体导入部分完成":"Account pool bundle import partially completed","整体导入完成":"Account pool bundle import completed","整体导入存在":"Account pool bundle import has","项冲突，请修正后重试":"conflicts. Fix them and try again","整体账号池导出文件已开始下载":"The account pool bundle export has started downloading"});
 Object.assign(enUS,{"Provider 权限":"Provider access","有效 Provider":"Effective providers","可用模型":"Available models","编辑权限":"Edit access","Provider 访问范围":"Provider access scope","指定 Provider":"Selected providers","仅允许勾选的上游":"Allow only selected upstreams","全部 Provider":"All providers","未来新增 Provider 也自动授权":"Automatically allow future providers","搜索 Provider":"Search providers","编辑 Provider 权限":"Edit provider access","客户端 Key":"Client key","有效模型":"Effective models","搜索模型 / Provider / 端点":"Search model, provider, or endpoint","支持端点":"Supported endpoints","上下文 / 最大输出":"Context / max output","正在加载有效模型…":"Loading effective models…","暂无可用模型":"No available models","当前不会发布模型":"Currently publishes no models","请至少选择一个 Provider":"Select at least one provider","Provider 权限已保存":"Provider access saved"});
-const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeyModels:[],range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{query:"",loading:false},
+const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeysLoadVersion:0,clientKeyModels:[],clientKeyModelsID:"",clientKeyModelsVersion:0,clientKeyModelsAbort:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{query:"",loading:false},
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0},exportIDs:[],
-    featureCatalog:null,
-    tasks:{owner:"",mode:"generation",items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
+    featureCatalog:null,featureCatalogVersion:0,featureCatalogRequest:null,featureModelLoads:{task:0,search:0,chat:0},
+    tasks:{owner:"",ownerLoaded:false,scopeVersion:0,mode:"generation",models:{generation:"",edit:""},items:[],poll:{timers:new Map(),fails:new Map(),started:new Map()},resumeBusy:new Set()},
     images:{apiKeyID:"",items:[],tags:[],selected:new Set(),start:"",end:"",tag:"",storage:null,deleteBusy:false},
     search:{busy:false,result:null,items:[],currentID:"",historyBusy:false},
     chat:{items:[],current:null,messages:[],models:[],turnId:"",polling:false,pollTimer:null,sending:false,content:"",hasMore:false,loadingOlder:false,pendingImages:[],generation:0,listGeneration:0,listAbort:null,detailAbort:null,historyAbort:null,sendAbort:null,pollAbort:null,cancelAbort:null,createAbort:null,pollGeneration:0}},
@@ -737,12 +745,31 @@ function systemAccessDescription(id,fallback){const values={openai:"兼容 OpenA
 function systemEndpointDescription(item){const key=`${item.method||""} ${item.path||""}`;const zh={"GET /healthz":"服务健康检查。","GET /v1/models":"列出当前有效模型目录。","POST /v1/models":"列出当前有效模型目录（兼容方法）。","POST /v1/chat/completions":"OpenAI Chat Completions。","POST /v1/responses":"OpenAI Responses。","POST /v1/messages":"Anthropic Messages。","POST /v1/completions":"旧版 OpenAI Completions。","POST /v1/embeddings":"OpenAI Embeddings。","POST /v1/images/generations":"图片生成。","POST /v1/images/edits":"图片编辑。","POST /v1/search":"受限的联网搜索。","GET /metrics":"Prometheus 指标。","GET /stats":"运行统计快照。","GET /stats/stream":"运行统计 SSE 流。"};return state.locale==="en-US"?(item.description||zh[key]||""):(zh[key]||item.description||"")}
 function renderSystemInfo(){const data=state.system;if(!data)return;const service=data.service||{},runtime=data.runtime||{};$(`systemVersion`).textContent=service.version||"—";$(`systemUptime`).textContent=formatSystemUptime(runtime.uptime_seconds);$(`systemStartedAt`).textContent=formatDate(runtime.started_at,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});$(`systemGoVersion`).textContent=service.go_version||"—";$(`systemServiceInfo`).innerHTML=[[t("服务名称"),service.name],[t("访问基址"),location.origin],[t("服务器时间"),runtime.server_time]].map(([label,value])=>`<dt>${esc(label)}</dt><dd>${esc(value||"—")}</dd>`).join("");const methods=Array.isArray(data.access_methods)?data.access_methods:[];$(`systemAccessMethods`).className="system-access-grid";$(`systemAccessMethods`).innerHTML=methods.map(item=>`<article class="system-access-card"><h4>${esc(item.name||item.id||"—")}</h4><p><strong>${esc(t("协议"))}：</strong>${esc(item.protocol||"—")}</p><p><strong>${esc(t("认证方式"))}：</strong><code>${esc(item.authentication||"—")}</code></p><p>${esc(systemAccessDescription(item.id,item.description))}</p><div class="system-access-endpoints">${(item.endpoints||[]).map(path=>`<code>${esc(path)}</code>`).join("")}</div></article>`).join("")||`<div class="empty">—</div>`;const endpoints=Array.isArray(data.endpoints)?data.endpoints:[];$(`systemEndpoints`).className="";$(`systemEndpoints`).innerHTML=`<div class="table-wrap"><table class="system-endpoint-table"><thead><tr><th>Method</th><th>Path</th><th>${esc(t("协议"))}</th><th>${esc(t("认证方式"))}</th><th>${esc(t("远程访问"))}</th><th>${esc(t("说明"))}</th></tr></thead><tbody>${endpoints.map(item=>`<tr><td><span class="tag">${esc(item.method||"—")}</span></td><td><code>${esc(item.path||"—")}</code></td><td>${esc(item.protocol||"—")}</td><td>${esc(systemAuthenticationLabel(item.authentication))}</td><td>${esc(systemRemoteAccessLabel(item.remote_access))}</td><td>${esc(systemEndpointDescription(item))}</td></tr>`).join("")}</tbody></table></div>`}
 async function loadSystemInfo(){const access=$(`systemAccessMethods`),endpoints=$(`systemEndpoints`);access.className="loading";access.innerHTML=`<div class="spin"></div><div>${esc(t("正在加载系统信息…"))}</div>`;endpoints.className="loading";endpoints.innerHTML=`<div class="spin"></div><div>${esc(t("正在加载系统信息…"))}</div>`;try{state.system=await request(apiURL("/api/system/info"));renderSystemInfo()}catch(e){const message=e.message||t("无法加载系统信息");access.className="";access.innerHTML=`<div class="empty">${esc(message)}</div>`;endpoints.className="";endpoints.innerHTML=`<div class="empty">${esc(message)}</div>`}}
+function setTaskOwner(owner){
+  const next=String(owner||"").trim();
+  if(state.cg.tasks.owner===next)return false;
+  state.cg.tasks.owner=next;
+  state.cg.tasks.scopeVersion++;
+  stopAllTaskPolling();
+  state.cg.tasks.items=[];
+  state.cg.tasks.resumeBusy.clear();
+  return true;
+}
 function ensureTaskOwner(){
   const input=$("cgTaskOwner");
-  const owner=(input?.value||state.cg.tasks.owner||"").trim();
-  state.cg.tasks.owner=owner;
+  const selected=input?String(input.value||"").trim():"";
+  const current=String(state.cg.tasks.owner||"").trim();
+  const owner=selected||(!state.cg.tasks.ownerLoaded?current:"");
+  setTaskOwner(owner);
   return owner;
 }
+function isCurrentTaskScope(owner,scopeVersion){
+  return state.cg.tasks.owner===owner&&state.cg.tasks.scopeVersion===scopeVersion;
+}
+function taskActionKey(taskId,owner=state.cg.tasks.owner,scopeVersion=state.cg.tasks.scopeVersion){
+  return `${scopeVersion}\u0000${owner}\u0000${taskId}`;
+}
+function taskActionBusy(taskId){return state.cg.tasks.resumeBusy.has(taskActionKey(taskId));}
 function renderImageKeySelectors(){
   const keys=(state.clientKeys||[]).filter(k=>k&&k.enabled!==false).map(k=>String(k.id||"").trim()).filter(Boolean);
   const task=$("cgTaskOwner"), image=$("cgImgAPIKey");
@@ -752,7 +779,8 @@ function renderImageKeySelectors(){
     el.innerHTML=keys.length?keys.map(k=>`<option value="${esc(k)}">${esc(k)}${k==="builtin-local"?"（内置工具 Key）":""}</option>`).join(""):`<option value="">暂无启用 API Key</option>`;
     el.value=keys.includes(value)?value:"";
   }
-  state.cg.tasks.owner=task?.value||"";
+  state.cg.tasks.ownerLoaded=true;
+  setTaskOwner(task?.value||"");
   state.cg.images.apiKeyID=image?.value||"";
 }
 function displayEmail(email){
@@ -866,6 +894,8 @@ function parseHash(){
   const h=location.hash||"#/providers";
   const [path,qs]=h.replace(/^#\/?/,"").split("?");
   const p=new URLSearchParams(qs||"");
+  const apiKeyID=p.get("api_key_id")||"";
+  const ownerID=p.get("owner_id")||"";
   let tab="providers";
   let cgSub="accounts";
   let poolSub="chatgptweb";
@@ -888,7 +918,8 @@ function parseHash(){
     if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts"||parts[1]==="search"||parts[1]==="chat")cgSub=parts[1];
     if(cgSub==="accounts"){tab="account-pools";poolSub="chatgptweb"}else{tab="features";featureSub=cgSub}
   }else if(path.startsWith("codex")){tab="account-pools";poolSub="codex"}
-  return {tab,cgSub,poolSub,featureSub,range:p.get("range")||"today",apiKeyFilter:p.get("api_key_id")||"",providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner:p.get("owner_id")||"",conversationId:p.get("id")||""};
+  const owner=tab==="features"&&featureSub==="tasks"?(ownerID||apiKeyID):ownerID;
+  return {tab,cgSub,poolSub,featureSub,range:p.get("range")||"today",apiKeyFilter:apiKeyID,providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner,conversationId:p.get("id")||""};
 }
 function setHash(){
   if(state.tab==="usage"){
@@ -956,7 +987,7 @@ function showFeatureSub(sub){
   if(state.tab==="features")setHash();
 }
 function showChatGPTSub(sub){
-  if(state.tab==="features"&&(sub==="tasks"||sub==="images"))loadClientKeys().then(()=>{renderImageKeySelectors();if(state.cg.sub!==sub)return;if(sub==="tasks")loadChatGPTTasks(false);else loadChatGPTImages()}).catch(()=>{});
+  if(state.tab==="features"&&(sub==="tasks"||sub==="images"))loadClientKeys().then(loaded=>{if(!loaded)return;renderImageKeySelectors();if(state.cg.sub!==sub)return;if(sub==="tasks")loadChatGPTTasks(false);else loadChatGPTImages()}).catch(()=>{});
   if(state.cg.sub==="tasks"&&sub!=="tasks")stopAllTaskPolling();
   if(state.cg.sub==="chat"&&sub!=="chat")invalidateTemporaryChatContext();
   state.cg.sub=sub||"accounts";
@@ -973,16 +1004,15 @@ function showChatGPTSub(sub){
   if(state.tab==="features")setHash();
   if(state.cg.sub==="accounts")loadChatGPTAccounts();
   else if(state.cg.sub==="tasks"){
-    setTaskMode(state.cg.tasks.mode||"generation");
+    setTaskMode(state.cg.tasks.mode||"generation",true);
     if(!($("cgTaskClientId").value||"").trim())$("cgTaskClientId").value=newUUID();
     ensureTaskOwner();
-    loadFeatureModels();
     loadChatGPTTasks(false);
   }else if(state.cg.sub==="chat"){
-    loadTemporaryChatModels();
+    loadTemporaryChatModels(true);
     loadTemporaryConversations(true);
   }else if(state.cg.sub==="search"){
-    loadFeatureSearchModels();
+    loadFeatureSearchModels(true);
     loadFeatureSearchHistory();
   }
   else loadChatGPTImages();
@@ -1136,7 +1166,7 @@ function beginCodexDiscoveryPolling(progress,options={}){
       if(pid!==state.codex.discovery.progressId)return;
       state.codex.discovery.failures=0;state.codex.discovery.done=Boolean(current.done);
       if(visible)renderCodexDiscoveryProgress(current);scheduleCodexProgressDismiss("discovery",current,visible);renderCodexAccounts();
-      if(current.done){state.codex.discovery.timer=null;await loadCodexAccounts();return}
+      if(current.done){state.codex.discovery.timer=null;invalidateFeatureCatalog();await loadCodexAccounts();return}
       state.codex.discovery.timer=setTimeout(tick,900);
     }catch(e){
       if(pid!==state.codex.discovery.progressId)return;
@@ -1145,7 +1175,7 @@ function beginCodexDiscoveryPolling(progress,options={}){
       state.codex.discovery.timer=setTimeout(tick,1200);
     }
   };
-  if(progress.done){loadCodexAccounts();return}
+  if(progress.done){invalidateFeatureCatalog();loadCodexAccounts();return}
   tick();
 }
 async function startCodexModelDiscovery(ids=[]){
@@ -1373,6 +1403,7 @@ async function submitAccountBundleImport(event){
     if(!Array.isArray(payload.accounts)||!payload.accounts.length||payload.accounts.length>accountImportMaxItems)throw new Error("整体账号池 accounts 数量无效");
     payload.replace=$(`accountBundleImportReplace`).checked;
     const result=await request(apiURL("/api/account-pool-bundle/import"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});
+    invalidateFeatureCatalog();
     const errors=[result.chatgpt_web?.error,result.codex_cli?.error].filter(Boolean);
     const conflictCount=Number(result.conflicts?.length)||0;
     const conflictSuffix=conflictCount?`，冲突 ${conflictCount} 项`:"";
@@ -1394,6 +1425,7 @@ async function submitCodexImport(event){
   try{
     const accounts=parseAccountObjectArray(await readAccountImport("codexImportFile","codexImportAccounts"));
     const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({accounts})});
+    invalidateFeatureCatalog();
     toast(`导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`);
     if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});
     else if(result.model_discovery_error)toast(result.model_discovery_error,"error");
@@ -1407,14 +1439,14 @@ async function deleteCodexAccounts(ids){
   if(!ids.length){toast("请先选择账号","error");return}
   if(!confirm(`确认删除 ${ids.length} 个 Codex OAuth 账号？此操作不可恢复。`))return;
   state.codex.busy=true;renderCodexAccounts();
-  try{await request(apiURL("/api/codex/accounts"),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});ids.forEach(id=>state.codex.selected.delete(id));toast("账号已删除");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
+  try{await request(apiURL("/api/codex/accounts"),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});invalidateFeatureCatalog();ids.forEach(id=>state.codex.selected.delete(id));toast("账号已删除");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
 }
 async function refreshCodexAccounts(ids){
   ids=uniq((ids||[]).filter(Boolean));
   if(!ids.length){toast("请先选择账号","error");return}
   if(state.codex.busy)return;
   state.codex.busy=true;renderCodexAccounts();
-  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
+  try{const result=await request(apiURL("/api/codex/accounts/refresh"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});invalidateFeatureCatalog();toast(`刷新完成：成功 ${result.refreshed||0}，失败 ${result.failed||0}`);if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{state.codex.busy=false;renderCodexAccounts()}
 }
 function clearCodexOAuthMemory(){
   state.codex.oauth={sessionId:"",authorizeURL:"",expiresIn:0};
@@ -1442,7 +1474,7 @@ async function finishCodexOAuth(event){
   const callback=$("codexOAuthCallback").value.trim(),sessionID=state.codex.oauth.sessionId;
   if(!callback||!sessionID){toast("会话未开始或 callback URL 为空","error");return}
   $("codexOAuthFinish").disabled=true;
-  try{const result=await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});toast("Codex OAuth 账号已导入");if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
+  try{const result=await request(apiURL("/api/codex/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id:sessionID,callback})});invalidateFeatureCatalog();toast("Codex OAuth 账号已导入");if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});else if(result.model_discovery_error)toast(result.model_discovery_error,"error");if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});else if(result.usage_refresh_error)toast(result.usage_refresh_error,"error");clearCodexOAuthMemory();$("codexOAuthDialog").close();await loadCodexAccounts()}catch(e){toast(e.message,"error")}finally{$("codexOAuthFinish").disabled=false}
 }
 function statusTag(status){
   const map={"正常":"status-normal","限流":"status-limited","异常":"status-abnormal","禁用":"status-disabled"};
@@ -1599,6 +1631,7 @@ async function submitImport(e){
     const st=$("cgImportSource").value.trim();
     if(st)body.source_type=st;
     const res=await request(apiURL("/api/chatgpt/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    invalidateFeatureCatalog();
     toast(`导入完成：新增 ${res.added||0}，更新 ${res.updated||0}，跳过 ${res.skipped||0}`);
     closeImportDialog();
     await loadChatGPTAccounts();
@@ -1623,6 +1656,7 @@ async function submitEdit(e){
   $("cgEditSubmit").disabled=true;
   try{
     await request(apiURL(`/api/chatgpt/accounts/${encodeURIComponent(id)}`),{method:"PATCH",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    invalidateFeatureCatalog();
     toast("账号已更新");
     $("cgEditDialog").close();
     await loadChatGPTAccounts();
@@ -1638,6 +1672,7 @@ async function deleteAccounts(ids){
   renderChatGPTAccounts();
   try{
     await request(apiURL("/api/chatgpt/accounts"),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({ids})});
+    invalidateFeatureCatalog();
     ids.forEach(id=>state.cg.selected.delete(id));
     toast("账号已删除");
     await loadChatGPTAccounts();
@@ -1671,6 +1706,7 @@ async function pollRefreshProgress(pid){
       $("cgRefreshProgress").textContent=done?`刷新完成：成功 ${refreshed}，失败 ${failed}，共 ${total} 个账号${displayError?` · ${displayError}`:""}`:`刷新进度 ${p.processed||0}/${total}…`+(taskError?` · ${taskError}`:"");
       if(done){
         state.cg.refresh.busy=false;state.cg.refresh.progressId="";state.cg.refresh.timer=null;
+        invalidateFeatureCatalog();
         toast(displayError||`账号刷新完成：成功 ${refreshed}，失败 ${failed}，共 ${total} 个账号`,failed||displayError?"error":"success");
         setTimeout(()=>$("cgRefreshProgress").classList.add("hidden"),4200);
         await loadChatGPTAccounts();
@@ -1737,6 +1773,7 @@ async function finishOAuth(e){
   $("cgOAuthFinish").disabled=true;
   try{
     await request(apiURL("/api/chatgpt/accounts/oauth/finish"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({session_id,callback})});
+    invalidateFeatureCatalog();
     toast("OAuth 账号已导入");
     clearOAuthMemory();
     $("cgOAuthDialog").close();
@@ -1782,12 +1819,17 @@ async function confirmExport(){
   }
 }
 
-function setTaskMode(mode){
-  state.cg.tasks.mode=mode==="edit"?"edit":"generation";
+function setTaskMode(mode,refreshCatalog=true){
+  const next=mode==="edit"?"edit":"generation";
+  const current=$("cgTaskModel");
+  const previous=state.cg.tasks.mode==="edit"?"edit":"generation";
+  if(current)state.cg.tasks.models[previous]=String(current.value||"").trim();
+  state.cg.tasks.mode=next;
+  if(current&&next!==previous)current.innerHTML=`<option value="">${esc(t("正在加载…"))}</option>`;
   $("cgTaskModeGen").classList.toggle("active",state.cg.tasks.mode==="generation");
   $("cgTaskModeEdit").classList.toggle("active",state.cg.tasks.mode==="edit");
   $("cgTaskImagesField").classList.toggle("hidden",state.cg.tasks.mode!=="edit");
-  loadFeatureModels();
+  loadFeatureModels(next,false,refreshCatalog);
 }
 function renderTaskGuide(){
   stopAllTaskPolling();
@@ -1847,17 +1889,19 @@ function sortChatGPTTasks(items){
 }
 async function loadChatGPTTasks(keepPolling){
   const owner=ensureTaskOwner();
-  state.cg.tasks.owner=owner;
+  const scopeVersion=keepPolling?state.cg.tasks.scopeVersion:++state.cg.tasks.scopeVersion;
   if(!owner){renderTaskGuide();return}
   if(!keepPolling)stopAllTaskPolling();
   $("cgTaskTable").className="loading";$("cgTaskTable").innerHTML=`<div class="spin"></div><div>正在加载任务…</div>`;
   try{
     const data=await request(apiURL(`/api/chatgpt/image-tasks?api_key_id=${encodeURIComponent(owner)}`));
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     setChatGPTAvailable();
     state.cg.tasks.items=sortChatGPTTasks(data.items);
     renderChatGPTTasks();
-    state.cg.tasks.items.filter(t=>!isTerminalTask(t)).forEach(t=>startTaskPolling(t.id));
+    state.cg.tasks.items.filter(t=>!isTerminalTask(t)).forEach(t=>startTaskPolling(t.id,owner,scopeVersion));
   }catch(e){
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     if(e.status===503){setChatGPTUnavailable(e.message);$("cgTaskTable").className="";$("cgTaskTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;return}
     $("cgTaskTable").className="";$("cgTaskTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
   }
@@ -1875,7 +1919,7 @@ function renderChatGPTTasks(){
     }).join("");
     const elapsed=t.elapsed_secs!=null?`${Number(t.elapsed_secs).toFixed(1)}s`:(t.duration_ms!=null?`${t.duration_ms}ms`:"—");
     const progress=taskProgressLabel(t);
-    const actionBusy=state.cg.tasks.resumeBusy.has(t.id);
+    const actionBusy=taskActionBusy(t.id);
     const actions=[`<button class="link-btn" data-task-view="${esc(t.id)}">查看</button>`];
     if(isTerminalTask(t))actions.push(`<button class="link-btn link-danger" data-task-delete="${esc(t.id)}" ${actionBusy?"disabled":""}>删除</button>`);
     else actions.push(`<button class="link-btn link-danger" data-task-cancel="${esc(t.id)}" ${actionBusy?"disabled":""}>取消</button>`);
@@ -1930,54 +1974,63 @@ function showImageTaskDetail(taskId){
 }
 async function cancelImageTask(taskId){
   const owner=state.cg.tasks.owner;
-  if(!owner||!taskId||state.cg.tasks.resumeBusy.has(taskId))return;
+  const scopeVersion=state.cg.tasks.scopeVersion;
+  const busyKey=taskActionKey(taskId,owner,scopeVersion);
+  if(!owner||!taskId||state.cg.tasks.resumeBusy.has(busyKey))return;
   if(!confirm("取消会停止 AetherRelay 本地等待并尽力取消上游请求。若上游已经受理，仍可能继续执行并产生额度消耗。是否继续？"))return;
-  state.cg.tasks.resumeBusy.add(taskId);renderChatGPTTasks();
+  state.cg.tasks.resumeBusy.add(busyKey);renderChatGPTTasks();
   try{
       const task=await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}/cancel`),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({api_key_id:owner})});
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     clearTaskPolling(taskId);upsertTask(task);renderChatGPTTasks();toast("图片任务已取消");
-  }catch(err){toast(err.message,"error")}
-  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+  }catch(err){if(isCurrentTaskScope(owner,scopeVersion))toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(busyKey);if(isCurrentTaskScope(owner,scopeVersion))renderChatGPTTasks()}
 }
 async function deleteImageTask(taskId){
   const owner=state.cg.tasks.owner;
-  if(!owner||!taskId||state.cg.tasks.resumeBusy.has(taskId))return;
+  const scopeVersion=state.cg.tasks.scopeVersion;
+  const busyKey=taskActionKey(taskId,owner,scopeVersion);
+  if(!owner||!taskId||state.cg.tasks.resumeBusy.has(busyKey))return;
   if(!confirm("仅删除任务记录；已经保存到图片库的图片不会删除。是否继续？"))return;
-  state.cg.tasks.resumeBusy.add(taskId);renderChatGPTTasks();
+  state.cg.tasks.resumeBusy.add(busyKey);renderChatGPTTasks();
   try{
     await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}`),{method:"DELETE",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({api_key_id:owner})});
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     clearTaskPolling(taskId);state.cg.tasks.items=state.cg.tasks.items.filter(item=>item.id!==taskId);renderChatGPTTasks();toast("图片任务记录已删除");
-  }catch(err){toast(err.message,"error")}
-  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+  }catch(err){if(isCurrentTaskScope(owner,scopeVersion))toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(busyKey);if(isCurrentTaskScope(owner,scopeVersion))renderChatGPTTasks()}
 }
-function startTaskPolling(taskId){
-  if(!taskId||!state.cg.tasks.owner)return;
+function startTaskPolling(taskId,owner=state.cg.tasks.owner,scopeVersion=state.cg.tasks.scopeVersion){
+  if(!taskId||!isCurrentTaskScope(owner,scopeVersion))return;
   if(state.cg.tasks.poll.timers.has(taskId))return;
   state.cg.tasks.poll.started.set(taskId,Date.now());
   state.cg.tasks.poll.fails.set(taskId,0);
   let delay=1000;
   const tick=async()=>{
-    if(state.tab!=="features"||state.featureSub!=="tasks"){state.cg.tasks.poll.timers.delete(taskId);return}
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
+    if(state.tab!=="features"||state.featureSub!=="tasks"){clearTaskPolling(taskId);return}
     if(state.cg.tasks.poll.started.has(taskId)&&Date.now()-state.cg.tasks.poll.started.get(taskId)>10*60*1000){
-      state.cg.tasks.poll.timers.delete(taskId);
+      clearTaskPolling(taskId);
       toast(`任务 ${taskId} 轮询超时，请手动恢复`,"error");
       return;
     }
     try{
-      const data=await request(apiURL(`/api/chatgpt/image-tasks?api_key_id=${encodeURIComponent(state.cg.tasks.owner)}&ids=${encodeURIComponent(taskId)}`));
+      const data=await request(apiURL(`/api/chatgpt/image-tasks?api_key_id=${encodeURIComponent(owner)}&ids=${encodeURIComponent(taskId)}`));
+      if(!isCurrentTaskScope(owner,scopeVersion))return;
       state.cg.tasks.poll.fails.set(taskId,0);
       const task=(data.items||[]).find(t=>t.id===taskId);
       if(task){upsertTask(task);renderChatGPTTasks();
-        if(isTerminalTask(task)){state.cg.tasks.poll.timers.delete(taskId);return}
+        if(isTerminalTask(task)){clearTaskPolling(taskId);return}
       }
       delay=Math.min(delay+1000,5000);
       const handle=setTimeout(tick,delay);
       state.cg.tasks.poll.timers.set(taskId,handle);
     }catch(err){
+      if(!isCurrentTaskScope(owner,scopeVersion))return;
       const fails=(state.cg.tasks.poll.fails.get(taskId)||0)+1;
       state.cg.tasks.poll.fails.set(taskId,fails);
       if(fails>=3){
-        state.cg.tasks.poll.timers.delete(taskId);
+        clearTaskPolling(taskId);
         toast(`任务 ${taskId} 轮询失败：${err.message}`,"error");
         return;
       }
@@ -1992,12 +2045,11 @@ function startTaskPolling(taskId){
 async function submitTask(e){
   e.preventDefault();
   const owner=ensureTaskOwner();
+  const scopeVersion=state.cg.tasks.scopeVersion;
   const client_task_id=($("cgTaskClientId").value||"").trim()||newUUID();
   const prompt=($("cgTaskPrompt").value||"").trim();
+  if(!owner){toast("请选择 API Key","error");return}
   if(!prompt){toast("prompt 必填","error");return}
-  // owner change isolation
-  if(state.cg.tasks.owner&&state.cg.tasks.owner!==owner){stopAllTaskPolling();state.cg.tasks.items=[]}
-  state.cg.tasks.owner=owner;
   $("cgTaskClientId").value=client_task_id;
   const body={api_key_id:owner,client_task_id,prompt};
   const model=$("cgTaskModel").value.trim();if(model)body.model=model;
@@ -2013,54 +2065,61 @@ async function submitTask(e){
   $("cgTaskSubmit").disabled=true;
   try{
     const task=await request(apiURL(path),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     upsertTask(task);
     renderChatGPTTasks();
-    if(!isTerminalTask(task))startTaskPolling(task.id);
+    if(!isTerminalTask(task))startTaskPolling(task.id,owner,scopeVersion);
     $("cgTaskPrompt").value="";
     $("cgTaskImages").value="";
     $("cgTaskClientId").value=newUUID();
     toast("图片任务已提交");
     setHash();
-  }catch(err){toast(err.message,"error")}
+  }catch(err){if(isCurrentTaskScope(owner,scopeVersion))toast(err.message,"error")}
   finally{$("cgTaskSubmit").disabled=false}
 }
 async function resumeTask(taskId){
   const owner=state.cg.tasks.owner;
+  const scopeVersion=state.cg.tasks.scopeVersion;
+  const busyKey=taskActionKey(taskId,owner,scopeVersion);
   if(!owner||!taskId)return;
-  if(state.cg.tasks.resumeBusy.has(taskId)){toast("该任务正在恢复轮询","error");return}
-  state.cg.tasks.resumeBusy.add(taskId);
+  if(state.cg.tasks.resumeBusy.has(busyKey)){toast("该任务正在恢复轮询","error");return}
+  state.cg.tasks.resumeBusy.add(busyKey);
   renderChatGPTTasks();
   try{
     const task=await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}/resume-poll`),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({api_key_id:owner,extra_timeout_secs:30})});
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     upsertTask(task);
     renderChatGPTTasks();
     if(!isTerminalTask(task)){
       // reset polling window
       if(state.cg.tasks.poll.timers.has(taskId)){clearTimeout(state.cg.tasks.poll.timers.get(taskId));state.cg.tasks.poll.timers.delete(taskId)}
-      startTaskPolling(taskId);
+      startTaskPolling(taskId,owner,scopeVersion);
     }
     toast("已恢复轮询");
-  }catch(err){toast(err.message,"error")}
-  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+  }catch(err){if(isCurrentTaskScope(owner,scopeVersion))toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(busyKey);if(isCurrentTaskScope(owner,scopeVersion))renderChatGPTTasks()}
 }
 async function retryGenerationTask(taskId){
   const owner=state.cg.tasks.owner;
+  const scopeVersion=state.cg.tasks.scopeVersion;
+  const busyKey=taskActionKey(taskId,owner,scopeVersion);
   if(!owner||!taskId)return;
   if(!confirm("此操作将重新提交尚未创建上游会话的图片任务。是否继续？"))return;
-  if(state.cg.tasks.resumeBusy.has(taskId)){toast("该任务正在处理中","error");return}
-  state.cg.tasks.resumeBusy.add(taskId);
+  if(state.cg.tasks.resumeBusy.has(busyKey)){toast("该任务正在处理中","error");return}
+  state.cg.tasks.resumeBusy.add(busyKey);
   renderChatGPTTasks();
   try{
     const task=await request(apiURL(`/api/chatgpt/image-tasks/${encodeURIComponent(taskId)}/retry-generation`),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({api_key_id:owner})});
+    if(!isCurrentTaskScope(owner,scopeVersion))return;
     upsertTask(task);
     renderChatGPTTasks();
     if(!isTerminalTask(task)){
       if(state.cg.tasks.poll.timers.has(taskId)){clearTimeout(state.cg.tasks.poll.timers.get(taskId));state.cg.tasks.poll.timers.delete(taskId)}
-      startTaskPolling(taskId);
+      startTaskPolling(taskId,owner,scopeVersion);
     }
     toast("图片任务已重新提交");
-  }catch(err){toast(err.message,"error")}
-  finally{state.cg.tasks.resumeBusy.delete(taskId);renderChatGPTTasks()}
+  }catch(err){if(isCurrentTaskScope(owner,scopeVersion))toast(err.message,"error")}
+  finally{state.cg.tasks.resumeBusy.delete(busyKey);if(isCurrentTaskScope(owner,scopeVersion))renderChatGPTTasks()}
 }
 
 async function loadChatGPTImages(){
@@ -2177,7 +2236,7 @@ async function deleteSelectedImages(){
   finally{state.cg.images.deleteBusy=false;$("cgImgDeleteSelected").disabled=false}
 }
 
-async function loadClientKeys(){try{const d=await request(apiURL("/api/client-api-keys"));state.clientKeys=d.client_api_keys||[];$(`addClientKey`).disabled=!d.writable;const rows=state.clientKeys.map(k=>{const access=k.provider_access?.mode==="all"?"全部 Provider":`已选择 ${(k.provider_access?.provider_ids||[]).length} 个`;const unavailable=k.unavailable_provider_ids||[];const builtin=Boolean(k.builtin);const actions=builtin?`<span class="subtle">内置，固定用于管理台工具集</span>`:`<button class="link-btn" data-key-access="${esc(k.id)}">编辑权限</button><button class="link-btn" data-key-toggle="${esc(k.id)}" data-enabled="${!k.enabled}">${k.enabled?"禁用":"启用"}</button><button class="link-btn" data-key-rotate="${esc(k.id)}">轮换</button><button class="link-btn link-danger" data-key-delete="${esc(k.id)}">删除</button>`;return `<tr><td class="key-id" title="${esc(k.id)}">${esc(k.id)}${builtin?' <span class="tag tag-purple">内置</span>':''}</td><td><span class="tag ${k.enabled?"tag-status-active":"tag-status-disabled"}">${k.enabled?"已启用":"已禁用"}</span></td><td><div class="key-access-summary"><span>${esc(access)}</span>${unavailable.length?`<span class="key-warning" title="${esc(unavailable.join(", "))}">${esc(`${unavailable.length} 个当前不可用`)}</span>`:""}</div></td><td>${esc((k.effective_provider_ids||[]).length)}</td><td><button class="link-btn" data-key-models="${esc(k.id)}">${esc(k.effective_model_count||0)} 个</button></td><td>${esc(k.last_used_at?formatDate(k.last_used_at):"—")}</td><td class="key-actions"><div class="actions">${actions}</div></td></tr>`}).join("");const table=$("clientKeyTable");table.className="";table.innerHTML=`<div class="table-wrap"><table class="client-key-table"><thead><tr><th>ID</th><th>状态</th><th>Provider 权限</th><th>有效 Provider</th><th>可用模型</th><th>最后使用</th><th>操作</th></tr></thead><tbody>${rows||`<tr><td colspan="7" class="empty">尚未配置客户端 Key</td></tr>`}</tbody></table></div>`;document.querySelectorAll("[data-key-access]").forEach(b=>b.onclick=()=>openClientKeyAccess(b.dataset.keyAccess));document.querySelectorAll("[data-key-models]").forEach(b=>b.onclick=()=>openClientKeyModels(b.dataset.keyModels));document.querySelectorAll("[data-key-toggle]").forEach(b=>b.onclick=()=>keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyToggle)}`),"PATCH",{enabled:b.dataset.enabled==="true"}));document.querySelectorAll("[data-key-rotate]").forEach(b=>b.onclick=()=>rotateClientKey(b.dataset.keyRotate));document.querySelectorAll("[data-key-delete]").forEach(b=>b.onclick=()=>{if(confirm(`删除 ${b.dataset.keyDelete}？该 Key 的调用明细和交互归档也会同步删除。`))keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyDelete)}`),"DELETE")});translateDOM(table)}catch(e){$("clientKeyTable").textContent=e.message}}
+async function loadClientKeys(){const version=(Number(state.clientKeysLoadVersion)||0)+1;state.clientKeysLoadVersion=version;try{const d=await request(apiURL("/api/client-api-keys"));if(version!==state.clientKeysLoadVersion)return false;state.clientKeys=d.client_api_keys||[];$(`addClientKey`).disabled=!d.writable;const rows=state.clientKeys.map(k=>{const access=k.provider_access?.mode==="all"?"全部 Provider":`已选择 ${(k.provider_access?.provider_ids||[]).length} 个`;const unavailable=k.unavailable_provider_ids||[];const builtin=Boolean(k.builtin);const actions=builtin?`<span class="subtle">内置，固定用于管理台工具集</span>`:`<button class="link-btn" data-key-access="${esc(k.id)}">编辑权限</button><button class="link-btn" data-key-toggle="${esc(k.id)}" data-enabled="${!k.enabled}">${k.enabled?"禁用":"启用"}</button><button class="link-btn" data-key-rotate="${esc(k.id)}">轮换</button><button class="link-btn link-danger" data-key-delete="${esc(k.id)}">删除</button>`;return `<tr><td class="key-id" title="${esc(k.id)}">${esc(k.id)}${builtin?' <span class="tag tag-purple">内置</span>':''}</td><td><span class="tag ${k.enabled?"tag-status-active":"tag-status-disabled"}">${k.enabled?"已启用":"已禁用"}</span></td><td><div class="key-access-summary"><span>${esc(access)}</span>${unavailable.length?`<span class="key-warning" title="${esc(unavailable.join(", "))}">${esc(`${unavailable.length} 个当前不可用`)}</span>`:""}</div></td><td>${esc((k.effective_provider_ids||[]).length)}</td><td><button class="link-btn" data-key-models="${esc(k.id)}">${esc(k.effective_model_count||0)} 个</button></td><td>${esc(k.last_used_at?formatDate(k.last_used_at):"—")}</td><td class="key-actions"><div class="actions">${actions}</div></td></tr>`}).join("");const table=$("clientKeyTable");table.className="";table.innerHTML=`<div class="table-wrap"><table class="client-key-table"><thead><tr><th>ID</th><th>状态</th><th>Provider 权限</th><th>有效 Provider</th><th>可用模型</th><th>最后使用</th><th>操作</th></tr></thead><tbody>${rows||`<tr><td colspan="7" class="empty">尚未配置客户端 Key</td></tr>`}</tbody></table></div>`;document.querySelectorAll("[data-key-access]").forEach(b=>b.onclick=()=>openClientKeyAccess(b.dataset.keyAccess));document.querySelectorAll("[data-key-models]").forEach(b=>b.onclick=()=>openClientKeyModels(b.dataset.keyModels));document.querySelectorAll("[data-key-toggle]").forEach(b=>b.onclick=()=>keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyToggle)}`),"PATCH",{enabled:b.dataset.enabled==="true"}));document.querySelectorAll("[data-key-rotate]").forEach(b=>b.onclick=()=>rotateClientKey(b.dataset.keyRotate));document.querySelectorAll("[data-key-delete]").forEach(b=>b.onclick=()=>{if(confirm(`删除 ${b.dataset.keyDelete}？该 Key 的调用明细和交互归档也会同步删除。`))keyRequest(apiURL(`/api/client-api-keys/${encodeURIComponent(b.dataset.keyDelete)}`),"DELETE")});translateDOM(table);return true}catch(e){if(version===state.clientKeysLoadVersion)$("clientKeyTable").textContent=e.message;return false}}
 async function keyRequest(url,method,body){try{await request(url,{method,headers:authHeaders({"Content-Type":"application/json"}),body:body?JSON.stringify(body):undefined});toast("客户端 Key 配置已保存");loadClientKeys()}catch(e){toast(e.message,"error")}}
 async function rotateClientKey(id){if(!confirm(`轮换 ${id}？旧 Key 将立即失效。`))return;try{const d=await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/rotate`),{method:"POST",headers:authHeaders()});showClientSecret(d.api_key);loadClientKeys()}catch(e){toast(e.message,"error")}}
 function showClientSecret(key){$("clientSecret").value=key;$("clientSecretDialog").showModal()}
@@ -2189,7 +2248,9 @@ function filterClientKeyProviderPicker(prefix){const query=$(`${prefix}ProviderS
 function updateClientKeyAccessUI(prefix,modeName){const mode=clientKeyAccessMode(modeName);const selected=clientKeyProviderSelection(prefix);$(`${prefix}ProviderField`).classList.toggle("hidden",mode==="all");const error=mode==="selected"&&!selected.length?"请至少选择一个 Provider":"";$(`${prefix}ProviderError`).textContent=error;const active=mode==="all"?state.providers.filter(p=>p.enabled):state.providers.filter(p=>selected.includes(p.name)&&p.enabled);const estimate=active.reduce((sum,p)=>sum+(Number(p.model_count)||Number((p.models||[]).length)||0),0);$(`${prefix}AccessEstimate`).textContent=mode==="all"?`当前 ${active.length} 个有效 Provider；未来新增 Provider 也会自动授权。`:`当前选择 ${selected.length} 个 Provider，其中 ${active.length} 个有效；模型数量估算 ${estimate}，保存后按实际目录去重。`;const submit=$(prefix==="clientKey"?"createClientKeySubmit":"saveClientKeyAccess");submit.disabled=Boolean(error)}
 async function openCreateClientKey(){try{await ensureClientKeyProviders();$("clientKeyForm").reset();$("clientKeyEnabled").checked=true;document.querySelector('input[name="clientKeyAccessMode"][value="selected"]').checked=true;$("clientKeyProviderSearch").value="";renderClientKeyProviderPicker("clientKey",[]);updateClientKeyAccessUI("clientKey","clientKeyAccessMode");$("clientKeyDialog").showModal();translateDOM($("clientKeyDialog"))}catch(e){toast(e.message,"error")}}
 async function openClientKeyAccess(id){const key=state.clientKeys.find(item=>item.id===id);if(!key)return;try{await ensureClientKeyProviders();$("clientKeyAccessID").value=id;const access=key.provider_access||{mode:"selected",provider_ids:[]};document.querySelector(`input[name="editKeyAccessMode"][value="${access.mode}"]`).checked=true;$("editKeyProviderSearch").value="";renderClientKeyProviderPicker("editKey",access.provider_ids||[]);updateClientKeyAccessUI("editKey","editKeyAccessMode");$("clientKeyAccessDialog").showModal();translateDOM($("clientKeyAccessDialog"))}catch(e){toast(e.message,"error")}}
-async function openClientKeyModels(id){$("clientKeyModelsTitle").textContent=`${id} · 有效模型`;$("clientKeyModelsSearch").value="";$("clientKeyModelsTable").className="loading";$("clientKeyModelsTable").textContent="正在加载有效模型…";$("clientKeyModelsDialog").showModal();try{const data=await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/models`));state.clientKeyModels=data.data||[];renderClientKeyModels()}catch(e){$("clientKeyModelsTable").className="";$("clientKeyModelsTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
+function invalidateClientKeyModels(){state.clientKeyModelsVersion=(Number(state.clientKeyModelsVersion)||0)+1;const controller=state.clientKeyModelsAbort;state.clientKeyModelsAbort=null;if(controller)controller.abort();return state.clientKeyModelsVersion}
+function isCurrentClientKeyModelsLoad(id,version,controller){return state.clientKeyModelsID===id&&state.clientKeyModelsVersion===version&&state.clientKeyModelsAbort===controller&&!controller.signal.aborted}
+async function openClientKeyModels(id){id=String(id||"").trim();if(!id)return;const version=invalidateClientKeyModels(),controller=new AbortController();state.clientKeyModelsID=id;state.clientKeyModelsAbort=controller;state.clientKeyModels=[];$("clientKeyModelsTitle").textContent=`${id} · 有效模型`;$("clientKeyModelsSearch").value="";$("clientKeyModelsTable").className="loading";$("clientKeyModelsTable").textContent="正在加载有效模型…";if(!$("clientKeyModelsDialog").open)$("clientKeyModelsDialog").showModal();try{const data=await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/models`),{signal:controller.signal});if(!isCurrentClientKeyModelsLoad(id,version,controller))return;state.clientKeyModels=data.data||[];renderClientKeyModels()}catch(e){if(!isCurrentClientKeyModelsLoad(id,version,controller))return;$("clientKeyModelsTable").className="";$("clientKeyModelsTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`}finally{if(state.clientKeyModelsAbort===controller)state.clientKeyModelsAbort=null}}
 function renderClientKeyModels(){const query=$("clientKeyModelsSearch").value.trim().toLowerCase();const items=state.clientKeyModels.filter(item=>!query||[item.id,...(item.provider_ids||[]),...(item.supported_endpoints||[])].join(" ").toLowerCase().includes(query));$("clientKeyModelsTable").className="";$("clientKeyModelsTable").innerHTML=`<div class="table-wrap"><table class="key-model-table"><thead><tr><th>模型</th><th>Provider</th><th>支持端点</th><th>上下文 / 最大输出</th></tr></thead><tbody>${items.map(item=>`<tr><td class="key-id">${esc(item.id)}</td><td>${esc((item.provider_ids||[]).join(", "))}</td><td><div class="tags">${(item.supported_endpoints||[]).map(v=>`<span class="tag tag-default">${esc(v)}</span>`).join("")}</div></td><td>${esc(item.context_window_tokens||"—")} / ${esc(item.max_output_tokens||"—")}</td></tr>`).join("")||`<tr><td colspan="4" class="empty">暂无可用模型</td></tr>`}</tbody></table></div>`}
 
 async function loadProviders(){try{const data=await request(apiURL("/api/providers"));state.providers=data.providers||[];state.providerWritable=Boolean(data.provider_writable);state.configWritable=Boolean(data.config_writable);$("readonlyNotice").style.display=state.providerWritable?"none":"block";$("addButton").disabled=!state.providerWritable;renderProviders()}catch(e){$("content").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
@@ -2198,7 +2259,7 @@ let providerBundleImportSecrets=false;
 function clearProviderBundleImport(){$("providerBundleFile").value="";providerBundleImportSecrets=false}
 function openProviderBundleImport(includeSecrets){providerBundleImportSecrets=Boolean(includeSecrets);$("providerBundleTitle").textContent=includeSecrets?"导入完整 Provider 配置":"导入安全 Provider 配置";clearProviderBundleImport();providerBundleImportSecrets=Boolean(includeSecrets);$("providerBundleDialog").showModal()}
 async function exportProviderBundle(includeSecrets){if(includeSecrets&&!confirm("完整配置包含所有自定义 Provider 的 API Key。确认继续导出？"))return;try{const result=await request(apiURL("/api/providers/export"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({include_api_keys:Boolean(includeSecrets)})});const blob=new Blob([JSON.stringify(result)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=bundleExportFilename("provider",result.schema_version,includeSecrets?"complete":"safe",result.exported_at);a.rel="noopener";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),0);toast(includeSecrets?"完整 Provider 配置已开始下载":"安全 Provider 配置已开始下载")}catch(e){toast(e.message,"error")}}
-async function submitProviderBundleImport(event){event.preventDefault();$("providerBundleSubmit").disabled=true;try{const file=$("providerBundleFile").files&&$("providerBundleFile").files[0];if(!file||!file.size)throw new Error("请选择 Provider bundle JSON 文件");if(file.size>accountImportMaxBytes)throw new Error("JSON 文件不能超过 1 MiB");const payload=JSON.parse(await file.text());if(!payload||payload.format!=="aetherrelay.provider-bundle"||Number(payload.schema_version)!==1)throw new Error("只支持 aetherrelay.provider-bundle v1");payload.mode=$("providerBundleMode").value;const result=await request(apiURL("/api/providers/import"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});const failure=(result.items||[]).filter(item=>item.status!=="ok");toast(failure.length?`Provider 导入完成，但有 ${failure.length} 项失败`:`Provider 导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`,failure.length?"error":"success");$("providerBundleDialog").close();await loadProviders()}catch(e){toast(e.message,"error")}finally{clearProviderBundleImport();$("providerBundleSubmit").disabled=false}}
+async function submitProviderBundleImport(event){event.preventDefault();$("providerBundleSubmit").disabled=true;try{const file=$("providerBundleFile").files&&$("providerBundleFile").files[0];if(!file||!file.size)throw new Error("请选择 Provider bundle JSON 文件");if(file.size>accountImportMaxBytes)throw new Error("JSON 文件不能超过 1 MiB");const payload=JSON.parse(await file.text());if(!payload||payload.format!=="aetherrelay.provider-bundle"||Number(payload.schema_version)!==1)throw new Error("只支持 aetherrelay.provider-bundle v1");payload.mode=$("providerBundleMode").value;const result=await request(apiURL("/api/providers/import"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});invalidateFeatureCatalog();const failure=(result.items||[]).filter(item=>item.status!=="ok");toast(failure.length?`Provider 导入完成，但有 ${failure.length} 项失败`:`Provider 导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`,failure.length?"error":"success");$("providerBundleDialog").close();await loadProviders()}catch(e){toast(e.message,"error")}finally{clearProviderBundleImport();$("providerBundleSubmit").disabled=false}}
 function providerStatusSummary(p){const a=p?.availability||{};const meta=providerAvailabilityMeta(a);const samples=Math.max(0,Number(a.sample_count)||0);const hasSamples=samples>0;const routeUnavailable=Boolean(p?.builtin)&&["disabled","unavailable"].includes(meta.status);const rawScore=Number(a.score);const score=hasSamples&&!routeUnavailable&&Number.isFinite(rawScore)?Math.max(0,Math.min(100,Math.round(rawScore))):null;const scoreText=score===null?"—":String(score);const successRate=`${formatNumber((Number(a.success_rate)||0)*100,{maximumFractionDigits:1})}%`;const p95=`${formatNumber(a.p95_ms,{maximumFractionDigits:1})} ms`;const metrics=hasSamples?`<div class="health-metric-grid"><div class="health-metric"><strong>${esc(formatNumber(samples))}</strong><span>${esc(t("样本"))}</span></div><div class="health-metric"><strong>${esc(successRate)}</strong><span>${esc(t("成功率"))}</span></div><div class="health-metric"><strong>${esc(p95)}</strong><span>${esc(t("P95 延迟"))}</span></div></div>`:`<div class="health-empty-message">${esc(t("暂无请求样本，健康度将在真实调用后形成。"))}</div>`;let circuit="";if(a.circuit_state==="open"){const label=a.circuit_retry_at?t("熔断中，恢复于 {time}",{time:formatDate(a.circuit_retry_at)}):t("熔断中");circuit=`<div class="health-alert">${esc(label)}</div>`}else if(a.circuit_state==="half_open"){circuit=`<div class="health-note">${esc(t("半开"))}</div>`}const reason=String(p?.unavailable_reason||"").trim();const reasonHTML=reason?`<div class="health-alert">${esc(t("不可用原因：{reason}",{reason}))}</div>`:"";const failure=a.last_failure_at?`<div class="health-alert">${esc(t("最近失败 · HTTP {status} · {outcome} · {time}",{status:a.last_status||"—",outcome:a.last_outcome||t("失败"),time:formatDate(a.last_failure_at)}))}</div>`:"";const success=a.last_success_at&&!a.last_failure_at?`<div class="health-note">${esc(`${t("最近成功")}：${formatDate(a.last_success_at)}`)}</div>`:"";const pool=[];if(p?.builtin){if(Number.isFinite(Number(p.available_accounts)))pool.push(t("可路由账号 {count}",{count:Number(p.available_accounts)||0}));if(Number.isFinite(Number(p.model_count)))pool.push(t("模型 {count}",{count:Number(p.model_count)||0}));if(p.updated_at)pool.push(t("最近发现 {time}",{time:formatDate(p.updated_at)}))}const poolHTML=pool.length?`<div class="health-pool">${esc(pool.join(" · "))}</div>`:"";return `<section class="provider-health is-${meta.tone}${score===null?" is-unscored":""}" title="${esc(meta.detail)}"><div class="provider-health-head"><div class="provider-health-state"><span class="provider-health-indicator"></span><span>${esc(meta.label)}</span></div><div class="provider-health-score"><span>${esc(t("健康评分"))}</span><strong>${esc(scoreText)}</strong><small>${score===null?esc(t("不可计算")):"/100"}</small></div></div><div class="health-meter"><span class="health-meter-fill" style="width:${score===null?0:score}%"></span></div>${metrics}${circuit}${reasonHTML}${failure}${success}${poolHTML}</section>`}
 function providerSourceMeta(p){
   const requested=p?.source||(p?.builtin?"builtin":"third_party");
@@ -2251,7 +2312,22 @@ async function submitForm(event){event.preventDefault();const endpoints=[...$("e
 async function submitBuiltinProviderForm(event){event.preventDefault();const p=state.providers[state.builtinEditing];if(!p?.builtin){closeBuiltinDialog();return}const priority=Number($("builtinPriority").value);if(!Number.isInteger(priority)||priority<-1000||priority>1000){toast(t("路由优先级必须在 -1000 到 1000 之间"),"error");return}const payload={};if(Boolean($("builtinEnabled").checked)!==Boolean(p.enabled))payload.enabled=$("builtinEnabled").checked;if(priority!==Number(p.priority))payload.priority=priority;if(!Object.keys(payload).length){closeBuiltinDialog();return}const button=$("builtinSaveButton");button.disabled=true;try{await saveBuiltinProvider(p.name,payload,t("内建 Provider 设置已保存并生效"),closeBuiltinDialog)}finally{button.disabled=false}}
 function providerPayload(p){return {name:p.name,protocol:p.protocol,base_url:p.base_url,api_key:p.api_key||"",clear_api_key:Boolean(p.clear_api_key),models:p.models||[],priority:Number.isFinite(Number(p.priority))?Number(p.priority):100,fallback:p.fallback!==false,endpoints:p.endpoints||[],enabled:Boolean(p.enabled)}}
 function providerChanges(original,item){const current=providerPayload(original);const next=providerPayload(item);const changes={};for(const key of ["protocol","base_url","models","priority","fallback","endpoints","enabled"]){if(JSON.stringify(current[key])!==JSON.stringify(next[key]))changes[key]=next[key]}if(String(next.api_key||"").trim())changes.api_key=next.api_key;return changes}
-function invalidateFeatureCatalog(){state.cg.featureCatalog=null}
+function clearFeatureCatalog(){
+  state.cg.featureCatalog=null;
+  state.cg.featureCatalogVersion=(Number(state.cg.featureCatalogVersion)||0)+1;
+  state.cg.featureCatalogRequest=null;
+  return state.cg.featureCatalogVersion;
+}
+function refreshActiveFeatureModelSelect(){
+  if(state.tab!=="features")return;
+  if(state.featureSub==="tasks")loadFeatureModels();
+  else if(state.featureSub==="search")loadFeatureSearchModels();
+  else if(state.featureSub==="chat")loadTemporaryChatModels();
+}
+function invalidateFeatureCatalog(){
+  clearFeatureCatalog();
+  refreshActiveFeatureModelSelect();
+}
 async function createProvider(payload,message,close=false){try{$("saveButton").disabled=true;await request(apiURL("/api/providers"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});invalidateFeatureCatalog();toast(message);if(close)closeDialog();await loadProviders();return true}catch(e){toast(e.message,"error");await loadProviders();return false}finally{$("saveButton").disabled=false}}
 async function patchProvider(name,payload,message,close=false){try{$('saveButton').disabled=true;await request(apiURL(`/api/providers/${encodeURIComponent(name)}`),{method:"PATCH",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});invalidateFeatureCatalog();toast(message);if(close)closeDialog();await loadProviders();return true}catch(e){toast(e.message,"error");await loadProviders();return false}finally{$('saveButton').disabled=false}}
 async function toggleProvider(index,enabled){const target=state.providers[index];if(!target)return;if(target.builtin){await saveBuiltinProvider(target.name,{enabled},enabled?"内建 Provider 已启用":"内建 Provider 已禁用");return}await patchProvider(target.name,{enabled},enabled?"Provider 已启用":"Provider 已禁用")}
@@ -2398,6 +2474,7 @@ document.querySelectorAll('input[name="editKeyAccessMode"]').forEach(input=>inpu
 $("editKeyProviderSearch").oninput=()=>filterClientKeyProviderPicker("editKey");
 $("clientKeyAccessForm").onsubmit=async e=>{e.preventDefault();const id=$("clientKeyAccessID").value,mode=clientKeyAccessMode("editKeyAccessMode"),provider_ids=mode==="selected"?clientKeyProviderSelection("editKey"):[];if(mode==="selected"&&!provider_ids.length){updateClientKeyAccessUI("editKey","editKeyAccessMode");return}const button=$("saveClientKeyAccess");button.disabled=true;try{await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/provider-access`),{method:"PUT",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({mode,provider_ids})});$("clientKeyAccessDialog").close();toast("Provider 权限已保存");await loadClientKeys()}catch(err){toast(err.message,"error")}finally{button.disabled=false}};
 $("closeClientKeyModels").onclick=()=>$("clientKeyModelsDialog").close();
+$("clientKeyModelsDialog").addEventListener("close",()=>{invalidateClientKeyModels();state.clientKeyModelsID="";state.clientKeyModels=[]});
 $("clientKeyModelsSearch").oninput=renderClientKeyModels;
 $("closeClientSecret").onclick=()=>$("clientSecretDialog").close();
 $("copyClientSecret").onclick=async()=>{try{await navigator.clipboard.writeText($("clientSecret").value);toast("已复制") }catch(e){$("clientSecret").select()}};
@@ -2431,9 +2508,9 @@ function applyChatGPTState(p){
   if(p.poolSub==="chatgptweb"||p.poolSub==="codex")state.poolSub=p.poolSub;
   if(p.featureSub==="tasks"||p.featureSub==="images"||p.featureSub==="search"||p.featureSub==="chat")state.featureSub=p.featureSub;
   if(p.cgSub)state.cg.sub=p.cgSub;
-  if(typeof p.owner==="string"){
-    state.cg.tasks.owner=p.owner;
+  if(p.tab==="features"&&p.featureSub==="tasks"&&typeof p.owner==="string"){
     if($("cgTaskOwner"))$("cgTaskOwner").value=p.owner;
+    setTaskOwner(p.owner);
   }
   if(typeof p.conversationId==="string" && p.conversationId){
     state.cg.chat.pendingId=p.conversationId;
@@ -2549,49 +2626,76 @@ function addTemporaryPendingImages(files){
   $("tcImages").value="";
   renderTemporaryPendingImages();
 }
-async function loadTemporaryChatModels(){
+async function loadTemporaryChatModels(forceCatalog=false){
   const sel=$("tcModel");
   if(!sel)return;
+  const loadVersion=nextFeatureModelLoad("chat");
+  if(forceCatalog)clearFeatureCatalog();
+  const catalogVersion=state.cg.featureCatalogVersion;
   try{
     const data=await loadFeatureCatalog();
+    if(!isCurrentFeatureModelLoad("chat",loadVersion)||catalogVersion!==state.cg.featureCatalogVersion)return;
     setChatGPTAvailable();
     const models=Array.isArray(data.text_models)?data.text_models:[];
     state.cg.chat.models=models.map(item=>String(item.id||"")).filter(Boolean);
-    if(!state.cg.chat.models.length){
-      sel.innerHTML=`<option value="">暂无可用模型</option>`;
-      return;
-    }
-    sel.innerHTML=models.map(item=>{
-      const providers=(item.providers||[]).map(provider=>provider.name).filter(Boolean).join(" / ");
-      return `<option value="${esc(item.id)}">${esc(item.id)}${providers?` — ${esc(providers)}`:""}</option>`;
-    }).join("");
+    renderFeatureModelOptions(sel,models,t("暂无可用模型"),sel.value);
   }catch(e){
-    sel.innerHTML=`<option value="">无法加载模型</option>`;
+    if(!isCurrentFeatureModelLoad("chat",loadVersion)||catalogVersion!==state.cg.featureCatalogVersion)return;
+    state.cg.chat.models=[];
+    sel.innerHTML=`<option value="">${esc(t("无法加载模型"))}</option>`;
   }
 }
 
-async function loadFeatureCatalog(force=false){
-  if(!force&&state.cg.featureCatalog)return state.cg.featureCatalog;
-  const data=await request(apiURL("/api/features/models"));
-  state.cg.featureCatalog=data||{};
-  return state.cg.featureCatalog;
+function nextFeatureModelLoad(kind){
+  const loads=state.cg.featureModelLoads;
+  loads[kind]=(Number(loads[kind])||0)+1;
+  return loads[kind];
+}
+function isCurrentFeatureModelLoad(kind,version){return Number(state.cg.featureModelLoads[kind])===Number(version)}
+function renderFeatureModelOptions(sel,models,emptyLabel,selected){
+  sel.innerHTML=models.length?models.map(item=>{
+    const providers=(item.providers||[]).map(provider=>provider.name).filter(Boolean).join(" / ");
+    return `<option value="${esc(item.id)}">${esc(item.id)}${providers?` — ${esc(providers)}`:""}</option>`;
+  }).join(""):`<option value="">${esc(emptyLabel)}</option>`;
+  const value=String(selected||"").trim();
+  if(value&&models.some(item=>String(item?.id||"")===value))sel.value=value;
+  return String(sel.value||"").trim();
+}
+function loadFeatureCatalog(){
+  const catalogVersion=state.cg.featureCatalogVersion;
+  if(state.cg.featureCatalog)return Promise.resolve(state.cg.featureCatalog);
+  const active=state.cg.featureCatalogRequest;
+  if(active&&active.version===catalogVersion)return active.promise;
+  const entry={version:catalogVersion,promise:null};
+  entry.promise=request(apiURL("/api/features/models")).then(data=>{
+    const catalog=data||{};
+    if(catalogVersion===state.cg.featureCatalogVersion)state.cg.featureCatalog=catalog;
+    return catalog;
+  }).finally(()=>{
+    if(state.cg.featureCatalogRequest===entry)state.cg.featureCatalogRequest=null;
+  });
+  state.cg.featureCatalogRequest=entry;
+  return entry.promise;
 }
 
-async function loadFeatureModels(){
+async function loadFeatureModels(mode=state.cg.tasks.mode,preserveCurrent=true,forceCatalog=false){
   const sel=$("cgTaskModel");
   if(!sel)return;
-  const selected=sel.value;
+  const taskMode=mode==="edit"?"edit":"generation";
+  if(preserveCurrent&&taskMode===state.cg.tasks.mode)state.cg.tasks.models[taskMode]=String(sel.value||"").trim();
+  const loadVersion=nextFeatureModelLoad("task");
+  if(forceCatalog)clearFeatureCatalog();
+  const catalogVersion=state.cg.featureCatalogVersion;
   try{
     const data=await loadFeatureCatalog();
-    const key=state.cg.tasks.mode==="edit"?"image_edit_models":"image_models";
+    if(!isCurrentFeatureModelLoad("task",loadVersion)||catalogVersion!==state.cg.featureCatalogVersion||state.cg.tasks.mode!==taskMode)return;
+    const key=taskMode==="edit"?"image_edit_models":"image_models";
     const models=Array.isArray(data[key])?data[key]:[];
-    sel.innerHTML=models.length?models.map(item=>{
-      const providers=(item.providers||[]).map(provider=>provider.name).filter(Boolean).join(" / ");
-      return `<option value="${esc(item.id)}">${esc(item.id)}${providers?` — ${esc(providers)}`:""}</option>`;
-    }).join(""):`<option value="">暂无可用模型</option>`;
-    if(selected&&models.some(item=>item.id===selected))sel.value=selected;
+    state.cg.tasks.models[taskMode]=renderFeatureModelOptions(sel,models,t("暂无可用模型"),state.cg.tasks.models[taskMode]);
   }catch(e){
-    sel.innerHTML=`<option value="">无法加载模型</option>`;
+    if(!isCurrentFeatureModelLoad("task",loadVersion)||catalogVersion!==state.cg.featureCatalogVersion||state.cg.tasks.mode!==taskMode)return;
+    state.cg.tasks.models[taskMode]="";
+    sel.innerHTML=`<option value="">${esc(t("无法加载模型"))}</option>`;
   }
 }
 function safeExternalURL(value){
@@ -2668,20 +2772,20 @@ async function openFeatureSearchHistory(id){
     renderFeatureSearchResult(result);
   }catch(e){toast(e.message,"error")}
 }
-async function loadFeatureSearchModels(){
+async function loadFeatureSearchModels(forceCatalog=false){
   const sel=$("cgSearchModel");
   if(!sel)return;
-  const selected=sel.value;
+  const loadVersion=nextFeatureModelLoad("search");
+  if(forceCatalog)clearFeatureCatalog();
+  const catalogVersion=state.cg.featureCatalogVersion;
   try{
     const data=await loadFeatureCatalog();
+    if(!isCurrentFeatureModelLoad("search",loadVersion)||catalogVersion!==state.cg.featureCatalogVersion)return;
     setChatGPTAvailable();
     const models=Array.isArray(data.search_models)?data.search_models:[];
-    sel.innerHTML=models.length?models.map(item=>{
-      const providers=(item.providers||[]).map(provider=>provider.name).filter(Boolean).join(" / ");
-      return `<option value="${esc(item.id)}">${esc(item.id)}${providers?` — ${esc(providers)}`:""}</option>`;
-    }).join(""):`<option value="">${esc(t("未找到可用搜索模型"))}</option>`;
-    if(selected&&models.some(item=>item.id===selected))sel.value=selected;
+    renderFeatureModelOptions(sel,models,t("未找到可用搜索模型"),sel.value);
   }catch(e){
+    if(!isCurrentFeatureModelLoad("search",loadVersion)||catalogVersion!==state.cg.featureCatalogVersion)return;
     sel.innerHTML=`<option value="">${esc(t("无法加载搜索模型"))}</option>`;
   }
 }
@@ -2938,7 +3042,7 @@ async function loadOlderTemporaryMessages(){
   }
 }
 function openTemporaryCreateDialog(){
-  loadTemporaryChatModels().finally(()=>$("tcCreateDialog").showModal());
+  loadTemporaryChatModels(true).finally(()=>$("tcCreateDialog").showModal());
 }
 async function createTemporaryConversation(event){
   event.preventDefault();
@@ -3213,18 +3317,18 @@ $("cgExportConfirm").onclick=confirmExport;
 
 $("cgTaskModeGen").onclick=()=>setTaskMode("generation");
 $("cgTaskModeEdit").onclick=()=>setTaskMode("edit");
+$("cgTaskModel").onchange=e=>{state.cg.tasks.models[state.cg.tasks.mode]=String(e.target.value||"").trim()};
 $("cgTaskRegenId").onclick=()=>{$("cgTaskClientId").value=newUUID()};
 $("cgTaskReload").onclick=()=>{
   const owner=($("cgTaskOwner").value||"").trim();
-  if(state.cg.tasks.owner&&owner&&state.cg.tasks.owner!==owner){stopAllTaskPolling();state.cg.tasks.items=[]}
-  state.cg.tasks.owner=owner;
+  setTaskOwner(owner);
   setHash();
+  loadFeatureModels(state.cg.tasks.mode,true,true);
   loadChatGPTTasks(false);
 };
 $("cgTaskOwner").onchange=()=>{
   const owner=($("cgTaskOwner").value||"").trim();
-  if(state.cg.tasks.owner&&owner!==state.cg.tasks.owner){stopAllTaskPolling();state.cg.tasks.items=[];renderTaskGuide()}
-  state.cg.tasks.owner=owner;
+  if(setTaskOwner(owner))renderTaskGuide();
 };
 $("cgImgAPIKey").onchange=e=>{state.cg.images.apiKeyID=e.target.value||"";state.cg.images.selected.clear();loadChatGPTImages()};
 $("cgTaskForm").onsubmit=submitTask;
@@ -3308,7 +3412,7 @@ Promise.allSettled([initAuthSession(),loadAdminPreferences()]).finally(()=>{
   const boot=parseHash();
   applyUsageState(boot);
   applyChatGPTState(boot);
-  setTaskMode(state.cg.tasks.mode||"generation");
+  setTaskMode(state.cg.tasks.mode||"generation",false);
   showTab(boot.tab);
   state.usageTimer=setInterval(()=>{if(state.tab==="usage")loadUsage(false)},15000);
 });
@@ -3364,7 +3468,7 @@ async function submitModelMetadata(e){
   const button=$("saveModelMetadata");button.disabled=true;
   try{
     await request(apiURL('/api/model-metadata/'+encodeURIComponent(editingModelMetadata.id)),{method:'PATCH',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({context_window_tokens:context,max_output_tokens:output,reasoning_supported:supported,reasoning_default_effort:supported?defaultEffort:"",reasoning_efforts:supported?efforts:[],native_responses_tools:$("mmNativeTools").checked,native_responses_images:$("mmNativeImages").checked})});
-    closeModelMetadataEditor();toast('模型元数据已保存');await loadModelMetadata();
+    invalidateFeatureCatalog();closeModelMetadataEditor();toast('模型元数据已保存');await loadModelMetadata();
   }catch(error){toast(error.message,'error')}
   finally{button.disabled=false}
 }

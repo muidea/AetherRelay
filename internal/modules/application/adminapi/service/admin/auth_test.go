@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -357,6 +358,11 @@ func TestAuthIndexInjectsBasePath(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "apiURL") {
 		t.Fatalf("frontend should use apiURL helper")
 	}
+	for _, marker := range []string{`id="aetherrelaySiteIcon"`, `id="aetherrelayAppleTouchIcon"`, "/assets/aetherrelay.png"} {
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("admin page missing site icon marker %q", marker)
+		}
+	}
 }
 
 func TestLoginPageInjectsInstanceDefaultLanguage(t *testing.T) {
@@ -366,6 +372,47 @@ func TestLoginPageInjectsInstanceDefaultLanguage(t *testing.T) {
 	}
 	if !strings.Contains(page, `const en={title:"Sign in to AetherRelay"`) {
 		t.Fatal("login page is missing English translations")
+	}
+	for _, marker := range []string{`id="aetherrelaySiteIcon"`, `id="aetherrelayAppleTouchIcon"`, `base+"/assets/aetherrelay.png"`} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("login page missing site icon marker %q", marker)
+		}
+	}
+}
+
+func TestAuthServesSiteIconWithoutSession(t *testing.T) {
+	h := newAuthHandler(t, enabledAuthConfig(t, "ops-admin", "s3cret-pass"))
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/ops/AetherRelay/assets/aetherrelay.png", nil)
+			req.RemoteAddr = "203.0.113.8:9"
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("site icon = %d %s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); got != "image/png" {
+				t.Fatalf("Content-Type = %q", got)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Fatalf("Cache-Control = %q", got)
+			}
+			if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+				t.Fatalf("Referrer-Policy = %q", got)
+			}
+			if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q", got)
+			}
+			if method == http.MethodHead {
+				if rec.Body.Len() != 0 {
+					t.Fatalf("HEAD body length = %d", rec.Body.Len())
+				}
+				return
+			}
+			if !bytes.HasPrefix(rec.Body.Bytes(), []byte("\x89PNG\r\n\x1a\n")) {
+				t.Fatal("site icon does not start with a PNG signature")
+			}
+		})
 	}
 }
 

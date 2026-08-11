@@ -40,6 +40,7 @@ type chatGPTAccountRuntimeStub struct {
 	cancelTaskID       string
 	deleteOwner        string
 	deleteTaskID       string
+	taskListOwner      string
 	temporaryCreate    tempevents.CreateConversationCommand
 	temporaryGet       tempevents.GetConversationCommand
 	temporaryTurn      tempevents.StartTurnCommand
@@ -157,7 +158,8 @@ func (s *chatGPTAccountRuntimeStub) SubmitChatGPTImageGeneration(context.Context
 func (s *chatGPTAccountRuntimeStub) SubmitChatGPTImageEdit(context.Context, taskevents.SubmitEditCommand) (taskevents.SubmitResult, error) {
 	return taskevents.SubmitResult{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) ListChatGPTImageTasks(context.Context, string, []string) (taskevents.ListResult, error) {
+func (s *chatGPTAccountRuntimeStub) ListChatGPTImageTasks(_ context.Context, ownerID string, _ []string) (taskevents.ListResult, error) {
+	s.taskListOwner = ownerID
 	return taskevents.ListResult{}, nil
 }
 func (s *chatGPTAccountRuntimeStub) ResumeChatGPTImageTask(context.Context, string, string, int) (taskevents.ResumePollResult, error) {

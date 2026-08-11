@@ -1088,6 +1088,26 @@ func TestBuiltinLocalClientAPIKeyIsListedButImmutable(t *testing.T) {
 	}
 }
 
+func TestChatGPTImageTaskListUsesSelectedClientAPIKey(t *testing.T) {
+	store := usage.NewMemoryStore()
+	now := time.Now().UTC()
+	for _, id := range []string{config.BuiltinClientAPIKeyID, "team-a"} {
+		if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: id, Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandlerWithUsage("", &testRuntime{}, store).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/image-tasks?api_key_id=team-a", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.taskListOwner != "team-a" {
+		t.Fatalf("list status=%d owner=%q body=%s", rec.Code, runtime.taskListOwner, rec.Body.String())
+	}
+}
+
 func TestDeleteProviderRejectsSelectedClientKeyReference(t *testing.T) {
 	cfg := config.Config{Providers: map[string]config.Provider{
 		"target": {Name: "target", Protocol: "openai", BaseURL: "https://target.test", APIKey: "k", Models: []string{"model"}, Endpoints: []string{config.ProviderEndpointResponses}},

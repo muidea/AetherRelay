@@ -264,6 +264,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 认证端点与登录页(开启认证时无需会话)。
 	switch {
+	case rel == "/assets/aetherrelay.png" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.serveSiteIcon(w, r)
+		return
 	case rel == "/login" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveLoginPage(w, r)
 		return
@@ -845,6 +848,17 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(injectAdminBasePath(adminweb.AdminIndexHTML, h.adminBasePath()))
+}
+
+func (h *Handler) serveSiteIcon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(adminweb.AdminSiteIcon)
 }
 
 // injectAdminBasePath 在 HTML 开头注入安全的 basePath JSON 字面量。

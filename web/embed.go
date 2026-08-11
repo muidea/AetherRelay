@@ -6,3 +6,8 @@ import _ "embed"
 //
 //go:embed admin/index.html
 var AdminIndexHTML []byte
+
+// AdminSiteIcon is the browser and mobile home-screen icon for the Admin UI.
+//
+//go:embed admin/assets/aetherrelay.png
+var AdminSiteIcon []byte
