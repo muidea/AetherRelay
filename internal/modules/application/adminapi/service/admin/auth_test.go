@@ -358,7 +358,7 @@ func TestAuthIndexInjectsBasePath(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "apiURL") {
 		t.Fatalf("frontend should use apiURL helper")
 	}
-	for _, marker := range []string{`id="aetherrelaySiteIcon"`, `id="aetherrelayAppleTouchIcon"`, "/assets/aetherrelay.png"} {
+	for _, marker := range []string{`id="aetherrelaySiteIcon"`, `id="aetherrelayAppleTouchIcon"`, `id="aetherrelayBrandIcon"`, "window.__AETHERRELAY_ADMIN_SITE_ICON_URL__", "/assets/aetherrelay.png"} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing site icon marker %q", marker)
 		}

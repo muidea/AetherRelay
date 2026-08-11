@@ -7,15 +7,17 @@
   <link id="aetherrelaySiteIcon" rel="icon" type="image/png">
   <link id="aetherrelayAppleTouchIcon" rel="apple-touch-icon">
   <script>
+    const aetherrelaySiteIconURL=(window.__AETHERRELAY_ADMIN_BASE_PATH__||"/admin")+"/assets/aetherrelay.png";
+    window.__AETHERRELAY_ADMIN_SITE_ICON_URL__=aetherrelaySiteIconURL;
     for(const id of ["aetherrelaySiteIcon","aetherrelayAppleTouchIcon"]){
       const icon=document.getElementById(id);
-      if(icon)icon.href=(window.__AETHERRELAY_ADMIN_BASE_PATH__||"/admin")+"/assets/aetherrelay.png";
+      if(icon)icon.href=aetherrelaySiteIconURL;
     }
   </script>
   <style>
     :root{--primary:#1677ff;--primary-hover:#4096ff;--success:#52c41a;--warning:#faad14;--danger:#ff4d4f;--text:#1f1f1f;--muted:#8c8c8c;--border:#d9d9d9;--line:#f0f0f0;--bg:#f5f7fa;--card:#fff;--radius:8px;--shadow:0 6px 16px rgba(0,0,0,.08)}
     *{box-sizing:border-box}body{margin:0;color:var(--text);background:var(--bg);font:14px/1.5715 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-    button,input,select,textarea{font:inherit}.shell{min-height:100vh}.header{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 32px;position:sticky;top:0;z-index:20;gap:24px}.brand{display:flex;align-items:center;gap:12px}.logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#1677ff,#69b1ff);display:grid;place-items:center;color:#fff;font-weight:700;box-shadow:0 4px 12px rgba(22,119,255,.28)}.brand h1{font-size:18px;margin:0}.brand small{display:block;color:var(--muted);font-size:12px;font-weight:400}
+    button,input,select,textarea{font:inherit}.shell{min-height:100vh}.header{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 32px;position:sticky;top:0;z-index:20;gap:24px}.brand{display:flex;align-items:center;gap:12px}.logo{width:36px;height:36px;object-fit:contain;flex:none}.brand h1{font-size:18px;margin:0}.brand small{display:block;color:var(--muted);font-size:12px;font-weight:400}
     .nav{display:flex;gap:4px;margin-left:18px}.nav a{padding:6px 14px;border-radius:6px;color:#595959;text-decoration:none}.nav a.active,.nav a:hover{color:var(--primary);background:#e6f4ff}
     .header-status{margin-left:auto;display:flex;align-items:center;gap:8px;color:#595959}.language-control{display:inline-flex;align-items:center;gap:5px;color:#595959;font-size:12px}.language-control .control{width:auto;min-height:30px;padding:3px 7px}.dot{width:8px;height:8px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(82,196,26,.12)}.dot.bad{background:var(--danger);box-shadow:0 0 0 3px rgba(255,77,79,.12)}
     main{width:100%;padding:28px 32px 48px}.hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:22px}.hero h2{font-size:24px;line-height:1.35;margin:0 0 6px}.hero p{margin:0;color:#666}.btn{height:32px;padding:4px 15px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:.2s}.btn:hover{color:var(--primary);border-color:var(--primary)}.btn-primary{color:#fff;background:var(--primary);border-color:var(--primary)}.btn-primary:hover{color:#fff;background:var(--primary-hover)}.btn:disabled{cursor:not-allowed;opacity:.55}.icon{font-size:18px;line-height:1}
@@ -95,7 +97,7 @@
 <body>
 <div class="shell">
   <header class="header">
-    <div class="brand"><div class="logo">AR</div><div><h1>AetherRelay</h1><small>管理控制台</small></div></div>
+    <div class="brand"><img id="aetherrelayBrandIcon" class="logo" alt="AetherRelay"><script>const aetherrelayBrandIcon=document.getElementById("aetherrelayBrandIcon");if(aetherrelayBrandIcon)aetherrelayBrandIcon.src=window.__AETHERRELAY_ADMIN_SITE_ICON_URL__||"/admin/assets/aetherrelay.png";</script><div><h1>AetherRelay</h1><small>管理控制台</small></div></div>
     <nav class="nav">
       <a href="#/providers" id="navProviders" class="active">Provider 管理</a>
       <a href="#/client-keys" id="navClientKeys">客户端 Key</a>
