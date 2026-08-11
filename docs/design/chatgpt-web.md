@@ -5,14 +5,20 @@
 ## 设计目标
 
 - 无需官方 API Key：通过 ChatGPT 网页账号凭据提供文本对话、图片生成与联网搜索。
-- 账号池是内建 Provider 的唯一模型权威；账号凭据经统一主密钥加密后只存 `state.database`，绝不进入 YAML、日志、错误或管理 API。
+- 账号池是内建 Provider 的唯一模型权威；敏感账号凭据经统一主密钥加密后只存 `state.database`，绝不进入 YAML、日志、错误或管理 API。
 - 全部能力以 Admin 管理页为运维入口，账号池与相关组件始终装配。
+
+### Admin 工具集的内建作用域
+
+- Usage runtime 启动时幂等创建服务端维护的客户端作用域 `builtin-local`。它只有元数据和 `all` Provider 访问范围，不保存 raw secret/hash，也不是外部客户端可以携带的 API Key。
+- 临时对话、在线搜索、图片代理以及图片任务/图片库在未指定 `api_key_id` 时都使用 `builtin-local`；Admin principal 仍单独用于临时会话和搜索历史的 owner 隔离。Admin 也可以显式选择其它已存在的客户端 Key。
+- 管理台会展示该内建条目及其模型目录，但禁止创建同名 Key、启停、权限修改、轮换和删除；公开 `/v1/*` 仍必须使用普通客户端密钥。
 
 ## 账号池与内建 Provider
 
 - 进程始终注入只读内建 Provider `chatgptweb`；`config.yaml` 不声明任何 Provider。
 - 模型来自账号池对 `/backend-api/models` 的枚举并集，并与 Provider 精确模型合成同一有效目录；`model_metadata` 为同 ID 模型补充容量与可选 reasoning 能力声明。同名来源保留全部候选，`priority` 默认 `10` 且不作为回退候选。
-- 账号列表严格脱敏：只返回稳定本地 ID、脱敏邮箱、状态、结果计数、冷却与最近刷新状态；token、账号代理与原始 OAuth 错误绝不返回。
+- 账号列表返回稳定本地 ID、邮箱、状态、结果计数、冷却与最近刷新状态；token、账号代理与原始 OAuth 错误绝不返回。
 - 账号导出是唯一有意返回明文 token 的接口：固定返回可直接作为 `accounts` 重新导入的 JSON 数组，二次确认、`Cache-Control: no-store`、不写 Web Storage、Blob 即用即销。导入同时支持纯 access token 和完整 OAuth 对象；完整对象保留 refresh/id token 与账号代理，不会退化为单 token。OAuth 授权 URL、callback 与 session 仅存页面内存态，完成或取消后销毁。
 - `provider_enabled` 只控制内建 Provider 是否参与路由（可热更新）；不影响账号刷新、图片或临时对话。
 
@@ -20,12 +26,13 @@
 
 - `/v1/chat/completions`：纯文本与 OpenAI content-part 数组中的 `text` / `image_url`（仅 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图 ≤ 4000 万像素）；不下载远程 URL（无 SSRF 通道）；图片仅限 `user` 消息；`input_audio`、`file`、工具调用与其它 content part 返回 `invalid_request`。
 - `/v1/responses`：同一文本执行器的无状态受限投影（字符串/message-array `input`、`instructions`、`reasoning.effort`、`input_text`、data-URI `input_image`、基础 buffered/SSE）；不保存会话；可兼容忽略的字段在 `ignored_features` 中可审计，改变语义的字段返回 `conversion_unsupported`。
-- `/v1/images/generations` / `/v1/images/edits`：上游生图代理。图片字节只存本地文件系统，DuckDB 只存元数据与索引；interaction archive 对 data URI / `b64_json` 只存 MIME、字节数与 SHA-256 摘要。
+- `/v1/images/generations` / `/v1/images/edits`：上游生图代理。ChatGPT Web conversation 协议没有 OpenAI Images API 的原生 `size` / `response_format` 字段；旧实现把尺寸附加到 prompt，只能表达意图，不能保证像素尺寸。现在请求只接受 `auto` 或受限的正整数 `WIDTHxHEIGHT`，并在拿到认证后的上游栅格 bytes 后本地中心裁切/双线性缩放；明确 `WxH` 才保证精确像素，`auto` 保留上游尺寸，无法解码 bytes 时失败而不虚报成功。图片字节只存本地文件系统，DuckDB 只存元数据与索引；interaction archive 对 data URI / `b64_json` 只存 MIME、字节数与 SHA-256 摘要。
+- ChatGPT Web 只返回 raster（PNG/JPEG/GIF 等可验证栅格）。它没有真正的 SVG/vector 输出协议；SVG 容器包裹 raster 也不是真矢量，因此显式 `svg`、`response_format: svg` 或“导出矢量文件”请求会在访问上游前明确拒绝。vector-like/raster illustration 等仅描述视觉风格的提示仍可生成栅格图。
 - 韧性：`rate_limit` / TLS / 超时 / 上游故障生成 60 秒生图冷却；`invalid_token` 先触发一次 OAuth 刷新，仅尚未创建 conversation 时重投一次，已有 conversation 永不盲重投。文本 token 为稳定本地估计，不可当上游账单。
 
 ## 图片任务与图片库
 
-- **图片任务**：`api_key_id` 必填且必须对应已存在客户端 Key，是任务查询、取消、删除与恢复的隔离边界，切换 Key 清空旧列表与轮询；`size`、`quality` 使用常用枚举提示但允许输入上游扩展值。所有任务开放详情，`queued` / `running` 可取消，终态记录可删除。取消先持久化 `cancelled`，再传播任务级 context 取消；状态机拒绝迟到进度、成功或失败覆盖该终态。该取消是协作式的，上游已经受理时不承诺停止执行或免除额度消耗。删除只处理任务记录，图片库资产由图片库独立管理。已有会话的失败任务走恢复轮询（`extra_timeout_secs=30`，不重新提交生成），仅 bootstrap 阶段失败的未建会话任务可重新提交，其它失败不开放通用重试。
+- **图片任务**：`api_key_id` 缺省时使用内建 `builtin-local`，显式值必须对应已存在客户端 Key；它是任务查询、取消、删除与恢复的隔离边界，切换 Key 清空旧列表与轮询。`size` 只接受 `auto` 或正整数 `WIDTHxHEIGHT`（最大边 8192、总像素 4000 万），`quality` 仍按上游能力传递。ChatGPT Web 没有原生尺寸字段，任务完成后由本地栅格规范化保证明确 `WxH` 的实际结果尺寸；详情和图片库展示实际宽、高、格式。SVG/vector 文件请求明确失败，不伪装成 SVG。所有任务开放详情，`queued` / `running` 可取消，终态记录可删除。取消先持久化 `cancelled`，再传播任务级 context 取消；状态机拒绝迟到进度、成功或失败覆盖该终态。该取消是协作式的，上游已经受理时不承诺停止执行或免除额度消耗。删除只处理任务记录，图片库资产由图片库独立管理。已有会话的失败任务走恢复轮询（`extra_timeout_secs=30`，不重新提交生成），仅 bootstrap 阶段失败的未建会话任务可重新提交，其它失败不开放通用重试。
 - **图片库**：列表、标签、删除（不可恢复）；图片内容经 Admin 鉴权同源只读端点 `GET /api/chatgpt/images/content?path=&thumb=` 读取，路径严格校验、no-store，不暴露通用 `/files/**`。
 
 ## 临时对话

@@ -44,8 +44,9 @@ const (
 	ErrorClient       = "client"
 )
 
-// AccountView is the redacted management projection. It never contains
-// access, refresh, or ID tokens, account IDs, or proxy URLs.
+// AccountView is the management projection. Email is displayed as provided;
+// access, refresh, and ID tokens, upstream account IDs, and proxy URLs are
+// never included.
 type AccountView struct {
 	ID                         string                `json:"id"`
 	IdentityKey                string                `json:"identity_key,omitempty"`

@@ -573,7 +573,7 @@ func (s *Store) View(id string) (events.AccountView, bool) {
 }
 
 // ViewByRefreshToken is intentionally available only inside the account-pool
-// owner. It lets OAuth completion return the newly persisted redacted view
+// owner. It lets OAuth completion return the newly persisted safe view
 // even when the token response does not contain an email claim.
 func (s *Store) ViewByRefreshToken(refreshToken string) (events.AccountView, bool) {
 	s.mu.Lock()

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
@@ -15,6 +16,13 @@ type Runtime struct{ store usage.Store }
 func NewRuntime(bootstrap configevents.Bootstrap) (*Runtime, error) {
 	store, err := usage.OpenDuckDB(bootstrap.Config.UsageStore)
 	if err != nil {
+		return nil, err
+	}
+	// Admin feature/tool calls use a server-owned, stable scope.  Materialize
+	// its metadata before any Application module reads the client-key catalog;
+	// EnsureClientAPIKey is idempotent and intentionally stores no raw secret.
+	if err := store.EnsureClientAPIKey(context.Background(), config.BuiltinClientAPIKeyID, time.Now().UTC()); err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 	return &Runtime{store: store}, nil

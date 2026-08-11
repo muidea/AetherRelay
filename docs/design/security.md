@@ -17,6 +17,7 @@
 - DuckDB 是客户端 Key 的唯一持久化权威，不接受 YAML 中的 Key 定义或摘要。
 - Key 摘要仅接受 `sha256:` + 64 位小写十六进制；原始 Key 与摘要在所有条目间均唯一。
 - Key ID 匹配 `[a-z0-9][a-z0-9._-]{0,63}`；`default` 为历史用量保留 ID，不能配置。
+- `builtin-local` 是 Usage runtime 启动时幂等维护的服务端内建工具 scope：仅有元数据和 `all` Provider 权限，不保存摘要/secret，不进入外部认证索引。Admin 工具请求在内部注入该身份；该条目可查看模型但不可创建、修改、轮换、启停或删除。
 - 服务端生成 Key 统一 `sk_` + base64.RawURLEncoding(crypto/rand 32 bytes)，至少 256 bit 熵；明文仅在创建/轮换成功响应中返回一次，响应 `Cache-Control: no-store`。
 
 ### 身份解析与 401 不变量
@@ -31,6 +32,7 @@
 
 - 创建与轮换不接受客户端提供的明文或摘要（服务端生成）；创建必须提供完整 `provider_access`，PUT 替换访问范围，PATCH 只允许改 `enabled`；轮换保持同一 `api_key_id` 和 ProviderAccess，激活后新请求只接受新 Key，在途旧快照请求允许完成，无宽限期；禁用与撤销均使新请求 401，不删除历史 usage；删除 `default` 返回 400。
 - 列表暴露策略、当前有效/不可用 Provider ID 和去重模型数，但不暴露摘要、base URL、凭据来源或账号 ID；有效模型接口只返回模型、候选 Provider ID、客户端端点与容量。
+- Admin 图片任务和图片库的作用域参数缺省为 `builtin-local`；显式值必须是已存在的客户端 Key。管理员登录用户名仍只负责会话/历史隔离，不拼接成动态客户端 Key ID。
 
 ### 配置写入与激活事务
 

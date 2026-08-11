@@ -17,7 +17,7 @@ Last Updated: 2026-07-26
 1. 在既有 `web/admin/index.html` 中新增一级页签“ChatGPT Web”，其下设置“账号池”“图片任务”“图片库”三个二级页签。
 2. 首轮只消费已经存在的 `/admin/api/chatgpt/**` 管理 API；除本设计明确列出的最小接口缺口外，不新建 Module、Block 或平行后端。
 3. 管理页仅面向 Admin，沿用现有会话、loopback 限制、CSRF 和写操作确认机制；不引入旧系统的 `admin/user` 多角色体系。
-4. 账号 token、refresh token、密码和代理地址均不得出现在列表、编辑表单、错误提示、浏览器持久化状态或普通通知中；邮箱默认脱敏。
+4. 账号 token、refresh token、密码和代理地址均不得出现在列表、编辑表单、错误提示、浏览器持久化状态或普通通知中；邮箱直接显示。
 5. 账号导出是唯一的有意敏感响应：必须二次确认、`Cache-Control: no-store`、不写入 localStorage/sessionStorage、下载或复制完成后立即释放内存引用。
 6. 图片任务的 `owner_id` 是任务隔离边界，页面必须由管理员显式选择或输入，不能静默使用一个固定共享 owner。
 
@@ -80,7 +80,7 @@ Admin
 - 支持多选，批量刷新、批量删除和批量导出；
 - 所有 token 只允许后端返回的脱敏值用于辅助识别，页面不提供 token 复制按钮。
 
-账号 ID 应成为所有写操作的唯一标识。页面不得以 token、邮箱或表格下标作为 API 请求标识。账号池 owner 的非敏感只读 `AccountView` 已提供 `restore_at`、`image_inflight`、`success`、`fail` 和 `created_at`，用于该运营表格；其中在途图片数为当前进程运行态，进程重启后归零。与旧页面不同，账号列使用稳定账号 ID，邮箱继续脱敏，且不显示或复制完整 token。
+账号 ID 应成为所有写操作的唯一标识。页面不得以 token、邮箱或表格下标作为 API 请求标识。账号池 owner 的非敏感只读 `AccountView` 已提供 `restore_at`、`image_inflight`、`success`、`fail` 和 `created_at`，用于该运营表格；其中在途图片数为当前进程运行态，进程重启后归零。与旧页面不同，账号列使用稳定账号 ID，邮箱直接显示，且不显示或复制完整 token。
 
 #### 导入、编辑、刷新与删除
 
@@ -255,7 +255,7 @@ OAuth 使用独立对话框：管理员可填可选 `email_hint`，调用 start 
 
 未增加：远端存储、压缩清理、通用上传、代理配置、密码重登、平行图片任务持久化。
 
-账号池表格使用稳定账号 ID 替代旧页面 token 列，其他运营列与原 `chatgpt2api` 对齐；列宽按视口自适应，窄屏隐藏低优先级列以避免横向滚动。完整 token、proxy 与未脱敏邮箱仍不进入普通管理页。
+账号池表格使用稳定账号 ID 替代旧页面 token 列，其他运营列与原 `chatgpt2api` 对齐；列宽按视口自适应，窄屏隐藏低优先级列以避免横向滚动。完整 token 与 proxy 仍不进入普通管理页，邮箱直接显示。
 
 ### 验证结果
 

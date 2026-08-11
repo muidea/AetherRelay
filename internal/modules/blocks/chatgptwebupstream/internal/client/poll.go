@@ -338,7 +338,10 @@ func (c *Client) downloadImage(downloadURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("image download request: %w", err)
 	}
-	req.Header.Set("accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	// The image task contract is raster-only.  Prefer PNG/JPEG and do not ask
+	// the Web origin for SVG/AVIF variants that the in-process decoder cannot
+	// verify or resize deterministically.
+	req.Header.Set("accept", "image/png,image/jpeg,image/gif,image/*;q=0.8,*/*;q=0.1")
 	// The Python reference downloads short-lived image URLs through its browser
 	// session.  Preserve that browser identity here as well: some ChatGPT image
 	// origins return a deliberately indistinguishable 404 when the session is

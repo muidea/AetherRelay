@@ -23,6 +23,7 @@ import (
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	"aetherrelay/internal/pkg/chatgptimageinput"
+	"aetherrelay/internal/pkg/chatgptimageoutput"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -194,9 +195,9 @@ func (s *ImageTask) handleResumePoll(ev event.Event, result event.Result) {
 	}
 	s.store.MarkRunning(cmd.OwnerID, cmd.TaskID, "resuming_poll")
 	view, _ = s.store.Get(cmd.OwnerID, cmd.TaskID)
-	ownerID, taskID, conversationID, accountID, baseURL := cmd.OwnerID, cmd.TaskID, resume.Task.ConversationID, resume.AccountID, ""
+	ownerID, taskID, conversationID, accountID, size, baseURL := cmd.OwnerID, cmd.TaskID, resume.Task.ConversationID, resume.AccountID, resume.Task.Size, ""
 	s.startTask(ownerID, taskID, func(ctx context.Context) {
-		s.runResumePoll(ctx, ownerID, taskID, conversationID, accountID, cmd.ExtraTimeoutSecs, baseURL)
+		s.runResumePoll(ctx, ownerID, taskID, conversationID, accountID, size, cmd.ExtraTimeoutSecs, baseURL)
 	})
 	result.Set(events.ResumePollResult{Task: view}, nil)
 }
@@ -489,7 +490,7 @@ func featureImageOutput(item proxyevents.FeatureImageData) upevents.ImageOutput 
 	return output
 }
 
-func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversationID, accountID string, extraTimeoutSecs int, baseURL string) {
+func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversationID, accountID, size string, extraTimeoutSecs int, baseURL string) {
 	start := time.Now()
 	accRes := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireImageAccount, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireImageAccountCommand{AccountID: accountID}))
 	accVal, accErr := accRes.Get()
@@ -508,7 +509,7 @@ func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversa
 	}()
 
 	s.store.MarkProgress(ownerID, taskID, "resuming_poll")
-	resumeRes := s.SendEvent(event.NewEventWithContext(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, ConversationID: conversationID, ExtraTimeoutSecs: extraTimeoutSecs}))
+	resumeRes := s.SendEvent(event.NewEventWithContext(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, ConversationID: conversationID, Size: size, ExtraTimeoutSecs: extraTimeoutSecs}))
 	resumeVal, resumeErr := resumeRes.Get()
 	if resumeErr != nil {
 		if partial, ok := resumeVal.(upevents.ResumeImageResult); ok && partial.ConversationID != "" {
@@ -544,6 +545,10 @@ func (s *ImageTask) persistImageOutputs(ctx context.Context, apiKeyID string, im
 		}
 		item := events.ImageData{URL: image.URL, B64JSON: image.B64JSON, RevisedPrompt: image.RevisedPrompt}
 		if len(image.Bytes) > 0 {
+			info, infoErr := chatgptimageoutput.DecodeRasterInfo(image.Bytes)
+			if infoErr != nil {
+				return nil, fmt.Errorf("invalid generated image %d: %w", len(data)+1, infoErr)
+			}
 			saveEv := event.NewEventWithContext(imgevents.TopicSave, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.SaveCommand{APIKeyID: apiKeyID, Bytes: image.Bytes, BaseURL: baseURL})
 			saveVal, saveErr := s.SendEvent(saveEv).Get()
 			if saveErr != nil {
@@ -554,6 +559,9 @@ func (s *ImageTask) persistImageOutputs(ctx context.Context, apiKeyID string, im
 				return nil, fmt.Errorf("invalid saved image result")
 			}
 			item.URL = saved.PublicURL
+			item.Width = info.Width
+			item.Height = info.Height
+			item.Format = info.Format
 		}
 		data = append(data, item)
 	}

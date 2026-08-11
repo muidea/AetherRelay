@@ -9,7 +9,7 @@
 | OpenAI / Anthropic 标准代理 | `/v1/chat/completions`、`/v1/messages`、`/v1/responses`、`/v1/completions`、`/v1/embeddings`、`/v1/models` | 管理页配置 Provider |
 | 模型路由候选链 | 请求体 exact `model` → 有序候选 | Provider 精确模型 / 账号池发现 + Provider pattern |
 | 协议转换 | Chat↔Messages 文本、Responses↔Messages Level 1–3 | 候选链中跨协议 Provider且方向 capability 已发布 |
-| 客户端 API Key | 全部数据端点认证 | Admin 创建并保存到 DuckDB |
+| 客户端 API Key | 全部数据端点认证 | 外部 Key 由 Admin 创建并保存到 DuckDB；工具集由服务端内建 `builtin-local` scope |
 | 用量统计与 DuckDB 持久化 | Admin「使用统计」、`/admin/api/usage/export.csv` | 默认启用（`state.database`） |
 | Admin 管理页 | `/admin`（默认 loopback-only） | 默认启用；远程访问需 `admin_auth_enabled` |
 | — Provider 管理与健康检查 | Admin「Provider」 | — |
@@ -87,7 +87,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - 每个已接受请求先写 DuckDB `started` 事件，随后结算为 `completed`；流式真实结束态用 outcome（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不计为上游故障。
 - Admin「使用统计」支持按时间（今日 / 7 天 / 30 天 / 自定义）、API Key、Provider、Model、Outcome 与估算标记筛选，并导出 CSV（单次最大 31 天、100,000 行）。
-- ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 临时对话归 `admin:<用户名>`，不是客户端 API Key。
+- ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 工具调用统一归 `api_key_id=builtin-local`。临时会话和搜索历史仍按管理员 owner 隔离，二者不是同一个维度。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
 - 旧 `usage.csv` 只能一次性显式导入（`cmd/aetherrelay-usage-import`）；`usage_file` 配置已删除。
 
@@ -129,14 +129,14 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - Codex Responses 的账号切换耗尽后会返回最后一个真实上游失败及安全 HTTP 状态，不再把 401、403、429 或 5xx 覆盖成泛化的 `provider_unavailable`；不会记录上游响应正文或任何账号凭据。
 - Web 端保留 ChatGPT Web 和 Codex 两个独立导入入口，并在统一账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，集中管理整体包导入与导出；整体包是唯一账号池导出格式。整体包导入先完成整包预检，文件内冲突返回安全的冲突列表且不写入任一槽位；预检通过后按 `account_id`/邮箱建立目标匹配，只有显式 `replace=true` 才替换同邮箱的不同上游账号，跨 Store 失败时明确标记部分成功。分槽位导入和整体包导入均在成功后重新计算统一账号行。ChatGPT Web 额外支持粘贴纯 access token。文件与粘贴内容不能同时使用，单次限制 1 MiB、1000 个账号，提交成功后清除浏览器内存引用，冲突时保留文件以便修改或确认替换后重试。
 - Codex 导入、OAuth 完成和凭据刷新自动触发的模型同步与用量刷新在后台静默轮询，只保留主操作的一次结果提示；手工点击“同步模型”或“刷新用量”时才显示对应的独立进度，成功完成信息短暂展示后自动隐藏，轮询错误保留以便排查。
-- 所有列表严格脱敏：只返回稳定本地 ID、脱敏邮箱、状态与结果计数，绝不返回 token、account ID 或代理。整体账号池导出接口是唯一有意返回明文 token 的接口，需二次确认且 `Cache-Control: no-store`。
+- 所有列表返回稳定本地 ID、邮箱、状态与结果计数，不返回 token、account ID 或代理。整体账号池导出接口是唯一有意返回明文 token 的接口，需二次确认且 `Cache-Control: no-store`。
 
 ### 功能集
 
 - **临时对话**：Admin 服务端持久化的多轮文本对话（DuckDB 专用表，浏览器不落会话正文）；历史严格按 `(owner_id, conversation_id)` 读取，管理页切换会话时会取消旧详情/历史/发送/轮询请求，并用会话代际拒绝迟到响应回写，因此一个气泡不会因前端竞态混入另一会话的消息；可附加图片（最多 4 张、合计 20 MiB，PNG/JPEG/GIF/WebP）、逐轮启用联网搜索；保留期 `temporary_chat.retention_days`（默认 30 天）；达到 `max_conversations` 拒绝新建，不静默删历史；重启时 `streaming` 消息标记 `interrupted`，会话进入 `recovery_required`。research / deep_research 专用模型不进入选择器。上游 ChatGPT Web 请求每轮使用独立根并发送 `history_and_training_disabled=true`；账号级 Memory 仍由上游控制，不能宣称绝对隔离。
 - **在线搜索**：隔离的强制 ChatGPT Web 搜索页面；每次上游搜索使用独立随机根和 `history_and_training_disabled=true`，结果（答案、查询、来源）服务端保存于 `state.database` 的 `chatgpt_web_search_history`，按登录管理员用户名隔离（未启用登录时用本地 `admin` 作用域）；每个作用域最多 200 条，自动清理 30 天前记录；搜索历史不写入浏览器存储。ChatGPT Web 账号级 Memory/Reference history 仍可能由上游注入，发现跨主题回答时需结合账号设置排查。
-- **图片任务**：文生图 / 图生图任务提交与轮询；`size`、`quality` 可从常用值中选择，也允许输入上游模型支持的扩展值；以 `api_key_id` 隔离。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：AetherRelay 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
-- **图片库**：图片列表、标签、删除（不可恢复）与缩略图均要求 `api_key_id`，只返回该 Key 的资产；内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。客户端 Key 删除时同步清除图片任务、图片资产、缩略图、标签和交互归档。
+- **图片任务**：文生图 / 图生图任务提交与轮询；`api_key_id` 缺省使用 `builtin-local`，显式值必须是已存在的客户端 Key；以该 scope 隔离任务。ChatGPT Web 的 conversation 协议没有原生 `size` 字段，旧实现仅把尺寸写入 prompt，无法保证像素；现在 `size` 只接受 `auto` 或正整数 `WIDTHxHEIGHT`，拿到栅格 bytes 后本地裁切/缩放，明确 WxH 才保证实际尺寸，详情记录实际宽、高、格式。SVG/vector 文件输出不支持并会在上游调用前返回明确错误。所有任务可查看完整详情，排队或运行中的任务可取消，终态任务记录可删除。取消采用协作式取消：AetherRelay 会停止本地等待并尽力取消上游请求，但上游已经受理时不保证立即停止或免除额度消耗；持久化的 `cancelled` 状态不会被迟到结果覆盖。删除仅移除任务记录，已保存到图片库的资产继续保留。失败任务可恢复轮询（不重复生成）或按原参数重新提交（仅 `bootstrap` 阶段失败）；已有 conversation 的任务永不盲目重投。
+- **图片库**：图片列表、标签、删除（不可恢复）与缩略图默认使用 `builtin-local`，也可显式选择已存在的其它 Key；只返回该 scope 的资产。内容经 Admin 鉴权同源端点读取，不暴露通用 `/files/**`。客户端 Key 删除时同步清除其图片任务、图片资产、缩略图、标签和交互归档。
 
 两个账号池始终装配；没有可用账号时，页面显示空池状态，数据面返回明确的无可用账号或模型错误。
 
@@ -146,7 +146,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - **文本代理**：`/v1/chat/completions` 支持纯文本与 `text` / `image_url` content parts（仅 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图 ≤4000 万像素；不下载远程 URL，无 SSRF 通道；图片仅限 `user` 消息）。
 - **受限 Responses 投影**：`/v1/responses` 无状态投影，支持字符串/message-array `input`、`instructions`、`reasoning.effort`、`input_text`、data-URI `input_image` 与基础 buffered/SSE；不保存会话，不支持 tools（除 web_search）、JSON Schema、`previous_response_id`、realtime、远程图片 URL、file ID。可兼容忽略的字段在 `ignored_features` 中可审计；改变语义的字段返回 `conversion_unsupported`。
-- **图片**：`/v1/images/generations` / `/v1/images/edits` 代理上游生图；成功响应中的图片字节按认证得到的 `api_key_id` 存储，原始 API Key 不进入路径、数据库或日志；仅对响应内 `b64_json` 归档，绝不主动下载任意 URL。
+- **图片**：`/v1/images/generations` / `/v1/images/edits` 代理上游生图；成功响应中的图片字节按认证得到的 `api_key_id` 存储，原始 API Key 不进入路径、数据库或日志。ChatGPT Web 返回认证后的图片 URL 时，内部会下载并验证栅格 bytes；明确 `size=WIDTHxHEIGHT` 会本地规范化为精确 PNG，`auto` 保留上游尺寸。`response_format` 仅支持 `b64_json` / `url`，SVG/vector 不支持；上游仅有不可下载或不可解码内容时请求失败，不声称已归档。
 - **在线搜索**：`/v1/search` 扩展端点（仅接受 `model` + 纯文本 `query`，返回 `search.result` 含 `output_text`、`sources`、估算 `usage`），只选择内建 `chatgptweb` 的已发现模型；协议内唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`（或 `web_search_options`），启动一次隔离的强制搜索会话，仅使用最后一条纯文本 user 消息作为 query。无可用搜索能力时返回明确错误，不降级为普通文本生成。`POST /v1/search` 保持无状态，不写搜索历史。
 
 ## Codex OAuth 账号池
@@ -157,7 +157,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；`429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE 输出后不切换账号；明确 `usage_limit_reached` 记录账号/模型额度耗尽与上游恢复时间（运行期观察，非官方额度）。
 - 非流式 `/v1/responses` 在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象。
 - P0 不支持 realtime/WebSocket、`responses/compact`、网页会话或插件；`/v1/search` 与临时对话不经过 Codex 账号域。
-- 账号凭据、代理与到期时间只写 `state.database`；管理 API 严格脱敏。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。
+- 账号凭据、代理与到期时间只写 `state.database`；管理 API 直接显示邮箱，但不返回 token、账号 ID 或代理。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。
 - 管理页不提供 Codex 槽位单独导出；选中的统一账号通过整体账号池导出接口获取完整凭据包，该接口显式返回 `Cache-Control: no-store`，页面不预览且仅用短生命周期 Blob 触发下载。
 
 ## 可观测性

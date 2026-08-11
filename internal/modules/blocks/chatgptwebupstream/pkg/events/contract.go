@@ -115,9 +115,13 @@ type EditImageResult struct {
 }
 
 type ResumeImageCommand struct {
-	AccessToken      string
-	Proxy            string
-	ConversationID   string
+	AccessToken    string
+	Proxy          string
+	ConversationID string
+	// Size is the original OpenAI-facing requested WxH value.  Resume must
+	// repeat local normalization because the first poll may have timed out
+	// after ChatGPT already created the conversation.
+	Size             string
 	ExtraTimeoutSecs int
 }
 

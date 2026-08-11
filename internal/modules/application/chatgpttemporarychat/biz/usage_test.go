@@ -50,7 +50,7 @@ func TestCompleteTurnUsageWritesEstimatedAdminEvent(t *testing.T) {
 	s := &TemporaryChat{usage: mem}
 	started := time.Now().UTC().Add(-time.Second)
 	if err := mem.Start(context.Background(), usage.StartRecord{
-		EventID: "evt-1", StartedAt: started, APIKeyID: "admin:ops", Provider: "chatgptweb", Model: "gpt-5",
+		EventID: "evt-1", StartedAt: started, APIKeyID: config.BuiltinClientAPIKeyID, Provider: "chatgptweb", Model: "gpt-5",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestCompleteTurnUsageWritesEstimatedAdminEvent(t *testing.T) {
 	if ev.EventID != "evt-1" || ev.Provider != "chatgptweb" || ev.Model != "gpt-5-actual" {
 		t.Fatalf("event=%+v", ev)
 	}
-	if ev.APIKeyID != "admin:ops" {
+	if ev.APIKeyID != config.BuiltinClientAPIKeyID {
 		t.Fatalf("identity fields=%+v", ev)
 	}
 	if !ev.Estimated || ev.Outcome != "success" || ev.HTTPStatus != 202 || !ev.Stream {
@@ -349,7 +349,7 @@ func TestStartTurnSuccessStartsUsageThenWorkerCompletes(t *testing.T) {
 	recordsMu.Lock()
 	startedCopy := started
 	recordsMu.Unlock()
-	if startedCopy.EventID == "" || startedCopy.APIKeyID != "admin:ops" || startedCopy.Provider != "chatgptweb" {
+	if startedCopy.EventID == "" || startedCopy.APIKeyID != config.BuiltinClientAPIKeyID || startedCopy.Provider != "chatgptweb" {
 		t.Fatalf("usage start=%+v", startedCopy)
 	}
 

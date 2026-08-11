@@ -46,6 +46,9 @@ type ImageData struct {
 	B64JSON       string `json:"b64_json,omitempty"`
 	URL           string `json:"url,omitempty"`
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
+	Width         int    `json:"width,omitempty"`
+	Height        int    `json:"height,omitempty"`
+	Format        string `json:"format,omitempty"`
 }
 
 type SubmitGenerationCommand struct {

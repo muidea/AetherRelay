@@ -243,7 +243,7 @@ func (s *chatGPTAccountRuntimeStub) DeleteTemporaryConversation(context.Context,
 	return tempevents.DeleteConversationResult{}, nil
 }
 
-func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
+func TestChatGPTAccountAdminUsesStableIDsAndDisplaysEmail(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
 	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
 
@@ -252,7 +252,7 @@ func TestChatGPTAccountAdminUsesStableIDsAndRedactsList(t *testing.T) {
 	listRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(listRecorder, list)
 	body := listRecorder.Body.String()
-	if listRecorder.Code != http.StatusOK || strings.Contains(body, "very-secret") || strings.Contains(body, "private.invalid") {
+	if listRecorder.Code != http.StatusOK || !strings.Contains(body, `"email":"operator@example.invalid"`) || strings.Contains(body, "very-secret") || strings.Contains(body, "private.invalid") {
 		t.Fatalf("list=%d %s", listRecorder.Code, listRecorder.Body.String())
 	}
 	for _, field := range []string{`"restore_at":"2026-07-27T01:02:03Z"`, `"image_inflight":1`, `"success":9`, `"fail":2`, `"created_at":"2026-07-26T01:02:03Z"`, `"last_token_refresh_at":"2026-07-27T00:30:00Z"`, `"last_token_refresh_error_at":"2026-07-27T01:00:00Z"`, `"last_token_refresh_error_class":"rate_limit"`, `"text_cooldowns":[{"model":"gpt-5","until":"2026-07-27T01:03:03Z","error_class":"rate_limit"}]`, `"image_cooldowns":[{"model":"gpt-image-2","until":"2026-07-27T01:03:03Z","error_class":"timeout"}]`} {

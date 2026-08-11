@@ -228,7 +228,7 @@ func (s *Upstream) handleResumeImage(ev event.Event, result event.Result) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resumed, err := client.ResumeImage(ctx, cmd.ConversationID, timeout)
+	resumed, err := client.ResumeImage(ctx, cmd.ConversationID, timeout, cmd.Size)
 	if err != nil {
 		result.Set(events.ResumeImageResult{ConversationID: resumed.ConversationID, ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return

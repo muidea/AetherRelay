@@ -19,7 +19,7 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
-func TestImportValidatesWholeBatchAndRedactsView(t *testing.T) {
+func TestImportValidatesWholeBatchAndReturnsSafeView(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, err := store.Import([]events.CredentialInput{
 		{AccessToken: "access-one", RefreshToken: "refresh-one", AccountID: "acct-secret", Proxy: "http://127.0.0.1:8080"},
@@ -40,7 +40,7 @@ func TestImportValidatesWholeBatchAndRedactsView(t *testing.T) {
 	}
 	view, found := store.ViewByRefreshToken("refresh-one")
 	if !found || view.ID == "" || view.Email != "operator@example.com" {
-		t.Fatalf("redacted view = %+v found=%v", view, found)
+		t.Fatalf("safe view = %+v found=%v", view, found)
 	}
 	payload, err := json.Marshal(view)
 	if err != nil {

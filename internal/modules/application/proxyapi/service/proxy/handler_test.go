@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,8 @@ import (
 
 	"aetherrelay/internal/modules/application/adminapi/service/observability"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelayusage"
@@ -31,6 +35,22 @@ import (
 type combineWriter struct{ buf *strings.Builder }
 
 func (c *combineWriter) Write(p []byte) (int, error) { return c.buf.Write(p) }
+
+func TestPrepareClientKeyIndexExcludesBuiltinLocalScope(t *testing.T) {
+	secret := "builtin-local-must-not-authenticate"
+	sum := sha256.Sum256([]byte(secret))
+	index, err := prepareClientKeyIndexFromRecords(map[string]usage.ClientAPIKeyRecord{
+		config.BuiltinClientAPIKeyID: {
+			ID: config.BuiltinClientAPIKeyID, Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clientauth.ResolveHeaders(http.Header{"Authorization": {"Bearer " + secret}}, index); !errors.Is(err, clientauth.ErrAuthenticationFailed) {
+		t.Fatalf("built-in scope was accepted as bearer auth: %v", err)
+	}
+}
 
 func TestOpenAICompatibleBufferedUsage(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {

@@ -293,6 +293,24 @@ func TestImagePromptPreservesOpenAISizeAndQualityIntent(t *testing.T) {
 	}
 }
 
+func TestNormalizeImageOutputsHonorsRequestedSize(t *testing.T) {
+	var input bytes.Buffer
+	if err := png.Encode(&input, image.NewRGBA(image.Rect(0, 0, 8, 4))); err != nil {
+		t.Fatal(err)
+	}
+	outputs, err := normalizeImageOutputs([]DownloadedImage{{Bytes: input.Bytes(), URL: "https://cdn.example/result.png"}}, "5x3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputs) != 1 || outputs[0].URL == "" {
+		t.Fatalf("outputs=%+v", outputs)
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(outputs[0].Bytes))
+	if err != nil || format != "png" || config.Width != 5 || config.Height != 3 {
+		t.Fatalf("config=%+v format=%q err=%v", config, format, err)
+	}
+}
+
 func TestParseImageSSEIgnoresNonJSONFrames(t *testing.T) {
 	result, err := ParseImageSSE(strings.NewReader("data: keepalive\n\ndata: {\"url\":\"https://cdn.example/image.png\"}\n"))
 	if err != nil {
@@ -367,6 +385,14 @@ type pollDownloadDoer struct {
 	requests []*http.Request
 }
 
+func testRasterBytes() []byte {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 1))); err != nil {
+		panic(err)
+	}
+	return encoded.Bytes()
+}
+
 func (d *pollDownloadDoer) Do(request *http.Request) (*http.Response, error) {
 	d.requests = append(d.requests, request)
 	switch {
@@ -376,7 +402,7 @@ func (d *pollDownloadDoer) Do(request *http.Request) (*http.Response, error) {
 	case request.URL.Path == "/backend-api/files/file_result/download":
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"download_url":"https://cdn.example/result.png"}`)), Header: make(http.Header)}, nil
 	case request.URL.Host == "cdn.example" && request.URL.Path == "/result.png":
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("image-bytes")), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(testRasterBytes())), Header: make(http.Header)}, nil
 	default:
 		return nil, fmt.Errorf("unexpected path %s", request.URL.String())
 	}
@@ -396,7 +422,7 @@ func TestPollAndDownloadImageResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(images) != 1 || string(images[0].Bytes) != "image-bytes" || images[0].URL != "https://cdn.example/result.png" {
+	if len(images) != 1 || !bytes.Equal(images[0].Bytes, testRasterBytes()) || images[0].URL != "https://cdn.example/result.png" {
 		t.Fatalf("images=%+v", images)
 	}
 	var downloadRequest *http.Request
@@ -422,7 +448,7 @@ func TestDownloadImageResultsPrefersStableReferencesOverDirectURL(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(images) != 1 || string(images[0].Bytes) != "image-bytes" || images[0].URL != "https://cdn.example/result.png" {
+	if len(images) != 1 || !bytes.Equal(images[0].Bytes, testRasterBytes()) || images[0].URL != "https://cdn.example/result.png" {
 		t.Fatalf("images=%+v", images)
 	}
 	for _, request := range doer.requests {
@@ -439,7 +465,7 @@ func TestResumeImagePollsExistingConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ConversationID != "conversation-1" || len(result.Images) != 1 || string(result.Images[0].Bytes) != "image-bytes" {
+	if result.ConversationID != "conversation-1" || len(result.Images) != 1 || !bytes.Equal(result.Images[0].Bytes, testRasterBytes()) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -467,7 +493,7 @@ func (d *generationDoer) Do(request *http.Request) (*http.Response, error) {
 	case request.URL.Path == "/backend-api/files/file_result/download":
 		body = `{"url":"https://cdn.example/result.png"}`
 	case request.URL.Host == "cdn.example" && request.URL.Path == "/result.png":
-		body = "image-bytes"
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(testRasterBytes())), Header: make(http.Header)}, nil
 	default:
 		return nil, fmt.Errorf("unexpected path %s", request.URL.String())
 	}
@@ -481,7 +507,7 @@ func TestGenerateImageRunsFullConversationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ConversationID != "conversation-1" || len(result.Images) != 1 || string(result.Images[0].Bytes) != "image-bytes" {
+	if result.ConversationID != "conversation-1" || len(result.Images) != 1 || !bytes.Equal(result.Images[0].Bytes, testRasterBytes()) {
 		t.Fatalf("result=%+v", result)
 	}
 	if len(doer.paths) != 8 {

@@ -18,6 +18,7 @@ import (
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/chatgptimageinput"
+	"aetherrelay/internal/pkg/chatgptimageoutput"
 )
 
 type chatGPTImageBody struct {
@@ -78,6 +79,11 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 	}
 	if body.Model == "" {
 		body.Model = "gpt-image-2"
+	}
+	if err := chatgptimageoutput.ValidateRequest(body.Prompt, body.Size, body.ResponseFormat); err != nil {
+		fail := newStreamFailWithCode(streamKindError, ErrorCodeInvalidRequest, "invalid_request: "+err.Error(), err, false)
+		h.writeChatGPTImageAPIError(w, round, r, start, "", body.Model, false, http.StatusBadRequest, APIError{Code: ErrorCodeInvalidRequest, Message: err.Error(), Model: body.Model}, fail, tokenUsage{})
+		return
 	}
 	plans, apiErr := h.resolveTransportPlans(r, body.Model)
 	if apiErr != nil || len(plans) == 0 {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 func (s *DuckDBStore) ListClientAPIKeys(ctx context.Context) (map[string]ClientAPIKeyRecord, error) {
@@ -229,6 +230,7 @@ func (s *DuckDBStore) EnsureClientAPIKey(ctx context.Context, id string, created
 	if s == nil || s.closed.Load() {
 		return ErrStoreUnavailable
 	}
+	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
 	}
@@ -237,8 +239,28 @@ func (s *DuckDBStore) EnsureClientAPIKey(ctx context.Context, id string, created
 	}
 	s.write.Lock()
 	defer s.write.Unlock()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO client_api_key_metadata(api_key_id, created_at, provider_access_mode) VALUES (?, ?, 'all') ON CONFLICT(api_key_id) DO NOTHING`, id, createdAt.UTC())
-	return err
+	if !config.IsBuiltinClientAPIKeyID(id) {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO client_api_key_metadata(api_key_id, created_at, provider_access_mode) VALUES (?, ?, 'all') ON CONFLICT(api_key_id) DO NOTHING`, id, createdAt.UTC())
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO client_api_key_metadata(api_key_id, created_at, provider_access_mode) VALUES (?, ?, 'all') ON CONFLICT(api_key_id) DO NOTHING`, id, createdAt.UTC()); err != nil {
+		return err
+	}
+	// Clear stale credential state for the built-in scope before it reaches the
+	// proxy's auth index. Other Ensure callers retain the generic metadata-only
+	// create-if-absent behavior above.
+	if _, err := tx.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=NULL,enabled=TRUE,last_rotated_at=NULL,revoked_at=NULL,provider_access_mode='all' WHERE api_key_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM client_api_key_provider_access WHERE api_key_id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *DuckDBStore) TouchClientAPIKey(ctx context.Context, id string, usedAt time.Time) error {

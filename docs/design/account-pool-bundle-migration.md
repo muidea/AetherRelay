@@ -114,7 +114,7 @@ POST /admin/api/account-pool-bundle/export
 POST /admin/api/account-pool-bundle/import
 ```
 
-整体导出一次导出当前完整账号池，因此两个 Store 都必须可用；整体导入先完成文件和槽位级校验，再读取目标 Store 的脱敏列表建立匹配计划，最后按槽位调用内部导入逻辑。只包含一种槽位的 bundle 只要求对应 Store 可用。导入请求可在 bundle 顶层设置 `"replace": true`，仅用于显式接受“同邮箱但上游 `account_id` 不同”的替换；默认值为 `false`。内部计划通过不序列化的本地 `TargetID` 传递给对应 owner，绝不会出现在外部 JSON、列表 API 或日志中。ChatGPT Web 和 Codex 的槽位导出按钮、槽位导出路由以及槽位导出响应均不属于最终对外合同。
+整体导出一次导出当前完整账号池，因此两个 Store 都必须可用；整体导入先完成文件和槽位级校验，再读取目标 Store 的账号列表建立匹配计划，最后按槽位调用内部导入逻辑。只包含一种槽位的 bundle 只要求对应 Store 可用。导入请求可在 bundle 顶层设置 `"replace": true`，仅用于显式接受“同邮箱但上游 `account_id` 不同”的替换；默认值为 `false`。内部计划通过不序列化的本地 `TargetID` 传递给对应 owner，绝不会出现在外部 JSON、列表 API 或日志中。ChatGPT Web 和 Codex 的槽位导出按钮、槽位导出路由以及槽位导出响应均不属于最终对外合同。
 
 导入成功响应包含两个 Store 的 `added`、`updated`、`skipped` 和 `error`；文件或目标匹配冲突返回 HTTP `409`，响应中的 `conflicts` 只包含 `account_ref`、槽位和安全原因。任一 Store 写入失败时不回滚另一 Store，返回 `partial_success: true` 并保留已完成结果。
 
@@ -166,6 +166,6 @@ POST /admin/api/account-pool-bundle/import
 ## 安全与审计
 
 - 整体导入导出需要 Admin 权限。
-- 邮箱可以明文出现在文件和管理页面；访问令牌、刷新令牌、ID Token 不做脱敏，但不得进入普通列表 API、日志、usage 或 interactions。
+- 邮箱可以明文出现在文件和管理页面；访问令牌、刷新令牌、ID Token 不得进入普通列表 API、日志、usage 或 interactions。
 - 导入错误只返回字段级原因，不回显 Token 内容。
 - 导出文件下载响应设置 `Cache-Control: no-store`，并提示管理员妥善保管。

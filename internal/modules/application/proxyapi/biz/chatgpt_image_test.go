@@ -1,7 +1,12 @@
 package biz
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"testing"
 
 	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
@@ -9,6 +14,8 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
 	basebiz "aetherrelay/internal/modules/base/biz"
+	imgcommon "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/common"
+	imgevents "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
@@ -72,6 +79,68 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 	if result.ConversationID != "conversation-1" || result.AccountID != "account-1" {
 		t.Fatalf("recovery metadata was lost: %+v", result)
 	}
+}
+
+func TestPresentChatGPTImagesUsesRasterBytesForBase64Response(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(4)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	var saved []byte
+	imageStore := event.NewSimpleObserver(imgcommon.UnitID, hub)
+	imageStore.Subscribe(imgevents.TopicSave, func(ev event.Event, result event.Result) {
+		command, ok := ev.Data().(imgevents.SaveCommand)
+		if !ok {
+			t.Fatalf("save command type = %T", ev.Data())
+		}
+		if command.APIKeyID != "builtin-local" {
+			t.Fatalf("save api_key_id = %q", command.APIKeyID)
+		}
+		saved = append([]byte(nil), command.Bytes...)
+		result.Set(imgevents.SaveResult{PublicURL: "https://relay.example/images/result.png"}, nil)
+	})
+
+	normalized := testPNG(t, 5, 3)
+	staleUpstreamB64 := base64.StdEncoding.EncodeToString(testPNG(t, 1, 1))
+	p := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	data, err := p.presentChatGPTImages(context.Background(), "builtin-local", []upevents.ImageOutput{{
+		Bytes:   normalized,
+		B64JSON: staleUpstreamB64,
+	}}, "b64_json", "https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 1 {
+		t.Fatalf("data=%+v", data)
+	}
+	if !bytes.Equal(saved, normalized) {
+		t.Fatal("image store did not receive normalized raster bytes")
+	}
+	payload, err := base64.StdEncoding.DecodeString(data[0].B64JSON)
+	if err != nil {
+		t.Fatalf("decode returned b64_json: %v", err)
+	}
+	if !bytes.Equal(payload, normalized) {
+		t.Fatal("returned b64_json did not use normalized raster bytes")
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(payload))
+	if err != nil || format != "png" || config.Width != 5 || config.Height != 3 {
+		t.Fatalf("returned raster = %dx%d %q, err=%v", config.Width, config.Height, format, err)
+	}
+}
+
+func testPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	image := image.NewRGBA(image.Rect(0, 0, width, height))
+	image.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var payload bytes.Buffer
+	if err := png.Encode(&payload, image); err != nil {
+		t.Fatal(err)
+	}
+	return payload.Bytes()
 }
 
 func TestGenerateImageRefreshesInvalidOAuthThenRetriesBeforeConversation(t *testing.T) {

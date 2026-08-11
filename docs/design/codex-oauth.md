@@ -6,7 +6,7 @@
 
 - 复用 Codex CLI 登录的 OAuth 账号，提供原生 `POST /v1/responses` 能力，无需 API Key。
 - 与 ChatGPT Web 是两个**独立账号域**：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
-- 账号凭据、代理与到期时间只存 `state.database`；管理 API 严格脱敏，绝不返回 token、account ID 或代理。
+- 账号凭据、代理与到期时间只存 `state.database`；管理 API 直接显示邮箱，但不返回 token、account ID 或代理。
 
 ## 账号池与模型发现
 

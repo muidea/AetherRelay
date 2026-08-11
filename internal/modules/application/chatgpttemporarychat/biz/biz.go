@@ -20,6 +20,7 @@ import (
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 	"aetherrelay/internal/pkg/chatattachment"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
@@ -1010,21 +1011,6 @@ func turnKey(ownerID, conversationID, turnID string) string {
 	return ownerID + "/" + conversationID + "/" + turnID
 }
 
-func maskAccount(account accevents.AccountView) string {
-	if email := strings.TrimSpace(account.Email); email != "" {
-		parts := strings.Split(email, "@")
-		if len(parts) == 2 && len(parts[0]) > 2 {
-			return parts[0][:2] + "***@" + parts[1]
-		}
-		return email
-	}
-	id := strings.TrimSpace(account.ID)
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:4] + "…" + id[len(id)-4:]
-}
-
 const (
 	httpStatusAccepted           = 202
 	httpStatusBadGateway         = 502
@@ -1038,7 +1024,7 @@ func (s *TemporaryChat) startTurnUsage(ownerID, eventID, model string, startedAt
 	return s.usage.Start(context.Background(), usage.StartRecord{
 		EventID:        eventID,
 		StartedAt:      startedAt,
-		APIKeyID:       "admin:" + strings.TrimSpace(ownerID),
+		APIKeyID:       config.BuiltinClientAPIKeyID,
 		Operation:      "text_generation",
 		Route:          "admin_temporary_chat",
 		ClientEndpoint: "/admin/chatgpt/temporary-chat",

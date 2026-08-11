@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
 var errClientAPIKeyNotFound = errors.New("client api key not found")
 
 func (s *MemoryStore) EnsureClientAPIKey(_ context.Context, id string, createdAt time.Time) error {
+	id = strings.TrimSpace(id)
 	if s == nil || id == "" {
 		return nil
 	}
@@ -24,13 +26,42 @@ func (s *MemoryStore) EnsureClientAPIKey(_ context.Context, id string, createdAt
 	if s.clientKeys == nil {
 		s.clientKeys = map[string]ClientAPIKeyMetadata{}
 	}
-	if _, ok := s.clientKeys[id]; !ok {
-		s.clientKeys[id] = ClientAPIKeyMetadata{ID: id, CreatedAt: createdAt.UTC()}
-		if s.clientKeyRecords == nil {
-			s.clientKeyRecords = map[string]ClientAPIKeyRecord{}
+	if !config.IsBuiltinClientAPIKeyID(id) {
+		if _, ok := s.clientKeys[id]; !ok {
+			s.clientKeys[id] = ClientAPIKeyMetadata{ID: id, CreatedAt: createdAt.UTC()}
+			if s.clientKeyRecords == nil {
+				s.clientKeyRecords = map[string]ClientAPIKeyRecord{}
+			}
+			s.clientKeyRecords[id] = ClientAPIKeyRecord{ID: id, Enabled: true, CreatedAt: createdAt.UTC(), ProviderAccess: clientaccess.All()}
 		}
-		s.clientKeyRecords[id] = ClientAPIKeyRecord{ID: id, Enabled: true, CreatedAt: createdAt.UTC(), ProviderAccess: clientaccess.All()}
+		return nil
 	}
+	metadata, ok := s.clientKeys[id]
+	if !ok {
+		metadata = ClientAPIKeyMetadata{ID: id, CreatedAt: createdAt.UTC()}
+		s.clientKeys[id] = metadata
+	}
+	if s.clientKeyRecords == nil {
+		s.clientKeyRecords = map[string]ClientAPIKeyRecord{}
+	}
+	// Reassert the metadata-only invariant for the server-owned scope on every
+	// startup so a stale same-ID record cannot retain a credential digest or a
+	// narrower external-key policy.
+	record := s.clientKeyRecords[id]
+	record.ID = id
+	record.Hash = ""
+	record.Enabled = true
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = metadata.CreatedAt
+	}
+	if record.LastUsedAt == nil && metadata.LastUsedAt != nil {
+		usedAt := *metadata.LastUsedAt
+		record.LastUsedAt = &usedAt
+	}
+	record.LastRotatedAt = nil
+	record.RevokedAt = nil
+	record.ProviderAccess = clientaccess.All()
+	s.clientKeyRecords[id] = record
 	return nil
 }
 func (s *MemoryStore) TouchClientAPIKey(_ context.Context, id string, usedAt time.Time) error {

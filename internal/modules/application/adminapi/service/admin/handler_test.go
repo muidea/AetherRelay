@@ -142,7 +142,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "function providerChanges(original,item)", "function invalidateFeatureCatalog()", "async function createProvider(payload,message,close=false)", "async function patchProvider(name,payload,message,close=false)", "/api/providers/${encodeURIComponent(name)}", `method:"DELETE"`, "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)", `id="uaAccountTable"`, "<summary class=\"btn btn-primary\">账号池迁移 ▾</summary><div class=\"account-menu-panel\"><span class=\"menu-label\">整体账号池文件</span>\n              <button type=\"button\" class=\"btn\" id=\"uaBundleImport\">导入整体账号池</button>\n              <button type=\"button\" class=\"btn\" id=\"uaBundleExport\">导出整体账号池</button>", "function unifiedAccounts()", "credential_type=chatgpt_web", "credential_type=codex_cli", "/api/account-pool-bundle/export", "if(state.codex.busy)return;", `id="codexAccNormal"`, `id="codexAccAbnormal"`, `id="codexAccRoutable"`, "`${counts.abnormal} / ${counts.disabled}`", `id="cgImportFile"`, `id="codexImportFile"`, `accept=".json,application/json"`, "async function readAccountImport(fileID,textID)", "accountImportMaxBytes=1<<20", "accountImportMaxItems=1000", "beginCodexDiscoveryPolling(result.model_discovery,{visible:false})", "beginCodexUsagePolling(result.usage_refresh,{visible:false})", "function scheduleCodexProgressDismiss(kind,progress,visible)", "renderCodexUsageProgress(null)", "账号刷新完成：成功 ${refreshed}，失败 ${failed}，共 ${total} 个账号", "},4200);",
-		`id="featureSubChat" data-feature-sub="chat" class="active">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)", `id="navSystem"`, `id="panelSystem"`, "function loadSystemInfo()", "/api/system/info",
+		`id="featureSubChat" data-feature-sub="chat" class="active">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)", `id="navSystem"`, `id="panelSystem"`, "function loadSystemInfo()", "/api/system/info", "function displayEmail(email)", "搜索邮箱",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
@@ -999,6 +999,92 @@ func TestClientAPIKeyProviderAccessAndEffectiveModels(t *testing.T) {
 	handler.ServeHTTP(badResponse, bad)
 	if badResponse.Code != http.StatusBadRequest {
 		t.Fatalf("unknown provider = %d %s", badResponse.Code, badResponse.Body.String())
+	}
+}
+
+func TestBuiltinLocalClientAPIKeyIsListedButImmutable(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "secret-value")
+	path := writeAdminTestConfig(t)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := usage.NewMemoryStore()
+	if err := store.EnsureClientAPIKey(context.Background(), config.BuiltinClientAPIKeyID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	handler := NewHandlerWithUsage(path, runtime, store)
+
+	list := httptest.NewRequest(http.MethodGet, "/admin/api/client-api-keys", nil)
+	list.RemoteAddr = "127.0.0.1:1234"
+	listed := httptest.NewRecorder()
+	handler.ServeHTTP(listed, list)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list = %d %s", listed.Code, listed.Body.String())
+	}
+	var payload struct {
+		Keys []struct {
+			ID      string `json:"id"`
+			Builtin bool   `json:"builtin"`
+		} `json:"client_api_keys"`
+	}
+	if err := json.Unmarshal(listed.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Keys) != 1 || payload.Keys[0].ID != config.BuiltinClientAPIKeyID || !payload.Keys[0].Builtin {
+		t.Fatalf("built-in key list = %#v", payload.Keys)
+	}
+	if strings.Contains(listed.Body.String(), "hash") || strings.Contains(listed.Body.String(), "secret") {
+		t.Fatalf("built-in key response leaked credential material: %s", listed.Body.String())
+	}
+
+	create := httptest.NewRequest(http.MethodPost, "/admin/api/client-api-keys", strings.NewReader(`{"id":"BUILTIN-LOCAL","provider_access":{"mode":"all","provider_ids":[]}}`))
+	create.RemoteAddr = "127.0.0.1:1234"
+	create.Header.Set("X-AetherRelay-Admin", "1")
+	create.Header.Set("Content-Type", "application/json")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusBadRequest {
+		t.Fatalf("create built-in = %d %s", created.Code, created.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "patch", method: http.MethodPatch, path: "/admin/api/client-api-keys/builtin-local", body: `{"enabled":false}`},
+		{name: "provider access", method: http.MethodPut, path: "/admin/api/client-api-keys/builtin-local/provider-access", body: `{"mode":"all","provider_ids":[]}`},
+		{name: "rotate", method: http.MethodPost, path: "/admin/api/client-api-keys/builtin-local/rotate"},
+		{name: "delete", method: http.MethodDelete, path: "/admin/api/client-api-keys/builtin-local"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			req.RemoteAddr = "127.0.0.1:1234"
+			req.Header.Set("X-AetherRelay-Admin", "1")
+			req.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "built-in") {
+				t.Fatalf("mutation = %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	models := httptest.NewRequest(http.MethodGet, "/admin/api/client-api-keys/builtin-local/models", nil)
+	models.RemoteAddr = "127.0.0.1:1234"
+	modelResponse := httptest.NewRecorder()
+	handler.ServeHTTP(modelResponse, models)
+	if modelResponse.Code != http.StatusOK || !strings.Contains(modelResponse.Body.String(), `"id":"gpt-4o"`) {
+		t.Fatalf("built-in models = %d %s", modelResponse.Code, modelResponse.Body.String())
+	}
+
+	imageScopeResponse := httptest.NewRecorder()
+	imageScope, ok := handler.imageAPIKeyID(imageScopeResponse, context.Background(), "", "")
+	if !ok || imageScope != config.BuiltinClientAPIKeyID {
+		t.Fatalf("empty Admin image scope = %q ok=%v response=%d", imageScope, ok, imageScopeResponse.Code)
 	}
 }
 

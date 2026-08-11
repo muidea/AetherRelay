@@ -240,14 +240,16 @@ type ClientIdentity struct {
 - UpdateConfig/客户端 Key 热刷新用一次 atomic pointer 切换完整索引。
 - 在途请求继续使用旧身份快照；更新完成后的新请求使用新策略。
 
-内部 Admin 功能身份必须显式使用 `ModeAll`：
+内部 Admin 功能身份必须显式使用服务端内建 scope `builtin-local` 与 `ModeAll`：
 
 ```go
 ClientIdentity{
-    KeyID:          "admin:" + ownerID,
+    KeyID:          "builtin-local",
     ProviderAccess: clientaccess.All(),
 }
 ```
+
+`builtin-local` 由 Usage runtime 幂等创建为无 secret/hash 的元数据行，不能作为外部 Header 凭据，也不能由 Admin API 创建、轮换、修改或删除。管理员用户名/owner 仍由各 Admin 功能单独用于会话和搜索历史隔离。
 
 禁止依赖零值代表 `all`。未知或零值 Policy 一律 deny-all。
 
@@ -766,4 +768,4 @@ ProviderAccess 创建、更新、启停、轮换和删除的最终一致顺序�
 9. 全量格式、测试和桌面/移动端可视检查通过。
 # 图片与交互数据作用域
 
-客户端 Key 的稳定 ID 同时是图片任务、图片资产和交互归档的生命周期作用域。`/v1/images/generations`、`/v1/images/edits` 从认证上下文取得该 ID；Admin 图片任务与图片库 API 必须显式选择已存在的 Key ID。图片索引与标签使用 `(api_key_id, path)` 复合主键，文件系统按安全化 Key ID 分目录。删除客户端 Key 时，先清理任务、图片/缩略图/标签和 `interactions/{api_key_id}/`，再删除 Key 记录并激活新认证索引；任何缺失或未知作用域都拒绝，不回退到共享目录。
+客户端 Key 的稳定 ID 同时是图片任务、图片资产和交互归档的生命周期作用域。`/v1/images/generations`、`/v1/images/edits` 从认证上下文取得该 ID；Admin 图片任务与图片库 API 缺省使用 `builtin-local`，显式值必须是已存在的 Key ID。图片索引与标签使用 `(api_key_id, path)` 复合主键，文件系统按安全化 Key ID 分目录。删除外部客户端 Key 时，先清理任务、图片/缩略图/标签和 `interactions/{api_key_id}/`，再删除 Key 记录并激活新认证索引；内建 `builtin-local` 不可删除。

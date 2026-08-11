@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"aetherrelay/internal/pkg/chatgptimageoutput"
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/google/uuid"
 )
@@ -88,7 +89,13 @@ func (c *Client) GenerateImage(ctx context.Context, request ImageRequest, option
 	}
 	images, err := c.DownloadImageResults(resolved)
 	if err != nil {
-		return ImageGenerationResult{}, err
+		return ImageGenerationResult{ConversationID: resolved.ConversationID, RevisedPrompt: resolved.RevisedPrompt}, err
+	}
+	images, err = normalizeImageOutputs(images, request.Size)
+	if err != nil {
+		// Preserve the conversation ID: an operator can resume polling the
+		// already-created upstream task instead of submitting a duplicate.
+		return ImageGenerationResult{ConversationID: resolved.ConversationID, RevisedPrompt: resolved.RevisedPrompt}, err
 	}
 	return ImageGenerationResult{Images: images, ConversationID: resolved.ConversationID, RevisedPrompt: resolved.RevisedPrompt}, nil
 }
@@ -111,7 +118,7 @@ func imagePrompt(prompt, size, quality string) string {
 // ResumeImage continues polling an existing conversation without replaying
 // image generation. Its caller must supply the same account token that owns
 // the conversation.
-func (c *Client) ResumeImage(ctx context.Context, conversationID string, extraTimeout time.Duration) (ImageGenerationResult, error) {
+func (c *Client) ResumeImage(ctx context.Context, conversationID string, extraTimeout time.Duration, requestedSize ...string) (ImageGenerationResult, error) {
 	if strings.TrimSpace(conversationID) == "" {
 		return ImageGenerationResult{}, fmt.Errorf("image resume: conversation ID is required")
 	}
@@ -126,6 +133,14 @@ func (c *Client) ResumeImage(ctx context.Context, conversationID string, extraTi
 		return ImageGenerationResult{ConversationID: conversationID}, err
 	}
 	images, err := c.DownloadImageResults(resolved)
+	if err != nil {
+		return ImageGenerationResult{ConversationID: conversationID, RevisedPrompt: resolved.RevisedPrompt}, err
+	}
+	size := ""
+	if len(requestedSize) > 0 {
+		size = requestedSize[0]
+	}
+	images, err = normalizeImageOutputs(images, size)
 	if err != nil {
 		return ImageGenerationResult{ConversationID: conversationID, RevisedPrompt: resolved.RevisedPrompt}, err
 	}
@@ -326,6 +341,9 @@ func validateImageRequest(request ImageRequest, requirements Requirements, requi
 	if strings.TrimSpace(request.Prompt) == "" {
 		return fmt.Errorf("image prompt is required")
 	}
+	if err := chatgptimageoutput.ValidateRequest(request.Prompt, request.Size, ""); err != nil {
+		return err
+	}
 	if strings.TrimSpace(requirements.Token) == "" {
 		return fmt.Errorf("image requirements token is required")
 	}
@@ -340,6 +358,32 @@ func validateImageRequest(request ImageRequest, requirements Requirements, requi
 		}
 	}
 	return nil
+}
+
+func normalizeImageOutputs(images []DownloadedImage, requestedSize string) ([]DownloadedImage, error) {
+	_, requested, err := chatgptimageoutput.ParseSize(requestedSize)
+	if err != nil {
+		return nil, err
+	}
+	if len(images) == 0 {
+		return images, nil
+	}
+	result := make([]DownloadedImage, 0, len(images))
+	for index, item := range images {
+		if len(item.Bytes) == 0 {
+			if requested {
+				return nil, fmt.Errorf("normalize image %d: cannot enforce requested size because image bytes are unavailable", index+1)
+			}
+			result = append(result, item)
+			continue
+		}
+		payload, _, err := chatgptimageoutput.Normalize(item.Bytes, requestedSize)
+		if err != nil {
+			return nil, fmt.Errorf("normalize image %d: %w", index+1, err)
+		}
+		result = append(result, DownloadedImage{Bytes: payload, URL: item.URL})
+	}
+	return result, nil
 }
 
 func imageModelSlug(model string) string {

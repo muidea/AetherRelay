@@ -73,9 +73,9 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 | 代理 `/v1/chat/completions` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
 | 代理受限 `/v1/responses` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
 | 代理 `/v1/images/*` → chatgptweb | `chatgptweb` | 客户端 Key ID | 上游 Usage（有则 `estimated=false`） |
-| Admin 临时对话 | `chatgptweb` | `admin:<管理员用户名>` | 本地估计，`estimated=true` |
+| Admin 工具集（临时对话、搜索、图片代理/任务） | `chatgptweb` | `builtin-local` | 本地估计或上游 Usage；图片任务详情另存任务级用量 |
 
-- 筛选 `provider=chatgptweb` 可查看全部 Web 流量；`admin:*` 仅为管理台调试，不是客户端 API Key。
+- 筛选 `provider=chatgptweb` 可查看全部 Web 流量；`builtin-local` 是服务端内建 scope，不接受外部 Header 认证，也不应轮换或删除。临时会话/搜索历史的管理员 owner 仍独立保存。
 - 文本 token 为稳定本地估计，不可当作上游账单。
 - 本设计落地前，部分 chatgptweb 成功请求可能被误记为 `error`/`proxy_internal_error`（`completePendingUsage` 兜底），历史行不回溯修正。
 - Admin 异步图片任务默认不进全局 usage（仍在任务详情展示任务级 Usage）。
@@ -89,7 +89,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 | 原生代理 `/v1/responses` → codexoauth | `codexoauth` | 客户端 Key ID | 上游 Response `usage`（缺失时本地估算） |
 
 - 使用统计会记录 `upstream_protocol=codexoauth`、`upstream_endpoint=codex_oauth_responses`、`conversion_mode=codex_oauth_responses`，包括 interaction archive 关闭时的兜底结算。
-- 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。导入、刷新凭据和完成 OAuth 都会提交一次立即同步；管理员也可在账号页对选中账号或全部账号执行“同步模型”，并轮询其进度。管理 API 与 Web 表格只返回稳定本地 ID、脱敏邮箱、状态、结果计数、模型缓存、模型冷却、额度观察与最近刷新状态，绝不返回 token、account ID 或代理。
+- 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。导入、刷新凭据和完成 OAuth 都会提交一次立即同步；管理员也可在账号页对选中账号或全部账号执行“同步模型”，并轮询其进度。管理 API 与 Web 表格返回稳定本地 ID、邮箱、状态、结果计数、模型缓存、模型冷却、额度观察与最近刷新状态，不返回 token、account ID 或代理。
 - 401 触发单飞 refresh 后只重试一次；429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。若上游明确返回 `usage_limit_reached`，账号表会记录该模型“额度耗尽”及上游提供的恢复时间；这只是运行期观察，不能当作官方剩余额度。
 - `/v1/responses` 的非流式请求在内部要求上游 SSE，并仅在 `response.completed` 事件返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。请求中的 `reasoning.effort` 按模型元数据枚举校验，允许值以 `/v1/models` 的 `capabilities.reasoning.efforts` 为准，不支持时返回 400。P0 不提供 realtime/WebSocket、`responses/compact` 或网页会话能力。
 - 账号定时刷新间隔是启动期设置，修改后需重启；账号池本身始终装配。
@@ -121,7 +121,8 @@ Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图
 - **账号导入/导出**：ChatGPT Web 与 Codex OAuth 均可直接选择导出的 JSON 文件重新导入，也支持粘贴 `accounts` 对象数组；ChatGPT Web 另支持纯 access token 文本。文件和粘贴内容不能同时使用，限制 1 MiB、单次 1000 个账号，提交或关闭后页面会清空输入。两个导出接口是仅有的明文凭据出口，必须二次确认且响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图，下载后立即销毁本地副本。
 - **OAuth 导入**：授权 URL、callback 与 session id 只应停留在管理员当前浏览器会话的内存中；不要把它们写进 URL 书签、共享剪贴板记录或监控日志。
 - **图片删除**：图片库删除不可恢复；批量删除前确认路径列表。图片内容通过 Admin 鉴权同源端点 `GET .../api/chatgpt/images/content?path=` 读取（可选 `thumb=1`），路径经严格校验，不提供通用 `/files/**`。
-- **api_key_id**：图片任务和图片库所有接口都以已存在的客户端 `api_key_id` 为隔离边界。Admin 页面从客户端 Key 选择器提交，不接受任意 owner 字符串；图片资产、缩略图、标签和任务不可跨 Key 读取。
+- **api_key_id**：图片任务和图片库缺省使用服务端内建 `builtin-local` scope；显式值必须是已存在的客户端 Key。Admin 页面从客户端 Key 选择器提交，不接受任意 owner 字符串；图片资产、缩略图、标签和任务不可跨 Key 读取。
+- **尺寸与 SVG 排查**：ChatGPT Web 的 conversation 请求没有 OpenAI Images API 的 `size` / `response_format` 原生字段。旧版本把尺寸追加到 prompt，所以上游可能返回任意像素；现在只有明确的 `WIDTHxHEIGHT` 才触发本地中心裁切/双线性缩放，`auto` 则保留上游尺寸。上游返回的是 raster bytes，服务端会下载认证 URL、验证格式并记录实际宽高；拿不到/无法解码 bytes 会失败闭合。SVG 容器包裹 raster 仍不是矢量，故 `svg`/vector 文件请求明确返回不支持，不会伪造 SVG。
 - **失败处理**：失败任务已有 `conversation_id` 时，可使用“恢复轮询”继续读取同一上游任务；该操作不会重新提交生成，适用于轮询超时及历史版本误记为 `"<nil>"` 的记录。`bootstrap` 阶段的 TLS/超时失败尚未建立上游会话，页面会有限退避重试一次；仍失败时显示“重新提交”，以原任务参数重新发起。其它失败不提供盲目重试，避免重复生成或重复扣除额度。
 - **取消与清理**：排队或运行中的任务可从操作列取消。取消会先持久化 `cancelled` 终态，再取消 AetherRelay 内部等待上下文，因此迟到的成功或失败结果不会覆盖取消状态；上游已受理的请求仍可能继续并产生额度消耗。成功、失败和已取消等终态记录可删除，删除任务记录不会联动删除图片库资产。所有状态均可从“查看”打开完整任务参数、进度、错误、用量和结果。
 - 账号池组件始终装配；若管理 API 返回 `503`，应检查模块启动错误和 DuckDB/主密钥状态，而不是通过配置开关启用。

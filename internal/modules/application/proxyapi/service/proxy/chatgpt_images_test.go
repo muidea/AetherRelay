@@ -255,3 +255,29 @@ func TestChatGPTImagePartialNFailureKeepsUsage(t *testing.T) {
 		t.Fatalf("expected accumulated non-estimated usage retained on failure: %+v", ev)
 	}
 }
+
+func TestChatGPTImageRejectsUnsupportedSizeAndSVGRequests(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "size", body: `{"model":"gpt-image-2","prompt":"a cat","size":"not-a-size"}`, want: "WIDTHxHEIGHT"},
+		{name: "response format", body: `{"model":"gpt-image-2","prompt":"a cat","response_format":"svg"}`, want: "SVG"},
+		{name: "prompt intent", body: `{"model":"gpt-image-2","prompt":"export an SVG vector file"}`, want: "SVG"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := usage.NewMemoryStore()
+			h := newChatGPTImageHandler(t, store, chatGPTImageExecutorStub{})
+			req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer test-client-key")
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest || !strings.Contains(strings.ToLower(resp.Body.String()), strings.ToLower(tc.want)) {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+		})
+	}
+}

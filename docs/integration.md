@@ -69,7 +69,13 @@ curl -sS http://127.0.0.1:8080/v1/models \
 
 ### 图片资产作用域
 
-`POST /v1/images/generations` 与 `POST /v1/images/edits` 成功产生的图片，按认证凭据解析出的稳定 `api_key_id` 存储。应用只需继续使用自己的 API Key，不需要也不能在请求体中指定作用域。`b64_json` 响应会在返回前归档图片字节；上游仅返回 URL 且没有图片字节时，代理不会主动下载该 URL。Admin 图片任务和图片库要求显式选择已存在的客户端 `api_key_id`，任务、原图、缩略图、标签和读取/删除操作均严格限制在该 Key 内。删除客户端 Key 会同步清理其图片任务、图片资产和 `interactions/{api_key_id}/` 交互归档。
+`POST /v1/images/generations` 与 `POST /v1/images/edits` 成功产生的图片，按认证凭据解析出的稳定 `api_key_id` 存储。应用只需继续使用自己的 API Key，不需要也不能在请求体中指定作用域。ChatGPT Web 内部会通过已认证会话下载其短时图片 URL，再验证并归档 raster bytes；上游只有不可下载/不可解码内容时请求失败，不会声称已满足尺寸或已归档。Admin 图片任务和图片库的 `api_key_id` 缺省为服务端内建 `builtin-local` scope，显式值必须是已存在的客户端 Key；任务、原图、缩略图、标签和读取/删除操作均严格限制在该 Key 内。删除外部客户端 Key 会同步清理其图片任务、图片资产和 `interactions/{api_key_id}/` 交互归档，内建 `builtin-local` 不可删除。
+
+### ChatGPT Web 图片尺寸与格式边界
+
+ChatGPT Web 使用 conversation 协议，而不是 OpenAI Images API；协议没有原生 `size` 或 `response_format` 字段。过去把 `size` 拼进 prompt 只能传达意图，不能让上游保证像素尺寸。当前网关接受 `auto` 或正整数 `WIDTHxHEIGHT`（最大边 8192、总像素 4000 万）：`auto` 保留上游尺寸，明确 `WxH` 在本地对返回 raster 做中心裁切和双线性缩放，并以 PNG 返回/归档，任务详情同时记录实际宽、高、格式。
+
+上游能力只产生 raster image bytes；把 raster 包在 SVG 容器中仍不是矢量图，因此 `response_format: "svg"`、SVG MIME 或明确导出 SVG/vector 文件的 prompt 会在上游调用前返回不支持错误。需要真正的 SVG 时，应使用独立的矢量生成/编辑工具或后处理流程；“vector-like raster illustration”这类视觉风格描述仍可生成普通栅格图。
 
 响应结构：
 

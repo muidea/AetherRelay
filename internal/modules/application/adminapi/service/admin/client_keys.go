@@ -30,6 +30,7 @@ type providerAccessDTO struct {
 
 type clientKeyView struct {
 	ID                     string            `json:"id"`
+	Builtin                bool              `json:"builtin,omitempty"`
 	Enabled                bool              `json:"enabled"`
 	CreatedAt              string            `json:"created_at,omitempty"`
 	LastUsedAt             string            `json:"last_used_at,omitempty"`
@@ -83,7 +84,7 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.ToLower(strings.TrimSpace(input.ID))
-	if id == "" || id == config.ReservedClientAPIKeyID {
+	if id == "" || id == config.ReservedClientAPIKeyID || config.IsBuiltinClientAPIKeyID(id) {
 		writeError(w, http.StatusBadRequest, "invalid client API key id")
 		return
 	}
@@ -147,6 +148,10 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 	}
 	if action == "models" && r.Method == http.MethodGet {
 		h.getClientAPIKeyModels(w, r.Context(), id)
+		return
+	}
+	if config.IsBuiltinClientAPIKeyID(id) {
+		writeError(w, http.StatusBadRequest, "built-in client API key cannot be modified")
 		return
 	}
 	if !h.requireAdminMutation(w, r) {
@@ -410,7 +415,7 @@ func (h *Handler) validateProviderAccess(input providerAccessDTO) (clientaccess.
 }
 
 func clientKeyViewFor(record usage.ClientAPIKeyRecord, snapshot effectivecatalog.Snapshot) clientKeyView {
-	view := clientKeyView{ID: record.ID, Enabled: record.Enabled, CreatedAt: record.CreatedAt.UTC().Format(time.RFC3339), ProviderAccess: providerAccessView(record.ProviderAccess)}
+	view := clientKeyView{ID: record.ID, Builtin: config.IsBuiltinClientAPIKeyID(record.ID), Enabled: record.Enabled, CreatedAt: record.CreatedAt.UTC().Format(time.RFC3339), ProviderAccess: providerAccessView(record.ProviderAccess)}
 	if record.LastUsedAt != nil {
 		view.LastUsedAt = record.LastUsedAt.UTC().Format(time.RFC3339)
 	}

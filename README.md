@@ -40,6 +40,8 @@ Anthropic API base: http://127.0.0.1:8080
 
 所有调用都需携带客户端密钥：OpenAI 客户端用 `Authorization: Bearer <key>`，Anthropic 客户端用 `X-API-Key: <key>`。缺少密钥、密钥错误或已停用时请求会被拒绝（401），且不会产生用量记录。
 
+管理台工具集由服务端内建的 `builtin-local` scope 归属（不是可对外携带的 secret，不能轮换或删除）；图片任务/图片库未指定 `api_key_id` 时默认使用它。ChatGPT Web 生图只返回栅格图：明确 `WIDTHxHEIGHT` 会在本地裁切/缩放到精确像素，`auto` 保留上游尺寸；SVG 真矢量输出不支持。
+
 ## 容器快速开始
 
 发布镜像位于 `ghcr.io/muidea/aetherrelay`，提供 Linux amd64 与 arm64 清单。**一条命令完成部署**（引导生成配置、初始化 Admin 凭据并启动容器）：

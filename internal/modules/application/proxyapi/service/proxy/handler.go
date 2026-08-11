@@ -123,12 +123,15 @@ func usageCompletionFromContext(ctx context.Context) *usageCompletion {
 	return completion
 }
 
-func withInternalFeatureIdentity(ctx context.Context, ownerID string) context.Context {
-	ownerID = strings.TrimSpace(ownerID)
-	if ownerID == "" {
-		ownerID = "admin"
+func withInternalFeatureIdentity(ctx context.Context, _ string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return context.WithValue(ctx, internalFeatureIdentityKey{}, clientauth.ClientIdentity{KeyID: "admin:" + ownerID, ProviderAccess: clientaccess.All()})
+	// All Admin feature/tool requests share one durable local scope.  The
+	// caller-provided owner is still used by feature-specific persistence (for
+	// example temporary-chat/search history), but must not create ad-hoc client
+	// API-key IDs or image-library scopes.
+	return context.WithValue(ctx, internalFeatureIdentityKey{}, clientauth.ClientIdentity{KeyID: config.BuiltinClientAPIKeyID, ProviderAccess: clientaccess.All()})
 }
 
 func internalFeatureIdentity(ctx context.Context) (clientauth.ClientIdentity, bool) {
@@ -293,6 +296,12 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 func prepareClientKeyIndexFromRecords(records map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error) {
 	keys := make([]clientauth.KeyEntry, 0, len(records))
 	for id, r := range records {
+		// builtin-local is an internally injected scope, never an external
+		// bearer credential.  Keep that boundary even if a stale database row
+		// somehow still contains a digest.
+		if config.IsBuiltinClientAPIKeyID(id) {
+			continue
+		}
 		if r.Hash != "" && r.Enabled && r.RevokedAt == nil {
 			keys = append(keys, clientauth.KeyEntry{ID: id, APIKeyHash: r.Hash, Enabled: true, ProviderAccess: r.ProviderAccess})
 		}

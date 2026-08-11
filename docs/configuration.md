@@ -72,11 +72,12 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 ## 客户端 API Key
 
-客户端 API Key 不属于 YAML 配置。Key 由 Admin 创建并保存在 `state.database` 的 DuckDB 中，初始数据库可以没有任何 Key。
+客户端 API Key 不属于 YAML 配置。外部 Key 由 Admin 创建并保存在 `state.database` 的 DuckDB 中；Usage runtime 每次启动会幂等维护一个服务端内建作用域 `builtin-local`，因此初始数据库即使没有外部 Key，管理台工具集仍有固定的归属。
 
 创建时 `provider_access` 必填：`mode: selected` 要求至少一个已知 Provider ID，`mode: all` 要求 `provider_ids` 为空。已禁用或暂时无模型的 Provider 仍可预授权；内建 ID 为 `chatgptweb`、`codexoauth`。`selected` 绑定不会随未来 Provider 自动扩展，`all` 会。权限更新、启停和轮换使用专用认证索引原子热切换，不重载 Provider 配置。
 
 - Key ID 需匹配 `[a-z0-9][a-z0-9._-]{0,63}`，`default` 为历史用量保留 ID，不能配置。
+- `builtin-local` 是内建工具 scope，不是可供外部请求携带的 secret：不保存 raw key/hash，不能创建同名 Key、修改权限、启停、轮换或删除；管理台可以查看它的有效模型。临时对话、搜索、图片代理、图片任务和图片库在未指定作用域时使用它。
 - 每个数据请求必须携带 Key；缺失、空 Header、未知、禁用、格式错误或两个身份 Header 冲突时均返回 401，且不产生用量记录。
 - OpenAI 使用 `Authorization: Bearer <key>`，Anthropic 使用 `X-API-Key: <key>`；两种 Header 可兼容，但同时出现时必须为同一 Key。
 - 原始客户端 Key 不写入日志、DuckDB、归档或管理 API，也不会转发给上游。
@@ -139,13 +140,13 @@ state:
 
 `state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、不可迁移或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
 
-`state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
+`state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。`builtin-local` 只作为服务端工具调用的稳定 `api_key_id` 元数据，不与管理员登录用户名/临时会话 owner 混用。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
 
 Usage runtime 当前使用重新基线化的最终 schema v1（版本名 `usage_provider_access_v1`），不再执行历史增量 migration。首次遇到旧 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata`、`client_api_key_provider_access` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v1 并保留新产生的数据。升级前如需回查旧数据，应先备份整个 `state.database`。
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 
-工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/{api_key_id}/{round_id}/`。图片任务与图片资产同样以客户端 API Key ID 作用域隔离：磁盘目录为 `images/{安全作用域}/{日期路径}` 和 `image_thumbnails/{安全作用域}/{日期路径}.png`，数据库索引与标签主键为 `(api_key_id, path)`。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
+工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/{api_key_id}/{round_id}/`。图片任务与图片资产同样以客户端 API Key ID 作用域隔离：磁盘目录为 `images/{安全作用域}/{日期路径}` 和 `image_thumbnails/{安全作用域}/{日期路径}.png`，数据库索引与标签主键为 `(api_key_id, path)`；Admin 图片任务/图片库缺省使用 `builtin-local`，显式作用域仍需是已存在的 Key。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 
 ## ChatGPT Web 本地数据
 
@@ -200,7 +201,7 @@ codex_oauth:
 - Codex Responses 在账号切换耗尽时保留最后一个真实上游失败，不再用后续的“无可用账号”覆盖首个 401、403、429 或 5xx。安全错误响应和日志会携带上游 HTTP 状态但不记录响应正文、Token、账号头或代理；上游 401 且 refresh token 恢复失败时按 `invalid_token` 反馈，不再误记为普通“上游故障”。
 - 调用中上游明确返回的 `usage_limit_reached` 仍会另行记录为账号/模型级额度耗尽与可选恢复时间，并驱动该模型冷却；普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
 - 可路由模型始终是全部健康账号模型快照的并集；不提供 `codex_oauth.models` 筛选项。管理型 Provider 使用同名模型时，两者都会进入候选链；其默认优先级为 `100`，Codex OAuth 默认 `90`，可在安全的原生 Responses 失败场景回退。`provider_enabled` 与 `priority` 是可热更新的路由策略。
-- 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）以 AES-256-GCM 加密载荷写入 `state.database`。管理列表严格脱敏，不返回 token、账号 ID 或代理 URL。
+- 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）以 AES-256-GCM 加密载荷写入 `state.database`。管理列表直接显示邮箱，但不返回 token、账号 ID 或代理 URL。
 - 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新、模型发现、`https://chatgpt.com/backend-api/wham/usage` 和 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新、发现、用量读取与实际调用的出口 IP 不一致。
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
@@ -214,7 +215,7 @@ codex_oauth:
 
 Provider 表的“来源”字段仅作展示：运行时内建 Provider 为 `builtin`，官方 Base URL 为 `official`，其余为 `third_party`。它不会写回 YAML，也不影响路由或安全判断。管理型 Provider 使用单项接口新增（`POST <admin_base_path>/api/providers`）、局部更新（`PATCH <admin_base_path>/api/providers/{name}`）和删除（`DELETE <admin_base_path>/api/providers/{name}`）；Web 编辑表单只提交实际变化的字段。PATCH 请求未提供 API Key 或提供空字符串时保留原凭据，只有显式 `clear_api_key: true` 才会清空。Provider 名称是不可变标识，改名需要删除旧项后新增。内建 Provider 不可删除，通过独立接口热更新路由启停与优先级。状态列合并账号池可用性与请求健康度，避免同一 Provider 出现两套相互矛盾的状态。
 
-ChatGPT Web 账号池、图片任务、图片存储与 Codex OAuth 账号池始终装配。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。两类账号导出是唯一有意返回完整凭据的管理操作，均固定返回可直接重新导入的 JSON 数组并使用 `Cache-Control: no-store`；OAuth callback、token 与代理不会写入浏览器持久化存储。
+ChatGPT Web 账号池、图片任务、图片存储与 Codex OAuth 账号池始终装配。图片预览通过 Admin 鉴权的同源读取端点 `GET <admin_base_path>/api/chatgpt/images/content` 加载，不暴露通用 `/files/**`。ChatGPT Web 生图只提供可验证的 raster bytes：`size` 为 `auto` 时保留上游尺寸，明确 `WIDTHxHEIGHT` 时本地裁切/缩放并记录实际宽高；SVG/vector 文件输出没有上游协议支持，会被明确拒绝。两类账号导出是唯一有意返回完整凭据的管理操作，均固定返回可直接重新导入的 JSON 数组并使用 `Cache-Control: no-store`；OAuth callback、token 与代理不会写入浏览器持久化存储。
 
 ChatGPT 账号列表 `GET <base>/api/chatgpt/accounts` 始终脱敏 access token，且不返回账号代理。列表会分别投影仍生效的文本与生图模型冷却（模型、错误类别、恢复时间），以及最近凭据刷新成功时间或失败类别/时间，供管理页只读展示；绝不返回原始 OAuth 错误、Token 或代理。冷却窗口目前固定为 60 秒，不提供 YAML 或 Web 调参。修改、删除、刷新和导出均使用稳定的 `id`，而不是 token：
 

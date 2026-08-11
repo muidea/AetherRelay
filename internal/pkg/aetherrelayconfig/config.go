@@ -2133,6 +2133,21 @@ func providersShareServiceablePath(a, b Provider) bool {
 // ReservedClientAPIKeyID 保留给历史 usage 记录，配置中禁止声明。
 const ReservedClientAPIKeyID = "default"
 
+// BuiltinClientAPIKeyID is the stable, server-owned client scope used by the
+// Admin feature/tool surface (temporary chat, search and image tasks).  It is
+// deliberately a scope identifier rather than a user-supplied secret: the
+// feature surface is reached through the Admin boundary and injects this
+// identity internally.  The Usage runtime materializes the metadata row at
+// startup so image tasks and the image library have a durable owner scope.
+const BuiltinClientAPIKeyID = "builtin-local"
+
+// IsBuiltinClientAPIKeyID reports whether id names the server-owned Admin
+// feature scope.  Keep this check in the configuration package so the Admin,
+// proxy and usage owners share one spelling/casing contract.
+func IsBuiltinClientAPIKeyID(id string) bool {
+	return strings.EqualFold(strings.TrimSpace(id), BuiltinClientAPIKeyID)
+}
+
 const (
 	defaultUsageStoreMemoryLimit       = "256MB"
 	defaultUsageStoreThreads           = 2

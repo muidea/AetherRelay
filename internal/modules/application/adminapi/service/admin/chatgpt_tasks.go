@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	taskevents "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/chatgptimageoutput"
 )
 
 type chatGPTTaskBody struct {
@@ -17,6 +19,7 @@ type chatGPTTaskBody struct {
 	Model            string   `json:"model"`
 	Size             string   `json:"size"`
 	Quality          string   `json:"quality"`
+	ResponseFormat   string   `json:"response_format"`
 	Images           []string `json:"images"`
 	Image            string   `json:"image"`
 	ExtraTimeoutSecs int      `json:"extra_timeout_secs"`
@@ -48,6 +51,9 @@ func (h *Handler) submitChatGPTImageGeneration(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "client_task_id and prompt are required")
 		return
 	}
+	if !validateChatGPTTaskImageOptions(w, body) {
+		return
+	}
 	out, err := h.chatGPT.SubmitChatGPTImageGeneration(r.Context(), taskevents.SubmitGenerationCommand{OwnerID: apiKeyID, ClientTaskID: body.ClientTaskID, Prompt: body.Prompt, Model: body.Model, Size: body.Size, Quality: body.Quality, BaseURL: adminImageBaseURL(r)})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -68,6 +74,9 @@ func (h *Handler) submitChatGPTImageEdit(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "client_task_id and prompt are required")
 		return
 	}
+	if !validateChatGPTTaskImageOptions(w, body) {
+		return
+	}
 	images := append([]string(nil), body.Images...)
 	if strings.TrimSpace(body.Image) != "" {
 		images = append(images, body.Image)
@@ -82,6 +91,14 @@ func (h *Handler) submitChatGPTImageEdit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, out.Task)
+}
+
+func validateChatGPTTaskImageOptions(w http.ResponseWriter, body chatGPTTaskBody) bool {
+	if err := chatgptimageoutput.ValidateRequest(body.Prompt, body.Size, body.ResponseFormat); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
 }
 func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request, rel string) {
 	var body chatGPTTaskBody
@@ -175,8 +192,19 @@ func (h *Handler) deleteChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *Handler) imageAPIKeyID(w http.ResponseWriter, ctx context.Context, apiKeyID, legacyOwner string) (string, bool) {
+	// Keep the old owner-only path solely for lightweight handlers that have no
+	// usage store (the test/runtime stub path).  A production Admin request
+	// without an explicit scope must always resolve to the server-owned scope;
+	// arbitrary owner strings must not create or select ad-hoc image scopes.
 	if strings.TrimSpace(apiKeyID) == "" && h.usageStore == nil {
 		apiKeyID = legacyOwner
+	}
+	// The Admin feature/tool surface has one durable local scope.  Keep the
+	// legacy owner fallback only for isolated tests that do not have a usage
+	// store; production requests should always land in builtin-local unless the
+	// caller explicitly selects another existing client scope.
+	if strings.TrimSpace(apiKeyID) == "" && h.usageStore != nil {
+		apiKeyID = config.BuiltinClientAPIKeyID
 	}
 	if h.usageStore == nil && strings.TrimSpace(apiKeyID) == "" {
 		apiKeyID = "default"

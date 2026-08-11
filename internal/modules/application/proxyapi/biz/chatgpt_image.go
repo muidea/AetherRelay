@@ -17,6 +17,7 @@ import (
 	imgevents "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	"aetherrelay/internal/pkg/chatgptimageoutput"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -47,8 +48,12 @@ func (s *Proxy) runChatGPTImages(ctx context.Context, request chatgptimage.Reque
 	if request.N < 1 || request.N > 4 {
 		return chatgptimage.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("n must be between 1 and 4"))
 	}
-	if request.ResponseFormat != "b64_json" && request.ResponseFormat != "url" {
-		return chatgptimage.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("response_format must be b64_json or url"))
+	if request.ResponseFormat == "" {
+		request.ResponseFormat = "b64_json"
+	}
+	request.ResponseFormat = strings.ToLower(strings.TrimSpace(request.ResponseFormat))
+	if err := chatgptimageoutput.ValidateRequest(request.Prompt, request.Size, request.ResponseFormat); err != nil {
+		return chatgptimage.Result{}, chatgptfail.New(chatgptfail.KindInternal, err)
 	}
 	result := chatgptimage.Result{Created: time.Now().Unix(), Data: make([]chatgptimage.Data, 0, request.N)}
 	for i := 0; i < request.N; i++ {
@@ -202,9 +207,14 @@ func (s *Proxy) presentChatGPTImages(ctx context.Context, apiKeyID string, outpu
 			}
 		}
 		if responseFormat == "b64_json" {
-			item.B64JSON = output.B64JSON
-			if item.B64JSON == "" && len(output.Bytes) > 0 {
+			// Bytes are authoritative whenever present.  ChatGPT Web image
+			// normalization may have changed the raster dimensions, so returning
+			// an upstream-provided b64_json here could silently undo the exact
+			// WxH contract.
+			if len(output.Bytes) > 0 {
 				item.B64JSON = base64.StdEncoding.EncodeToString(output.Bytes)
+			} else {
+				item.B64JSON = output.B64JSON
 			}
 			if item.B64JSON == "" {
 				return nil, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt image has no content"))
