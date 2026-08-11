@@ -53,6 +53,10 @@ type Client struct {
 	sessionID     string
 	scriptSources []string
 	dataBuild     string
+	// newSearchClient is deliberately kept private to the transport owner. A
+	// retried search_prepare must use a new browser TLS client rather than a
+	// connection that may have been closed by the peer or account proxy.
+	newSearchClient func() (*Client, error)
 }
 
 func New(config Config) (*Client, error) {
@@ -85,7 +89,11 @@ func New(config Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create TLS client: %w", err)
 	}
-	return newWithDoer(config, baseURL, doer), nil
+	client := newWithDoer(config, baseURL, doer)
+	client.newSearchClient = func() (*Client, error) {
+		return New(config)
+	}
+	return client, nil
 }
 
 // resolveProxyURL makes the account-owned proxy authoritative, then falls

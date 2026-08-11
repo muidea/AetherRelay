@@ -193,8 +193,15 @@ func (s *Proxy) refreshChatGPTTextToken(ctx context.Context, token string) (acce
 }
 
 func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (accevents.AcquireTextTokenResult, error) {
+	return s.acquireChatGPTTextTokenExcluding(ctx, model, nil)
+}
+
+// acquireChatGPTTextTokenExcluding is used by bounded recovery paths that
+// have already observed a failure on one account. The account-pool owner keeps
+// the actual selection and model capability checks authoritative.
+func (s *Proxy) acquireChatGPTTextTokenExcluding(ctx context.Context, model string, exclude []string) (accevents.AcquireTextTokenResult, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.AcquireTextTokenCommand{
-		Model: model, Capability: accevents.ModelCapabilityTextGeneration,
+		Exclude: append([]string(nil), exclude...), Model: model, Capability: accevents.ModelCapabilityTextGeneration,
 	})).Get()
 	if err != nil {
 		return accevents.AcquireTextTokenResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("chatgpt account unavailable"))
@@ -206,9 +213,10 @@ func (s *Proxy) acquireChatGPTTextToken(ctx context.Context, model string) (acce
 	return account, nil
 }
 
-// recordChatGPTTextResult records the single final account outcome. Local
-// client disconnects, response-writer errors and request-content rejections do
-// not describe account health and therefore must not trigger account cooling.
+// recordChatGPTTextResult records the final outcome for one attempted account.
+// Search recovery calls it once per account attempt. Local client disconnects,
+// response-writer errors and request-content rejections do not describe account
+// health and therefore must not trigger account cooling.
 func (s *Proxy) recordChatGPTTextResult(ctx context.Context, accountID, model string, executionErr error) {
 	if strings.TrimSpace(accountID) == "" {
 		return

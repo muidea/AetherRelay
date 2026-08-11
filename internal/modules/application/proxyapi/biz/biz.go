@@ -235,7 +235,10 @@ func (s *Proxy) handleExecuteFeatureText(ev event.Event, result event.Result) {
 	}
 	out, err := executor.ExecuteFeatureText(ev.Context(), cmd)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		// Preserve the constrained result projection alongside the EventHub
+		// error so temporary chat can persist a safe failure category instead
+		// of reducing every transport failure to provider_unavailable.
+		result.Set(out, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	result.Set(out, nil)

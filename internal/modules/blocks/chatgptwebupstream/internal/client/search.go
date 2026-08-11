@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -22,6 +23,10 @@ const (
 	maxSearchDocument    = 4 << 20
 	maxSearchTextBytes   = 256 << 10
 	maxSearchSourceCount = 32
+	// searchPrepareRetryDelay is intentionally small: an EOF before the
+	// prepare response is often a transient proxy or edge connection close,
+	// while a long retry would only consume the caller's search budget.
+	searchPrepareRetryDelay = 250 * time.Millisecond
 )
 
 var searchURLPattern = regexp.MustCompile(`https?://[^\s<>"'）)\]]+`)
@@ -50,15 +55,36 @@ type SearchResult struct {
 // then polls its bounded document projection until the assistant answer has
 // reached a terminal state. It never returns the raw conversation document.
 func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := c.searchOnce(ctx, request)
+	if !retryableSearchPrepareFailure(err) || c.newSearchClient == nil {
+		return result, err
+	}
+	if !waitForSearchPrepareRetry(ctx) {
+		// Preserve the classified transport error. The caller can then record a
+		// meaningful account result rather than treating a canceled backoff as
+		// an unrelated upstream failure.
+		return result, err
+	}
+	retryClient, retryClientErr := c.newSearchClient()
+	if retryClientErr != nil {
+		return result, err
+	}
+	return retryClient.searchOnce(ctx, request)
+}
+
+// searchOnce owns one isolated browser session. Search retries must create a
+// new Client and invoke this method directly so a broken keep-alive/TLS path is
+// never reused.
+func (c *Client) searchOnce(ctx context.Context, request SearchRequest) (SearchResult, error) {
 	query := strings.TrimSpace(request.Query)
 	if query == "" {
 		return SearchResult{}, fmt.Errorf("search query is required")
 	}
 	if len(query) > maxSearchQueryBytes {
 		return SearchResult{}, fmt.Errorf("search query exceeds %d KiB", maxSearchQueryBytes>>10)
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	// A search is a standalone upstream interaction.  Never use the static
 	// browser root (or let two requests share one) because ChatGPT Web may use
@@ -79,6 +105,25 @@ func (c *Client) Search(ctx context.Context, request SearchRequest) (SearchResul
 		return SearchResult{}, err
 	}
 	return c.pollSearch(ctx, conversationID)
+}
+
+func retryableSearchPrepareFailure(err error) bool {
+	var upstream *Error
+	if !errors.As(err, &upstream) || upstream.Operation != "search_prepare" {
+		return false
+	}
+	return upstream.Class == TLS || upstream.Class == Timeout
+}
+
+func waitForSearchPrepareRetry(ctx context.Context) bool {
+	timer := time.NewTimer(searchPrepareRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (c *Client) prepareSearch(ctx context.Context, model, query, rootMessageID string) (string, error) {

@@ -121,6 +121,63 @@ func TestSearchUsesDifferentRootForEachRequest(t *testing.T) {
 	}
 }
 
+func TestSearchRetriesPrepareWithFreshClient(t *testing.T) {
+	first := &prepareEOFDoer{}
+	second := &searchDoer{}
+	client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", first)
+	created := 0
+	client.newSearchClient = func() (*Client, error) {
+		created++
+		return newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", second), nil
+	}
+
+	result, err := client.Search(context.Background(), SearchRequest{Model: "gpt-5", Query: "retry once"})
+	if err != nil || result.Text == "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if first.prepareCalls != 1 || created != 1 || second.prepare == nil {
+		t.Fatalf("first_prepare=%d fresh_clients=%d second_prepare=%v", first.prepareCalls, created, second.prepare != nil)
+	}
+}
+
+func TestSearchDoesNotRetryAfterConversationStart(t *testing.T) {
+	doer := &conversationEOFDoer{searchDoer: searchDoer{}}
+	client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", doer)
+	created := 0
+	client.newSearchClient = func() (*Client, error) {
+		created++
+		return newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", &searchDoer{}), nil
+	}
+
+	_, err := client.Search(context.Background(), SearchRequest{Model: "gpt-5", Query: "do not duplicate"})
+	if err == nil || created != 0 || doer.conversationCalls != 1 {
+		t.Fatalf("err=%v fresh_clients=%d conversation_calls=%d", err, created, doer.conversationCalls)
+	}
+}
+
+type prepareEOFDoer struct{ prepareCalls int }
+
+func (d *prepareEOFDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/backend-api/f/conversation/prepare" {
+		d.prepareCalls++
+		return nil, io.EOF
+	}
+	return nil, fmt.Errorf("unexpected request before prepare retry: %s", request.URL.Path)
+}
+
+type conversationEOFDoer struct {
+	searchDoer
+	conversationCalls int
+}
+
+func (d *conversationEOFDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/backend-api/f/conversation" {
+		d.conversationCalls++
+		return nil, io.EOF
+	}
+	return d.searchDoer.Do(request)
+}
+
 type multiSearchDoer struct {
 	doers []*searchDoer
 	index int

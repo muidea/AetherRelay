@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -28,6 +29,24 @@ type featureExecutionTrace struct {
 	accountID      string
 	usage          *tokenusage.Usage
 }
+
+// featureRequestError retains the safe error projection emitted by the local
+// HTTP adapter. The FeatureExecutor deliberately does not retain raw upstream
+// bodies, account identifiers, credentials, or proxy details.
+type featureRequestError struct {
+	status       int
+	code         string
+	message      string
+	failureClass string
+}
+
+func (e *featureRequestError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
 type featureExecutionTraceKey struct{}
 type featureFileAttachmentsKey struct{}
 
@@ -150,7 +169,7 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		query := strings.TrimSpace(queryMessage.Content)
 		search, err := h.ExecuteFeatureSearch(ctx, proxyevents.ExecuteFeatureSearchCommand{OwnerID: command.OwnerID, Model: model, Query: query})
 		if err != nil {
-			return proxyevents.ExecuteFeatureTextResult{Provider: search.Provider, ActualModel: search.ActualModel}, err
+			return proxyevents.ExecuteFeatureTextResult{Provider: search.Provider, ActualModel: search.ActualModel, ErrorClass: featureRequestFailureClass(err)}, err
 		}
 		sources := make([]chatgptsearch.Source, 0, len(search.Sources))
 		for _, source := range search.Sources {
@@ -226,7 +245,7 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 	payload, _ := json.Marshal(body)
 	response, trace, err := h.executeFeatureRequest(ctx, command.OwnerID, endpoint, "application/json", payload)
 	if err != nil {
-		return proxyevents.ExecuteFeatureTextResult{}, err
+		return proxyevents.ExecuteFeatureTextResult{Provider: trace.provider, ErrorClass: featureRequestFailureClass(err)}, err
 	}
 	text, actualModel, err := extractFeatureText(response, endpoint)
 	if err != nil {
@@ -368,18 +387,29 @@ func (h *Handler) executeFeatureRequest(ctx context.Context, ownerID, endpoint, 
 	h.ServeHTTP(response, request)
 	if response.status < 200 || response.status >= 300 {
 		var envelope struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
+			Error APIError `json:"error"`
 		}
 		_ = json.Unmarshal(response.body.Bytes(), &envelope)
 		message := strings.TrimSpace(envelope.Error.Message)
 		if message == "" {
 			message = fmt.Sprintf("feature provider request failed with HTTP %d", response.status)
 		}
-		return nil, *trace, fmt.Errorf("%s", message)
+		return nil, *trace, &featureRequestError{
+			status:       response.status,
+			code:         strings.TrimSpace(envelope.Error.Code),
+			message:      message,
+			failureClass: strings.TrimSpace(envelope.Error.FailureClass),
+		}
 	}
 	return bytes.Clone(response.body.Bytes()), *trace, nil
+}
+
+func featureRequestFailureClass(err error) string {
+	var requestErr *featureRequestError
+	if !errors.As(err, &requestErr) || requestErr == nil {
+		return ""
+	}
+	return strings.TrimSpace(requestErr.failureClass)
 }
 
 func extractFeatureText(body []byte, endpoint string) (string, string, error) {

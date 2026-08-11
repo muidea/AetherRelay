@@ -107,6 +107,19 @@ func TestExecuteFeatureTextSearchIgnoresHistoricalAttachments(t *testing.T) {
 	}
 }
 
+func TestExecuteFeatureTextSearchPreservesSafeFailureClass(t *testing.T) {
+	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(context.Context, chatgptsearch.Request) (chatgptsearch.Result, error) {
+		return chatgptsearch.Result{}, chatgptfail.New(chatgptfail.KindTLS, errors.New("EOF"))
+	}})
+	out, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{
+		OwnerID: "admin", Model: "gpt-5", WebSearch: true,
+		Messages: []proxyevents.FeatureTextMessage{{Role: "user", Content: "latest news"}},
+	})
+	if err == nil || out.Provider != "chatgptweb" || out.ErrorClass != string(chatgptfail.KindTLS) {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
+
 func TestExecuteFeatureTextSearchRejectsAttachmentsOnCurrentQuery(t *testing.T) {
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{})
 	_, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{

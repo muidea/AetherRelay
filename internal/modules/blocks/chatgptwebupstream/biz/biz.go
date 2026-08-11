@@ -296,13 +296,13 @@ func (s *Upstream) handleSearch(ev event.Event, result event.Result) {
 	}
 	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy})
 	if err != nil {
-		result.Set(events.SearchResult{ErrorClass: classifyError(err)}, cd.NewError(cd.IllegalParam, err.Error()))
+		result.Set(events.SearchResult{ErrorClass: classifyError(err), ErrorOperation: searchErrorOperation(err)}, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
 	searched, err := s.search(client, ev.Context(), upclient.SearchRequest{Model: cmd.Model, Query: cmd.Query})
 	if err != nil {
 		class := classifyError(err)
-		result.Set(events.SearchResult{ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, ErrorClass: class}, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.SearchResult{ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, ErrorClass: class, ErrorOperation: searchErrorOperation(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	sources := make([]events.SearchSource, 0, len(searched.Sources))
@@ -323,6 +323,14 @@ func (s *Upstream) search(client *upclient.Client, ctx context.Context, request 
 		}
 	}()
 	return client.Search(ctx, request)
+}
+
+func searchErrorOperation(err error) string {
+	var upstreamErr *upclient.Error
+	if !errors.As(err, &upstreamErr) {
+		return ""
+	}
+	return strings.TrimSpace(upstreamErr.Operation)
 }
 
 // completeText converts an unexpected transport-library panic into the same

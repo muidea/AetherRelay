@@ -180,6 +180,10 @@ type SearchResult struct {
 	Text           string
 	Sources        []SearchSource
 	ErrorClass     ErrorClass
+	// ErrorOperation is a bounded transport stage such as search_prepare.
+	// It permits the proxy owner to distinguish a safe pre-conversation retry
+	// from failures after a remote search may already have started.
+	ErrorOperation string
 }
 
 type StartTextCommand struct {

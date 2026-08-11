@@ -173,6 +173,9 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, apiErr APIError, fail *streamFail, tok tokenUsage) {
+	if apiErr.FailureClass == "" && fail != nil {
+		apiErr.FailureClass = chatGPTFailureCode(fail)
+	}
 	if apiErr.ClientProtocol == "" {
 		apiErr.ClientProtocol = clientProtocolFromRequest(r)
 	}

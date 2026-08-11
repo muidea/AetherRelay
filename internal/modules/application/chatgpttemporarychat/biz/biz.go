@@ -533,7 +533,11 @@ func (s *TemporaryChat) runFeatureTurn(ctx context.Context, runtime *turnRuntime
 			errorClass, errorMessage = "cancelled", "cancelled by user"
 		}
 	} else if requestErr != nil || !ok {
-		errorClass, errorMessage = "provider_unavailable", "no compatible provider completed the request"
+		errorClass = strings.TrimSpace(response.ErrorClass)
+		if errorClass == "" {
+			errorClass = "provider_unavailable"
+		}
+		errorMessage = safeTurnError(errorClass)
 	}
 	content, actualModel := response.Text, response.ActualModel
 	if response.Provider != "" {
@@ -768,6 +772,8 @@ func safeTurnError(errorClass string) string {
 		return "original account is rate limited"
 	case "content_policy":
 		return "upstream content policy rejected the request"
+	case "provider_unavailable":
+		return "no compatible provider completed the request"
 	default:
 		return "upstream request failed"
 	}

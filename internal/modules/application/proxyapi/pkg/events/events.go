@@ -93,6 +93,10 @@ type ExecuteFeatureTextResult struct {
 	Provider    string
 	ActualModel string
 	Text        string
+	// ErrorClass is a safe, stable upstream category returned alongside an
+	// EventHub error. It never contains account, proxy, token, or raw upstream
+	// response content.
+	ErrorClass string
 }
 
 // ExecuteFeatureSearchCommand is the Admin feature-page projection of the

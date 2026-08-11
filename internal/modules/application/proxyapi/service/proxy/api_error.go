@@ -45,6 +45,7 @@ type APIError struct {
 	Code                string   `json:"code"`
 	Message             string   `json:"message"`
 	Type                string   `json:"type,omitempty"` // OpenAI error.type
+	FailureClass        string   `json:"failure_class,omitempty"`
 	Model               string   `json:"model,omitempty"`
 	ClientEndpoint      string   `json:"client_endpoint,omitempty"`
 	ClientProtocol      string   `json:"client_protocol,omitempty"`

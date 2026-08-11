@@ -49,7 +49,7 @@
 ## 在线搜索
 
 - **请求边界**：Chat/Responses 仅接受唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具（或 `web_search_options`）；只取最后一条纯文本 user 消息为 query；图片、文件、function、混合工具与工具循环一律 `conversion_unsupported`；`web_search_options` 调优字段仅记受限降级。
-- **上游执行**：prepare → `force_use_search=true` conversation → 有界 poll；每次搜索生成独立的随机 `parent_message_id`，prepare 与 conversation 仅共享本次请求的根，并在两步都发送 `history_and_training_disabled=true`，不复用固定根或历史网页会话；全链路共用账号级 TLS client；结果仅投影受限答案、实际模型与去重来源（标题/URL/摘要），均有大小上限；429/网络/超时/上游失败触发模型级冷却，首个 401 单飞刷新后仅重试一次。
+- **上游执行与恢复边界**：prepare → `force_use_search=true` conversation → 有界 poll；每次搜索生成独立的随机 `parent_message_id`，prepare 与 conversation 仅共享本次请求的根，并在两步都发送 `history_and_training_disabled=true`，不复用固定根或历史网页会话。单次尝试中的 prepare、conversation 与 poll 共用账号级 TLS client；仅当 `search_prepare` 在尚未取得 conversation ID 时分类为 TLS/超时，才会短暂退避并重建 TLS client 重试一次。该重试仍失败后，最多切换一次到不同账号且不同已配置代理端点；conversation 已开始、SSE 或 poll 阶段绝不重投，避免重复搜索或答案。结果仅投影受限答案、实际模型与去重来源（标题/URL/摘要），均有大小上限；429/网络/超时/上游失败触发模型级冷却，首个 401 单飞刷新后仅重试一次。
 - ChatGPT Web 是非公开网页逆向接口；上述字段只能阻止代理主动携带历史，不能覆盖上游账号级 Memory/Reference chat history 等服务端策略。若账号仍注入跨主题内容，应在 ChatGPT 账号侧关闭相关记忆能力，或将该账号标记为不保证严格隔离。
 - 排查污染时，先以管理页会话 ID 对照 DuckDB 中当前会话的消息，再按 `var/interactions/{api_key_id}/{round_id}/` 的 request/response 与 `metadata.json` 核对实际发送的消息；若本地请求未携带异会话内容而上游仍返回跨主题文本，问题位于上游账号记忆/网页会话策略，不应回写或拼接到其它本地会话。
 - **响应形态**：Chat 非流式追加来源与 OpenAI `url_citation` annotations；流式在搜索完成后发送单个完整 delta 与 `[DONE]`（兼容 SSE，不是增量搜索流）；Responses 返回 `web_search_call` 与带 citations 的 `output_text`。

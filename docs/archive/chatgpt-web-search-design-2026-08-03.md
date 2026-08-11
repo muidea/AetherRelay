@@ -25,11 +25,11 @@ OpenAI Chat / Responses / `POST /v1/search` 或 Admin 功能集 / 临时对话
 
 ## 上游与韧性
 
-上游依次执行 `POST /backend-api/f/conversation/prepare`、带 `force_use_search=true` 的 `POST /backend-api/f/conversation`，再有界轮询 `GET /backend-api/conversation/{id}`。prepare、requirements、SSE 与 poll 共用同一个按账号构造的浏览器 TLS client，因此账号 proxy 会覆盖整个搜索链路。
+上游依次执行 `POST /backend-api/f/conversation/prepare`、带 `force_use_search=true` 的 `POST /backend-api/f/conversation`，再有界轮询 `GET /backend-api/conversation/{id}`。每次尝试中的 prepare、requirements、SSE 与 poll 共用一个按账号构造的浏览器 TLS client，因此账号 proxy 会覆盖整个搜索链路。只有 `search_prepare` 在尚未得到 conversation ID 时分类为 TLS/超时，才会在短暂退避后重建 client 并重试一次；不复用可能已被对端关闭的连接。
 
 结果只投影为受限答案、实际模型和去重来源（标题、URL、摘要）。所有上游错误体、SSE、会话文档和来源数均有大小上限；不把原始会话或 token 交给协议层。
 
-搜索与普通 ChatGPT 文本调用使用同一账号结果反馈：成功会更新可用性，`429` / 网络 / 超时 / 上游失败触发既有模型级冷却；首个 `401` 会单飞刷新 OAuth token 后安全重试一次。永久刷新失败或第二次 `401` 才使凭据失效。
+搜索与普通 ChatGPT 文本调用使用同一账号结果反馈：成功会更新可用性，`429` / 网络 / 超时 / 上游失败触发既有模型级冷却；首个 `401` 会单飞刷新 OAuth token 后安全重试一次。`search_prepare` 的新 client 重试仍失败且未建立 conversation 时，Proxy 最多再选择一个不同账号、不同已配置代理端点尝试一次；conversation、SSE 或 poll 已开始后不切换账号、不重投。永久刷新失败或第二次 `401` 才使凭据失效。
 
 ## 响应与管理页
 
