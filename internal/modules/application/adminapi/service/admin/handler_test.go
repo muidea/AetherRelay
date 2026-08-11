@@ -148,7 +148,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
 	}
-	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`, `id="cgTaskReload"`} {
+	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`, `id="cgTaskReload"`, `id="usageExport"`, `id="storeDot"`, `id="storeLabel"`} {
 		if strings.Contains(rec.Body.String(), obsolete) {
 			t.Fatalf("admin page still exposes obsolete Codex statistic %q", obsolete)
 		}

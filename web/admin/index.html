@@ -106,7 +106,7 @@
       <a href="#/features/chat" id="navFeatures">功能集</a>
       <a href="#/system" id="navSystem">系统信息</a>
     </nav>
-    <div class="header-status"><i class="dot" id="storeDot"></i><span id="storeLabel">本地管理模式</span><label class="language-control" for="languageSelect"><select id="languageSelect" class="control" aria-label="显示语言"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
+    <div class="header-status"><span>本地管理模式</span><label class="language-control" for="languageSelect"><select id="languageSelect" class="control" aria-label="显示语言"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label><button id="logoutBtn" class="btn hidden" type="button" style="margin-left:8px">退出登录</button></div>
   </header>
   <main>
     <section id="panelProviders" class="panel active">
@@ -143,7 +143,6 @@
             <button class="btn" data-range="custom">自定义</button>
           </div>
           <button class="btn" id="usageRefresh">刷新</button>
-          <a class="btn" id="usageExport" href="#">导出 CSV</a>
         </div>
       </section>
       <section class="card" style="padding:14px 16px">
@@ -670,7 +669,7 @@ const enUS={
   "管理控制台":"Administration console","Provider 管理":"Providers","客户端 Key":"Client keys","使用统计":"Usage","账号池":"Account pools","功能集":"Features","系统信息":"System information","本地管理模式":"Local administration","退出登录":"Log out","显示语言":"Display language","简体中文":"Simplified Chinese",
   "新增 Provider":"Add provider","当前实例没有关联可写配置文件，只能查看 Provider。":"This instance has no writable configuration file; providers are read-only.","当前实例未配置凭据主密钥，Provider 安全存储不可写。":"No credential master key is configured; secure Provider storage is read-only.","Provider 总数":"Providers","已启用":"Enabled","官方":"Official","第三方":"Third party","Provider 列表":"Provider list","搜索名称 / 来源 / 模型":"Search name, source, or model","正在加载配置…":"Loading configuration…",
   "客户端 API Key":"Client API keys","创建、启停、轮换调用 AetherRelay 的客户端身份。明文 Key 仅在创建或轮换时显示一次。":"Create, enable, rotate, or disable identities that call AetherRelay. Plaintext keys are shown only when created or rotated.","＋ 新建 Key":"＋ New key","Key 列表":"Key list",
-  "基于 DuckDB 持久化明细的调用次数与 Token 汇总（UTC 日期）。":"Request and token totals from persisted DuckDB records (UTC).","今日":"Today","7天":"7 days","30天":"30 days","自定义":"Custom","刷新":"Refresh","导出 CSV":"Export CSV","全部 API Key":"All API keys","全部 Provider":"All providers","全部 Model":"All models","全部 Outcome":"All outcomes","精确与估算":"Exact and estimated","仅精确":"Exact only","仅估算":"Estimated only","开始时间（UTC）":"Start time (UTC)","结束时间（UTC）":"End time (UTC)","应用筛选":"Apply filters","调用次数":"Requests","总 Token":"Total tokens","输入 / 输出":"Input / output","成功率":"Success rate","调用次数趋势":"Request trend","Token 趋势（输入/输出）":"Token trend (input/output)","API Key 使用量汇总":"API key usage summary","最近调用明细":"Recent requests","加载更多":"Load more",
+  "基于 DuckDB 持久化明细的调用次数与 Token 汇总（UTC 日期）。":"Request and token totals from persisted DuckDB records (UTC).","今日":"Today","7天":"7 days","30天":"30 days","自定义":"Custom","刷新":"Refresh","全部 API Key":"All API keys","全部 Provider":"All providers","全部 Model":"All models","全部 Outcome":"All outcomes","精确与估算":"Exact and estimated","仅精确":"Exact only","仅估算":"Estimated only","开始时间（UTC）":"Start time (UTC)","结束时间（UTC）":"End time (UTC)","应用筛选":"Apply filters","调用次数":"Requests","总 Token":"Total tokens","输入 / 输出":"Input / output","成功率":"Success rate","调用次数趋势":"Request trend","Token 趋势（输入/输出）":"Token trend (input/output)","API Key 使用量汇总":"API key usage summary","最近调用明细":"Recent requests","加载更多":"Load more",
   "集中管理 ChatGPT Web 与 Codex OAuth 账号。两类账号池的凭据、网络出口、刷新状态、冷却策略和模型目录相互隔离。":"Manage ChatGPT Web and Codex OAuth accounts. Credentials, network egress, refresh status, cooldown policies, and model catalogs are isolated between pools.","账号池类型":"Account pool type","提供临时对话、在线搜索、图片任务和图片库，用于使用服务端限期保留的多轮对话、检索公开信息、提交任务与管理图片资产。":"Temporary chat, web search, image tasks, and image library for server-retained multi-turn conversations, retrieving public information, submitting tasks, and managing image assets.","图片任务":"Image tasks","图片库":"Image library","在线搜索":"Web search","临时对话":"Temporary chat",
   "账号总数":"Accounts","正常 / 限流":"Normal / rate limited","异常 / 禁用":"Abnormal / disabled","可用配额合计":"Available quota","账号列表":"Account list","搜索邮箱":"Search email","全部状态":"All statuses","正常":"Normal","限流":"Rate limited","异常":"Abnormal","禁用":"Disabled","全部类型":"All types","刷新所选凭据":"Refresh selected credentials","导出所选账号":"Export selected accounts","删除所选账号":"Delete selected accounts","OAuth 导入":"OAuth import","正在加载账号…":"Loading accounts…",
   "首次使用时自动生成，可按需指定":"Generated on first use; specify one if needed","图片任务按 API Key ID 隔离。切换 Key 后会自动加载任务列表并停止旧轮询。":"Image tasks are isolated by API key ID. Changing the key automatically loads its task list and stops the previous polling.","提交图片任务":"Submit image task","文生图":"Text to image","图生图":"Image to image","重新生成":"Regenerate","可选":"Optional","例如 1024x1024":"For example, 1024x1024","提交任务":"Submit task","任务列表":"Task list","正在初始化 API Key…":"Initializing API key…","仅列出当前由 ChatGPT Web 账号池发现且可执行强制联网搜索的模型。":"Only models discovered by the ChatGPT Web account pool that can run forced web search are listed.","搜索内容":"Search query","输入需要检索的问题或关键词":"Enter a question or keywords to search","每次提交创建一个独立搜索会话，仅支持纯文本输入。":"Each submission creates an isolated search session and accepts text only.","开始搜索":"Search","搜索结果":"Search results","尚未执行搜索。":"No search has been run.","正在搜索…":"Searching…","请输入搜索内容":"Enter a search query","未找到可用搜索模型":"No searchable models are available","无法加载搜索模型":"Could not load searchable models","搜索结果无文本回答":"Search returned no text answer","来源":"Sources",
@@ -2388,7 +2387,7 @@ async function loadFilterOptions(force=false){
     if(key!==filterOptionsCacheKey())return;
     state.filterOptionsKey=key;
     fillFilterOptions(data);
-    if(data&&data.store&&data.store.usage_query_ok===false&&!state.filterOptionsWarned){
+    if(data&&data.history_query_ok===false&&!state.filterOptionsWarned){
       state.filterOptionsWarned=true;
       toast("历史筛选选项加载失败，已仅显示配置项","error");
     }
@@ -2403,9 +2402,6 @@ async function loadUsage(resetEvents=true){
   try{
     const data=await request(apiURL(`/api/usage/dashboard?${usageParams().toString()}`));
     state.usage=data;
-    const healthy=data?.store?.healthy!==false;
-    $("storeDot").classList.toggle("bad",!healthy);
-    $("storeLabel").textContent=healthy?"统计存储 healthy":"统计存储 degraded";
     const s=data.summary||{};
     $("uRequests").textContent=compact(s.requests);$("uRequests").title=String(s.requests||0);
     $("uTotal").textContent=compact(s.total_tokens);$("uTotal").title=String(s.total_tokens||0);
@@ -2414,7 +2410,6 @@ async function loadUsage(resetEvents=true){
     $("uSuccess").textContent=rate;$("uSuccess").title=`success ${s.success_requests||0} / ${s.requests||0}`;
     renderCharts(data.daily||[]);
     renderKeyTable(data.by_api_key||[]);
-    $("usageExport").href=apiURL(`/api/usage/export.csv?${usageParams().toString()}`);
     if(resetEvents){state.events=[];state.cursor="";await loadEvents(true)}
   }catch(e){
     $("keyTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;

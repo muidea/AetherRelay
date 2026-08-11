@@ -13,11 +13,6 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
-const (
-	maxUsageExportDays = 31
-	maxUsageExportRows = 100000
-)
-
 func (h *Handler) observeUsageQuery(start time.Time, err error) {
 	if h.metricsRegistry != nil {
 		healthy := h.usageStore != nil && h.usageStore.Healthy()
@@ -42,6 +37,10 @@ func NewHandlerWithUsage(configPath string, runtime RuntimeConfig, store usage.S
 }
 
 func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
+	if !((rel == "/api/usage/dashboard" || rel == "/api/usage/events" || rel == "/api/usage/filter-options") && r.Method == http.MethodGet) {
+		http.NotFound(w, r)
+		return
+	}
 	if h.usageStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "usage store unavailable")
 		return
@@ -51,12 +50,8 @@ func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
 		h.usageDashboard(w, r)
 	case rel == "/api/usage/events" && r.Method == http.MethodGet:
 		h.usageEvents(w, r)
-	case rel == "/api/usage/export.csv" && r.Method == http.MethodGet:
-		h.usageExport(w, r)
 	case rel == "/api/usage/filter-options" && r.Method == http.MethodGet:
 		h.usageFilterOptions(w, r)
-	default:
-		http.NotFound(w, r)
 	}
 }
 
@@ -85,10 +80,6 @@ func (h *Handler) usageDashboard(w http.ResponseWriter, r *http.Request) {
 		"summary":    dash.Summary,
 		"daily":      dash.Daily,
 		"by_api_key": dash.ByAPIKey,
-		"store": map[string]any{
-			"engine":  "duckdb",
-			"healthy": h.usageStore.Healthy(),
-		},
 	})
 }
 
@@ -122,39 +113,6 @@ func (h *Handler) usageEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
-}
-
-func (h *Handler) usageExport(w http.ResponseWriter, r *http.Request) {
-	filter, err := parseUsageFilter(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if filter.AllTime || filter.To.Sub(filter.From) > maxUsageExportDays*24*time.Hour {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("export range must not exceed %d days", maxUsageExportDays))
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	started := time.Now()
-	count, err := h.usageStore.Count(ctx, filter)
-	h.observeUsageQuery(started, err)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "usage query failed")
-		return
-	}
-	if count > maxUsageExportRows {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("export exceeds maximum of %d rows", maxUsageExportRows))
-		return
-	}
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="usage-export.csv"`)
-	w.Header().Set("Cache-Control", "no-store")
-	started = time.Now()
-	err = h.usageStore.ExportCSV(ctx, filter, w)
-	h.observeUsageQuery(started, err)
-	// CSV 流已开始时 HTTP 状态无法安全更改；预检已将数据库不可用和超限
-	// 错误拦截在写 header 前，这里仅保留连接中断等不可恢复失败。
 }
 
 func parseUsageFilter(r *http.Request) (usage.UsageFilter, error) {
@@ -281,11 +239,7 @@ func (h *Handler) usageFilterOptions(w http.ResponseWriter, r *http.Request) {
 				"models":      usageRes.Truncated.Models,
 			},
 		},
-		"store": map[string]any{
-			"engine":         "duckdb",
-			"healthy":        h.usageStore.Healthy(),
-			"usage_query_ok": usageOK,
-		},
+		"history_query_ok": usageOK,
 	})
 }
 

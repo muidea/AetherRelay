@@ -10,7 +10,7 @@
 | 模型路由候选链 | 请求体 exact `model` → 有序候选 | Provider 精确模型 / 账号池发现 + Provider pattern |
 | 协议转换 | Chat↔Messages 文本、Responses↔Messages Level 1–3 | 候选链中跨协议 Provider且方向 capability 已发布 |
 | 客户端 API Key | 全部数据端点认证 | 外部 Key 由 Admin 创建并保存到 DuckDB；工具集由服务端内建 `builtin-local` scope |
-| 用量统计与 DuckDB 持久化 | Admin「使用统计」、`/admin/api/usage/export.csv` | 默认启用（`state.database`） |
+| 用量统计与 DuckDB 持久化 | Admin「使用统计」 | 默认启用（`state.database`） |
 | Admin 管理页 | `/admin`（默认 loopback-only） | 默认启用；远程访问需 `admin_auth_enabled` |
 | — Provider 管理与健康检查 | Admin「Provider」 | — |
 | — 客户端 Key 管理 | Admin「客户端 Key」 | — |
@@ -86,7 +86,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 ## 用量统计
 
 - 每个已接受请求先写 DuckDB `started` 事件，随后结算为 `completed`；流式真实结束态用 outcome（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不计为上游故障。
-- Admin「使用统计」支持按时间（今日 / 7 天 / 30 天 / 自定义）、API Key、Provider、Model、Outcome 与估算标记筛选，并导出 CSV（单次最大 31 天、100,000 行）。
+- Admin「使用统计」支持按时间（今日 / 7 天 / 30 天 / 自定义）、API Key、Provider、Model、Outcome 与估算标记筛选查看。
 - ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 工具调用统一归 `api_key_id=builtin-local`。临时会话和搜索历史仍按管理员 owner 隔离，二者不是同一个维度。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
 - 旧 `usage.csv` 只能一次性显式导入（`cmd/aetherrelay-usage-import`）；`usage_file` 配置已删除。
@@ -109,7 +109,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ### 使用统计
 
-查询 DuckDB 用量并按多维度筛选、导出 CSV。
+查询 DuckDB 用量并按多维度筛选。
 
 ### 系统信息
 

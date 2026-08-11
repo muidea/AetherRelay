@@ -166,9 +166,9 @@ Prometheus 指标均以 `aetherrelay_` 为前缀：
 
 相关指标：`aetherrelay_slo_webhook_dropped_total`、`aetherrelay_slo_webhook_queue_length`、`aetherrelay_slo_webhook_requests_total{result}`。
 
-## 用量、导出与归档
+## 用量与归档
 
-每个已接受请求会先写入 DuckDB `started` 事件，随后结算为 `completed`。管理页或 `<admin_base_path>/api/usage/export.csv`（默认 `/admin/api/usage/export.csv`）可导出安全元数据；单次导出最大范围为 31 天、最大 100,000 行。
+每个已接受请求会先写入 DuckDB `started` 事件，随后结算为 `completed`。管理页可按时间、API Key、Provider、Model、Outcome 与估算标记筛选查看用量。
 
 旧 `usage.csv` 只可显式一次性导入：
 

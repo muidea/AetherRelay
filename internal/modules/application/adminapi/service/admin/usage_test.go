@@ -54,6 +54,9 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	if int(summary["requests"].(float64)) != 1 {
 		t.Fatalf("requests=%v", summary["requests"])
 	}
+	if _, ok := body["store"]; ok {
+		t.Fatal("dashboard must not expose a storage health status")
+	}
 
 	// remote forbidden
 	req = httptest.NewRequest(http.MethodGet, "/admin/api/usage/dashboard", nil)
@@ -70,6 +73,21 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("events status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/usage/export.csv?range=30d", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("export endpoint status=%d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	h = NewHandler("", rt)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("export endpoint without usage store status=%d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -134,16 +152,21 @@ func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 			InConfig bool   `json:"in_config"`
 			InUsage  bool   `json:"in_usage"`
 		} `json:"models"`
-		Outcomes []string `json:"outcomes"`
-		Store    struct {
-			UsageQueryOK bool `json:"usage_query_ok"`
-		} `json:"store"`
+		Outcomes       []string `json:"outcomes"`
+		HistoryQueryOK bool     `json:"history_query_ok"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if !payload.Store.UsageQueryOK {
-		t.Fatalf("expected usage_query_ok")
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["store"]; ok {
+		t.Fatal("filter options must not expose a storage health status")
+	}
+	if !payload.HistoryQueryOK {
+		t.Fatalf("expected history_query_ok")
 	}
 	keyByID := map[string]struct {
 		Status   string
@@ -247,15 +270,13 @@ func TestUsageFilterOptionsStoreFailureDegrades(t *testing.T) {
 		APIKeyIDs []struct {
 			ID string `json:"id"`
 		} `json:"api_key_ids"`
-		Store struct {
-			UsageQueryOK bool `json:"usage_query_ok"`
-		} `json:"store"`
+		HistoryQueryOK bool `json:"history_query_ok"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Store.UsageQueryOK {
-		t.Fatalf("expected usage_query_ok=false")
+	if payload.HistoryQueryOK {
+		t.Fatalf("expected history_query_ok=false")
 	}
 	ids := map[string]bool{}
 	for _, k := range payload.APIKeyIDs {
