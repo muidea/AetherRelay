@@ -103,7 +103,7 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 	}
 	models, err := client.ListModels()
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(events.ListModelsResult{ErrorClass: classifyError(err)}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	out := make([]events.ModelDescriptor, 0, len(models))

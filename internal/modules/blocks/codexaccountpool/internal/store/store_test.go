@@ -225,13 +225,51 @@ func TestExpiredModelSnapshotIsNotPublishedAndFailureIsScoped(t *testing.T) {
 	if _, err := store.Acquire("gpt-5.2-codex", nil); err == nil {
 		t.Fatal("expired snapshot must not acquire")
 	}
-	retryAt, found, err := store.RecordModelDiscoveryFailure(id, "upstream unavailable")
+	retryAt, found, err := store.RecordModelDiscoveryFailure(id, events.ErrorUpstream)
 	if err != nil || !found || retryAt == "" {
 		t.Fatalf("failure retry_at=%q found=%v err=%v", retryAt, found, err)
 	}
 	candidates := store.ListDiscoveryCandidates(nil)
-	if len(candidates.Candidates) != 1 || candidates.Candidates[0].DiscoveryDue {
+	if len(candidates.Candidates) != 1 || candidates.Candidates[0].DiscoveryDue || !candidates.Candidates[0].DiscoveryBackedOff {
 		t.Fatalf("failed account should honor discovery backoff: %+v", candidates)
+	}
+}
+
+func TestModelDiscoveryInvalidTokenQuarantinesAccountAndProjectsSafeClass(t *testing.T) {
+	store := openTestStore(t)
+	if _, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	version := store.catalogVersion
+	retryAt, found, err := store.RecordModelDiscoveryFailure(id, events.ErrorInvalidToken)
+	if err != nil || !found || retryAt != "" {
+		t.Fatalf("record retry_at=%q found=%v err=%v", retryAt, found, err)
+	}
+	view, found := store.View(id)
+	if !found || view.Status != events.StatusAbnormal || view.ModelDiscoveryErrorClass != events.ErrorInvalidToken {
+		t.Fatalf("invalid-token discovery view=%+v found=%v", view, found)
+	}
+	if candidates := store.ListDiscoveryCandidates(nil); len(candidates.Candidates) != 0 {
+		t.Fatalf("quarantined account candidates=%+v", candidates)
+	}
+	if store.catalogVersion <= version {
+		t.Fatalf("invalid token did not invalidate catalog: before=%d after=%d", version, store.catalogVersion)
+	}
+}
+
+func TestModelDiscoveryFailureNormalizesUnsafeDetail(t *testing.T) {
+	store := openTestStore(t)
+	if _, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	if _, found, err := store.RecordModelDiscoveryFailure(id, "upstream response: access"); err != nil || !found {
+		t.Fatalf("record found=%v err=%v", found, err)
+	}
+	view, found := store.View(id)
+	if !found || view.ModelDiscoveryErrorClass != events.ErrorUpstream || view.Status != events.StatusNormal {
+		t.Fatalf("unsafe discovery detail leaked into view=%+v found=%v", view, found)
 	}
 }
 

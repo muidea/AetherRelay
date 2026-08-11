@@ -36,12 +36,14 @@ const (
 )
 
 const (
-	ErrorInvalidToken = "invalid_token"
-	ErrorRateLimit    = "rate_limit"
-	ErrorTimeout      = "timeout"
-	ErrorNetwork      = "network"
-	ErrorUpstream     = "upstream"
-	ErrorClient       = "client"
+	ErrorInvalidToken   = "invalid_token"
+	ErrorRateLimit      = "rate_limit"
+	ErrorTimeout        = "timeout"
+	ErrorNetwork        = "network"
+	ErrorUpstream       = "upstream"
+	ErrorProtocol       = "protocol"
+	ErrorInvalidRequest = "invalid_request"
+	ErrorClient         = "client"
 )
 
 // AccountView is the management projection. Email is displayed as provided;
@@ -64,10 +66,12 @@ type AccountView struct {
 	QuotaObservations          []QuotaObservation    `json:"quota_observations,omitempty"`
 	ModelSnapshot              *AccountModelSnapshot `json:"model_snapshot,omitempty"`
 	ModelDiscoveryRetryAt      string                `json:"model_discovery_retry_at,omitempty"`
-	ModelDiscoveryLastError    string                `json:"model_discovery_last_error,omitempty"`
-	UsageSnapshot              *AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
-	UsageRefreshErrorAt        string                `json:"usage_refresh_error_at,omitempty"`
-	UsageRefreshError          string                `json:"usage_refresh_error,omitempty"`
+	// Model discovery health uses a stable category rather than raw upstream
+	// diagnostics, which can contain proxy or transport details.
+	ModelDiscoveryErrorClass string                `json:"model_discovery_error_class,omitempty"`
+	UsageSnapshot            *AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
+	UsageRefreshErrorAt      string                `json:"usage_refresh_error_at,omitempty"`
+	UsageRefreshError        string                `json:"usage_refresh_error,omitempty"`
 }
 
 type CooldownView struct {
@@ -229,6 +233,9 @@ type DiscoveryCandidate struct {
 	Proxy           string
 	NeedsDiscovery  bool
 	DiscoveryDue    bool
+	// DiscoveryBackedOff remains true during the persisted retry window even
+	// when a prior model snapshot has not expired yet.
+	DiscoveryBackedOff bool
 }
 
 type ListDiscoveryCandidatesCommand struct{ AccountIDs []string }
@@ -247,8 +254,8 @@ type PutModelSnapshotResult struct {
 }
 
 type RecordModelDiscoveryFailureCommand struct {
-	AccountID string
-	Error     string
+	AccountID  string
+	ErrorClass string
 }
 type RecordModelDiscoveryFailureResult struct {
 	RetryAt string

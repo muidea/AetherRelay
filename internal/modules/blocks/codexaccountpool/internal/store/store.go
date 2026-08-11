@@ -59,10 +59,10 @@ type account struct {
 	QuotaObservations   map[string]quotaObservation `json:"quota_observations,omitempty"`
 	// ModelSnapshot is the constrained account-scoped Codex capability cache.
 	// It never contains raw upstream JSON or credentials beyond this account.
-	ModelSnapshot           *events.AccountModelSnapshot `json:"model_snapshot,omitempty"`
-	ModelDiscoveryFailures  int                          `json:"model_discovery_failures,omitempty"`
-	ModelDiscoveryRetryAt   string                       `json:"model_discovery_retry_at,omitempty"`
-	ModelDiscoveryLastError string                       `json:"model_discovery_last_error,omitempty"`
+	ModelSnapshot            *events.AccountModelSnapshot `json:"model_snapshot,omitempty"`
+	ModelDiscoveryFailures   int                          `json:"model_discovery_failures,omitempty"`
+	ModelDiscoveryRetryAt    string                       `json:"model_discovery_retry_at,omitempty"`
+	ModelDiscoveryErrorClass string                       `json:"model_discovery_error_class,omitempty"`
 	// UsageSnapshot keeps only the allowlisted upstream usage projection. It
 	// deliberately excludes raw upstream JSON and all request credentials.
 	UsageSnapshot       *events.AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
@@ -281,7 +281,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		existing.ModelSnapshot = nil
 		existing.ModelDiscoveryFailures = 0
 		existing.ModelDiscoveryRetryAt = ""
-		existing.ModelDiscoveryLastError = ""
+		existing.ModelDiscoveryErrorClass = ""
 		existing.UsageSnapshot = nil
 		existing.UsageRefreshErrorAt = ""
 		existing.UsageRefreshError = ""
@@ -658,7 +658,7 @@ func toView(item *account, now time.Time) events.AccountView {
 		LastTokenRefreshErrorAt:    item.LastRefreshErrAt,
 		LastTokenRefreshErrorClass: item.LastRefreshErrClass,
 		ModelDiscoveryRetryAt:      item.ModelDiscoveryRetryAt,
-		ModelDiscoveryLastError:    item.ModelDiscoveryLastError,
+		ModelDiscoveryErrorClass:   item.ModelDiscoveryErrorClass,
 		UsageRefreshErrorAt:        item.UsageRefreshErrorAt,
 		UsageRefreshError:          item.UsageRefreshError,
 	}
@@ -727,13 +727,17 @@ func (s *Store) ListDiscoveryCandidates(accountIDs []string) events.ListDiscover
 			}
 		}
 		needs := item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now)
+		retryDue := modelDiscoveryRetryDue(item, now)
+		backedOff := !retryDue
+		hasFailure := strings.TrimSpace(item.ModelDiscoveryErrorClass) != ""
 		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
-			AccountID:       item.ID,
-			AccessToken:     item.AccessToken,
-			AccountIDHeader: item.AccountIDHeader,
-			Proxy:           item.Proxy,
-			NeedsDiscovery:  needs,
-			DiscoveryDue:    needs && modelDiscoveryRetryDue(item, now),
+			AccountID:          item.ID,
+			AccessToken:        item.AccessToken,
+			AccountIDHeader:    item.AccountIDHeader,
+			Proxy:              item.Proxy,
+			NeedsDiscovery:     needs,
+			DiscoveryDue:       (needs || hasFailure) && retryDue,
+			DiscoveryBackedOff: backedOff,
 		})
 	}
 	return out
@@ -754,7 +758,7 @@ func (s *Store) PutModelSnapshot(accountID string, snapshot events.AccountModelS
 	item.ModelSnapshot = &clean
 	item.ModelDiscoveryFailures = 0
 	item.ModelDiscoveryRetryAt = ""
-	item.ModelDiscoveryLastError = ""
+	item.ModelDiscoveryErrorClass = ""
 	if item.Status == events.StatusAbnormal {
 		item.Status = events.StatusNormal
 	}
@@ -765,7 +769,7 @@ func (s *Store) PutModelSnapshot(accountID string, snapshot events.AccountModelS
 	return s.catalogVersion, true, nil
 }
 
-func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, bool, error) {
+func (s *Store) RecordModelDiscoveryFailure(accountID, errorClass string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	accountID = strings.TrimSpace(accountID)
@@ -776,14 +780,39 @@ func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, 
 	if item == nil {
 		return "", false, nil
 	}
+	errorClass = normalizeModelDiscoveryErrorClass(errorClass)
 	item.ModelDiscoveryFailures++
+	item.ModelDiscoveryErrorClass = errorClass
+	if errorClass == events.ErrorInvalidToken {
+		item.ModelDiscoveryRetryAt = ""
+		statusChanged := false
+		if item.Status != events.StatusDisabled {
+			statusChanged = item.Status != events.StatusAbnormal
+			item.Status = events.StatusAbnormal
+		}
+		if err := s.saveLocked(); err != nil {
+			return "", false, err
+		}
+		if statusChanged {
+			s.bumpCatalogLocked()
+		}
+		return "", true, nil
+	}
 	retryAt := time.Now().UTC().Add(modelDiscoveryRetryDelay(item.ModelDiscoveryFailures))
 	item.ModelDiscoveryRetryAt = retryAt.Format(time.RFC3339)
-	item.ModelDiscoveryLastError = bounded(message, 256)
 	if err := s.saveLocked(); err != nil {
 		return "", false, err
 	}
 	return item.ModelDiscoveryRetryAt, true, nil
+}
+
+func normalizeModelDiscoveryErrorClass(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case events.ErrorInvalidToken, events.ErrorRateLimit, events.ErrorTimeout, events.ErrorNetwork, events.ErrorUpstream, events.ErrorProtocol, events.ErrorInvalidRequest:
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return events.ErrorUpstream
+	}
 }
 
 // ListUsageCandidates returns routable accounts for an unscoped refresh. An

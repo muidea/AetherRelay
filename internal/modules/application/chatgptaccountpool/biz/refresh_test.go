@@ -290,3 +290,50 @@ func TestTransientOAuthRefreshFailureRetainsAccount(t *testing.T) {
 		t.Fatalf("account should remain usable: view=%+v found=%v", view, ok)
 	}
 }
+
+func TestMissingOAuthRefreshCredentialIsPermanent(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
+	if _, _, err := accounts.Add([]string{"access-only"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+
+	value, err := hub.Send(event.NewEvent(accevents.TopicRefreshTextToken, "test", acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{AccessToken: "access-only"})).Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok || refreshed.Refreshed || !refreshed.PermanentFailure || refreshed.ErrorClass != "invalid_token" {
+		t.Fatalf("refresh result=%+v", value)
+	}
+}
+
+func TestUnavailableOAuthRefresherIsNotPermanent(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
+	if _, _, err := accounts.AddOAuth("old-token", "refresh-old", "id-old"); err != nil {
+		t.Fatal(err)
+	}
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+	account.oauth = nil
+
+	value, err := hub.Send(event.NewEvent(accevents.TopicRefreshTextToken, "test", acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{AccessToken: "old-token"})).Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed, ok := value.(accevents.RefreshTextTokenResult)
+	if !ok || refreshed.Refreshed || refreshed.PermanentFailure || refreshed.ErrorClass != "unavailable" {
+		t.Fatalf("refresh result=%+v", value)
+	}
+}

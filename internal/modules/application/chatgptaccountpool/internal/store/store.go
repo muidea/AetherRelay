@@ -1557,6 +1557,8 @@ func toView(acc *Account, withToken bool) events.AccountView {
 		LastTokenRefreshAt:         extraString(acc, "last_token_refresh_at"),
 		LastTokenRefreshErrorAt:    extraString(acc, "last_token_refresh_error_at"),
 		LastTokenRefreshErrorClass: extraString(acc, "last_token_refresh_error_class"),
+		ModelDiscoveryRetryAt:      extraString(acc, "model_discovery_retry_at"),
+		ModelDiscoveryErrorClass:   extraString(acc, "model_discovery_error_class"),
 		TextCooldowns:              activeTextCooldowns(acc, time.Now().UTC()),
 		ImageCooldowns:             activeImageCooldowns(acc, time.Now().UTC()),
 	}
@@ -1657,13 +1659,17 @@ func (s *Store) ListDiscoveryCandidates() (events.ListDiscoveryCandidatesResult,
 			continue
 		}
 		needs := acc.ModelSnapshot == nil || snapshotExpired(acc.ModelSnapshot, now)
+		retryDue := modelDiscoveryRetryDue(acc, now)
+		backedOff := !retryDue
+		hasFailure := extraString(acc, "model_discovery_error_class") != ""
 		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
-			AccountID:      acc.ID,
-			AccessToken:    acc.AccessToken,
-			Proxy:          acc.Proxy,
-			Status:         acc.Status,
-			NeedsDiscovery: needs,
-			DiscoveryDue:   needs && modelDiscoveryRetryDue(acc, now),
+			AccountID:          acc.ID,
+			AccessToken:        acc.AccessToken,
+			Proxy:              acc.Proxy,
+			Status:             acc.Status,
+			NeedsDiscovery:     needs,
+			DiscoveryDue:       (needs || hasFailure) && retryDue,
+			DiscoveryBackedOff: backedOff,
 		})
 	}
 	return out, nil
@@ -1691,6 +1697,7 @@ func (s *Store) PutModelSnapshot(accountID string, snap events.AccountModelSnaps
 	if acc.Extra != nil {
 		delete(acc.Extra, "model_discovery_failures")
 		delete(acc.Extra, "model_discovery_retry_at")
+		delete(acc.Extra, "model_discovery_error_class")
 		delete(acc.Extra, "model_discovery_last_error")
 	}
 	s.bumpCatalogLocked()
@@ -1700,9 +1707,10 @@ func (s *Store) PutModelSnapshot(accountID string, snap events.AccountModelSnaps
 	return s.catalogVersion, true, nil
 }
 
-// RecordModelDiscoveryFailure persistently throttles failed model discovery so
-// the fast watcher only retries the affected account when its backoff expires.
-func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, bool, error) {
+// RecordModelDiscoveryFailure stores only a bounded error category. An
+// invalid credential is not a transient discovery problem: it is quarantined
+// immediately so it cannot remain in routing or periodic scans.
+func (s *Store) RecordModelDiscoveryFailure(accountID, errorClass string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	accountID = trim(accountID)
@@ -1717,15 +1725,42 @@ func (s *Store) RecordModelDiscoveryFailure(accountID, message string) (string, 
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
 	}
+	errorClass = normalizeModelDiscoveryErrorClass(errorClass)
 	failures := extraInt(acc, "model_discovery_failures") + 1
-	retryAt := time.Now().UTC().Add(modelDiscoveryRetryDelay(failures))
 	acc.Extra["model_discovery_failures"] = failures
+	acc.Extra["model_discovery_error_class"] = errorClass
+	delete(acc.Extra, "model_discovery_last_error")
+	if errorClass == "invalid_token" {
+		delete(acc.Extra, "model_discovery_retry_at")
+		changed := false
+		if acc.Status != StatusDisabled {
+			changed = acc.Status != StatusAbnormal || acc.Quota != 0
+			acc.Status = StatusAbnormal
+			acc.Quota = 0
+		}
+		if err := s.saveLocked(); err != nil {
+			return "", false, err
+		}
+		if changed {
+			s.bumpCatalogLocked()
+		}
+		return "", true, nil
+	}
+	retryAt := time.Now().UTC().Add(modelDiscoveryRetryDelay(failures))
 	acc.Extra["model_discovery_retry_at"] = retryAt.Format(time.RFC3339)
-	acc.Extra["model_discovery_last_error"] = bounded(trim(message), 512)
 	if err := s.saveLocked(); err != nil {
 		return "", false, err
 	}
 	return retryAt.Format(time.RFC3339), true, nil
+}
+
+func normalizeModelDiscoveryErrorClass(value string) string {
+	switch strings.ToLower(trim(value)) {
+	case "invalid_token", "rate_limit", "tls", "timeout", "upstream", "not_implemented":
+		return strings.ToLower(trim(value))
+	default:
+		return "upstream"
+	}
 }
 
 // CatalogSnapshot returns the model union across healthy accounts with

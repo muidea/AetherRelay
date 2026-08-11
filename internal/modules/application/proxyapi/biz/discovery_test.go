@@ -23,7 +23,7 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
-func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
+func TestAutomaticDiscoverySkipsBackedOffAccounts(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)
 	defer hub.Terminate(context.Background())
@@ -33,7 +33,7 @@ func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
 	var mu sync.Mutex
 	modelRequests := map[string]int{}
 	accountCandidates := []accevents.DiscoveryCandidate{
-		{AccountID: "backed-off", AccessToken: "token-backoff", Proxy: "http://backed-off-proxy.invalid:8080", NeedsDiscovery: true, DiscoveryDue: false},
+		{AccountID: "backed-off", AccessToken: "token-backoff", Proxy: "http://backed-off-proxy.invalid:8080", DiscoveryBackedOff: true},
 		{AccountID: "due", AccessToken: "token-due", Proxy: "http://due-proxy.invalid:8080", NeedsDiscovery: true, DiscoveryDue: true},
 	}
 	accounts.Subscribe(accevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
@@ -78,8 +78,98 @@ func TestDueDiscoverySkipsBackedOffAccounts(t *testing.T) {
 	proxy.runDiscoveryRound(context.Background(), false)
 	mu.Lock()
 	defer mu.Unlock()
-	if modelRequests["token-due"] != 1 || modelRequests["token-backoff"] != 1 {
+	if modelRequests["token-due"] != 1 || modelRequests["token-backoff"] != 0 {
 		t.Fatalf("full discovery requests=%v", modelRequests)
+	}
+}
+
+func TestChatGPTDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	refreshes := 0
+	var snapshot accevents.AccountModelSnapshot
+	accounts.Subscribe(accevents.TopicRefreshTextToken, func(ev event.Event, result event.Result) {
+		command, ok := ev.Data().(accevents.RefreshTextTokenCommand)
+		if !ok || command.AccessToken != "expired-token" {
+			t.Fatalf("refresh command=%#v", ev.Data())
+		}
+		refreshes++
+		result.Set(accevents.RefreshTextTokenResult{AccessToken: "fresh-token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://fresh-proxy.invalid:8080"}, Refreshed: true}, nil)
+	})
+	accounts.Subscribe(accevents.TopicPutModelSnapshot, func(ev event.Event, result event.Result) {
+		command, ok := ev.Data().(accevents.PutModelSnapshotCommand)
+		if !ok || command.AccountID != "account-1" {
+			t.Fatalf("snapshot command=%#v", ev.Data())
+		}
+		snapshot = command.Snapshot
+		result.Set(accevents.PutModelSnapshotResult{OK: true}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRecordModelDiscoveryFailure, func(ev event.Event, result event.Result) {
+		t.Fatalf("recoverable discovery must not be recorded as failed: %#v", ev.Data())
+	})
+
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	requests := 0
+	upstream.Subscribe(upevents.TopicListModels, func(ev event.Event, result event.Result) {
+		command := ev.Data().(upevents.ListModelsCommand)
+		requests++
+		switch command.AccessToken {
+		case "expired-token":
+			result.Set(upevents.ListModelsResult{ErrorClass: upevents.ErrClassInvalidToken}, nil)
+		case "fresh-token":
+			if command.Proxy != "http://fresh-proxy.invalid:8080" {
+				t.Fatalf("fresh model request proxy=%q", command.Proxy)
+			}
+			result.Set(upevents.ListModelsResult{Models: []upevents.ModelDescriptor{{ID: "gpt-5", Capabilities: []upevents.ModelCapability{upevents.ModelCapabilityTextGeneration}}}}, nil)
+		default:
+			t.Fatalf("unexpected model request=%#v", command)
+		}
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}}
+	proxy.discoverOneAccount(context.Background(), accevents.DiscoveryCandidate{AccountID: "account-1", AccessToken: "expired-token", Proxy: "http://old-proxy.invalid:8080"})
+	if refreshes != 1 || requests != 2 || len(snapshot.Models) != 1 || snapshot.Models[0].ID != "gpt-5" {
+		t.Fatalf("refreshes=%d requests=%d snapshot=%+v", refreshes, requests, snapshot)
+	}
+}
+
+func TestChatGPTDiscoveryQuarantinesCredentialAfterPermanentRefreshFailure(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicRefreshTextToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.RefreshTextTokenResult{PermanentFailure: true, ErrorClass: "invalid_grant"}, nil)
+	})
+	recorded := make(chan accevents.RecordModelDiscoveryFailureCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordModelDiscoveryFailure, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordModelDiscoveryFailureCommand)
+		result.Set(accevents.RecordModelDiscoveryFailureResult{OK: true}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicListModels, func(_ event.Event, result event.Result) {
+		result.Set(upevents.ListModelsResult{ErrorClass: upevents.ErrClassInvalidToken}, nil)
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}}
+	proxy.discoverOneAccount(context.Background(), accevents.DiscoveryCandidate{AccountID: "account-1", AccessToken: "expired-token"})
+	select {
+	case command := <-recorded:
+		if command.AccountID != "account-1" || command.ErrorClass != "invalid_token" {
+			t.Fatalf("record command=%+v", command)
+		}
+	default:
+		t.Fatal("permanent credential failure was not recorded")
 	}
 }
 
@@ -91,7 +181,7 @@ func TestCodexDiscoveryUsesAccountScopedCredentialsAndSkipsBackoff(t *testing.T)
 
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
 	candidates := []codexevents.DiscoveryCandidate{
-		{AccountID: "backed-off", AccessToken: "token-backoff", NeedsDiscovery: true, DiscoveryDue: false},
+		{AccountID: "backed-off", AccessToken: "token-backoff", DiscoveryBackedOff: true},
 		{AccountID: "due", AccessToken: "token-due", AccountIDHeader: "upstream-account", Proxy: "http://due-proxy.invalid:8080", NeedsDiscovery: true, DiscoveryDue: true},
 	}
 	var mu sync.Mutex
@@ -142,8 +232,101 @@ func TestCodexDiscoveryUsesAccountScopedCredentialsAndSkipsBackoff(t *testing.T)
 	proxy.runCodexDiscoveryRound(context.Background(), false)
 	mu.Lock()
 	defer mu.Unlock()
-	if requests != 2 || len(stored) != 2 {
+	if requests != 1 || len(stored) != 1 {
 		t.Fatalf("full discovery requests=%d snapshots=%+v", requests, stored)
+	}
+}
+
+func TestCodexDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	refreshes := 0
+	var snapshot codexevents.AccountModelSnapshot
+	accounts.Subscribe(codexevents.TopicRefreshToken, func(ev event.Event, result event.Result) {
+		command, ok := ev.Data().(codexevents.RefreshTokenCommand)
+		if !ok || command.AccountID != "account-1" {
+			t.Fatalf("refresh command=%#v", ev.Data())
+		}
+		refreshes++
+		result.Set(codexevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "fresh-token", AccountIDHeader: "fresh-header", Proxy: "http://fresh-proxy.invalid:8080", Refreshed: true}, nil)
+	})
+	accounts.Subscribe(codexevents.TopicPutModelSnapshot, func(ev event.Event, result event.Result) {
+		command, ok := ev.Data().(codexevents.PutModelSnapshotCommand)
+		if !ok || command.AccountID != "account-1" {
+			t.Fatalf("snapshot command=%#v", ev.Data())
+		}
+		snapshot = command.Snapshot
+		result.Set(codexevents.PutModelSnapshotResult{OK: true}, nil)
+	})
+	accounts.Subscribe(codexevents.TopicRecordModelDiscoveryFailure, func(ev event.Event, result event.Result) {
+		t.Fatalf("recoverable discovery must not be recorded as failed: %#v", ev.Data())
+	})
+
+	upstream := event.NewSimpleObserver(codexupcommon.UnitID, hub)
+	requests := 0
+	upstream.Subscribe(codexupevents.TopicListModels, func(ev event.Event, result event.Result) {
+		command := ev.Data().(codexupevents.ListModelsCommand)
+		requests++
+		switch command.AccessToken {
+		case "expired-token":
+			result.Set(codexupevents.ListModelsResult{ErrorClass: codexupevents.ErrorInvalidToken}, nil)
+		case "fresh-token":
+			if command.AccountIDHeader != "fresh-header" || command.Proxy != "http://fresh-proxy.invalid:8080" {
+				t.Fatalf("fresh model request=%+v", command)
+			}
+			result.Set(codexupevents.ListModelsResult{Models: []codexupevents.ModelDescriptor{{ID: "gpt-5.2-codex"}}}, nil)
+		default:
+			t.Fatalf("unexpected model request=%#v", command)
+		}
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}}
+	err := proxy.discoverOneCodexAccount(context.Background(), codexevents.DiscoveryCandidate{AccountID: "account-1", AccessToken: "expired-token", AccountIDHeader: "old-header", Proxy: "http://old-proxy.invalid:8080"})
+	if err != nil || refreshes != 1 || requests != 2 || len(snapshot.Models) != 1 || snapshot.Models[0].ID != "gpt-5.2-codex" {
+		t.Fatalf("err=%v refreshes=%d requests=%d snapshot=%+v", err, refreshes, requests, snapshot)
+	}
+}
+
+func TestCodexDiscoveryQuarantinesCredentialAfterPermanentRefreshFailure(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicRefreshToken, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.RefreshTokenResult{PermanentFailure: true, ErrorClass: codexevents.ErrorInvalidToken}, nil)
+	})
+	recorded := make(chan codexevents.RecordModelDiscoveryFailureCommand, 1)
+	accounts.Subscribe(codexevents.TopicRecordModelDiscoveryFailure, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(codexevents.RecordModelDiscoveryFailureCommand)
+		result.Set(codexevents.RecordModelDiscoveryFailureResult{OK: true}, nil)
+	})
+	upstream := event.NewSimpleObserver(codexupcommon.UnitID, hub)
+	upstream.Subscribe(codexupevents.TopicListModels, func(_ event.Event, result event.Result) {
+		result.Set(codexupevents.ListModelsResult{ErrorClass: codexupevents.ErrorInvalidToken}, nil)
+	})
+
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}}
+	err := proxy.discoverOneCodexAccount(context.Background(), codexevents.DiscoveryCandidate{AccountID: "account-1", AccessToken: "expired-token"})
+	if err == nil {
+		t.Fatal("permanent credential failure should fail discovery")
+	}
+	select {
+	case command := <-recorded:
+		if command.AccountID != "account-1" || command.ErrorClass != codexevents.ErrorInvalidToken {
+			t.Fatalf("record command=%+v", command)
+		}
+	default:
+		t.Fatal("permanent credential failure was not recorded")
 	}
 }
 

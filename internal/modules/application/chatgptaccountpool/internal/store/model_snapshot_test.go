@@ -170,7 +170,7 @@ func TestModelDiscoveryFailureBackoffOnlyDefersAffectedCandidate(t *testing.T) {
 		t.Fatalf("accounts=%d", len(accounts))
 	}
 	failedID := accounts[0].ID
-	retryAt, found, err := s.RecordModelDiscoveryFailure(failedID, "upstream unavailable")
+	retryAt, found, err := s.RecordModelDiscoveryFailure(failedID, "upstream")
 	if err != nil || !found || retryAt == "" {
 		t.Fatalf("record retry_at=%q found=%v err=%v", retryAt, found, err)
 	}
@@ -183,12 +183,54 @@ func TestModelDiscoveryFailureBackoffOnlyDefersAffectedCandidate(t *testing.T) {
 		if !candidate.NeedsDiscovery {
 			t.Fatalf("new account should need discovery: %+v", candidate)
 		}
-		if candidate.AccountID == failedID && candidate.DiscoveryDue {
+		if candidate.AccountID == failedID && (candidate.DiscoveryDue || !candidate.DiscoveryBackedOff) {
 			t.Fatalf("failed candidate ignored retry backoff: %+v", candidate)
 		}
 		if candidate.AccountID != failedID && !candidate.DiscoveryDue {
 			t.Fatalf("unrelated candidate was throttled: %+v", candidate)
 		}
+	}
+}
+
+func TestModelDiscoveryInvalidTokenQuarantinesAccountAndProjectsSafeClass(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	id := s.List()[0].ID
+	quota := 3
+	if _, _, err := s.UpdateByID(id, nil, nil, &quota, nil); err != nil {
+		t.Fatal(err)
+	}
+	version := s.CatalogVersion()
+	retryAt, found, err := s.RecordModelDiscoveryFailure(id, "invalid_token")
+	if err != nil || !found || retryAt != "" {
+		t.Fatalf("record retry_at=%q found=%v err=%v", retryAt, found, err)
+	}
+	view := s.List()[0]
+	if view.Status != StatusAbnormal || view.Quota != 0 || view.ModelDiscoveryErrorClass != "invalid_token" {
+		t.Fatalf("invalid-token discovery view=%+v", view)
+	}
+	if candidates, err := s.ListDiscoveryCandidates(); err != nil || len(candidates.Candidates) != 0 {
+		t.Fatalf("quarantined account candidates=%+v err=%v", candidates, err)
+	}
+	if s.CatalogVersion() <= version {
+		t.Fatalf("invalid token did not invalidate catalog: before=%d after=%d", version, s.CatalogVersion())
+	}
+}
+
+func TestModelDiscoveryFailureNormalizesUnsafeDetail(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	id := s.List()[0].ID
+	if _, found, err := s.RecordModelDiscoveryFailure(id, "upstream response: token-a"); err != nil || !found {
+		t.Fatalf("record found=%v err=%v", found, err)
+	}
+	view := s.List()[0]
+	if view.ModelDiscoveryErrorClass != "upstream" || view.Status != StatusNormal {
+		t.Fatalf("unsafe discovery detail leaked into view=%+v", view)
 	}
 }
 

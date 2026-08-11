@@ -333,7 +333,7 @@ func (s *Account) handleRecordModelDiscoveryFailure(ev event.Event, result event
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex discovery failure command"))
 		return
 	}
-	retryAt, found, err := s.store.RecordModelDiscoveryFailure(cmd.AccountID, cmd.Error)
+	retryAt, found, err := s.store.RecordModelDiscoveryFailure(cmd.AccountID, cmd.ErrorClass)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -475,7 +475,11 @@ func (s *Account) refreshToken(ctx context.Context, accountID string) (events.Re
 func (s *Account) refreshTokenOnce(ctx context.Context, accountID string) (events.RefreshTokenResult, error) {
 	credential, found := s.store.RefreshCredential(accountID)
 	if !found {
-		return events.RefreshTokenResult{}, fmt.Errorf("OAuth refresh credential is unavailable")
+		out, recordErr := s.store.RecordRefreshFailure(accountID, events.ErrorInvalidToken, true)
+		if recordErr != nil {
+			return out, recordErr
+		}
+		return out, fmt.Errorf("OAuth refresh credential is unavailable")
 	}
 	oauthCtx, cancel := s.oauthRequestContext(ctx)
 	defer cancel()

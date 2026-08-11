@@ -44,6 +44,10 @@ type ListModelsCommand struct {
 
 type ListModelsResult struct {
 	Models []ModelDescriptor
+	// ErrorClass is populated when the EventHub result also carries an error.
+	// It lets discovery make account-health decisions without parsing upstream
+	// text or response bodies.
+	ErrorClass ErrorClass
 }
 
 type ErrorClass string

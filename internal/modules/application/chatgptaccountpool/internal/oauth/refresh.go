@@ -82,6 +82,14 @@ func IsRetryable(err error) bool {
 	return errors.As(err, &oauthErr) && oauthErr.Retryable
 }
 
+// IsPermanent reports whether the refresh operation explicitly confirmed that
+// the credential cannot be renewed. Generic owner/runtime failures must stay
+// retryable: they do not prove that the account credential is invalid.
+func IsPermanent(err error) bool {
+	var oauthErr *Error
+	return errors.As(err, &oauthErr) && !oauthErr.Retryable
+}
+
 // FailureClass returns a bounded string suitable for account state projection.
 func FailureClass(err error) string {
 	var oauthErr *Error

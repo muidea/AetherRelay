@@ -536,7 +536,7 @@ func (s *Account) handleRefreshTextToken(ev event.Event, result event.Result) {
 		result.Set(events.RefreshTextTokenResult{
 			AccessToken:      current.AccessToken,
 			Account:          current,
-			PermanentFailure: !oauth.IsRetryable(err),
+			PermanentFailure: oauth.IsPermanent(err),
 			ErrorClass:       oauth.FailureClass(err),
 		}, nil)
 		return
@@ -627,7 +627,7 @@ func (s *Account) handleRecordModelDiscoveryFailure(ev event.Event, result event
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid record model discovery failure command"))
 		return
 	}
-	retryAt, found, err := s.store.RecordModelDiscoveryFailure(cmd.AccountID, cmd.Error)
+	retryAt, found, err := s.store.RecordModelDiscoveryFailure(cmd.AccountID, cmd.ErrorClass)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return

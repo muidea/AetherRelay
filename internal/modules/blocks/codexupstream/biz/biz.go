@@ -228,7 +228,7 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 	}
 	models, class, err := listModels(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex model discovery failed: "+string(class)))
+		result.Set(events.ListModelsResult{ErrorClass: class}, cd.NewError(cd.Unexpected, "Codex model discovery failed: "+string(class)))
 		return
 	}
 	result.Set(events.ListModelsResult{Models: models}, nil)

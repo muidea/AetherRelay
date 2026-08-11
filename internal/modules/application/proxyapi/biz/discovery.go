@@ -130,9 +130,12 @@ func (s *Proxy) runDiscoveryRound(ctx context.Context, dueOnly bool) {
 	sem := make(chan struct{}, discoveryConcurrency)
 	var wg sync.WaitGroup
 	for _, candidate := range candidates.Candidates {
-		// The five-minute full scan refreshes every healthy account. The faster
-		// watch path retries only accounts whose persisted backoff has elapsed.
+		// A fresh snapshot can be renewed during the full scan, but any failed
+		// discovery remains paused until its persisted retry window expires.
 		if strings.TrimSpace(candidate.AccessToken) == "" || strings.TrimSpace(candidate.AccountID) == "" {
+			continue
+		}
+		if candidate.DiscoveryBackedOff || (candidate.NeedsDiscovery && !candidate.DiscoveryDue) {
 			continue
 		}
 		if dueOnly && !candidate.DiscoveryDue {
@@ -154,19 +157,22 @@ func (s *Proxy) runDiscoveryRound(ctx context.Context, dueOnly bool) {
 }
 
 func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.DiscoveryCandidate) {
-	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
-	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicListModels, s.ID(), upcommon.UnitID, event.NewHeader(), reqCtx, upevents.ListModelsCommand{
-		AccessToken: candidate.AccessToken,
-		Proxy:       candidate.Proxy,
-	})).Get()
-	if err != nil {
-		s.recordDiscoveryFailure(ctx, candidate, "list_models", err)
-		return
+	listed, failureClass, err := s.listChatGPTModels(ctx, candidate.AccessToken, candidate.Proxy)
+	if err != nil && failureClass == upevents.ErrClassInvalidToken {
+		refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, candidate.AccessToken)
+		switch {
+		case refreshErr == nil && !permanent && refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "":
+			listed, failureClass, err = s.listChatGPTModels(ctx, refreshed.AccessToken, refreshed.Account.Proxy)
+		case permanent:
+			failureClass = upevents.ErrClassInvalidToken
+			err = fmt.Errorf("chatgpt model discovery credential refresh failed")
+		default:
+			failureClass = chatGPTDiscoveryRefreshFailureClass(refreshed.ErrorClass)
+			err = fmt.Errorf("chatgpt model discovery credential refresh unavailable")
+		}
 	}
-	listed, ok := value.(upevents.ListModelsResult)
-	if !ok {
-		s.recordDiscoveryFailure(ctx, candidate, "list_models", fmt.Errorf("invalid model list result"))
+	if err != nil {
+		s.recordDiscoveryFailure(ctx, candidate, "list_models", failureClass)
 		return
 	}
 	now := time.Now().UTC()
@@ -195,7 +201,54 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 		Snapshot:  snap,
 	})).Get()
 	if putErr != nil {
-		s.recordDiscoveryFailure(ctx, candidate, "put_snapshot", putErr)
+		s.recordDiscoveryFailure(ctx, candidate, "put_snapshot", upevents.ErrClassUpstream)
+	}
+}
+
+func (s *Proxy) listChatGPTModels(ctx context.Context, accessToken, proxy string) (upevents.ListModelsResult, upevents.ErrorClass, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
+	defer cancel()
+	value, eventErr := s.SendEvent(event.NewEventWithContext(upevents.TopicListModels, s.ID(), upcommon.UnitID, event.NewHeader(), reqCtx, upevents.ListModelsCommand{
+		AccessToken: accessToken,
+		Proxy:       proxy,
+	})).Get()
+	listed, ok := value.(upevents.ListModelsResult)
+	if !ok {
+		if eventErr != nil {
+			return upevents.ListModelsResult{}, upevents.ErrClassUpstream, eventErr
+		}
+		return upevents.ListModelsResult{}, upevents.ErrClassUpstream, fmt.Errorf("invalid model list result")
+	}
+	failureClass := normalizeChatGPTDiscoveryErrorClass(listed.ErrorClass)
+	if listed.ErrorClass != "" {
+		if eventErr != nil {
+			return listed, failureClass, eventErr
+		}
+		return listed, failureClass, fmt.Errorf("chatgpt model discovery failed")
+	}
+	if eventErr != nil {
+		return listed, upevents.ErrClassUpstream, eventErr
+	}
+	return listed, "", nil
+}
+
+func normalizeChatGPTDiscoveryErrorClass(value upevents.ErrorClass) upevents.ErrorClass {
+	switch value {
+	case upevents.ErrClassInvalidToken, upevents.ErrClassRateLimit, upevents.ErrClassTLS, upevents.ErrClassTimeout, upevents.ErrClassUpstream, upevents.ErrClassNotImplemented:
+		return value
+	default:
+		return upevents.ErrClassUpstream
+	}
+}
+
+func chatGPTDiscoveryRefreshFailureClass(value string) upevents.ErrorClass {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "timeout":
+		return upevents.ErrClassTimeout
+	case "transport":
+		return upevents.ErrClassTLS
+	default:
+		return upevents.ErrClassUpstream
 	}
 }
 
@@ -277,6 +330,11 @@ func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, 
 				continue
 			}
 		}
+		// An operator-requested sync may intentionally bypass the automatic
+		// retry window after fixing a credential or proxy. Timers must not.
+		if strings.TrimSpace(progressID) == "" && (candidate.DiscoveryBackedOff || (candidate.NeedsDiscovery && !candidate.DiscoveryDue)) {
+			continue
+		}
 		if dueOnly && !candidate.DiscoveryDue {
 			continue
 		}
@@ -307,22 +365,26 @@ func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, 
 }
 
 func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexevents.DiscoveryCandidate) error {
-	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
-	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{
-		AccessToken:     candidate.AccessToken,
-		AccountIDHeader: candidate.AccountIDHeader,
-		Proxy:           candidate.Proxy,
-	})).Get()
-	if err != nil {
-		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", err)
-		return err
+	listed, failureClass, err := s.listCodexModels(ctx, candidate)
+	if err != nil && failureClass == codexupevents.ErrorInvalidToken {
+		refreshed, refreshErr := s.refreshCodexAccount(ctx, candidate.AccountID)
+		switch {
+		case refreshErr == nil && refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "":
+			candidate.AccessToken = refreshed.AccessToken
+			candidate.AccountIDHeader = refreshed.AccountIDHeader
+			candidate.Proxy = refreshed.Proxy
+			listed, failureClass, err = s.listCodexModels(ctx, candidate)
+		case refreshed.PermanentFailure:
+			failureClass = codexupevents.ErrorInvalidToken
+			err = fmt.Errorf("Codex model discovery credential refresh failed")
+		default:
+			failureClass = codexDiscoveryRefreshFailureClass(refreshed.ErrorClass)
+			err = fmt.Errorf("Codex model discovery credential refresh unavailable")
+		}
 	}
-	listed, ok := value.(codexupevents.ListModelsResult)
-	if !ok {
-		err := fmt.Errorf("invalid model list result")
-		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", err)
-		return err
+	if err != nil {
+		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", failureClass)
+		return fmt.Errorf("Codex model discovery failed: %s", failureClass)
 	}
 	now := time.Now().UTC()
 	snapshot := codexevents.AccountModelSnapshot{
@@ -338,10 +400,60 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 	}
 	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutModelSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutModelSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot})).Get()
 	if putErr != nil {
-		s.recordCodexDiscoveryFailure(ctx, candidate, "put_snapshot", putErr)
-		return putErr
+		s.recordCodexDiscoveryFailure(ctx, candidate, "put_snapshot", codexupevents.ErrorUpstream)
+		return fmt.Errorf("Codex model discovery failed: %s", codexupevents.ErrorUpstream)
 	}
 	return nil
+}
+
+func (s *Proxy) listCodexModels(ctx context.Context, candidate codexevents.DiscoveryCandidate) (codexupevents.ListModelsResult, codexupevents.ErrorClass, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
+	defer cancel()
+	value, eventErr := s.SendEvent(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{
+		AccessToken:     candidate.AccessToken,
+		AccountIDHeader: candidate.AccountIDHeader,
+		Proxy:           candidate.Proxy,
+	})).Get()
+	listed, ok := value.(codexupevents.ListModelsResult)
+	if !ok {
+		if eventErr != nil {
+			return codexupevents.ListModelsResult{}, codexupevents.ErrorUpstream, eventErr
+		}
+		return codexupevents.ListModelsResult{}, codexupevents.ErrorProtocol, fmt.Errorf("invalid Codex model list result")
+	}
+	failureClass := normalizeCodexDiscoveryErrorClass(listed.ErrorClass)
+	if listed.ErrorClass != "" {
+		if eventErr != nil {
+			return listed, failureClass, eventErr
+		}
+		return listed, failureClass, fmt.Errorf("Codex model discovery failed")
+	}
+	if eventErr != nil {
+		return listed, codexupevents.ErrorUpstream, eventErr
+	}
+	return listed, "", nil
+}
+
+func normalizeCodexDiscoveryErrorClass(value codexupevents.ErrorClass) codexupevents.ErrorClass {
+	switch value {
+	case codexupevents.ErrorInvalidRequest, codexupevents.ErrorInvalidToken, codexupevents.ErrorRateLimit, codexupevents.ErrorTimeout, codexupevents.ErrorNetwork, codexupevents.ErrorUpstream, codexupevents.ErrorProtocol:
+		return value
+	default:
+		return codexupevents.ErrorUpstream
+	}
+}
+
+func codexDiscoveryRefreshFailureClass(value string) codexupevents.ErrorClass {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case codexevents.ErrorRateLimit:
+		return codexupevents.ErrorRateLimit
+	case codexevents.ErrorTimeout:
+		return codexupevents.ErrorTimeout
+	case codexevents.ErrorNetwork:
+		return codexupevents.ErrorNetwork
+	default:
+		return codexupevents.ErrorUpstream
+	}
 }
 
 func uniqueCodexAccountIDs(values []string) []string {
@@ -455,28 +567,24 @@ func boundedDiscoveryError(value string) string {
 	return value
 }
 
-func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, cause error) {
-	if cause == nil {
-		return
-	}
-	// Account IDs are opaque local identifiers; do not log access tokens or
-	// upstream response bodies.
-	slog.Warn("chatgpt model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error", cause.Error())
+func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, errorClass upevents.ErrorClass) {
+	errorClass = normalizeChatGPTDiscoveryErrorClass(errorClass)
+	// Account IDs are opaque local identifiers. Keep discovery telemetry to a
+	// stable class instead of logging upstream diagnostics or response bodies.
+	slog.Warn("chatgpt model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error_class", errorClass)
 	_, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRecordModelDiscoveryFailure, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RecordModelDiscoveryFailureCommand{
-		AccountID: candidate.AccountID,
-		Error:     cause.Error(),
+		AccountID:  candidate.AccountID,
+		ErrorClass: string(errorClass),
 	})).Get()
 	if err != nil {
 		slog.Warn("chatgpt model discovery failure was not recorded", "account_id", candidate.AccountID, "error", err.Error())
 	}
 }
 
-func (s *Proxy) recordCodexDiscoveryFailure(ctx context.Context, candidate codexevents.DiscoveryCandidate, stage string, cause error) {
-	if cause == nil {
-		return
-	}
-	slog.Warn("Codex model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error", cause.Error())
-	_, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRecordModelDiscoveryFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordModelDiscoveryFailureCommand{AccountID: candidate.AccountID, Error: cause.Error()})).Get()
+func (s *Proxy) recordCodexDiscoveryFailure(ctx context.Context, candidate codexevents.DiscoveryCandidate, stage string, errorClass codexupevents.ErrorClass) {
+	errorClass = normalizeCodexDiscoveryErrorClass(errorClass)
+	slog.Warn("Codex model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error_class", errorClass)
+	_, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRecordModelDiscoveryFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordModelDiscoveryFailureCommand{AccountID: candidate.AccountID, ErrorClass: string(errorClass)})).Get()
 	if err != nil {
 		slog.Warn("Codex model discovery failure was not recorded", "account_id", candidate.AccountID, "error", err.Error())
 	}

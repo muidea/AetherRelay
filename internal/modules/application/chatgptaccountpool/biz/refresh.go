@@ -325,7 +325,10 @@ func (s *Account) refreshOAuthTokens(selectedIDs map[string]struct{}) map[string
 func (s *Account) refreshTextToken(accessToken string) (events.RefreshTextTokenResult, error) {
 	credential, found := s.store.OAuthRefreshCredentialFor(accessToken)
 	if !found {
-		return events.RefreshTextTokenResult{}, fmt.Errorf("oauth refresh credential is unavailable")
+		// A model-list 401 plus no stored refresh credential is conclusive for
+		// this access token. Mark it as a typed permanent failure so callers can
+		// retire the account rather than repeatedly retrying an unusable token.
+		return events.RefreshTextTokenResult{}, &oauth.Error{Class: "invalid_token"}
 	}
 	if current, ok := s.store.ViewForAccessToken(accessToken); ok && credential.AccessToken != strings.TrimSpace(accessToken) {
 		// Another in-flight request already rotated this credential. Reuse the
@@ -355,7 +358,9 @@ func (s *Account) refreshTextToken(accessToken string) (events.RefreshTextTokenR
 
 func (s *Account) refreshTextTokenOnce(credential store.OAuthRefreshCredential) (events.RefreshTextTokenResult, error) {
 	if s.oauth == nil || s.stopping.Load() {
-		return events.RefreshTextTokenResult{}, fmt.Errorf("oauth refresh is unavailable")
+		// A local lifecycle problem says nothing about the credential itself.
+		// Keep the account eligible for a later discovery retry.
+		return events.RefreshTextTokenResult{}, &oauth.Error{Class: "unavailable", Retryable: true}
 	}
 	refreshed, err := s.oauth.Refresh(s.shutdownCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy})
 	if err != nil {

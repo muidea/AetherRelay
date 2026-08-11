@@ -872,6 +872,21 @@ function tokenRefreshBadge(account){
   const title=`最近凭据刷新成功：${when}`;
   return `<div class="account-refresh-state"><span class="tag tag-refresh-ok" title="${esc(title)}">${esc(`凭据已刷新 · ${when}`)}</span></div>`;
 }
+function modelDiscoveryReason(value){
+  const labels={invalid_token:"凭据失效",rate_limit:t("限流"),tls:"TLS 连接失败",timeout:t("超时"),network:"网络故障",upstream:"上游故障",protocol:"响应异常",invalid_request:"请求异常",not_implemented:"暂不支持"};
+  const key=String(value||"").trim().toLowerCase();
+  return labels[key]||t("上游故障");
+}
+function modelDiscoveryBadge(account){
+  const failureClass=String(account?.model_discovery_error_class||"").trim();
+  if(!failureClass)return "";
+  const reason=modelDiscoveryReason(failureClass);
+  const retryAt=String(account?.model_discovery_retry_at||"").trim();
+  const credentialInvalid=failureClass.toLowerCase()==="invalid_token";
+  const label=credentialInvalid?`模型发现凭据失效 · ${reason}`:`模型发现失败 · ${reason}${retryAt?` · 下次重试 ${formatAccountDate(retryAt)}`:""}`;
+  const title=credentialInvalid?"模型发现确认当前访问凭据无效，账号已停止自动路由与发现。":`模型目录暂不可用；${retryAt?`下次自动尝试：${formatAccountDate(retryAt)}`:"等待下一次自动尝试"}`;
+  return `<div class="account-refresh-state"><span class="tag ${credentialInvalid?"tag-refresh-failure":"tag-cooldown"}" title="${esc(title)}">${esc(label)}</span></div>`;
+}
 async function request(url,options={}){
   const opts={cache:"no-store",credentials:"same-origin",...options};
   const r=await fetch(url,opts);
@@ -1068,18 +1083,17 @@ function codexRefreshBadge(account){
 function codexModelSnapshotBadge(account){
   const snapshot=account?.model_snapshot;
   const models=Array.isArray(snapshot?.models)?snapshot.models:[];
-  const retryAt=String(account?.model_discovery_retry_at||"").trim();
-  const lastError=String(account?.model_discovery_last_error||"").trim();
+  const failureClass=String(account?.model_discovery_error_class||"").trim();
   if(!snapshot){
+    if(failureClass)return modelDiscoveryBadge(account);
     if(!state.codex.discovery.done)return `<div class="subtle">${esc(t("模型发现中"))}</div>`;
-    if(retryAt)return `<div class="subtle" title="${esc(lastError||t("模型目录同步暂不可用"))}">${esc(t("模型发现失败：{error}；下次尝试 {time}",{error:lastError||t("模型目录同步暂不可用"),time:formatAccountDate(retryAt)}))}</div>`;
     return `<div class="subtle">${esc(t("等待模型同步"))}</div>`;
   }
   const visible=models.slice(0,2).map(model=>`<span class="tag tag-purple" title="${esc(model.id||"")}">${esc(model.id||"")}</span>`).join("");
   const more=models.length>2?`<span class="tag tag-default">+${models.length-2}</span>`:"";
   const discovered=`<div class="subtle">${esc(t("已发现 {count} 个模型",{count:models.length}))}</div>`;
   const expires=snapshot.expires_at?`<div class="subtle">${esc(t("缓存有效至 {time}",{time:formatAccountDate(snapshot.expires_at)}))}</div>`:"";
-  return `${discovered}<div class="tags">${visible||`<span class="subtle">${esc(t("未发现模型"))}</span>`}${more}</div>${expires}`;
+  return `${discovered}<div class="tags">${visible||`<span class="subtle">${esc(t("未发现模型"))}</span>`}${more}</div>${expires}${modelDiscoveryBadge(account)}`;
 }
 function codexQuotaObservationBadges(account){
   const observations=Array.isArray(account?.quota_observations)?account.quota_observations:[];
@@ -1282,8 +1296,7 @@ function unifiedAccountStatus(row){
 function unifiedWebSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 ChatGPT Web 凭据</div>`;
   const restore=formatRestoreAt(account.restore_at);
-  const failure=String(account.last_token_refresh_error_class||"").trim();
-  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div></div><div class="unified-slot-primary"><span class="unified-slot-primary-value">图片额度 ${Math.max(0,Number(account.quota)||0)}</span>${restore.relative?`<span class="subtle">恢复 ${esc(restore.relative)}</span>`:""}</div>${failure?`<div class="unified-slot-meta"><span class="tag tag-refresh-failure">刷新失败 · ${esc(failure)}</span></div>`:""}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}">刷新凭据</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}">删除槽位</button></div></div>`;
+  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div></div><div class="unified-slot-primary"><span class="unified-slot-primary-value">图片额度 ${Math.max(0,Number(account.quota)||0)}</span>${restore.relative?`<span class="subtle">恢复 ${esc(restore.relative)}</span>`:""}</div>${tokenRefreshBadge(account)}${modelDiscoveryBadge(account)}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}">刷新凭据</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}">删除槽位</button></div></div>`;
 }
 function unifiedCodexSummary(account){
   const models=Array.isArray(account?.model_snapshot?.models)?account.model_snapshot.models:[];
@@ -1293,8 +1306,7 @@ function unifiedCodexSummary(account){
   const usage=first?`剩余 ${Math.round(remaining)}%`:(windows.length?"用量未知":"用量未同步");
   const usageClass=remaining===null?"":remaining<=0?" exhausted":remaining<=30?" warning":"";
   const usageView=remaining===null?`<span class="unified-slot-meta-text">${esc(usage)}</span>`:`<div class="unified-usage"><div class="unified-usage-head"><span>用量</span><strong>${esc(usage)}</strong></div><div class="unified-usage-meter${usageClass}"><i style="width:${Math.round(remaining)}%"></i></div></div>`;
-  const failure=String(account?.last_token_refresh_error_class||"").trim();
-  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span>${usageView}${failure?`<span class="tag tag-refresh-failure">刷新失败 · ${esc(failure)}</span>`:""}</div>`;
+  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span>${usageView}</div>${codexRefreshBadge(account)}${modelDiscoveryBadge(account)}`;
 }
 function unifiedCodexSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 Codex CLI 凭据</div>`;
@@ -1575,7 +1587,7 @@ function renderChatGPTAccounts(){
       <td><input type="checkbox" data-acc-check="${esc(a.id)}" ${checked}></td>
       <td>${chatGPTAccountIdentity(a)}</td>
       <td>${chatGPTAccountOrigin(a)}</td>
-      <td class="account-status-cell">${statusTag(a.status)}${textCooldownBadges(a.text_cooldowns)}${imageCooldownBadges(a.image_cooldowns)}${tokenRefreshBadge(a)}</td>
+      <td class="account-status-cell">${statusTag(a.status)}${textCooldownBadges(a.text_cooldowns)}${imageCooldownBadges(a.image_cooldowns)}${tokenRefreshBadge(a)}${modelDiscoveryBadge(a)}</td>
       <td>${chatGPTAccountQuota(quota,restore,a.restore_at)}</td>
       <td class="cg-account-task ${inflight>0?"account-inflight":"subtle"}" title="${inflight>0?"当前图片任务数量。账号池空闲时该值持续大于 0，可能表示并发槽位未释放。":"当前无进行中的图片任务"}">${inflight}</td>
       <td>${chatGPTAccountActivity(success,fail)}</td>

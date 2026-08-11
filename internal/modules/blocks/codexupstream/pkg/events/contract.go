@@ -100,7 +100,12 @@ type ModelDescriptor struct {
 	OwnedBy   string
 }
 
-type ListModelsResult struct{ Models []ModelDescriptor }
+type ListModelsResult struct {
+	Models []ModelDescriptor
+	// ErrorClass is present alongside an EventHub error so account discovery can
+	// distinguish an invalid credential from a transient transport failure.
+	ErrorClass ErrorClass
+}
 
 // GetUsageCommand is credential-bearing only within the EventHub path. The
 // result below is an allowlisted summary rather than the raw WHAM response.

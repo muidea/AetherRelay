@@ -65,6 +65,10 @@ type AccountView struct {
 	LastTokenRefreshAt         string `json:"last_token_refresh_at,omitempty"`
 	LastTokenRefreshErrorAt    string `json:"last_token_refresh_error_at,omitempty"`
 	LastTokenRefreshErrorClass string `json:"last_token_refresh_error_class,omitempty"`
+	// Model discovery health is a bounded operational projection. It never
+	// contains raw upstream responses, proxy diagnostics, or credentials.
+	ModelDiscoveryRetryAt    string `json:"model_discovery_retry_at,omitempty"`
+	ModelDiscoveryErrorClass string `json:"model_discovery_error_class,omitempty"`
 	// TextCooldowns is a read-only projection of active model-scoped account
 	// cooldowns. It intentionally contains no credential or persistence data.
 	TextCooldowns []TextCooldownView `json:"text_cooldowns,omitempty"`
@@ -235,6 +239,10 @@ type DiscoveryCandidate struct {
 	Status         string
 	NeedsDiscovery bool
 	DiscoveryDue   bool
+	// DiscoveryBackedOff is true while a prior failed attempt has not reached
+	// its persisted retry time. It is separate from NeedsDiscovery because a
+	// still-valid snapshot may also fail its periodic refresh.
+	DiscoveryBackedOff bool
 }
 
 type ListDiscoveryCandidatesCommand struct{}
@@ -253,8 +261,8 @@ type PutModelSnapshotResult struct {
 }
 
 type RecordModelDiscoveryFailureCommand struct {
-	AccountID string
-	Error     string
+	AccountID  string
+	ErrorClass string
 }
 type RecordModelDiscoveryFailureResult struct {
 	RetryAt string
