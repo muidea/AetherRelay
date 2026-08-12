@@ -33,11 +33,7 @@ func (h *Handler) addChatGPTAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt account pool is unavailable")
 		return
 	}
-	var body struct {
-		Tokens     []string               `json:"tokens"`
-		Accounts   []accevents.ExportItem `json:"accounts"`
-		SourceType string                 `json:"source_type"`
-	}
+	var body chatGPTAccountImportBody
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}

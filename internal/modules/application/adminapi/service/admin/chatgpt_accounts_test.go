@@ -23,6 +23,7 @@ type chatGPTAccountRuntimeStub struct {
 	accounts           []accevents.AccountView
 	addedTokens        []string
 	addedAccounts      []accevents.ExportItem
+	addedSourceType    string
 	addErr             error
 	deletedIDs         []string
 	updated            accevents.UpdateByIDCommand
@@ -79,9 +80,10 @@ func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]acce
 		Proxy:                      "http://private.invalid",
 	}}, nil
 }
-func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, accounts []accevents.ExportItem, _ string) (accevents.AddResult, error) {
+func (s *chatGPTAccountRuntimeStub) AddChatGPTAccounts(_ context.Context, tokens []string, accounts []accevents.ExportItem, sourceType string) (accevents.AddResult, error) {
 	s.addedTokens = append([]string(nil), tokens...)
 	s.addedAccounts = append([]accevents.ExportItem(nil), accounts...)
+	s.addedSourceType = sourceType
 	if s.addErr != nil {
 		return accevents.AddResult{}, s.addErr
 	}
@@ -364,6 +366,65 @@ func TestChatGPTAccountSlotExportEndpointRemoved(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("slot export status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChatGPTAccountImportAcceptsDirectCredentialShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		payload    string
+		wantTokens []string
+		wantAccess []string
+		wantSource string
+	}{
+		{
+			name:       "single object",
+			payload:    `{"credential_type":"chatgpt_web","access_token":"access-single","refresh_token":"refresh-single","email":"single@example.invalid","source_type":"web"}`,
+			wantAccess: []string{"access-single"},
+			wantSource: "web",
+		},
+		{
+			name:       "array",
+			payload:    `[{"credential_type":"chatgpt_web","access_token":"access-one","refresh_token":"refresh-one"},{"credential_type":"chatgpt_web","access_token":"access-two","refresh_token":"refresh-two"}]`,
+			wantAccess: []string{"access-one", "access-two"},
+		},
+		{
+			name:       "legacy envelope",
+			payload:    `{"tokens":["token-only"],"accounts":[{"credential_type":"chatgpt_web","access_token":"access-wrapped","refresh_token":"refresh-wrapped"}],"source_type":"oauth_import"}`,
+			wantTokens: []string{"token-only"},
+			wantAccess: []string{"access-wrapped"},
+			wantSource: "oauth_import",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := &chatGPTAccountRuntimeStub{}
+			handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(tt.payload))
+			req.RemoteAddr = "127.0.0.1:1234"
+			req.Header.Set("X-AetherRelay-Admin", "1")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if strings.Join(runtime.addedTokens, ",") != strings.Join(tt.wantTokens, ",") {
+				t.Fatalf("tokens=%v want=%v", runtime.addedTokens, tt.wantTokens)
+			}
+			if len(runtime.addedAccounts) != len(tt.wantAccess) {
+				t.Fatalf("accounts=%d want=%d", len(runtime.addedAccounts), len(tt.wantAccess))
+			}
+			for i, account := range runtime.addedAccounts {
+				if account.AccessToken != tt.wantAccess[i] {
+					t.Fatalf("account[%d].access_token=%q want=%q", i, account.AccessToken, tt.wantAccess[i])
+				}
+			}
+			if runtime.addedSourceType != tt.wantSource {
+				t.Fatalf("source_type=%q want=%q", runtime.addedSourceType, tt.wantSource)
+			}
+		})
 	}
 }
 

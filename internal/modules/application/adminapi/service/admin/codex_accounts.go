@@ -25,9 +25,7 @@ func (h *Handler) importCodexAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "Codex account pool is unavailable")
 		return
 	}
-	var body struct {
-		Accounts []codexevents.CredentialInput `json:"accounts"`
-	}
+	var body codexAccountImportBody
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}

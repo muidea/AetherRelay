@@ -232,7 +232,7 @@ POST   <base>/api/codex/accounts/export            # {"ids":[...]}；返回可�
 
 导出属于刻意的敏感操作，只应在受控的本机或已启用 HTTPS 登录保护的 Admin 会话中调用；不要把响应写入日志、浏览器持久化存储或工单。
 
-两类账号池的导入/导出遵循同一使用约定：导入接受 `{ "accounts": [...] }`，导出固定返回数组；完整 OAuth 对象需要包含可用的 `access_token` 与 `refresh_token`，`id_token` 可选。凭据类型由 `/api/chatgpt/accounts` 或 `/api/codex/accounts` 导入入口决定，不强制要求冗余 `credential_type` 字段；服务端仍拒绝把一类 OAuth 导出导入另一类账号池，避免使用错误 OAuth client 刷新 refresh token。ChatGPT Web 额外接受 `tokens` 字符串数组及管理页中的换行/逗号分隔 token 文本，适合只有 access token 的场景；完整对象不会降级成单 token 导入。
+两类账号池的导入/导出遵循同一使用约定：导入兼容既有 `{ "accounts": [...] }` 包装，也接受裸对象数组 `[...]` 或单条凭据对象 `{...}`；导出固定返回数组。完整 OAuth 对象需要包含可用的 `access_token` 与 `refresh_token`，`id_token` 可选。凭据类型由 `/api/chatgpt/accounts` 或 `/api/codex/accounts` 导入入口决定，不强制要求冗余 `credential_type` 字段；服务端仍拒绝把一类 OAuth 导出导入另一类账号池，避免使用错误 OAuth client 刷新 refresh token。ChatGPT Web 额外接受 `tokens` 字符串数组及管理页中的换行/逗号分隔 token 文本，适合只有 access token 的场景；完整对象不会降级成单 token 导入。
 
 管理页以 JSON 文件作为主要导入方式，可直接选择上述导出文件；粘贴 JSON 是辅助方式，两者不能同时使用。浏览器只在提交期间读取文件，不预览、不写入 Web Storage，并在提交或关闭弹窗后清空输入。文件及 HTTP 请求体上限为 1 MiB，单次最多导入 1000 个账号；后端会再次执行数量和凭据结构校验。
 

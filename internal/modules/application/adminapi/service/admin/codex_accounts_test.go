@@ -132,6 +132,54 @@ func TestCodexImportStartsDiscoveryAndExposesProgress(t *testing.T) {
 	}
 }
 
+func TestCodexAccountImportAcceptsDirectCredentialShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		payload    string
+		wantAccess []string
+	}{
+		{
+			name:       "single object",
+			payload:    `{"credential_type":"codex_cli","access_token":"access-single","refresh_token":"refresh-single","email":"single@example.invalid"}`,
+			wantAccess: []string{"access-single"},
+		},
+		{
+			name:       "array",
+			payload:    `[{"credential_type":"codex_cli","access_token":"access-one","refresh_token":"refresh-one"},{"credential_type":"codex_cli","access_token":"access-two","refresh_token":"refresh-two"}]`,
+			wantAccess: []string{"access-one", "access-two"},
+		},
+		{
+			name:       "legacy envelope",
+			payload:    `{"accounts":[{"credential_type":"codex_cli","access_token":"access-wrapped","refresh_token":"refresh-wrapped"}]}`,
+			wantAccess: []string{"access-wrapped"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := &codexAccountRuntimeStub{}
+			handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts", strings.NewReader(tt.payload))
+			req.RemoteAddr = "127.0.0.1:1234"
+			req.Header.Set("X-AetherRelay-Admin", "1")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(runtime.imported) != len(tt.wantAccess) {
+				t.Fatalf("accounts=%d want=%d", len(runtime.imported), len(tt.wantAccess))
+			}
+			for i, account := range runtime.imported {
+				if account.AccessToken != tt.wantAccess[i] {
+					t.Fatalf("account[%d].access_token=%q want=%q", i, account.AccessToken, tt.wantAccess[i])
+				}
+			}
+		})
+	}
+}
+
 func TestCodexAccountImportRejectsMoreThanLimit(t *testing.T) {
 	runtime := &codexAccountRuntimeStub{}
 	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)

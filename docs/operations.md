@@ -118,7 +118,7 @@ Admin 管理台一级页签「ChatGPT Web」提供账号池、临时对话、图
 - 备份/恢复 `state.database` 即包含临时对话正文；共享或外发该文件等同于泄露管理员调试输入输出，需按主机权限与备份策略保护。
 - research / deep_research 专用模型不会进入临时对话模型选择器或公开 `/v1/models`。
 
-- **账号导入/导出**：ChatGPT Web 与 Codex OAuth 均可直接选择导出的 JSON 文件重新导入，也支持粘贴 `accounts` 对象数组；ChatGPT Web 另支持纯 access token 文本。文件和粘贴内容不能同时使用，限制 1 MiB、单次 1000 个账号，提交或关闭后页面会清空输入。两个导出接口是仅有的明文凭据出口，必须二次确认且响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图，下载后立即销毁本地副本。
+- **账号导入/导出**：ChatGPT Web 与 Codex OAuth 均可直接选择导出的 JSON 文件重新导入，也支持粘贴单条凭据对象 `{...}`、对象数组 `[...]` 或 `{accounts:[...]}` 包装；ChatGPT Web 另支持纯 access token 文本。文件和粘贴内容不能同时使用，限制 1 MiB、单次 1000 个账号，提交或关闭后页面会清空输入。两个导出接口是仅有的明文凭据出口，必须二次确认且响应带 `Cache-Control: no-store`。不要把导出内容写入日志、工单、浏览器 localStorage/sessionStorage 或截图，下载后立即销毁本地副本。
 - **OAuth 导入**：授权 URL、callback 与 session id 只应停留在管理员当前浏览器会话的内存中；不要把它们写进 URL 书签、共享剪贴板记录或监控日志。
 - **图片删除**：图片库删除不可恢复；批量删除前确认路径列表。图片内容通过 Admin 鉴权同源端点 `GET .../api/chatgpt/images/content?path=` 读取（可选 `thumb=1`），路径经严格校验，不提供通用 `/files/**`。
 - **api_key_id**：图片任务和图片库缺省使用服务端内建 `builtin-local` scope；显式值必须是已存在的客户端 Key。Admin 页面从客户端 Key 选择器提交，不接受任意 owner 字符串；图片资产、缩略图、标签和任务不可跨 Key 读取。

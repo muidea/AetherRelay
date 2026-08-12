@@ -546,8 +546,8 @@
   <form id="cgImportForm" autocomplete="off">
     <div class="modal-head"><span class="modal-title">导入 ChatGPT Web 凭据</span><button class="close" type="button" id="cgImportClose">×</button></div>
     <div class="modal-body">
-      <div class="field"><label class="label" for="cgImportFile">JSON 文件</label><input id="cgImportFile" class="control" type="file" accept=".json,application/json"><div class="help">推荐直接选择 ChatGPT Web 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。</div></div>
-      <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="10" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea><div class="help">文件与粘贴内容只能选择一种。支持完整 ChatGPT Web OAuth JSON，也支持每行一个 access token；Codex OAuth 导出不可导入此处。</div></div>
+      <div class="field"><label class="label" for="cgImportFile">JSON 文件</label><input id="cgImportFile" class="control" type="file" accept=".json,application/json"><div class="help">支持 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。</div></div>
+      <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="10" placeholder='{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}'></textarea><div class="help">文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。</div></div>
       <div class="field"><label class="label" for="cgImportSource">source_type</label>
         <select id="cgImportSource" class="control"><option value="">留空</option><option value="web">手工导入（web）</option></select>
       </div>
@@ -604,8 +604,8 @@
   <form id="codexImportForm" autocomplete="off">
     <div class="modal-head"><span class="modal-title">导入 Codex OAuth 凭据</span><button class="close" type="button" id="codexImportClose">×</button></div>
     <div class="modal-body">
-      <div class="field"><label class="label" for="codexImportFile">JSON 文件</label><input id="codexImportFile" class="control" type="file" accept=".json,application/json"><div class="help">推荐直接选择 Codex OAuth 导出的 JSON 文件，最大 1 MiB、最多 1000 个账号。</div></div>
-      <div class="field"><label class="label" for="codexImportAccounts">粘贴凭据（辅助）</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='[{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}]'></textarea><div class="help">文件与粘贴内容只能选择一种。支持 Codex OAuth 完整 JSON；ChatGPT Web 导出不可导入此处。</div></div>
+      <div class="field"><label class="label" for="codexImportFile">JSON 文件</label><input id="codexImportFile" class="control" type="file" accept=".json,application/json"><div class="help">支持 Codex OAuth 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。</div></div>
+      <div class="field"><label class="label" for="codexImportAccounts">粘贴凭据（辅助）</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}'></textarea><div class="help">文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。</div></div>
     </div>
     <div class="modal-foot"><button class="btn" type="button" id="codexImportCancel">取消</button><button class="btn btn-primary" type="submit" id="codexImportSubmit">导入</button></div>
   </form>
@@ -707,6 +707,7 @@ Object.assign(enUS,{
 Object.assign(enUS,{"刷新所选账号":"Refresh selected accounts","刷新账号":"Refresh account"});
 Object.assign(enUS,{"允许按邮箱替换已有的不同上游账号":"Allow replacing an existing slot with a different upstream account","默认遇到不同 account_id 会报告冲突；仅在确认目标槽位应被替换时启用。":"Different account_id values produce a conflict by default; enable this only when the target slot should be replaced.","导出响应缺少有效 exported_at":"Export response is missing a valid exported_at"});
 Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。":"Manage separate ChatGPT Web and Codex CLI credential slots under one account identity. Each slot is renewed only by its matching OAuth client.","统一账号 / 双凭据账号":"Unified / dual-credential accounts","ChatGPT Web / Codex CLI 凭据":"ChatGPT Web / Codex CLI credentials","可用图片额度":"Available image quota","凭据刷新失败（Web / Codex）":"Credential refresh failures (Web / Codex)","导入 Web 凭据":"Import Web credentials","导入 Codex 凭据":"Import Codex credentials","ChatGPT Web 凭据槽":"ChatGPT Web credential slot","Codex CLI 凭据槽":"Codex CLI credential slot","未配置 ChatGPT Web 凭据":"ChatGPT Web credentials not configured","未配置 Codex CLI 凭据":"Codex CLI credentials not configured","刷新额度/凭据":"Refresh quota/credentials","删除槽位":"Delete slot","导入账号 ▾":"Import credentials ▾","选择账号类型和导入方式":"Choose a credential type and import method","导入整体账号池":"Import account pool bundle","账号池迁移 ▾":"Account pool migration ▾","整体账号池文件":"Account pool bundle file","导出整体账号池":"Export account pool bundle","整体账号池 JSON":"Account pool bundle JSON","仅接受 aetherrelay.account-pool-bundle v2；文件包含 ChatGPT Web 和 Codex 两类槽位，最大 1 MiB、最多 1000 个统一账号。":"Only aetherrelay.account-pool-bundle v2 is accepted. The file may contain ChatGPT Web and Codex slots; the limit is 1 MiB and 1,000 unified accounts.","请选择整体账号池 JSON 文件":"Choose an account pool bundle JSON file","JSON 文件不能超过 1 MiB":"The JSON file must not exceed 1 MiB","只支持 aetherrelay.account-pool-bundle v2":"Only aetherrelay.account-pool-bundle v2 is supported","整体账号池 accounts 数量无效":"The account pool bundle accounts count is invalid","整体导入部分完成":"Account pool bundle import partially completed","整体导入完成":"Account pool bundle import completed","整体导入存在":"Account pool bundle import has","项冲突，请修正后重试":"conflicts. Fix them and try again","整体账号池导出文件已开始下载":"The account pool bundle export has started downloading"});
+Object.assign(enUS,{"支持 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。":"Accepts a ChatGPT Web export JSON array or a single JSON credential object; maximum 1 MiB and 1,000 accounts.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, {accounts:[...]}, or one access token per line; Codex OAuth exports cannot be imported here.","支持 Codex OAuth 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。":"Accepts a Codex OAuth export JSON array or a single JSON credential object; maximum 1 MiB and 1,000 accounts.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, or {accounts:[...]}; ChatGPT Web exports cannot be imported here.","账号必须是单条对象或非空对象数组":"An account must be a single object or a non-empty object array.","tokens 必须是字符串数组":"tokens must be an array of strings.","账号必须是单条对象或非空数组":"An account must be a single object or a non-empty array.","账号 JSON 仅支持 token 字符串或含 access_token 的对象":"Account JSON accepts only token strings or objects containing access_token."});
 Object.assign(enUS,{"Provider 权限":"Provider access","有效 Provider":"Effective providers","可用模型":"Available models","编辑权限":"Edit access","Provider 访问范围":"Provider access scope","指定 Provider":"Selected providers","仅允许勾选的上游":"Allow only selected upstreams","全部 Provider":"All providers","未来新增 Provider 也自动授权":"Automatically allow future providers","搜索 Provider":"Search providers","编辑 Provider 权限":"Edit provider access","客户端 Key":"Client key","有效模型":"Effective models","搜索模型 / Provider / 端点":"Search model, provider, or endpoint","支持端点":"Supported endpoints","上下文 / 最大输出":"Context / max output","正在加载有效模型…":"Loading effective models…","暂无可用模型":"No available models","当前不会发布模型":"Currently publishes no models","请至少选择一个 Provider":"Select at least one provider","Provider 权限已保存":"Provider access saved"});
 const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeysLoadVersion:0,clientKeyModels:[],clientKeyModelsID:"",clientKeyModelsVersion:0,clientKeyModelsAbort:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{query:"",loading:false},
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
@@ -1398,10 +1399,19 @@ async function readAccountImport(fileID,textID){
 function parseAccountObjectArray(value){
   let parsed;
   try{parsed=JSON.parse(value||"")}catch(_){throw new Error("账号 JSON 格式无效")}
-  const accounts=Array.isArray(parsed)?parsed:(parsed&&Array.isArray(parsed.accounts)?parsed.accounts:[]);
-  if(!accounts.length||accounts.some(item=>!item||typeof item!=="object"||Array.isArray(item)))throw new Error("accounts 必须是非空对象数组");
+  const accounts=accountImportObjects(parsed);
+  if(!accounts.length||accounts.some(item=>!item||typeof item!=="object"||Array.isArray(item)))throw new Error(t("账号必须是单条对象或非空对象数组"));
   if(accounts.length>accountImportMaxItems)throw new Error("单次最多导入 1000 个账号");
   return accounts;
+}
+function accountImportObjects(parsed){
+  if(Array.isArray(parsed))return parsed;
+  if(!parsed||typeof parsed!=="object")return [];
+  if(Object.prototype.hasOwnProperty.call(parsed,"accounts")){
+    const accounts=parsed.accounts;
+    return Array.isArray(accounts)?accounts:(accounts&&typeof accounts==="object"&&!Array.isArray(accounts)?[accounts]:[]);
+  }
+  return [parsed];
 }
 function clearAccountBundleImport(){$("accountBundleImportFile").value="";$(`accountBundleImportReplace`).checked=false}
 function openAccountBundleImport(){clearAccountBundleImport();$("accountBundleImportDialog").showModal()}
@@ -1623,13 +1633,19 @@ function parseChatGPTImport(value){
   if(!/^[\[{]/.test(raw))return {tokens:uniq(splitList(raw)),accounts:[]};
   let parsed;
   try{parsed=JSON.parse(raw)}catch(_){throw new Error("账号 JSON 格式无效")}
-  const items=Array.isArray(parsed)?parsed:(parsed&&Array.isArray(parsed.accounts)?parsed.accounts:[]);
-  if(!items.length)throw new Error("accounts 必须是非空数组");
+  const object=parsed&&typeof parsed==="object"&&!Array.isArray(parsed);
+  const wrapped=object&&(Object.prototype.hasOwnProperty.call(parsed,"accounts")||Object.prototype.hasOwnProperty.call(parsed,"tokens"));
+  const items=Array.isArray(parsed)?parsed:wrapped?accountImportObjects({accounts:parsed.accounts}):accountImportObjects(parsed);
   const tokens=[],accounts=[];
+  if(wrapped&&Object.prototype.hasOwnProperty.call(parsed,"tokens")){
+    if(!Array.isArray(parsed.tokens)||parsed.tokens.some(token=>typeof token!=="string"))throw new Error(t("tokens 必须是字符串数组"));
+    tokens.push(...parsed.tokens);
+  }
+  if(!items.length&&!tokens.length)throw new Error(t("账号必须是单条对象或非空数组"));
   for(const item of items){
     if(typeof item==="string"){tokens.push(item);continue}
     if(item&&typeof item==="object"&&typeof item.access_token==="string"){accounts.push(item);continue}
-    throw new Error("账号 JSON 仅支持 token 字符串或含 access_token 的对象")
+    throw new Error(t("账号 JSON 仅支持 token 字符串或含 access_token 的对象"))
   }
   const result={tokens:uniq(tokens.map(token=>token.trim()).filter(Boolean)),accounts};
   if(result.tokens.length+result.accounts.length>accountImportMaxItems)throw new Error("单次最多导入 1000 个账号");
