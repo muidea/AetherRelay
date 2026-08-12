@@ -546,7 +546,7 @@
   <form id="cgImportForm" autocomplete="off">
     <div class="modal-head"><span class="modal-title">导入 ChatGPT Web 凭据</span><button class="close" type="button" id="cgImportClose">×</button></div>
     <div class="modal-body">
-      <div class="field"><label class="label" for="cgImportFile">JSON 文件</label><input id="cgImportFile" class="control" type="file" accept=".json,application/json"><div class="help">支持 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。</div></div>
+      <div class="field"><label class="label" for="cgImportFile">JSON 文件</label><input id="cgImportFile" class="control" type="file" accept=".json,application/json" multiple><div class="help">可一次选择最多 20 个 JSON 文件；系统会合并预检后一次导入。选择集总计最大 1 MiB、最多 1000 个账号；每个文件可为 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象。</div></div>
       <div class="field"><label class="label" for="cgImportTokens">粘贴凭据（辅助）</label><textarea id="cgImportTokens" class="control mono" rows="10" placeholder='{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}'></textarea><div class="help">文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。</div></div>
       <div class="field"><label class="label" for="cgImportSource">source_type</label>
         <select id="cgImportSource" class="control"><option value="">留空</option><option value="web">手工导入（web）</option></select>
@@ -604,7 +604,7 @@
   <form id="codexImportForm" autocomplete="off">
     <div class="modal-head"><span class="modal-title">导入 Codex OAuth 凭据</span><button class="close" type="button" id="codexImportClose">×</button></div>
     <div class="modal-body">
-      <div class="field"><label class="label" for="codexImportFile">JSON 文件</label><input id="codexImportFile" class="control" type="file" accept=".json,application/json"><div class="help">支持 Codex OAuth 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。</div></div>
+      <div class="field"><label class="label" for="codexImportFile">JSON 文件</label><input id="codexImportFile" class="control" type="file" accept=".json,application/json" multiple><div class="help">可一次选择最多 20 个 JSON 文件；无法读取、解析或缺少必要凭据的文件会整份忽略，其余文件合并为一次导入。选择集总计最大 1 MiB、最多 1000 个有效账号；每个文件可为 Codex OAuth 导出的 JSON 数组或单条 JSON 对象。</div></div>
       <div class="field"><label class="label" for="codexImportAccounts">粘贴凭据（辅助）</label><textarea id="codexImportAccounts" class="control mono" rows="10" autocomplete="off" placeholder='{"access_token":"...","refresh_token":"...","id_token":"...","account_id":"...","email":"...","expired":"2026-...","proxy":"http://..."}'></textarea><div class="help">文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。</div></div>
     </div>
     <div class="modal-foot"><button class="btn" type="button" id="codexImportCancel">取消</button><button class="btn btn-primary" type="submit" id="codexImportSubmit">导入</button></div>
@@ -707,7 +707,7 @@ Object.assign(enUS,{
 Object.assign(enUS,{"刷新所选账号":"Refresh selected accounts","刷新账号":"Refresh account"});
 Object.assign(enUS,{"允许按邮箱替换已有的不同上游账号":"Allow replacing an existing slot with a different upstream account","默认遇到不同 account_id 会报告冲突；仅在确认目标槽位应被替换时启用。":"Different account_id values produce a conflict by default; enable this only when the target slot should be replaced.","导出响应缺少有效 exported_at":"Export response is missing a valid exported_at"});
 Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。":"Manage separate ChatGPT Web and Codex CLI credential slots under one account identity. Each slot is renewed only by its matching OAuth client.","统一账号 / 双凭据账号":"Unified / dual-credential accounts","ChatGPT Web / Codex CLI 凭据":"ChatGPT Web / Codex CLI credentials","可用图片额度":"Available image quota","凭据刷新失败（Web / Codex）":"Credential refresh failures (Web / Codex)","导入 Web 凭据":"Import Web credentials","导入 Codex 凭据":"Import Codex credentials","ChatGPT Web 凭据槽":"ChatGPT Web credential slot","Codex CLI 凭据槽":"Codex CLI credential slot","未配置 ChatGPT Web 凭据":"ChatGPT Web credentials not configured","未配置 Codex CLI 凭据":"Codex CLI credentials not configured","刷新额度/凭据":"Refresh quota/credentials","删除槽位":"Delete slot","导入账号 ▾":"Import credentials ▾","选择账号类型和导入方式":"Choose a credential type and import method","导入整体账号池":"Import account pool bundle","账号池迁移 ▾":"Account pool migration ▾","整体账号池文件":"Account pool bundle file","导出整体账号池":"Export account pool bundle","整体账号池 JSON":"Account pool bundle JSON","仅接受 aetherrelay.account-pool-bundle v2；文件包含 ChatGPT Web 和 Codex 两类槽位，最大 1 MiB、最多 1000 个统一账号。":"Only aetherrelay.account-pool-bundle v2 is accepted. The file may contain ChatGPT Web and Codex slots; the limit is 1 MiB and 1,000 unified accounts.","请选择整体账号池 JSON 文件":"Choose an account pool bundle JSON file","JSON 文件不能超过 1 MiB":"The JSON file must not exceed 1 MiB","只支持 aetherrelay.account-pool-bundle v2":"Only aetherrelay.account-pool-bundle v2 is supported","整体账号池 accounts 数量无效":"The account pool bundle accounts count is invalid","整体导入部分完成":"Account pool bundle import partially completed","整体导入完成":"Account pool bundle import completed","整体导入存在":"Account pool bundle import has","项冲突，请修正后重试":"conflicts. Fix them and try again","整体账号池导出文件已开始下载":"The account pool bundle export has started downloading"});
-Object.assign(enUS,{"支持 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。":"Accepts a ChatGPT Web export JSON array or a single JSON credential object; maximum 1 MiB and 1,000 accounts.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, {accounts:[...]}, or one access token per line; Codex OAuth exports cannot be imported here.","支持 Codex OAuth 导出的 JSON 数组或单条 JSON 对象，最大 1 MiB、最多 1000 个账号。":"Accepts a Codex OAuth export JSON array or a single JSON credential object; maximum 1 MiB and 1,000 accounts.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, or {accounts:[...]}; ChatGPT Web exports cannot be imported here.","账号必须是单条对象或非空对象数组":"An account must be a single object or a non-empty object array.","tokens 必须是字符串数组":"tokens must be an array of strings.","账号必须是单条对象或非空数组":"An account must be a single object or a non-empty array.","账号 JSON 仅支持 token 字符串或含 access_token 的对象":"Account JSON accepts only token strings or objects containing access_token."});
+Object.assign(enUS,{"可一次选择最多 20 个 JSON 文件；系统会合并预检后一次导入。选择集总计最大 1 MiB、最多 1000 个账号；每个文件可为 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象。":"Choose up to 20 JSON files at once. They are merged, validated, and imported in one request. The complete selection is limited to 1 MiB and 1,000 accounts; each file may be a ChatGPT Web export array or a single credential object.","可一次选择最多 20 个 JSON 文件；无法读取、解析或缺少必要凭据的文件会整份忽略，其余文件合并为一次导入。选择集总计最大 1 MiB、最多 1000 个有效账号；每个文件可为 Codex OAuth 导出的 JSON 数组或单条 JSON 对象。":"Choose up to 20 JSON files at once. Files that cannot be read or parsed, or that lack required credentials, are ignored as a whole; the remaining files are merged into one import request. The complete selection is limited to 1 MiB and 1,000 valid accounts; each file may be a Codex OAuth export array or a single credential object.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, {accounts:[...]}, or one access token per line; Codex OAuth exports cannot be imported here.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, or {accounts:[...]}; ChatGPT Web exports cannot be imported here.","账号必须是单条对象或非空对象数组":"An account must be a single object or a non-empty object array.","tokens 必须是字符串数组":"tokens must be an array of strings.","账号必须是单条对象或非空数组":"An account must be a single object or a non-empty array.","账号 JSON 仅支持 token 字符串或含 access_token 的对象":"Account JSON accepts only token strings or objects containing access_token.","一次最多选择 20 个 JSON 文件":"Choose at most 20 JSON files at once.","选择的 JSON 文件合计不能超过 1 MiB":"The selected JSON files must not exceed 1 MiB in total.","导入请求不能超过 1 MiB":"The import request must not exceed 1 MiB.","单次最多导入 1000 个账号":"Import at most 1,000 accounts at once.","没有可导入的有效 Codex 凭据文件":"No valid Codex credential files are available for import."});
 Object.assign(enUS,{"Provider 权限":"Provider access","有效 Provider":"Effective providers","可用模型":"Available models","编辑权限":"Edit access","Provider 访问范围":"Provider access scope","指定 Provider":"Selected providers","仅允许勾选的上游":"Allow only selected upstreams","全部 Provider":"All providers","未来新增 Provider 也自动授权":"Automatically allow future providers","搜索 Provider":"Search providers","编辑 Provider 权限":"Edit provider access","客户端 Key":"Client key","有效模型":"Effective models","搜索模型 / Provider / 端点":"Search model, provider, or endpoint","支持端点":"Supported endpoints","上下文 / 最大输出":"Context / max output","正在加载有效模型…":"Loading effective models…","暂无可用模型":"No available models","当前不会发布模型":"Currently publishes no models","请至少选择一个 Provider":"Select at least one provider","Provider 权限已保存":"Provider access saved"});
 const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeysLoadVersion:0,clientKeyModels:[],clientKeyModelsID:"",clientKeyModelsVersion:0,clientKeyModelsAbort:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{query:"",loading:false},
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
@@ -1379,7 +1379,7 @@ function renderCodexAccounts(){
   document.querySelectorAll("[data-codex-delete]").forEach(el=>el.onclick=()=>deleteCodexAccounts([el.dataset.codexDelete]));
 }
 function selectedCodexIDs(){return [...state.codex.selected]}
-const accountImportMaxBytes=1<<20,accountImportMaxItems=1000;
+const accountImportMaxBytes=1<<20,accountImportMaxItems=1000,accountImportMaxFiles=20;
 function bundleExportFilename(artifact,schemaVersion,profile,exportedAt){
   const date=new Date(exportedAt);
   if(Number.isNaN(date.getTime()))throw new Error(t("导出响应缺少有效 exported_at"));
@@ -1387,14 +1387,56 @@ function bundleExportFilename(artifact,schemaVersion,profile,exportedAt){
   return `aetherrelay-${artifact}-bundle-v${Number(schemaVersion)}-${profile}-${stamp}.json`;
 }
 function clearAccountImport(fileID,textID){$(fileID).value="";$(textID).value=""}
+function accountImportByteLength(value){return new TextEncoder().encode(value).byteLength}
+function accountImportRequestBody(payload){
+  const body=JSON.stringify(payload);
+  if(accountImportByteLength(body)>accountImportMaxBytes)throw new Error(t("导入请求不能超过 1 MiB"));
+  return body;
+}
 async function readAccountImport(fileID,textID){
-  const input=$(fileID),file=input.files&&input.files[0],pasted=$(textID).value.trim();
-  if(file&&pasted)throw new Error("JSON 文件与粘贴内容只能选择一种");
-  if(!file)return pasted;
-  if(!String(file.name||"").toLowerCase().endsWith(".json"))throw new Error("仅支持 .json 文件");
-  if(!file.size)throw new Error("JSON 文件为空");
-  if(file.size>accountImportMaxBytes)throw new Error("JSON 文件不能超过 1 MiB");
-  return await file.text();
+  const input=$(fileID),files=Array.from(input.files||[]),pasted=$(textID).value.trim();
+  if(files.length&&pasted)throw new Error("JSON 文件与粘贴内容只能选择一种");
+  if(files.length>accountImportMaxFiles)throw new Error(t("一次最多选择 20 个 JSON 文件"));
+  let totalBytes=0;
+  const fileErrors=new Map();
+  for(const file of files){
+    if(!String(file.name||"").toLowerCase().endsWith(".json"))fileErrors.set(file,"仅支持 .json 文件");
+    else if(!file.size)fileErrors.set(file,"JSON 文件为空");
+    totalBytes+=file.size;
+    if(totalBytes>accountImportMaxBytes)throw new Error(t("选择的 JSON 文件合计不能超过 1 MiB"));
+  }
+  if(pasted&&accountImportByteLength(pasted)>accountImportMaxBytes)throw new Error(t("导入请求不能超过 1 MiB"));
+  return {pasted,files:await Promise.all(files.map(async file=>{
+    if(fileErrors.has(file))return {name:file.name,error:new Error(fileErrors.get(file))};
+    try{return {name:file.name,content:await file.text()}}
+    catch(error){return {name:file.name,error}}
+  }))};
+}
+function parseAccountImportFile(file,parse){
+  if(file.error)throw new Error(`${file.name}：文件读取失败`);
+  try{return parse(file.content)}catch(e){throw new Error(`${file.name}：${e.message||"账号 JSON 格式无效"}`)}
+}
+function requireAccountImportItemLimit(count){
+  if(count>accountImportMaxItems)throw new Error(t("单次最多导入 1000 个账号"));
+}
+function validCodexImportProxy(value){
+  value=String(value||"").trim();
+  if(!value)return true;
+  try{const parsed=new URL(value);return (parsed.protocol==="http:"||parsed.protocol==="https:")&&Boolean(parsed.host)}catch(_){return false}
+}
+function collectCodexAccountImportFiles(files){
+  const accounts=[],ignored=[];
+  for(const file of files){
+    try{
+      const items=parseAccountImportFile(file,parseAccountObjectArray);
+      if(items.some(item=>typeof item.access_token!=="string"||!item.access_token.trim()||typeof item.refresh_token!=="string"||!item.refresh_token.trim()))throw new Error("缺少 access_token 或 refresh_token");
+      if(items.some(item=>item.credential_type&&String(item.credential_type).trim().toLowerCase()!=="codex_cli"))throw new Error("credential_type 不是 codex_cli");
+      if(items.some(item=>!validCodexImportProxy(item.proxy)))throw new Error("proxy 必须是有效的 http/https URL");
+      accounts.push(...items);
+    }catch(error){ignored.push({name:file.name,error:error.message||"凭据文件无效"})}
+    requireAccountImportItemLimit(accounts.length);
+  }
+  return {accounts,ignored};
 }
 function parseAccountObjectArray(value){
   let parsed;
@@ -1446,10 +1488,15 @@ async function submitCodexImport(event){
   event.preventDefault();
   $("codexImportSubmit").disabled=true;
   try{
-    const accounts=parseAccountObjectArray(await readAccountImport("codexImportFile","codexImportAccounts"));
-    const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({accounts})});
+    const {pasted,files}=await readAccountImport("codexImportFile","codexImportAccounts");
+    const collected=files.length?collectCodexAccountImportFiles(files):{accounts:parseAccountObjectArray(pasted),ignored:[]};
+    const {accounts,ignored}=collected;
+    if(!accounts.length)throw new Error(t("没有可导入的有效 Codex 凭据文件"));
+    requireAccountImportItemLimit(accounts.length);
+    const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:accountImportRequestBody({accounts})});
     invalidateFeatureCatalog();
-    toast(`导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}`);
+    const ignoredSuffix=ignored.length?`，忽略错误文件 ${ignored.length} 个`:"";
+    toast(`导入完成：新增 ${result.added||0}，更新 ${result.updated||0}，跳过 ${result.skipped||0}${ignoredSuffix}`.trim());
     if(result.model_discovery)beginCodexDiscoveryPolling(result.model_discovery,{visible:false});
     else if(result.model_discovery_error)toast(result.model_discovery_error,"error");
     if(result.usage_refresh)beginCodexUsagePolling(result.usage_refresh,{visible:false});
@@ -1651,15 +1698,26 @@ function parseChatGPTImport(value){
   if(result.tokens.length+result.accounts.length>accountImportMaxItems)throw new Error("单次最多导入 1000 个账号");
   return result;
 }
+function collectChatGPTAccountImportFiles(files){
+  const tokens=[],accounts=[];
+  for(const file of files){
+    const item=parseAccountImportFile(file,parseChatGPTImport);
+    tokens.push(...item.tokens);accounts.push(...item.accounts);
+    requireAccountImportItemLimit(tokens.length+accounts.length);
+  }
+  return {tokens:uniq(tokens),accounts};
+}
 async function submitImport(e){
   e.preventDefault();
   $("cgImportSubmit").disabled=true;
   try{
-    const body=parseChatGPTImport(await readAccountImport("cgImportFile","cgImportTokens"));
-    if(!body.tokens.length&&!body.accounts.length)throw new Error("请至少提供一个账号凭据");
+    const {pasted,files}=await readAccountImport("cgImportFile","cgImportTokens");
     const st=$("cgImportSource").value.trim();
+    const body=files.length?collectChatGPTAccountImportFiles(files):parseChatGPTImport(pasted);
+    if(!body.tokens.length&&!body.accounts.length)throw new Error("请至少提供一个账号凭据");
+    requireAccountImportItemLimit(body.tokens.length+body.accounts.length);
     if(st)body.source_type=st;
-    const res=await request(apiURL("/api/chatgpt/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+    const res=await request(apiURL("/api/chatgpt/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:accountImportRequestBody(body)});
     invalidateFeatureCatalog();
     toast(`导入完成：新增 ${res.added||0}，更新 ${res.updated||0}，跳过 ${res.skipped||0}`);
     closeImportDialog();
