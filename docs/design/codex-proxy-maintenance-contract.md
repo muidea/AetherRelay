@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -171,7 +171,7 @@
 
 ## 7. HTTP、SSE、compact 与 WebSocket
 
-`CP-STREAM-001` 非流式下游请求仍可使用上游 SSE；只接受 `response.completed` 中的 Response 对象作为成功结果。
+`CP-STREAM-001` 非流式下游请求仍可使用上游 SSE；接受 `response.completed` 或 `response.incomplete` 中的 Response 对象作为合法结果。incomplete 必须保留 partial output、usage、status 和 incomplete_details，不得切换账号。
 
 `CP-STREAM-002` 流式成功必须观察到合法 terminal event。仅 EOF、仅 delta 或缺失 terminal event 都是 `upstream_truncated`/protocol error。
 
@@ -182,6 +182,10 @@
 `CP-STREAM-005` 单个 SSE data 行或 WebSocket message 中若包含 2..16 个、总计不超过 16 MiB 的完整 Responses JSON 文档，必须按原顺序拆成独立事件。其它非法 JSON 必须进入协议错误路径，不能猜测修复。
 
 `CP-STREAM-006` 只有在当前 turn 已观察到语义 output、usage 或明确 error 时，`response.completed`/`response.done` 才能判成功。仅有前导事件和空 completed 是 silent refusal：HTTP 非流式和尚未向客户端提交业务事件的 SSE 必须允许切换账号；原生 WebSocket 必须返回明确失败，不得把空 turn 记为成功。
+
+`CP-STREAM-007` `response.incomplete` 是有界生成、内容过滤等原因形成的合法非成功完成状态，不是账号或 transport 失败。原生 Responses 必须原样保留；Chat/Messages adapter 必须映射对应 finish/stop reason。
+
+`CP-STREAM-008` created/in_progress、空 delta、空 output/tool 骨架和可重试 error 不算已向客户端产生业务输出。HTTP 200 后、首个真实业务输出前收到 usage limit、capacity、认证、限流或 transport terminal error 时，必须先分类并允许按失败规则切换账号；已有真实输出时只能转发安全终态，禁止重放。
 
 `CP-COMPACT-001` compact 上游使用 `/backend-api/codex/responses/compact`，请求不得带普通 Responses 的 `stream`、`store` 或不受支持 `tool_choice`。
 
@@ -206,6 +210,8 @@
 `CP-WS-008` 客户端在本地 compact 后提交完整替换 transcript 时，代理必须保序转发该 transcript，不得与旧 turn 历史合并或注入旧 `previous_response_id`。
 
 `CP-WS-009` 上游 `response.done` 是成功终态；向标准 Responses 客户端转发前必须规范为 `response.completed`。`response.cancelled`/`response.canceled` 是失败终态，不得等待到连接超时。
+
+`CP-WS-010` 每个 WebSocket terminal 必须携带与 HTTP/SSE 相同的有界错误分类、quota/reset observation 和 turn outcome。`response.failed`、`error`、transport/protocol failure 后必须失效当前上游连接；`response.incomplete` 保持合法终态并允许连接继续复用。
 
 ## 8. 账号调度与会话粘性
 
@@ -236,7 +242,7 @@
 | 408/连接/首事件超时 | 否 | 未输出且无已知副作用时是 | `CP-FAIL-005` |
 | 429/usage limit | 否 | 未输出时是，并记录 reset | `CP-FAIL-006` |
 | 5xx | 否 | 未输出且无已知副作用时是 | `CP-FAIL-007` |
-| SSE/WS terminal failed | 否 | 否 | `CP-FAIL-008` |
+| SSE/WS terminal failed | 否 | 仅首个真实业务输出前按具体错误类别决定 | `CP-FAIL-008` |
 | 客户端取消 | 否 | 否 | `CP-FAIL-009` |
 
 `CP-FAIL-010` 必须保留最后一个真实上游失败的安全 HTTP 状态和错误类别，不能在账号耗尽后统一覆盖为 `provider_unavailable`。
@@ -247,7 +253,7 @@
 
 `CP-FAIL-013` 确定性 upstream 400 必须保持 HTTP 400 且不得切换账号。代理只允许从结构化 JSON 错误中投影经过长度限制和脱敏的 `type`、`code`、`param`、`message`；原始正文、未知字段和凭据形态不得跨 `codexupstream` Block。
 
-`CP-FAIL-014` 原生 WebSocket 的账号结果按 turn terminal 登记，不按 socket close 登记。合法 completed 记成功；failed/incomplete/cancelled、transport/protocol error 记对应失败；客户端在 terminal 前关闭只释放 lease，不得伪造成功或清除 quota observation。
+`CP-FAIL-014` 原生 WebSocket 的账号结果按 turn terminal 登记，不按 socket close 登记。合法 completed/done/incomplete 记合法完成；failed/cancelled、transport/protocol error 记对应失败并保留 quota observation；客户端在 terminal 前关闭只释放 lease，不得伪造成功或清除 quota observation。
 
 ## 10. 模型与能力目录
 
@@ -305,7 +311,7 @@
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..006 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..008 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
@@ -314,7 +320,7 @@
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
-| Responses WebSocket | CP-EP-002, CP-WS-001..004, CP-WS-006 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go` | `codex_websocket_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses WebSocket | CP-EP-002, CP-WS-001..010 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go` | `codex_websocket_test.go`, `codexupstream/biz/biz_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |
 | 真实上游差分 corpus | CP-DOD-002 | planned | - | - |

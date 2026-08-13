@@ -145,9 +145,11 @@ type WSPullCommand struct {
 	TimeoutMillis int
 }
 type WSPullResult struct {
-	Payload    []byte
-	Done       bool
-	ErrorClass ErrorClass
+	Payload           []byte
+	Done              bool
+	ErrorClass        ErrorClass
+	RetryAfterSeconds int
+	RateLimit         RateLimitObservation
 }
 
 type WSCloseCommand struct{ SessionID string }

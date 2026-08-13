@@ -57,9 +57,11 @@ type responseStream struct {
 }
 
 type websocketUpdate struct {
-	payload    []byte
-	done       bool
-	errorClass events.ErrorClass
+	payload           []byte
+	done              bool
+	errorClass        events.ErrorClass
+	retryAfterSeconds int
+	rateLimit         events.RateLimitObservation
 }
 
 type websocketSession struct {
@@ -262,7 +264,7 @@ func (s *Upstream) handleWSPull(ev event.Event, result event.Result) {
 			result.Set(events.WSPullResult{Done: true}, nil)
 			return
 		}
-		result.Set(events.WSPullResult{Payload: update.payload, Done: update.done, ErrorClass: update.errorClass}, nil)
+		result.Set(events.WSPullResult{Payload: update.payload, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
 	case <-time.After(timeout):
 		result.Set(events.WSPullResult{}, nil)
 	case <-ev.Context().Done():
@@ -338,8 +340,9 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 			documents = [][]byte{payload}
 		}
 		for _, document := range documents {
+			class, observation := websocketTerminalFailure(document)
 			select {
-			case session.updates <- websocketUpdate{payload: document}:
+			case session.updates <- websocketUpdate{payload: document, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation}:
 			case <-ctx.Done():
 				return
 			}
@@ -1110,7 +1113,12 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 								}
 								return completed, "", events.RateLimitObservation{}, nil
 							}
-						case "response.failed", "response.incomplete":
+						case "response.incomplete":
+							if len(event.Response) > 0 {
+								return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, nil
+							}
+							return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response.incomplete omitted response")
+						case "response.failed":
 							observation := rateLimitObservation(payload, time.Now().UTC())
 							class := events.ErrorUpstream
 							if observation.UsageLimited {
@@ -1229,6 +1237,29 @@ func rawPresent(raw json.RawMessage) bool {
 	return len(trimmed) > 0 && string(trimmed) != "null"
 }
 
+func rawNonEmptyValue(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && string(trimmed) != "null" && string(trimmed) != `""`
+}
+
+func codexItemHasOutput(raw json.RawMessage) bool {
+	if !rawNonEmptyValue(raw) {
+		return false
+	}
+	var item struct {
+		Text      json.RawMessage   `json:"text"`
+		Arguments json.RawMessage   `json:"arguments"`
+		Input     json.RawMessage   `json:"input"`
+		Output    json.RawMessage   `json:"output"`
+		Result    json.RawMessage   `json:"result"`
+		Content   []json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return false
+	}
+	return rawNonEmptyValue(item.Text) || rawNonEmptyValue(item.Arguments) || rawNonEmptyValue(item.Input) || rawNonEmptyValue(item.Output) || rawNonEmptyValue(item.Result) || len(item.Content) > 0
+}
+
 func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, emptyCompleted bool) {
 	trimmed := strings.TrimSpace(string(line))
 	if !strings.HasPrefix(trimmed, "data:") {
@@ -1253,8 +1284,10 @@ func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, empty
 		}
 		empty := responseObjectIsEmpty(event.Response)
 		return !empty, empty
-	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+	case "response.incomplete":
 		return true, false
+	case "response.failed", "response.cancelled", "response.canceled", "error":
+		return false, false
 	case "response.created", "response.in_progress", "response.queued":
 		return false, false
 	}
@@ -1262,8 +1295,11 @@ func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, empty
 		len(bytes.TrimSpace(event.Error)) > 0 && string(bytes.TrimSpace(event.Error)) != "null" {
 		return true, false
 	}
-	if strings.Contains(event.Type, "output") || strings.Contains(event.Type, "tool_call") || strings.HasSuffix(event.Type, ".delta") {
-		return true, false
+	if strings.HasSuffix(event.Type, ".delta") {
+		return rawNonEmptyValue(event.Delta), false
+	}
+	if strings.Contains(event.Type, "output") || strings.Contains(event.Type, "tool_call") {
+		return codexItemHasOutput(event.Item), false
 	}
 	return false, false
 }
@@ -1301,7 +1337,11 @@ func terminalClass(line []byte) (bool, events.ErrorClass) {
 	switch item.Type {
 	case "response.completed":
 		return true, ""
-	case "response.failed", "response.incomplete":
+	case "response.failed":
+		return true, events.ErrorUpstream
+	case "response.incomplete":
+		return true, ""
+	case "error":
 		return true, events.ErrorUpstream
 	default:
 		return false, ""
@@ -1312,7 +1352,11 @@ func terminalEvent(line []byte) (bool, events.ErrorClass) {
 	switch sseEventName(line) {
 	case "response.completed":
 		return true, ""
-	case "response.failed", "response.incomplete":
+	case "response.failed":
+		return true, events.ErrorUpstream
+	case "response.incomplete":
+		return true, ""
+	case "error":
 		return true, events.ErrorUpstream
 	default:
 		return false, ""
@@ -1332,11 +1376,58 @@ func terminalOutcome(line []byte) (bool, events.ErrorClass, events.RateLimitObse
 	if !done {
 		return false, "", events.RateLimitObservation{}
 	}
-	observation := rateLimitObservationFromLine(line, time.Now().UTC())
-	if observation.UsageLimited {
-		class = events.ErrorRateLimit
+	payload := sseData(line)
+	if terminalClass, observation := websocketTerminalFailure(payload); terminalClass != "" {
+		return true, terminalClass, observation
 	}
+	observation := rateLimitObservation(payload, time.Now().UTC())
 	return true, class, observation
+}
+
+func sseData(line []byte) []byte {
+	trimmed := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(trimmed, "data:") {
+		return nil
+	}
+	return []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+}
+
+func websocketTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitObservation) {
+	var event struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+		Response struct {
+			Error struct {
+				Type string `json:"type"`
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) != nil || event.Type != "response.failed" && event.Type != "error" {
+		return "", events.RateLimitObservation{}
+	}
+	errorType, errorCode := event.Error.Type, event.Error.Code
+	if errorType == "" && errorCode == "" {
+		errorType, errorCode = event.Response.Error.Type, event.Response.Error.Code
+	}
+	observation := rateLimitObservation(payload, time.Now().UTC())
+	if observation.UsageLimited {
+		return events.ErrorRateLimit, observation
+	}
+	combined := strings.ToLower(strings.TrimSpace(errorType + " " + errorCode))
+	switch {
+	case strings.Contains(combined, "authentication"), strings.Contains(combined, "unauthorized"), strings.Contains(combined, "invalid_api_key"):
+		return events.ErrorInvalidToken, observation
+	case strings.Contains(combined, "rate_limit"):
+		return events.ErrorRateLimit, observation
+	case strings.Contains(combined, "invalid_request"), strings.Contains(combined, "bad_request"), strings.Contains(combined, "context_length"):
+		return events.ErrorInvalidRequest, observation
+	default:
+		return events.ErrorUpstream, observation
+	}
 }
 
 func readErrorObservation(response *http.Response) (events.RateLimitObservation, int, events.SafeError) {

@@ -78,16 +78,9 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 	model := ""
 	sessionID := ""
 	var sessionFeatures codexRequestFeatures
-	succeeded := false
 	defer func() {
 		if sessionID != "" {
 			h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
-		}
-		if model != "" {
-			if succeeded {
-				h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(started), tokenUsage{Estimated: true, Known: true}, "")
-				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(started), tokenUsage{Estimated: true, Known: true}, "websocket", "", "", "success")
-			}
 		}
 	}()
 	for {
@@ -137,15 +130,28 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket send failed")
 			return
 		}
-		terminal, forwardErr := h.forwardCodexWebsocketTurn(ctx, conn, sessionID)
+		turnStarted := time.Now()
+		terminal, reusable, turnUsage, forwardErr := h.forwardCodexWebsocketTurn(ctx, conn, sessionID)
 		if forwardErr != nil {
 			writeCodexWebsocketError(conn, "upstream_failed", forwardErr.Error())
+			h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, forwardErr.Error())
+			h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, "websocket", forwardErr.Error(), "", "upstream_failed")
 			return
 		}
 		if !terminal {
 			return
 		}
-		succeeded = true
+		outcome := "success"
+		message := ""
+		if !reusable {
+			outcome = "upstream_failed"
+			message = "Codex websocket turn failed"
+		}
+		h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, message)
+		h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, "websocket", message, "", outcome)
+		if !reusable {
+			return
+		}
 	}
 }
 
@@ -213,39 +219,64 @@ func websocketPromptCacheKey(raw []byte) string {
 	return value
 }
 
-func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket.Conn, sessionID string) (bool, error) {
+func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket.Conn, sessionID string) (bool, bool, tokenUsage, error) {
+	usage := tokenUsage{Estimated: true, Known: true}
 	for {
 		payload, done, err := h.codexResponses.PullCodexWebsocket(ctx, sessionID)
 		if err != nil {
-			return false, err
+			return false, false, usage, err
 		}
 		if len(payload) > 0 {
 			payload = normalizeCodexWebsocketEvent(payload)
+			usage = codexWebsocketUsage(payload, usage)
 			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-				return false, err
+				return false, false, usage, err
 			}
-			if codexWebsocketTerminal(payload) {
-				return true, nil
+			if terminal, reusable := codexWebsocketTerminalOutcome(payload); terminal {
+				return true, reusable, usage, nil
 			}
 		}
 		if done {
-			return false, nil
+			return false, false, usage, nil
 		}
 	}
 }
 
-func codexWebsocketTerminal(payload []byte) bool {
+func codexWebsocketTerminalOutcome(payload []byte) (bool, bool) {
 	var event struct {
 		Type string `json:"type"`
 	}
 	if json.Unmarshal(payload, &event) != nil {
-		return false
+		return false, false
 	}
 	switch event.Type {
-	case "response.completed", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "error":
-		return true
+	case "response.completed", "response.incomplete":
+		return true, true
+	case "response.failed", "response.cancelled", "response.canceled", "error":
+		return true, false
+	default:
+		return false, false
 	}
-	return false
+}
+
+func codexWebsocketUsage(payload []byte, current tokenUsage) tokenUsage {
+	var event struct {
+		Response struct {
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) == nil && (event.Response.Usage.InputTokens > 0 || event.Response.Usage.OutputTokens > 0) {
+		return tokenUsage{PromptTokens: event.Response.Usage.InputTokens, CompletionTokens: event.Response.Usage.OutputTokens, TotalTokens: event.Response.Usage.InputTokens + event.Response.Usage.OutputTokens, Known: true}
+	}
+	return current
+}
+
+func codexWebsocketTerminal(payload []byte) bool {
+	terminal, _ := codexWebsocketTerminalOutcome(payload)
+	return terminal
 }
 
 func normalizeCodexWebsocketEvent(payload []byte) []byte {

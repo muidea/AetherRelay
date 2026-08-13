@@ -92,6 +92,15 @@ func TestCodexWebsocketDoneNormalizesToCompletedTerminal(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketFailureTerminalIsNotReusable(t *testing.T) {
+	if terminal, reusable := codexWebsocketTerminalOutcome([]byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded"}}}`)); !terminal || reusable {
+		t.Fatalf("CP-WS-010 failed terminal=%v reusable=%v", terminal, reusable)
+	}
+	if terminal, reusable := codexWebsocketTerminalOutcome([]byte(`{"type":"response.incomplete","response":{"status":"incomplete"}}`)); !terminal || !reusable {
+		t.Fatalf("CP-STREAM-007 incomplete terminal=%v reusable=%v", terminal, reusable)
+	}
+}
+
 func TestCodexWebsocketForwardsCustomNamespaceTools(t *testing.T) {
 	var sent []byte
 	executor := codexResponsesExecutorStub{

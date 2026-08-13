@@ -28,6 +28,9 @@ func TestCodexWebsocketTurnOutcomeRequiresNonEmptyCompleted(t *testing.T) {
 	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.failed","response":{"error":{"message":"failed"}}}`)); success || !terminal || class != accevents.ErrorUpstream {
 		t.Fatalf("CP-FAIL-014 failed success=%v terminal=%v class=%q", success, terminal, class)
 	}
+	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":1,"output_tokens":2}}}`)); !success || !terminal || class != "" {
+		t.Fatalf("CP-STREAM-007 incomplete success=%v terminal=%v class=%q", success, terminal, class)
+	}
 }
 
 func TestCloseCodexWebsocketDoesNotInventAccountSuccess(t *testing.T) {

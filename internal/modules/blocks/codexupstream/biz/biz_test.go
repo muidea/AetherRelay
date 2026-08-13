@@ -121,6 +121,16 @@ func TestCompletedResponseRejectsEmptyCompletedWithoutUsageOrOutput(t *testing.T
 	}
 }
 
+func TestCompletedResponsePreservesIncompletePartialOutputAndUsage(t *testing.T) {
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n" +
+			"data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_partial\",\"status\":\"incomplete\",\"output\":[],\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n"))}
+	value, class, _, err := completedResponse(response, 4096)
+	if err != nil || class != "" || !strings.Contains(string(value), `"status":"incomplete"`) || !strings.Contains(string(value), `"output_text":"partial"`) || !strings.Contains(string(value), `"output_tokens":2`) {
+		t.Fatalf("CP-STREAM-001/007 value=%s class=%q err=%v", value, class, err)
+	}
+}
+
 func TestSafeUpstreamErrorIsBoundedAndRedacted(t *testing.T) {
 	safe := safeUpstreamError([]byte(`{"error":{"type":"invalid_request_error","code":"invalid_function_parameters","param":"input[1].tools[2]","message":"Invalid schema"}}`))
 	if safe.Type != "invalid_request_error" || safe.Code != "invalid_function_parameters" || safe.Param != "input[1].tools[2]" || safe.Message != "Invalid schema" {
@@ -200,8 +210,66 @@ func TestTerminalClass(t *testing.T) {
 	if done, class := terminalEvent([]byte("event: response.failed\n")); !done || class != events.ErrorUpstream {
 		t.Fatalf("event-only failed terminal = done=%v class=%q", done, class)
 	}
+	if done, class := terminalClass([]byte("data: {\"type\":\"response.incomplete\"}\n")); !done || class != "" {
+		t.Fatalf("incomplete terminal = done=%v class=%q", done, class)
+	}
 	if got := sseEventName([]byte("event: response.output_item.done\n")); got != "response.output_item.done" {
 		t.Fatalf("output done event=%q", got)
+	}
+}
+
+func TestCodexStreamSemanticsRequiresActualOutput(t *testing.T) {
+	for _, line := range []string{
+		`data: {"type":"response.output_text.delta","delta":""}`,
+		`data: {"type":"response.output_item.added","item":{"type":"message","content":[]}}`,
+	} {
+		if semantic, _ := codexStreamSemantics([]byte(line), false); semantic {
+			t.Fatalf("CP-STREAM-008 empty event became output: %s", line)
+		}
+	}
+	if semantic, _ := codexStreamSemantics([]byte(`data: {"type":"response.output_text.delta","delta":"hello"}`), false); !semantic {
+		t.Fatal("CP-STREAM-008 non-empty delta was not output")
+	}
+}
+
+func TestRunStreamKeepsRetryableTerminalBeforeOutputBuffered(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	stream := &responseStream{cancel: cancel, updates: make(chan streamUpdate, 8)}
+	upstream := &Upstream{streams: map[string]*responseStream{"capacity": stream}}
+	body := "data: {\"type\":\"response.created\"}\n\n" +
+		"data: {\"type\":\"error\",\"error\":{\"type\":\"usage_limit_reached\",\"resets_in_seconds\":120}}\n\n"
+	upstream.runStream(ctx, "capacity", stream, io.NopCloser(strings.NewReader(body)), 4096)
+	dataFrames := 0
+	var terminal streamUpdate
+	for update := range stream.updates {
+		if len(update.data) > 0 {
+			dataFrames++
+		}
+		if update.done {
+			terminal = update
+		}
+	}
+	if dataFrames != 0 || terminal.errorClass != events.ErrorRateLimit || !terminal.rateLimit.UsageLimited {
+		t.Fatalf("CP-STREAM-008 data=%d terminal=%+v", dataFrames, terminal)
+	}
+}
+
+func TestWebsocketTerminalFailureClassifiesQuotaReset(t *testing.T) {
+	class, observation := websocketTerminalFailure([]byte(`{"type":"response.failed","response":{"error":{"type":"usage_limit_reached","resets_in_seconds":120}}}`))
+	if class != events.ErrorRateLimit || !observation.UsageLimited || observation.ResetAt == "" {
+		t.Fatalf("CP-WS-010 class=%q observation=%+v", class, observation)
+	}
+}
+
+func TestTerminalOutcomeClassifiesStreamErrorsBeforeOutput(t *testing.T) {
+	done, class, _ := terminalOutcome([]byte(`data: {"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded"}}`))
+	if !done || class != events.ErrorInvalidRequest {
+		t.Fatalf("CP-STREAM-008 invalid request done=%v class=%q", done, class)
+	}
+	done, class, _ = terminalOutcome([]byte(`data: {"type":"error","error":{"code":"server_is_overloaded"}}`))
+	if !done || class != events.ErrorUpstream {
+		t.Fatalf("CP-STREAM-008 capacity done=%v class=%q", done, class)
 	}
 }
 

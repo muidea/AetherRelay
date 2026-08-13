@@ -114,7 +114,7 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) ([]byt
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
 		return nil, false, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket update"))
 	}
-	if update.ErrorClass != "" {
+	if update.ErrorClass != "" && len(update.Payload) == 0 {
 		failure := failureFromUpstream(update.ErrorClass, 0, upevents.RateLimitObservation{}, 0, upevents.SafeError{})
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, string(failure.Kind))
 		return nil, update.Done, failure
@@ -130,7 +130,13 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) ([]byt
 		turnEvidence := found && binding.turnEvidence
 		s.mu.Unlock()
 		if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence(update.Payload, turnEvidence); terminal {
-			s.recordCodexWebsocketTurn(ctx, sessionID, success, class)
+			if update.ErrorClass != "" {
+				failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+				class = string(failure.Kind)
+				s.recordCodexWebsocketTurnResult(ctx, sessionID, false, class, failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+			} else {
+				s.recordCodexWebsocketTurn(ctx, sessionID, success, class)
+			}
 			if !success && codexWebsocketEmptyCompleted(update.Payload) && !turnEvidence {
 				return nil, true, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream returned an empty response.completed"))
 			}
@@ -151,6 +157,10 @@ func (s *Proxy) CloseCodexWebsocket(ctx context.Context, sessionID string) {
 }
 
 func (s *Proxy) recordCodexWebsocketTurn(ctx context.Context, sessionID string, success bool, class string) {
+	s.recordCodexWebsocketTurnResult(ctx, sessionID, success, class, 0, false, "")
+}
+
+func (s *Proxy) recordCodexWebsocketTurnResult(ctx context.Context, sessionID string, success bool, class string, retryAfter int, quotaExhausted bool, quotaResetAt string) {
 	s.mu.Lock()
 	binding, found := s.codexWebsockets[sessionID]
 	shouldRecord := found && !binding.resultRecorded
@@ -160,7 +170,7 @@ func (s *Proxy) recordCodexWebsocketTurn(ctx context.Context, sessionID string, 
 	}
 	s.mu.Unlock()
 	if shouldRecord {
-		s.recordCodexResult(ctx, binding.accountID, binding.model, success, class, 0, false, "")
+		s.recordCodexResult(ctx, binding.accountID, binding.model, success, class, retryAfter, quotaExhausted, quotaResetAt)
 	}
 }
 
@@ -182,7 +192,9 @@ func codexWebsocketTurnOutcomeWithEvidence(payload []byte, turnEvidence bool) (s
 			return false, true, accevents.ErrorUpstream
 		}
 		return true, true, ""
-	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+	case "response.incomplete":
+		return true, true, ""
+	case "response.failed", "response.cancelled", "response.canceled", "error":
 		return false, true, accevents.ErrorUpstream
 	default:
 		return false, false, ""
