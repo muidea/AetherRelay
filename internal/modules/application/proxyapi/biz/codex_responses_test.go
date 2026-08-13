@@ -58,6 +58,46 @@ func TestCompleteCodexResponsesSwitchesBeforeOutputForRetryableStatuses(t *testi
 	}
 }
 
+func TestCodexCompactSwitchesAndRecordsExplicitlyUnsupportedAccount(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	acquires := 0
+	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
+		command := ev.Data().(accevents.AcquireCommand)
+		if command.Transport != accevents.TransportCompact {
+			t.Errorf("transport=%q", command.Transport)
+		}
+		acquires++
+		result.Set(accevents.AcquireResult{AccountID: fmt.Sprintf("account-%d", acquires), AccessToken: fmt.Sprintf("token-%d", acquires), LeaseID: fmt.Sprintf("lease-%d", acquires)}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
+	capabilities := make(chan accevents.RecordTransportCapabilityCommand, 2)
+	accounts.Subscribe(accevents.TopicRecordTransportCapability, func(ev event.Event, result event.Result) {
+		capabilities <- ev.Data().(accevents.RecordTransportCapabilityCommand)
+		result.Set(accevents.RecordTransportCapabilityResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicCompact, func(ev event.Event, result event.Result) {
+		if ev.Data().(upevents.CompactCommand).AccessToken == "token-1" {
+			result.Set(upevents.CompactResult{ErrorClass: upevents.ErrorInvalidRequest, HTTPStatus: http.StatusNotFound}, nil)
+			return
+		}
+		result.Set(upevents.CompactResult{Body: []byte(`{"id":"resp_compact"}`)}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	completed, err := proxy.CompleteCodexCompact(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)})
+	if err != nil || acquires != 2 || string(completed.Body) != `{"id":"resp_compact"}` {
+		t.Fatalf("completed=%s acquires=%d err=%v", completed.Body, acquires, err)
+	}
+	first, second := <-capabilities, <-capabilities
+	if first.AccountID != "account-1" || first.Supported || second.AccountID != "account-2" || !second.Supported {
+		t.Fatalf("capabilities=%+v %+v", first, second)
+	}
+}
+
 func TestCompleteCodexResponsesPreservesLastRetryableFailure(t *testing.T) {
 	hub := event.NewHub(24)
 	background := task.NewBackgroundRoutine(8)

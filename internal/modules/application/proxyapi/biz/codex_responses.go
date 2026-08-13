@@ -25,7 +25,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
-		account, err := s.acquireCodexAccount(ctx, request.Model, tried, request.SessionHash)
+		account, err := s.acquireCodexAccountForTransport(ctx, request.Model, tried, request.SessionHash, accevents.TransportWebsocket)
 		if err != nil {
 			if lastFailure != nil {
 				return codexresponses.WebsocketOpenResult{}, lastFailure
@@ -45,6 +45,12 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			return codexresponses.WebsocketOpenResult{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket result"))
 		}
 		if opened.ErrorClass != "" {
+			if transportExplicitlyUnsupported(accevents.TransportWebsocket, opened.HTTPStatus) {
+				s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, false)
+				s.releaseCodexAccount(ctx, account.LeaseID)
+				tried = append(tried, account.AccountID)
+				continue
+			}
 			failure := failureFromUpstream(opened.ErrorClass, 0, upevents.RateLimitObservation{}, opened.HTTPStatus)
 			lastFailure = failure
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -65,6 +71,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		}
 		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, model: request.Model}
 		s.mu.Unlock()
+		s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
 		return codexresponses.WebsocketOpenResult{SessionID: opened.SessionID}, nil
 	}
 }
@@ -171,7 +178,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
-		account, err := s.acquireCodexAccount(ctx, request.Model, tried, request.SessionHash)
+		account, err := s.acquireCodexAccountForTransport(ctx, request.Model, tried, request.SessionHash, accevents.TransportCompact)
 		if err != nil {
 			if lastFailure != nil {
 				return codexresponses.Result{}, lastFailure
@@ -192,12 +199,19 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex compact result"))
 		}
 		if completed.ErrorClass == "" {
+			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, true)
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 			return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 		}
 		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus)
 		lastFailure = failure
+		if transportExplicitlyUnsupported(accevents.TransportCompact, completed.HTTPStatus) {
+			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, false)
+			s.releaseCodexAccount(ctx, account.LeaseID)
+			tried = append(tried, account.AccountID)
+			continue
+		}
 		s.releaseCodexAccount(ctx, account.LeaseID)
 		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 		if retryableCodexFailure(failure) {
@@ -328,10 +342,11 @@ func retryableCodexFailure(failure *codexresponses.Failure) bool {
 }
 
 func (s *Proxy) acquireCodexAccount(ctx context.Context, model string, exclude []string, sessionHash ...string) (accevents.AcquireResult, error) {
-	command := accevents.AcquireCommand{Model: model, Exclude: exclude}
-	if len(sessionHash) > 0 {
-		command.SessionHash = sessionHash[0]
-	}
+	return s.acquireCodexAccountForTransport(ctx, model, exclude, firstString(sessionHash), accevents.TransportResponses)
+}
+
+func (s *Proxy) acquireCodexAccountForTransport(ctx context.Context, model string, exclude []string, sessionHash, transport string) (accevents.AcquireResult, error) {
+	command := accevents.AcquireCommand{Model: model, Exclude: exclude, SessionHash: sessionHash, Transport: transport}
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquire, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, command)).Get()
 	if err != nil {
 		return accevents.AcquireResult{}, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex OAuth account unavailable"))
@@ -341,6 +356,30 @@ func (s *Proxy) acquireCodexAccount(ctx context.Context, model string, exclude [
 		return accevents.AcquireResult{}, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex OAuth account unavailable"))
 	}
 	return account, nil
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func transportExplicitlyUnsupported(transport string, status int) bool {
+	switch transport {
+	case accevents.TransportCompact:
+		return status == 404 || status == 405
+	case accevents.TransportWebsocket:
+		return status == 404 || status == 405 || status == 426
+	default:
+		return false
+	}
+}
+
+func (s *Proxy) recordCodexTransportCapability(ctx context.Context, id, transport string, supported bool) {
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordTransportCapability, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordTransportCapabilityCommand{
+		AccountID: id, Transport: transport, Supported: supported,
+	})).Get()
 }
 
 func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {

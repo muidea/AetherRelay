@@ -68,6 +68,8 @@ type account struct {
 	UsageSnapshot       *events.AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
 	UsageRefreshErrorAt string                       `json:"usage_refresh_error_at,omitempty"`
 	UsageRefreshError   string                       `json:"usage_refresh_error,omitempty"`
+	CompactSupported    *bool                        `json:"compact_supported,omitempty"`
+	WebsocketSupported  *bool                        `json:"websocket_supported,omitempty"`
 }
 
 type Store struct {
@@ -361,6 +363,10 @@ func (s *Store) Acquire(model string, exclude []string) (events.AcquireResult, e
 }
 
 func (s *Store) AcquirePreferred(model string, exclude []string, preferredID string) (events.AcquireResult, error) {
+	return s.AcquirePreferredTransport(model, exclude, preferredID, events.TransportResponses)
+}
+
+func (s *Store) AcquirePreferredTransport(model string, exclude []string, preferredID, transport string) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
@@ -369,7 +375,7 @@ func (s *Store) AcquirePreferred(model string, exclude []string, preferredID str
 		excluded[strings.TrimSpace(id)] = struct{}{}
 	}
 	if preferred := s.items[strings.TrimSpace(preferredID)]; preferred != nil && preferred.Status == events.StatusNormal && strings.TrimSpace(preferred.AccessToken) != "" {
-		if _, found := excluded[preferred.ID]; !found && !cooling(preferred, model, now) && accountSupportsModel(preferred, model, now) {
+		if _, found := excluded[preferred.ID]; !found && !cooling(preferred, model, now) && accountSupportsModel(preferred, model, now) && transportSupport(preferred, transport) == 1 {
 			preferred.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
@@ -377,23 +383,77 @@ func (s *Store) AcquirePreferred(model string, exclude []string, preferredID str
 			return events.AcquireResult{AccountID: preferred.ID, AccessToken: preferred.AccessToken, AccountIDHeader: preferred.AccountIDHeader, Proxy: preferred.Proxy}, nil
 		}
 	}
-	for offset := 0; offset < len(s.order); offset++ {
-		pos := (s.index + offset) % len(s.order)
-		item := s.items[s.order[pos]]
-		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" {
-			continue
+	for _, tier := range []int{1, 0} {
+		for offset := 0; offset < len(s.order); offset++ {
+			pos := (s.index + offset) % len(s.order)
+			item := s.items[s.order[pos]]
+			if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" || transportSupport(item, transport) != tier {
+				continue
+			}
+			if _, found := excluded[item.ID]; found || cooling(item, model, now) || !accountSupportsModel(item, model, now) {
+				continue
+			}
+			s.index = (pos + 1) % len(s.order)
+			item.LastUsedAt = now.Format(time.RFC3339)
+			if err := s.saveLocked(); err != nil {
+				return events.AcquireResult{}, err
+			}
+			return events.AcquireResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy}, nil
 		}
-		if _, found := excluded[item.ID]; found || cooling(item, model, now) || !accountSupportsModel(item, model, now) {
-			continue
-		}
-		s.index = (pos + 1) % len(s.order)
-		item.LastUsedAt = now.Format(time.RFC3339)
-		if err := s.saveLocked(); err != nil {
-			return events.AcquireResult{}, err
-		}
-		return events.AcquireResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy}, nil
 	}
 	return events.AcquireResult{}, fmt.Errorf("no eligible Codex OAuth account")
+}
+
+func transportSupport(item *account, transport string) int {
+	var supported *bool
+	switch strings.TrimSpace(transport) {
+	case events.TransportCompact:
+		supported = item.CompactSupported
+	case events.TransportWebsocket:
+		supported = item.WebsocketSupported
+	default:
+		return 1
+	}
+	if supported == nil {
+		return 0
+	}
+	if *supported {
+		return 1
+	}
+	return -1
+}
+
+func (s *Store) RecordTransportCapability(id, transport string, supported bool) (events.AccountView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := s.items[strings.TrimSpace(id)]
+	if item == nil {
+		return events.AccountView{}, fmt.Errorf("account not found")
+	}
+	value := supported
+	changed := false
+	switch strings.TrimSpace(transport) {
+	case events.TransportCompact:
+		if item.CompactSupported == nil || *item.CompactSupported != supported {
+			item.CompactSupported = &value
+			changed = true
+		}
+	case events.TransportWebsocket:
+		if item.WebsocketSupported == nil || *item.WebsocketSupported != supported {
+			item.WebsocketSupported = &value
+			changed = true
+		}
+	default:
+		return events.AccountView{}, fmt.Errorf("invalid Codex transport capability")
+	}
+	if !changed {
+		return toView(item, time.Now().UTC()), nil
+	}
+	if err := s.saveLocked(); err != nil {
+		return events.AccountView{}, err
+	}
+	s.bumpCatalogLocked()
+	return toView(item, time.Now().UTC()), nil
 }
 
 func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
@@ -674,6 +734,8 @@ func toView(item *account, now time.Time) events.AccountView {
 		ModelDiscoveryErrorClass:   item.ModelDiscoveryErrorClass,
 		UsageRefreshErrorAt:        item.UsageRefreshErrorAt,
 		UsageRefreshError:          item.UsageRefreshError,
+		CompactSupported:           item.CompactSupported,
+		WebsocketSupported:         item.WebsocketSupported,
 	}
 	if item.ModelSnapshot != nil {
 		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)

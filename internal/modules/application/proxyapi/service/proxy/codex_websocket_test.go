@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -116,6 +117,51 @@ func TestCodexWebsocketForwardsCustomNamespaceTools(t *testing.T) {
 	}
 	if !strings.Contains(string(sent), `"type":"namespace"`) || !strings.Contains(string(sent), `"type":"custom_tool_call"`) || !strings.Contains(string(sent), `"call_id":"call_exec"`) || !strings.Contains(string(sent), `"parallel_tool_calls":true`) {
 		t.Fatalf("CP-REQ-008/011/023/024 websocket=%s", sent)
+	}
+}
+
+func TestCodexWebsocketForwardsIncrementalToolContinuation(t *testing.T) {
+	var sent [][]byte
+	pulls := 0
+	executor := codexResponsesExecutorStub{
+		wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
+			return codexresponses.WebsocketOpenResult{SessionID: "session-continuation"}, nil
+		},
+		wsSend: func(_ context.Context, _ string, payload []byte) error {
+			sent = append(sent, append([]byte(nil), payload...))
+			return nil
+		},
+		wsPull: func(context.Context, string) ([]byte, bool, error) {
+			pulls++
+			if pulls == 1 {
+				return []byte(`{"type":"response.completed","response":{"id":"resp-1"}}`), false, nil
+			}
+			return []byte(`{"type":"response.completed","response":{"id":"resp-2"}}`), false, nil
+		},
+	}
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	headers := http.Header{"Authorization": []string{"Bearer test-client-key"}}
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", headers)
+	if err != nil {
+		t.Fatalf("handshake response=%v err=%v", response, err)
+	}
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"gpt-5.2-codex","tools":[{"type":"function","name":"lookup"}],"input":"hello"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","previous_response_id":"resp-1","input":[{"type":"function_call_output","call_id":"call-1","output":"done"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 2 || !bytes.Contains(sent[1], []byte(`"previous_response_id":"resp-1"`)) || !bytes.Contains(sent[1], []byte(`"call_id":"call-1"`)) {
+		t.Fatalf("CP-WS-007 sent=%q", sent)
 	}
 }
 

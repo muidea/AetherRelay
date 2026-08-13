@@ -2,19 +2,20 @@
 package events
 
 const (
-	TopicList         = "aetherrelay.codex.accountpool.command.list"
-	TopicImport       = "aetherrelay.codex.accountpool.command.import"
-	TopicDelete       = "aetherrelay.codex.accountpool.command.delete"
-	TopicUpdate       = "aetherrelay.codex.accountpool.command.update"
-	TopicAcquire      = "aetherrelay.codex.accountpool.command.acquire"
-	TopicRelease      = "aetherrelay.codex.accountpool.command.release"
-	TopicRecordResult = "aetherrelay.codex.accountpool.command.record_result"
-	TopicRefreshToken = "aetherrelay.codex.accountpool.command.refresh_token"
-	TopicRefreshByID  = "aetherrelay.codex.accountpool.command.refresh_by_id"
-	TopicExportByID   = "aetherrelay.codex.accountpool.command.export_by_id"
-	TopicHealth       = "aetherrelay.codex.accountpool.command.health"
-	TopicOAuthStart   = "aetherrelay.codex.accountpool.command.oauth_start"
-	TopicOAuthFinish  = "aetherrelay.codex.accountpool.command.oauth_finish"
+	TopicList                      = "aetherrelay.codex.accountpool.command.list"
+	TopicImport                    = "aetherrelay.codex.accountpool.command.import"
+	TopicDelete                    = "aetherrelay.codex.accountpool.command.delete"
+	TopicUpdate                    = "aetherrelay.codex.accountpool.command.update"
+	TopicAcquire                   = "aetherrelay.codex.accountpool.command.acquire"
+	TopicRelease                   = "aetherrelay.codex.accountpool.command.release"
+	TopicRecordResult              = "aetherrelay.codex.accountpool.command.record_result"
+	TopicRecordTransportCapability = "aetherrelay.codex.accountpool.command.record_transport_capability"
+	TopicRefreshToken              = "aetherrelay.codex.accountpool.command.refresh_token"
+	TopicRefreshByID               = "aetherrelay.codex.accountpool.command.refresh_by_id"
+	TopicExportByID                = "aetherrelay.codex.accountpool.command.export_by_id"
+	TopicHealth                    = "aetherrelay.codex.accountpool.command.health"
+	TopicOAuthStart                = "aetherrelay.codex.accountpool.command.oauth_start"
+	TopicOAuthFinish               = "aetherrelay.codex.accountpool.command.oauth_finish"
 	// Discovery contracts keep the constrained, account-scoped model cache in
 	// the account-pool owner. Tokens only cross the EventHub for the discovery
 	// request and are never exposed through the Admin HTTP API.
@@ -73,6 +74,8 @@ type AccountView struct {
 	UsageSnapshot            *AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
 	UsageRefreshErrorAt      string                `json:"usage_refresh_error_at,omitempty"`
 	UsageRefreshError        string                `json:"usage_refresh_error,omitempty"`
+	CompactSupported         *bool                 `json:"compact_supported,omitempty"`
+	WebsocketSupported       *bool                 `json:"websocket_supported,omitempty"`
 }
 
 type CooldownView struct {
@@ -138,6 +141,7 @@ type UpdateResult struct {
 // the EventHub path and must not be returned from any HTTP adapter.
 type AcquireCommand struct {
 	Model       string
+	Transport   string
 	Exclude     []string
 	SessionHash string
 	PreferredID string
@@ -163,6 +167,19 @@ type RecordResultCommand struct {
 	QuotaResetAt      string
 }
 type RecordResultResult struct{ Account AccountView }
+
+const (
+	TransportResponses = "responses"
+	TransportCompact   = "compact"
+	TransportWebsocket = "websocket"
+)
+
+type RecordTransportCapabilityCommand struct {
+	AccountID string
+	Transport string
+	Supported bool
+}
+type RecordTransportCapabilityResult struct{ Account AccountView }
 
 type RefreshTokenCommand struct{ AccountID string }
 type RefreshTokenResult struct {

@@ -97,7 +97,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
@@ -105,6 +105,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicAcquire, b.handleAcquire)
 	b.SubscribeFunc(events.TopicRelease, b.handleRelease)
 	b.SubscribeFunc(events.TopicRecordResult, b.handleRecordResult)
+	b.SubscribeFunc(events.TopicRecordTransportCapability, b.handleRecordTransportCapability)
 	b.SubscribeFunc(events.TopicRefreshToken, b.handleRefreshToken)
 	b.SubscribeFunc(events.TopicRefreshByID, b.handleRefreshByID)
 	b.SubscribeFunc(events.TopicExportByID, b.handleExportByID)
@@ -236,7 +237,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 			exclude = append(exclude, accountID)
 		}
 	}
-	item, err := s.store.AcquirePreferred(cmd.Model, exclude, preferred)
+	item, err := s.store.AcquirePreferredTransport(cmd.Model, exclude, preferred, cmd.Transport)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return
@@ -289,6 +290,23 @@ func (s *Account) handleRecordResult(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.RecordResultResult{Account: item}, nil)
+}
+
+func (s *Account) handleRecordTransportCapability(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.RecordTransportCapabilityCommand)
+	if !ok || strings.TrimSpace(cmd.AccountID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex transport capability command"))
+		return
+	}
+	item, err := s.store.RecordTransportCapability(cmd.AccountID, cmd.Transport, cmd.Supported)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.RecordTransportCapabilityResult{Account: item}, nil)
 }
 
 func (s *Account) handleRefreshToken(ev event.Event, result event.Result) {

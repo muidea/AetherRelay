@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -238,7 +239,7 @@ func TestCodexRequestRejectsUnsupportedStateAndCapabilityBeforeUpstream(t *testi
 		{name: "parallel type", body: `{"model":"gpt-5.2-codex","parallel_tool_calls":"yes","input":"hello"}`},
 		{name: "unknown client metadata", body: `{"model":"gpt-5.2-codex","client_metadata":{"tenant":"secret"},"input":"hello"}`},
 		{name: "computer tool", body: `{"model":"gpt-5.2-codex","input":"hello","tools":[{"type":"computer"}]}`},
-		{name: "invalid item id", body: `{"model":"gpt-5.2-codex","input":[{"id":"bad id","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`},
+		{name: "non string item id", body: `{"model":"gpt-5.2-codex","input":[{"id":12,"role":"user","content":[{"type":"input_text","text":"hello"}]}]}`},
 		{name: "orphan tool output", body: `{"model":"gpt-5.2-codex","input":[{"type":"function_call_output","call_id":"call_missing","output":"done"}]}`},
 	}
 	for _, testCase := range tests {
@@ -318,8 +319,60 @@ func TestCodexRequestNormalizesLegacyFunctionsAndToolContinuation(t *testing.T) 
 	if len(tools) != 1 || tool["name"] != "lookup" || tool["function"] != nil || choice["name"] != "lookup" || bytes.Contains(normalized, []byte(`"functions"`)) {
 		t.Fatalf("CP-REQ-010/021 normalized=%s", normalized)
 	}
-	if !bytes.Contains(normalized, []byte(`"call_id":"fc_lookup"`)) {
-		t.Fatalf("CP-REQ-012 normalized=%s", normalized)
+	if !bytes.Contains(normalized, []byte(`"call_id":"call_lookup"`)) || bytes.Contains(normalized, []byte(`"call_id":"fc_lookup"`)) {
+		t.Fatalf("CP-REQ-012 call_id must be preserved: %s", normalized)
+	}
+}
+
+func TestCodexRequestNormalizesInputItemIDsWithoutChangingCallID(t *testing.T) {
+	longID := strings.Repeat("external-item-", 8)
+	raw := []byte(`{"model":"gpt-test","input":[{"type":"function_call","id":"` + longID + `","call_id":"call-1","name":"lookup","arguments":"{}"},{"type":"function_call_output","id":"` + longID + `","call_id":"call-1","output":"done"},{"type":"message","id":"external-message","role":"user","content":"continue"}]}`)
+	normalized, body, _, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := body["input"].([]any)
+	call := items[0].(map[string]any)
+	output := items[1].(map[string]any)
+	message := items[2].(map[string]any)
+	if call["call_id"] != "call-1" || output["call_id"] != "call-1" {
+		t.Fatalf("CP-REQ-012 call_id changed: %s", normalized)
+	}
+	if id := call["id"].(string); !strings.HasPrefix(id, "fc_") || len([]rune(id)) > codexInputItemIDLimit {
+		t.Fatalf("CP-REQ-013 function item id=%q", id)
+	}
+	if output["id"] == call["id"] || len([]rune(output["id"].(string))) > codexInputItemIDLimit {
+		t.Fatalf("CP-REQ-013 collision not resolved: %s", normalized)
+	}
+	if message["id"] != "msg_external-message" {
+		t.Fatalf("CP-REQ-013 message id=%q", message["id"])
+	}
+}
+
+func TestCodexResponsesLiteForcesParallelToolCallsFalse(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","tools":[{"type":"function","name":"lookup"}],"parallel_tool_calls":true,"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},"input":"hello"}`)
+	normalized, body, ignored, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := body["parallel_tool_calls"].(bool); !ok || value {
+		t.Fatalf("CP-REQ-011 Responses Lite must force false: %s", normalized)
+	}
+	if body["client_metadata"] != nil || !slices.Contains(ignored, "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite") {
+		t.Fatalf("CP-REQ-016 ignored=%v body=%s", ignored, normalized)
+	}
+}
+
+func TestCodexRequestDropsOverlongEncryptedReasoningItem(t *testing.T) {
+	longID := "rs_" + strings.Repeat("a", codexInputItemIDLimit)
+	raw := []byte(`{"model":"gpt-test","input":[{"type":"reasoning","id":"` + longID + `","encrypted_content":"sealed","summary":[]},{"type":"message","id":"user-1","role":"user","content":"continue"}]}`)
+	normalized, body, _, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := body["input"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["type"] != "message" {
+		t.Fatalf("CP-REQ-013 encrypted reasoning item was not dropped: %s", normalized)
 	}
 }
 

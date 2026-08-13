@@ -6,14 +6,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
 )
 
-var codexItemIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+const codexInputItemIDLimit = 64
+
+type codexNormalizationOptions struct {
+	compact             bool
+	allowPreviousID     bool
+	allowIncrementalOut bool
+	responsesLite       bool
+}
 
 var codexDropCompatibleHeaders = []string{
 	"X-Codex-Turn-Metadata",
@@ -50,6 +57,10 @@ var codexDropCompatibleFields = []string{
 // normalizeCodexRequest applies the deterministic client-side portion of
 // CP-REQ-001..024 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
+	return normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact})
+}
+
+func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOptions) ([]byte, map[string]any, []string, error) {
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid JSON request body")
@@ -64,7 +75,7 @@ func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []
 			"content": []any{map[string]any{"type": "input_text", "text": input}},
 		}}
 	}
-	if compact {
+	if options.compact {
 		delete(body, "stream")
 		delete(body, "store")
 		delete(body, "tool_choice")
@@ -77,15 +88,19 @@ func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []
 		ensureCodexReasoningInclude(body)
 	}
 	convertLegacyCodexFunctions(body)
-	metadataIgnored, err := projectCodexClientMetadata(body)
+	responsesLite, metadataIgnored, err := projectCodexClientMetadata(body)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := validateCodexRequest(body, compact); err != nil {
+	if responsesLite {
+		body["parallel_tool_calls"] = false
+		options.responsesLite = true
+	}
+	if err := validateCodexRequest(body, options); err != nil {
 		return nil, nil, nil, err
 	}
-	normalizeCodexFunctionCallIDs(body["input"])
-	if compact {
+	body["input"] = normalizeCodexInputItemIDs(body["input"])
+	if options.compact {
 		stripCodexCompactInputNamespaces(body["input"])
 	}
 	ignored := append([]string(nil), metadataIgnored...)
@@ -146,24 +161,32 @@ func convertLegacyCodexFunctions(body map[string]any) {
 	}
 }
 
-func validateCodexRequest(body map[string]any, compact bool) error {
+func validateCodexRequest(body map[string]any, options codexNormalizationOptions) error {
 	if previous, exists := body["previous_response_id"]; exists && previous != nil && strings.TrimSpace(fmt.Sprint(previous)) != "" {
-		return fmt.Errorf("previous_response_id is not supported without an AetherRelay-owned response store")
+		if !options.allowPreviousID {
+			return fmt.Errorf("previous_response_id is not supported without an AetherRelay-owned response store")
+		}
+		value, ok := previous.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("previous_response_id must be a non-empty string")
+		}
+		body["previous_response_id"] = strings.TrimSpace(value)
+	} else {
+		delete(body, "previous_response_id")
 	}
-	delete(body, "previous_response_id")
 	if parallel, exists := body["parallel_tool_calls"]; exists {
 		if _, ok := parallel.(bool); !ok {
 			return fmt.Errorf("parallel_tool_calls must be a boolean")
 		}
 		tools, toolsOK := body["tools"].([]any)
-		if compact || !toolsOK || len(tools) == 0 {
+		if options.compact || (!toolsOK || len(tools) == 0) && !options.responsesLite {
 			delete(body, "parallel_tool_calls")
 		}
 	}
 	if err := validateCodexTools(body["tools"]); err != nil {
 		return err
 	}
-	return validateCodexInput(body["input"])
+	return validateCodexInput(body["input"], options.allowIncrementalOut)
 }
 
 func validateCodexTools(value any) error {
@@ -202,7 +225,7 @@ func validateCodexTools(value any) error {
 	return nil
 }
 
-func validateCodexInput(value any) error {
+func validateCodexInput(value any, allowIncrementalOutputs bool) error {
 	items, ok := value.([]any)
 	if !ok {
 		return nil
@@ -215,8 +238,7 @@ func validateCodexInput(value any) error {
 			continue
 		}
 		if id, exists := item["id"]; exists {
-			text, ok := id.(string)
-			if !ok || !codexItemIDPattern.MatchString(text) {
+			if _, ok := id.(string); !ok {
 				return fmt.Errorf("input item id is invalid")
 			}
 		}
@@ -235,7 +257,8 @@ func validateCodexInput(value any) error {
 			}
 		case "function_call_output":
 			callID, _ := item["call_id"].(string)
-			if _, exists := functionCalls[strings.TrimSpace(callID)]; strings.TrimSpace(callID) == "" || !exists {
+			_, exists := functionCalls[strings.TrimSpace(callID)]
+			if strings.TrimSpace(callID) == "" || !exists && !allowIncrementalOutputs {
 				return fmt.Errorf("function_call_output references an unknown call_id")
 			}
 		case "custom_tool_call", "mcp_tool_call":
@@ -244,7 +267,8 @@ func validateCodexInput(value any) error {
 			}
 		case "custom_tool_call_output", "mcp_tool_call_output":
 			callID, _ := item["call_id"].(string)
-			if _, exists := customCalls[strings.TrimSpace(callID)]; strings.TrimSpace(callID) == "" || !exists {
+			_, exists := customCalls[strings.TrimSpace(callID)]
+			if strings.TrimSpace(callID) == "" || !exists && !allowIncrementalOutputs {
 				return fmt.Errorf("%s references an unknown call_id", typ)
 			}
 		case "additional_tools":
@@ -283,18 +307,77 @@ func rejectCodexMultimodalContent(value any) error {
 	return nil
 }
 
-func normalizeCodexFunctionCallIDs(value any) {
+func normalizeCodexInputItemIDs(value any) any {
 	items, _ := value.([]any)
+	if items == nil {
+		return value
+	}
+	occupied := make(map[string]struct{}, len(items))
+	normalized := make([]any, 0, len(items))
 	for _, raw := range items {
 		item, _ := raw.(map[string]any)
-		typ, _ := item["type"].(string)
-		if typ != "function_call" && typ != "function_call_output" {
+		original, ok := item["id"].(string)
+		if ok && len([]rune(original)) > codexInputItemIDLimit && item["type"] == "reasoning" {
+			if encrypted, _ := item["encrypted_content"].(string); encrypted != "" {
+				continue
+			}
+		}
+		if !ok || original == "" {
+			normalized = append(normalized, raw)
 			continue
 		}
-		if id, ok := item["call_id"].(string); ok {
-			item["call_id"] = normalizedCodexCallID(id)
+		prefix := codexInputItemPrefix(item)
+		id := original
+		if prefix != "" && !strings.HasPrefix(id, prefix+"_") {
+			id = prefix + "_" + id
 		}
+		id = shortenCodexInputItemID(id, 0)
+		for attempt := 1; ; attempt++ {
+			if _, exists := occupied[id]; !exists {
+				break
+			}
+			id = shortenCodexInputItemID(prefix+"_"+original, attempt)
+		}
+		occupied[id] = struct{}{}
+		item["id"] = id
+		normalized = append(normalized, raw)
 	}
+	return normalized
+}
+
+func codexInputItemPrefix(item map[string]any) string {
+	switch item["type"] {
+	case "message":
+		return "msg"
+	case "reasoning":
+		return "rs"
+	case "function_call":
+		return "fc"
+	case "custom_tool_call":
+		return "ctc"
+	case "custom_tool_call_output":
+		return "ctco"
+	default:
+		return ""
+	}
+}
+
+func shortenCodexInputItemID(id string, attempt int) string {
+	runes := []rune(id)
+	hashInput := id
+	if attempt > 0 {
+		hashInput += "\x00" + strconv.Itoa(attempt)
+	}
+	digest := sha256.Sum256([]byte(hashInput))
+	suffix := "_" + hex.EncodeToString(digest[:8])
+	if len(runes) <= codexInputItemIDLimit && attempt == 0 {
+		return id
+	}
+	limit := codexInputItemIDLimit - len(suffix)
+	if limit > len(runes) {
+		limit = len(runes)
+	}
+	return string(runes[:limit]) + suffix
 }
 
 var codexClientMetadataAllowlist = map[string]struct{}{
@@ -304,26 +387,38 @@ var codexClientMetadataAllowlist = map[string]struct{}{
 	"ws_request_header_x_openai_internal_codex_responses_lite": {},
 }
 
-func projectCodexClientMetadata(body map[string]any) ([]string, error) {
+func projectCodexClientMetadata(body map[string]any) (bool, []string, error) {
 	value, exists := body["client_metadata"]
 	if !exists || value == nil {
 		delete(body, "client_metadata")
-		return nil, nil
+		return false, nil, nil
 	}
 	metadata, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("client_metadata must be an object")
+		return false, nil, fmt.Errorf("client_metadata must be an object")
 	}
+	responsesLite := codexMetadataTrue(metadata["ws_request_header_x_openai_internal_codex_responses_lite"])
 	ignored := make([]string, 0, len(metadata))
 	for key := range metadata {
 		if _, allowed := codexClientMetadataAllowlist[key]; !allowed {
-			return nil, fmt.Errorf("client_metadata field %q is not supported", key)
+			return false, nil, fmt.Errorf("client_metadata field %q is not supported", key)
 		}
 		ignored = append(ignored, "client_metadata."+key)
 	}
 	sort.Strings(ignored)
 	delete(body, "client_metadata")
-	return ignored, nil
+	return responsesLite, ignored, nil
+}
+
+func codexMetadataTrue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
 }
 
 func stripCodexCompactInputNamespaces(value any) {
@@ -335,21 +430,6 @@ func stripCodexCompactInputNamespaces(value any) {
 			delete(item, "namespace")
 		}
 	}
-}
-
-func normalizedCodexCallID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return ""
-	}
-	if !strings.HasPrefix(id, "fc") {
-		id = "fc_" + strings.TrimPrefix(id, "call_")
-	}
-	if len(id) <= 64 {
-		return id
-	}
-	digest := sha256.Sum256([]byte("aetherrelay:codex-call-id:v1:" + id))
-	return "fc_" + hex.EncodeToString(digest[:])[:61]
 }
 
 // codexSessionHash implements CP-SCHED-002..003 without retaining the raw

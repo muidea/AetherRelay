@@ -15,7 +15,7 @@
     "name": "tool continuation",
     "compact": false,
     "input": {"model":"gpt-test","input":[{"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_lookup","output":"done"}]},
-    "expected": {"model":"gpt-test","input":[{"type":"function_call","call_id":"fc_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"fc_lookup","output":"done"}],"stream":true,"store":false}
+    "expected": {"model":"gpt-test","input":[{"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_lookup","output":"done"}],"stream":true,"store":false}
   },
   {
     "name": "custom namespace parallel and image",

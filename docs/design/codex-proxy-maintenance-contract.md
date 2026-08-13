@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`2.0.0`
+> 合同版本：`2.2.0`
 >
 > 状态：`active`
 >
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.1.0` 在 `2.0.0` 端点收口基础上补齐 Codex CLI `0.147.0` 已使用的 custom/namespace 工具、并行工具、工具续链、原生图片输入及有界 `client_metadata` 兼容规则。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。`2.1.0` 在 `2.0.0` 端点收口基础上补齐 Codex CLI `0.147.0` 已使用的 custom/namespace 工具、并行工具、工具续链、原生图片输入及有界 `client_metadata` 兼容规则。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -115,10 +115,10 @@
 | `tools` | 支持 `function`、`custom`、递归 `namespace`；其他类型按独立能力声明处理 | 保序；不自动注入图片工具 | `CP-REQ-008` |
 | `tool_choice` | 规范化；目标不支持则拒绝 | 删除或拒绝，以能力合同为准 | `CP-REQ-009` |
 | `functions/function_call` | 转为 `tools/tool_choice` | 同左 | `CP-REQ-010` |
-| `parallel_tool_calls` | boolean 且存在工具时保留；无工具时删除 | 删除 | `CP-REQ-011` |
-| function `call_id` | 规范为 `fc_`，最长 64 bytes，稳定压缩；custom call ID 原样保留 | 同左 | `CP-REQ-012` |
-| input item `id` | 只保留续链所需且合法的 ID | 保留 compaction 结构 | `CP-REQ-013` |
-| `previous_response_id` | 无本地状态时拒绝或显式展开，不能静默透传未知 owner ID | reject | `CP-REQ-014` |
+| `parallel_tool_calls` | boolean 且存在工具时保留；无工具时删除；Responses Lite 强制 false | 删除 | `CP-REQ-011` |
+| function/custom/MCP `call_id` | 原样保留，call 与 output 必须一致；禁止改写到 `fc_` 命名空间 | 同左 | `CP-REQ-012` |
+| input item `id` | 按 item 类型规范为 `msg_`/`rs_`/`fc_`/`ctc_`/`ctco_`，最长 64 字符，稳定压缩并处理冲突 | 保留顺序并执行同一规范化 | `CP-REQ-013` |
+| `previous_response_id` | HTTP 无本地状态时拒绝；原生持久 WS 同 session 增量 turn 保留 | reject | `CP-REQ-014` |
 | `prompt_cache_key` | 规范化并绑定 session | 保留适用值 | `CP-REQ-015` |
 | `client_metadata` | 只接受已知 Codex 键；当前敏感身份值 drop-compatible 并只审计键名 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
@@ -127,7 +127,7 @@
 
 `CP-REQ-020` system message 必须无损提升到 `instructions`。只有能证明文本语义已完整保留的转换入口，才可以从 `input` 删除被提升项；原生 Responses 默认保留为 developer message。
 
-`CP-REQ-021` 工具调用与 tool output 必须成对，不能删除续链需要的 `call_id`、reference 或 encrypted reasoning。
+`CP-REQ-021` HTTP 完整历史中的工具调用与 tool output 必须成对；原生持久 WS 的后续 turn 可以只包含引用上一 turn pending call 的 output。两种路径都不能删除或改写续链需要的 `call_id`、reference 或 encrypted reasoning。
 
 `CP-REQ-022` 请求变换必须发生在账号选择和访问上游之前。确定性客户端错误不得消耗账号或触发 failover。
 
@@ -188,6 +188,10 @@
 `CP-WS-005` compact 不使用上游 WebSocket。WebSocket 到 HTTP 的自动降级不属于当前合同；握手或上游连接失败必须返回明确错误，不能把客户端请求静默改成另一种 transport。
 
 `CP-WS-006` WebSocket 单帧、单消息、session 数、空闲时间和存活时间必须有配置上限。
+
+`CP-WS-007` 同一上游连接的后续 `response.create` 必须支持 `previous_response_id + incremental input`。代理不得要求本 turn 的 `function_call_output`、`custom_tool_call_output` 或 `mcp_tool_call_output` 在同一 input 数组中重复其 call。
+
+`CP-WS-008` 客户端在本地 compact 后提交完整替换 transcript 时，代理必须保序转发该 transcript，不得与旧 turn 历史合并或注入旧 `previous_response_id`。
 
 ## 8. 账号调度与会话粘性
 

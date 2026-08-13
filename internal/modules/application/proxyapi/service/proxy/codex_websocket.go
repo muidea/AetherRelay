@@ -175,7 +175,9 @@ func normalizeCodexWebsocketCreate(raw []byte, currentModel string) ([]byte, str
 	}
 	envelope["model"] = model
 	encoded, _ := json.Marshal(envelope)
-	normalized, body, _, err := normalizeCodexRequest(encoded, false)
+	normalized, body, _, err := normalizeCodexRequestWithOptions(encoded, codexNormalizationOptions{
+		allowPreviousID: currentModel != "", allowIncrementalOut: currentModel != "",
+	})
 	if err != nil {
 		return nil, "", err
 	}

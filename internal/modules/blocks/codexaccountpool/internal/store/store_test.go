@@ -422,6 +422,47 @@ func TestExplicitDiscoveryCandidatesCanRetryAbnormalButNotDisabledAccounts(t *te
 	}
 }
 
+func TestTransportCapabilitiesPrioritizeSupportedAndExcludeUnsupported(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: "unknown-access", RefreshToken: "unknown-refresh"},
+		{AccessToken: "supported-access", RefreshToken: "supported-refresh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := store.List()
+	if len(items) != 2 {
+		t.Fatalf("items=%#v", items)
+	}
+	now := time.Now().UTC()
+	for _, item := range items {
+		if _, ok, err := store.PutModelSnapshot(item.ID, events.AccountModelSnapshot{
+			Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		}); err != nil || !ok {
+			t.Fatalf("put model snapshot account=%s ok=%v err=%v", item.ID, ok, err)
+		}
+	}
+	if _, err := store.RecordTransportCapability(items[1].ID, events.TransportCompact, true); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := store.AcquirePreferredTransport("gpt-test", nil, "", events.TransportCompact)
+	if err != nil || acquired.AccountID != items[1].ID {
+		t.Fatalf("supported account was not preferred: acquired=%+v err=%v", acquired, err)
+	}
+	if _, err := store.RecordTransportCapability(items[1].ID, events.TransportCompact, false); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err = store.AcquirePreferredTransport("gpt-test", nil, "", events.TransportCompact)
+	if err != nil || acquired.AccountID != items[0].ID {
+		t.Fatalf("unsupported account was not excluded: acquired=%+v err=%v", acquired, err)
+	}
+	view, _ := store.View(items[1].ID)
+	if view.CompactSupported == nil || *view.CompactSupported {
+		t.Fatalf("compact capability not projected: %+v", view)
+	}
+}
+
 func contains(value, needle string) bool {
 	for index := 0; index+len(needle) <= len(value); index++ {
 		if value[index:index+len(needle)] == needle {
