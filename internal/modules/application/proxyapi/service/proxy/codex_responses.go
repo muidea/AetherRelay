@@ -230,13 +230,15 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	emit := func(line []byte) error {
+		upstreamLine := line
+		line, _ = sanitizeCodexCapacitySSEForClient(upstreamLine)
 		total += int64(len(line))
 		if total > maxStream {
 			return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("stream exceeds limit of %d bytes", maxStream))
 		}
-		accumulator.TrackSSELine(line)
-		terminalObserved = terminalObserved || parseTerminalSSELine(streamProtoResponses, line).Terminal
-		archive.Write(line)
+		accumulator.TrackSSELine(upstreamLine)
+		terminalObserved = terminalObserved || parseTerminalSSELine(streamProtoResponses, upstreamLine).Terminal
+		archive.Write(upstreamLine)
 		if _, err := w.Write(line); err != nil {
 			return err
 		}
@@ -273,6 +275,69 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	tok := accumulator.FinalizeUsage(body)
 	h.recordAndPrint(round, r, provider, model, true, http.StatusOK, time.Since(started), tok, "")
 	h.writeArchiveMetadata(round, provider, model, true, http.StatusOK, time.Since(started), tok, "response.sse", "", "", "success")
+}
+
+func sanitizeCodexCapacitySSEForClient(line []byte) ([]byte, bool) {
+	trimmed := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(trimmed, "data:") {
+		return line, false
+	}
+	payload := []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+	sanitized, changed := sanitizeCodexCapacityEventForClient(payload)
+	if !changed {
+		return line, false
+	}
+	ending := ""
+	switch {
+	case bytes.HasSuffix(line, []byte("\r\n\r\n")):
+		ending = "\r\n\r\n"
+	case bytes.HasSuffix(line, []byte("\n\n")):
+		ending = "\n\n"
+	case bytes.HasSuffix(line, []byte("\r\n")):
+		ending = "\r\n"
+	case bytes.HasSuffix(line, []byte("\n")):
+		ending = "\n"
+	}
+	return []byte("data: " + string(sanitized) + ending), true
+}
+
+func sanitizeCodexCapacityEventForClient(payload []byte) ([]byte, bool) {
+	var event map[string]any
+	if json.Unmarshal(payload, &event) != nil {
+		return payload, false
+	}
+	typ, _ := event["type"].(string)
+	_, bareError := event["error"].(map[string]any)
+	if typ != "error" && typ != "response.failed" && !(typ == "" && bareError) {
+		return payload, false
+	}
+	changed := sanitizeCodexCapacityErrorObject(event["error"])
+	if response, ok := event["response"].(map[string]any); ok {
+		changed = sanitizeCodexCapacityErrorObject(response["error"]) || changed
+	}
+	if !changed {
+		return payload, false
+	}
+	sanitized, err := json.Marshal(event)
+	if err != nil {
+		return payload, false
+	}
+	return sanitized, true
+}
+
+func sanitizeCodexCapacityErrorObject(value any) bool {
+	errorObject, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	code, _ := errorObject["code"].(string)
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "server_is_overloaded", "slow_down":
+		errorObject["code"] = "server_error"
+		return true
+	default:
+		return false
+	}
 }
 
 func codexResponsesFailureSSE(failure *streamFail) []byte {

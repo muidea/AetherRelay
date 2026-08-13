@@ -1,12 +1,12 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`2.6.0`
+> 合同版本：`3.0.0`
 >
 > 状态：`active`
 >
 > 生效日期：2026-08-13
 >
-> 参考基线：AetherRelay `f7c61d2`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
+> 参考基线：AetherRelay `06aa4b4`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -186,11 +186,13 @@
 
 `CP-STREAM-006` 只有在当前 turn 已观察到语义 output、usage 或明确 error 时，`response.completed`/`response.done` 才能判成功。仅有前导事件和空 completed 是 silent refusal：HTTP 非流式和尚未向客户端提交业务事件的 SSE 必须允许切换账号；原生 WebSocket 必须返回明确失败，不得把空 turn 记为成功。
 
-`CP-STREAM-007` `response.incomplete` 是有界生成、内容过滤等原因形成的合法非成功完成状态，不是账号或 transport 失败。原生 Responses 必须原样保留；Chat/Messages adapter 必须映射对应 finish/stop reason。
+`CP-STREAM-007` `response.incomplete` 是有界生成、内容过滤等原因形成的合法非成功完成状态，不是账号或 transport 失败。原生 Responses 必须原样保留；Chat/Messages adapter 必须映射对应 finish/stop reason。Chat adapter 的 `max_tokens`/`max_output_tokens` 映射为 `length`，`content_filter` 映射为 `content_filter`，不得把所有 incomplete 原因统一伪装成长度终止。
 
 `CP-STREAM-008` created/in_progress、空 delta、空 output/tool 骨架和可重试 error 不算已向客户端产生业务输出。HTTP 200 后、首个真实业务输出前收到 usage limit、capacity、认证、限流或 transport terminal error 时，必须先分类并允许按失败规则切换账号；已有真实输出时只能转发安全终态，禁止重放。
 
 `CP-STREAM-009` 普通 Responses SSE 不得仅因上游返回 HTTP 200 就提交下游 200；必须等首个实际转发事件。账号在输出前全部失败时返回真实 HTTP error；已提交后发生无 terminal 的 transport/protocol failure 时必须合成一个有界 `response.failed`。业务 terminal 的成败只由 codexupstream typed result 裁决，HTTP emit 回调不得把 incomplete/failed 重分类为 client write。
+
+`CP-STREAM-010` 网关已经无法执行 failover、必须向客户端转发上游 capacity 降载事件时，写给客户端的 `error`/`response.failed` 副本必须把 `server_is_overloaded` 和 `slow_down` code 投影为可重试的 `server_error`。账号分类、额度观察和审计必须继续使用未改写的原始事件；`rate_limit_exceeded` 等其它错误码不得改写。HTTP/SSE 与 WebSocket 必须一致。
 
 `CP-COMPACT-001` compact 上游使用 `/backend-api/codex/responses/compact`，请求不得带普通 Responses 的 `stream`、`store` 或不受支持 `tool_choice`。
 
@@ -320,7 +322,7 @@
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..027 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
+| 请求兼容层 | CP-REQ-001..028 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `codexupstream/biz/identity.go` | `codexupstream/biz/biz_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |

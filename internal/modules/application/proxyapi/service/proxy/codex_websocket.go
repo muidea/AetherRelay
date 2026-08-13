@@ -229,6 +229,7 @@ func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket
 		if len(payload) > 0 {
 			payload = normalizeCodexWebsocketEvent(payload)
 			usage = codexWebsocketUsage(payload, usage)
+			payload, _ = sanitizeCodexCapacityEventForClient(payload)
 			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 				return false, false, usage, err
 			}

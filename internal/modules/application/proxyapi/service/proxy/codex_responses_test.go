@@ -522,6 +522,48 @@ func TestCodexResponsesStreamFailureAfterOutputGetsTerminal(t *testing.T) {
 	}
 }
 
+func TestCodexResponsesStreamSanitizesCapacityCodesForClient(t *testing.T) {
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		if err := started(codexresponses.StreamStart{}); err != nil {
+			return err
+		}
+		for _, line := range []string{
+			`data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n",
+			`data: {"type":"error","error":{"code":"server_is_overloaded","message":"at capacity"}}` + "\n\n",
+			`data: {"type":"response.failed","response":{"error":{"code":"slow_down","message":"retry later"}}}` + "\n\n",
+		} {
+			if err := emit([]byte(line)); err != nil {
+				return err
+			}
+		}
+		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("capacity"))
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","stream":true,"input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	body := response.Body.String()
+	if response.Code != http.StatusOK || strings.Count(body, `"code":"server_error"`) != 2 || strings.Contains(body, "server_is_overloaded") || strings.Contains(body, "slow_down") || strings.Count(body, "response.failed") != 1 {
+		t.Fatalf("CP-STREAM-010 status=%d body=%s", response.Code, body)
+	}
+}
+
+func TestSanitizeCodexCapacityEventForClientPreservesOtherErrors(t *testing.T) {
+	payload := []byte(`{"type":"error","error":{"code":"rate_limit_exceeded","message":"wait"}}`)
+	sanitized, changed := sanitizeCodexCapacityEventForClient(payload)
+	if changed || !bytes.Equal(sanitized, payload) {
+		t.Fatalf("CP-STREAM-010 rate limit changed=%v payload=%s", changed, sanitized)
+	}
+}
+
+func TestSanitizeCodexCapacityEventForClientAcceptsBareErrorPayload(t *testing.T) {
+	payload := []byte(`{"error":{"code":"server_is_overloaded","message":"at capacity"}}`)
+	sanitized, changed := sanitizeCodexCapacityEventForClient(payload)
+	if !changed || !bytes.Contains(sanitized, []byte(`"code":"server_error"`)) {
+		t.Fatalf("CP-STREAM-010 changed=%v payload=%s", changed, sanitized)
+	}
+}
+
 func TestCodexCompactNormalizesUnaryAndBridgesSSE(t *testing.T) {
 	var received codexresponses.Request
 	executor := codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
@@ -612,6 +654,31 @@ func TestChatCompletionsStreamsCodexToolCallAndDone(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"finish_reason":"tool_calls"`) || !strings.Contains(response.Body.String(), `data: [DONE]`) || !strings.Contains(response.Body.String(), `"arguments":"{\"q\":"`) {
 		t.Fatalf("CP-EP-007 status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestChatCompletionsMapsCodexIncompleteReasons(t *testing.T) {
+	for _, testCase := range []struct {
+		name, reason, finish string
+	}{
+		{name: "max output", reason: "max_output_tokens", finish: "length"},
+		{name: "content filter", reason: "content_filter", finish: "content_filter"},
+		{name: "unknown", reason: "unknown_reason", finish: "stop"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := []byte(`{"id":"resp_chat","status":"incomplete","output":[],"incomplete_details":{"reason":"` + testCase.reason + `"}}`)
+			converted, _, err := convertCodexResponsesToChat(body, "gpt-5.2-codex")
+			if err != nil || !bytes.Contains(converted, []byte(`"finish_reason":"`+testCase.finish+`"`)) {
+				t.Fatalf("CP-STREAM-007 converted=%s err=%v", converted, err)
+			}
+
+			state := &codexChatStreamState{Model: "gpt-5.2-codex"}
+			event := []byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"` + testCase.reason + `"}}}`)
+			chunks, err := codexResponsesEventToChat(event, state)
+			if err != nil || len(chunks) != 2 || !bytes.Contains(chunks[0], []byte(`"finish_reason":"`+testCase.finish+`"`)) {
+				t.Fatalf("CP-STREAM-007 chunks=%q err=%v", chunks, err)
+			}
+		})
 	}
 }
 

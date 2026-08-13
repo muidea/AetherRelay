@@ -292,7 +292,7 @@ func convertCodexResponsesToChat(body []byte, fallbackModel string) ([]byte, tok
 	}
 	status, _ := response["status"].(string)
 	if status == "incomplete" {
-		finish = "length"
+		finish = codexChatIncompleteFinishReason(response)
 	} else if status != "" && status != "completed" {
 		return nil, tokenUsage{}, fmt.Errorf("response.status.%s", status)
 	}
@@ -424,12 +424,25 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 			finish = "tool_calls"
 		}
 		if typ == "response.incomplete" {
-			finish = "length"
+			finish = codexChatIncompleteFinishReason(response)
 		}
 		state.Done = true
 		usage := tokenUsage{PromptTokens: state.Input, CompletionTokens: state.Output, TotalTokens: state.Input + state.Output, Known: true}
 		return [][]byte{chunk(map[string]any{}, finish, usage), []byte("[DONE]")}, nil
 	default:
 		return nil, fmt.Errorf("responses stream event %q", typ)
+	}
+}
+
+func codexChatIncompleteFinishReason(response map[string]any) string {
+	details, _ := response["incomplete_details"].(map[string]any)
+	reason, _ := details["reason"].(string)
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "max_tokens", "max_output_tokens":
+		return "length"
+	case "content_filter":
+		return "content_filter"
+	default:
+		return "stop"
 	}
 }

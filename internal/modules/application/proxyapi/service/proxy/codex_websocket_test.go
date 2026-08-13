@@ -101,6 +101,16 @@ func TestCodexWebsocketFailureTerminalIsNotReusable(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketSanitizesCapacityCodesForClient(t *testing.T) {
+	for _, code := range []string{"server_is_overloaded", "slow_down"} {
+		payload := []byte(`{"type":"response.failed","response":{"error":{"code":"` + code + `","message":"retry later"}}}`)
+		sanitized, changed := sanitizeCodexCapacityEventForClient(payload)
+		if !changed || bytes.Contains(sanitized, []byte(code)) || !bytes.Contains(sanitized, []byte(`"code":"server_error"`)) {
+			t.Fatalf("CP-STREAM-010 code=%s changed=%v payload=%s", code, changed, sanitized)
+		}
+	}
+}
+
 func TestCodexWebsocketForwardsCustomNamespaceTools(t *testing.T) {
 	var sent []byte
 	executor := codexResponsesExecutorStub{
