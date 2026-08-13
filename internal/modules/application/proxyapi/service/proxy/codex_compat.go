@@ -719,9 +719,27 @@ func codexSessionHash(r *http.Request, model string, body map[string]any) string
 		}
 	}
 	if signal == "" {
-		return ""
+		signal = "default"
 	}
 	identity := clientauth.ClientIdentityFromContext(r.Context())
 	digest := sha256.Sum256([]byte("aetherrelay:codex-session:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + signal))
 	return hex.EncodeToString(digest[:])
+}
+
+func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash string) ([]byte, map[string]any, error) {
+	if body == nil {
+		body = map[string]any{}
+	}
+	if value, ok := body["prompt_cache_key"].(string); ok && strings.TrimSpace(value) != "" {
+		return encoded, body, nil
+	}
+	if strings.TrimSpace(sessionHash) == "" {
+		return encoded, body, nil
+	}
+	body["prompt_cache_key"] = strings.TrimSpace(sessionHash)
+	updated, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode Codex prompt cache key: %w", err)
+	}
+	return updated, body, nil
 }

@@ -431,6 +431,19 @@ func TestNormalizeCodexRequestRejectsNonStringInstructions(t *testing.T) {
 	}
 }
 
+func TestEnsureCodexPromptCacheKeyUsesStableSessionHash(t *testing.T) {
+	body := map[string]any{"model": "gpt-test"}
+	encoded, updated, err := ensureCodexPromptCacheKey([]byte(`{"model":"gpt-test"}`), body, "session-hash")
+	if err != nil || updated["prompt_cache_key"] != "session-hash" || !bytes.Contains(encoded, []byte(`"prompt_cache_key":"session-hash"`)) {
+		t.Fatalf("prompt_cache_key=%#v body=%s err=%v", updated["prompt_cache_key"], encoded, err)
+	}
+	clientEncoded := []byte(`{"model":"gpt-test","prompt_cache_key":"client-key"}`)
+	encoded, updated, err = ensureCodexPromptCacheKey(clientEncoded, map[string]any{"prompt_cache_key": "client-key"}, "session-hash")
+	if err != nil || updated["prompt_cache_key"] != "client-key" || !bytes.Contains(encoded, []byte(`"prompt_cache_key":"client-key"`)) {
+		t.Fatalf("explicit prompt_cache_key was not preserved: body=%s err=%v", encoded, err)
+	}
+}
+
 func TestCodexRequestDropsOverlongEncryptedReasoningItem(t *testing.T) {
 	longID := "rs_" + strings.Repeat("a", codexInputItemIDLimit)
 	raw := []byte(`{"model":"gpt-test","input":[{"type":"reasoning","id":"` + longID + `","encrypted_content":"sealed","summary":[]},{"type":"message","id":"user-1","role":"user","content":"continue"}]}`)

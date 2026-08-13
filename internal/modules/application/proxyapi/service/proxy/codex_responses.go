@@ -53,7 +53,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedAPIError(w, round, r, started, "", model, clientStream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: "no Codex OAuth account can serve responses compact", Model: model, ClientEndpoint: "/v1/responses/compact", ClientProtocol: ClientProtocolOpenAI})
 		return
 	}
-	normalized, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(raw, true, r.Header)
+	normalized, normalizedBody, ignored, features, normalizeErr := normalizeCodexHTTPRequest(raw, true, r.Header)
 	if normalizeErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusBadRequest, normalizeErr.Error())
 		return
@@ -66,7 +66,13 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, clientStream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex compact executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: codexSessionHash(r, model, clientBody), RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite}
+	sessionHash := codexSessionHash(r, model, clientBody)
+	normalized, _, normalizeErr = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+	if normalizeErr != nil {
+		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
+		return
+	}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite}
 	if clientStream {
 		h.handleCodexCompactStream(w, r, round, started, plan, model, clientBody, request)
 		return

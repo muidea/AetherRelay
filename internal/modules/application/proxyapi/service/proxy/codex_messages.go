@@ -30,8 +30,14 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	markConversionDegraded(round, append(degraded, ignored...))
+	sessionHash := codexSessionHash(r, model, normalizedBody)
+	normalized, _, err = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+	if err != nil {
+		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())
+		return
+	}
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: codexSessionHash(r, model, normalizedBody)}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash}
 	if !stream {
 		result, execErr := h.codexResponses.CompleteCodexResponses(r.Context(), request)
 		if execErr != nil {

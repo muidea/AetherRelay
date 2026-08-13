@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`3.1.0`
+> 合同版本：`3.2.0`
 >
 > 状态：`active`
 >
@@ -122,7 +122,7 @@
 | function/custom/MCP `call_id` | 原样保留，call 与 output 必须一致；禁止改写到 `fc_` 命名空间 | 同左 | `CP-REQ-012` |
 | input item `id` | 按 item 类型规范为 `msg_`/`rs_`/`fc_`/`ctc_`/`ctco_`，最长 64 字符，稳定压缩并处理冲突 | 保留顺序并执行同一规范化 | `CP-REQ-013` |
 | `previous_response_id` | HTTP 无本地状态时拒绝；原生持久 WS 同 session 增量 turn 保留 | reject | `CP-REQ-014` |
-| `prompt_cache_key` | 规范化并绑定 session | 保留适用值 | `CP-REQ-015` |
+| `prompt_cache_key` | 显式值保留；缺失时按客户端 key+model+session 生成稳定隔离值并写入上游 body | 同左；compact 不改变 input 顺序 | `CP-REQ-015` |
 | `client_metadata` | 只接受已知 Codex 键；当前敏感身份值 drop-compatible 并只审计键名 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
 | `stream_options` | 仅保留已验证的 `reasoning_summary_delivery=sequential_cutoff`；其它键 drop-compatible | 删除 | `CP-REQ-028` |
@@ -271,7 +271,7 @@
 
 `CP-CAP-002` 能力至少区分：Responses、compact、WebSocket、function tools、parallel tools、image input、image generation、reasoning efforts。
 
-`CP-CAP-003` 未探测能力使用 `unknown`，不能当作 `supported` 对外宣称；请求期可按明确的兼容策略尝试一次并缓存结果。
+`CP-CAP-003` 未探测能力使用 `unknown`，不能当作 `supported` 对外宣称；请求期可按明确的兼容策略尝试一次并缓存结果。Codex manifest 的客户端基础字段（`base_instructions`、`minimal_client_version`、`visibility`、`max_context_window`、`priority`、`service_tiers`、`supported_in_api`）必须存在；未知容量使用合同规定的保守默认值，不得把账号私有描述透传给客户端。
 
 `CP-CAP-004` `/v1/models` 与请求路由必须读取同一 effective catalog generation，不得分别拼接目录。
 
@@ -340,6 +340,8 @@
 - AetherRelay 已使用本机核对的 Codex CLI `0.147.0` 版本 profile；内部 Codex header 不接受客户端透传，新增 header 必须先建立独立能力合同。
 - HTTP/SSE、compact 与 WebSocket 已有主链路；custom/namespace/parallel 工具、原生图片输入与 compact namespace 历史清理已纳入离线合同。图片生成/Images API bridge 仍不属于 Codex core。真实账号/参考实现差分仍需显式运维执行。
 - `/v1/models` 与请求路由读取同一 effective catalog generation；不提供 Codex OAuth 专用入站模型别名。
+- Codex manifest 使用本地稳定基础模板字段；未知模型容量使用保守默认值，不透传账号私有 `description` 或 `base_instructions`。
+- Codex HTTP/SSE、compact、adapter 与 WebSocket 均为上游 body 补齐稳定 `prompt_cache_key`；显式客户端值保持不变。
 - Chat Completions 与 Anthropic Messages 已通过独立适配器转入 Codex Responses；支持范围以 `CP-EP-007..008` 测试和 fail-closed 字段校验为准。
 
 ## 16. 兼容证据记录

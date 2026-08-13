@@ -111,7 +111,8 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				writeCodexWebsocketError(conn, "model_not_found", message)
 				return
 			}
-			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)}), RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
+			sessionHash := codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})
+			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
 			if openErr != nil {
 				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket could not be opened")
 				return
@@ -124,6 +125,18 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 		}
 		if features != sessionFeatures {
 			writeCodexWebsocketError(conn, "invalid_request", "websocket feature profile cannot change within a session")
+			return
+		}
+		var normalizedBody map[string]any
+		if err := json.Unmarshal(normalized, &normalizedBody); err != nil {
+			writeCodexWebsocketError(conn, "invalid_request", "invalid normalized response.create message")
+			return
+		}
+		sessionHash := codexSessionHash(r, model, normalizedBody)
+		var cacheErr error
+		normalized, normalizedBody, cacheErr = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+		if cacheErr != nil {
+			writeCodexWebsocketError(conn, "invalid_request", cacheErr.Error())
 			return
 		}
 		if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, normalized); err != nil {

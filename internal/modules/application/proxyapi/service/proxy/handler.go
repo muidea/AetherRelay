@@ -1227,7 +1227,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
-		codexBody, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
+		codexBody, normalizedBody, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
 		if normalizeErr != nil {
 			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
 			return
@@ -1236,6 +1236,11 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 		}
 		sessionHash := codexSessionHash(r, rawModel, rawBody)
+		codexBody, _, normalizeErr = ensureCodexPromptCacheKey(codexBody, normalizedBody, sessionHash)
+		if normalizeErr != nil {
+			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, normalizeErr.Error())
+			return
+		}
 		if !rawStream {
 			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
 			if codexErr == nil {
@@ -1360,7 +1365,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		if codexPlan, ok := codexFallbackPlan(plans, plan); ok {
 			h.recordCandidateFailure(r, plan, http.StatusBadGateway, result.Duration)
 			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
-			codexBody, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
+			codexBody, normalizedBody, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
 			if normalizeErr != nil {
 				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
 				return
@@ -1368,7 +1373,13 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			if round != nil {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 			}
-			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, codexBody, rawBody, rawStream, codexSessionHash(r, rawModel, rawBody), features)
+			sessionHash := codexSessionHash(r, rawModel, rawBody)
+			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, sessionHash)
+			if keyErr != nil {
+				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, keyErr.Error())
+				return
+			}
+			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, codexBody, rawBody, rawStream, sessionHash, features)
 			return
 		}
 		h.writeArchivedError(w, round, r, start, providerName, rawModel, rawStream, http.StatusBadGateway, err.Error())
@@ -1382,7 +1393,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 				result.Cancel()
 			}
 			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
-			codexBody, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
+			codexBody, normalizedBody, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
 			if normalizeErr != nil {
 				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
 				return
@@ -1390,7 +1401,13 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			if round != nil {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 			}
-			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, codexBody, rawBody, rawStream, codexSessionHash(r, rawModel, rawBody), features)
+			sessionHash := codexSessionHash(r, rawModel, rawBody)
+			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, sessionHash)
+			if keyErr != nil {
+				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, keyErr.Error())
+				return
+			}
+			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, codexBody, rawBody, rawStream, sessionHash, features)
 			return
 		}
 	}

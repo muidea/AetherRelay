@@ -93,6 +93,13 @@ type CodexModelManifestRecord struct {
 	UseResponsesLite         bool                        `json:"use_responses_lite"`
 	PreferWebsockets         bool                        `json:"prefer_websockets"`
 	ContextWindow            int                         `json:"context_window,omitempty"`
+	MaxContextWindow         int                         `json:"max_context_window,omitempty"`
+	BaseInstructions         string                      `json:"base_instructions"`
+	MinimalClientVersion     string                      `json:"minimal_client_version"`
+	Visibility               string                      `json:"visibility"`
+	Priority                 int                         `json:"priority"`
+	ServiceTiers             []any                       `json:"service_tiers"`
+	SupportedInAPI           bool                        `json:"supported_in_api"`
 }
 
 type CodexReasoningLevelRecord struct {
@@ -145,7 +152,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 
 func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientaccess.Policy) CodexModelsManifest {
 	models := make([]CodexModelManifestRecord, 0)
-	for _, record := range buildModelsListResponse(snap, policy).Data {
+	for priority, record := range buildModelsListResponse(snap, policy).Data {
 		if !containsString(record.SupportedEndpoints, "/v1/responses") {
 			continue
 		}
@@ -174,10 +181,20 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			DefaultReasoningLevel: defaultEffort, SupportedReasoningLevels: levels,
 			InputModalities: modalities, UseResponsesLite: false,
 			PreferWebsockets: modelHasRouteOwner(snap, record.ID, effectivecatalog.CodexOAuthProviderID, policy),
-			ContextWindow:    record.ContextWindowTokens,
+			ContextWindow:    manifestContextWindow(record.ContextWindowTokens),
+			MaxContextWindow: manifestContextWindow(record.ContextWindowTokens),
+			BaseInstructions: "You are Codex, an AI coding assistant.", MinimalClientVersion: "0.147.0",
+			Visibility: "list", Priority: priority + 1, ServiceTiers: []any{}, SupportedInAPI: true,
 		})
 	}
 	return CodexModelsManifest{Models: models}
+}
+
+func manifestContextWindow(value int) int {
+	if value > 0 {
+		return value
+	}
+	return 128000
 }
 
 func containsString(values []string, target string) bool {

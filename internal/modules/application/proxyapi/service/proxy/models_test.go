@@ -53,9 +53,10 @@ func TestCodexModelsManifestUsesEffectiveCatalogCapabilities(t *testing.T) {
 		t.Fatalf("CP-EP-013 models=%#v", manifest.Models)
 	}
 	model := manifest.Models[0]
-	if model.Slug != "gpt-codex" || model.ContextWindow != 400000 || model.DefaultReasoningLevel != "high" ||
+	if model.Slug != "gpt-codex" || model.ContextWindow != 400000 || model.MaxContextWindow != 400000 || model.DefaultReasoningLevel != "high" ||
 		!reflect.DeepEqual(model.SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "low"}, {Effort: "high"}}) ||
-		!reflect.DeepEqual(model.InputModalities, []string{"text", "image"}) || !model.PreferWebsockets || model.UseResponsesLite {
+		!reflect.DeepEqual(model.InputModalities, []string{"text", "image"}) || !model.PreferWebsockets || model.UseResponsesLite ||
+		model.BaseInstructions == "" || model.MinimalClientVersion == "" || model.Visibility != "list" || model.Priority != 1 || !model.SupportedInAPI || model.ServiceTiers == nil {
 		t.Fatalf("CP-EP-013 model=%#v", model)
 	}
 }
