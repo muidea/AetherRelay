@@ -419,6 +419,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	message := "Codex OAuth response failed: " + failure.ErrorCode
 	if codexFailure != nil && codexFailure.HTTPStatus > 0 {
 		message += fmt.Sprintf(" (upstream HTTP %d)", codexFailure.HTTPStatus)
+		if codexFailure.HTTPStatus >= 400 && codexFailure.HTTPStatus <= 599 {
+			status = codexFailure.HTTPStatus
+		}
 	}
 	errorType, param := "", ""
 	if codexFailure != nil && codexFailure.Kind == codexresponses.KindInvalidRequest {
@@ -480,7 +483,7 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind = streamKindClientWrite
 	case codexresponses.KindProtocol:
 		kind = streamKindProtocol
-	case codexresponses.KindRateLimit, codexresponses.KindInvalidToken, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream:
+	case codexresponses.KindRateLimit, codexresponses.KindInvalidToken, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream, codexresponses.KindEndpoint:
 		kind, countUpstream = streamKindUpstreamFailed, true
 	default:
 		kind = streamKindError

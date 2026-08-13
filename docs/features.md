@@ -181,7 +181,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - Chat Completions↔Messages 转换仅保证纯文本与纯文本 SSE；Responses↔Messages 可按公开 Level 3 合同支持非流式 function tools。多模态、JSON Schema、continuation 和流式 tools 在转换路径访问上游前拒绝。
 - `completions` / `embeddings` 不能由 chat/messages 转换派生，必须由具备对应 `endpoints` 的上游直连服务。
-- 不提供 WebSocket / OpenAI Realtime 代理、`responses/compact`；`/v1/search` 不是 OpenAI 官方端点别名。
+- Codex OAuth 提供 Responses WebSocket（`GET /v1/responses` upgrade）和 `/v1/responses/compact`；不提供 OpenAI Realtime 代理。`/v1/search` 不是 OpenAI 官方端点别名。
 - 不提供请求侧 Provider 覆盖；候选顺序由语义等级、配置的 `priority` / `fallback`、请求期健康状态和稳定名称共同决定。
 - ChatGPT Web 不提供通用 function/tool calling、工具循环、深度研究、网页插件；Codex 不提供网页会话与插件能力。
 - 单进程单工作区：`state.database` 不可多实例共享；账号定时刷新间隔修改后必须重启。

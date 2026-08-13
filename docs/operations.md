@@ -91,7 +91,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 - 使用统计会记录 `upstream_protocol=codexoauth`、`upstream_endpoint=codex_oauth_responses`、`conversion_mode=codex_oauth_responses`，包括 interaction archive 关闭时的兜底结算。
 - 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。导入、刷新凭据和完成 OAuth 都会提交一次立即同步；管理员也可在账号页对选中账号或全部账号执行“同步模型”，并轮询其进度。管理 API 与 Web 表格返回稳定本地 ID、邮箱、状态、结果计数、模型缓存、模型冷却、额度观察与最近刷新状态，不返回 token、account ID 或代理。
 - 401 触发单飞 refresh 后只重试一次；429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。若上游明确返回 `usage_limit_reached`，账号表会记录该模型“额度耗尽”及上游提供的恢复时间；这只是运行期观察，不能当作官方剩余额度。
-- `/v1/responses` 的非流式请求在内部要求上游 SSE，并仅在 `response.completed` 事件返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。请求中的 `reasoning.effort` 按模型元数据枚举校验，允许值以 `/v1/models` 的 `capabilities.reasoning.efforts` 为准，不支持时返回 400。P0 不提供 realtime/WebSocket、`responses/compact` 或网页会话能力。
+- `/v1/responses` 的非流式请求在内部要求上游 SSE，并在 `response.completed` 或合法的 `response.incomplete` 终态返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。请求中的 `reasoning.effort` 按模型元数据枚举校验，允许值以 `/v1/models` 的 `capabilities.reasoning.efforts` 为准，不支持时返回 400。Responses WebSocket 使用同一路径的 GET upgrade，`/v1/responses/compact` 提供 unary JSON 及最小 SSE 投影；Realtime、网页会话和插件仍不属于 Codex OAuth 能力。
 - 账号定时刷新间隔是启动期设置，修改后需重启；账号池本身始终装配。
 
 ## ChatGPT Web 内建 Provider

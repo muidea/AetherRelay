@@ -60,6 +60,18 @@ func TestCodexNormalizationGoldenCorpus(t *testing.T) {
 	}
 }
 
+func TestCodexEndpointFailurePreservesUpstreamStatus(t *testing.T) {
+	failure := codexresponses.NewFailure(codexresponses.KindEndpoint, 0, fmt.Errorf("endpoint blocked"))
+	failure.HTTPStatus = http.StatusForbidden
+	streamFailure := streamFailFromCodexError(failure)
+	if streamFailure == nil || streamFailure.ErrorCode != string(codexresponses.KindEndpoint) {
+		t.Fatalf("stream failure=%+v", streamFailure)
+	}
+	if streamFailure.Kind != streamKindUpstreamFailed {
+		t.Fatalf("stream kind=%v", streamFailure.Kind)
+	}
+}
+
 type codexResponsesExecutorStub struct {
 	complete func(context.Context, codexresponses.Request) (codexresponses.Result, error)
 	stream   func(context.Context, codexresponses.Request, func(codexresponses.StreamStart) error, func([]byte) error) error
