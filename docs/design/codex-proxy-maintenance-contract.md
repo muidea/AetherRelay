@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.0.0` 根据生产路由和最新 Codex 配置合同退役全部 `/backend-api/codex/*` 入站别名及误收录的 `/v1/responses/ws`，并固化 core 与 AetherRelay adapter 两级端点分类。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`2.1.0` 在 `2.0.0` 端点收口基础上补齐 Codex CLI `0.147.0` 已使用的 custom/namespace 工具、并行工具、工具续链、原生图片输入及有界 `client_metadata` 兼容规则。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -112,24 +112,28 @@
 | `store` | 上游强制 false | 删除 | `CP-REQ-005` |
 | `reasoning` | 保留并保证所需 include | 按 compact 合同处理 | `CP-REQ-006` |
 | `include` | 去重并补 `reasoning.encrypted_content` | 不注入普通 Responses 专属值 | `CP-REQ-007` |
-| `tools` | 规范化受支持工具 | 保序；不自动注入图片工具 | `CP-REQ-008` |
+| `tools` | 支持 `function`、`custom`、递归 `namespace`；其他类型按独立能力声明处理 | 保序；不自动注入图片工具 | `CP-REQ-008` |
 | `tool_choice` | 规范化；目标不支持则拒绝 | 删除或拒绝，以能力合同为准 | `CP-REQ-009` |
 | `functions/function_call` | 转为 `tools/tool_choice` | 同左 | `CP-REQ-010` |
-| `parallel_tool_calls` | 按模型/profile 规范化 | 按能力处理 | `CP-REQ-011` |
-| function `call_id` | 规范为 `fc_`，最长 64 bytes，稳定压缩 | 同左 | `CP-REQ-012` |
+| `parallel_tool_calls` | boolean 且存在工具时保留；无工具时删除 | 删除 | `CP-REQ-011` |
+| function `call_id` | 规范为 `fc_`，最长 64 bytes，稳定压缩；custom call ID 原样保留 | 同左 | `CP-REQ-012` |
 | input item `id` | 只保留续链所需且合法的 ID | 保留 compaction 结构 | `CP-REQ-013` |
 | `previous_response_id` | 无本地状态时拒绝或显式展开，不能静默透传未知 owner ID | reject | `CP-REQ-014` |
 | `prompt_cache_key` | 规范化并绑定 session | 保留适用值 | `CP-REQ-015` |
-| `client_metadata` | allowlist 投影 | allowlist 投影 | `CP-REQ-016` |
+| `client_metadata` | 只接受已知 Codex 键；当前敏感身份值 drop-compatible 并只审计键名 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
 | `metadata/user/safety_identifier` | drop-compatible | drop-compatible | `CP-REQ-018` |
-| 图片/file/computer use | 仅能力声明支持时 pass，否则 reject | 默认 reject | `CP-REQ-019` |
+| 图片/file/computer use | 原生 `input_image` pass；file/computer/image-generation bridge reject | 默认 reject | `CP-REQ-019` |
 
 `CP-REQ-020` system message 必须无损提升到 `instructions`。只有能证明文本语义已完整保留的转换入口，才可以从 `input` 删除被提升项；原生 Responses 默认保留为 developer message。
 
 `CP-REQ-021` 工具调用与 tool output 必须成对，不能删除续链需要的 `call_id`、reference 或 encrypted reasoning。
 
 `CP-REQ-022` 请求变换必须发生在账号选择和访问上游之前。确定性客户端错误不得消耗账号或触发 failover。
+
+`CP-REQ-023` 普通 Responses/WS 必须保留 `function_call`、`custom_tool_call`、`mcp_tool_call` 上的 `namespace`；compact 必须删除直接历史输入项上的 `namespace`，不能删除调用项本身或改变顺序。
+
+`CP-REQ-024` `custom_tool_call_output` 与对应 custom call 使用同一 `call_id`；代理不得把 custom call ID 改写为 function 的 `fc_` 命名空间。
 
 ## 6. 上游身份与 Header 合同
 
@@ -279,7 +283,7 @@
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..022 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go` |
+| 请求兼容层 | CP-REQ-001..024 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `codexupstream/biz/identity.go` | `codexupstream/biz/biz_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
@@ -292,7 +296,7 @@
 ## 15. 已知基线差异
 
 - AetherRelay 已使用本机核对的 Codex CLI `0.147.0` 版本 profile；内部 Codex header 不接受客户端透传，新增 header 必须先建立独立能力合同。
-- HTTP/SSE、compact 与 WebSocket 已有主链路；compact heartbeat、WS 保活与配置化上限已完成。脱敏离线规范化 corpus 已加入，真实账号/参考实现差分仍需显式运维执行。
+- HTTP/SSE、compact 与 WebSocket 已有主链路；custom/namespace/parallel 工具、原生图片输入与 compact namespace 历史清理已纳入离线合同。图片生成/Images API bridge 仍不属于 Codex core。真实账号/参考实现差分仍需显式运维执行。
 - `/v1/models` 与请求路由读取同一 effective catalog generation；不提供 Codex OAuth 专用入站模型别名。
 - Chat Completions 与 Anthropic Messages 已通过独立适配器转入 Codex Responses；支持范围以 `CP-EP-007..008` 测试和 fail-closed 字段校验为准。
 

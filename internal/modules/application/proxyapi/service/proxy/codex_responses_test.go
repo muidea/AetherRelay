@@ -211,6 +211,24 @@ func TestCodexOAuthDropsCompatibleMaxOutputTokensBeforeUpstream(t *testing.T) {
 	}
 }
 
+func TestCodexOAuthProjectsKnownClientMetadataBeforeUpstream(t *testing.T) {
+	var received codexresponses.Request
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+		received = request
+		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_metadata"}`)}, nil
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello","client_metadata":{"x-codex-installation-id":"private-installation","x-codex-window-id":"private-window"}}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if bytes.Contains(received.Body, []byte("client_metadata")) || bytes.Contains(received.Body, []byte("private-installation")) || bytes.Contains(received.Body, []byte("private-window")) {
+		t.Fatalf("CP-REQ-016 sensitive metadata reached upstream: %s", received.Body)
+	}
+}
+
 func TestCodexRequestRejectsUnsupportedStateAndCapabilityBeforeUpstream(t *testing.T) {
 	tests := []struct {
 		name string
@@ -218,9 +236,7 @@ func TestCodexRequestRejectsUnsupportedStateAndCapabilityBeforeUpstream(t *testi
 	}{
 		{name: "previous response", body: `{"model":"gpt-5.2-codex","previous_response_id":"resp_external","input":"hello"}`},
 		{name: "parallel type", body: `{"model":"gpt-5.2-codex","parallel_tool_calls":"yes","input":"hello"}`},
-		{name: "parallel enabled", body: `{"model":"gpt-5.2-codex","parallel_tool_calls":true,"input":"hello"}`},
-		{name: "client metadata", body: `{"model":"gpt-5.2-codex","client_metadata":{"tenant":"secret"},"input":"hello"}`},
-		{name: "image input", body: `{"model":"gpt-5.2-codex","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]}`},
+		{name: "unknown client metadata", body: `{"model":"gpt-5.2-codex","client_metadata":{"tenant":"secret"},"input":"hello"}`},
 		{name: "computer tool", body: `{"model":"gpt-5.2-codex","input":"hello","tools":[{"type":"computer"}]}`},
 		{name: "invalid item id", body: `{"model":"gpt-5.2-codex","input":[{"id":"bad id","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`},
 		{name: "orphan tool output", body: `{"model":"gpt-5.2-codex","input":[{"type":"function_call_output","call_id":"call_missing","output":"done"}]}`},
@@ -240,6 +256,53 @@ func TestCodexRequestRejectsUnsupportedStateAndCapabilityBeforeUpstream(t *testi
 				t.Fatalf("CP-REQ-014/016/019/021/022 status=%d called=%v body=%s", response.Code, called, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestCodexRequestSupportsNativeToolAndImageProtocol(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","parallel_tool_calls":true,"client_metadata":{"x-codex-installation-id":"private-installation","x-codex-turn-metadata":"{\"turn_id\":\"private-turn\"}"},"tools":[{"type":"custom","name":"exec","description":"execute"},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}],"input":[{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]},{"type":"custom_tool_call","call_id":"call_custom_1","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_custom_1","output":"/tmp"}]}`)
+	normalized, body, ignored, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["parallel_tool_calls"] != true || body["client_metadata"] != nil {
+		t.Fatalf("CP-REQ-011/016 normalized=%s", normalized)
+	}
+	if !bytes.Contains(normalized, []byte(`"type":"namespace"`)) || !bytes.Contains(normalized, []byte(`"type":"custom_tool_call"`)) || !bytes.Contains(normalized, []byte(`"type":"input_image"`)) {
+		t.Fatalf("CP-REQ-008/019/023 normalized=%s", normalized)
+	}
+	if !bytes.Contains(normalized, []byte(`"call_id":"call_custom_1"`)) || bytes.Contains(normalized, []byte(`fc_custom_1`)) {
+		t.Fatalf("CP-REQ-012/024 custom call id changed: %s", normalized)
+	}
+	wantIgnored := []string{"client_metadata.x-codex-installation-id", "client_metadata.x-codex-turn-metadata"}
+	for _, name := range wantIgnored {
+		found := false
+		for _, candidate := range ignored {
+			if candidate == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("CP-REQ-016 ignored=%v missing %s", ignored, name)
+		}
+	}
+	if bytes.Contains(normalized, []byte("private-installation")) || bytes.Contains(normalized, []byte("private-turn")) {
+		t.Fatalf("CP-REQ-016 metadata value reached upstream: %s", normalized)
+	}
+}
+
+func TestCodexCompactStripsInputNamespacesAndParallelFlag(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","parallel_tool_calls":true,"tools":[{"type":"custom","name":"exec"}],"input":[{"type":"custom_tool_call","call_id":"call_custom_1","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_custom_1","output":"/tmp"}]}`)
+	normalized, body, _, err := normalizeCodexRequest(raw, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["parallel_tool_calls"] != nil || bytes.Contains(normalized, []byte(`"namespace"`)) {
+		t.Fatalf("CP-REQ-011/023 compact=%s", normalized)
+	}
+	if !bytes.Contains(normalized, []byte(`"type":"custom_tool_call"`)) || !bytes.Contains(normalized, []byte(`"call_id":"call_custom_1"`)) {
+		t.Fatalf("CP-REQ-021/024 compact lost custom history: %s", normalized)
 	}
 }
 

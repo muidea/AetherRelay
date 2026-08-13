@@ -84,6 +84,41 @@ func TestCodexWebsocketRejectsUnauthenticatedUpgrade(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketForwardsCustomNamespaceTools(t *testing.T) {
+	var sent []byte
+	executor := codexResponsesExecutorStub{
+		wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
+			return codexresponses.WebsocketOpenResult{SessionID: "session-tools"}, nil
+		},
+		wsSend: func(_ context.Context, _ string, payload []byte) error {
+			sent = append([]byte(nil), payload...)
+			return nil
+		},
+		wsPull: func(context.Context, string) ([]byte, bool, error) {
+			return []byte(`{"type":"response.completed","response":{"id":"resp_ws_tools"}}`), false, nil
+		},
+	}
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	headers := http.Header{"Authorization": []string{"Bearer test-client-key"}}
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", headers)
+	if err != nil {
+		t.Fatalf("handshake response=%v err=%v", response, err)
+	}
+	defer conn.Close()
+	request := `{"type":"response.create","model":"gpt-5.2-codex","parallel_tool_calls":true,"tools":[{"type":"custom","name":"exec"},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"apply_patch"}]},{"type":"custom_tool_call","call_id":"call_exec","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_exec","output":"/tmp"}]}`
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sent), `"type":"namespace"`) || !strings.Contains(string(sent), `"type":"custom_tool_call"`) || !strings.Contains(string(sent), `"call_id":"call_exec"`) || !strings.Contains(string(sent), `"parallel_tool_calls":true`) {
+		t.Fatalf("CP-REQ-008/011/023/024 websocket=%s", sent)
+	}
+}
+
 func TestCodexWebsocketRejectsSessionAboveConfiguredLimit(t *testing.T) {
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{})
 	cfg := handler.ConfigSnapshot()

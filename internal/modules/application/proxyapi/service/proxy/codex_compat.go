@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
@@ -47,7 +48,7 @@ var codexDropCompatibleFields = []string{
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
-// CP-REQ-001..018 before an account is acquired.
+// CP-REQ-001..024 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -76,11 +77,18 @@ func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []
 		ensureCodexReasoningInclude(body)
 	}
 	convertLegacyCodexFunctions(body)
+	metadataIgnored, err := projectCodexClientMetadata(body)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if err := validateCodexRequest(body, compact); err != nil {
 		return nil, nil, nil, err
 	}
-	normalizeCodexCallIDs(body)
-	ignored := make([]string, 0, len(codexDropCompatibleFields))
+	normalizeCodexFunctionCallIDs(body["input"])
+	if compact {
+		stripCodexCompactInputNamespaces(body["input"])
+	}
+	ignored := append([]string(nil), metadataIgnored...)
 	for _, field := range codexDropCompatibleFields {
 		if _, ok := body[field]; ok {
 			delete(body, field)
@@ -144,21 +152,13 @@ func validateCodexRequest(body map[string]any, compact bool) error {
 	}
 	delete(body, "previous_response_id")
 	if parallel, exists := body["parallel_tool_calls"]; exists {
-		enabled, ok := parallel.(bool)
-		if !ok {
+		if _, ok := parallel.(bool); !ok {
 			return fmt.Errorf("parallel_tool_calls must be a boolean")
 		}
-		if compact || enabled {
-			return fmt.Errorf("parallel_tool_calls is not supported by the current Codex capability profile")
+		tools, toolsOK := body["tools"].([]any)
+		if compact || !toolsOK || len(tools) == 0 {
+			delete(body, "parallel_tool_calls")
 		}
-		delete(body, "parallel_tool_calls")
-	}
-	if metadata, exists := body["client_metadata"]; exists && metadata != nil {
-		object, ok := metadata.(map[string]any)
-		if !ok || len(object) != 0 {
-			return fmt.Errorf("client_metadata contains no supported fields")
-		}
-		delete(body, "client_metadata")
 	}
 	if err := validateCodexTools(body["tools"]); err != nil {
 		return err
@@ -174,17 +174,29 @@ func validateCodexTools(value any) error {
 	if !ok {
 		return fmt.Errorf("tools must be an array")
 	}
-	for _, raw := range tools {
+	for index, raw := range tools {
 		tool, ok := raw.(map[string]any)
 		if !ok {
-			return fmt.Errorf("tools entries must be objects")
+			return fmt.Errorf("tools[%d] must be an object", index)
 		}
 		typ, _ := tool["type"].(string)
-		if typ != "function" {
+		switch typ {
+		case "function", "custom":
+			if name, _ := tool["name"].(string); strings.TrimSpace(name) == "" {
+				return fmt.Errorf("%s tool name is required", typ)
+			}
+		case "namespace":
+			if name, _ := tool["name"].(string); strings.TrimSpace(name) == "" {
+				return fmt.Errorf("namespace tool name is required")
+			}
+			if _, ok := tool["tools"].([]any); !ok {
+				return fmt.Errorf("namespace tool %q tools must be an array", tool["name"])
+			}
+			if err := validateCodexTools(tool["tools"]); err != nil {
+				return fmt.Errorf("namespace tool %q: %w", tool["name"], err)
+			}
+		default:
 			return fmt.Errorf("tool type %q is not supported by the Codex proxy", typ)
-		}
-		if name, _ := tool["name"].(string); strings.TrimSpace(name) == "" {
-			return fmt.Errorf("function tool name is required")
 		}
 	}
 	return nil
@@ -195,7 +207,8 @@ func validateCodexInput(value any) error {
 	if !ok {
 		return nil
 	}
-	calls := map[string]struct{}{}
+	functionCalls := map[string]struct{}{}
+	customCalls := map[string]struct{}{}
 	for _, raw := range items {
 		item, ok := raw.(map[string]any)
 		if !ok {
@@ -209,16 +222,34 @@ func validateCodexInput(value any) error {
 		}
 		typ, _ := item["type"].(string)
 		switch typ {
-		case "input_image", "input_file", "computer_call", "computer_call_output", "image_generation_call":
+		case "input_image":
+			imageURL, _ := item["image_url"].(string)
+			if strings.TrimSpace(imageURL) == "" {
+				return fmt.Errorf("input_image image_url is required")
+			}
+		case "input_file", "computer_call", "computer_call_output", "image_generation_call":
 			return fmt.Errorf("input item type %q is not supported by the Codex proxy", typ)
 		case "function_call":
 			if callID, _ := item["call_id"].(string); strings.TrimSpace(callID) != "" {
-				calls[strings.TrimSpace(callID)] = struct{}{}
+				functionCalls[strings.TrimSpace(callID)] = struct{}{}
 			}
 		case "function_call_output":
 			callID, _ := item["call_id"].(string)
-			if _, exists := calls[strings.TrimSpace(callID)]; strings.TrimSpace(callID) == "" || !exists {
+			if _, exists := functionCalls[strings.TrimSpace(callID)]; strings.TrimSpace(callID) == "" || !exists {
 				return fmt.Errorf("function_call_output references an unknown call_id")
+			}
+		case "custom_tool_call", "mcp_tool_call":
+			if callID, _ := item["call_id"].(string); strings.TrimSpace(callID) != "" {
+				customCalls[strings.TrimSpace(callID)] = struct{}{}
+			}
+		case "custom_tool_call_output", "mcp_tool_call_output":
+			callID, _ := item["call_id"].(string)
+			if _, exists := customCalls[strings.TrimSpace(callID)]; strings.TrimSpace(callID) == "" || !exists {
+				return fmt.Errorf("%s references an unknown call_id", typ)
+			}
+		case "additional_tools":
+			if err := validateCodexTools(item["tools"]); err != nil {
+				return fmt.Errorf("additional_tools: %w", err)
 			}
 		}
 		if err := rejectCodexMultimodalContent(item["content"]); err != nil {
@@ -239,28 +270,69 @@ func rejectCodexMultimodalContent(value any) error {
 			continue
 		}
 		typ, _ := part["type"].(string)
-		if typ != "" && typ != "input_text" && typ != "output_text" && typ != "text" {
+		if typ != "" && typ != "input_text" && typ != "output_text" && typ != "text" && typ != "input_image" {
 			return fmt.Errorf("content type %q is not supported by the Codex proxy", typ)
+		}
+		if typ == "input_image" {
+			imageURL, _ := part["image_url"].(string)
+			if strings.TrimSpace(imageURL) == "" {
+				return fmt.Errorf("input_image image_url is required")
+			}
 		}
 	}
 	return nil
 }
 
-func normalizeCodexCallIDs(value any) {
-	switch current := value.(type) {
-	case map[string]any:
-		for key, item := range current {
-			if key == "call_id" {
-				if id, ok := item.(string); ok {
-					current[key] = normalizedCodexCallID(id)
-				}
-				continue
-			}
-			normalizeCodexCallIDs(item)
+func normalizeCodexFunctionCallIDs(value any) {
+	items, _ := value.([]any)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		typ, _ := item["type"].(string)
+		if typ != "function_call" && typ != "function_call_output" {
+			continue
 		}
-	case []any:
-		for _, item := range current {
-			normalizeCodexCallIDs(item)
+		if id, ok := item["call_id"].(string); ok {
+			item["call_id"] = normalizedCodexCallID(id)
+		}
+	}
+}
+
+var codexClientMetadataAllowlist = map[string]struct{}{
+	"x-codex-installation-id": {},
+	"x-codex-turn-metadata":   {},
+	"x-codex-window-id":       {},
+	"ws_request_header_x_openai_internal_codex_responses_lite": {},
+}
+
+func projectCodexClientMetadata(body map[string]any) ([]string, error) {
+	value, exists := body["client_metadata"]
+	if !exists || value == nil {
+		delete(body, "client_metadata")
+		return nil, nil
+	}
+	metadata, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("client_metadata must be an object")
+	}
+	ignored := make([]string, 0, len(metadata))
+	for key := range metadata {
+		if _, allowed := codexClientMetadataAllowlist[key]; !allowed {
+			return nil, fmt.Errorf("client_metadata field %q is not supported", key)
+		}
+		ignored = append(ignored, "client_metadata."+key)
+	}
+	sort.Strings(ignored)
+	delete(body, "client_metadata")
+	return ignored, nil
+}
+
+func stripCodexCompactInputNamespaces(value any) {
+	items, _ := value.([]any)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		switch item["type"] {
+		case "function_call", "custom_tool_call", "mcp_tool_call":
+			delete(item, "namespace")
 		}
 	}
 }

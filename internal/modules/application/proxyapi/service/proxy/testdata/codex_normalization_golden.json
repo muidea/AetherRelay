@@ -18,13 +18,25 @@
     "expected": {"model":"gpt-test","input":[{"type":"function_call","call_id":"fc_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"fc_lookup","output":"done"}],"stream":true,"store":false}
   },
   {
+    "name": "custom namespace parallel and image",
+    "compact": false,
+    "input": {"model":"gpt-test","parallel_tool_calls":true,"tools":[{"type":"custom","name":"exec"},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]},{"type":"custom_tool_call","call_id":"call_custom","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_custom","output":"/tmp"}]},
+    "expected": {"model":"gpt-test","parallel_tool_calls":true,"tools":[{"type":"custom","name":"exec"},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]},{"type":"custom_tool_call","call_id":"call_custom","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_custom","output":"/tmp"}],"stream":true,"store":false}
+  },
+  {
+    "name": "compact custom history namespace",
+    "compact": true,
+    "input": {"model":"gpt-test","parallel_tool_calls":true,"tools":[{"type":"custom","name":"exec"}],"input":[{"type":"custom_tool_call","call_id":"call_custom","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_custom","output":"/tmp"}]},
+    "expected": {"model":"gpt-test","instructions":"","tools":[{"type":"custom","name":"exec"}],"input":[{"type":"custom_tool_call","call_id":"call_custom","name":"exec","input":"pwd"},{"type":"custom_tool_call_output","call_id":"call_custom","output":"/tmp"}]}
+  },
+  {
     "name": "external response state rejected",
     "compact": false,
     "input": {"model":"gpt-test","previous_response_id":"resp_external","input":"hello"},
     "error_contains": "previous_response_id"
   },
   {
-    "name": "multimodal rejected",
+    "name": "file input rejected",
     "compact": false,
     "input": {"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_file","file_id":"file_external"}]}]},
     "error_contains": "input_file"
