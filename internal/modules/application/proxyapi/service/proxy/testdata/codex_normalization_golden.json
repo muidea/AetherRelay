@@ -1,0 +1,32 @@
+[
+  {
+    "name": "responses text",
+    "compact": false,
+    "input": {"model":" gpt-test ","input":"hello","reasoning":{"effort":"medium"},"max_output_tokens":64},
+    "expected": {"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"reasoning":{"effort":"medium"},"include":["reasoning.encrypted_content"],"stream":true,"store":false}
+  },
+  {
+    "name": "compact",
+    "compact": true,
+    "input": {"model":"gpt-test","stream":true,"store":true,"tool_choice":"auto","input":[{"type":"compaction_trigger"}]},
+    "expected": {"model":"gpt-test","instructions":"","input":[{"type":"compaction_trigger"}]}
+  },
+  {
+    "name": "tool continuation",
+    "compact": false,
+    "input": {"model":"gpt-test","input":[{"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_lookup","output":"done"}]},
+    "expected": {"model":"gpt-test","input":[{"type":"function_call","call_id":"fc_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"fc_lookup","output":"done"}],"stream":true,"store":false}
+  },
+  {
+    "name": "external response state rejected",
+    "compact": false,
+    "input": {"model":"gpt-test","previous_response_id":"resp_external","input":"hello"},
+    "error_contains": "previous_response_id"
+  },
+  {
+    "name": "multimodal rejected",
+    "compact": false,
+    "input": {"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_file","file_id":"file_external"}]}]},
+    "error_contains": "input_file"
+  }
+]

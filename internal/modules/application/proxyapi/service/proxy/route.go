@@ -21,6 +21,8 @@ const (
 	TransportModeAnthropicToOpenAI    = "anthropic_to_openai"
 	TransportModeResponsesToAnthropic = "responses_to_anthropic"
 	TransportModeAnthropicToResponses = "anthropic_to_responses"
+	TransportModeAnthropicToCodex     = "anthropic_to_codex_responses"
+	TransportModeChatToCodex          = "chat_to_codex_responses"
 	// TransportModeChatGPTWebResponses is a bounded, stateless Responses
 	// projection backed by the ChatGPT Web text executor. It intentionally is
 	// not a native upstream Responses implementation.
@@ -50,7 +52,7 @@ type TransportPlan struct {
 
 // IsConversion 表示需要协议转换(非 native 直通)。
 func (p TransportPlan) IsConversion() bool {
-	return p.Mode == TransportModeOpenAIToAnthropic || p.Mode == TransportModeAnthropicToOpenAI || p.Mode == TransportModeResponsesToAnthropic || p.Mode == TransportModeAnthropicToResponses
+	return p.Mode == TransportModeOpenAIToAnthropic || p.Mode == TransportModeAnthropicToOpenAI || p.Mode == TransportModeResponsesToAnthropic || p.Mode == TransportModeAnthropicToResponses || p.Mode == TransportModeAnthropicToCodex || p.Mode == TransportModeChatToCodex
 }
 
 // RouteLabel 把入站 HTTP 路径归一化为 Prometheus 标签使用的稳定 route 名。
@@ -67,6 +69,8 @@ func RouteLabel(r *http.Request) string {
 		return "messages"
 	case "/v1/responses":
 		return "responses"
+	case "/v1/responses/compact":
+		return "responses_compact"
 	case "/v1/search":
 		return "search"
 	case "/v1/completions":
@@ -92,7 +96,7 @@ func ClientProtocolForPath(path string) string {
 	switch path {
 	case "/v1/messages":
 		return ClientProtocolAnthropic
-	case "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
+	case "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
 		return ClientProtocolOpenAI
 	default:
 		return ""

@@ -7,6 +7,7 @@ const (
 	TopicDelete       = "aetherrelay.codex.accountpool.command.delete"
 	TopicUpdate       = "aetherrelay.codex.accountpool.command.update"
 	TopicAcquire      = "aetherrelay.codex.accountpool.command.acquire"
+	TopicRelease      = "aetherrelay.codex.accountpool.command.release"
 	TopicRecordResult = "aetherrelay.codex.accountpool.command.record_result"
 	TopicRefreshToken = "aetherrelay.codex.accountpool.command.refresh_token"
 	TopicRefreshByID  = "aetherrelay.codex.accountpool.command.refresh_by_id"
@@ -136,15 +137,21 @@ type UpdateResult struct {
 // AcquireResult contains only request-time credentials. It is restricted to
 // the EventHub path and must not be returned from any HTTP adapter.
 type AcquireCommand struct {
-	Model   string
-	Exclude []string
+	Model       string
+	Exclude     []string
+	SessionHash string
+	PreferredID string
 }
 type AcquireResult struct {
 	AccountID       string
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
+	LeaseID         string
 }
+
+type ReleaseCommand struct{ LeaseID string }
+type ReleaseResult struct{ Released bool }
 
 type RecordResultCommand struct {
 	AccountID         string

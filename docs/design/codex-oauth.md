@@ -4,14 +4,14 @@
 
 ## 设计目标
 
-- 复用 Codex CLI 登录的 OAuth 账号，提供原生 `POST /v1/responses` 能力，无需 API Key。
+- 复用 Codex CLI 登录的 OAuth 账号，提供原生 Responses HTTP/SSE、compact 与 WebSocket 能力，无需上游 API Key。
 - 与 ChatGPT Web 是两个**独立账号域**：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
 - 账号凭据、代理与到期时间只存 `state.database`；管理 API 直接显示邮箱，但不返回 token、account ID 或代理。
 
 ## 账号池与模型发现
 
 - 进程始终注入只读内建 Provider `codexoauth`；`codexaccountpool` 是单一凭据与模型快照 owner（安全文档 scope `codex_oauth_accounts`）。
-- 模型按账号从 `GET /backend-api/codex/models` 自动发现，快照 6 小时有效；失败按账号独立指数退避（30 秒 ~ 5 分钟），仅持有有效快照的账号可被调度；可路由模型是全部健康账号快照的并集，不提供 allowlist 筛选项。
+- 模型按账号从 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现，快照 6 小时有效；该路径不作为 AetherRelay 入站端点。失败按账号独立指数退避（30 秒 ~ 5 分钟），仅持有有效快照的账号可被调度；可路由模型是全部健康账号快照的并集，不提供 allowlist 筛选项。
 - 每账号代理同时用于授权码换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致；管理读模型从不返回代理值。
 - 导入凭据、刷新凭据或完成 OAuth 后立即提交一次模型同步；管理页可对选中账号或全部账号执行「同步模型」并轮询进度（有界进度任务，当前进程保留 30 分钟，持久化快照才是重启后权威）。
 - 自动触发的模型同步与用量刷新由管理页静默轮询，避免一次账号操作重复显示两条完成通知；只有用户手工启动的同步任务显示进度，成功完成信息自动隐藏，轮询错误保持可见。
@@ -19,11 +19,11 @@
 
 ## 原生 Responses 代理
 
-- `codexoauth` 只服务原生 `POST /v1/responses`（HTTP JSON/SSE P0）；请求与 SSE 事件不经过 ChatGPT Web 消息树转换；`/v1/chat/completions` 不能路由到该 Provider。
+- `codexoauth` 服务原生 `POST /v1/responses`、`POST /v1/responses/compact` 与 Responses WebSocket；请求与事件不经过 ChatGPT Web 消息树转换；`/v1/chat/completions` 和 `/v1/messages` 可通过受限协议适配路由到该 Provider。
 - `codexoauth` 是只读内建 Provider，上游 Responses、模型发现和用量端点由实现固定，不参与管理型 Provider 的 protocol/base URL/endpoints 切换；如需切换上游接入端点，必须使用独立的管理型直连 Provider。
 - 非流式请求在内部要求上游 SSE；优先返回 `response.completed` 的原始 Response 对象，也可从完整 `output_item.done` 重建标准文本和 function-call output。上游若返回原生 JSON Response 也接受。
 - 流式响应透传标准 Responses 事件。若工具调用已收到完整 `function_call_arguments.done` 和 `response.output_item.done`，随后 clean EOF 可作为成功结束；代理不会伪造缺失的 `response.completed` data。
-- P0 不支持 realtime/WebSocket、`responses/compact`、网页会话或插件能力。
+- WebSocket 支持规范入口 `GET /v1/responses`；`GET /v1/responses/ws` 仅见于参考实现的 SDK 测试，不作为生产兼容入口。Realtime、网页会话或插件能力不在本合同范围。
 
 ## 账号韧性
 

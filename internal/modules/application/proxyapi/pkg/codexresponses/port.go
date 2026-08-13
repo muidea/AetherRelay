@@ -9,16 +9,27 @@ import (
 type Header struct{ Name, Value string }
 
 type Request struct {
-	Model string
-	Body  []byte
+	Model       string
+	Body        []byte
+	SessionHash string
 }
 
 type Result struct {
 	Body    []byte
 	Headers []Header
 }
+type Completion struct {
+	Result Result
+	Err    error
+}
 
 type StreamStart struct{ Headers []Header }
+
+type WebsocketOpenRequest struct {
+	Model       string
+	SessionHash string
+}
+type WebsocketOpenResult struct{ SessionID string }
 
 type ErrorKind string
 
@@ -70,5 +81,11 @@ func AsFailure(err error) (*Failure, bool) { var value *Failure; return value, e
 
 type Executor interface {
 	CompleteCodexResponses(context.Context, Request) (Result, error)
+	CompleteCodexCompact(context.Context, Request) (Result, error)
+	StartCodexCompact(context.Context, Request) (<-chan Completion, error)
 	StreamCodexResponses(context.Context, Request, func(StreamStart) error, func([]byte) error) error
+	OpenCodexWebsocket(context.Context, WebsocketOpenRequest) (WebsocketOpenResult, error)
+	SendCodexWebsocket(context.Context, string, []byte) error
+	PullCodexWebsocket(context.Context, string) ([]byte, bool, error)
+	CloseCodexWebsocket(context.Context, string)
 }

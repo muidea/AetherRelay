@@ -11,7 +11,69 @@ import (
 	"time"
 
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	"github.com/gorilla/websocket"
+	"github.com/muidea/magicCommon/event"
+	"github.com/muidea/magicCommon/task"
 )
+
+func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) {
+	headers := make(chan http.Header, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers <- r.Header.Clone()
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, payload, err := conn.ReadMessage()
+		if err == nil {
+			_ = conn.WriteMessage(websocket.TextMessage, append([]byte(`{"type":"response.completed","echo":`), append(payload, '}')...))
+		}
+	}))
+	defer server.Close()
+	previous := responsesWebsocketURL
+	responsesWebsocketURL = "ws" + strings.TrimPrefix(server.URL, "http")
+	t.Cleanup(func() { responsesWebsocketURL = previous })
+	hub := event.NewHub(32)
+	background := task.NewBackgroundRoutine(8)
+	upstream := New(hub, background)
+	t.Cleanup(func() {
+		upstream.Teardown(context.Background())
+		background.Shutdown(context.Background())
+		hub.Terminate(context.Background())
+	})
+	openResult := event.NewResult(events.TopicWSOpen, "test", "upstream")
+	upstream.handleWSOpen(event.NewEventWithContext(events.TopicWSOpen, "test", "upstream", nil, context.Background(), events.WSOpenCommand{AccessToken: "secret-token", AccountIDHeader: "account-header", MaxMessageBytes: 1024, SessionHash: "session-hash"}), openResult)
+	value, cdErr := openResult.Get()
+	if cdErr != nil {
+		t.Fatal(cdErr)
+	}
+	opened := value.(events.WSOpenResult)
+	if opened.SessionID == "" || opened.ErrorClass != "" {
+		t.Fatalf("CP-WS-002 opened=%+v", opened)
+	}
+	gotHeaders := <-headers
+	if gotHeaders.Get("Authorization") != "Bearer secret-token" || gotHeaders.Get("ChatGPT-Account-ID") != "account-header" || gotHeaders.Get("OpenAI-Beta") != currentIdentity.WebsocketBeta || gotHeaders.Get("User-Agent") != currentIdentity.UserAgent || gotHeaders.Get("Originator") != currentIdentity.Originator {
+		t.Fatalf("CP-HDR/CP-WS-002 headers=%v", gotHeaders)
+	}
+	assertCodexSessionHeaders(t, gotHeaders, "session-hash")
+	sendResult := event.NewResult(events.TopicWSSend, "test", "upstream")
+	upstream.handleWSSend(event.NewEvent(events.TopicWSSend, "test", "upstream", nil, events.WSSendCommand{SessionID: opened.SessionID, Payload: []byte(`{"type":"response.create"}`)}), sendResult)
+	if _, err := sendResult.Get(); err != nil {
+		t.Fatal(err)
+	}
+	pullResult := event.NewResult(events.TopicWSPull, "test", "upstream")
+	upstream.handleWSPull(event.NewEventWithContext(events.TopicWSPull, "test", "upstream", nil, context.Background(), events.WSPullCommand{SessionID: opened.SessionID, TimeoutMillis: 1000}), pullResult)
+	pulled, err := event.GetAs[events.WSPullResult](pullResult)
+	if err != nil || !strings.Contains(string(pulled.Payload), "response.completed") {
+		t.Fatalf("CP-WS-004 pulled=%s err=%v", pulled.Payload, err)
+	}
+	upstream.Teardown(context.Background())
+	if len(upstream.websockets) != 0 {
+		t.Fatal("CP-ARCH-004 websocket survived teardown")
+	}
+}
 
 func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
 	value, err := forceStream([]byte(`{"model":"gpt-5.2","input":"hello","stream":false,"tools":[{"type":"function"}],"metadata":{"tenant":"alpha"}}`))
@@ -170,7 +232,7 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer access-token" {
 			t.Fatalf("authorization=%q", r.Header.Get("Authorization"))
 		}
-		if r.Header.Get("User-Agent") != codexUserAgent || r.Header.Get("Originator") != codexOriginator {
+		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator {
 			t.Fatalf("Codex identity headers user-agent=%q originator=%q", r.Header.Get("User-Agent"), r.Header.Get("Originator"))
 		}
 		if r.Header.Get("ChatGPT-Account-ID") != "chatgpt-account-id" || r.Header.Get("Accept") != "text/event-stream" {
@@ -191,15 +253,57 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	_ = response.Body.Close()
 }
 
+func TestHandleCompactUsesUnaryEndpointAndFixedIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Accept") != "application/json" {
+			t.Fatalf("CP-COMPACT-001 request=%s accept=%q", r.Method, r.Header.Get("Accept"))
+		}
+		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
+			t.Fatalf("CP-HDR account headers=%v", r.Header)
+		}
+		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator {
+			t.Fatalf("CP-HDR identity=%v", r.Header)
+		}
+		assertCodexSessionHeaders(t, r.Header, "compact-session-hash")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_compact","object":"response.compaction"}`))
+	}))
+	defer server.Close()
+	previousURL := compactURL
+	compactURL = server.URL
+	t.Cleanup(func() { compactURL = previousURL })
+
+	upstream := &Upstream{}
+	result := event.NewResult(events.TopicCompact, "test", "test")
+	upstream.handleCompact(event.NewEventWithContext(events.TopicCompact, "test", "test", nil, context.Background(), events.CompactCommand{
+		AccessToken: "access-token", AccountIDHeader: "account-header", Body: []byte(`{"model":"gpt-5.4","input":[]}`), MaxResponseBytes: 1024, SessionHash: "compact-session-hash",
+	}), result)
+	value, resultErr := result.Get()
+	completed, ok := value.(events.CompactResult)
+	if resultErr != nil || !ok || completed.ErrorClass != "" || !strings.Contains(string(completed.Body), "resp_compact") {
+		t.Fatalf("CP-COMPACT result=%#v err=%v", value, resultErr)
+	}
+}
+
+func assertCodexSessionHeaders(t *testing.T, headers http.Header, sessionHash string) {
+	t.Helper()
+	want := map[string]string{"Session-Id": sessionHash, "Thread-Id": sessionHash, "X-Client-Request-Id": sessionHash, "X-Codex-Window-Id": sessionHash + ":0"}
+	for name, value := range want {
+		if headers.Get(name) != value {
+			t.Fatalf("CP-HDR-007..010 %s=%q want %q headers=%v", name, headers.Get(name), value, headers)
+		}
+	}
+}
+
 func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != "0.135.0" {
+		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != currentIdentity.ClientVersion {
 			t.Fatalf("request=%s %s", r.Method, r.URL.String())
 		}
 		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
 			t.Fatalf("account headers=%v", r.Header)
 		}
-		if r.Header.Get("User-Agent") != codexUserAgent || r.Header.Get("Originator") != codexOriginator {
+		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator {
 			t.Fatalf("Codex identity headers=%v", r.Header)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -207,7 +311,7 @@ func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 	}))
 	defer server.Close()
 	previousURL := modelsURL
-	modelsURL = server.URL + "?client_version=0.135.0"
+	modelsURL = server.URL + "?client_version=" + currentIdentity.ClientVersion
 	t.Cleanup(func() { modelsURL = previousURL })
 
 	models, class, err := listModels(context.Background(), "access-token", "account-header", "")
@@ -227,7 +331,7 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
 			t.Fatalf("account headers=%v", r.Header)
 		}
-		if r.Header.Get("User-Agent") != codexUserAgent || r.Header.Get("Originator") != codexOriginator || r.Header.Get("Content-Type") != "application/json" {
+		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator || r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("Codex usage headers=%v", r.Header)
 		}
 		w.Header().Set("Content-Type", "application/json")

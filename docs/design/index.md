@@ -2,6 +2,8 @@
 
 本文档目录按**功能结构**组织 `AetherRelay` 的最终设计。每份设计文档只描述当前实现的最终决策与关键合同，不再包含开发过程中的中间方案；早期设计、收口计划与现场审计记录已归档至 [`docs/archive/`](../archive/)，仅作历史追溯。
 
+涉及 Codex 访问反向代理时，[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md) 是最高优先级合同。必须先更新其中的版本化规则和验收，再改变实现；未标记为 `implemented` 的能力不得对外宣称支持。
+
 ## 文档体系
 
 | 层级 | 文档 | 职责 |
@@ -18,6 +20,7 @@
 | 安全与认证 | [security.md](security.md) | 客户端 API Key 身份与用量归属、Admin 账号密码登录、会话与 CSRF、访问控制边界 |
 | ChatGPT Web 能力 | [chatgpt-web.md](chatgpt-web.md) | 账号池与内建 Provider、文本/图片代理、图片任务与图片库、临时对话、在线搜索、管理页 |
 | Codex OAuth 账号池 | [codex-oauth.md](codex-oauth.md) | 独立账号域、模型发现、原生 Responses 代理、额度观察与账号韧性 |
+| Codex 反向代理首要维护合同 | [codex-proxy-maintenance-contract.md](codex-proxy-maintenance-contract.md) | 版本化端点、字段、Header、HTTP/SSE/WS、compact、调度、失败矩阵与实施证据 |
 | 账号池整体迁移 | [account-pool-bundle-migration.md](account-pool-bundle-migration.md) | ChatGPT Web 与 Codex 双槽位整体导入导出（仅整体导出）、跨上游账号关联与冲突处理 |
 | 迁移 Bundle 文件命名 | [bundle-file-naming.md](bundle-file-naming.md) | Provider 与账号池整体迁移的统一导出文件名、敏感性标识与导入判定边界 |
 

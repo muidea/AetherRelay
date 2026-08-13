@@ -77,6 +77,31 @@ providers:
 	}
 }
 
+func TestLoadCodexWebsocketLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+codex_oauth:
+  websocket_max_sessions: 17
+  websocket_max_message_bytes: 65536
+  websocket_idle_timeout_seconds: 45
+  websocket_max_lifetime_seconds: 600
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, messageBytes, idle, lifetime := cfg.CodexOAuth.EffectiveWebsocketLimits()
+	if sessions != 17 || messageBytes != 65536 || idle != 45*time.Second || lifetime != 10*time.Minute {
+		t.Fatalf("CP-WS-006 limits=%d,%d,%s,%s", sessions, messageBytes, idle, lifetime)
+	}
+	defaultSessions, defaultBytes, defaultIdle, defaultLifetime := (CodexOAuthConfig{}).EffectiveWebsocketLimits()
+	if defaultSessions != DefaultCodexWebsocketMaxSessions || defaultBytes != DefaultCodexWebsocketMaxMessageBytes || defaultIdle != DefaultCodexWebsocketIdleTimeout || defaultLifetime != DefaultCodexWebsocketMaxLifetime {
+		t.Fatalf("CP-WS-006 defaults=%d,%d,%s,%s", defaultSessions, defaultBytes, defaultIdle, defaultLifetime)
+	}
+}
+
 func TestLoadDisabledProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

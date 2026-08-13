@@ -1,0 +1,233 @@
+package proxy
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"github.com/gorilla/websocket"
+)
+
+var codexWebsocketUpgrader = websocket.Upgrader{
+	ReadBufferSize: 4096, WriteBufferSize: 4096,
+	CheckOrigin: func(*http.Request) bool { return true },
+}
+
+func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, requestID string) {
+	_ = requestID
+	started := time.Now()
+	round := archiveRoundFromContext(r.Context())
+	if h.codexResponses == nil {
+		h.writeCodexResponsesError(w, r, round, started, effectivecatalog.CodexOAuthProviderID, "", true, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex websocket executor is unavailable")))
+		return
+	}
+	maxSessions, maxMessageBytes, idleTimeout, maxLifetime := h.currentConfig().CodexOAuth.EffectiveWebsocketLimits()
+	active := h.codexWebsockets.Add(1)
+	if active > int64(maxSessions) {
+		h.codexWebsockets.Add(-1)
+		h.writeArchivedAPIError(w, round, r, started, effectivecatalog.CodexOAuthProviderID, "", true, http.StatusServiceUnavailable, APIError{Code: ErrorCodeProviderUnavailable, Message: "Codex websocket session limit reached", ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), ClientProtocol: ClientProtocolOpenAI, UpstreamProtocol: effectivecatalog.CodexOAuthProviderID})
+		return
+	}
+	defer h.codexWebsockets.Add(-1)
+	conn, err := codexWebsocketUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.SetReadLimit(maxMessageBytes)
+	_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	})
+	ctx, cancel := context.WithTimeout(r.Context(), maxLifetime)
+	defer cancel()
+	pingDone := make(chan struct{})
+	go func() {
+		defer close(pingDone)
+		interval := idleTimeout / 2
+		if interval <= 0 || interval > 30*time.Second {
+			interval = 30 * time.Second
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "session closed"), time.Now().Add(time.Second))
+				_ = conn.Close()
+				return
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					cancel()
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-pingDone
+	}()
+	model := ""
+	sessionID := ""
+	succeeded := false
+	defer func() {
+		if sessionID != "" {
+			h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
+		}
+		if model != "" {
+			if succeeded {
+				h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(started), tokenUsage{Estimated: true, Known: true}, "")
+				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(started), tokenUsage{Estimated: true, Known: true}, "websocket", "", "", "success")
+			}
+		}
+	}()
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		messageType, raw, readErr := conn.ReadMessage()
+		if readErr != nil {
+			return
+		}
+		if messageType != websocket.TextMessage {
+			writeCodexWebsocketError(conn, "invalid_request", "only text response.create messages are supported")
+			return
+		}
+		normalized, requestModel, normalizeErr := normalizeCodexWebsocketCreate(raw, model)
+		if normalizeErr != nil {
+			writeCodexWebsocketError(conn, "invalid_request", normalizeErr.Error())
+			return
+		}
+		if model == "" {
+			model = requestModel
+			routeRequest := (&http.Request{Method: http.MethodPost, URL: cloneURLPath(r, "/v1/responses"), Header: r.Header, Body: r.Body, Host: r.Host}).WithContext(r.Context())
+			plans, apiErr := h.resolveTransportPlans(routeRequest, model)
+			if apiErr != nil || !hasCodexWebsocketPlan(plans) {
+				message := "model is not available for Codex websocket"
+				if apiErr != nil {
+					message = apiErr.Message
+				}
+				writeCodexWebsocketError(conn, "model_not_found", message)
+				return
+			}
+			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})})
+			if openErr != nil {
+				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket could not be opened")
+				return
+			}
+			sessionID = opened.SessionID
+		}
+		if requestModel != model {
+			writeCodexWebsocketError(conn, "invalid_request", "websocket model cannot change within a session")
+			return
+		}
+		if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, normalized); err != nil {
+			writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket send failed")
+			return
+		}
+		terminal, forwardErr := h.forwardCodexWebsocketTurn(ctx, conn, sessionID)
+		if forwardErr != nil || !terminal {
+			return
+		}
+		succeeded = true
+	}
+}
+
+func cloneURLPath(r *http.Request, path string) *url.URL {
+	if r == nil || r.URL == nil {
+		return &url.URL{Path: path}
+	}
+	copyURL := *r.URL
+	copyURL.Path = path
+	return &copyURL
+}
+
+func hasCodexWebsocketPlan(plans []TransportPlan) bool {
+	for _, plan := range plans {
+		if plan.Mode == TransportModeCodexOAuthResponses {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeCodexWebsocketCreate(raw []byte, currentModel string) ([]byte, string, error) {
+	var envelope map[string]any
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, "", fmt.Errorf("invalid JSON websocket message")
+	}
+	if typ, _ := envelope["type"].(string); typ != "response.create" {
+		return nil, "", fmt.Errorf("message type must be response.create")
+	}
+	model, _ := envelope["model"].(string)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = currentModel
+	}
+	if model == "" {
+		return nil, "", fmt.Errorf("model is required on the first response.create")
+	}
+	envelope["model"] = model
+	encoded, _ := json.Marshal(envelope)
+	normalized, body, _, err := normalizeCodexRequest(encoded, false)
+	if err != nil {
+		return nil, "", err
+	}
+	delete(body, "stream")
+	body["type"] = "response.create"
+	normalized, err = json.Marshal(body)
+	return normalized, model, err
+}
+
+func websocketPromptCacheKey(raw []byte) string {
+	var body map[string]any
+	_ = json.Unmarshal(raw, &body)
+	value, _ := body["prompt_cache_key"].(string)
+	return value
+}
+
+func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket.Conn, sessionID string) (bool, error) {
+	for {
+		payload, done, err := h.codexResponses.PullCodexWebsocket(ctx, sessionID)
+		if err != nil {
+			writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket upstream failed")
+			return false, err
+		}
+		if len(payload) > 0 {
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				return false, err
+			}
+			if codexWebsocketTerminal(payload) {
+				return true, nil
+			}
+		}
+		if done {
+			return false, nil
+		}
+	}
+}
+
+func codexWebsocketTerminal(payload []byte) bool {
+	var event struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	switch event.Type {
+	case "response.completed", "response.incomplete", "response.failed", "error":
+		return true
+	}
+	return false
+}
+
+func writeCodexWebsocketError(conn *websocket.Conn, code, message string) {
+	payload, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]any{"type": code, "code": code, "message": message}})
+	_ = conn.WriteMessage(websocket.TextMessage, payload)
+}

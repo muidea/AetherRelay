@@ -17,10 +17,14 @@ import (
 // 默认体大小上限:入站 32MiB,上游响应 64MiB。
 // 流式:累计输出默认 64MiB,单条 SSE 行默认 1MiB。
 const (
-	DefaultMaxRequestBodyBytes      int64 = 32 << 20
-	DefaultMaxUpstreamResponseBytes int64 = 64 << 20
-	DefaultMaxStreamBytes           int64 = 64 << 20
-	DefaultMaxSSELineBytes          int64 = 1 << 20
+	DefaultMaxRequestBodyBytes           int64 = 32 << 20
+	DefaultMaxUpstreamResponseBytes      int64 = 64 << 20
+	DefaultMaxStreamBytes                int64 = 64 << 20
+	DefaultMaxSSELineBytes               int64 = 1 << 20
+	DefaultCodexWebsocketMaxSessions           = 128
+	DefaultCodexWebsocketMaxMessageBytes int64 = 1 << 20
+	DefaultCodexWebsocketIdleTimeout           = 5 * time.Minute
+	DefaultCodexWebsocketMaxLifetime           = 30 * time.Minute
 
 	// Admin 登录安全默认值与边界。
 	DefaultAdminBasePath                 = "/admin"
@@ -161,6 +165,30 @@ type CodexOAuthConfig struct {
 	Priority                     int
 	priorityConfigured           bool
 	RefreshAccountIntervalMinute int
+	WebsocketMaxSessions         int
+	WebsocketMaxMessageBytes     int64
+	WebsocketIdleTimeout         time.Duration
+	WebsocketMaxLifetime         time.Duration
+}
+
+func (c CodexOAuthConfig) EffectiveWebsocketLimits() (int, int64, time.Duration, time.Duration) {
+	maxSessions := c.WebsocketMaxSessions
+	if maxSessions <= 0 {
+		maxSessions = DefaultCodexWebsocketMaxSessions
+	}
+	maxMessageBytes := c.WebsocketMaxMessageBytes
+	if maxMessageBytes <= 0 {
+		maxMessageBytes = DefaultCodexWebsocketMaxMessageBytes
+	}
+	idleTimeout := c.WebsocketIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = DefaultCodexWebsocketIdleTimeout
+	}
+	maxLifetime := c.WebsocketMaxLifetime
+	if maxLifetime <= 0 {
+		maxLifetime = DefaultCodexWebsocketMaxLifetime
+	}
+	return maxSessions, maxMessageBytes, idleTimeout, maxLifetime
 }
 
 // TemporaryChatConfig controls Admin temporary multi-turn text conversations.
@@ -691,6 +719,30 @@ func setCodexOAuth(cfg *Config, key, value string) error {
 			return fmt.Errorf("codex_oauth.refresh_account_interval_minute: %w", err)
 		}
 		cfg.CodexOAuth.RefreshAccountIntervalMinute = n
+	case "websocket_max_sessions":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.websocket_max_sessions: %w", err)
+		}
+		cfg.CodexOAuth.WebsocketMaxSessions = n
+	case "websocket_max_message_bytes":
+		n, err := parseStrictPositiveInt64(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.websocket_max_message_bytes: %w", err)
+		}
+		cfg.CodexOAuth.WebsocketMaxMessageBytes = n
+	case "websocket_idle_timeout_seconds":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.websocket_idle_timeout_seconds: %w", err)
+		}
+		cfg.CodexOAuth.WebsocketIdleTimeout = time.Duration(n) * time.Second
+	case "websocket_max_lifetime_seconds":
+		n, err := parseStrictPositiveInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.websocket_max_lifetime_seconds: %w", err)
+		}
+		cfg.CodexOAuth.WebsocketMaxLifetime = time.Duration(n) * time.Second
 	default:
 		return fmt.Errorf("codex_oauth: unknown key %q", key)
 	}
@@ -1229,6 +1281,18 @@ func normalize(cfg *Config, configPath string) error {
 	}
 	if !cfg.CodexOAuth.providerEnabledConfigured {
 		cfg.CodexOAuth.ProviderEnabled = true
+	}
+	if cfg.CodexOAuth.WebsocketMaxSessions == 0 {
+		cfg.CodexOAuth.WebsocketMaxSessions = DefaultCodexWebsocketMaxSessions
+	}
+	if cfg.CodexOAuth.WebsocketMaxMessageBytes == 0 {
+		cfg.CodexOAuth.WebsocketMaxMessageBytes = DefaultCodexWebsocketMaxMessageBytes
+	}
+	if cfg.CodexOAuth.WebsocketIdleTimeout == 0 {
+		cfg.CodexOAuth.WebsocketIdleTimeout = DefaultCodexWebsocketIdleTimeout
+	}
+	if cfg.CodexOAuth.WebsocketMaxLifetime == 0 {
+		cfg.CodexOAuth.WebsocketMaxLifetime = DefaultCodexWebsocketMaxLifetime
 	}
 	normalizeTemporaryChat(&cfg.ChatGPTWeb.TemporaryChat)
 	// Client API keys are deliberately excluded from configuration. They are
@@ -2037,6 +2101,9 @@ func ResolveProviderTransports(provider Provider, path string) []ProviderTranspo
 		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "openai_to_anthropic"})
 		}
+		if provider.Protocol == "codexoauth" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
+			result = append(result, ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "chat_to_codex_responses"})
+		}
 	case "/v1/messages":
 		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "native"})
@@ -2048,6 +2115,9 @@ func ResolveProviderTransports(provider Provider, path string) []ProviderTranspo
 		}
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"})
+		}
+		if provider.Protocol == "codexoauth" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
+			result = append(result, ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "anthropic_to_codex_responses"})
 		}
 	case "/v1/responses":
 		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
@@ -2279,6 +2349,9 @@ func validateCodexOAuth(codex CodexOAuthConfig) error {
 	}
 	if codex.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("codex_oauth.refresh_account_interval_minute must be >= 0")
+	}
+	if codex.WebsocketMaxSessions < 0 || codex.WebsocketMaxMessageBytes < 0 || codex.WebsocketIdleTimeout < 0 || codex.WebsocketMaxLifetime < 0 {
+		return fmt.Errorf("codex_oauth websocket resource limits must be omitted or > 0")
 	}
 	return nil
 }

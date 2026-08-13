@@ -27,10 +27,17 @@ import (
 )
 
 const (
-	oauthSessionTTL = 10 * time.Minute
-	oauthSessionMax = 64
-	refreshLead     = 5 * time.Minute
+	oauthSessionTTL           = 10 * time.Minute
+	oauthSessionMax           = 64
+	refreshLead               = 5 * time.Minute
+	defaultSessionAffinityTTL = time.Hour
+	defaultAccountConcurrency = 4
 )
+
+type sessionBinding struct {
+	accountID string
+	expiresAt time.Time
+}
 
 type oauthSession struct {
 	verifier string
@@ -58,6 +65,11 @@ type Account struct {
 	refreshes     map[string]*refreshFlight
 	oauthMu       sync.Mutex
 	oauthSessions map[string]oauthSession
+	scheduleMu    sync.Mutex
+	sessions      map[string]sessionBinding
+	leases        map[string]string
+	inflight      map[string]int
+	now           func() time.Time
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Account, *cd.Error) {
@@ -81,16 +93,17 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery, oauthTimeout time.Duration) *Account {
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
-	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}}
+	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}, sessions: map[string]sessionBinding{}, leases: map[string]string{}, inflight: map[string]int{}, now: time.Now}
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
 	b.SubscribeFunc(events.TopicUpdate, b.handleUpdate)
 	b.SubscribeFunc(events.TopicAcquire, b.handleAcquire)
+	b.SubscribeFunc(events.TopicRelease, b.handleRelease)
 	b.SubscribeFunc(events.TopicRecordResult, b.handleRecordResult)
 	b.SubscribeFunc(events.TopicRefreshToken, b.handleRefreshToken)
 	b.SubscribeFunc(events.TopicRefreshByID, b.handleRefreshByID)
@@ -121,6 +134,11 @@ func (s *Account) Teardown(context.Context) {
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
+	s.scheduleMu.Lock()
+	s.sessions = map[string]sessionBinding{}
+	s.leases = map[string]string{}
+	s.inflight = map[string]int{}
+	s.scheduleMu.Unlock()
 	if s.store != nil {
 		_ = s.store.Close()
 	}
@@ -197,12 +215,63 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account acquire command"))
 		return
 	}
-	item, err := s.store.Acquire(cmd.Model, cmd.Exclude)
+	if s.stopping.Load() {
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex account pool is stopping"))
+		return
+	}
+	exclude := append([]string(nil), cmd.Exclude...)
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+	now := s.now().UTC()
+	preferred := strings.TrimSpace(cmd.PreferredID)
+	if binding, ok := s.sessions[strings.TrimSpace(cmd.SessionHash)]; ok {
+		if binding.expiresAt.After(now) {
+			preferred = binding.accountID
+		} else {
+			delete(s.sessions, strings.TrimSpace(cmd.SessionHash))
+		}
+	}
+	for accountID, count := range s.inflight {
+		if count >= defaultAccountConcurrency {
+			exclude = append(exclude, accountID)
+		}
+	}
+	item, err := s.store.AcquirePreferred(cmd.Model, exclude, preferred)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return
 	}
+	leaseID := uuid.NewString()
+	s.leases[leaseID] = item.AccountID
+	s.inflight[item.AccountID]++
+	if sessionHash := strings.TrimSpace(cmd.SessionHash); sessionHash != "" {
+		s.sessions[sessionHash] = sessionBinding{accountID: item.AccountID, expiresAt: now.Add(defaultSessionAffinityTTL)}
+	}
+	item.LeaseID = leaseID
 	result.Set(item, nil)
+}
+
+func (s *Account) handleRelease(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.ReleaseCommand)
+	if !ok || strings.TrimSpace(cmd.LeaseID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account release command"))
+		return
+	}
+	s.scheduleMu.Lock()
+	accountID, found := s.leases[cmd.LeaseID]
+	if found {
+		delete(s.leases, cmd.LeaseID)
+		if s.inflight[accountID] <= 1 {
+			delete(s.inflight, accountID)
+		} else {
+			s.inflight[accountID]--
+		}
+	}
+	s.scheduleMu.Unlock()
+	result.Set(events.ReleaseResult{Released: found}, nil)
 }
 
 func (s *Account) handleRecordResult(ev event.Event, result event.Result) {

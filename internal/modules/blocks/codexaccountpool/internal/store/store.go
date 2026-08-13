@@ -357,12 +357,25 @@ func (s *Store) Update(id string, status, proxy *string) (events.AccountView, er
 }
 
 func (s *Store) Acquire(model string, exclude []string) (events.AcquireResult, error) {
+	return s.AcquirePreferred(model, exclude, "")
+}
+
+func (s *Store) AcquirePreferred(model string, exclude []string, preferredID string) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	excluded := make(map[string]struct{}, len(exclude))
 	for _, id := range exclude {
 		excluded[strings.TrimSpace(id)] = struct{}{}
+	}
+	if preferred := s.items[strings.TrimSpace(preferredID)]; preferred != nil && preferred.Status == events.StatusNormal && strings.TrimSpace(preferred.AccessToken) != "" {
+		if _, found := excluded[preferred.ID]; !found && !cooling(preferred, model, now) && accountSupportsModel(preferred, model, now) {
+			preferred.LastUsedAt = now.Format(time.RFC3339)
+			if err := s.saveLocked(); err != nil {
+				return events.AcquireResult{}, err
+			}
+			return events.AcquireResult{AccountID: preferred.ID, AccessToken: preferred.AccessToken, AccountIDHeader: preferred.AccountIDHeader, Proxy: preferred.Proxy}, nil
+		}
 	}
 	for offset := 0; offset < len(s.order); offset++ {
 		pos := (s.index + offset) % len(s.order)

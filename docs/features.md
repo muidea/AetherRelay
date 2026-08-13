@@ -19,7 +19,7 @@
 | — 功能集：临时对话 / 在线搜索 / 图片任务 / 图片库 | Admin「功能集」 | 始终装配（临时对话可单独关闭） |
 | ChatGPT Web 文本与图片代理 | 同上标准端点路由到内建 `chatgptweb` | `chatgpt_web.provider_enabled` |
 | ChatGPT Web 在线搜索 | `/v1/search`、协议内 `web_search` 工具 | 始终装配，需可用账号与模型 |
-| Codex OAuth 原生 Responses | `/v1/responses` 路由到内建 `codexoauth` | `codex_oauth.provider_enabled` |
+| Codex OAuth 原生 Responses | `/v1/responses` HTTP/SSE/WebSocket、`/v1/responses/compact` 路由到内建 `codexoauth` | `codex_oauth.provider_enabled` |
 | Prometheus 指标 / 统计快照 | `/metrics`、`/stats`、`/stats/stream` | 默认 loopback-only |
 | SLO 违规 webhook | 状态变化时异步 POST | `slo_violation_webhook` 配置 |
 | 交互归档 | `state.dir/interactions/{api_key_id}/{round_id}/` | 默认启用 |
@@ -44,9 +44,11 @@
 | --- | --- | --- | --- | --- |
 | `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
 | `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
+| `/v1/chat/completions` | codexoauth | `responses` | Codex Responses | `chat_to_codex_responses` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
 | `/v1/messages` | openai | `responses` | `/v1/responses` | `anthropic_to_responses`（需发布 capability） |
 | `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
+| `/v1/messages` | codexoauth | `responses` | Codex Responses | `anthropic_to_codex_responses` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
 | `/v1/responses` | anthropic | `messages` | `/v1/messages` | `responses_to_anthropic`（需发布 capability） |
 | `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
@@ -151,12 +153,12 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ## Codex OAuth 账号池
 
-进程自动注入只读内建 Provider `codexoauth`，**只服务原生 `POST /v1/responses`**（`/v1/chat/completions` 不能路由到它）：
+进程自动注入只读内建 Provider `codexoauth`，服务原生 Responses HTTP/SSE、compact 与 WebSocket，并为 `/v1/chat/completions` 和 `/v1/messages` 提供受限协议适配：
 
-- 模型按账号从 `/backend-api/codex/models` 自动发现并缓存 6 小时，失败指数退避；可路由模型是全部健康账号模型快照的并集，不提供 allowlist。
+- 模型按账号从 ChatGPT 上游 `/backend-api/codex/models` 自动发现并缓存 6 小时，该路径不作为 AetherRelay 入站端点；失败指数退避；可路由模型是全部健康账号模型快照的并集，不提供 allowlist。
 - 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；`429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE 输出后不切换账号；明确 `usage_limit_reached` 记录账号/模型额度耗尽与上游恢复时间（运行期观察，非官方额度）。
 - 非流式 `/v1/responses` 在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象。
-- P0 不支持 realtime/WebSocket、`responses/compact`、网页会话或插件；`/v1/search` 与临时对话不经过 Codex 账号域。
+- WebSocket 支持规范入口 `GET /v1/responses`；compact 支持 unary JSON 和最小 SSE 投影。不提供 `/backend-api/codex/*` 入站别名。Realtime、网页会话和插件不属于该能力；`/v1/search` 与临时对话不经过 Codex 账号域。
 - 账号凭据、代理与到期时间只写 `state.database`；管理 API 直接显示邮箱，但不返回 token、账号 ID 或代理。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。
 - 管理页不提供 Codex 槽位单独导出；选中的统一账号通过整体账号池导出接口获取完整凭据包，该接口显式返回 `Cache-Control: no-store`，页面不预览且仅用短生命周期 Blob 触发下载。
 

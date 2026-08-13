@@ -52,6 +52,7 @@ type Handler struct {
 	chatGPTSearch       chatgptsearch.Executor
 	chatGPTImage        chatgptimage.Executor
 	codexResponses      codexresponses.Executor
+	codexWebsockets     atomic.Int64
 }
 
 func (h *Handler) currentClient() *http.Client {
@@ -508,6 +509,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if round != nil {
 		round.SetRequestID(requestID)
 		round.SetAPIKeyID(identity.KeyID)
+		round.SetIgnoredFeatures(codexIgnoredHeaderNames(r))
 		defer round.Abort()
 	}
 	r = r.WithContext(withArchiveRound(r.Context(), round))
@@ -535,6 +537,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleImages(w, r, requestID)
 	case r.URL.Path == "/v1/messages" && r.Method == http.MethodPost:
 		h.handleAnthropicMessages(w, r, requestID)
+	case r.URL.Path == "/v1/responses/compact" && r.Method == http.MethodPost:
+		h.handleCodexCompact(w, r, requestID)
+	case r.URL.Path == "/v1/responses" && r.Method == http.MethodGet:
+		h.handleCodexWebsocket(w, r, requestID)
 	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 		h.handleModels(w, r, requestID)
 	case r.URL.Path == "/v1/search" && r.Method == http.MethodPost:
@@ -916,7 +922,9 @@ func (h *Handler) readLimitedUpstreamContext(ctx context.Context, body io.ReadCl
 // isSupportedInbound 限制客户端只能访问标准 OpenAI / Anthropic path。
 func isSupportedInbound(method, path string) bool {
 	switch path {
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
+	case "/v1/responses":
+		return method == http.MethodPost || method == http.MethodGet
+	case "/v1/chat/completions", "/v1/messages", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
 		return method == http.MethodPost
 	case "/v1/models":
 		return method == http.MethodGet || method == http.MethodPost
@@ -976,6 +984,10 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 		// cfg.Providers entry. Route it before looking up static providers.
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), stream)
 		h.handleChatGPTWebChatCompletions(w, r, start, plan.RouteOwner, model, stream, body)
+		return
+	}
+	if plan.Mode == TransportModeChatToCodex && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
+		h.handleChatToCodex(w, r, start, plan, model, stream, body)
 		return
 	}
 	candidates, preflightErr := h.prepareOpenAIChatCandidates(plans, bodyBytes, body, stream, r.URL.RawQuery, r.Method)
@@ -1215,15 +1227,17 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
-		if _, exists := rawBody["max_output_tokens"]; exists {
-			h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), rawStream)
-			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, APIError{
-				Code: ErrorCodeInvalidRequest, Message: "max_output_tokens is not supported by the fixed Codex OAuth upstream", Feature: "max_output_tokens", Model: rawModel,
-			})
+		codexBody, _, ignored, normalizeErr := normalizeCodexRequest(body, false)
+		if normalizeErr != nil {
+			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
 			return
 		}
+		if round != nil {
+			round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
+		}
+		sessionHash := codexSessionHash(r, rawModel, rawBody)
 		if !rawStream {
-			response, codexErr := h.completeCodexOAuthResponse(r.Context(), rawModel, body)
+			response, codexErr := h.completeCodexOAuthResponse(r.Context(), rawModel, codexBody, sessionHash)
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
@@ -1250,7 +1264,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			return
 		}
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), true)
-		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, body, rawBody, true)
+		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, codexBody, rawBody, true, sessionHash)
 		return
 	}
 	if hasTransportMode(plans, TransportModeResponsesToAnthropic) {

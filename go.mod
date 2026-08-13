@@ -8,9 +8,11 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
+	github.com/bogdanfinn/websocket v1.5.5-barnius
 	github.com/duckdb/duckdb-go/v2 v2.10504.0
 	github.com/gabriel-vasile/mimetype v1.4.12
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/muidea/magicCommon v1.5.10
 	github.com/muidea/magicEngine v1.4.9
 	github.com/openai/openai-go v1.12.0
@@ -27,7 +29,6 @@ require (
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
 	github.com/bogdanfinn/quic-go-utls v1.0.9-utls // indirect
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
-	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/duckdb/duckdb-go-bindings v0.10504.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10504.0 // indirect

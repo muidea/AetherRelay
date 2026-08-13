@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AetherRelay` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 解析有序上游候选链；必要时做基础协议转换，并仅在响应未提交的可重试失败时回退。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
 
-当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
+当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。涉及 Codex 访问反向代理时，`docs/design/codex-proxy-maintenance-contract.md` 是首要维护合同：必须先更新其版本化规则与验收，再改变实现。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
 
 ## 常用命令
 
@@ -75,7 +75,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 入站白名单：
 
-- OpenAI：`POST /v1/chat/completions|responses|completions|embeddings`，`GET|POST /v1/models`
+- OpenAI：`POST /v1/chat/completions|responses|responses/compact|completions|embeddings`，Responses WebSocket `GET /v1/responses`，`GET|POST /v1/models`
 - Anthropic：`POST /v1/messages`
 - 其它 `/v1/*` → 404
 

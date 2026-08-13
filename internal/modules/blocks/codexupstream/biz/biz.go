@@ -21,25 +21,23 @@ import (
 	basebiz "aetherrelay/internal/modules/base/biz"
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	fhttp "github.com/bogdanfinn/fhttp"
+	wsclient "github.com/bogdanfinn/websocket"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
 
-const (
-	// Keep the native Codex identity independent from downstream client headers.
-	// The upstream accepts a Codex CLI-style request without exposing arbitrary
-	// client User-Agent or Originator values to the account provider.
-	codexUserAgent  = "codex-tui/0.135.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.135.0)"
-	codexOriginator = "codex-tui"
-)
-
 var responsesURL = "https://chatgpt.com/backend-api/codex/responses"
+
+var compactURL = "https://chatgpt.com/backend-api/codex/responses/compact"
+
+var responsesWebsocketURL = "wss://chatgpt.com/backend-api/codex/responses"
 
 // The model-list endpoint is account-scoped. Its client version is a local
 // Codex identity detail, never an inbound request parameter.
-var modelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=0.135.0"
+var modelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=" + currentIdentity.ClientVersion
 
 // usageURL is the account-scoped Codex usage endpoint used by CLIProxyAPI's
 // management surface as well. It is intentionally not exposed to clients.
@@ -58,27 +56,87 @@ type responseStream struct {
 	updates chan streamUpdate
 }
 
+type websocketUpdate struct {
+	payload    []byte
+	done       bool
+	errorClass events.ErrorClass
+}
+
+type websocketSession struct {
+	conn    *wsclient.Conn
+	cancel  context.CancelFunc
+	updates chan websocketUpdate
+	writeMu sync.Mutex
+}
+
 type Upstream struct {
 	basebiz.Base
-	topics  []string
-	mu      sync.Mutex
-	streams map[string]*responseStream
+	topics     []string
+	mu         sync.Mutex
+	streams    map[string]*responseStream
+	websockets map[string]*websocketSession
+	stopping   bool
 }
 
 func New(hub event.Hub, background task.BackgroundRoutine) *Upstream {
-	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}}
-	b.topics = []string{events.TopicComplete, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicListModels, events.TopicGetUsage}
+	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}, websockets: map[string]*websocketSession{}}
+	b.topics = []string{events.TopicComplete, events.TopicCompact, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicWSOpen, events.TopicWSSend, events.TopicWSPull, events.TopicWSClose, events.TopicListModels, events.TopicGetUsage}
 	b.SubscribeFunc(events.TopicComplete, b.handleComplete)
+	b.SubscribeFunc(events.TopicCompact, b.handleCompact)
 	b.SubscribeFunc(events.TopicStart, b.handleStart)
 	b.SubscribeFunc(events.TopicPull, b.handlePull)
 	b.SubscribeFunc(events.TopicCancel, b.handleCancel)
+	b.SubscribeFunc(events.TopicWSOpen, b.handleWSOpen)
+	b.SubscribeFunc(events.TopicWSSend, b.handleWSSend)
+	b.SubscribeFunc(events.TopicWSPull, b.handleWSPull)
+	b.SubscribeFunc(events.TopicWSClose, b.handleWSClose)
 	b.SubscribeFunc(events.TopicListModels, b.handleListModels)
 	b.SubscribeFunc(events.TopicGetUsage, b.handleGetUsage)
 	return b
 }
 
+func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.CompactCommand)
+	if !ok || strings.TrimSpace(cmd.AccessToken) == "" || len(cmd.Body) == 0 {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact command"))
+		return
+	}
+	response, class, retryAfter, err := performURL(ev.Context(), compactURL, "application/json", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.Body, cmd.SessionHash)
+	if err != nil {
+		result.Set(events.CompactResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		observation, retryAfter := readRateLimitObservation(response)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
+		return
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, cmd.MaxResponseBytes+1))
+	if err != nil {
+		result.Set(events.CompactResult{ErrorClass: classifyTransport(err)}, nil)
+		return
+	}
+	if int64(len(payload)) > cmd.MaxResponseBytes || !json.Valid(payload) {
+		result.Set(events.CompactResult{ErrorClass: events.ErrorProtocol}, nil)
+		return
+	}
+	result.Set(events.CompactResult{Body: payload, Headers: responseHeaders(response.Header)}, nil)
+}
+
 func (s *Upstream) Run(context.Context) *cd.Error { return nil }
 func (s *Upstream) Teardown(context.Context) {
+	s.mu.Lock()
+	s.stopping = true
+	for _, session := range s.websockets {
+		session.cancel()
+		_ = session.conn.Close()
+	}
+	s.websockets = map[string]*websocketSession{}
+	s.mu.Unlock()
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
@@ -88,6 +146,216 @@ func (s *Upstream) Teardown(context.Context) {
 	}
 	s.streams = map[string]*responseStream{}
 	s.mu.Unlock()
+}
+
+func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.WSOpenCommand)
+	if !ok || strings.TrimSpace(cmd.AccessToken) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket open command"))
+		return
+	}
+	s.mu.Lock()
+	stopping := s.stopping
+	s.mu.Unlock()
+	if stopping {
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex upstream is stopping"))
+		return
+	}
+	dialer := &wsclient.Dialer{HandshakeTimeout: 30 * time.Second, EnableCompression: true}
+	if rawProxy := strings.TrimSpace(cmd.Proxy); rawProxy != "" {
+		proxyURL, err := url.ParseRequestURI(rawProxy)
+		if err != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
+			result.Set(events.WSOpenResult{ErrorClass: events.ErrorProtocol}, nil)
+			return
+		}
+		dialer.Proxy = fhttp.ProxyURL(proxyURL)
+	}
+	headers := fhttp.Header{}
+	headers.Set("Authorization", "Bearer "+strings.TrimSpace(cmd.AccessToken))
+	headers.Set("User-Agent", currentIdentity.UserAgent)
+	headers.Set("Originator", currentIdentity.Originator)
+	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
+	applyCodexSessionHeaders(headers, cmd.SessionHash)
+	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
+		headers.Set("ChatGPT-Account-ID", accountID)
+	}
+	conn, response, err := dialer.DialContext(ev.Context(), responsesWebsocketURL, headers)
+	if err != nil {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+		}
+		class := classifyTransport(err)
+		if status > 0 {
+			class = classifyStatus(status)
+		}
+		result.Set(events.WSOpenResult{HTTPStatus: status, ErrorClass: class}, nil)
+		return
+	}
+	limit := cmd.MaxMessageBytes
+	if limit <= 0 || limit > 16<<20 {
+		limit = 1 << 20
+	}
+	conn.SetReadLimit(limit)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ev.Context()))
+	sessionID := uuid.NewString()
+	session := &websocketSession{conn: conn, cancel: cancel, updates: make(chan websocketUpdate, 64)}
+	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		cancel()
+		_ = conn.Close()
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex upstream is stopping"))
+		return
+	}
+	s.websockets[sessionID] = session
+	s.mu.Unlock()
+	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runWebsocket(ctx, sessionID, session) }); err != nil {
+		s.closeWebsocket(sessionID)
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket reader unavailable"))
+		return
+	}
+	result.Set(events.WSOpenResult{SessionID: sessionID}, nil)
+}
+
+func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.WSSendCommand)
+	session := s.websocket(cmd.SessionID)
+	if !ok || session == nil || len(cmd.Payload) == 0 {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket send command"))
+		return
+	}
+	session.writeMu.Lock()
+	err := session.conn.WriteMessage(wsclient.TextMessage, cmd.Payload)
+	session.writeMu.Unlock()
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket write failed"))
+		return
+	}
+	result.Set(events.WSSendResult{Sent: true}, nil)
+}
+
+func (s *Upstream) handleWSPull(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.WSPullCommand)
+	session := s.websocket(cmd.SessionID)
+	if !ok || session == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket pull command"))
+		return
+	}
+	timeout := time.Duration(cmd.TimeoutMillis) * time.Millisecond
+	if timeout <= 0 || timeout > time.Minute {
+		timeout = time.Second
+	}
+	select {
+	case update, open := <-session.updates:
+		if !open {
+			result.Set(events.WSPullResult{Done: true}, nil)
+			return
+		}
+		result.Set(events.WSPullResult{Payload: update.payload, Done: update.done, ErrorClass: update.errorClass}, nil)
+	case <-time.After(timeout):
+		result.Set(events.WSPullResult{}, nil)
+	case <-ev.Context().Done():
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket pull canceled"))
+	}
+}
+
+func (s *Upstream) handleWSClose(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.WSCloseCommand)
+	if !ok || strings.TrimSpace(cmd.SessionID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket close command"))
+		return
+	}
+	result.Set(events.WSCloseResult{Closed: s.closeWebsocket(cmd.SessionID)}, nil)
+}
+
+func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websocketSession) {
+	const upstreamIdleTimeout = 5 * time.Minute
+	_ = session.conn.SetReadDeadline(time.Now().Add(upstreamIdleTimeout))
+	session.conn.SetPongHandler(func(string) error {
+		return session.conn.SetReadDeadline(time.Now().Add(upstreamIdleTimeout))
+	})
+	pingDone := make(chan struct{})
+	if err := s.BackgroundRoutine().AsyncFunction(func() {
+		defer close(pingDone)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = session.conn.Close()
+				return
+			case <-ticker.C:
+				if err := session.conn.WriteControl(wsclient.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					session.cancel()
+					_ = session.conn.Close()
+					return
+				}
+			}
+		}
+	}); err != nil {
+		close(pingDone)
+		session.cancel()
+	}
+	defer func() {
+		session.cancel()
+		<-pingDone
+		s.mu.Lock()
+		if s.websockets[id] == session {
+			delete(s.websockets, id)
+		}
+		s.mu.Unlock()
+		close(session.updates)
+	}()
+	for {
+		_ = session.conn.SetReadDeadline(time.Now().Add(upstreamIdleTimeout))
+		messageType, payload, err := session.conn.ReadMessage()
+		if err != nil {
+			select {
+			case session.updates <- websocketUpdate{done: true, errorClass: classifyTransport(err)}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		if messageType != wsclient.TextMessage {
+			continue
+		}
+		select {
+		case session.updates <- websocketUpdate{payload: payload}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *Upstream) websocket(id string) *websocketSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.websockets[id]
+}
+func (s *Upstream) closeWebsocket(id string) bool {
+	s.mu.Lock()
+	session := s.websockets[id]
+	delete(s.websockets, id)
+	s.mu.Unlock()
+	if session == nil {
+		return false
+	}
+	session.cancel()
+	_ = session.conn.Close()
+	return true
 }
 
 func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
@@ -104,7 +372,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body)
+	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash)
 	if err != nil {
 		result.Set(events.CompleteResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -137,7 +405,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body)
+	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash)
 	if err != nil {
 		result.Set(events.StartResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -312,21 +580,28 @@ func (s *Upstream) removeStream(id string) bool {
 	return true
 }
 
-func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte) (*http.Response, events.ErrorClass, int, error) {
+func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, sessionHash ...string) (*http.Response, events.ErrorClass, int, error) {
+	return performURL(ctx, responsesURL, "text/event-stream", accessToken, accountID, proxy, body, sessionHash...)
+}
+
+func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, sessionHash ...string) (*http.Response, events.ErrorClass, int, error) {
 	client, err := newHTTPClient(proxy)
 	if err != nil {
 		return nil, events.ErrorProtocol, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, events.ErrorProtocol, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("Connection", "Keep-Alive")
-	req.Header.Set("User-Agent", codexUserAgent)
-	req.Header.Set("Originator", codexOriginator)
+	req.Header.Set("User-Agent", currentIdentity.UserAgent)
+	req.Header.Set("Originator", currentIdentity.Originator)
+	if len(sessionHash) > 0 {
+		applyCodexSessionHeaders(req.Header, sessionHash[0])
+	}
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -335,6 +610,19 @@ func perform(ctx context.Context, accessToken, accountID, proxy string, body []b
 		return nil, classifyTransport(err), 0, err
 	}
 	return response, "", retryAfterSeconds(response.Header), nil
+}
+
+type headerSetter interface{ Set(string, string) }
+
+func applyCodexSessionHeaders(headers headerSetter, sessionHash string) {
+	sessionHash = strings.TrimSpace(sessionHash)
+	if headers == nil || sessionHash == "" {
+		return
+	}
+	headers.Set("Session-Id", sessionHash)
+	headers.Set("Thread-Id", sessionHash)
+	headers.Set("X-Client-Request-Id", sessionHash)
+	headers.Set("X-Codex-Window-Id", sessionHash+":0")
 }
 
 func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]events.ModelDescriptor, events.ErrorClass, error) {
@@ -348,8 +636,8 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]ev
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
-	req.Header.Set("User-Agent", codexUserAgent)
-	req.Header.Set("Originator", codexOriginator)
+	req.Header.Set("User-Agent", currentIdentity.UserAgent)
+	req.Header.Set("Originator", currentIdentity.Originator)
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -387,8 +675,8 @@ func getUsage(ctx context.Context, accessToken, accountID, proxy string) (string
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
-	req.Header.Set("User-Agent", codexUserAgent)
-	req.Header.Set("Originator", codexOriginator)
+	req.Header.Set("User-Agent", currentIdentity.UserAgent)
+	req.Header.Set("Originator", currentIdentity.Originator)
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -1058,6 +1346,12 @@ func retryAfterSeconds(headers http.Header) int {
 func classifyStatus(status int) events.ErrorClass {
 	if status == http.StatusUnauthorized {
 		return events.ErrorInvalidToken
+	}
+	if status == http.StatusRequestTimeout {
+		return events.ErrorTimeout
+	}
+	if status == http.StatusForbidden {
+		return events.ErrorUpstream
 	}
 	if status == http.StatusTooManyRequests {
 		return events.ErrorRateLimit

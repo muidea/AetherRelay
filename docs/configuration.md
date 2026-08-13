@@ -121,7 +121,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
 - `/v1/search` 是 AetherRelay 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
-- 内建 `codexoauth` 只服务原生 `POST /v1/responses`：请求与 SSE 事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；需要可切换上游端点时应创建管理型直连 Provider。P0 不支持 WebSocket/realtime、`/responses/compact` 或网页会话/插件能力；`/v1/chat/completions` 不能路由到该 Provider。
+- 内建 `codexoauth` 服务原生 Responses HTTP/SSE、compact 与 WebSocket：请求与事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。WebSocket 入口是 `GET /v1/responses`；compact 使用 `/v1/responses/compact`。`/v1/chat/completions` 与 `/v1/messages` 通过受限、保留 function tools 的协议适配进入同一 Codex Responses 执行链。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；Realtime、网页会话和插件仍不支持。
 - 跨协议转换按模型方向化 capability 开放：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；流式工具、多模态、结构化输出、continuation 仍在访问上游前拒绝。thinking/reasoning 只有配置方向专用 adapter 时才以降级模式开放。最近调用、usage 与 Prometheus 请求指标会同时记录 `conversion_mode`、`conversion_level`、转换耗时和拒绝/降级能力。
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
@@ -191,9 +191,13 @@ codex_oauth:
   provider_enabled: true
   priority: 90
   refresh_account_interval_minute: 0
+  websocket_max_sessions: 128
+  websocket_max_message_bytes: 1048576
+  websocket_idle_timeout_seconds: 300
+  websocket_max_lifetime_seconds: 1800
 ```
 
-- 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 `GET /backend-api/codex/models` 自动发现模型；结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
+- 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现模型；该路径不作为 AetherRelay 入站端点。结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。
 - 管理页可按账号读取 `GET /backend-api/wham/usage`，并展示上游观测到的套餐类型、主/次窗口、代码审查和附加窗口的 `used_percent`、恢复时间与限制状态。导入、凭据刷新、OAuth 完成会触发一次账号范围刷新；也可在账号池选中账号后手动刷新。快照有效期为 15 分钟，刷新失败会保留上一份快照并标记错误；不会高频轮询，也不把窗口百分比伪装为 Token 数、请求数或路由可用性。
 - Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
@@ -206,6 +210,7 @@ codex_oauth:
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
 - `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
+- WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。
 
 ## 本地管理页
 
@@ -303,4 +308,4 @@ endpoint 下只允许选择固定 profile：`level1`、`level2`、`level2_reason
 
 `gpt-5.5` 发布 `272,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `medium`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools、tool result 闭环及全部五档 reasoning；不据此开放跨协议转换或图片能力。
 
-`gpt-5.4-mini` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 发布 `400,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `none`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools 与 tool result 闭环，不据此开放跨协议转换。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理会在上游调用前明确拒绝；目录中的 `maxOutputTokens` 仅表示模型输出能力上限。
+`gpt-5.4-mini` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 发布 `400,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `none`。当前模型由内建 `codexoauth` 发现并发布原生 Responses 能力，已验证文本、SSE、function tools 与 tool result 闭环，不据此开放跨协议转换。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理按兼容策略删除该字段并只记录字段名；目录中的 `maxOutputTokens` 仅表示模型输出能力上限。

@@ -1555,6 +1555,9 @@ type textConversionStreamState struct {
 	HeadersWritten                                 bool
 	BytesWritten                                   int64
 	TextBlocks, TextOutputIndex                    int
+	ToolStarted, ToolCompleted                     bool
+	ToolIndex                                      int
+	ToolCallID                                     string
 	Output                                         bytes.Buffer
 }
 
@@ -1831,6 +1834,21 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 	case "response.output_item.added":
 		item, _ := event["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
+		if itemType == "function_call" {
+			if !capability.Tools || state.ToolStarted {
+				return nil, fmt.Errorf("responses stream function_call is not supported in this order")
+			}
+			callID, _ := item["call_id"].(string)
+			name, _ := item["name"].(string)
+			if callID == "" || name == "" {
+				return nil, fmt.Errorf("responses stream function_call")
+			}
+			state.ToolStarted = true
+			state.ToolIndex = 1
+			state.ToolCallID = callID
+			out = append(out, map[string]any{"type": "content_block_start", "index": state.ToolIndex, "content_block": map[string]any{"type": "tool_use", "id": callID, "name": name, "input": map[string]any{}}})
+			break
+		}
 		if itemType == "reasoning" {
 			if !capability.Reasoning {
 				return nil, fmt.Errorf("responses stream item %q", itemType)
@@ -1855,9 +1873,25 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			return nil, fmt.Errorf("responses stream content part %q", partType)
 		}
 	case "response.output_text.done":
+	case "response.function_call_arguments.delta":
+		if !state.ToolStarted || state.ToolCompleted {
+			return nil, fmt.Errorf("responses stream function arguments are out of order")
+		}
+		delta, ok := event["delta"].(string)
+		if !ok {
+			return nil, fmt.Errorf("response.function_call_arguments.delta")
+		}
+		out = append(out, map[string]any{"type": "content_block_delta", "index": state.ToolIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": delta}})
+	case "response.function_call_arguments.done":
 	case "response.output_item.done":
 		item, _ := event["item"].(map[string]any)
-		if itemType, _ := item["type"].(string); itemType == "reasoning" {
+		if itemType, _ := item["type"].(string); itemType == "function_call" {
+			if !state.ToolStarted || state.ToolCompleted {
+				return nil, fmt.Errorf("responses stream function_call completion is out of order")
+			}
+			state.ToolCompleted = true
+			out = append(out, map[string]any{"type": "content_block_stop", "index": state.ToolIndex})
+		} else if itemType == "reasoning" {
 			if !capability.Reasoning {
 				return nil, fmt.Errorf("responses stream item %q", itemType)
 			}
@@ -1874,7 +1908,10 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 		if typ == "response.incomplete" {
 			status = "incomplete"
 		}
-		if _, err := responsesTerminationToAnthropic(status, incompleteReason, false); err != nil {
+		if state.ToolStarted && !state.ToolCompleted {
+			return nil, fmt.Errorf("responses stream completed with unfinished function_call")
+		}
+		if _, err := responsesTerminationToAnthropic(status, incompleteReason, state.ToolCompleted); err != nil {
 			return nil, err
 		}
 		if usage, ok := response["usage"].(map[string]any); ok {
@@ -1882,10 +1919,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			state.OutputTokens = intNumber(usage["output_tokens"])
 		}
 		state.Completed = true
-		stopReason := "end_turn"
-		if status == "incomplete" {
-			stopReason, _ = responsesTerminationToAnthropic(status, incompleteReason, false)
-		}
+		stopReason, _ := responsesTerminationToAnthropic(status, incompleteReason, state.ToolCompleted)
 		out = append(out, map[string]any{"type": "content_block_stop", "index": 0}, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": state.OutputTokens}}, map[string]any{"type": "message_stop"})
 	default:
 		return nil, fmt.Errorf("responses stream event %q", typ)

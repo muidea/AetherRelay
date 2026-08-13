@@ -1,4 +1,4 @@
-.PHONY: help run build test fmt vet check release-package release clean
+.PHONY: help run build test fmt vet check check-codex release-package release clean
 
 BINARY ?= AetherRelay
 CMD ?= ./cmd/aetherrelay
@@ -13,6 +13,7 @@ help:
 	@printf '  %-10s %s\n' 'fmt' 'format Go source files'
 	@printf '  %-10s %s\n' 'vet' 'run go vet'
 	@printf '  %-10s %s\n' 'check' 'run fmt, vet, and test'
+	@printf '  %-10s %s\n' 'check-codex' 'run the Codex proxy maintenance contract checks'
 	@printf '  %-10s %s\n' 'release-package' 'build a native release archive (VERSION=vX.Y.Z)'
 	@printf '  %-10s %s\n' 'release' 'run checks and optionally publish a native release (VERSION=vX.Y.Z PUBLISH=1)'
 	@printf '  %-10s %s\n' 'clean' 'remove build artifacts'
@@ -33,6 +34,9 @@ vet:
 	$(GO) vet ./...
 
 check: fmt vet test
+
+check-codex:
+	scripts/check-codex-contract.sh
 
 release-package:
 	@test -n "$(VERSION)" || (echo 'VERSION=vX.Y.Z is required' >&2; exit 2)

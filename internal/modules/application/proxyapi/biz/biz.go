@@ -9,6 +9,8 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
 	basebiz "aetherrelay/internal/modules/base/biz"
+	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
+	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	metricsevents "aetherrelay/internal/modules/blocks/metricsruntime/pkg/events"
 	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
@@ -64,10 +66,11 @@ type Proxy struct {
 	discoveryJobsMu    sync.RWMutex
 	codexDiscoveryJobs map[string]proxyevents.CodexDiscoveryProgress
 	codexUsageJobs     map[string]proxyevents.CodexUsageProgress
+	codexWebsockets    map[string]codexWebsocketBinding
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {
-	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
+	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}, codexWebsockets: map[string]codexWebsocketBinding{}}
 	bootstrap, err := configevents.RequestBootstrap(ctx, biz.EventHub(), biz.ID())
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
@@ -118,6 +121,14 @@ func (s *Proxy) Run(ctx context.Context) *cd.Error {
 }
 
 func (s *Proxy) Teardown(context.Context) {
+	s.mu.Lock()
+	websockets := s.codexWebsockets
+	s.codexWebsockets = nil
+	s.mu.Unlock()
+	for sessionID, binding := range websockets {
+		_, _ = s.SendEvent(event.NewEvent(upevents.TopicWSClose, s.ID(), upcommon.UnitID, nil, upevents.WSCloseCommand{SessionID: sessionID})).Get()
+		s.releaseCodexAccount(context.Background(), binding.leaseID)
+	}
 	s.UnsubscribeFunc(proxyevents.TopicUpdateConfig)
 	s.UnsubscribeFunc(proxyevents.TopicEffectiveCatalog)
 	s.UnsubscribeFunc(proxyevents.TopicStartCodexDiscovery)

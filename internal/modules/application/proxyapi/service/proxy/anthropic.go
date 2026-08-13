@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
@@ -74,6 +75,10 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 	if round != nil && plan.IsConversion() {
 		round.SetTransportPlan(RouteLabel(r), plan.ClientEndpoint, plan.ClientProtocol, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
 		round.SetConversionLevel(plan.ConversionLevel)
+	}
+	if plan.Mode == TransportModeAnthropicToCodex && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
+		h.handleAnthropicToCodex(w, r, start, plan, model, stream, body)
+		return
 	}
 	candidates, preflightErr := h.prepareAnthropicMessageCandidates(plans, bodyBytes, body, stream, r.URL.RawQuery, r.Method)
 	if len(candidates) == 0 {

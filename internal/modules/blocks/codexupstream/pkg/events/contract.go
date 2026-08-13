@@ -3,9 +3,14 @@ package events
 
 const (
 	TopicComplete   = "aetherrelay.codex.upstream.command.complete"
+	TopicCompact    = "aetherrelay.codex.upstream.command.compact"
 	TopicStart      = "aetherrelay.codex.upstream.command.start"
 	TopicPull       = "aetherrelay.codex.upstream.command.pull"
 	TopicCancel     = "aetherrelay.codex.upstream.command.cancel"
+	TopicWSOpen     = "aetherrelay.codex.upstream.command.ws_open"
+	TopicWSSend     = "aetherrelay.codex.upstream.command.ws_send"
+	TopicWSPull     = "aetherrelay.codex.upstream.command.ws_pull"
+	TopicWSClose    = "aetherrelay.codex.upstream.command.ws_close"
 	TopicListModels = "aetherrelay.codex.upstream.command.list_models"
 	TopicGetUsage   = "aetherrelay.codex.upstream.command.get_usage"
 )
@@ -43,6 +48,7 @@ type CompleteCommand struct {
 	Proxy            string
 	Body             []byte
 	MaxResponseBytes int64
+	SessionHash      string
 }
 type CompleteResult struct {
 	Body              []byte
@@ -53,12 +59,24 @@ type CompleteResult struct {
 	RateLimit         RateLimitObservation
 }
 
+type CompactCommand struct {
+	AccessToken      string
+	AccountIDHeader  string
+	Proxy            string
+	Body             []byte
+	MaxResponseBytes int64
+	SessionHash      string
+}
+
+type CompactResult = CompleteResult
+
 type StartCommand struct {
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
 	Body            []byte
 	MaxLineBytes    int64
+	SessionHash     string
 }
 type StartResult struct {
 	StreamID          string
@@ -83,6 +101,38 @@ type PullResult struct {
 
 type CancelCommand struct{ StreamID string }
 type CancelResult struct{ Cancelled bool }
+
+type WSOpenCommand struct {
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+	MaxMessageBytes int64
+	SessionHash     string
+}
+type WSOpenResult struct {
+	SessionID  string
+	HTTPStatus int
+	ErrorClass ErrorClass
+}
+
+type WSSendCommand struct {
+	SessionID string
+	Payload   []byte
+}
+type WSSendResult struct{ Sent bool }
+
+type WSPullCommand struct {
+	SessionID     string
+	TimeoutMillis int
+}
+type WSPullResult struct {
+	Payload    []byte
+	Done       bool
+	ErrorClass ErrorClass
+}
+
+type WSCloseCommand struct{ SessionID string }
+type WSCloseResult struct{ Closed bool }
 
 // ListModelsCommand is intentionally credential-bearing only on the typed
 // EventHub path. It is never returned to an HTTP caller.

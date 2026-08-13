@@ -1,13 +1,40 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	usage "aetherrelay/internal/pkg/aetherrelayusage"
 )
+
+func TestUnsupportedCodexCompatibilityEndpointsReturnNotFound(t *testing.T) {
+	handler := NewHandler(mustHandlerConfig(config.Config{}), usage.NewMemoryStore(), nil, nil)
+	for _, testCase := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/v1/responses/ws"},
+		{method: http.MethodGet, path: "/backend-api/codex/responses"},
+		{method: http.MethodPost, path: "/backend-api/codex/responses"},
+		{method: http.MethodPost, path: "/backend-api/codex/responses/compact"},
+		{method: http.MethodGet, path: "/backend-api/codex/models"},
+		{method: http.MethodPost, path: "/backend-api/codex/models"},
+	} {
+		t.Run(testCase.method+" "+testCase.path, func(t *testing.T) {
+			request := httptest.NewRequest(testCase.method, testCase.path, nil)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("CP-EP-004..006/CP-EP-011..012 unsupported compatibility endpoint status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
 
 func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 	snap := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
@@ -25,6 +52,32 @@ func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("supported endpoints=%v, want %v", got, want)
 		}
+	}
+}
+
+func TestCodexModelSupportedEndpointsIncludeAdapterEntrypoints(t *testing.T) {
+	cfg := mustHandlerConfig(config.Config{})
+	snap := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}}})
+	got := modelSupportedEndpoints(snap, "gpt-codex", clientaccess.All())
+	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/compact"} {
+		found := false
+		for _, item := range got {
+			if item == path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("CP-EP-007..008 supported endpoints=%v missing %s", got, path)
+		}
+	}
+	response := buildModelsListResponse(snap, clientaccess.All())
+	if len(response.Data) != 1 || response.Data[0].Capabilities == nil || response.Data[0].Capabilities.Codex == nil {
+		t.Fatalf("CP-CAP-002/003 models=%#v", response.Data)
+	}
+	codex := response.Data[0].Capabilities.Codex
+	if codex.Compact != "supported" || codex.Websocket != "supported" || codex.FunctionTools != "unknown" || codex.ParallelTools != "unknown" || codex.ImageInput != "unknown" {
+		t.Fatalf("CP-CAP-002/003 codex=%#v", codex)
 	}
 }
 

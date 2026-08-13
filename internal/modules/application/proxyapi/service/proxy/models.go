@@ -35,7 +35,16 @@ type ModelRecord struct {
 type ModelCapabilities struct {
 	Reasoning   *ReasoningCapability    `json:"reasoning,omitempty"`
 	Native      *NativeCapabilities     `json:"native,omitempty"`
+	Codex       *CodexCapabilities      `json:"codex,omitempty"`
 	Conversions *ConversionCapabilities `json:"conversions,omitempty"`
+}
+
+type CodexCapabilities struct {
+	Compact       string `json:"compact"`
+	Websocket     string `json:"websocket"`
+	FunctionTools string `json:"function_tools"`
+	ParallelTools string `json:"parallel_tools"`
+	ImageInput    string `json:"image_input"`
 }
 type ConversionCapabilities struct {
 	ResponsesToAnthropic *ConversionCapability `json:"responses_to_anthropic,omitempty"`
@@ -107,7 +116,8 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	h.archiveAndLogClientRequest(round, r, len(bodyBytes))
 
 	identity := clientauth.ClientIdentityFromContext(r.Context())
-	payload := buildModelsListResponse(h.EffectiveCatalog(), identity.ProviderAccess)
+	snapshot := h.EffectiveCatalog()
+	payload := buildModelsListResponse(snapshot, identity.ProviderAccess)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		h.writeArchivedError(w, round, r, start, "", "", false, http.StatusInternalServerError, err.Error())
@@ -139,14 +149,26 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot, policy clientaccess
 			Object: "model",
 		}
 		rec.SupportedEndpoints = modelSupportedEndpoints(snap, id, policy)
+		if modelHasRouteOwner(snap, id, effectivecatalog.CodexOAuthProviderID, policy) {
+			rec.Capabilities = &ModelCapabilities{Codex: &CodexCapabilities{
+				Compact: "supported", Websocket: "supported", FunctionTools: "unknown", ParallelTools: "unknown", ImageInput: "unknown",
+			}}
+		}
 		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.ReasoningDeclared {
-			rec.Capabilities = &ModelCapabilities{Reasoning: &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}}
+			if rec.Capabilities == nil {
+				rec.Capabilities = &ModelCapabilities{}
+			}
+			rec.Capabilities.Reasoning = &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}
 		}
 		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.NativeResponsesDeclared {
 			if rec.Capabilities == nil {
 				rec.Capabilities = &ModelCapabilities{}
 			}
 			rec.Capabilities.Native = &NativeCapabilities{Responses: &NativeResponsesCapabilities{Tools: metadata.NativeResponsesTools, Images: metadata.NativeResponsesImages}}
+			if rec.Capabilities.Codex != nil {
+				rec.Capabilities.Codex.FunctionTools = capabilityState(metadata.NativeResponsesTools)
+				rec.Capabilities.Codex.ImageInput = capabilityState(metadata.NativeResponsesImages)
+			}
 		}
 		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok {
 			for endpoint, capability := range metadata.ConversionCapabilities {
@@ -187,6 +209,22 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot, policy clientaccess
 	return ModelsListResponse{Object: "list", Data: data}
 }
 
+func capabilityState(supported bool) string {
+	if supported {
+		return "supported"
+	}
+	return "unsupported"
+}
+
+func modelHasRouteOwner(snap effectivecatalog.Snapshot, modelID, owner string, policy clientaccess.Policy) bool {
+	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
+		if candidate.RouteOwner == owner {
+			return true
+		}
+	}
+	return false
+}
+
 func modelHasConversionDirection(snap effectivecatalog.Snapshot, modelID, direction string, policy clientaccess.Policy) bool {
 	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
 		for _, mode := range candidate.ConversionModes {
@@ -215,8 +253,11 @@ func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string, pol
 			seen[path] = true
 		}
 	}
+	if modelHasRouteOwner(snap, modelID, effectivecatalog.CodexOAuthProviderID, policy) {
+		seen["/v1/responses/compact"] = true
+	}
 	paths := []string{
-		"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/search",
+		"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/compact", "/v1/search",
 		"/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits",
 	}
 	result := make([]string, 0, len(paths))
