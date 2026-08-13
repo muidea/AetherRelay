@@ -403,6 +403,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	case string(codexresponses.KindProviderUnavailable):
 		status = http.StatusServiceUnavailable
 		code = ErrorCodeProviderUnavailable
+	case string(codexresponses.KindEndpoint):
+		status = http.StatusForbidden
+		code = ErrorCodeUpstreamUnavailable
 	case string(codexresponses.KindRateLimit):
 		status = http.StatusTooManyRequests
 	case string(codexresponses.KindTimeout):

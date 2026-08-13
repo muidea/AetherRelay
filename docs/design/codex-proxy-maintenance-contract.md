@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`3.3.0`
+> 合同版本：`3.4.0`
 >
 > 状态：`active`
 >
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -267,6 +267,8 @@
 
 `CP-FAIL-014` 原生 WebSocket 的账号结果按 turn terminal 登记，不按 socket close 登记。合法 completed/done/incomplete 记合法完成；failed/cancelled、transport/protocol error 记对应失败并保留 quota observation；客户端在 terminal 前关闭只释放 lease，不得伪造成功或清除 quota observation。
 
+`CP-FAIL-015` 上游 403 若响应体是 HTML/未结构化网关页面，必须分类为 endpoint-level failure：允许请求级 failover，但不得把账号标记为凭据异常或写入账号冷却。结构化 403 仍按账号/权限错误处理；两者均须保留最终真实 HTTP 状态。
+
 ## 10. 模型与能力目录
 
 `CP-CAP-001` 模型来自账号级 `/backend-api/codex/models` 快照；可路由目录是健康账号能力并集，但账号选择仍按账号自身快照过滤。
@@ -276,6 +278,8 @@
 `CP-CAP-003` 未探测能力使用 `unknown`，不能当作 `supported` 对外宣称；请求期可按明确的兼容策略尝试一次并缓存结果。Codex manifest 的客户端基础字段（`base_instructions`、`minimal_client_version`、`visibility`、`max_context_window`、`priority`、`service_tiers`、`supported_in_api`）必须存在；未知容量使用合同规定的保守默认值，不得把账号私有描述透传给客户端。
 
 `CP-CAP-004` `/v1/models` 与请求路由必须读取同一 effective catalog generation，不得分别拼接目录。
+
+`CP-CAP-005` 新鲜且明确标记 `LimitReached`、且 reset 尚未到期的账号用量窗口必须参与账号准入；未知、缺失或已过期快照不得阻止尝试。请求失败产生的 model cooldown 仍是更高优先级的即时事实。
 
 ## 11. 安全、资源与可观测性
 
@@ -332,6 +336,8 @@
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
+| 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
+| 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
 | Responses WebSocket | CP-EP-002, CP-WS-001..011 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go`, `magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |

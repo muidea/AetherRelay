@@ -490,6 +490,50 @@ func TestTransportCapabilitiesPrioritizeSupportedAndExcludeUnsupported(t *testin
 	}
 }
 
+func TestAcquireSkipsFreshExhaustedUsageSnapshot(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: "limited-access", RefreshToken: "limited-refresh"},
+		{AccessToken: "available-access", RefreshToken: "available-refresh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := store.List()
+	now := time.Now().UTC()
+	for _, item := range items {
+		if _, ok, err := store.PutModelSnapshot(item.ID, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := store.PutUsageSnapshot(items[0].ID, events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Windows: []events.UsageWindow{{ID: "primary", LimitReached: true, ResetAt: now.Add(time.Hour).Format(time.RFC3339)}}}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	acquired, err := store.AcquirePreferredTransport("gpt-test", nil, "", events.TransportResponses)
+	if err != nil || acquired.AccountID != items[1].ID {
+		t.Fatalf("acquired=%+v err=%v", acquired, err)
+	}
+}
+
+func TestAcquireAllowsExpiredExhaustedUsageSnapshot(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	now := time.Now().UTC()
+	if _, ok, err := store.PutModelSnapshot(id, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	if ok, err := store.PutUsageSnapshot(id, events.AccountUsageSnapshot{ObservedAt: now.Add(-time.Hour).Format(time.RFC3339), ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339), Windows: []events.UsageWindow{{ID: "primary", LimitReached: true, ResetAt: now.Add(time.Hour).Format(time.RFC3339)}}}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	if _, err := store.AcquirePreferredTransport("gpt-test", nil, "", events.TransportResponses); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func contains(value, needle string) bool {
 	for index := 0; index+len(needle) <= len(value); index++ {
 		if value[index:index+len(needle)] == needle {

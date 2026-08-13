@@ -30,6 +30,9 @@ const (
 	ErrorNetwork        ErrorClass = "network"
 	ErrorUpstream       ErrorClass = "upstream"
 	ErrorProtocol       ErrorClass = "protocol"
+	// ErrorEndpoint identifies a route/CDN/proxy-level response (for example an
+	// HTML 403) that must not be treated as an account credential failure.
+	ErrorEndpoint ErrorClass = "endpoint"
 )
 
 // RateLimitObservation is the bounded projection of an upstream limit error.

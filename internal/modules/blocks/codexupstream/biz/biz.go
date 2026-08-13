@@ -113,8 +113,8 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		observation, retryAfter, safeError := readErrorObservation(response)
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		body, observation, retryAfter, safeError := readErrorObservation(response)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, cmd.MaxResponseBytes+1))
@@ -389,8 +389,8 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		observation, retryAfter, safeError := readErrorObservation(response)
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		body, observation, retryAfter, safeError := readErrorObservation(response)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	completed, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
@@ -421,9 +421,9 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		observation, retryAfter, safeError := readErrorObservation(response)
+		body, observation, retryAfter, safeError := readErrorObservation(response)
 		_ = response.Body.Close()
-		result.Set(events.StartResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.StartResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	streamID := uuid.NewString()
@@ -1430,13 +1430,13 @@ func websocketTerminalFailure(payload []byte) (events.ErrorClass, events.RateLim
 	}
 }
 
-func readErrorObservation(response *http.Response) (events.RateLimitObservation, int, events.SafeError) {
+func readErrorObservation(response *http.Response) ([]byte, events.RateLimitObservation, int, events.SafeError) {
 	if response == nil || response.Body == nil {
-		return events.RateLimitObservation{}, 0, events.SafeError{}
+		return nil, events.RateLimitObservation{}, 0, events.SafeError{}
 	}
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	observation := rateLimitObservation(body, time.Now().UTC())
-	return observation, maxRetryAfter(retryAfterSeconds(response.Header), retryAfterFromObservation(observation)), safeUpstreamError(body)
+	return body, observation, maxRetryAfter(retryAfterSeconds(response.Header), retryAfterFromObservation(observation)), safeUpstreamError(body)
 }
 
 func safeUpstreamError(body []byte) events.SafeError {
@@ -1591,6 +1591,18 @@ func errorClassWithRateLimit(statusCode int, observation events.RateLimitObserva
 		return events.ErrorRateLimit
 	}
 	return classifyStatus(statusCode)
+}
+
+func errorClassWithBody(statusCode int, body []byte, observation events.RateLimitObservation) events.ErrorClass {
+	if statusCode == http.StatusForbidden && responseLooksHTML(body) {
+		return events.ErrorEndpoint
+	}
+	return errorClassWithRateLimit(statusCode, observation)
+}
+
+func responseLooksHTML(body []byte) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(string(body)))
+	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
 }
 
 func sendUpdate(ctx context.Context, stream *responseStream, update streamUpdate) bool {

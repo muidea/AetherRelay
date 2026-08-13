@@ -530,7 +530,7 @@ func retryableCodexFailure(failure *codexresponses.Failure) bool {
 		return false
 	}
 	switch failure.Kind {
-	case codexresponses.KindInvalidToken, codexresponses.KindRateLimit, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream:
+	case codexresponses.KindInvalidToken, codexresponses.KindRateLimit, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream, codexresponses.KindEndpoint:
 		return true
 	default:
 		return false
@@ -754,6 +754,8 @@ func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit up
 		failure = codexresponses.NewFailure(codexresponses.KindNetwork, retryAfter, fmt.Errorf("Codex upstream network failed"))
 	case upevents.ErrorProtocol:
 		failure = codexresponses.NewFailure(codexresponses.KindProtocol, retryAfter, fmt.Errorf("Codex upstream protocol failed"))
+	case upevents.ErrorEndpoint:
+		failure = codexresponses.NewFailure(codexresponses.KindEndpoint, retryAfter, fmt.Errorf("Codex upstream endpoint failed"))
 	default:
 		failure = codexresponses.NewFailure(codexresponses.KindUpstream, retryAfter, fmt.Errorf("Codex upstream failed"))
 	}

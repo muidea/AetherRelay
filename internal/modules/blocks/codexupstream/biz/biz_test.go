@@ -502,3 +502,12 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 		t.Fatalf("additional window=%+v", window)
 	}
 }
+
+func TestErrorClassifiesHTML403AsEndpoint(t *testing.T) {
+	if got := errorClassWithBody(http.StatusForbidden, []byte("<!doctype html><html>blocked</html>"), events.RateLimitObservation{}); got != events.ErrorEndpoint {
+		t.Fatalf("class=%q", got)
+	}
+	if got := errorClassWithBody(http.StatusForbidden, []byte(`{"error":{"type":"forbidden"}}`), events.RateLimitObservation{}); got != events.ErrorUpstream {
+		t.Fatalf("structured class=%q", got)
+	}
+}

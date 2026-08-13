@@ -377,7 +377,7 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 		excluded[strings.TrimSpace(id)] = struct{}{}
 	}
 	if preferred := s.items[strings.TrimSpace(preferredID)]; preferred != nil && preferred.Status == events.StatusNormal && strings.TrimSpace(preferred.AccessToken) != "" {
-		if _, found := excluded[preferred.ID]; !found && !cooling(preferred, model, now) && accountSupportsModel(preferred, model, now) && transportSupport(preferred, transport) == 1 {
+		if _, found := excluded[preferred.ID]; !found && !cooling(preferred, model, now) && !usageLimitCooling(preferred, now) && accountSupportsModel(preferred, model, now) && transportSupport(preferred, transport) == 1 {
 			preferred.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
@@ -392,7 +392,7 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 			if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" || transportSupport(item, transport) != tier {
 				continue
 			}
-			if _, found := excluded[item.ID]; found || cooling(item, model, now) || !accountSupportsModel(item, model, now) {
+			if _, found := excluded[item.ID]; found || cooling(item, model, now) || usageLimitCooling(item, now) || !accountSupportsModel(item, model, now) {
 				continue
 			}
 			s.index = (pos + 1) % len(s.order)
@@ -698,6 +698,34 @@ func cooling(item *account, model string, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// usageLimitCooling applies only to a fresh, explicit upstream quota snapshot.
+// Unknown or expired snapshots remain routable; request failures still create
+// the authoritative model cooldown in RecordResult.
+func usageLimitCooling(item *account, now time.Time) bool {
+	if item == nil || item.UsageSnapshot == nil {
+		return false
+	}
+	snapshot := normalizeUsageSnapshot(*item.UsageSnapshot)
+	if snapshot.ExpiresAt == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, snapshot.ExpiresAt)
+	if err != nil || !expiresAt.After(now) {
+		return false
+	}
+	for _, window := range snapshot.Windows {
+		if window.LimitReached && (window.ResetAt == "" || resetAfter(window.ResetAt, now)) {
+			return true
+		}
+	}
+	return false
+}
+
+func resetAfter(value string, now time.Time) bool {
+	resetAt, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	return err == nil && resetAt.After(now)
 }
 
 func parseExpiry(value string) (time.Time, bool) {
