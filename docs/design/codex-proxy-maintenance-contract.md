@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`2.3.0`
+> 合同版本：`2.4.0`
 >
 > 状态：`active`
 >
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -123,6 +123,8 @@
 | `client_metadata` | 只接受已知 Codex 键；当前敏感身份值 drop-compatible 并只审计键名 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
 | `metadata/user/safety_identifier` | drop-compatible | drop-compatible | `CP-REQ-018` |
+| `truncation/prompt_cache_options` | drop-compatible | drop-compatible | `CP-REQ-027` |
+| `service_tier` | 仅 `priority` pass；其它值 drop-compatible | 同左 | `CP-REQ-027` |
 | 图片/file/computer use | 原生 `input_image` pass；file/computer/image-generation bridge reject | 默认 reject | `CP-REQ-019` |
 
 `CP-REQ-020` system message 必须无损提升到 `instructions`。只有能证明文本语义已完整保留的转换入口，才可以从 `input` 删除被提升项；原生 Responses 默认保留为 developer message。
@@ -138,6 +140,8 @@
 `CP-REQ-025` Responses Lite 必须由精确为 true 的内部 header 或对应 `client_metadata` 信号识别。其 `reasoning.context` 必须固定为 `all_turns`；顶层 `namespace` 工具必须迁移到 `input.additional_tools`，按 `type + name` 去重，相同身份的冲突定义必须在访问账号前拒绝。
 
 `CP-REQ-026` 带 `compaction_trigger` 和 `remote_compaction_v2` beta 的请求仍是普通 `/responses` 流式请求，不得提升为 `/responses/compact`，不得删除 trigger 或改变 input 顺序。
+
+`CP-REQ-027` ChatGPT Codex 明确不支持但删除后仍保持标准执行语义的 `truncation`、`prompt_cache_options` 和非 `priority` `service_tier` 必须在账号选择前 drop-compatible；字段名进入有界 ignored-features 记录，字段值不得记录。
 
 ## 6. 上游身份与 Header 合同
 
@@ -176,6 +180,8 @@
 `CP-STREAM-004` SSE 允许的 terminal 是 `response.completed`、`response.incomplete`、`response.failed`。错误帧不能伪装成成功 completed。
 
 `CP-STREAM-005` 单个 SSE data 行或 WebSocket message 中若包含 2..16 个、总计不超过 16 MiB 的完整 Responses JSON 文档，必须按原顺序拆成独立事件。其它非法 JSON 必须进入协议错误路径，不能猜测修复。
+
+`CP-STREAM-006` 只有在当前 turn 已观察到语义 output、usage 或明确 error 时，`response.completed`/`response.done` 才能判成功。仅有前导事件和空 completed 是 silent refusal：HTTP 非流式和尚未向客户端提交业务事件的 SSE 必须允许切换账号；原生 WebSocket 必须返回明确失败，不得把空 turn 记为成功。
 
 `CP-COMPACT-001` compact 上游使用 `/backend-api/codex/responses/compact`，请求不得带普通 Responses 的 `stream`、`store` 或不受支持 `tool_choice`。
 
@@ -239,6 +245,10 @@
 
 `CP-FAIL-012` 同账号 refresh 使用 singleflight。成功 rotation 必须原子更新 access/refresh/id token 和 expires；失败不能破坏最近可用 access token。
 
+`CP-FAIL-013` 确定性 upstream 400 必须保持 HTTP 400 且不得切换账号。代理只允许从结构化 JSON 错误中投影经过长度限制和脱敏的 `type`、`code`、`param`、`message`；原始正文、未知字段和凭据形态不得跨 `codexupstream` Block。
+
+`CP-FAIL-014` 原生 WebSocket 的账号结果按 turn terminal 登记，不按 socket close 登记。合法 completed 记成功；failed/incomplete/cancelled、transport/protocol error 记对应失败；客户端在 terminal 前关闭只释放 lease，不得伪造成功或清除 quota observation。
+
 ## 10. 模型与能力目录
 
 `CP-CAP-001` 模型来自账号级 `/backend-api/codex/models` 快照；可路由目录是健康账号能力并集，但账号选择仍按账号自身快照过滤。
@@ -295,15 +305,15 @@
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..004 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..006 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..026 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
+| 请求兼容层 | CP-REQ-001..027 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `codexupstream/biz/identity.go` | `codexupstream/biz/biz_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
-| 扩展 failover | CP-FAIL-004..010 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
+| 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | Responses WebSocket | CP-EP-002, CP-WS-001..004, CP-WS-006 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go` | `codex_websocket_test.go`, `codexupstream/biz/biz_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |
@@ -328,6 +338,9 @@
 | `POST /backend-api/codex/models` | CLIProxyAPI `f43aad76` 与 sub2api `0e82efe48` 均无生产路由 | 无历史依据，拒绝 |
 | `POST /v1/models` | AetherRelay `2260888c` 已存在；参考实现与 Codex 客户端没有该 method 依据 | AetherRelay 通用历史兼容，不计入 Codex 合同 |
 | `POST /v1/chat/completions`、`POST /v1/messages` | AetherRelay `2260888c` 已存在，Codex 补全只新增协议转换 | AetherRelay adapter，不是 Codex 官方或历史直连端点 |
+| `prompt_cache_options`、`truncation`、`service_tier` 清洗 | CLIProxyAPI `2ab25eae` 明确记录 ChatGPT Codex 不支持 `prompt_cache_options`；`f43aad76` 的 Responses translator 同时删除 `truncation`，只保留 `priority` tier | 删除后不改变标准执行语义，按 `CP-REQ-027` drop-compatible |
+| 空 `response.completed` | sub2api `280c1c862` 的脱敏样本为 completed + empty output、无 usage/error，真实结果是 silent refusal | 按 `CP-STREAM-006` 在未提交业务输出前失败并允许 HTTP/SSE 切号；WS 返回明确失败 |
+| 确定性 upstream 400 | sub2api `591d47fb9` 覆盖 `invalid_function_parameters`、`missing_required_parameter` 等结构化 400 | 保持 400、不切号；只投影 `CP-FAIL-013` 允许的有界安全字段 |
 
 - `CP-WS-002` profile 来源：CLIProxyAPI `f43aad76` 的 `internal/runtime/executor/codex_websockets_connection.go`，验证 beta 值 `responses_websockets=2026-02-06`；测试只使用脱敏本地 WebSocket server。
 - 最新配置判定来源：OpenAI Docs `https://developers.openai.com/codex/config-reference/`，其中 `model_providers.<id>.base_url` 定义为模型 Provider API base URL，`chatgpt_base_url` 定义为 ChatGPT login flow base URL override。

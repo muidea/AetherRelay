@@ -111,8 +111,8 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		observation, retryAfter := readRateLimitObservation(response)
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
+		observation, retryAfter, safeError := readErrorObservation(response)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, cmd.MaxResponseBytes+1))
@@ -386,8 +386,8 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		observation, retryAfter := readRateLimitObservation(response)
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
+		observation, retryAfter, safeError := readErrorObservation(response)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	completed, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
@@ -418,9 +418,9 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		observation, retryAfter := readRateLimitObservation(response)
+		observation, retryAfter, safeError := readErrorObservation(response)
 		_ = response.Body.Close()
-		result.Set(events.StartResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation}, nil)
+		result.Set(events.StartResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithRateLimit(response.StatusCode, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	streamID := uuid.NewString()
@@ -536,12 +536,39 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 	pendingTerminal := false
 	pendingClass := events.ErrorClass("")
 	sawOutputDone := false
+	semanticOutput := false
+	pending := make([][]byte, 0, 8)
+	pendingBytes := 0
 	for {
 		line, err := readLine(reader, maxLine)
 		if len(line) > 0 {
 			for _, expanded := range expandCodexSSELine(line) {
-				if !sendUpdate(ctx, stream, streamUpdate{data: expanded}) {
+				semantic, emptyCompleted := codexStreamSemantics(expanded, semanticOutput)
+				if semantic {
+					semanticOutput = true
+				}
+				if emptyCompleted {
+					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorUpstream})
 					return
+				}
+				if !semanticOutput {
+					pendingBytes += len(expanded)
+					if pendingBytes > 1<<20 {
+						sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol})
+						return
+					}
+					pending = append(pending, bytes.Clone(expanded))
+				} else {
+					for _, buffered := range pending {
+						if !sendUpdate(ctx, stream, streamUpdate{data: buffered}) {
+							return
+						}
+					}
+					pending = nil
+					pendingBytes = 0
+					if !sendUpdate(ctx, stream, streamUpdate{data: expanded}) {
+						return
+					}
 				}
 				if done, class, observation := terminalOutcome(expanded); done {
 					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
@@ -558,6 +585,11 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if pendingTerminal {
+					for _, buffered := range pending {
+						if !sendUpdate(ctx, stream, streamUpdate{data: buffered}) {
+							return
+						}
+					}
 					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: pendingClass})
 				} else if sawOutputDone {
 					sendUpdate(ctx, stream, streamUpdate{done: true})
@@ -1038,6 +1070,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	reader := bufio.NewReader(response.Body)
 	var outputText strings.Builder
 	outputItems := map[int]json.RawMessage{}
+	semanticEvidence := false
 	for {
 		line, err := readLine(reader, 1<<20)
 		if len(line) > 0 {
@@ -1055,18 +1088,27 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 						OutputIndex int             `json:"output_index"`
 						Item        json.RawMessage `json:"item"`
 						Response    json.RawMessage `json:"response"`
+						Usage       json.RawMessage `json:"usage"`
+						Error       json.RawMessage `json:"error"`
 					}
 					if json.Unmarshal(payload, &event) == nil {
+						semanticEvidence = semanticEvidence || rawPresent(event.Usage) || rawPresent(event.Error)
 						switch event.Type {
 						case "response.output_text.delta":
 							outputText.WriteString(event.Delta)
+							semanticEvidence = semanticEvidence || event.Delta != ""
 						case "response.output_item.done":
 							if event.OutputIndex >= 0 && event.OutputIndex < 1024 && json.Valid(event.Item) {
 								outputItems[event.OutputIndex] = bytes.Clone(event.Item)
+								semanticEvidence = true
 							}
 						case "response.completed":
 							if len(event.Response) > 0 {
-								return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, nil
+								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
+								if responseObjectIsEmpty(completed) && !semanticEvidence {
+									return nil, events.ErrorUpstream, events.RateLimitObservation{}, fmt.Errorf("Codex upstream returned an empty response.completed")
+								}
+								return completed, "", events.RateLimitObservation{}, nil
 							}
 						case "response.failed", "response.incomplete":
 							observation := rateLimitObservation(payload, time.Now().UTC())
@@ -1161,6 +1203,71 @@ func outputHasItems(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &items) == nil && len(items) > 0
 }
 
+func responseObjectIsEmpty(raw []byte) bool {
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return true
+	}
+	var response struct {
+		Output json.RawMessage `json:"output"`
+		Usage  json.RawMessage `json:"usage"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(raw, &response) != nil {
+		return false
+	}
+	if len(bytes.TrimSpace(response.Usage)) > 0 && string(bytes.TrimSpace(response.Usage)) != "null" {
+		return false
+	}
+	if len(bytes.TrimSpace(response.Error)) > 0 && string(bytes.TrimSpace(response.Error)) != "null" {
+		return false
+	}
+	return !outputHasItems(response.Output)
+}
+
+func rawPresent(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && string(trimmed) != "null"
+}
+
+func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, emptyCompleted bool) {
+	trimmed := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(trimmed, "data:") {
+		return false, false
+	}
+	payload := []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+	var event struct {
+		Type     string          `json:"type"`
+		Delta    json.RawMessage `json:"delta"`
+		Item     json.RawMessage `json:"item"`
+		Usage    json.RawMessage `json:"usage"`
+		Error    json.RawMessage `json:"error"`
+		Response json.RawMessage `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false, false
+	}
+	switch event.Type {
+	case "response.completed", "response.done":
+		if semanticOutputSeen {
+			return true, false
+		}
+		empty := responseObjectIsEmpty(event.Response)
+		return !empty, empty
+	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+		return true, false
+	case "response.created", "response.in_progress", "response.queued":
+		return false, false
+	}
+	if len(bytes.TrimSpace(event.Usage)) > 0 && string(bytes.TrimSpace(event.Usage)) != "null" ||
+		len(bytes.TrimSpace(event.Error)) > 0 && string(bytes.TrimSpace(event.Error)) != "null" {
+		return true, false
+	}
+	if strings.Contains(event.Type, "output") || strings.Contains(event.Type, "tool_call") || strings.HasSuffix(event.Type, ".delta") {
+		return true, false
+	}
+	return false, false
+}
+
 func readLine(reader *bufio.Reader, limit int64) ([]byte, error) {
 	if limit <= 0 {
 		limit = 1 << 20
@@ -1232,13 +1339,65 @@ func terminalOutcome(line []byte) (bool, events.ErrorClass, events.RateLimitObse
 	return true, class, observation
 }
 
-func readRateLimitObservation(response *http.Response) (events.RateLimitObservation, int) {
+func readErrorObservation(response *http.Response) (events.RateLimitObservation, int, events.SafeError) {
 	if response == nil || response.Body == nil {
-		return events.RateLimitObservation{}, 0
+		return events.RateLimitObservation{}, 0, events.SafeError{}
 	}
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	observation := rateLimitObservation(body, time.Now().UTC())
-	return observation, maxRetryAfter(retryAfterSeconds(response.Header), retryAfterFromObservation(observation))
+	return observation, maxRetryAfter(retryAfterSeconds(response.Header), retryAfterFromObservation(observation)), safeUpstreamError(body)
+}
+
+func safeUpstreamError(body []byte) events.SafeError {
+	var payload struct {
+		Error struct {
+			Type    string          `json:"type"`
+			Code    string          `json:"code"`
+			Param   json.RawMessage `json:"param"`
+			Message string          `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return events.SafeError{}
+	}
+	param := strings.Trim(strings.TrimSpace(string(payload.Error.Param)), `"`)
+	return events.SafeError{
+		Type:    safeErrorToken(payload.Error.Type, 64),
+		Code:    safeErrorToken(payload.Error.Code, 96),
+		Param:   safeErrorToken(param, 256),
+		Message: safeErrorText(payload.Error.Message, 512),
+	}
+}
+
+func safeErrorToken(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) > limit {
+		value = value[:limit]
+	}
+	for _, char := range value {
+		if !(char == '_' || char == '-' || char == '.' || char == '[' || char == ']' || char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z') {
+			return ""
+		}
+	}
+	return value
+}
+
+func safeErrorText(value string, limit int) string {
+	value = strings.Map(func(char rune) rune {
+		if char < 0x20 || char == 0x7f {
+			return ' '
+		}
+		return char
+	}, strings.TrimSpace(value))
+	for _, marker := range []string{"bearer ", "authorization", "api_key", "access_token", "refresh_token", "cookie", "sk-", "sess-"} {
+		if strings.Contains(strings.ToLower(value), marker) {
+			return ""
+		}
+	}
+	if len(value) > limit {
+		value = value[:limit]
+	}
+	return strings.TrimSpace(value)
 }
 
 func rateLimitObservationFromLine(line []byte, now time.Time) events.RateLimitObservation {

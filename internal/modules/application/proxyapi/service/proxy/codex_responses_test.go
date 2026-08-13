@@ -212,6 +212,44 @@ func TestCodexOAuthDropsCompatibleMaxOutputTokensBeforeUpstream(t *testing.T) {
 	}
 }
 
+func TestCodexOAuthDropsUnsupportedCacheAndTierFields(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","input":"hello","truncation":"auto","prompt_cache_options":{"mode":"implicit"},"service_tier":"standard"}`)
+	normalized, _, ignored, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"truncation", "prompt_cache_options", "service_tier"} {
+		if bytes.Contains(normalized, []byte(`"`+field+`"`)) || !slices.Contains(ignored, field) {
+			t.Fatalf("CP-REQ-027 field=%s ignored=%v body=%s", field, ignored, normalized)
+		}
+	}
+	priority, _, ignored, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","input":"hello","service_tier":"priority"}`), false)
+	if err != nil || !bytes.Contains(priority, []byte(`"service_tier":"priority"`)) || slices.Contains(ignored, "service_tier") {
+		t.Fatalf("CP-REQ-027 priority ignored=%v body=%s err=%v", ignored, priority, err)
+	}
+}
+
+func TestCodexOAuthProjectsSafeUpstreamInvalidRequest(t *testing.T) {
+	failure := codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("rejected"))
+	failure.HTTPStatus = http.StatusBadRequest
+	failure.UpstreamType = "invalid_request_error"
+	failure.UpstreamCode = "invalid_function_parameters"
+	failure.UpstreamParam = "input[1].tools[2]"
+	failure.UpstreamMessage = "Invalid schema"
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+		return codexresponses.Result{}, failure
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	for _, expected := range []string{`"type":"invalid_request_error"`, `"code":"invalid_function_parameters"`, `"param":"input[1].tools[2]"`, `"message":"Invalid schema"`} {
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("CP-FAIL-013 expected=%s status=%d body=%s", expected, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestCodexOAuthProjectsKnownClientMetadataBeforeUpstream(t *testing.T) {
 	var received codexresponses.Request
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {

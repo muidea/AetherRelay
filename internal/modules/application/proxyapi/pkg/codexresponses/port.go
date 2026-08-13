@@ -56,6 +56,10 @@ type Failure struct {
 	RetryAfterSeconds int
 	QuotaExhausted    bool
 	QuotaResetAt      string
+	UpstreamType      string
+	UpstreamCode      string
+	UpstreamParam     string
+	UpstreamMessage   string
 	Err               error
 }
 

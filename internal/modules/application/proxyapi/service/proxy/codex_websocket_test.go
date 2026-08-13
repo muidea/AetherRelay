@@ -32,7 +32,7 @@ func TestCodexWebsocketAuthenticatesAndForwardsFirstTurn(t *testing.T) {
 			return nil
 		},
 		wsPull: func(context.Context, string) ([]byte, bool, error) {
-			return []byte(`{"type":"response.completed","response":{"id":"resp_ws"}}`), false, nil
+			return []byte(`{"type":"response.completed","response":{"id":"resp_ws","usage":{"input_tokens":1,"output_tokens":1}}}`), false, nil
 		},
 		wsClose: func(context.Context, string) { closed <- struct{}{} },
 	}
@@ -86,7 +86,7 @@ func TestCodexWebsocketRejectsUnauthenticatedUpgrade(t *testing.T) {
 }
 
 func TestCodexWebsocketDoneNormalizesToCompletedTerminal(t *testing.T) {
-	payload := normalizeCodexWebsocketEvent([]byte(`{"type":"response.done","response":{"id":"resp-1"}}`))
+	payload := normalizeCodexWebsocketEvent([]byte(`{"type":"response.done","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1}}}`))
 	if !codexWebsocketTerminal(payload) || !bytes.Contains(payload, []byte(`"type":"response.completed"`)) {
 		t.Fatalf("normalized terminal=%s", payload)
 	}
@@ -103,7 +103,7 @@ func TestCodexWebsocketForwardsCustomNamespaceTools(t *testing.T) {
 			return nil
 		},
 		wsPull: func(context.Context, string) ([]byte, bool, error) {
-			return []byte(`{"type":"response.completed","response":{"id":"resp_ws_tools"}}`), false, nil
+			return []byte(`{"type":"response.completed","response":{"id":"resp_ws_tools","usage":{"input_tokens":1,"output_tokens":1}}}`), false, nil
 		},
 	}
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
@@ -141,9 +141,9 @@ func TestCodexWebsocketForwardsIncrementalToolContinuation(t *testing.T) {
 		wsPull: func(context.Context, string) ([]byte, bool, error) {
 			pulls++
 			if pulls == 1 {
-				return []byte(`{"type":"response.completed","response":{"id":"resp-1"}}`), false, nil
+				return []byte(`{"type":"response.completed","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1}}}`), false, nil
 			}
-			return []byte(`{"type":"response.completed","response":{"id":"resp-2"}}`), false, nil
+			return []byte(`{"type":"response.completed","response":{"id":"resp-2","usage":{"input_tokens":1,"output_tokens":1}}}`), false, nil
 		},
 	}
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)

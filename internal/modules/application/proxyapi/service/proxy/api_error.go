@@ -51,6 +51,7 @@ type APIError struct {
 	ClientProtocol      string   `json:"client_protocol,omitempty"`
 	UpstreamProtocol    string   `json:"upstream_protocol,omitempty"`
 	Feature             string   `json:"feature,omitempty"`
+	Param               string   `json:"param,omitempty"`
 	UnsupportedFeatures []string `json:"unsupported_features,omitempty"`
 }
 

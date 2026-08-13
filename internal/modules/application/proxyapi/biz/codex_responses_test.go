@@ -18,6 +18,55 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
+func TestCodexWebsocketTurnOutcomeRequiresNonEmptyCompleted(t *testing.T) {
+	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.completed","response":{"output":[]}}`)); success || !terminal || class != accevents.ErrorUpstream {
+		t.Fatalf("CP-STREAM-006 empty success=%v terminal=%v class=%q", success, terminal, class)
+	}
+	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.completed","response":{"output":[],"usage":{"input_tokens":1,"output_tokens":0}}}`)); !success || !terminal || class != "" {
+		t.Fatalf("CP-FAIL-014 usage success=%v terminal=%v class=%q", success, terminal, class)
+	}
+	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.failed","response":{"error":{"message":"failed"}}}`)); success || !terminal || class != accevents.ErrorUpstream {
+		t.Fatalf("CP-FAIL-014 failed success=%v terminal=%v class=%q", success, terminal, class)
+	}
+}
+
+func TestCloseCodexWebsocketDoesNotInventAccountSuccess(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(4)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	recorded := make(chan accevents.RecordResultCommand, 2)
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicWSClose, func(_ event.Event, result event.Result) { result.Set(upevents.WSCloseResult{Closed: true}, nil) })
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexWebsockets: map[string]codexWebsocketBinding{
+		"session": {leaseID: "lease", accountID: "account", model: "gpt-test"},
+	}}
+	proxy.CloseCodexWebsocket(context.Background(), "session")
+	select {
+	case command := <-recorded:
+		t.Fatalf("CP-FAIL-014 close invented result=%+v", command)
+	default:
+	}
+
+	proxy.codexWebsockets["completed"] = codexWebsocketBinding{leaseID: "lease-2", accountID: "account", model: "gpt-test"}
+	proxy.recordCodexWebsocketTurn(context.Background(), "completed", true, "")
+	proxy.CloseCodexWebsocket(context.Background(), "completed")
+	command := <-recorded
+	if !command.Success {
+		t.Fatalf("CP-FAIL-014 completed result=%+v", command)
+	}
+	select {
+	case duplicate := <-recorded:
+		t.Fatalf("CP-FAIL-014 duplicate result=%+v", duplicate)
+	default:
+	}
+}
+
 func TestCompleteCodexResponsesSwitchesBeforeOutputForRetryableStatuses(t *testing.T) {
 	tests := []struct {
 		name       string

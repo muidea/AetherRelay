@@ -138,7 +138,11 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		terminal, forwardErr := h.forwardCodexWebsocketTurn(ctx, conn, sessionID)
-		if forwardErr != nil || !terminal {
+		if forwardErr != nil {
+			writeCodexWebsocketError(conn, "upstream_failed", forwardErr.Error())
+			return
+		}
+		if !terminal {
 			return
 		}
 		succeeded = true
@@ -213,7 +217,6 @@ func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket
 	for {
 		payload, done, err := h.codexResponses.PullCodexWebsocket(ctx, sessionID)
 		if err != nil {
-			writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket upstream failed")
 			return false, err
 		}
 		if len(payload) > 0 {

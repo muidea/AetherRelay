@@ -39,6 +39,15 @@ type RateLimitObservation struct {
 	ResetAt      string
 }
 
+// SafeError is the bounded, redacted projection of a structured upstream
+// client error. Raw response bodies never cross the codexupstream boundary.
+type SafeError struct {
+	Type    string
+	Code    string
+	Param   string
+	Message string
+}
+
 // CompleteCommand and StartCommand deliberately carry bounded source-wire JSON
 // as bytes. This preserves native Responses objects without map/any EventHub
 // envelopes or a lossy proxy-side protocol translation.
@@ -59,6 +68,7 @@ type CompleteResult struct {
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
 	RateLimit         RateLimitObservation
+	SafeError         SafeError
 }
 
 type CompactCommand struct {
@@ -91,6 +101,7 @@ type StartResult struct {
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
 	RateLimit         RateLimitObservation
+	SafeError         SafeError
 }
 
 type PullCommand struct {

@@ -55,7 +55,7 @@ func codexIgnoredHeaderNames(r *http.Request) []string {
 var codexDropCompatibleFields = []string{
 	"max_output_tokens", "max_completion_tokens", "temperature", "top_p",
 	"frequency_penalty", "presence_penalty", "user", "metadata",
-	"prompt_cache_retention", "safety_identifier", "stream_options",
+	"prompt_cache_retention", "prompt_cache_options", "safety_identifier", "stream_options", "truncation",
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
@@ -162,6 +162,15 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		if _, ok := body[field]; ok {
 			delete(body, field)
 			ignored = append(ignored, field)
+		}
+	}
+	if tier, exists := body["service_tier"]; exists {
+		value, ok := tier.(string)
+		if !ok || strings.TrimSpace(value) != "priority" {
+			delete(body, "service_tier")
+			ignored = append(ignored, "service_tier")
+		} else {
+			body["service_tier"] = "priority"
 		}
 	}
 	encoded, err := json.Marshal(body)

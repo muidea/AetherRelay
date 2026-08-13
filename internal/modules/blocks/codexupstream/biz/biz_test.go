@@ -104,6 +104,34 @@ func TestCompletedResponseSupportsJSONAndSSE(t *testing.T) {
 	}
 }
 
+func TestCompletedResponseRejectsEmptyCompletedWithoutUsageOrOutput(t *testing.T) {
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\"}}\n\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[]}}\n\n"))}
+	_, class, _, err := completedResponse(response, 4096)
+	if err == nil || class != events.ErrorUpstream {
+		t.Fatalf("CP-STREAM-006 class=%q err=%v", class, err)
+	}
+
+	usageOnly := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_usage\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n"))}
+	value, class, _, err := completedResponse(usageOnly, 4096)
+	if err != nil || class != "" || !strings.Contains(string(value), `"input_tokens":3`) {
+		t.Fatalf("CP-STREAM-006 usage-only value=%s class=%q err=%v", value, class, err)
+	}
+}
+
+func TestSafeUpstreamErrorIsBoundedAndRedacted(t *testing.T) {
+	safe := safeUpstreamError([]byte(`{"error":{"type":"invalid_request_error","code":"invalid_function_parameters","param":"input[1].tools[2]","message":"Invalid schema"}}`))
+	if safe.Type != "invalid_request_error" || safe.Code != "invalid_function_parameters" || safe.Param != "input[1].tools[2]" || safe.Message != "Invalid schema" {
+		t.Fatalf("CP-FAIL-013 safe=%+v", safe)
+	}
+	redacted := safeUpstreamError([]byte(`{"error":{"message":"Authorization: Bearer secret"}}`))
+	if redacted.Message != "" {
+		t.Fatalf("CP-FAIL-013 secret message=%q", redacted.Message)
+	}
+}
+
 func TestCompletedResponseRebuildsFunctionCallOutputItem(t *testing.T) {
 	stream := "event: response.output_item.done\n" +
 		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"arguments\":\"{\\\"city\\\":\\\"Shanghai\\\"}\",\"call_id\":\"call_1\",\"name\":\"lookup_city\"}}\n\n" +

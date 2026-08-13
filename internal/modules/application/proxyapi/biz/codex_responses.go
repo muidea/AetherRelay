@@ -1,7 +1,9 @@
 package biz
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -17,9 +19,11 @@ import (
 )
 
 type codexWebsocketBinding struct {
-	leaseID   string
-	accountID string
-	model     string
+	leaseID        string
+	accountID      string
+	model          string
+	resultRecorded bool
+	turnEvidence   bool
 }
 
 func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
@@ -79,11 +83,21 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 }
 
 func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payload []byte) error {
+	s.mu.Lock()
+	binding, found := s.codexWebsockets[sessionID]
+	if found {
+		binding.resultRecorded = false
+		binding.turnEvidence = false
+		s.codexWebsockets[sessionID] = binding
+	}
+	s.mu.Unlock()
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload})).Get()
 	if err != nil {
+		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorUpstream)
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket send failed"))
 	}
 	if sent, ok := value.(upevents.WSSendResult); !ok || !sent.Sent {
+		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket send result"))
 	}
 	return nil
@@ -92,14 +106,35 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) ([]byte, bool, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSPullCommand{SessionID: sessionID, TimeoutMillis: 1000})).Get()
 	if err != nil {
+		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorUpstream)
 		return nil, false, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket pull failed"))
 	}
 	update, ok := value.(upevents.WSPullResult)
 	if !ok {
+		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
 		return nil, false, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket update"))
 	}
 	if update.ErrorClass != "" {
-		return nil, update.Done, failureFromUpstream(update.ErrorClass, 0, upevents.RateLimitObservation{}, 0)
+		failure := failureFromUpstream(update.ErrorClass, 0, upevents.RateLimitObservation{}, 0, upevents.SafeError{})
+		s.recordCodexWebsocketTurn(ctx, sessionID, false, string(failure.Kind))
+		return nil, update.Done, failure
+	}
+	if len(update.Payload) > 0 {
+		evidence := codexWebsocketPayloadHasEvidence(update.Payload)
+		s.mu.Lock()
+		binding, found := s.codexWebsockets[sessionID]
+		if found && evidence {
+			binding.turnEvidence = true
+			s.codexWebsockets[sessionID] = binding
+		}
+		turnEvidence := found && binding.turnEvidence
+		s.mu.Unlock()
+		if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence(update.Payload, turnEvidence); terminal {
+			s.recordCodexWebsocketTurn(ctx, sessionID, success, class)
+			if !success && codexWebsocketEmptyCompleted(update.Payload) && !turnEvidence {
+				return nil, true, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream returned an empty response.completed"))
+			}
+		}
 	}
 	return update.Payload, update.Done, nil
 }
@@ -112,8 +147,101 @@ func (s *Proxy) CloseCodexWebsocket(ctx context.Context, sessionID string) {
 	_, _ = s.SendEvent(event.NewEventWithContext(upevents.TopicWSClose, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.WSCloseCommand{SessionID: sessionID})).Get()
 	if found {
 		s.releaseCodexAccount(ctx, binding.leaseID)
-		s.recordCodexResult(ctx, binding.accountID, binding.model, true, "", 0, false, "")
 	}
+}
+
+func (s *Proxy) recordCodexWebsocketTurn(ctx context.Context, sessionID string, success bool, class string) {
+	s.mu.Lock()
+	binding, found := s.codexWebsockets[sessionID]
+	shouldRecord := found && !binding.resultRecorded
+	if shouldRecord {
+		binding.resultRecorded = true
+		s.codexWebsockets[sessionID] = binding
+	}
+	s.mu.Unlock()
+	if shouldRecord {
+		s.recordCodexResult(ctx, binding.accountID, binding.model, success, class, 0, false, "")
+	}
+}
+
+func codexWebsocketTurnOutcome(payload []byte) (success, terminal bool, class string) {
+	return codexWebsocketTurnOutcomeWithEvidence(payload, false)
+}
+
+func codexWebsocketTurnOutcomeWithEvidence(payload []byte, turnEvidence bool) (success, terminal bool, class string) {
+	var event struct {
+		Type     string          `json:"type"`
+		Response json.RawMessage `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false, false, ""
+	}
+	switch event.Type {
+	case "response.completed", "response.done":
+		if codexResponseObjectEmpty(event.Response) && !turnEvidence {
+			return false, true, accevents.ErrorUpstream
+		}
+		return true, true, ""
+	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+		return false, true, accevents.ErrorUpstream
+	default:
+		return false, false, ""
+	}
+}
+
+func codexWebsocketPayloadHasEvidence(payload []byte) bool {
+	var event struct {
+		Type      string          `json:"type"`
+		Delta     json.RawMessage `json:"delta"`
+		Item      json.RawMessage `json:"item"`
+		Usage     json.RawMessage `json:"usage"`
+		Error     json.RawMessage `json:"error"`
+		Arguments json.RawMessage `json:"arguments"`
+		Input     json.RawMessage `json:"input"`
+		Response  json.RawMessage `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	if event.Type == "response.completed" || event.Type == "response.done" {
+		return !codexResponseObjectEmpty(event.Response)
+	}
+	if event.Type == "response.created" || event.Type == "response.in_progress" || event.Type == "response.queued" {
+		return false
+	}
+	return rawJSONPresent(event.Delta) || rawJSONPresent(event.Item) || rawJSONPresent(event.Usage) || rawJSONPresent(event.Error) ||
+		rawJSONPresent(event.Arguments) || rawJSONPresent(event.Input)
+}
+
+func rawJSONPresent(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && string(trimmed) != "null" && string(trimmed) != `""`
+}
+
+func codexWebsocketEmptyCompleted(payload []byte) bool {
+	var event struct {
+		Type     string          `json:"type"`
+		Response json.RawMessage `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) != nil || event.Type != "response.completed" && event.Type != "response.done" {
+		return false
+	}
+	return codexResponseObjectEmpty(event.Response)
+}
+
+func codexResponseObjectEmpty(raw json.RawMessage) bool {
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return true
+	}
+	var response struct {
+		Output []json.RawMessage `json:"output"`
+		Usage  json.RawMessage   `json:"usage"`
+		Error  json.RawMessage   `json:"error"`
+	}
+	if json.Unmarshal(raw, &response) != nil {
+		return false
+	}
+	return len(response.Output) == 0 && !rawJSONPresent(response.Usage) && !rawJSONPresent(response.Error)
 }
 
 func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexresponses.Request) (codexresponses.Result, error) {
@@ -207,7 +335,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
 			return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 		}
-		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus)
+		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
 		lastFailure = failure
 		if transportExplicitlyUnsupported(accevents.TransportCompact, completed.HTTPStatus) {
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, false)
@@ -404,7 +532,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex upstream result"))
 	}
 	if completed.ErrorClass != "" {
-		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus)
+		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
 	}
 	s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
@@ -422,7 +550,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	if startedUpstream.ErrorClass != "" {
-		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus)
+		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus, startedUpstream.SafeError)
 	}
 	s.mergeCodexUsageHeaders(ctx, account.AccountID, startedUpstream.Headers)
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
@@ -538,7 +666,7 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 	}
 	return result
 }
-func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int) *codexresponses.Failure {
+func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int, safeErrors ...upevents.SafeError) *codexresponses.Failure {
 	var failure *codexresponses.Failure
 	switch class {
 	case upevents.ErrorInvalidRequest:
@@ -561,6 +689,12 @@ func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit up
 		failure = codexresponses.NewFailure(codexresponses.KindUpstream, retryAfter, fmt.Errorf("Codex upstream failed"))
 	}
 	failure.HTTPStatus = httpStatus
+	if len(safeErrors) > 0 {
+		failure.UpstreamType = safeErrors[0].Type
+		failure.UpstreamCode = safeErrors[0].Code
+		failure.UpstreamParam = safeErrors[0].Param
+		failure.UpstreamMessage = safeErrors[0].Message
+	}
 	return failure
 }
 func clientFailure(err error) error {
