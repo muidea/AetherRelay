@@ -276,6 +276,36 @@ func TestStreamCodexResponsesNeverSwitchesAfterBusinessOutput(t *testing.T) {
 	}
 }
 
+func TestStreamCodexResponsesStartsClientOnlyOnFirstEmittedEvent(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	acquires := 0
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		acquires++
+		if acquires > 1 {
+			result.Set(nil, cd.NewError(cd.NotFound, "exhausted"))
+			return
+		}
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "token", LeaseID: "lease-1"}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicStart, func(_ event.Event, result event.Result) { result.Set(upevents.StartResult{StreamID: "stream-1"}, nil) })
+	upstream.Subscribe(upevents.TopicPull, func(_ event.Event, result event.Result) {
+		result.Set(upevents.PullResult{Done: true, ErrorClass: upevents.ErrorRateLimit}, nil)
+	})
+	upstream.Subscribe(upevents.TopicCancel, func(_ event.Event, result event.Result) { result.Set(upevents.CancelResult{Cancelled: true}, nil) })
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	started := 0
+	err := proxy.StreamCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, func(codexresponses.StreamStart) error { started++; return nil }, nil)
+	if err == nil || started != 0 {
+		t.Fatalf("CP-STREAM-009 started=%d err=%v", started, err)
+	}
+}
+
 func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 	hub := event.NewHub(16)
 	background := task.NewBackgroundRoutine(8)

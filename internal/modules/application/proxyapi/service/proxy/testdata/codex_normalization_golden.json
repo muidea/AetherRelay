@@ -6,6 +6,12 @@
     "expected": {"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"reasoning":{"effort":"medium"},"include":["reasoning.encrypted_content"],"stream":true,"store":false}
   },
   {
+    "name": "sequential cutoff reasoning summary",
+    "compact": false,
+    "input": {"model":"gpt-test","input":"hello","stream_options":{"reasoning_summary_delivery":"sequential_cutoff","include_usage":true}},
+    "expected": {"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"stream_options":{"reasoning_summary_delivery":"sequential_cutoff"},"stream":true,"store":false}
+  },
+  {
     "name": "compact",
     "compact": true,
     "input": {"model":"gpt-test","stream":true,"store":true,"tool_choice":"auto","input":[{"type":"compaction_trigger"}]},

@@ -1,12 +1,12 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`2.4.0`
+> 合同版本：`2.6.0`
 >
 > 状态：`active`
 >
 > 生效日期：2026-08-13
 >
-> 参考基线：AetherRelay `fca77b1`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
+> 参考基线：AetherRelay `f7c61d2`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -122,6 +122,7 @@
 | `prompt_cache_key` | 规范化并绑定 session | 保留适用值 | `CP-REQ-015` |
 | `client_metadata` | 只接受已知 Codex 键；当前敏感身份值 drop-compatible 并只审计键名 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
+| `stream_options` | 仅保留已验证的 `reasoning_summary_delivery=sequential_cutoff`；其它键 drop-compatible | 删除 | `CP-REQ-028` |
 | `metadata/user/safety_identifier` | drop-compatible | drop-compatible | `CP-REQ-018` |
 | `truncation/prompt_cache_options` | drop-compatible | drop-compatible | `CP-REQ-027` |
 | `service_tier` | 仅 `priority` pass；其它值 drop-compatible | 同左 | `CP-REQ-027` |
@@ -142,6 +143,8 @@
 `CP-REQ-026` 带 `compaction_trigger` 和 `remote_compaction_v2` beta 的请求仍是普通 `/responses` 流式请求，不得提升为 `/responses/compact`，不得删除 trigger 或改变 input 顺序。
 
 `CP-REQ-027` ChatGPT Codex 明确不支持但删除后仍保持标准执行语义的 `truncation`、`prompt_cache_options` 和非 `priority` `service_tier` 必须在账号选择前 drop-compatible；字段名进入有界 ignored-features 记录，字段值不得记录。
+
+`CP-REQ-028` 普通流式 Responses 只允许 `stream_options.reasoning_summary_delivery` 的已验证值 `sequential_cutoff` 进入上游；`include_usage` 等其它键删除。未知值或错误类型必须在账号选择前拒绝，不能静默改变 reasoning summary 的事件交付语义。
 
 ## 6. 上游身份与 Header 合同
 
@@ -186,6 +189,8 @@
 `CP-STREAM-007` `response.incomplete` 是有界生成、内容过滤等原因形成的合法非成功完成状态，不是账号或 transport 失败。原生 Responses 必须原样保留；Chat/Messages adapter 必须映射对应 finish/stop reason。
 
 `CP-STREAM-008` created/in_progress、空 delta、空 output/tool 骨架和可重试 error 不算已向客户端产生业务输出。HTTP 200 后、首个真实业务输出前收到 usage limit、capacity、认证、限流或 transport terminal error 时，必须先分类并允许按失败规则切换账号；已有真实输出时只能转发安全终态，禁止重放。
+
+`CP-STREAM-009` 普通 Responses SSE 不得仅因上游返回 HTTP 200 就提交下游 200；必须等首个实际转发事件。账号在输出前全部失败时返回真实 HTTP error；已提交后发生无 terminal 的 transport/protocol failure 时必须合成一个有界 `response.failed`。业务 terminal 的成败只由 codexupstream typed result 裁决，HTTP emit 回调不得把 incomplete/failed 重分类为 client write。
 
 `CP-COMPACT-001` compact 上游使用 `/backend-api/codex/responses/compact`，请求不得带普通 Responses 的 `stream`、`store` 或不受支持 `tool_choice`。
 
@@ -311,7 +316,7 @@
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..008 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..009 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |

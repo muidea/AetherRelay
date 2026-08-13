@@ -218,6 +218,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	maxStream, _ := h.streamLimits()
 	accumulator.SetMaxContent(maxStream)
 	var total int64
+	terminalObserved := false
 	startStream := func(info codexresponses.StreamStart) error {
 		if streamStarted {
 			return nil
@@ -234,15 +235,13 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 			return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("stream exceeds limit of %d bytes", maxStream))
 		}
 		accumulator.TrackSSELine(line)
+		terminalObserved = terminalObserved || parseTerminalSSELine(streamProtoResponses, line).Terminal
 		archive.Write(line)
 		if _, err := w.Write(line); err != nil {
 			return err
 		}
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
-		}
-		if failure := streamFailFromTerminal(parseTerminalSSELine(streamProtoResponses, line)); failure != nil {
-			return codexresponses.NewFailure(codexresponses.KindUpstream, 0, failure)
 		}
 		return nil
 	}
@@ -253,6 +252,14 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		failure := streamFailFromCodexError(err)
+		if !terminalObserved {
+			terminal := codexResponsesFailureSSE(failure)
+			archive.Write(terminal)
+			_, _ = w.Write(terminal)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
 		tok := accumulator.FinalizeUsage(body)
 		_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
 		h.recordAndPrintFail(round, r, provider, model, true, http.StatusOK, time.Since(started), tok, failure)
@@ -266,6 +273,21 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	tok := accumulator.FinalizeUsage(body)
 	h.recordAndPrint(round, r, provider, model, true, http.StatusOK, time.Since(started), tok, "")
 	h.writeArchiveMetadata(round, provider, model, true, http.StatusOK, time.Since(started), tok, "response.sse", "", "", "success")
+}
+
+func codexResponsesFailureSSE(failure *streamFail) []byte {
+	code := string(codexresponses.KindUpstream)
+	if failure != nil && strings.TrimSpace(failure.ErrorCode) != "" {
+		code = failure.ErrorCode
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"type": "response.failed",
+		"response": map[string]any{
+			"object": "response", "status": "failed",
+			"error": map[string]any{"code": code, "message": "Codex stream failed"},
+		},
+	})
+	return []byte("event: response.failed\ndata: " + string(payload) + "\n\n")
 }
 
 func (h *Handler) completeCodexOAuthResponse(ctx context.Context, model string, raw []byte, sessionHash ...string) (codexresponses.Result, error) {

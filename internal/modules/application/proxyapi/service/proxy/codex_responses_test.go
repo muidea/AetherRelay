@@ -461,6 +461,67 @@ func TestNormalizeCodexRequestRejectsToolSearchOutsideLite(t *testing.T) {
 	}
 }
 
+func TestNormalizeCodexRequestRejectsUnknownReasoningSummaryDelivery(t *testing.T) {
+	if _, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","input":"hello","stream_options":{"reasoning_summary_delivery":"unknown"}}`), false); err == nil {
+		t.Fatal("CP-REQ-028 unknown reasoning summary delivery was accepted")
+	}
+}
+
+func TestCodexResponsesStreamIncompleteRemainsSuccessful(t *testing.T) {
+	store := usage.NewMemoryStore()
+	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		if err := started(codexresponses.StreamStart{}); err != nil {
+			return err
+		}
+		return emit([]byte(`data: {"type":"response.incomplete","response":{"id":"resp_partial","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":2,"output_tokens":3}}}` + "\n\n"))
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","stream":true,"input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "response.incomplete") {
+		t.Fatalf("CP-STREAM-007 status=%d body=%s", response.Code, response.Body.String())
+	}
+	events := usageEvents(t, store)
+	if len(events) != 1 || events[0].Outcome != "success" {
+		t.Fatalf("CP-STREAM-007 events=%+v", events)
+	}
+}
+
+func TestCodexResponsesStreamFailureBeforeFirstEventReturnsHTTPError(t *testing.T) {
+	failure := codexresponses.NewFailure(codexresponses.KindRateLimit, 30, fmt.Errorf("rate limited"))
+	failure.HTTPStatus = http.StatusTooManyRequests
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, _ func(codexresponses.StreamStart) error, _ func([]byte) error) error {
+		return failure
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","stream":true,"input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests || strings.Contains(response.Body.String(), "response.failed") {
+		t.Fatalf("CP-STREAM-009 status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCodexResponsesStreamFailureAfterOutputGetsTerminal(t *testing.T) {
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		if err := started(codexresponses.StreamStart{}); err != nil {
+			return err
+		}
+		if err := emit([]byte(`data: {"type":"response.output_text.delta","delta":"partial"}` + "\n\n")); err != nil {
+			return err
+		}
+		return codexresponses.NewFailure(codexresponses.KindNetwork, 0, fmt.Errorf("connection reset"))
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","stream":true,"input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"delta":"partial"`) || !strings.Contains(response.Body.String(), "event: response.failed") {
+		t.Fatalf("CP-STREAM-009 status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestCodexCompactNormalizesUnaryAndBridgesSSE(t *testing.T) {
 	var received codexresponses.Request
 	executor := codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {

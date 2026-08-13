@@ -55,7 +55,7 @@ func codexIgnoredHeaderNames(r *http.Request) []string {
 var codexDropCompatibleFields = []string{
 	"max_output_tokens", "max_completion_tokens", "temperature", "top_p",
 	"frequency_penalty", "presence_penalty", "user", "metadata",
-	"prompt_cache_retention", "prompt_cache_options", "safety_identifier", "stream_options", "truncation",
+	"prompt_cache_retention", "prompt_cache_options", "safety_identifier", "truncation",
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
@@ -139,6 +139,10 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		ensureCodexReasoningInclude(body)
 	}
 	convertLegacyCodexFunctions(body)
+	streamOptionsIgnored, err := normalizeCodexStreamOptions(body, options.compact)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	responsesLite, metadataIgnored, err := projectCodexClientMetadata(body)
 	if err != nil {
 		return nil, nil, nil, err
@@ -158,6 +162,7 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		stripCodexCompactInputNamespaces(body["input"])
 	}
 	ignored := append([]string(nil), metadataIgnored...)
+	ignored = append(ignored, streamOptionsIgnored...)
 	for _, field := range codexDropCompatibleFields {
 		if _, ok := body[field]; ok {
 			delete(body, field)
@@ -178,6 +183,35 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
 	}
 	return encoded, body, ignored, nil
+}
+
+func normalizeCodexStreamOptions(body map[string]any, compact bool) ([]string, error) {
+	raw, exists := body["stream_options"]
+	if !exists {
+		return nil, nil
+	}
+	delete(body, "stream_options")
+	if compact {
+		return []string{"stream_options"}, nil
+	}
+	options, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("stream_options must be an object")
+	}
+	ignored := make([]string, 0, len(options))
+	for key := range options {
+		if key != "reasoning_summary_delivery" {
+			ignored = append(ignored, "stream_options."+key)
+		}
+	}
+	if delivery, exists := options["reasoning_summary_delivery"]; exists {
+		value, ok := delivery.(string)
+		if !ok || strings.TrimSpace(value) != "sequential_cutoff" {
+			return nil, fmt.Errorf("stream_options.reasoning_summary_delivery must be sequential_cutoff")
+		}
+		body["stream_options"] = map[string]any{"reasoning_summary_delivery": "sequential_cutoff"}
+	}
+	return ignored, nil
 }
 
 func normalizeCodexResponsesLite(body map[string]any) error {

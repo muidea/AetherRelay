@@ -569,11 +569,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
 	}
 	defer s.SendEvent(event.NewEvent(upevents.TopicCancel, s.ID(), upcommon.UnitID, nil, upevents.CancelCommand{StreamID: startedUpstream.StreamID}))
-	if started != nil {
-		if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers)}); err != nil {
-			return clientFailure(err)
-		}
-	}
+	clientStarted := false
 	for {
 		value, pullErr := s.SendEvent(event.NewEventWithContext(upevents.TopicPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.PullCommand{StreamID: startedUpstream.StreamID, TimeoutMillis: 1000})).Get()
 		if pullErr != nil {
@@ -583,9 +579,17 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		if !ok {
 			return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream update"))
 		}
-		if len(update.Data) > 0 && emit != nil {
-			if err := emit(update.Data); err != nil {
-				return clientFailure(err)
+		if len(update.Data) > 0 {
+			if !clientStarted && started != nil {
+				if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers)}); err != nil {
+					return clientFailure(err)
+				}
+				clientStarted = true
+			}
+			if emit != nil {
+				if err := emit(update.Data); err != nil {
+					return clientFailure(err)
+				}
 			}
 		}
 		if update.Done {
@@ -710,6 +714,9 @@ func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit up
 	return failure
 }
 func clientFailure(err error) error {
+	if _, ok := codexresponses.AsFailure(err); ok {
+		return err
+	}
 	if errors.Is(err, context.Canceled) {
 		return codexresponses.NewFailure(codexresponses.KindClientCanceled, 0, err)
 	}
