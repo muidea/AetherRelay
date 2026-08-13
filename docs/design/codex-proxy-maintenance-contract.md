@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`3.2.0`
+> 合同版本：`3.3.0`
 >
 > 状态：`active`
 >
@@ -223,6 +223,8 @@
 
 `CP-WS-010` 每个 WebSocket terminal 必须携带与 HTTP/SSE 相同的有界错误分类、quota/reset observation 和 turn outcome。`response.failed`、`error`、transport/protocol failure 后必须失效当前上游连接；`response.incomplete` 保持合法终态并允许连接继续复用。
 
+`CP-WS-011` 生产 listener、HTTP middleware、RouteRegistry 与响应记账 wrapper 必须完整透传 `http.Hijacker`；成功 Upgrade 必须被标记为已写，框架不得在 `101 Switching Protocols` 后追加 204 或错误正文。验收必须使用真实 TCP listener 完成握手，不能只调用 handler 或使用 recorder。
+
 ## 8. 账号调度与会话粘性
 
 `CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → LRU/round-robin。
@@ -330,7 +332,7 @@
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
-| Responses WebSocket | CP-EP-002, CP-WS-001..010 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go` | `codex_websocket_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses WebSocket | CP-EP-002, CP-WS-001..011 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go`, `magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |
 | 真实上游差分 corpus | CP-DOD-002 | planned | - | - |
