@@ -382,9 +382,44 @@ func TestCodexInternalHeadersAreAuditedByNameOnly(t *testing.T) {
 	request.Header.Set("X-Codex-Beta-Features", "unverified-feature")
 	request.Header.Set("Cookie", "not-a-codex-contract-header")
 	got := codexIgnoredHeaderNames(request)
-	want := []string{"X-Codex-Turn-Metadata", "X-Codex-Beta-Features"}
+	want := []string{"X-Codex-Turn-Metadata"}
 	if !reflect.DeepEqual(got, want) || strings.Contains(strings.Join(got, ","), "secret") || strings.Contains(strings.Join(got, ","), "unverified") {
 		t.Fatalf("CP-HDR-011..015 ignored=%v", got)
+	}
+}
+
+func TestNormalizeCodexHTTPRequestResponsesLiteAndRemoteCompaction(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-Codex-Beta-Features", "remote_compaction_v2")
+	headers.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
+	raw := []byte(`{"model":"gpt-test","reasoning":{"effort":"high"},"tools":[{"type":"function","name":"shell"},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],"input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
+	normalized, body, _, features, err := normalizeCodexHTTPRequest(raw, false, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !features.RemoteCompactionV2 || !features.ResponsesLite || body["reasoning"].(map[string]any)["context"] != "all_turns" {
+		t.Fatalf("features=%+v body=%s", features, normalized)
+	}
+	tools := body["tools"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["type"] != "function" {
+		t.Fatalf("top-level tools=%#v", tools)
+	}
+	input := body["input"].([]any)
+	if len(input) != 3 || input[1].(map[string]any)["type"] != "compaction_trigger" || input[2].(map[string]any)["type"] != "additional_tools" {
+		t.Fatalf("Lite input=%#v", input)
+	}
+}
+
+func TestNormalizeCodexHTTPRequestRejectsUnknownBeta(t *testing.T) {
+	headers := http.Header{"X-Codex-Beta-Features": []string{"remote_compaction_v2,unknown"}}
+	if _, _, _, _, err := normalizeCodexHTTPRequest([]byte(`{"model":"gpt-test","input":"hello"}`), false, headers); err == nil {
+		t.Fatal("unknown beta feature was accepted")
+	}
+}
+
+func TestNormalizeCodexRequestRejectsToolSearchOutsideLite(t *testing.T) {
+	if _, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","tools":[{"type":"tool_search"}],"input":"hello"}`), false); err == nil {
+		t.Fatal("ordinary Responses accepted Lite-only tool_search")
 	}
 }
 

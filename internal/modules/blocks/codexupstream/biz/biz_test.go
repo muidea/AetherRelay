@@ -246,11 +246,52 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	previousURL := responsesURL
 	responsesURL = server.URL
 	t.Cleanup(func() { responsesURL = previousURL })
-	response, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`))
+	response, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), "", false, false)
 	if err != nil || class != "" || response == nil {
 		t.Fatalf("perform response=%v class=%q err=%v", response, class, err)
 	}
 	_ = response.Body.Close()
+}
+
+func TestPerformUsesAllowlistedCodexFeatureHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Codex-Beta-Features") != "remote_compaction_v2" || r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite") != "true" {
+			t.Fatalf("feature headers=%v", r.Header)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))
+	}))
+	defer server.Close()
+	previous := responsesURL
+	responsesURL = server.URL
+	defer func() { responsesURL = previous }()
+	response, class, _, err := perform(context.Background(), "access", "account", "", []byte(`{"model":"gpt-test"}`), "session", true, true)
+	if err != nil || class != "" {
+		t.Fatalf("perform class=%q err=%v", class, err)
+	}
+	_ = response.Body.Close()
+}
+
+func TestCodexJSONDocumentsRepairIsBounded(t *testing.T) {
+	documents, repaired := splitCodexJSONDocuments([]byte(`{"type":"response.in_progress"}{"type":"response.done"}`))
+	if !repaired || len(documents) != 2 {
+		t.Fatalf("documents=%q repaired=%v", documents, repaired)
+	}
+	lines := expandCodexSSELine([]byte(`data: {"type":"response.in_progress"}{"type":"response.completed"}` + "\n"))
+	if len(lines) != 2 || !strings.Contains(string(lines[1]), "response.completed") {
+		t.Fatalf("expanded=%q", lines)
+	}
+}
+
+func TestResponseHeadersProjectsCodexUsageAllowlist(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-Codex-Primary-Used-Percent", "25")
+	headers.Set("X-Codex-Secondary-Window-Minutes", "300")
+	headers.Set("Set-Cookie", "secret")
+	projected := responseHeaders(headers)
+	if len(projected) != 2 || projected[0].Name != "X-Codex-Primary-Used-Percent" || projected[1].Name != "X-Codex-Secondary-Window-Minutes" {
+		t.Fatalf("projected=%+v", projected)
+	}
 }
 
 func TestHandleCompactUsesUnaryEndpointAndFixedIdentity(t *testing.T) {

@@ -87,6 +87,12 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("items=%+v", items)
 	}
+	if _, err := store.RecordTransportCapability(items[0].ID, events.TransportCompact, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordTransportCapability(items[0].ID, events.TransportWebsocket, true); err != nil {
+		t.Fatal(err)
+	}
 	input := events.CredentialInput{AccountID: "new-upstream-account", AccessToken: "new-access", RefreshToken: "new-refresh", TargetID: items[0].ID}
 	if added, updated, _, err := store.Import([]events.CredentialInput{input}); err != nil || added != 0 || updated != 1 {
 		t.Fatalf("replacement added=%d updated=%d err=%v", added, updated, err)
@@ -97,6 +103,27 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	exported := store.ExportByIDs([]string{items[0].ID})
 	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].AccountID != "new-upstream-account" {
 		t.Fatalf("replacement export=%+v", exported)
+	}
+	view, _ := store.View(items[0].ID)
+	if view.CompactSupported != nil || view.WebsocketSupported != nil {
+		t.Fatalf("replacement retained transport capabilities: %+v", view)
+	}
+}
+
+func TestMergeUsageSnapshotPreservesUnobservedWindows(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, _ = store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	id := store.List()[0].ID
+	now := time.Now().UTC()
+	if ok, err := store.PutUsageSnapshot(id, events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), Windows: []events.UsageWindow{{ID: "wham", UsedPercent: 10, UsedPercentKnown: true}}}); err != nil || !ok {
+		t.Fatalf("put ok=%v err=%v", ok, err)
+	}
+	if ok, err := store.MergeUsageSnapshot(id, events.AccountUsageSnapshot{ObservedAt: now.Add(time.Minute).Format(time.RFC3339), Windows: []events.UsageWindow{{ID: "header-primary", UsedPercent: 25, UsedPercentKnown: true}}}); err != nil || !ok {
+		t.Fatalf("merge ok=%v err=%v", ok, err)
+	}
+	view, _ := store.View(id)
+	if view.UsageSnapshot == nil || len(view.UsageSnapshot.Windows) != 2 {
+		t.Fatalf("merged snapshot=%+v", view.UsageSnapshot)
 	}
 }
 

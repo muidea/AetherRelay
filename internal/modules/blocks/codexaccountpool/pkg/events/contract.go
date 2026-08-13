@@ -28,6 +28,7 @@ const (
 	// proxyapi orchestration path and are never included in AccountView.
 	TopicListUsageCandidates = "aetherrelay.codex.accountpool.command.list_usage_candidates"
 	TopicPutUsageSnapshot    = "aetherrelay.codex.accountpool.command.put_usage_snapshot"
+	TopicMergeUsageSnapshot  = "aetherrelay.codex.accountpool.command.merge_usage_snapshot"
 	TopicRecordUsageFailure  = "aetherrelay.codex.accountpool.command.record_usage_failure"
 )
 
@@ -305,6 +306,12 @@ type PutUsageSnapshotCommand struct {
 	Snapshot  AccountUsageSnapshot
 }
 type PutUsageSnapshotResult struct{ OK bool }
+
+type MergeUsageSnapshotCommand struct {
+	AccountID string
+	Snapshot  AccountUsageSnapshot
+}
+type MergeUsageSnapshotResult struct{ OK bool }
 
 type RecordUsageFailureCommand struct {
 	AccountID string

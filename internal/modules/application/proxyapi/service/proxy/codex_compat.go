@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,12 +23,15 @@ type codexNormalizationOptions struct {
 	responsesLite       bool
 }
 
+type codexRequestFeatures struct {
+	RemoteCompactionV2 bool
+	ResponsesLite      bool
+}
+
 var codexDropCompatibleHeaders = []string{
 	"X-Codex-Turn-Metadata",
 	"X-Codex-Turn-State",
-	"X-Codex-Beta-Features",
 	"Version",
-	"X-OpenAI-Internal-Codex-Responses-Lite",
 }
 
 func codexIgnoredHeaderNames(r *http.Request) []string {
@@ -58,6 +62,53 @@ var codexDropCompatibleFields = []string{
 // CP-REQ-001..024 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
 	return normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact})
+}
+
+func normalizeCodexHTTPRequest(raw []byte, compact bool, headers http.Header) ([]byte, map[string]any, []string, codexRequestFeatures, error) {
+	features, err := codexFeaturesFromHeaders(headers)
+	if err != nil {
+		return nil, nil, nil, codexRequestFeatures{}, err
+	}
+	features.ResponsesLite = features.ResponsesLite || rawCodexResponsesLite(raw)
+	if compact && features.RemoteCompactionV2 {
+		return nil, nil, nil, codexRequestFeatures{}, fmt.Errorf("remote_compaction_v2 is only valid on /v1/responses")
+	}
+	normalized, body, ignored, err := normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact, responsesLite: features.ResponsesLite})
+	if err != nil {
+		return nil, nil, nil, codexRequestFeatures{}, err
+	}
+	return normalized, body, ignored, features, nil
+}
+
+func rawCodexResponsesLite(raw []byte) bool {
+	var envelope struct {
+		ClientMetadata map[string]any `json:"client_metadata"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	return codexMetadataTrue(envelope.ClientMetadata["ws_request_header_x_openai_internal_codex_responses_lite"])
+}
+
+func codexFeaturesFromHeaders(headers http.Header) (codexRequestFeatures, error) {
+	features := codexRequestFeatures{}
+	if headers == nil {
+		return features, nil
+	}
+	features.ResponsesLite = strings.EqualFold(strings.TrimSpace(headers.Get("X-OpenAI-Internal-Codex-Responses-Lite")), "true")
+	for _, raw := range headers.Values("X-Codex-Beta-Features") {
+		for _, token := range strings.Split(raw, ",") {
+			token = strings.TrimSpace(token)
+			if token == "" {
+				continue
+			}
+			if token != "remote_compaction_v2" {
+				return codexRequestFeatures{}, fmt.Errorf("X-Codex-Beta-Features value %q is not supported", token)
+			}
+			features.RemoteCompactionV2 = true
+		}
+	}
+	return features, nil
 }
 
 func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOptions) ([]byte, map[string]any, []string, error) {
@@ -92,9 +143,12 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if responsesLite {
+	if responsesLite || options.responsesLite {
 		body["parallel_tool_calls"] = false
 		options.responsesLite = true
+		if err := normalizeCodexResponsesLite(body); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if err := validateCodexRequest(body, options); err != nil {
 		return nil, nil, nil, err
@@ -115,6 +169,127 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
 	}
 	return encoded, body, ignored, nil
+}
+
+func normalizeCodexResponsesLite(body map[string]any) error {
+	reasoning, exists := body["reasoning"]
+	if !exists || reasoning == nil {
+		body["reasoning"] = map[string]any{"context": "all_turns"}
+	} else if object, ok := reasoning.(map[string]any); ok {
+		object["context"] = "all_turns"
+	} else {
+		return fmt.Errorf("Responses Lite reasoning must be an object")
+	}
+	tools, exists := body["tools"]
+	if !exists || tools == nil {
+		return nil
+	}
+	list, ok := tools.([]any)
+	if !ok {
+		return fmt.Errorf("Responses Lite tools must be an array")
+	}
+	top := make([]any, 0, len(list))
+	var moved []any
+	for index, raw := range list {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Responses Lite tools[%d] must be an object", index)
+		}
+		typ, _ := tool["type"].(string)
+		switch strings.TrimSpace(typ) {
+		case "function", "custom", "tool_search":
+			top = append(top, raw)
+		case "namespace":
+			moved = append(moved, raw)
+		default:
+			return fmt.Errorf("Responses Lite tool type %q is not supported", typ)
+		}
+	}
+	if len(moved) == 0 {
+		return nil
+	}
+	input, err := appendCodexAdditionalTools(body["input"], moved)
+	if err != nil {
+		return err
+	}
+	body["input"] = input
+	if len(top) == 0 {
+		delete(body, "tools")
+	} else {
+		body["tools"] = top
+	}
+	return nil
+}
+
+func appendCodexAdditionalTools(value any, moved []any) ([]any, error) {
+	items, ok := value.([]any)
+	if !ok {
+		if value == nil {
+			items = []any{}
+		} else {
+			return nil, fmt.Errorf("Responses Lite namespace tools require array input")
+		}
+	}
+	seen := map[string]any{}
+	var target map[string]any
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if item["type"] != "additional_tools" {
+			continue
+		}
+		list, ok := item["tools"].([]any)
+		if !ok && item["tools"] != nil {
+			return nil, fmt.Errorf("Responses Lite additional_tools.tools must be an array")
+		}
+		if target == nil {
+			target = item
+		}
+		for _, tool := range list {
+			if err := rememberCodexLiteTool(seen, tool); err != nil {
+				return nil, err
+			}
+		}
+	}
+	var additions []any
+	for _, tool := range moved {
+		key := codexLiteToolKey(tool)
+		if previous, exists := seen[key]; exists {
+			if !reflect.DeepEqual(previous, tool) {
+				return nil, fmt.Errorf("Responses Lite additional_tools conflicts with %s", key)
+			}
+			continue
+		}
+		seen[key] = tool
+		additions = append(additions, tool)
+	}
+	if target == nil {
+		return append(items, map[string]any{"type": "additional_tools", "role": "developer", "tools": additions}), nil
+	}
+	existing, _ := target["tools"].([]any)
+	target["tools"] = append(existing, additions...)
+	return items, nil
+}
+
+func rememberCodexLiteTool(seen map[string]any, tool any) error {
+	key := codexLiteToolKey(tool)
+	if key == "" {
+		return nil
+	}
+	if previous, exists := seen[key]; exists && !reflect.DeepEqual(previous, tool) {
+		return fmt.Errorf("Responses Lite additional_tools contains conflicting %s", key)
+	}
+	seen[key] = tool
+	return nil
+}
+
+func codexLiteToolKey(raw any) string {
+	tool, _ := raw.(map[string]any)
+	typ, _ := tool["type"].(string)
+	name, _ := tool["name"].(string)
+	if strings.TrimSpace(typ) == "" || strings.TrimSpace(name) == "" {
+		return ""
+	}
+	return strings.TrimSpace(typ) + "/" + strings.TrimSpace(name)
 }
 
 func ensureCodexReasoningInclude(body map[string]any) {
@@ -183,13 +358,13 @@ func validateCodexRequest(body map[string]any, options codexNormalizationOptions
 			delete(body, "parallel_tool_calls")
 		}
 	}
-	if err := validateCodexTools(body["tools"]); err != nil {
+	if err := validateCodexTools(body["tools"], options.responsesLite); err != nil {
 		return err
 	}
 	return validateCodexInput(body["input"], options.allowIncrementalOut)
 }
 
-func validateCodexTools(value any) error {
+func validateCodexTools(value any, allowToolSearch ...bool) error {
 	if value == nil {
 		return nil
 	}
@@ -215,8 +390,12 @@ func validateCodexTools(value any) error {
 			if _, ok := tool["tools"].([]any); !ok {
 				return fmt.Errorf("namespace tool %q tools must be an array", tool["name"])
 			}
-			if err := validateCodexTools(tool["tools"]); err != nil {
+			if err := validateCodexTools(tool["tools"], allowToolSearch...); err != nil {
 				return fmt.Errorf("namespace tool %q: %w", tool["name"], err)
+			}
+		case "tool_search":
+			if len(allowToolSearch) == 0 || !allowToolSearch[0] {
+				return fmt.Errorf("tool type %q is not supported by the Codex proxy", typ)
 			}
 		default:
 			return fmt.Errorf("tool type %q is not supported by the Codex proxy", typ)
@@ -272,7 +451,7 @@ func validateCodexInput(value any, allowIncrementalOutputs bool) error {
 				return fmt.Errorf("%s references an unknown call_id", typ)
 			}
 		case "additional_tools":
-			if err := validateCodexTools(item["tools"]); err != nil {
+			if err := validateCodexTools(item["tools"], true); err != nil {
 				return fmt.Errorf("additional_tools: %w", err)
 			}
 		}

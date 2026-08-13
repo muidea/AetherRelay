@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		}
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
+			RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite,
 		})).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -187,7 +189,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		}
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy,
-			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash,
+			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite,
 		})).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -199,6 +201,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex compact result"))
 		}
 		if completed.ErrorClass == "" {
+			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, true)
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
@@ -392,7 +395,7 @@ func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
 func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (codexresponses.Result, *codexresponses.Failure) {
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite})).Get()
 	if err != nil {
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream unavailable"))
 	}
@@ -403,13 +406,14 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	if completed.ErrorClass != "" {
 		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus)
 	}
+	s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 }
 
 func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite})).Get()
 	if err != nil {
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream unavailable"))
 	}
@@ -420,6 +424,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 	if startedUpstream.ErrorClass != "" {
 		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus)
 	}
+	s.mergeCodexUsageHeaders(ctx, account.AccountID, startedUpstream.Headers)
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
 	}
@@ -450,6 +455,43 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			return nil
 		}
 	}
+}
+
+func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, headers []upevents.Header) {
+	values := make(map[string]string, len(headers))
+	for _, header := range headers {
+		values[strings.ToLower(strings.TrimSpace(header.Name))] = strings.TrimSpace(header.Value)
+	}
+	now := time.Now().UTC()
+	snapshot := accevents.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(codexUsageSnapshotTTL).Format(time.RFC3339)}
+	for _, definition := range []struct {
+		id, label, prefix string
+	}{
+		{id: "header-primary", label: "Primary", prefix: "x-codex-primary-"},
+		{id: "header-secondary", label: "Secondary", prefix: "x-codex-secondary-"},
+	} {
+		window := accevents.UsageWindow{ID: definition.id, Label: definition.label}
+		used, usedErr := strconv.ParseFloat(values[definition.prefix+"used-percent"], 64)
+		minutes, minutesErr := strconv.Atoi(values[definition.prefix+"window-minutes"])
+		resetSeconds, resetErr := strconv.Atoi(values[definition.prefix+"reset-after-seconds"])
+		if usedErr == nil {
+			window.UsedPercent, window.UsedPercentKnown = used, true
+			window.LimitReached = used >= 100
+		}
+		if minutesErr == nil && minutes > 0 {
+			window.WindowSeconds = minutes * 60
+		}
+		if resetErr == nil && resetSeconds > 0 {
+			window.ResetAt = now.Add(time.Duration(resetSeconds) * time.Second).Format(time.RFC3339)
+		}
+		if window.UsedPercentKnown || window.WindowSeconds > 0 || window.ResetAt != "" {
+			snapshot.Windows = append(snapshot.Windows, window)
+		}
+	}
+	if len(snapshot.Windows) == 0 {
+		return
+	}
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMergeUsageSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot})).Get()
 }
 
 func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {

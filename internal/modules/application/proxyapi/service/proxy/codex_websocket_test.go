@@ -85,6 +85,13 @@ func TestCodexWebsocketRejectsUnauthenticatedUpgrade(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketDoneNormalizesToCompletedTerminal(t *testing.T) {
+	payload := normalizeCodexWebsocketEvent([]byte(`{"type":"response.done","response":{"id":"resp-1"}}`))
+	if !codexWebsocketTerminal(payload) || !bytes.Contains(payload, []byte(`"type":"response.completed"`)) {
+		t.Fatalf("normalized terminal=%s", payload)
+	}
+}
+
 func TestCodexWebsocketForwardsCustomNamespaceTools(t *testing.T) {
 	var sent []byte
 	executor := codexResponsesExecutorStub{

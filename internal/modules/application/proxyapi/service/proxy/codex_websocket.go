@@ -77,6 +77,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 	}()
 	model := ""
 	sessionID := ""
+	var sessionFeatures codexRequestFeatures
 	succeeded := false
 	defer func() {
 		if sessionID != "" {
@@ -99,13 +100,14 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			writeCodexWebsocketError(conn, "invalid_request", "only text response.create messages are supported")
 			return
 		}
-		normalized, requestModel, normalizeErr := normalizeCodexWebsocketCreate(raw, model)
+		normalized, requestModel, features, normalizeErr := normalizeCodexWebsocketCreate(raw, model, r.Header, sessionFeatures)
 		if normalizeErr != nil {
 			writeCodexWebsocketError(conn, "invalid_request", normalizeErr.Error())
 			return
 		}
 		if model == "" {
 			model = requestModel
+			sessionFeatures = features
 			routeRequest := (&http.Request{Method: http.MethodPost, URL: cloneURLPath(r, "/v1/responses"), Header: r.Header, Body: r.Body, Host: r.Host}).WithContext(r.Context())
 			plans, apiErr := h.resolveTransportPlans(routeRequest, model)
 			if apiErr != nil || !hasCodexWebsocketPlan(plans) {
@@ -116,7 +118,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				writeCodexWebsocketError(conn, "model_not_found", message)
 				return
 			}
-			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})})
+			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)}), RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
 			if openErr != nil {
 				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket could not be opened")
 				return
@@ -125,6 +127,10 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 		}
 		if requestModel != model {
 			writeCodexWebsocketError(conn, "invalid_request", "websocket model cannot change within a session")
+			return
+		}
+		if features != sessionFeatures {
+			writeCodexWebsocketError(conn, "invalid_request", "websocket feature profile cannot change within a session")
 			return
 		}
 		if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, normalized); err != nil {
@@ -157,13 +163,13 @@ func hasCodexWebsocketPlan(plans []TransportPlan) bool {
 	return false
 }
 
-func normalizeCodexWebsocketCreate(raw []byte, currentModel string) ([]byte, string, error) {
+func normalizeCodexWebsocketCreate(raw []byte, currentModel string, headers http.Header, inherited codexRequestFeatures) ([]byte, string, codexRequestFeatures, error) {
 	var envelope map[string]any
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, "", fmt.Errorf("invalid JSON websocket message")
+		return nil, "", codexRequestFeatures{}, fmt.Errorf("invalid JSON websocket message")
 	}
 	if typ, _ := envelope["type"].(string); typ != "response.create" {
-		return nil, "", fmt.Errorf("message type must be response.create")
+		return nil, "", codexRequestFeatures{}, fmt.Errorf("message type must be response.create")
 	}
 	model, _ := envelope["model"].(string)
 	model = strings.TrimSpace(model)
@@ -171,20 +177,29 @@ func normalizeCodexWebsocketCreate(raw []byte, currentModel string) ([]byte, str
 		model = currentModel
 	}
 	if model == "" {
-		return nil, "", fmt.Errorf("model is required on the first response.create")
+		return nil, "", codexRequestFeatures{}, fmt.Errorf("model is required on the first response.create")
 	}
 	envelope["model"] = model
 	encoded, _ := json.Marshal(envelope)
+	features, err := codexFeaturesFromHeaders(headers)
+	if err != nil {
+		return nil, "", codexRequestFeatures{}, err
+	}
+	features.ResponsesLite = features.ResponsesLite || rawCodexResponsesLite(encoded)
+	if currentModel != "" {
+		features.RemoteCompactionV2 = features.RemoteCompactionV2 || inherited.RemoteCompactionV2
+		features.ResponsesLite = features.ResponsesLite || inherited.ResponsesLite
+	}
 	normalized, body, _, err := normalizeCodexRequestWithOptions(encoded, codexNormalizationOptions{
-		allowPreviousID: currentModel != "", allowIncrementalOut: currentModel != "",
+		allowPreviousID: currentModel != "", allowIncrementalOut: currentModel != "", responsesLite: features.ResponsesLite,
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, "", codexRequestFeatures{}, err
 	}
 	delete(body, "stream")
 	body["type"] = "response.create"
 	normalized, err = json.Marshal(body)
-	return normalized, model, err
+	return normalized, model, features, err
 }
 
 func websocketPromptCacheKey(raw []byte) string {
@@ -202,6 +217,7 @@ func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket
 			return false, err
 		}
 		if len(payload) > 0 {
+			payload = normalizeCodexWebsocketEvent(payload)
 			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 				return false, err
 			}
@@ -223,10 +239,23 @@ func codexWebsocketTerminal(payload []byte) bool {
 		return false
 	}
 	switch event.Type {
-	case "response.completed", "response.incomplete", "response.failed", "error":
+	case "response.completed", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "error":
 		return true
 	}
 	return false
+}
+
+func normalizeCodexWebsocketEvent(payload []byte) []byte {
+	var event map[string]any
+	if json.Unmarshal(payload, &event) != nil || event["type"] != "response.done" {
+		return payload
+	}
+	event["type"] = "response.completed"
+	normalized, err := json.Marshal(event)
+	if err != nil {
+		return payload
+	}
+	return normalized
 }
 
 func writeCodexWebsocketError(conn *websocket.Conn, code, message string) {

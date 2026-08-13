@@ -287,6 +287,8 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		existing.UsageSnapshot = nil
 		existing.UsageRefreshErrorAt = ""
 		existing.UsageRefreshError = ""
+		existing.CompactSupported = nil
+		existing.WebsocketSupported = nil
 	}
 	if err := s.saveLocked(); err != nil {
 		return 0, 0, 0, nil, err
@@ -955,6 +957,41 @@ func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageS
 	}
 	if statusChanged {
 		s.bumpCatalogLocked()
+	}
+	return true, nil
+}
+
+func (s *Store) MergeUsageSnapshot(accountID string, snapshot events.AccountUsageSnapshot) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := s.items[strings.TrimSpace(accountID)]
+	if item == nil {
+		return false, nil
+	}
+	clean := normalizeUsageSnapshot(snapshot)
+	if item.UsageSnapshot != nil {
+		existing := normalizeUsageSnapshot(*item.UsageSnapshot)
+		byID := make(map[string]int, len(existing.Windows))
+		for index, window := range existing.Windows {
+			byID[window.ID] = index
+		}
+		for _, window := range clean.Windows {
+			if index, ok := byID[window.ID]; ok {
+				existing.Windows[index] = window
+			} else {
+				existing.Windows = append(existing.Windows, window)
+			}
+		}
+		if clean.PlanType != "" {
+			existing.PlanType = clean.PlanType
+		}
+		existing.ObservedAt = clean.ObservedAt
+		existing.ExpiresAt = clean.ExpiresAt
+		clean = normalizeUsageSnapshot(existing)
+	}
+	item.UsageSnapshot = &clean
+	if err := s.saveLocked(); err != nil {
+		return false, err
 	}
 	return true, nil
 }

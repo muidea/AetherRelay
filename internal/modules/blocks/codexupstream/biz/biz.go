@@ -104,7 +104,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact command"))
 		return
 	}
-	response, class, retryAfter, err := performURL(ev.Context(), compactURL, "application/json", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.Body, cmd.SessionHash)
+	response, class, retryAfter, err := performURL(ev.Context(), compactURL, "application/json", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.Body, cmd.SessionHash, cmd.RemoteCompactionV2, cmd.ResponsesLite)
 	if err != nil {
 		result.Set(events.CompactResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -178,6 +178,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	headers.Set("User-Agent", currentIdentity.UserAgent)
 	headers.Set("Originator", currentIdentity.Originator)
 	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
+	applyCodexFeatureHeaders(headers, cmd.RemoteCompactionV2, cmd.ResponsesLite)
 	applyCodexSessionHeaders(headers, cmd.SessionHash)
 	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
 		headers.Set("ChatGPT-Account-ID", accountID)
@@ -332,10 +333,16 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 		if messageType != wsclient.TextMessage {
 			continue
 		}
-		select {
-		case session.updates <- websocketUpdate{payload: payload}:
-		case <-ctx.Done():
-			return
+		documents, repaired := splitCodexJSONDocuments(payload)
+		if !repaired {
+			documents = [][]byte{payload}
+		}
+		for _, document := range documents {
+			select {
+			case session.updates <- websocketUpdate{payload: document}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }
@@ -372,7 +379,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash)
+	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash, cmd.RemoteCompactionV2, cmd.ResponsesLite)
 	if err != nil {
 		result.Set(events.CompleteResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -405,7 +412,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash)
+	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash, cmd.RemoteCompactionV2, cmd.ResponsesLite)
 	if err != nil {
 		result.Set(events.StartResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -532,18 +539,20 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 	for {
 		line, err := readLine(reader, maxLine)
 		if len(line) > 0 {
-			if !sendUpdate(ctx, stream, streamUpdate{data: line}) {
-				return
-			}
-			if done, class, observation := terminalOutcome(line); done {
-				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
-				return
-			}
-			if done, class := terminalEvent(line); done {
-				pendingTerminal, pendingClass = true, class
-			}
-			if sseEventName(line) == "response.output_item.done" {
-				sawOutputDone = true
+			for _, expanded := range expandCodexSSELine(line) {
+				if !sendUpdate(ctx, stream, streamUpdate{data: expanded}) {
+					return
+				}
+				if done, class, observation := terminalOutcome(expanded); done {
+					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
+					return
+				}
+				if done, class := terminalEvent(expanded); done {
+					pendingTerminal, pendingClass = true, class
+				}
+				if sseEventName(expanded) == "response.output_item.done" {
+					sawOutputDone = true
+				}
 			}
 		}
 		if err != nil {
@@ -580,11 +589,11 @@ func (s *Upstream) removeStream(id string) bool {
 	return true
 }
 
-func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, sessionHash ...string) (*http.Response, events.ErrorClass, int, error) {
-	return performURL(ctx, responsesURL, "text/event-stream", accessToken, accountID, proxy, body, sessionHash...)
+func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, sessionHash string, remoteCompactionV2, responsesLite bool) (*http.Response, events.ErrorClass, int, error) {
+	return performURL(ctx, responsesURL, "text/event-stream", accessToken, accountID, proxy, body, sessionHash, remoteCompactionV2, responsesLite)
 }
 
-func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, sessionHash ...string) (*http.Response, events.ErrorClass, int, error) {
+func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, sessionHash string, remoteCompactionV2, responsesLite bool) (*http.Response, events.ErrorClass, int, error) {
 	client, err := newHTTPClient(proxy)
 	if err != nil {
 		return nil, events.ErrorProtocol, 0, err
@@ -599,9 +608,8 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	req.Header.Set("Connection", "Keep-Alive")
 	req.Header.Set("User-Agent", currentIdentity.UserAgent)
 	req.Header.Set("Originator", currentIdentity.Originator)
-	if len(sessionHash) > 0 {
-		applyCodexSessionHeaders(req.Header, sessionHash[0])
-	}
+	applyCodexSessionHeaders(req.Header, sessionHash)
+	applyCodexFeatureHeaders(req.Header, remoteCompactionV2, responsesLite)
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -610,6 +618,18 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 		return nil, classifyTransport(err), 0, err
 	}
 	return response, "", retryAfterSeconds(response.Header), nil
+}
+
+func applyCodexFeatureHeaders(headers headerSetter, remoteCompactionV2, responsesLite bool) {
+	if headers == nil {
+		return
+	}
+	if remoteCompactionV2 {
+		headers.Set("X-Codex-Beta-Features", "remote_compaction_v2")
+	}
+	if responsesLite {
+		headers.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
+	}
 }
 
 type headerSetter interface{ Set(string, string) }
@@ -1024,32 +1044,38 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 			trimmed := strings.TrimSpace(string(line))
 			if strings.HasPrefix(trimmed, "data:") {
 				payload := []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
-				var event struct {
-					Type        string          `json:"type"`
-					Delta       string          `json:"delta"`
-					OutputIndex int             `json:"output_index"`
-					Item        json.RawMessage `json:"item"`
-					Response    json.RawMessage `json:"response"`
+				documents, repaired := splitCodexJSONDocuments(payload)
+				if !repaired {
+					documents = [][]byte{payload}
 				}
-				if json.Unmarshal(payload, &event) == nil {
-					switch event.Type {
-					case "response.output_text.delta":
-						outputText.WriteString(event.Delta)
-					case "response.output_item.done":
-						if event.OutputIndex >= 0 && event.OutputIndex < 1024 && json.Valid(event.Item) {
-							outputItems[event.OutputIndex] = bytes.Clone(event.Item)
+				for _, payload := range documents {
+					var event struct {
+						Type        string          `json:"type"`
+						Delta       string          `json:"delta"`
+						OutputIndex int             `json:"output_index"`
+						Item        json.RawMessage `json:"item"`
+						Response    json.RawMessage `json:"response"`
+					}
+					if json.Unmarshal(payload, &event) == nil {
+						switch event.Type {
+						case "response.output_text.delta":
+							outputText.WriteString(event.Delta)
+						case "response.output_item.done":
+							if event.OutputIndex >= 0 && event.OutputIndex < 1024 && json.Valid(event.Item) {
+								outputItems[event.OutputIndex] = bytes.Clone(event.Item)
+							}
+						case "response.completed":
+							if len(event.Response) > 0 {
+								return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, nil
+							}
+						case "response.failed", "response.incomplete":
+							observation := rateLimitObservation(payload, time.Now().UTC())
+							class := events.ErrorUpstream
+							if observation.UsageLimited {
+								class = events.ErrorRateLimit
+							}
+							return nil, class, observation, fmt.Errorf("Codex response did not complete")
 						}
-					case "response.completed":
-						if len(event.Response) > 0 {
-							return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, nil
-						}
-					case "response.failed", "response.incomplete":
-						observation := rateLimitObservation(payload, time.Now().UTC())
-						class := events.ErrorUpstream
-						if observation.UsageLimited {
-							class = events.ErrorRateLimit
-						}
-						return nil, class, observation, fmt.Errorf("Codex response did not complete")
 					}
 				}
 			}
@@ -1327,8 +1353,12 @@ func sendUpdate(ctx context.Context, stream *responseStream, update streamUpdate
 }
 
 func responseHeaders(headers http.Header) []events.Header {
-	out := make([]events.Header, 0, 2)
-	for _, key := range []string{"Content-Type", "X-Request-ID"} {
+	out := make([]events.Header, 0, 8)
+	for _, key := range []string{
+		"Content-Type", "X-Request-ID",
+		"X-Codex-Primary-Used-Percent", "X-Codex-Primary-Reset-After-Seconds", "X-Codex-Primary-Window-Minutes",
+		"X-Codex-Secondary-Used-Percent", "X-Codex-Secondary-Reset-After-Seconds", "X-Codex-Secondary-Window-Minutes",
+	} {
 		if value := strings.TrimSpace(headers.Get(key)); value != "" {
 			out = append(out, events.Header{Name: key, Value: value})
 		}

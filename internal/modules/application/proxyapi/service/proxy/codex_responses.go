@@ -53,7 +53,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedAPIError(w, round, r, started, "", model, clientStream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: "no Codex OAuth account can serve responses compact", Model: model, ClientEndpoint: "/v1/responses/compact", ClientProtocol: ClientProtocolOpenAI})
 		return
 	}
-	normalized, _, ignored, normalizeErr := normalizeCodexRequest(raw, true)
+	normalized, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(raw, true, r.Header)
 	if normalizeErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusBadRequest, normalizeErr.Error())
 		return
@@ -66,7 +66,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, clientStream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex compact executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: codexSessionHash(r, model, clientBody)}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: codexSessionHash(r, model, clientBody), RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite}
 	if clientStream {
 		h.handleCodexCompactStream(w, r, round, started, plan, model, clientBody, request)
 		return
@@ -194,19 +194,16 @@ func codexCompactSSE(raw []byte) ([]byte, error) {
 // handleCodexOAuthResponses relays the native Responses object rather than
 // converting it through the ChatGPT Web message-tree adapter. This preserves
 // native output items and tools within the documented HTTP Responses P0.
-func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, raw []byte, body map[string]any, stream bool, sessionHash ...string) {
+func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, raw []byte, body map[string]any, stream bool, sessionHash string, features codexRequestFeatures) {
 	round := archiveRoundFromContext(r.Context())
 	executor := h.codexResponses
 	if executor == nil {
 		h.writeCodexResponsesError(w, r, round, started, provider, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw)}
-	if len(sessionHash) > 0 {
-		request.SessionHash = sessionHash[0]
-	}
+	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite}
 	if !stream {
-		response, err := h.completeCodexOAuthResponse(r.Context(), model, raw, request.SessionHash)
+		response, err := executor.CompleteCodexResponses(r.Context(), request)
 		if err != nil {
 			h.writeCodexResponsesError(w, r, round, started, provider, model, false, err)
 			return

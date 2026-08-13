@@ -43,12 +43,14 @@ type RateLimitObservation struct {
 // as bytes. This preserves native Responses objects without map/any EventHub
 // envelopes or a lossy proxy-side protocol translation.
 type CompleteCommand struct {
-	AccessToken      string
-	AccountIDHeader  string
-	Proxy            string
-	Body             []byte
-	MaxResponseBytes int64
-	SessionHash      string
+	AccessToken        string
+	AccountIDHeader    string
+	Proxy              string
+	Body               []byte
+	MaxResponseBytes   int64
+	SessionHash        string
+	RemoteCompactionV2 bool
+	ResponsesLite      bool
 }
 type CompleteResult struct {
 	Body              []byte
@@ -60,23 +62,27 @@ type CompleteResult struct {
 }
 
 type CompactCommand struct {
-	AccessToken      string
-	AccountIDHeader  string
-	Proxy            string
-	Body             []byte
-	MaxResponseBytes int64
-	SessionHash      string
+	AccessToken        string
+	AccountIDHeader    string
+	Proxy              string
+	Body               []byte
+	MaxResponseBytes   int64
+	SessionHash        string
+	RemoteCompactionV2 bool
+	ResponsesLite      bool
 }
 
 type CompactResult = CompleteResult
 
 type StartCommand struct {
-	AccessToken     string
-	AccountIDHeader string
-	Proxy           string
-	Body            []byte
-	MaxLineBytes    int64
-	SessionHash     string
+	AccessToken        string
+	AccountIDHeader    string
+	Proxy              string
+	Body               []byte
+	MaxLineBytes       int64
+	SessionHash        string
+	RemoteCompactionV2 bool
+	ResponsesLite      bool
 }
 type StartResult struct {
 	StreamID          string
@@ -103,11 +109,13 @@ type CancelCommand struct{ StreamID string }
 type CancelResult struct{ Cancelled bool }
 
 type WSOpenCommand struct {
-	AccessToken     string
-	AccountIDHeader string
-	Proxy           string
-	MaxMessageBytes int64
-	SessionHash     string
+	AccessToken        string
+	AccountIDHeader    string
+	Proxy              string
+	MaxMessageBytes    int64
+	SessionHash        string
+	RemoteCompactionV2 bool
+	ResponsesLite      bool
 }
 type WSOpenResult struct {
 	SessionID  string

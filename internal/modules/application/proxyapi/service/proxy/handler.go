@@ -1227,7 +1227,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	if plan.Mode == TransportModeCodexOAuthResponses && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
-		codexBody, _, ignored, normalizeErr := normalizeCodexRequest(body, false)
+		codexBody, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
 		if normalizeErr != nil {
 			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
 			return
@@ -1237,7 +1237,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		}
 		sessionHash := codexSessionHash(r, rawModel, rawBody)
 		if !rawStream {
-			response, codexErr := h.completeCodexOAuthResponse(r.Context(), rawModel, codexBody, sessionHash)
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
@@ -1264,7 +1264,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			return
 		}
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), true)
-		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, codexBody, rawBody, true, sessionHash)
+		h.handleCodexOAuthResponses(w, r, start, plan.RouteOwner, rawModel, codexBody, rawBody, true, sessionHash, features)
 		return
 	}
 	if hasTransportMode(plans, TransportModeResponsesToAnthropic) {
@@ -1360,7 +1360,15 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		if codexPlan, ok := codexFallbackPlan(plans, plan); ok {
 			h.recordCandidateFailure(r, plan, http.StatusBadGateway, result.Duration)
 			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
-			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, body, rawBody, rawStream)
+			codexBody, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
+			if normalizeErr != nil {
+				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
+				return
+			}
+			if round != nil {
+				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
+			}
+			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, codexBody, rawBody, rawStream, codexSessionHash(r, rawModel, rawBody), features)
 			return
 		}
 		h.writeArchivedError(w, round, r, start, providerName, rawModel, rawStream, http.StatusBadGateway, err.Error())
@@ -1374,7 +1382,15 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 				result.Cancel()
 			}
 			h.archiveAndLogTransportPlan(round, r, codexPlan, effectivecatalog.BuiltinProviderViewFor(codexPlan.RouteOwner), rawStream)
-			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, body, rawBody, rawStream)
+			codexBody, _, ignored, features, normalizeErr := normalizeCodexHTTPRequest(body, false, r.Header)
+			if normalizeErr != nil {
+				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusBadRequest, normalizeErr.Error())
+				return
+			}
+			if round != nil {
+				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
+			}
+			h.handleCodexOAuthResponses(w, r, start, codexPlan.RouteOwner, rawModel, codexBody, rawBody, rawStream, codexSessionHash(r, rawModel, rawBody), features)
 			return
 		}
 	}

@@ -97,7 +97,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
@@ -118,6 +118,7 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicCatalogSnapshot, b.handleCatalogSnapshot)
 	b.SubscribeFunc(events.TopicListUsageCandidates, b.handleListUsageCandidates)
 	b.SubscribeFunc(events.TopicPutUsageSnapshot, b.handlePutUsageSnapshot)
+	b.SubscribeFunc(events.TopicMergeUsageSnapshot, b.handleMergeUsageSnapshot)
 	b.SubscribeFunc(events.TopicRecordUsageFailure, b.handleRecordUsageFailure)
 	return b
 }
@@ -466,6 +467,23 @@ func (s *Account) handlePutUsageSnapshot(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.PutUsageSnapshotResult{OK: updated}, nil)
+}
+
+func (s *Account) handleMergeUsageSnapshot(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	command, ok := ev.Data().(events.MergeUsageSnapshotCommand)
+	if !ok || strings.TrimSpace(command.AccountID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid merge usage snapshot command"))
+		return
+	}
+	updated, err := s.store.MergeUsageSnapshot(command.AccountID, command.Snapshot)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.MergeUsageSnapshotResult{OK: updated}, nil)
 }
 
 func (s *Account) handleRecordUsageFailure(ev event.Event, result event.Result) {

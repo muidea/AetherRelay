@@ -1,12 +1,12 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`2.2.0`
+> 合同版本：`2.3.0`
 >
 > 状态：`active`
 >
 > 生效日期：2026-08-13
 >
-> 参考基线：AetherRelay `acf2d4b`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
+> 参考基线：AetherRelay `fca77b1`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。`2.1.0` 在 `2.0.0` 端点收口基础上补齐 Codex CLI `0.147.0` 已使用的 custom/namespace 工具、并行工具、工具续链、原生图片输入及有界 `client_metadata` 兼容规则。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
+版本记录：`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。`2.2.0` 修正 function `call_id` 与 input item `id` 的边界，补充 Responses Lite 和原生持久 WebSocket 增量续 turn 规则，并要求账号级 compact/WebSocket 能力探测参与调度。固定的 ChatGPT 上游 `/backend-api/codex/*` URL 不属于入站端点，不受此变更影响。
 
 ## 3. 支持对象与版本策略
 
@@ -112,7 +112,7 @@
 | `store` | 上游强制 false | 删除 | `CP-REQ-005` |
 | `reasoning` | 保留并保证所需 include | 按 compact 合同处理 | `CP-REQ-006` |
 | `include` | 去重并补 `reasoning.encrypted_content` | 不注入普通 Responses 专属值 | `CP-REQ-007` |
-| `tools` | 支持 `function`、`custom`、递归 `namespace`；其他类型按独立能力声明处理 | 保序；不自动注入图片工具 | `CP-REQ-008` |
+| `tools` | 支持 `function`、`custom`、递归 `namespace`；Responses Lite 额外支持 `tool_search`，并把顶层 `namespace` 迁移到 `input.additional_tools` | 保序；不自动注入图片工具 | `CP-REQ-008` |
 | `tool_choice` | 规范化；目标不支持则拒绝 | 删除或拒绝，以能力合同为准 | `CP-REQ-009` |
 | `functions/function_call` | 转为 `tools/tool_choice` | 同左 | `CP-REQ-010` |
 | `parallel_tool_calls` | boolean 且存在工具时保留；无工具时删除；Responses Lite 强制 false | 删除 | `CP-REQ-011` |
@@ -135,6 +135,10 @@
 
 `CP-REQ-024` `custom_tool_call_output` 与对应 custom call 使用同一 `call_id`；代理不得把 custom call ID 改写为 function 的 `fc_` 命名空间。
 
+`CP-REQ-025` Responses Lite 必须由精确为 true 的内部 header 或对应 `client_metadata` 信号识别。其 `reasoning.context` 必须固定为 `all_turns`；顶层 `namespace` 工具必须迁移到 `input.additional_tools`，按 `type + name` 去重，相同身份的冲突定义必须在访问账号前拒绝。
+
+`CP-REQ-026` 带 `compaction_trigger` 和 `remote_compaction_v2` beta 的请求仍是普通 `/responses` 流式请求，不得提升为 `/responses/compact`，不得删除 trigger 或改变 input 顺序。
+
 ## 6. 上游身份与 Header 合同
 
 | Header | 策略 | 规则 |
@@ -151,9 +155,9 @@
 | `X-Codex-Window-Id` | normalize：绑定 session/window | `CP-HDR-010` |
 | `X-Codex-Turn-Metadata` | drop-compatible；无独立 turn metadata owner | `CP-HDR-011` |
 | `X-Codex-Turn-State` | drop-compatible；无独立 WS state 合同 | `CP-HDR-012` |
-| `X-Codex-Beta-Features` | drop-compatible；beta 只由 profile 生成 | `CP-HDR-013` |
+| `X-Codex-Beta-Features` | allowlist normalize；当前只接受并生成 `remote_compaction_v2` | `CP-HDR-013` |
 | `Version` | drop-compatible；身份只由 profile 生成 | `CP-HDR-014` |
-| `X-OpenAI-Internal-Codex-Responses-Lite` | drop-compatible；未开放内部图片桥接 | `CP-HDR-015` |
+| `X-OpenAI-Internal-Codex-Responses-Lite` | normalize；仅精确 true 时生成，且不开放内部图片桥接 | `CP-HDR-015` |
 
 `CP-HDR-016` 下游 `Authorization`、Cookie、任意 forwarded header、任意 account ID 和自定义代理 header 绝不能进入上游。
 
@@ -170,6 +174,8 @@
 `CP-STREAM-003` 一旦向下游写出任一业务 SSE/WS 事件，不得切换账号或重放请求。
 
 `CP-STREAM-004` SSE 允许的 terminal 是 `response.completed`、`response.incomplete`、`response.failed`。错误帧不能伪装成成功 completed。
+
+`CP-STREAM-005` 单个 SSE data 行或 WebSocket message 中若包含 2..16 个、总计不超过 16 MiB 的完整 Responses JSON 文档，必须按原顺序拆成独立事件。其它非法 JSON 必须进入协议错误路径，不能猜测修复。
 
 `CP-COMPACT-001` compact 上游使用 `/backend-api/codex/responses/compact`，请求不得带普通 Responses 的 `stream`、`store` 或不受支持 `tool_choice`。
 
@@ -193,6 +199,8 @@
 
 `CP-WS-008` 客户端在本地 compact 后提交完整替换 transcript 时，代理必须保序转发该 transcript，不得与旧 turn 历史合并或注入旧 `previous_response_id`。
 
+`CP-WS-009` 上游 `response.done` 是成功终态；向标准 Responses 客户端转发前必须规范为 `response.completed`。`response.cancelled`/`response.canceled` 是失败终态，不得等待到连接超时。
+
 ## 8. 账号调度与会话粘性
 
 `CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → LRU/round-robin。
@@ -206,6 +214,10 @@
 `CP-SCHED-005` 每账号并发槽必须覆盖 HTTP/SSE/WS turn 的完整上游生命周期，并在取消、错误和 shutdown 时释放。
 
 `CP-SCHED-006` 账号选择结果和凭据只通过 typed EventHub command/result 跨 Block；HTTP handler 不接收 EventHub、Store 或 OAuth token。
+
+`CP-SCHED-007` 显式替换账号凭据时，模型、额度、compact 和 WebSocket 能力快照都必须失效为 unknown，禁止让新凭据继承旧上游身份的 transport 判定。
+
+`CP-SCHED-008` 成功 Responses/compact 握手返回的 primary/secondary used、window 和 reset header 必须投影为有界账号 usage 快照；非法或缺失 header 不得覆盖独立 usage 查询的有效字段。
 
 ## 9. Refresh、错误与 Failover
 
@@ -287,7 +299,7 @@
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..024 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
+| 请求兼容层 | CP-REQ-001..026 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `codexupstream/biz/identity.go` | `codexupstream/biz/biz_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
