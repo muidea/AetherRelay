@@ -29,12 +29,12 @@
 
 入站白名单（其它 `/v1/*` 一律 404）：
 
-- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET|POST /v1/models`
+- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET /v1/models`
 - **Anthropic**：`POST /v1/messages`
 - **AetherRelay 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
 - **OpenAI Images**：`POST /v1/images/generations|edits`（OpenAI native 或内建 `chatgptweb` 图片能力）
 
-`GET/POST /v1/models` **本地合成**，不访问上游；返回有效目录中的模型、已知的 `contextWindowTokens` / `maxOutputTokens`、已声明的 `capabilities.reasoning`，以及运行时推导的 `supported_endpoints`。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`supported_endpoints` 是客户端可调用的完整路径列表，由模型候选 Provider、Provider 原生 `endpoints` 和统一传输矩阵计算，不是静态模型元数据，也不暴露 provider 名、base URL 或密钥。
+`GET /v1/models` **本地合成**，不访问上游；普通请求返回有效目录中的 OpenAI-compatible 模型清单，携带 `client_version` query 时返回 Codex models manifest。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`POST /v1/models` 不受支持。
 
 `supported_endpoints` 只表示模型至少有一个已配置或已发现的目录候选具备该客户端路径合同，不包含请求期健康度和熔断过滤。例如 Anthropic Provider 声明原生 `messages` 时，模型可以同时显示 `/v1/messages` 与经协议转换的 `/v1/chat/completions`；ChatGPT Web 的 `chat_completions` 还会派生 `/v1/search`，`images` 会派生图片生成和编辑两个路径。系统信息中的“开放 API 端点”是实例级路由清单，需与模型的 `supported_endpoints` 取交集后再发起请求；即使目录命中，全部候选临时熔断时仍会返回 `provider_unavailable`。
 

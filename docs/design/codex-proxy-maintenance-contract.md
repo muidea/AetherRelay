@@ -1,12 +1,12 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`3.0.0`
+> 合同版本：`3.1.0`
 >
 > 状态：`active`
 >
 > 生效日期：2026-08-13
 >
-> 参考基线：AetherRelay `06aa4b4`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
+> 参考基线：AetherRelay `53f7b14`、CLIProxyAPI `f43aad76`、sub2api `0e82efe48`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -88,8 +88,11 @@
 | `CP-EP-008` | POST | `/v1/messages` | AetherRelay adapter | 可转换到 Codex Responses | implemented |
 | `CP-EP-012` | GET | `/v1/responses/ws` | retired | 无生产路由证据；固定返回 404 | rejected |
 | `CP-EP-013` | GET | `/v1/models` | core | 自定义 Provider 模式的模型发现；与有效目录同代 | implemented |
+| `CP-EP-014` | POST | `/v1/models` | retired | 无 Codex 或参考实现依据；固定返回 404 | rejected |
 
-`POST /v1/models` 是 AetherRelay 在 Codex 补全前已经存在的网关兼容端点，继续服从 AetherRelay 通用 API 合同，但不属于 Codex core 或本次新增端点。CLIProxyAPI、sub2api 与已核对的 Codex 客户端历史均没有要求该 method。
+`GET /v1/models` 在 query 中存在 `client_version` 时返回 Codex models manifest `{"models":[...]}`；未携带该 query 时返回 OpenAI-compatible `{"object":"list","data":[...]}`。两种表示必须读取同一 effective catalog generation，并执行相同的客户端 Provider access 过滤。Codex manifest 只列出实际支持 `/v1/responses` 的模型；`use_responses_lite` 与 `prefer_websockets` 只能按 AetherRelay 已实现能力声明。
+
+`POST /v1/models` 曾是 AetherRelay 通用兼容端点，但请求体不参与结果、与 GET 完全重复，且 CLIProxyAPI、sub2api 与已核对的 Codex 客户端历史均没有要求该 method。该端点现已退出合同并固定返回 404。
 
 `GET /v1/responses/ws` 与全部 `/backend-api/codex/*` 入站路径不属于支持合同，必须返回 404，不能作为隐藏别名保留。CLIProxyAPI 和 sub2api 中的同名路径仅作为历史证据记录，不覆盖最新 Codex 的自定义 Provider 配置合同。
 
@@ -107,7 +110,7 @@
 | --- | --- | --- | --- |
 | `model` | trim 后 exact 路由，保留大小写 | 同左，可用 compact-only 映射 | `CP-REQ-001` |
 | string `input` | 转为 user/input_text message array | 不允许丢失 compaction item 顺序 | `CP-REQ-002` |
-| `instructions` | 保留；缺失按 profile 决定是否补空串 | 缺失/null 补空串 | `CP-REQ-003` |
+| `instructions` | 缺失/null 补空串；非字符串拒绝 | 缺失/null 补空串；非字符串拒绝 | `CP-REQ-003` |
 | `stream` | 上游强制 true，下游按原意投影 | 上游 unary；下游可桥接 SSE | `CP-REQ-004` |
 | `store` | 上游强制 false | 删除 | `CP-REQ-005` |
 | `reasoning` | 保留并保证所需 include | 按 compact 合同处理 | `CP-REQ-006` |
@@ -318,10 +321,10 @@
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..009 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..010 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
-| 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
+| 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012, CP-EP-014 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
 | 请求兼容层 | CP-REQ-001..028 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `codexupstream/biz/identity.go` | `codexupstream/biz/biz_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/biz.go` | `codex_responses_test.go`, `biz_test.go` |
@@ -346,10 +349,10 @@
 | `POST /v1/responses`、`GET /v1/responses` | CLIProxyAPI `f43aad76` 的 `internal/api/server_routes.go`；sub2api `0e82efe48` 的生产路由 | Codex core，必须保留 |
 | `POST /v1/responses/compact` | CLIProxyAPI `95096bc3` 首次加入；sub2api `2fb212b7`、`a56eb5b4`、`84bb7d07` 持续修复原生 compact 链路 | 当前工作流能力，必须保留 |
 | `/backend-api/codex/responses*` | CLIProxyAPI `f43aad76` 注释为 `chatgpt_base_url compatible` direct aliases；sub2api `0e82efe48` 同样注册；最新 OpenAI 配置参考明确 `chatgpt_base_url` 只覆盖登录流程，模型请求使用 `model_providers.<id>.base_url` | 仅历史参考，不提供入站兼容 |
-| `GET /v1/models`、`GET /backend-api/codex/models` | sub2api `13e773ef` 引入 Codex manifest 透传，`806bb230` 增加根 alias；最新自定义 Provider 只需要 base URL 下的 `/models` | 前者 core，后者不提供入站兼容 |
+| `GET /v1/models?client_version=...`、`GET /backend-api/codex/models` | CLIProxyAPI `f43aad76` 按 `client_version` 分流 Codex manifest；sub2api `13e773ef` 引入 manifest 透传，`806bb230` 增加根 alias；最新自定义 Provider 只需要 base URL 下的 `/models` | 前者 core，后者不提供入站兼容 |
 | `GET /v1/responses/ws` | CLIProxyAPI `f43aad76` 仅在 SDK WebSocket 测试中自行注册；生产路由未注册，sub2api 生产路由也未注册 | 测试路径，不是生产兼容合同，拒绝 |
 | `POST /backend-api/codex/models` | CLIProxyAPI `f43aad76` 与 sub2api `0e82efe48` 均无生产路由 | 无历史依据，拒绝 |
-| `POST /v1/models` | AetherRelay `2260888c` 已存在；参考实现与 Codex 客户端没有该 method 依据 | AetherRelay 通用历史兼容，不计入 Codex 合同 |
+| `POST /v1/models` | AetherRelay `2260888c` 已存在；请求体不影响结果，参考实现与 Codex 客户端没有该 method 依据 | 重复的历史兼容端点，退出并固定返回 404 |
 | `POST /v1/chat/completions`、`POST /v1/messages` | AetherRelay `2260888c` 已存在，Codex 补全只新增协议转换 | AetherRelay adapter，不是 Codex 官方或历史直连端点 |
 | `prompt_cache_options`、`truncation`、`service_tier` 清洗 | CLIProxyAPI `2ab25eae` 明确记录 ChatGPT Codex 不支持 `prompt_cache_options`；`f43aad76` 的 Responses translator 同时删除 `truncation`，只保留 `priority` tier | 删除后不改变标准执行语义，按 `CP-REQ-027` drop-compatible |
 | 空 `response.completed` | sub2api `280c1c862` 的脱敏样本为 completed + empty output、无 usage/error，真实结果是 silent refusal | 按 `CP-STREAM-006` 在未提交业务输出前失败并允许 HTTP/SSE 切号；WS 返回明确失败 |

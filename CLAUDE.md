@@ -75,11 +75,11 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 入站白名单：
 
-- OpenAI：`POST /v1/chat/completions|responses|responses/compact|completions|embeddings`，Responses WebSocket `GET /v1/responses`，`GET|POST /v1/models`
+- OpenAI：`POST /v1/chat/completions|responses|responses/compact|completions|embeddings`，Responses WebSocket `GET /v1/responses`，`GET /v1/models`
 - Anthropic：`POST /v1/messages`
 - 其它 `/v1/*` → 404
 
-`GET/POST /v1/models` **本地合成**，不访问上游；不暴露 provider 名、base URL 或密钥。
+`GET /v1/models` **本地合成**，不访问上游；携带 `client_version` query 时返回 Codex models manifest，不暴露 provider 名、base URL 或密钥。`POST /v1/models` 返回 404。
 
 转发矩阵（`endpoints` 只表示上游直连能力）：
 

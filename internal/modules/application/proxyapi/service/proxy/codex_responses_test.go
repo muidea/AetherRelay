@@ -401,6 +401,36 @@ func TestCodexResponsesLiteForcesParallelToolCallsFalse(t *testing.T) {
 	}
 }
 
+func TestNormalizeCodexRequestFillsInstructionsAndRepairsNullToolSchemaTypes(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","tools":[{"type":"function","name":"automation_update","parameters":{"type":null}},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":null}}]}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"history_tool","parameters":{"type":null}}]}]}`)
+	normalized, body, _, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["instructions"] != "" {
+		t.Fatalf("CP-REQ-003 instructions=%#v", body["instructions"])
+	}
+	if strings.Count(string(normalized), `"type":"object"`) != 3 || strings.Contains(string(normalized), `"type":null`) {
+		t.Fatalf("null schema types were not repaired: %s", normalized)
+	}
+}
+
+func TestNormalizeCodexRequestPreservesMissingToolSchemaType(t *testing.T) {
+	normalized, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","tools":[{"type":"function","name":"lookup","parameters":{"properties":{}}}],"input":[]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(normalized), `"parameters":{"type":"object"`) {
+		t.Fatalf("missing schema type must remain missing: %s", normalized)
+	}
+}
+
+func TestNormalizeCodexRequestRejectsNonStringInstructions(t *testing.T) {
+	if _, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","instructions":{},"input":[]}`), false); err == nil || !strings.Contains(err.Error(), "instructions must be a string") {
+		t.Fatalf("CP-REQ-003 err=%v", err)
+	}
+}
+
 func TestCodexRequestDropsOverlongEncryptedReasoningItem(t *testing.T) {
 	longID := "rs_" + strings.Repeat("a", codexInputItemIDLimit)
 	raw := []byte(`{"model":"gpt-test","input":[{"type":"reasoning","id":"` + longID + `","encrypted_content":"sealed","summary":[]},{"type":"message","id":"user-1","role":"user","content":"continue"}]}`)

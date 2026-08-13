@@ -20,7 +20,7 @@ model_metadata:
     max_output_tokens: 128000
 ```
 
-`model_metadata` 是可选的静态模型元数据目录；模型 ID exact 且严格区分大小写。Provider 是否能处理某类请求由 `endpoints` 与共享 transport matrix 唯一决定。`GET/POST /v1/models` 会把这套运行时结果以模型级 `supported_endpoints` 返回；该字段不是配置项，也不应写入 `model_metadata`：
+`model_metadata` 是可选的静态模型元数据目录；模型 ID exact 且严格区分大小写。Provider 是否能处理某类请求由 `endpoints` 与共享 transport matrix 唯一决定。普通 `GET /v1/models` 会把这套运行时结果以模型级 `supported_endpoints` 返回；该字段不是配置项，也不应写入 `model_metadata`：
 
 - enabled Provider 的精确 `models` 条目会自动进入运行时模型目录，无需在 `model_metadata` 重复登记。Embedding 模型通常只需配置在 Provider 中。
 - `*`、`prefix-*` 等 pattern 只能参与匹配，不能枚举具体模型 ID；具体 ID 必须来自某个 enabled Provider 的精确 `models` 条目或账号池发现。

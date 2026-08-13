@@ -14,11 +14,11 @@
 
 Client Protocol 只由 method + path 决定，不从 header 或 body 推断。其它 `/v1/*` 一律 404。
 
-- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET|POST /v1/models`
+- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET /v1/models`
 - **Anthropic**：`POST /v1/messages`
 - **扩展**：`POST /v1/search`（AetherRelay 自有搜索端点）、`POST /v1/images/generations|edits`（ChatGPT Web 图片）
 
-`GET/POST /v1/models` 本地合成，不访问上游；返回模型、已知容量和运行时派生的 `supported_endpoints`，不暴露 provider 名、base URL 或密钥。`supported_endpoints` 由候选 Provider 的原生 `endpoints` 经过统一 transport matrix 计算，表达客户端可调用路径；它不属于静态模型元数据。
+`GET /v1/models` 本地合成，不访问上游；普通请求返回 OpenAI 模型清单，携带 `client_version` query 时返回 Codex models manifest。两者读取同一有效目录，不暴露 provider 名、base URL 或密钥。`POST /v1/models` 不受支持。
 
 ## 字段语义
 

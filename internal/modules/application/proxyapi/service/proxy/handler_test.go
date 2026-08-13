@@ -17,7 +17,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1623,7 +1622,7 @@ func TestRequestBodyLimit(t *testing.T) {
 	}
 }
 
-func TestModelsPOSTBodyLimitReturnsTypedError(t *testing.T) {
+func TestModelsPOSTIsRejectedBeforeBodyProcessing(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.cfg.MaxRequestBodyBytes = 8
@@ -1632,14 +1631,8 @@ func TestModelsPOSTBodyLimitReturnsTypedError(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusRequestEntityTooLarge {
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
-		t.Fatalf("content-type = %q, want application/json", got)
-	}
-	if !strings.Contains(rec.Body.String(), `"code":"request_too_large"`) {
-		t.Fatalf("expected typed request_too_large, body=%s", rec.Body.String())
 	}
 }
 
@@ -2480,7 +2473,7 @@ func TestModelsListOmitsUnknownCapacityForExactProviderModel(t *testing.T) {
 	}
 }
 
-func TestModelsGETAndPOSTConsistent(t *testing.T) {
+func TestModelsGETReturnsStableCatalogAndPOSTIsRejected(t *testing.T) {
 	tmpDir := t.TempDir()
 	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
 	if err != nil {
@@ -2506,18 +2499,15 @@ func TestModelsGETAndPOSTConsistent(t *testing.T) {
 	handler.ServeHTTP(getRec, newRequest(http.MethodGet, "/v1/models", ""))
 	postRec := newResponseRecorder()
 	handler.ServeHTTP(postRec, newRequest(http.MethodPost, "/v1/models", ""))
-	if getRec.Code != 200 || postRec.Code != 200 {
+	if getRec.Code != 200 || postRec.Code != http.StatusNotFound {
 		t.Fatalf("status get=%d post=%d", getRec.Code, postRec.Code)
 	}
-	var getPayload, postPayload ModelsListResponse
+	var getPayload ModelsListResponse
 	if err := json.Unmarshal(getRec.Body.Bytes(), &getPayload); err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(postRec.Body.Bytes(), &postPayload); err != nil {
-		t.Fatal(err)
-	}
-	if len(getPayload.Data) != 2 || len(postPayload.Data) != 2 {
-		t.Fatalf("len get=%d post=%d", len(getPayload.Data), len(postPayload.Data))
+	if len(getPayload.Data) != 2 {
+		t.Fatalf("len get=%d", len(getPayload.Data))
 	}
 	// stable order by case-fold id: emb, gpt-4o
 	if getPayload.Data[0].ID != "emb" || getPayload.Data[1].ID != "gpt-4o" {
@@ -2527,16 +2517,8 @@ func TestModelsGETAndPOSTConsistent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	postBody, err := json.Marshal(postPayload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(getPayload, postPayload) {
-		t.Fatalf("GET/POST payload mismatch: get=%s post=%s", getBody, postBody)
-	}
-	if strings.Contains(getRec.Body.String(), `"owned_by"`) || strings.Contains(getRec.Body.String(), `"created"`) ||
-		strings.Contains(postRec.Body.String(), `"owned_by"`) || strings.Contains(postRec.Body.String(), `"created"`) {
-		t.Fatalf("GET/POST /v1/models must not expose route owner or meaningless created value: get=%s post=%s", getRec.Body.String(), postRec.Body.String())
+	if strings.Contains(getRec.Body.String(), `"owned_by"`) || strings.Contains(getRec.Body.String(), `"created"`) {
+		t.Fatalf("GET /v1/models must not expose route owner or meaningless created value: get=%s", getBody)
 	}
 }
 

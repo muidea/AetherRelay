@@ -126,19 +126,23 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 			"content": []any{map[string]any{"type": "input_text", "text": input}},
 		}}
 	}
+	if instructions, exists := body["instructions"]; !exists || instructions == nil {
+		body["instructions"] = ""
+	} else if _, ok := instructions.(string); !ok {
+		return nil, nil, nil, fmt.Errorf("instructions must be a string")
+	}
 	if options.compact {
 		delete(body, "stream")
 		delete(body, "store")
 		delete(body, "tool_choice")
-		if value, ok := body["instructions"]; !ok || value == nil {
-			body["instructions"] = ""
-		}
 	} else {
 		body["stream"] = true
 		body["store"] = false
 		ensureCodexReasoningInclude(body)
 	}
 	convertLegacyCodexFunctions(body)
+	sanitizeCodexToolParameterTypes(body["tools"])
+	sanitizeCodexInputToolParameterTypes(body["input"])
 	streamOptionsIgnored, err := normalizeCodexStreamOptions(body, options.compact)
 	if err != nil {
 		return nil, nil, nil, err
@@ -183,6 +187,49 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
 	}
 	return encoded, body, ignored, nil
+}
+
+// sanitizeCodexToolParameterTypes repairs the explicit null emitted by Codex
+// Desktop for some built-in function schemas. A missing type remains missing,
+// because adding one would narrow an otherwise valid JSON Schema.
+func sanitizeCodexToolParameterTypes(value any) {
+	tools, ok := value.([]any)
+	if !ok {
+		return
+	}
+	for _, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"parameters"} {
+			if parameters, ok := tool[key].(map[string]any); ok {
+				if typ, exists := parameters["type"]; exists && typ == nil {
+					parameters["type"] = "object"
+				}
+			}
+		}
+		if function, ok := tool["function"].(map[string]any); ok {
+			if parameters, ok := function["parameters"].(map[string]any); ok {
+				if typ, exists := parameters["type"]; exists && typ == nil {
+					parameters["type"] = "object"
+				}
+			}
+		}
+		sanitizeCodexToolParameterTypes(tool["tools"])
+	}
+}
+
+func sanitizeCodexInputToolParameterTypes(value any) {
+	items, ok := value.([]any)
+	if !ok {
+		return
+	}
+	for _, raw := range items {
+		if item, ok := raw.(map[string]any); ok {
+			sanitizeCodexToolParameterTypes(item["tools"])
+		}
+	}
 }
 
 func normalizeCodexStreamOptions(body map[string]any, compact bool) ([]string, error) {

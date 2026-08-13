@@ -221,8 +221,61 @@ func codexWebsocketPayloadHasEvidence(payload []byte) bool {
 	if event.Type == "response.created" || event.Type == "response.in_progress" || event.Type == "response.queued" {
 		return false
 	}
-	return rawJSONPresent(event.Delta) || rawJSONPresent(event.Item) || rawJSONPresent(event.Usage) || rawJSONPresent(event.Error) ||
-		rawJSONPresent(event.Arguments) || rawJSONPresent(event.Input)
+	return rawJSONSemanticValue(event.Delta) || codexWebsocketItemHasEvidence(event.Item) || rawJSONPresent(event.Usage) || rawJSONPresent(event.Error) ||
+		rawJSONSemanticValue(event.Arguments) || rawJSONSemanticValue(event.Input)
+}
+
+func codexWebsocketItemHasEvidence(raw json.RawMessage) bool {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(raw, &item) != nil {
+		return false
+	}
+	for _, key := range []string{"content", "summary", "text", "arguments", "input", "output"} {
+		if rawJSONSemanticValue(item[key]) {
+			return true
+		}
+	}
+	// A completed tool call with no arguments is still a semantic request.
+	var typ, status, name string
+	_ = json.Unmarshal(item["type"], &typ)
+	_ = json.Unmarshal(item["status"], &status)
+	_ = json.Unmarshal(item["name"], &name)
+	return status == "completed" && name != "" && strings.Contains(typ, "call")
+}
+
+func rawJSONSemanticValue(raw json.RawMessage) bool {
+	if !rawJSONPresent(raw) {
+		return false
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed != ""
+	case []any:
+		for _, item := range typed {
+			encoded, _ := json.Marshal(item)
+			if rawJSONSemanticValue(encoded) {
+				return true
+			}
+		}
+	case map[string]any:
+		for key, item := range typed {
+			switch key {
+			case "type", "id", "status", "role", "name", "call_id":
+				continue
+			}
+			encoded, _ := json.Marshal(item)
+			if rawJSONSemanticValue(encoded) {
+				return true
+			}
+		}
+	case float64, bool:
+		return true
+	}
+	return false
 }
 
 func rawJSONPresent(raw json.RawMessage) bool {

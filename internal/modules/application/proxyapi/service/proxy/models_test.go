@@ -24,6 +24,7 @@ func TestUnsupportedCodexCompatibilityEndpointsReturnNotFound(t *testing.T) {
 		{method: http.MethodPost, path: "/backend-api/codex/responses/compact"},
 		{method: http.MethodGet, path: "/backend-api/codex/models"},
 		{method: http.MethodPost, path: "/backend-api/codex/models"},
+		{method: http.MethodPost, path: "/v1/models"},
 	} {
 		t.Run(testCase.method+" "+testCase.path, func(t *testing.T) {
 			request := httptest.NewRequest(testCase.method, testCase.path, nil)
@@ -33,6 +34,38 @@ func TestUnsupportedCodexCompatibilityEndpointsReturnNotFound(t *testing.T) {
 				t.Fatalf("CP-EP-004..006/CP-EP-011..012 unsupported compatibility endpoint status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestCodexModelsManifestUsesEffectiveCatalogCapabilities(t *testing.T) {
+	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
+		"gpt-codex": {
+			ID: "gpt-codex", ContextWindowTokens: 400000,
+			ReasoningDeclared: true, ReasoningSupported: true, ReasoningDefaultEffort: "high", ReasoningEfforts: []string{"low", "high"},
+			NativeResponsesDeclared: true, NativeResponsesImages: true,
+		},
+	}}
+	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
+		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
+	})
+	manifest := buildCodexModelsManifest(snapshot, clientaccess.All())
+	if len(manifest.Models) != 1 {
+		t.Fatalf("CP-EP-013 models=%#v", manifest.Models)
+	}
+	model := manifest.Models[0]
+	if model.Slug != "gpt-codex" || model.ContextWindow != 400000 || model.DefaultReasoningLevel != "high" ||
+		!reflect.DeepEqual(model.SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "low"}, {Effort: "high"}}) ||
+		!reflect.DeepEqual(model.InputModalities, []string{"text", "image"}) || !model.PreferWebsockets || model.UseResponsesLite {
+		t.Fatalf("CP-EP-013 model=%#v", model)
+	}
+}
+
+func TestCodexModelsManifestExcludesModelsWithoutResponses(t *testing.T) {
+	snapshot := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
+		"emb": {{ModelID: "emb", RouteOwner: "openai", SupportedEndpoints: []string{"/v1/embeddings"}}},
+	}}
+	if manifest := buildCodexModelsManifest(snapshot, clientaccess.All()); len(manifest.Models) != 0 {
+		t.Fatalf("CP-EP-013 manifest=%#v", manifest)
 	}
 }
 

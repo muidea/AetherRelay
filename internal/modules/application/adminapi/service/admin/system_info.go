@@ -99,7 +99,6 @@ func (h *Handler) systemInfo(w http.ResponseWriter) {
 		Endpoints: []systemEndpoint{
 			{Method: http.MethodGet, Path: "/healthz", Protocol: "health", Authentication: "none", RemoteAccess: "listener", Description: "Service health check."},
 			{Method: http.MethodGet, Path: "/v1/models", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "List the effective model catalog."},
-			{Method: http.MethodPost, Path: "/v1/models", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "List the effective model catalog (compatibility method)."},
 			{Method: http.MethodPost, Path: "/v1/chat/completions", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "OpenAI Chat Completions."},
 			{Method: http.MethodPost, Path: "/v1/responses", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "OpenAI Responses."},
 			{Method: http.MethodPost, Path: "/v1/messages", Protocol: "anthropic", Authentication: "client_api_key", RemoteAccess: "listener", Description: "Anthropic Messages."},

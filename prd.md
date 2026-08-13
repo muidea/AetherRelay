@@ -165,10 +165,10 @@
 - [x] **D-01.08** `POST /v1/completions` 被识别为受支持入站接口。
 - [x] **D-01.09** `POST /v1/embeddings` 被识别为受支持入站接口。
 - [x] **D-01.10** `GET /v1/models` 被识别为受支持入站接口。
-- [x] **D-01.11** `POST /v1/models` 被识别为受支持入站接口。
+- [x] **D-01.11** `POST /v1/models` 作为无客户端依据的重复兼容端点返回 HTTP 404。
 - [x] **D-01.12** 其他 `/v1/*` 路径返回 HTTP 404。
 - [x] **D-01.13** 执行端点只接受 POST。
-- [x] **D-01.14** `/v1/models` 的 GET 与 POST 返回一致的模型列表。
+- [x] **D-01.14** `GET /v1/models?client_version=...` 返回 Codex models manifest；普通 GET 保持 OpenAI list envelope。
 - [x] **D-01.15** `/v1/models` 只返回 `model_catalog` 中的模型。
 - [x] **D-01.16** `/v1/models` 按 exact 模型 ID 稳定排序。
 - [x] **D-01.17** `/v1/models` 为每个模型返回非空 `operations`。
@@ -177,7 +177,7 @@
 - [x] **D-01.20** `/v1/models` 不返回 RouteOwner。
 - [x] **D-01.21** `/v1/models` 不返回 provider base URL。
 - [x] **D-01.22** `/v1/models` 不返回 provider API Key。
-- [x] **D-01.23** `POST /v1/models` 的请求体受入站大小限制。
+- [x] **D-01.23** `POST /v1/models` 在认证、请求体读取和用量登记前返回 HTTP 404。
 - [x] **D-01.24** `/v1/models` 不向任何上游发起请求。
 
 ### D-02 配置加载与启动校验

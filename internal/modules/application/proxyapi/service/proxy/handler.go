@@ -541,7 +541,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleCodexCompact(w, r, requestID)
 	case r.URL.Path == "/v1/responses" && r.Method == http.MethodGet:
 		h.handleCodexWebsocket(w, r, requestID)
-	case r.URL.Path == "/v1/models" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
 		h.handleModels(w, r, requestID)
 	case r.URL.Path == "/v1/search" && r.Method == http.MethodPost:
 		h.handleSearch(w, r, requestID)
@@ -927,7 +927,7 @@ func isSupportedInbound(method, path string) bool {
 	case "/v1/chat/completions", "/v1/messages", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
 		return method == http.MethodPost
 	case "/v1/models":
-		return method == http.MethodGet || method == http.MethodPost
+		return method == http.MethodGet
 	default:
 		return false
 	}

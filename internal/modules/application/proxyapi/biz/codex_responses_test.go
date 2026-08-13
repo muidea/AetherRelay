@@ -182,6 +182,27 @@ func TestCompleteCodexResponsesPreservesLastRetryableFailure(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketEvidenceRejectsEmptyOutputSkeletons(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"response.output_item.added","item":{"type":"reasoning","summary":[]}}`),
+		[]byte(`{"type":"response.content_part.added","item":{"type":"message","content":[]}}`),
+		[]byte(`{"type":"response.output_text.delta","delta":""}`),
+	} {
+		if codexWebsocketPayloadHasEvidence(payload) {
+			t.Fatalf("CP-STREAM-006/008 empty payload counted as evidence: %s", payload)
+		}
+	}
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"response.output_text.delta","delta":"hello"}`),
+		[]byte(`{"type":"response.output_item.done","item":{"type":"function_call","status":"completed","name":"lookup","arguments":"{}"}}`),
+		[]byte(`{"type":"response.completed","response":{"usage":{"input_tokens":1}}}`),
+	} {
+		if !codexWebsocketPayloadHasEvidence(payload) {
+			t.Fatalf("CP-STREAM-006/008 semantic payload missed: %s", payload)
+		}
+	}
+}
+
 func TestCompleteCodexResponsesSwitchesOnUpstreamFailureAndReleasesLeases(t *testing.T) {
 	hub := event.NewHub(32)
 	background := task.NewBackgroundRoutine(8)

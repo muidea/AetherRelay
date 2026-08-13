@@ -12,7 +12,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 )
 
-// ModelsListResponse 是 GET/POST /v1/models 的具体外部协议 DTO。
+// ModelsListResponse 是普通 GET /v1/models 的具体外部协议 DTO。
 // 禁止使用 map[string]any / []any 动态组装。
 type ModelsListResponse struct {
 	Object string        `json:"object"`
@@ -77,34 +77,36 @@ type ReasoningCapability struct {
 	Efforts       []string `json:"efforts,omitempty"`
 }
 
-// handleModels returns the effective catalog (exact provider models, optional
-// static metadata, and auto-discovered account-pool models) as an
-// OpenAI-compatible model list.
+// CodexModelsManifest is selected by the presence of the client_version query
+// parameter used by Codex custom providers.
+type CodexModelsManifest struct {
+	Models []CodexModelManifestRecord `json:"models"`
+}
+
+type CodexModelManifestRecord struct {
+	Slug                     string                      `json:"slug"`
+	DisplayName              string                      `json:"display_name"`
+	Description              string                      `json:"description"`
+	DefaultReasoningLevel    string                      `json:"default_reasoning_level"`
+	SupportedReasoningLevels []CodexReasoningLevelRecord `json:"supported_reasoning_levels"`
+	InputModalities          []string                    `json:"input_modalities"`
+	UseResponsesLite         bool                        `json:"use_responses_lite"`
+	PreferWebsockets         bool                        `json:"prefer_websockets"`
+	ContextWindow            int                         `json:"context_window,omitempty"`
+}
+
+type CodexReasoningLevelRecord struct {
+	Effort string `json:"effort"`
+}
+
+// handleModels returns the effective catalog as either an OpenAI-compatible
+// list or, when client_version is present, a Codex client manifest.
 // 不转发上游;字段 contextWindowTokens / maxOutputTokens 为扩展元数据。
 // RouteOwner 仅用于内部路由、归档与观测，不作为客户端发现接口的一部分。
 func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID string) {
 	start := time.Now()
 	round := archiveRoundFromContext(r.Context())
 	bodyBytes := []byte(nil)
-	if r.Body != nil && r.Method == http.MethodPost {
-		var err error
-		bodyBytes, err = h.readLimitedBody(w, r)
-		if err != nil {
-			status := http.StatusBadRequest
-			code := ErrorCodeInvalidRequest
-			if isRequestTooLarge(err) {
-				status = http.StatusRequestEntityTooLarge
-				code = ErrorCodeRequestTooLarge
-			}
-			h.writeArchivedAPIError(w, round, r, start, "", "", false, status, APIError{
-				Code:           code,
-				Message:        err.Error(),
-				ClientProtocol: clientProtocolFromRequest(r),
-				ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
-			})
-			return
-		}
-	}
 	if r.Body != nil {
 		_ = r.Body.Close()
 	}
@@ -117,7 +119,12 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 
 	identity := clientauth.ClientIdentityFromContext(r.Context())
 	snapshot := h.EffectiveCatalog()
-	payload := buildModelsListResponse(snapshot, identity.ProviderAccess)
+	var payload any
+	if _, codexClient := r.URL.Query()["client_version"]; codexClient {
+		payload = buildCodexModelsManifest(snapshot, identity.ProviderAccess)
+	} else {
+		payload = buildModelsListResponse(snapshot, identity.ProviderAccess)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		h.writeArchivedError(w, round, r, start, "", "", false, http.StatusInternalServerError, err.Error())
@@ -134,6 +141,52 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	duration := time.Since(start)
 	h.recordAndPrint(round, r, "", "", false, http.StatusOK, duration, tokenUsage{}, "")
 	h.writeArchiveMetadata(round, "", "", false, http.StatusOK, duration, tokenUsage{}, "response.json", "", "", "success")
+}
+
+func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientaccess.Policy) CodexModelsManifest {
+	models := make([]CodexModelManifestRecord, 0)
+	for _, record := range buildModelsListResponse(snap, policy).Data {
+		if !containsString(record.SupportedEndpoints, "/v1/responses") {
+			continue
+		}
+		efforts := []string{"medium"}
+		defaultEffort := "medium"
+		if record.Capabilities != nil && record.Capabilities.Reasoning != nil && record.Capabilities.Reasoning.Supported {
+			if len(record.Capabilities.Reasoning.Efforts) > 0 {
+				efforts = append([]string(nil), record.Capabilities.Reasoning.Efforts...)
+			}
+			if containsString(efforts, record.Capabilities.Reasoning.DefaultEffort) {
+				defaultEffort = record.Capabilities.Reasoning.DefaultEffort
+			} else {
+				defaultEffort = efforts[0]
+			}
+		}
+		levels := make([]CodexReasoningLevelRecord, 0, len(efforts))
+		for _, effort := range efforts {
+			levels = append(levels, CodexReasoningLevelRecord{Effort: effort})
+		}
+		modalities := []string{"text"}
+		if record.Capabilities != nil && record.Capabilities.Native != nil && record.Capabilities.Native.Responses != nil && record.Capabilities.Native.Responses.Images {
+			modalities = append(modalities, "image")
+		}
+		models = append(models, CodexModelManifestRecord{
+			Slug: record.ID, DisplayName: record.ID, Description: record.ID,
+			DefaultReasoningLevel: defaultEffort, SupportedReasoningLevels: levels,
+			InputModalities: modalities, UseResponsesLite: false,
+			PreferWebsockets: modelHasRouteOwner(snap, record.ID, effectivecatalog.CodexOAuthProviderID, policy),
+			ContextWindow:    record.ContextWindowTokens,
+		})
+	}
+	return CodexModelsManifest{Models: models}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func buildModelsListResponse(snap effectivecatalog.Snapshot, policy clientaccess.Policy) ModelsListResponse {
