@@ -184,6 +184,7 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml
 - **Admin 凭据初始化**：密码提示直接显示在当前 TTY，输入不回显；`password-hash` 在容器内运行，密码不进入参数、环境变量或日志。其 stdout 通过临时挂载文件回传哈希，随即写入 `.env` 的 `AETHERRELAY_ADMIN_PASSWORD_HASH` 并删除临时文件；`config.yaml` 中仅以 `${AETHERRELAY_ADMIN_PASSWORD_HASH}` 引用。
 - **凭据加密**：脚本首次运行自动生成 `AETHERRELAY_CREDENTIAL_KEY`；Provider 与两类账号池凭据均以该密钥加密写入 DuckDB。重复运行保留原密钥，禁止随意重置。
 - **Provider 配置**：默认配置不内置 Provider，因此脚本不询问任何固定厂商 Key。部署完成后从管理台添加任意 Provider，或在账号池页面导入 ChatGPT Web / Codex OAuth 凭据。
+- **就绪判定**：容器在等待窗口内未通过 `/healthz` 时脚本返回非零并停止，不会继续打印“部署完成”；已生成的配置、`.env` 与数据目录会保留，按错误提示查看日志后可直接重跑。
 - 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
 - `.env` 生成后为 `chmod 600`，包含凭据主密钥与 Admin 哈希，务必保持私有、不入版本库。
 - 重复运行时保留已有 `config.yaml` 不覆盖；`.env` 中已配置的值保留为默认。

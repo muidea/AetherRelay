@@ -276,7 +276,7 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 if [[ "$READY" != 1 ]]; then
-  warn "服务未在预期时间内就绪，请检查: ${COMPOSE[*]} -f $COMPOSE_FILE logs -f"
+  die "服务未在预期时间内就绪，请检查: ${COMPOSE[*]} -f $COMPOSE_FILE logs -f"
 fi
 
 # 7. 结果提示

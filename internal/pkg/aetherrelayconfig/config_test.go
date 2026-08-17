@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,23 @@ providers:
 	}
 	if cfg.StreamIdleTimeout != 900*time.Second {
 		t.Fatalf("stream idle timeout = %s", cfg.StreamIdleTimeout)
+	}
+}
+
+func TestExampleConfigLoads(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve config test source path")
+	}
+	path := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "..", "config.example.yaml"))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config.example.yaml: %v", err)
+	}
+
+	sessions, messageBytes, idle, lifetime := cfg.CodexOAuth.EffectiveWebsocketLimits()
+	if sessions != DefaultCodexWebsocketMaxSessions || messageBytes != DefaultCodexWebsocketMaxMessageBytes || idle != DefaultCodexWebsocketIdleTimeout || lifetime != DefaultCodexWebsocketMaxLifetime {
+		t.Fatalf("example Codex websocket limits=%d,%d,%s,%s", sessions, messageBytes, idle, lifetime)
 	}
 }
 

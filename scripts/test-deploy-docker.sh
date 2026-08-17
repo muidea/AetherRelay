@@ -11,12 +11,19 @@ cat >"$TMP/bin/docker" <<'EOF'
 set -euo pipefail
 
 if [[ "${1:-}" == "compose" ]]; then
+  if [[ "${FAKE_DOCKER_HEALTH_FAIL:-}" == "1" && " $* " == *" exec -T aetherrelay curl "* ]]; then
+    exit 1
+  fi
   exit 0
 fi
 echo "unexpected fake docker invocation: $*" >&2
 exit 1
 EOF
-chmod +x "$TMP/bin/docker"
+cat >"$TMP/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$TMP/bin/docker" "$TMP/bin/sleep"
 
 PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" \
   --dir "$TMP/deploy" \
@@ -64,5 +71,19 @@ if grep -Eq 'OPENAI_API_KEY|DEEPSEEK_API_KEY|ANTHROPIC_API_KEY' "$compose" "$env
 fi
 if grep -Fq 'AETHERRELAY_ADMIN_PASSWORD_HASH=' "$env_file"; then
   echo "--skip-admin unexpectedly persisted an Admin password hash" >&2
+  exit 1
+fi
+
+if FAKE_DOCKER_HEALTH_FAIL=1 PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" \
+  --dir "$TMP/deploy-health-fail" \
+  --skip-admin \
+  --listen 0.0.0.0:9090 \
+  >"$TMP/output-health-fail" 2>"$TMP/error-health-fail"; then
+  echo "deployment unexpectedly succeeded when health checks failed" >&2
+  exit 1
+fi
+grep -Fq '服务未在预期时间内就绪' "$TMP/error-health-fail"
+if grep -Fq '部署完成' "$TMP/output-health-fail"; then
+  echo "failed deployment still reported completion" >&2
   exit 1
 fi

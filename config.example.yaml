@@ -86,11 +86,6 @@ chatgpt_web:
   priority: 10
   # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
   refresh_account_interval_minute: 0
-  # Responses WebSocket 资源边界；修改后只影响新连接。
-  websocket_max_sessions: 128
-  websocket_max_message_bytes: 1048576
-  websocket_idle_timeout_seconds: 300
-  websocket_max_lifetime_seconds: 1800
   # Admin 临时文本多轮对话（服务端 DuckDB 持久化；浏览器不落会话正文）
   temporary_chat:
     enabled: true
@@ -111,6 +106,11 @@ codex_oauth:
   priority: 90
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
   refresh_account_interval_minute: 0
+  # Responses WebSocket 资源边界；修改后只影响新连接。
+  websocket_max_sessions: 128
+  websocket_max_message_bytes: 1048576
+  websocket_idle_timeout_seconds: 300
+  websocket_max_lifetime_seconds: 1800
 
 # 直连 Provider 通过管理台创建；定义与 API Key 使用 AETHERRELAY_CREDENTIAL_KEY
 # 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth
