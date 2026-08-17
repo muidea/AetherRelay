@@ -79,17 +79,30 @@ func (h *Handler) updateCodexAccount(w http.ResponseWriter, r *http.Request, rel
 		return
 	}
 	var body struct {
-		Status *string `json:"status"`
-		Proxy  *string `json:"proxy"`
+		Status          *string `json:"status"`
+		Proxy           *string `json:"proxy"`
+		FingerprintMode *string `json:"fingerprint_mode"`
 	}
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	if body.Status == nil && body.Proxy == nil {
+	if body.Status == nil && body.Proxy == nil && body.FingerprintMode == nil {
 		writeError(w, http.StatusBadRequest, "at least one account field is required")
 		return
 	}
-	result, err := h.codex.UpdateCodexAccount(r.Context(), codexevents.UpdateCommand{ID: id, Status: body.Status, Proxy: body.Proxy})
+	if body.FingerprintMode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*body.FingerprintMode))
+		switch mode {
+		case "", codexevents.FingerprintModeOff:
+			mode = codexevents.FingerprintModeOff
+		case codexevents.FingerprintModeDevice, codexevents.FingerprintModeSession, codexevents.FingerprintModeFull:
+		default:
+			writeError(w, http.StatusBadRequest, "fingerprint_mode must be off, device, session, or full")
+			return
+		}
+		body.FingerprintMode = &mode
+	}
+	result, err := h.codex.UpdateCodexAccount(r.Context(), codexevents.UpdateCommand{ID: id, Status: body.Status, Proxy: body.Proxy, FingerprintMode: body.FingerprintMode})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

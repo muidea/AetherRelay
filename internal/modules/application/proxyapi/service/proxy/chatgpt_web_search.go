@@ -418,7 +418,7 @@ func presentChatGPTWebSearch(result chatgptsearch.Result) (string, []openAIURLCi
 		}
 		line := fmt.Sprintf("%d. %s", index+1, title)
 		if source.URL != "" {
-			start := utf8.RuneCountInString(text) + utf8.RuneCountInString(line)
+			var start int
 			if title == source.URL {
 				start = utf8.RuneCountInString(text) + utf8.RuneCountInString(fmt.Sprintf("%d. ", index+1))
 			} else {

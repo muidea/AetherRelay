@@ -20,6 +20,18 @@ type Header struct {
 	Value string
 }
 
+// CodexFingerprint is the fully resolved, non-secret outbound identity set.
+// Empty/off means that the proxy keeps its ordinary per-client session
+// isolation and does not converge any account-level identifiers.
+type CodexFingerprint struct {
+	Mode           string
+	InstallationID string
+	SessionID      string
+	ThreadID       string
+	TurnID         string
+	WindowID       string
+}
+
 type ErrorClass string
 
 const (
@@ -55,14 +67,16 @@ type SafeError struct {
 // as bytes. This preserves native Responses objects without map/any EventHub
 // envelopes or a lossy proxy-side protocol translation.
 type CompleteCommand struct {
-	AccessToken        string
-	AccountIDHeader    string
-	Proxy              string
-	Body               []byte
-	MaxResponseBytes   int64
-	SessionHash        string
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	AccessToken      string
+	AccountIDHeader  string
+	Proxy            string
+	Body             []byte
+	MaxResponseBytes int64
+	SessionHash      string
+	BetaFeatures     string
+	ResponsesLite    bool
+	TurnState        string
+	Fingerprint      CodexFingerprint
 }
 type CompleteResult struct {
 	Body              []byte
@@ -75,27 +89,40 @@ type CompleteResult struct {
 }
 
 type CompactCommand struct {
-	AccessToken        string
-	AccountIDHeader    string
-	Proxy              string
-	Body               []byte
-	MaxResponseBytes   int64
-	SessionHash        string
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	AccessToken      string
+	AccountIDHeader  string
+	Proxy            string
+	Body             []byte
+	MaxResponseBytes int64
+	SessionHash      string
+	BetaFeatures     string
+	ResponsesLite    bool
+	TurnState        string
+	Fingerprint      CodexFingerprint
 }
 
-type CompactResult = CompleteResult
+type CompactResult struct {
+	Body                        []byte
+	Headers                     []Header
+	HTTPStatus                  int
+	ErrorClass                  ErrorClass
+	RetryAfterSeconds           int
+	RateLimit                   RateLimitObservation
+	SafeError                   SafeError
+	NativeCompactionUnsupported bool
+}
 
 type StartCommand struct {
-	AccessToken        string
-	AccountIDHeader    string
-	Proxy              string
-	Body               []byte
-	MaxLineBytes       int64
-	SessionHash        string
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+	Body            []byte
+	MaxLineBytes    int64
+	SessionHash     string
+	BetaFeatures    string
+	ResponsesLite   bool
+	TurnState       string
+	Fingerprint     CodexFingerprint
 }
 type StartResult struct {
 	StreamID          string
@@ -123,13 +150,15 @@ type CancelCommand struct{ StreamID string }
 type CancelResult struct{ Cancelled bool }
 
 type WSOpenCommand struct {
-	AccessToken        string
-	AccountIDHeader    string
-	Proxy              string
-	MaxMessageBytes    int64
-	SessionHash        string
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	AccessToken     string
+	AccountIDHeader string
+	Proxy           string
+	MaxMessageBytes int64
+	SessionHash     string
+	BetaFeatures    string
+	ResponsesLite   bool
+	TurnState       string
+	Fingerprint     CodexFingerprint
 }
 type WSOpenResult struct {
 	SessionID  string
@@ -138,8 +167,9 @@ type WSOpenResult struct {
 }
 
 type WSSendCommand struct {
-	SessionID string
-	Payload   []byte
+	SessionID   string
+	Payload     []byte
+	Fingerprint CodexFingerprint
 }
 type WSSendResult struct{ Sent bool }
 

@@ -44,7 +44,7 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 		hub.Terminate(context.Background())
 	})
 	openResult := event.NewResult(events.TopicWSOpen, "test", "upstream")
-	upstream.handleWSOpen(event.NewEventWithContext(events.TopicWSOpen, "test", "upstream", nil, context.Background(), events.WSOpenCommand{AccessToken: "secret-token", AccountIDHeader: "account-header", MaxMessageBytes: 1024, SessionHash: "session-hash"}), openResult)
+	upstream.handleWSOpen(event.NewEventWithContext(events.TopicWSOpen, "test", "upstream", nil, context.Background(), events.WSOpenCommand{AccessToken: "secret-token", AccountIDHeader: "account-header", MaxMessageBytes: 1024, SessionHash: "session-hash", TurnState: "opaque-state", Fingerprint: events.CodexFingerprint{Mode: "device", InstallationID: "install-id"}}), openResult)
 	value, cdErr := openResult.Get()
 	if cdErr != nil {
 		t.Fatal(cdErr)
@@ -58,15 +58,18 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 		t.Fatalf("CP-HDR/CP-WS-002 headers=%v", gotHeaders)
 	}
 	assertCodexSessionHeaders(t, gotHeaders, "session-hash")
+	if gotHeaders.Get("X-Codex-Installation-Id") != "install-id" || gotHeaders.Get("X-Codex-Turn-State") != "opaque-state" || gotHeaders.Get("X-Codex-Beta-Features") != defaultCodexBetaFeatures {
+		t.Fatalf("Codex websocket profile headers=%v", gotHeaders)
+	}
 	sendResult := event.NewResult(events.TopicWSSend, "test", "upstream")
-	upstream.handleWSSend(event.NewEvent(events.TopicWSSend, "test", "upstream", nil, events.WSSendCommand{SessionID: opened.SessionID, Payload: []byte(`{"type":"response.create"}`)}), sendResult)
+	upstream.handleWSSend(event.NewEvent(events.TopicWSSend, "test", "upstream", nil, events.WSSendCommand{SessionID: opened.SessionID, Payload: []byte(`{"type":"response.create"}`), Fingerprint: events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0"}}), sendResult)
 	if _, err := sendResult.Get(); err != nil {
 		t.Fatal(err)
 	}
 	pullResult := event.NewResult(events.TopicWSPull, "test", "upstream")
 	upstream.handleWSPull(event.NewEventWithContext(events.TopicWSPull, "test", "upstream", nil, context.Background(), events.WSPullCommand{SessionID: opened.SessionID, TimeoutMillis: 1000}), pullResult)
 	pulled, err := event.GetAs[events.WSPullResult](pullResult)
-	if err != nil || !strings.Contains(string(pulled.Payload), "response.completed") {
+	if err != nil || !strings.Contains(string(pulled.Payload), "response.completed") || !strings.Contains(string(pulled.Payload), `"turn_id":"turn-id"`) {
 		t.Fatalf("CP-WS-004 pulled=%s err=%v", pulled.Payload, err)
 	}
 	upstream.Teardown(context.Background())
@@ -101,6 +104,29 @@ func TestCompletedResponseSupportsJSONAndSSE(t *testing.T) {
 	value, class, observation, err = completedResponse(sseResponse, 1024)
 	if err != nil || class != "" || observation.UsageLimited || !strings.Contains(string(value), `"resp_2"`) || !strings.Contains(string(value), `"output_text":"hello world"`) {
 		t.Fatalf("sse completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
+	}
+}
+
+func TestCompletedResponseRecoversCompactionFromAddedEvent(t *testing.T) {
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"cmp_added\",\"type\":\"compaction\",\"encrypted_content\":\"safe\"}}\n\n" +
+			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_added\",\"object\":\"response\",\"output\":[{\"type\":\"message\",\"content\":[]}]}}\n\n"))}
+	payload, class, _, err := completedResponse(response, 4096)
+	if err != nil || class != "" || !strings.Contains(string(payload), `"id":"cmp_added"`) {
+		t.Fatalf("added compaction payload=%s class=%q err=%v", payload, class, err)
+	}
+	if _, supported, err := nativeCompactResponse(payload); err != nil || !supported {
+		t.Fatalf("native compact supported=%v err=%v payload=%s", supported, err, payload)
+	}
+}
+
+func TestCompletedResponseAddedOnlyCompactionDoesNotInventMessage(t *testing.T) {
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"cmp_only\",\"type\":\"compaction\",\"encrypted_content\":\"safe\"}}\n\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_only\",\"object\":\"response\",\"output\":[]}}\n\n"))}
+	payload, class, _, err := completedResponse(response, 4096)
+	if err != nil || class != "" || !strings.Contains(string(payload), `"id":"cmp_only"`) || strings.Contains(string(payload), `"type":"message"`) {
+		t.Fatalf("added-only payload=%s class=%q err=%v", payload, class, err)
 	}
 }
 
@@ -342,7 +368,7 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	previousURL := responsesURL
 	responsesURL = server.URL
 	t.Cleanup(func() { responsesURL = previousURL })
-	response, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), "", false, false)
+	response, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), codexRequestProfile{})
 	if err != nil || class != "" || response == nil {
 		t.Fatalf("perform response=%v class=%q err=%v", response, class, err)
 	}
@@ -361,7 +387,7 @@ func TestPerformUsesAllowlistedCodexFeatureHeaders(t *testing.T) {
 	previous := responsesURL
 	responsesURL = server.URL
 	defer func() { responsesURL = previous }()
-	response, class, _, err := perform(context.Background(), "access", "account", "", []byte(`{"model":"gpt-test"}`), "session", true, true)
+	response, class, _, err := perform(context.Background(), "access", "account", "", []byte(`{"model":"gpt-test"}`), codexRequestProfile{sessionHash: "session", responsesLite: true})
 	if err != nil || class != "" {
 		t.Fatalf("perform class=%q err=%v", class, err)
 	}
@@ -383,16 +409,48 @@ func TestResponseHeadersProjectsCodexUsageAllowlist(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("X-Codex-Primary-Used-Percent", "25")
 	headers.Set("X-Codex-Secondary-Window-Minutes", "300")
+	headers.Set("X-Codex-Turn-State", "opaque-state")
 	headers.Set("Set-Cookie", "secret")
 	projected := responseHeaders(headers)
-	if len(projected) != 2 || projected[0].Name != "X-Codex-Primary-Used-Percent" || projected[1].Name != "X-Codex-Secondary-Window-Minutes" {
+	if len(projected) != 3 || projected[0].Name != "X-Codex-Turn-State" || projected[0].Value != "opaque-state" || projected[1].Name != "X-Codex-Primary-Used-Percent" || projected[2].Name != "X-Codex-Secondary-Window-Minutes" {
 		t.Fatalf("projected=%+v", projected)
+	}
+	headers.Set("X-Codex-Turn-State", strings.Repeat("x", maxCodexTurnStateBytes+1))
+	projected = responseHeaders(headers)
+	for _, header := range projected {
+		if header.Name == "X-Codex-Turn-State" {
+			t.Fatalf("oversized turn state was projected: %+v", projected)
+		}
 	}
 }
 
-func TestHandleCompactUsesUnaryEndpointAndFixedIdentity(t *testing.T) {
+func TestCodexFingerprintRewritesHeadersAndBodyTogether(t *testing.T) {
+	fingerprint := events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0"}
+	headers := http.Header{}
+	applyCodexSessionHeaders(headers, "isolated-session")
+	applyCodexFingerprintHeaders(headers, fingerprint)
+	if headers.Get("X-Codex-Installation-Id") != "install-id" || headers.Get("Session-Id") != "session-id" || headers.Get("Thread-Id") != "thread-id" || headers.Get("X-Client-Request-Id") != "thread-id" {
+		t.Fatalf("fingerprint headers=%v", headers)
+	}
+	body, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test","input":[]}`), fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		ClientMetadata map[string]any `json:"client_metadata"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || envelope.ClientMetadata["x-codex-installation-id"] != "install-id" || envelope.ClientMetadata["session_id"] != "session-id" || envelope.ClientMetadata["turn_id"] != "turn-id" {
+		t.Fatalf("fingerprint body=%s metadata=%+v", body, envelope.ClientMetadata)
+	}
+	offBody, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test"}`), events.CodexFingerprint{})
+	if err != nil || strings.Contains(string(offBody), "client_metadata") {
+		t.Fatalf("off body=%s err=%v", offBody, err)
+	}
+}
+
+func TestHandleCompactUsesNativeV2ResponsesAndFixedIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.Header.Get("Accept") != "application/json" {
+		if r.Method != http.MethodPost || r.Header.Get("Accept") != "text/event-stream" {
 			t.Fatalf("CP-COMPACT-001 request=%s accept=%q", r.Method, r.Header.Get("Accept"))
 		}
 		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
@@ -402,23 +460,59 @@ func TestHandleCompactUsesUnaryEndpointAndFixedIdentity(t *testing.T) {
 			t.Fatalf("CP-HDR identity=%v", r.Header)
 		}
 		assertCodexSessionHeaders(t, r.Header, "compact-session-hash")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_compact","object":"response.compaction"}`))
+		if r.Header.Get("X-Codex-Beta-Features") != defaultCodexBetaFeatures || r.Header.Get("X-Codex-Turn-State") != "compact-state" || r.Header.Get("X-Codex-Installation-Id") != "compact-install" {
+			t.Fatalf("CP-COMPACT profile headers=%v", r.Header)
+		}
+		var body struct {
+			Stream         bool           `json:"stream"`
+			Store          bool           `json:"store"`
+			ClientMetadata map[string]any `json:"client_metadata"`
+			Input          []struct {
+				Type string `json:"type"`
+			} `json:"input"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || !body.Stream || body.Store || len(body.Input) != 1 || body.Input[0].Type != "compaction_trigger" || body.ClientMetadata["x-codex-installation-id"] != "compact-install" {
+			t.Fatalf("CP-COMPACT-001 native body=%+v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"safe\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_compact\",\"object\":\"response\",\"output\":[]}}\n\n"))
 	}))
 	defer server.Close()
-	previousURL := compactURL
-	compactURL = server.URL
-	t.Cleanup(func() { compactURL = previousURL })
+	previousURL := responsesURL
+	responsesURL = server.URL
+	t.Cleanup(func() { responsesURL = previousURL })
 
 	upstream := &Upstream{}
 	result := event.NewResult(events.TopicCompact, "test", "test")
 	upstream.handleCompact(event.NewEventWithContext(events.TopicCompact, "test", "test", nil, context.Background(), events.CompactCommand{
 		AccessToken: "access-token", AccountIDHeader: "account-header", Body: []byte(`{"model":"gpt-5.4","input":[]}`), MaxResponseBytes: 1024, SessionHash: "compact-session-hash",
+		TurnState: "compact-state", Fingerprint: events.CodexFingerprint{Mode: "device", InstallationID: "compact-install"},
 	}), result)
 	value, resultErr := result.Get()
 	completed, ok := value.(events.CompactResult)
-	if resultErr != nil || !ok || completed.ErrorClass != "" || !strings.Contains(string(completed.Body), "resp_compact") {
+	if resultErr != nil || !ok || completed.ErrorClass != "" || !strings.Contains(string(completed.Body), "resp_compact") || !strings.Contains(string(completed.Body), "response.compaction") {
 		t.Fatalf("CP-COMPACT result=%#v err=%v", value, resultErr)
+	}
+}
+
+func TestForceNativeCompactCanonicalizesTriggerAtInputTail(t *testing.T) {
+	body, err := forceNativeCompact([]byte(`{"model":"gpt-5.4","stream":false,"store":true,"tool_choice":"auto","input":[{"type":"compaction_trigger"},{"type":"message","role":"user"},{"type":"compaction_trigger"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Stream     bool             `json:"stream"`
+		Store      bool             `json:"store"`
+		ToolChoice *json.RawMessage `json:"tool_choice"`
+		Input      []struct {
+			Type string `json:"type"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.Stream || envelope.Store || envelope.ToolChoice != nil || len(envelope.Input) != 2 || envelope.Input[0].Type != "message" || envelope.Input[1].Type != "compaction_trigger" {
+		t.Fatalf("CP-COMPACT-001 canonical body=%s", body)
 	}
 }
 

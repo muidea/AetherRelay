@@ -24,6 +24,7 @@ type codexWebsocketBinding struct {
 	model          string
 	resultRecorded bool
 	turnEvidence   bool
+	fingerprint    upevents.CodexFingerprint
 }
 
 func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
@@ -37,9 +38,11 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			}
 			return codexresponses.WebsocketOpenResult{}, err
 		}
+		fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
-			RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite,
+			BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
+			TurnState: s.guardCodexTurnState(request.TurnState, account.AccountID), Fingerprint: fingerprint,
 		})).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -75,7 +78,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		if s.codexWebsockets == nil {
 			s.codexWebsockets = map[string]codexWebsocketBinding{}
 		}
-		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, model: request.Model}
+		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, model: request.Model, fingerprint: fingerprint}
 		s.mu.Unlock()
 		s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
 		return codexresponses.WebsocketOpenResult{SessionID: opened.SessionID}, nil
@@ -91,7 +94,7 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		s.codexWebsockets[sessionID] = binding
 	}
 	s.mu.Unlock()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload, Fingerprint: codexFingerprintForTurn(binding.fingerprint)})).Get()
 	if err != nil {
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorUpstream)
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket send failed"))
@@ -172,10 +175,6 @@ func (s *Proxy) recordCodexWebsocketTurnResult(ctx context.Context, sessionID st
 	if shouldRecord {
 		s.recordCodexResult(ctx, binding.accountID, binding.model, success, class, retryAfter, quotaExhausted, quotaResetAt)
 	}
-}
-
-func codexWebsocketTurnOutcome(payload []byte) (success, terminal bool, class string) {
-	return codexWebsocketTurnOutcomeWithEvidence(payload, false)
 }
 
 func codexWebsocketTurnOutcomeWithEvidence(payload []byte, turnEvidence bool) (success, terminal bool, class string) {
@@ -330,7 +329,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy}, request)
+				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode}, request)
 				if failure == nil {
 					s.releaseCodexAccount(ctx, account.LeaseID)
 					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
@@ -380,9 +379,11 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			}
 			return codexresponses.Result{}, err
 		}
+		fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy,
-			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite,
+			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
+			TurnState: s.guardCodexTurnState(request.TurnState, account.AccountID), Fingerprint: fingerprint,
 		})).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -395,6 +396,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		}
 		if completed.ErrorClass == "" {
 			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
+			s.noteCodexTurnState(account.AccountID, completed.Headers)
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, true)
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
@@ -402,7 +404,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		}
 		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
 		lastFailure = failure
-		if transportExplicitlyUnsupported(accevents.TransportCompact, completed.HTTPStatus) {
+		if completed.NativeCompactionUnsupported {
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, false)
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			tried = append(tried, account.AccountID)
@@ -468,7 +470,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy}, request, started, func(line []byte) error {
+				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode}, request, started, func(line []byte) error {
 					emitted = emitted || len(line) > 0
 					if emit == nil {
 						return nil
@@ -563,8 +565,6 @@ func firstString(values []string) string {
 
 func transportExplicitlyUnsupported(transport string, status int) bool {
 	switch transport {
-	case accevents.TransportCompact:
-		return status == 404 || status == 405
 	case accevents.TransportWebsocket:
 		return status == 404 || status == 405 || status == 426
 	default:
@@ -588,7 +588,8 @@ func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
 func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (codexresponses.Result, *codexresponses.Failure) {
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite})).Get()
+	fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: s.guardCodexTurnState(request.TurnState, account.AccountID), Fingerprint: fingerprint})).Get()
 	if err != nil {
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream unavailable"))
 	}
@@ -600,13 +601,15 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
 	}
 	s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
+	s.noteCodexTurnState(account.AccountID, completed.Headers)
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 }
 
 func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, RemoteCompactionV2: request.RemoteCompactionV2, ResponsesLite: request.ResponsesLite})).Get()
+	fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: s.guardCodexTurnState(request.TurnState, account.AccountID), Fingerprint: fingerprint})).Get()
 	if err != nil {
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream unavailable"))
 	}
@@ -637,6 +640,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 				if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers)}); err != nil {
 					return clientFailure(err)
 				}
+				s.noteCodexTurnState(account.AccountID, startedUpstream.Headers)
 				clientStarted = true
 			}
 			if emit != nil {

@@ -19,16 +19,16 @@ import (
 )
 
 func TestCodexWebsocketTurnOutcomeRequiresNonEmptyCompleted(t *testing.T) {
-	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.completed","response":{"output":[]}}`)); success || !terminal || class != accevents.ErrorUpstream {
+	if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence([]byte(`{"type":"response.completed","response":{"output":[]}}`), false); success || !terminal || class != accevents.ErrorUpstream {
 		t.Fatalf("CP-STREAM-006 empty success=%v terminal=%v class=%q", success, terminal, class)
 	}
-	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.completed","response":{"output":[],"usage":{"input_tokens":1,"output_tokens":0}}}`)); !success || !terminal || class != "" {
+	if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence([]byte(`{"type":"response.completed","response":{"output":[],"usage":{"input_tokens":1,"output_tokens":0}}}`), false); !success || !terminal || class != "" {
 		t.Fatalf("CP-FAIL-014 usage success=%v terminal=%v class=%q", success, terminal, class)
 	}
-	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.failed","response":{"error":{"message":"failed"}}}`)); success || !terminal || class != accevents.ErrorUpstream {
+	if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence([]byte(`{"type":"response.failed","response":{"error":{"message":"failed"}}}`), false); success || !terminal || class != accevents.ErrorUpstream {
 		t.Fatalf("CP-FAIL-014 failed success=%v terminal=%v class=%q", success, terminal, class)
 	}
-	if success, terminal, class := codexWebsocketTurnOutcome([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":1,"output_tokens":2}}}`)); !success || !terminal || class != "" {
+	if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":1,"output_tokens":2}}}`), false); !success || !terminal || class != "" {
 		t.Fatalf("CP-STREAM-007 incomplete success=%v terminal=%v class=%q", success, terminal, class)
 	}
 }
@@ -110,7 +110,7 @@ func TestCompleteCodexResponsesSwitchesBeforeOutputForRetryableStatuses(t *testi
 	}
 }
 
-func TestCodexCompactSwitchesAndRecordsExplicitlyUnsupportedAccount(t *testing.T) {
+func TestCodexCompactSwitchesWhenNativeV2ProducesNoCompactionItem(t *testing.T) {
 	hub := event.NewHub(24)
 	background := task.NewBackgroundRoutine(8)
 	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
@@ -134,7 +134,7 @@ func TestCodexCompactSwitchesAndRecordsExplicitlyUnsupportedAccount(t *testing.T
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	upstream.Subscribe(upevents.TopicCompact, func(ev event.Event, result event.Result) {
 		if ev.Data().(upevents.CompactCommand).AccessToken == "token-1" {
-			result.Set(upevents.CompactResult{ErrorClass: upevents.ErrorInvalidRequest, HTTPStatus: http.StatusNotFound}, nil)
+			result.Set(upevents.CompactResult{ErrorClass: upevents.ErrorProtocol, NativeCompactionUnsupported: true}, nil)
 			return
 		}
 		result.Set(upevents.CompactResult{Body: []byte(`{"id":"resp_compact"}`)}, nil)
@@ -147,6 +147,93 @@ func TestCodexCompactSwitchesAndRecordsExplicitlyUnsupportedAccount(t *testing.T
 	first, second := <-capabilities, <-capabilities
 	if first.AccountID != "account-1" || first.Supported || second.AccountID != "account-2" || !second.Supported {
 		t.Fatalf("capabilities=%+v %+v", first, second)
+	}
+}
+
+func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
+	off := resolveCodexFingerprint("account-1", accevents.FingerprintModeOff, "client-session")
+	if off != (upevents.CodexFingerprint{}) {
+		t.Fatalf("off fingerprint=%+v", off)
+	}
+	device := resolveCodexFingerprint("account-1", accevents.FingerprintModeDevice, "client-session")
+	session := resolveCodexFingerprint("account-1", accevents.FingerprintModeSession, "client-session")
+	repeated := resolveCodexFingerprint("account-1", accevents.FingerprintModeSession, "client-session")
+	full := resolveCodexFingerprint("account-1", accevents.FingerprintModeFull, "client-session")
+	if device.InstallationID == "" || device.SessionID != "" || session.InstallationID != device.InstallationID || session.SessionID == "" || session.ThreadID == "" {
+		t.Fatalf("device=%+v session=%+v", device, session)
+	}
+	if repeated.SessionID != session.SessionID || repeated.ThreadID != session.ThreadID || repeated.TurnID == session.TurnID {
+		t.Fatalf("session IDs did not converge per contract: first=%+v repeated=%+v", session, repeated)
+	}
+	if full.ThreadID != full.SessionID || full.WindowID != full.ThreadID+":0" {
+		t.Fatalf("full fingerprint=%+v", full)
+	}
+}
+
+func TestCodexTurnStateGuardDropsKnownCrossAccountEcho(t *testing.T) {
+	proxy := &Proxy{}
+	headers := []upevents.Header{{Name: "X-Codex-Turn-State", Value: "opaque-state"}}
+	proxy.noteCodexTurnState("account-a", headers)
+	if got := proxy.guardCodexTurnState("opaque-state", "account-a"); got != "opaque-state" {
+		t.Fatalf("same-account state=%q", got)
+	}
+	if got := proxy.guardCodexTurnState("opaque-state", "account-b"); got != "" {
+		t.Fatalf("cross-account state=%q", got)
+	}
+	if got := proxy.guardCodexTurnState("unknown-state", "account-b"); got != "unknown-state" {
+		t.Fatalf("unknown-origin state=%q", got)
+	}
+}
+
+func TestCodexTurnStateProvenanceRemainsBounded(t *testing.T) {
+	proxy := &Proxy{codexTurnStates: map[string]codexTurnStateOrigin{}}
+	for index := 0; index <= codexTurnStateMaxEntries; index++ {
+		proxy.noteCodexTurnState("account-a", []upevents.Header{{Name: "X-Codex-Turn-State", Value: fmt.Sprintf("state-%d", index)}})
+	}
+	if len(proxy.codexTurnStates) > codexTurnStateMaxEntries {
+		t.Fatalf("turn-state provenance entries=%d", len(proxy.codexTurnStates))
+	}
+}
+
+func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	acquires := 0
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		acquires++
+		if acquires == 1 {
+			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeSession}, nil)
+			return
+		}
+		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeOff}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
+	commands := make(chan upevents.CompleteCommand, 2)
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicComplete, func(ev event.Event, result event.Result) {
+		command := ev.Data().(upevents.CompleteCommand)
+		commands <- command
+		if command.AccessToken == "token-a" {
+			result.Set(upevents.CompleteResult{ErrorClass: upevents.ErrorUpstream}, nil)
+			return
+		}
+		result.Set(upevents.CompleteResult{Body: []byte(`{"id":"resp-b"}`)}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexTurnStates: map[string]codexTurnStateOrigin{}}
+	proxy.noteCodexTurnState("account-a", []upevents.Header{{Name: "X-Codex-Turn-State", Value: "state-a"}})
+	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), SessionHash: "client-session", TurnState: "state-a"})
+	if err != nil || string(completed.Body) != `{"id":"resp-b"}` {
+		t.Fatalf("completed=%s err=%v", completed.Body, err)
+	}
+	first, second := <-commands, <-commands
+	if first.Fingerprint.Mode != accevents.FingerprintModeSession || first.Fingerprint.InstallationID == "" || first.TurnState != "state-a" {
+		t.Fatalf("first attempt=%+v", first)
+	}
+	if second.Fingerprint != (upevents.CodexFingerprint{}) || second.TurnState != "" {
+		t.Fatalf("off failover retained prior identity: %+v", second)
 	}
 }
 

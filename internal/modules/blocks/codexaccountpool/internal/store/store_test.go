@@ -78,6 +78,44 @@ func TestExportByIDsReturnsOnlySelectedCredentials(t *testing.T) {
 	}
 }
 
+func TestFingerprintConvergenceIsExplicitOptInAndPersists(t *testing.T) {
+	store := openTestStore(t)
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil || added != 1 {
+		t.Fatalf("import added=%d err=%v", added, err)
+	}
+	item := store.List()[0]
+	if item.FingerprintMode != events.FingerprintModeOff {
+		t.Fatalf("default fingerprint mode=%q", item.FingerprintMode)
+	}
+	mode := events.FingerprintModeSession
+	updated, err := store.Update(item.ID, nil, nil, &mode)
+	if err != nil || updated.FingerprintMode != mode {
+		t.Fatalf("updated=%+v err=%v", updated, err)
+	}
+	now := time.Now().UTC()
+	if _, ok, err := store.PutModelSnapshot(item.ID, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
+		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
+	}
+	acquired, err := store.AcquirePreferredTransport("gpt-test", nil, item.ID, events.TransportResponses)
+	if err != nil || acquired.FingerprintMode != mode {
+		t.Fatalf("acquired=%+v err=%v", acquired, err)
+	}
+	exported := store.ExportByIDs([]string{item.ID})
+	if len(exported) != 1 || exported[0].FingerprintMode != mode {
+		t.Fatalf("exported=%+v", exported)
+	}
+	if _, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	if preserved := store.List()[0].FingerprintMode; preserved != mode {
+		t.Fatalf("credential refresh cleared explicit mode: %q", preserved)
+	}
+	invalid := "automatic"
+	if _, err := store.Update(item.ID, nil, nil, &invalid); err == nil {
+		t.Fatal("invalid fingerprint mode was accepted")
+	}
+}
+
 func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	store := openTestStore(t)
 	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh"}}); err != nil || added != 1 {
@@ -356,7 +394,7 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 	}
 
 	abnormal := events.StatusAbnormal
-	if _, err := store.Update(id, &abnormal, nil); err != nil {
+	if _, err := store.Update(id, &abnormal, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -368,7 +406,7 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 		t.Fatalf("usage recovery view=%+v", view)
 	}
 
-	if _, err := store.Update(id, &abnormal, nil); err != nil {
+	if _, err := store.Update(id, &abnormal, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := store.PutModelSnapshot(id, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
@@ -380,7 +418,7 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 	}
 
 	disabled := events.StatusDisabled
-	if _, err := store.Update(id, &disabled, nil); err != nil {
+	if _, err := store.Update(id, &disabled, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := store.PutUsageSnapshot(id, events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339)}); err != nil || !ok {
@@ -408,7 +446,7 @@ func TestExplicitUsageCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testin
 	}
 	statusByID := map[string]string{items[0].ID: events.StatusNormal, items[1].ID: events.StatusAbnormal, items[2].ID: events.StatusDisabled}
 	for id, status := range statusByID {
-		if _, err := store.Update(id, &status, nil); err != nil {
+		if _, err := store.Update(id, &status, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -435,7 +473,7 @@ func TestExplicitDiscoveryCandidatesCanRetryAbnormalButNotDisabledAccounts(t *te
 	items := store.List()
 	statusByID := map[string]string{items[0].ID: events.StatusNormal, items[1].ID: events.StatusAbnormal, items[2].ID: events.StatusDisabled}
 	for id, status := range statusByID {
-		if _, err := store.Update(id, &status, nil); err != nil {
+		if _, err := store.Update(id, &status, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

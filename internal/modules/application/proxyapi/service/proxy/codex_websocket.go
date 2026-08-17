@@ -112,7 +112,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				return
 			}
 			sessionHash := codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})
-			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
+			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState})
 			if openErr != nil {
 				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket could not be opened")
 				return
@@ -210,10 +210,16 @@ func normalizeCodexWebsocketCreate(raw []byte, currentModel string, headers http
 	}
 	features.ResponsesLite = features.ResponsesLite || rawCodexResponsesLite(encoded)
 	if currentModel != "" {
-		features.RemoteCompactionV2 = features.RemoteCompactionV2 || inherited.RemoteCompactionV2
+		features.BetaFeatures = inherited.BetaFeatures
 		features.ResponsesLite = features.ResponsesLite || inherited.ResponsesLite
+		features.TurnState = inherited.TurnState
+		if rawCodexInputHasCompactionTrigger(envelopeRawInput(envelope)) && !codexBetaFeaturePresent(features.BetaFeatures, codexRemoteCompactionV2Feature) {
+			return nil, "", codexRequestFeatures{}, fmt.Errorf("compaction_trigger requires remote_compaction_v2 in the websocket session profile")
+		}
+	} else if rawCodexInputHasCompactionTrigger(envelopeRawInput(envelope)) {
+		features.BetaFeatures = ensureCodexBetaFeature(features.BetaFeatures, codexRemoteCompactionV2Feature)
 	}
-	normalized, body, _, err := normalizeCodexRequestWithOptions(encoded, codexNormalizationOptions{
+	_, body, _, err := normalizeCodexRequestWithOptions(encoded, codexNormalizationOptions{
 		allowPreviousID: currentModel != "", allowIncrementalOut: currentModel != "", responsesLite: features.ResponsesLite,
 	})
 	if err != nil {
@@ -221,8 +227,17 @@ func normalizeCodexWebsocketCreate(raw []byte, currentModel string, headers http
 	}
 	delete(body, "stream")
 	body["type"] = "response.create"
-	normalized, err = json.Marshal(body)
+	normalized, err := json.Marshal(body)
 	return normalized, model, features, err
+}
+
+func envelopeRawInput(envelope map[string]any) json.RawMessage {
+	input, ok := envelope["input"]
+	if !ok {
+		return nil
+	}
+	raw, _ := json.Marshal(input)
+	return raw
 }
 
 func websocketPromptCacheKey(raw []byte) string {

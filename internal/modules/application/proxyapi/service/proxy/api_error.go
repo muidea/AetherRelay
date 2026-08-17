@@ -55,10 +55,6 @@ type APIError struct {
 	UnsupportedFeatures []string `json:"unsupported_features,omitempty"`
 }
 
-func writeAPIError(w http.ResponseWriter, status int, apiErr APIError) {
-	writeClientProtocolError(w, status, ClientProtocolOpenAI, apiErr)
-}
-
 // writeClientProtocolError 按客户端协议输出 SDK 可解析 envelope。
 // OpenAI: {"error":{code,message,type,...}}
 // Anthropic: {"type":"error","error":{"type":"...","message":"..."}}

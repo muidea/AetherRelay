@@ -24,6 +24,7 @@ const (
 	modelDiscoveryRetryBase  = 30 * time.Second
 	modelDiscoveryRetryMax   = 5 * time.Minute
 	secureDocumentScope      = "codex_oauth_accounts"
+	nativeCompactProtocol    = "remote_compaction_v2"
 )
 
 type cooldown struct {
@@ -69,7 +70,9 @@ type account struct {
 	UsageRefreshErrorAt string                       `json:"usage_refresh_error_at,omitempty"`
 	UsageRefreshError   string                       `json:"usage_refresh_error,omitempty"`
 	CompactSupported    *bool                        `json:"compact_supported,omitempty"`
+	CompactProtocol     string                       `json:"compact_protocol,omitempty"`
 	WebsocketSupported  *bool                        `json:"websocket_supported,omitempty"`
+	FingerprintMode     string                       `json:"fingerprint_mode,omitempty"`
 }
 
 type Store struct {
@@ -116,6 +119,7 @@ func (s *Store) loadEncrypted() error {
 	if err != nil {
 		return err
 	}
+	migrated := false
 	for _, row := range rows {
 		payload, err := s.credentials.Open(secureDocumentScope, row.ID, row.Payload)
 		if err != nil {
@@ -134,8 +138,23 @@ func (s *Store) loadEncrypted() error {
 		if item.Status == "" {
 			item.Status = events.StatusNormal
 		}
+		mode, valid := normalizeFingerprintMode(item.FingerprintMode)
+		if !valid || item.FingerprintMode != mode {
+			item.FingerprintMode = mode
+			migrated = true
+		}
+		// compact_supported learned against the retired unary endpoint is not
+		// valid for native remote compaction v2.
+		if item.CompactProtocol != nativeCompactProtocol {
+			item.CompactSupported = nil
+			item.CompactProtocol = nativeCompactProtocol
+			migrated = true
+		}
 		s.items[item.ID] = &item
 		s.order = append(s.order, item.ID)
+	}
+	if migrated {
+		return s.saveEncryptedLocked()
 	}
 	return nil
 }
@@ -214,6 +233,13 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		if err := validateProxy(input.Proxy); err != nil {
 			return 0, 0, skipped, nil, err
 		}
+		if rawMode := strings.TrimSpace(input.FingerprintMode); rawMode != "" {
+			mode, valid := normalizeFingerprintMode(rawMode)
+			if !valid {
+				return 0, 0, skipped, nil, fmt.Errorf("invalid Codex fingerprint mode")
+			}
+			input.FingerprintMode = mode
+		}
 		seenRefresh[input.RefreshToken] = struct{}{}
 		seenAccess[input.AccessToken] = struct{}{}
 		normalized = append(normalized, input)
@@ -258,7 +284,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 	for i, input := range normalized {
 		existing := resolved[i]
 		if existing == nil {
-			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal}
+			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeOff}
 			s.items[existing.ID] = existing
 			s.order = append(s.order, existing.ID)
 			added++
@@ -274,6 +300,11 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		existing.Email = strings.TrimSpace(input.Email)
 		existing.Expired = strings.TrimSpace(input.Expired)
 		existing.Proxy = strings.TrimSpace(input.Proxy)
+		if strings.TrimSpace(input.FingerprintMode) != "" {
+			existing.FingerprintMode = input.FingerprintMode
+		} else if existing.FingerprintMode == "" {
+			existing.FingerprintMode = events.FingerprintModeOff
+		}
 		if existing.Status == "" {
 			existing.Status = events.StatusNormal
 		}
@@ -288,6 +319,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		existing.UsageRefreshErrorAt = ""
 		existing.UsageRefreshError = ""
 		existing.CompactSupported = nil
+		existing.CompactProtocol = nativeCompactProtocol
 		existing.WebsocketSupported = nil
 	}
 	if err := s.saveLocked(); err != nil {
@@ -327,29 +359,45 @@ func (s *Store) Delete(ids []string) (int, error) {
 	return deleted, s.saveLocked()
 }
 
-func (s *Store) Update(id string, status, proxy *string) (events.AccountView, error) {
+func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (events.AccountView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
-	changed := false
+	normalizedStatus := ""
 	if status != nil {
-		value := strings.ToLower(strings.TrimSpace(*status))
-		if value != events.StatusNormal && value != events.StatusAbnormal && value != events.StatusDisabled {
+		normalizedStatus = strings.ToLower(strings.TrimSpace(*status))
+		if normalizedStatus != events.StatusNormal && normalizedStatus != events.StatusAbnormal && normalizedStatus != events.StatusDisabled {
 			return events.AccountView{}, fmt.Errorf("invalid account status")
 		}
-		if item.Status != value {
-			item.Status = value
-			changed = true
-		}
 	}
+	normalizedProxy := ""
 	if proxy != nil {
 		if err := validateProxy(*proxy); err != nil {
 			return events.AccountView{}, err
 		}
-		item.Proxy = strings.TrimSpace(*proxy)
+		normalizedProxy = strings.TrimSpace(*proxy)
+	}
+	normalizedMode := ""
+	if fingerprintMode != nil {
+		value, valid := normalizeFingerprintMode(*fingerprintMode)
+		if !valid {
+			return events.AccountView{}, fmt.Errorf("invalid Codex fingerprint mode")
+		}
+		normalizedMode = value
+	}
+	changed := false
+	if status != nil && item.Status != normalizedStatus {
+		item.Status = normalizedStatus
+		changed = true
+	}
+	if proxy != nil {
+		item.Proxy = normalizedProxy
+	}
+	if fingerprintMode != nil {
+		item.FingerprintMode = normalizedMode
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, err
@@ -382,7 +430,7 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
 			}
-			return events.AcquireResult{AccountID: preferred.ID, AccessToken: preferred.AccessToken, AccountIDHeader: preferred.AccountIDHeader, Proxy: preferred.Proxy}, nil
+			return acquireResult(preferred), nil
 		}
 	}
 	for _, tier := range []int{1, 0} {
@@ -400,10 +448,24 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
 			}
-			return events.AcquireResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy}, nil
+			return acquireResult(item), nil
 		}
 	}
 	return events.AcquireResult{}, fmt.Errorf("no eligible Codex OAuth account")
+}
+
+func acquireResult(item *account) events.AcquireResult {
+	if item == nil {
+		return events.AcquireResult{}
+	}
+	mode, _ := normalizeFingerprintMode(item.FingerprintMode)
+	return events.AcquireResult{
+		AccountID:       item.ID,
+		AccessToken:     item.AccessToken,
+		AccountIDHeader: item.AccountIDHeader,
+		Proxy:           item.Proxy,
+		FingerprintMode: mode,
+	}
 }
 
 func transportSupport(item *account, transport string) int {
@@ -440,6 +502,10 @@ func (s *Store) RecordTransportCapability(id, transport string, supported bool) 
 			item.CompactSupported = &value
 			changed = true
 		}
+		if item.CompactProtocol != nativeCompactProtocol {
+			item.CompactProtocol = nativeCompactProtocol
+			changed = true
+		}
 	case events.TransportWebsocket:
 		if item.WebsocketSupported == nil || *item.WebsocketSupported != supported {
 			item.WebsocketSupported = &value
@@ -465,7 +531,7 @@ func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
 	if item == nil || strings.TrimSpace(item.RefreshToken) == "" {
 		return events.CredentialInput{}, false
 	}
-	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy}, true
+	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode}, true
 }
 
 func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
@@ -486,7 +552,7 @@ func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
 		result = append(result, events.CredentialInput{
 			CredentialType: "codex_cli",
 			AccessToken:    item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken,
-			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy,
+			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode,
 		})
 	}
 	return result
@@ -533,7 +599,7 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 	if statusChanged {
 		s.bumpCatalogLocked()
 	}
-	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, Refreshed: true}, nil
+	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, Refreshed: true}, nil
 }
 
 func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (events.RefreshTokenResult, error) {
@@ -766,6 +832,7 @@ func toView(item *account, now time.Time) events.AccountView {
 		UsageRefreshError:          item.UsageRefreshError,
 		CompactSupported:           item.CompactSupported,
 		WebsocketSupported:         item.WebsocketSupported,
+		FingerprintMode:            item.FingerprintMode,
 	}
 	if item.ModelSnapshot != nil {
 		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)
@@ -1258,6 +1325,21 @@ func validateProxy(value string) error {
 		return fmt.Errorf("invalid account proxy URL")
 	}
 	return nil
+}
+
+func normalizeFingerprintMode(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", events.FingerprintModeOff:
+		return events.FingerprintModeOff, true
+	case events.FingerprintModeDevice:
+		return events.FingerprintModeDevice, true
+	case events.FingerprintModeSession:
+		return events.FingerprintModeSession, true
+	case events.FingerprintModeFull:
+		return events.FingerprintModeFull, true
+	default:
+		return events.FingerprintModeOff, false
+	}
 }
 
 func unique(values []string) []string {

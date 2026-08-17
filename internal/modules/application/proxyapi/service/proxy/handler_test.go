@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1220,27 +1219,6 @@ func csvField(t *testing.T, records [][]string, row int, name string) string {
 		t.Fatalf("csv row %d missing col %d (%s): %v", row, idx, name, records[row])
 	}
 	return records[row][idx]
-}
-
-func readUsageCSV(t *testing.T, path string) [][]string {
-	t.Fatalf("readUsageCSV removed; use readUsageFromStore(t, handler) path=%s", path)
-	return nil
-}
-func readUsageCSV_REMOVED(t *testing.T, path string) [][]string {
-	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	records, err := csv.NewReader(file).ReadAll()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) < 2 {
-		t.Fatalf("expected header and one data row, got %d", len(records))
-	}
-	return records
 }
 
 func assertFileContains(t *testing.T, path, want string) {

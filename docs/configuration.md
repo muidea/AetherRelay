@@ -211,6 +211,8 @@ codex_oauth:
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
 - `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
 - WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。
+- Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。
+- `device` 只统一 installation ID；`session` 再统一账号 session，并按下游隔离 session 稳定派生 thread；`full` 将 thread 也统一到账号 session。启用模式会同时改写上游 header 与 `client_metadata`；默认 `off` 仍使用 AetherRelay 原有的客户端隔离 session，不做账号级收敛。
 
 ## 本地管理页
 

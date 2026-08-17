@@ -55,15 +55,16 @@ type accountPoolBundleChatGPT struct {
 }
 
 type accountPoolBundleCodex struct {
-	CredentialType string `json:"credential_type,omitempty"`
-	AccountID      string `json:"account_id,omitempty"`
-	IdentityKey    string `json:"identity_key,omitempty"`
-	Email          string `json:"email,omitempty"`
-	AccessToken    string `json:"access_token"`
-	RefreshToken   string `json:"refresh_token"`
-	IDToken        string `json:"id_token,omitempty"`
-	Expired        string `json:"expired,omitempty"`
-	Proxy          string `json:"proxy,omitempty"`
+	CredentialType  string `json:"credential_type,omitempty"`
+	AccountID       string `json:"account_id,omitempty"`
+	IdentityKey     string `json:"identity_key,omitempty"`
+	Email           string `json:"email,omitempty"`
+	AccessToken     string `json:"access_token"`
+	RefreshToken    string `json:"refresh_token"`
+	IDToken         string `json:"id_token,omitempty"`
+	Expired         string `json:"expired,omitempty"`
+	Proxy           string `json:"proxy,omitempty"`
+	FingerprintMode string `json:"fingerprint_mode,omitempty"`
 }
 
 type accountPoolBundleImportResult struct {
@@ -168,7 +169,7 @@ func (h *Handler) exportAccountPoolBundle(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "duplicate codex_cli slot for account")
 			return
 		}
-		row.Slots.Codex = &accountPoolBundleCodex{CredentialType: "codex_oauth", AccountID: item.AccountID, IdentityKey: effectiveIdentity, Email: item.Email, AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, Expired: item.Expired, Proxy: item.Proxy}
+		row.Slots.Codex = &accountPoolBundleCodex{CredentialType: "codex_oauth", AccountID: item.AccountID, IdentityKey: effectiveIdentity, Email: item.Email, AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode}
 		if row.Identity.Email == "" {
 			row.Identity.Email = effectiveEmail
 		}
@@ -345,6 +346,12 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			slot.IDToken = strings.TrimSpace(slot.IDToken)
 			slot.Expired = strings.TrimSpace(slot.Expired)
 			slot.Proxy = strings.TrimSpace(slot.Proxy)
+			slot.FingerprintMode = strings.ToLower(strings.TrimSpace(slot.FingerprintMode))
+			switch slot.FingerprintMode {
+			case "", codexevents.FingerprintModeOff, codexevents.FingerprintModeDevice, codexevents.FingerprintModeSession, codexevents.FingerprintModeFull:
+			default:
+				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli.fingerprint_mode is invalid", i)
+			}
 			if err := validateSlotText(slot.AccountID, 512, fmt.Sprintf("accounts[%d].slots.codex_cli.account_id", i)); err != nil {
 				return nil, nil, nil, err
 			}
@@ -393,7 +400,7 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 					seenEmails[email] = account.AccountRef
 				}
 			}
-			codex = append(codex, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy})
+			codex = append(codex, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode})
 		}
 	}
 	if len(chat) > maxAccountImportItems || len(codex) > maxAccountImportItems {

@@ -23,6 +23,7 @@ type codexAccountRuntimeStub struct {
 	exported     []codexevents.CredentialInput
 	imported     []codexevents.CredentialInput
 	importErr    error
+	updated      codexevents.UpdateCommand
 }
 
 func (s *codexAccountRuntimeStub) ListCodexAccounts(context.Context) ([]codexevents.AccountView, error) {
@@ -38,7 +39,8 @@ func (s *codexAccountRuntimeStub) ImportCodexAccounts(_ context.Context, account
 func (s *codexAccountRuntimeStub) DeleteCodexAccounts(context.Context, []string) (codexevents.DeleteResult, error) {
 	return codexevents.DeleteResult{}, nil
 }
-func (s *codexAccountRuntimeStub) UpdateCodexAccount(context.Context, codexevents.UpdateCommand) (codexevents.UpdateResult, error) {
+func (s *codexAccountRuntimeStub) UpdateCodexAccount(_ context.Context, command codexevents.UpdateCommand) (codexevents.UpdateResult, error) {
+	s.updated = command
 	return codexevents.UpdateResult{}, nil
 }
 func (s *codexAccountRuntimeStub) RefreshCodexAccounts(context.Context, []string) (admincodex.RefreshResult, error) {
@@ -195,5 +197,31 @@ func TestCodexAccountImportRejectsMoreThanLimit(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 1000") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCodexAccountPatchAcceptsExplicitFingerprintMode(t *testing.T) {
+	runtime := &codexAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/codex/accounts/account-1", strings.NewReader(`{"fingerprint_mode":"session"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.updated.FingerprintMode == nil || *runtime.updated.FingerprintMode != codexevents.FingerprintModeSession {
+		t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.updated, rec.Body.String())
+	}
+}
+
+func TestCodexAccountPatchRejectsInvalidFingerprintMode(t *testing.T) {
+	runtime := &codexAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/codex/accounts/account-1", strings.NewReader(`{"fingerprint_mode":"automatic"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || runtime.updated.ID != "" {
+		t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.updated, rec.Body.String())
 	}
 }

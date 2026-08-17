@@ -31,8 +31,6 @@ import (
 
 var responsesURL = "https://chatgpt.com/backend-api/codex/responses"
 
-var compactURL = "https://chatgpt.com/backend-api/codex/responses/compact"
-
 var responsesWebsocketURL = "wss://chatgpt.com/backend-api/codex/responses"
 
 // The model-list endpoint is account-scoped. Its client version is a local
@@ -106,7 +104,13 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact command"))
 		return
 	}
-	response, class, retryAfter, err := performURL(ev.Context(), compactURL, "application/json", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.Body, cmd.SessionHash, cmd.RemoteCompactionV2, cmd.ResponsesLite)
+	body, err := forceNativeCompact(cmd.Body)
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact body"))
+		return
+	}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	response, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompactResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -117,16 +121,17 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	payload, err := io.ReadAll(io.LimitReader(response.Body, cmd.MaxResponseBytes+1))
+	payload, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
-		result.Set(events.CompactResult{ErrorClass: classifyTransport(err)}, nil)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation}, nil)
 		return
 	}
-	if int64(len(payload)) > cmd.MaxResponseBytes || !json.Valid(payload) {
-		result.Set(events.CompactResult{ErrorClass: events.ErrorProtocol}, nil)
+	payload, supported, err := nativeCompactResponse(payload)
+	if err != nil || !supported {
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), ErrorClass: events.ErrorProtocol, NativeCompactionUnsupported: true}, nil)
 		return
 	}
-	result.Set(events.CompactResult{Body: payload, Headers: responseHeaders(response.Header)}, nil)
+	result.Set(events.CompactResult{Body: payload, Headers: compactResponseHeaders(response.Header)}, nil)
 }
 
 func (s *Upstream) Run(context.Context) *cd.Error { return nil }
@@ -180,8 +185,9 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	headers.Set("User-Agent", currentIdentity.UserAgent)
 	headers.Set("Originator", currentIdentity.Originator)
 	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
-	applyCodexFeatureHeaders(headers, cmd.RemoteCompactionV2, cmd.ResponsesLite)
-	applyCodexSessionHeaders(headers, cmd.SessionHash)
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	applyCodexFeatureHeaders(headers, profile.betaFeatures, profile.responsesLite)
+	applyCodexRequestIdentity(headers, profile)
 	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
 		headers.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -234,8 +240,13 @@ func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket send command"))
 		return
 	}
+	payload, fingerprintErr := applyCodexFingerprintBody(cmd.Payload, cmd.Fingerprint)
+	if fingerprintErr != nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket fingerprint body"))
+		return
+	}
 	session.writeMu.Lock()
-	err := session.conn.WriteMessage(wsclient.TextMessage, cmd.Payload)
+	err := session.conn.WriteMessage(wsclient.TextMessage, payload)
 	session.writeMu.Unlock()
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket write failed"))
@@ -382,7 +393,8 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash, cmd.RemoteCompactionV2, cmd.ResponsesLite)
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompleteResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -415,7 +427,8 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, cmd.SessionHash, cmd.RemoteCompactionV2, cmd.ResponsesLite)
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.StartResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -624,12 +637,16 @@ func (s *Upstream) removeStream(id string) bool {
 	return true
 }
 
-func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, sessionHash string, remoteCompactionV2, responsesLite bool) (*http.Response, events.ErrorClass, int, error) {
-	return performURL(ctx, responsesURL, "text/event-stream", accessToken, accountID, proxy, body, sessionHash, remoteCompactionV2, responsesLite)
+func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, profile codexRequestProfile) (*http.Response, events.ErrorClass, int, error) {
+	return performURL(ctx, responsesURL, "text/event-stream", accessToken, accountID, proxy, body, profile)
 }
 
-func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, sessionHash string, remoteCompactionV2, responsesLite bool) (*http.Response, events.ErrorClass, int, error) {
+func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, profile codexRequestProfile) (*http.Response, events.ErrorClass, int, error) {
 	client, err := newHTTPClient(proxy)
+	if err != nil {
+		return nil, events.ErrorProtocol, 0, err
+	}
+	body, err = applyCodexFingerprintBody(body, profile.fingerprint)
 	if err != nil {
 		return nil, events.ErrorProtocol, 0, err
 	}
@@ -643,8 +660,8 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	req.Header.Set("Connection", "Keep-Alive")
 	req.Header.Set("User-Agent", currentIdentity.UserAgent)
 	req.Header.Set("Originator", currentIdentity.Originator)
-	applyCodexSessionHeaders(req.Header, sessionHash)
-	applyCodexFeatureHeaders(req.Header, remoteCompactionV2, responsesLite)
+	applyCodexRequestIdentity(req.Header, profile)
+	applyCodexFeatureHeaders(req.Header, profile.betaFeatures, profile.responsesLite)
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -653,31 +670,6 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 		return nil, classifyTransport(err), 0, err
 	}
 	return response, "", retryAfterSeconds(response.Header), nil
-}
-
-func applyCodexFeatureHeaders(headers headerSetter, remoteCompactionV2, responsesLite bool) {
-	if headers == nil {
-		return
-	}
-	if remoteCompactionV2 {
-		headers.Set("X-Codex-Beta-Features", "remote_compaction_v2")
-	}
-	if responsesLite {
-		headers.Set("X-OpenAI-Internal-Codex-Responses-Lite", "true")
-	}
-}
-
-type headerSetter interface{ Set(string, string) }
-
-func applyCodexSessionHeaders(headers headerSetter, sessionHash string) {
-	sessionHash = strings.TrimSpace(sessionHash)
-	if headers == nil || sessionHash == "" {
-		return
-	}
-	headers.Set("Session-Id", sessionHash)
-	headers.Set("Thread-Id", sessionHash)
-	headers.Set("X-Client-Request-Id", sessionHash)
-	headers.Set("X-Codex-Window-Id", sessionHash+":0")
 }
 
 func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]events.ModelDescriptor, events.ErrorClass, error) {
@@ -1073,6 +1065,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	reader := bufio.NewReader(response.Body)
 	var outputText strings.Builder
 	outputItems := map[int]json.RawMessage{}
+	compactionItems := map[int]json.RawMessage{}
 	semanticEvidence := false
 	for {
 		line, err := readLine(reader, 1<<20)
@@ -1100,14 +1093,26 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 						case "response.output_text.delta":
 							outputText.WriteString(event.Delta)
 							semanticEvidence = semanticEvidence || event.Delta != ""
+						case "response.output_item.added":
+							if event.OutputIndex >= 0 && event.OutputIndex < 1024 && nativeCompactionItem(event.Item) {
+								compactionItems[event.OutputIndex] = bytes.Clone(event.Item)
+								if _, finalized := outputItems[event.OutputIndex]; !finalized {
+									outputItems[event.OutputIndex] = bytes.Clone(event.Item)
+								}
+								semanticEvidence = true
+							}
 						case "response.output_item.done":
 							if event.OutputIndex >= 0 && event.OutputIndex < 1024 && json.Valid(event.Item) {
 								outputItems[event.OutputIndex] = bytes.Clone(event.Item)
+								if nativeCompactionItem(event.Item) {
+									compactionItems[event.OutputIndex] = bytes.Clone(event.Item)
+								}
 								semanticEvidence = true
 							}
 						case "response.completed":
 							if len(event.Response) > 0 {
 								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
+								completed = responseWithCompactionItems(completed, compactionItems)
 								if responseObjectIsEmpty(completed) && !semanticEvidence {
 									return nil, events.ErrorUpstream, events.RateLimitObservation{}, fmt.Errorf("Codex upstream returned an empty response.completed")
 								}
@@ -1491,14 +1496,6 @@ func safeErrorText(value string, limit int) string {
 	return strings.TrimSpace(value)
 }
 
-func rateLimitObservationFromLine(line []byte, now time.Time) events.RateLimitObservation {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return events.RateLimitObservation{}
-	}
-	return rateLimitObservation([]byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))), now)
-}
-
 func rateLimitObservation(body []byte, now time.Time) events.RateLimitObservation {
 	var payload struct {
 		Type  string `json:"type"`
@@ -1614,18 +1611,34 @@ func sendUpdate(ctx context.Context, stream *responseStream, update streamUpdate
 	}
 }
 
-func responseHeaders(headers http.Header) []events.Header {
+type headerGetter interface{ Get(string) string }
+
+func responseHeaders(headers headerGetter) []events.Header {
 	out := make([]events.Header, 0, 8)
 	for _, key := range []string{
-		"Content-Type", "X-Request-ID",
+		"Content-Type", "X-Request-ID", "X-Codex-Turn-State",
 		"X-Codex-Primary-Used-Percent", "X-Codex-Primary-Reset-After-Seconds", "X-Codex-Primary-Window-Minutes",
 		"X-Codex-Secondary-Used-Percent", "X-Codex-Secondary-Reset-After-Seconds", "X-Codex-Secondary-Window-Minutes",
 	} {
 		if value := strings.TrimSpace(headers.Get(key)); value != "" {
+			if strings.EqualFold(key, "X-Codex-Turn-State") && normalizedCodexTurnState(value) == "" {
+				continue
+			}
 			out = append(out, events.Header{Name: key, Value: value})
 		}
 	}
 	return out
+}
+
+func compactResponseHeaders(headers headerGetter) []events.Header {
+	out := responseHeaders(headers)
+	for index := range out {
+		if strings.EqualFold(out[index].Name, "Content-Type") {
+			out[index].Value = "application/json"
+			return out
+		}
+	}
+	return append(out, events.Header{Name: "Content-Type", Value: "application/json"})
 }
 
 func retryAfterSeconds(headers http.Header) int {

@@ -53,13 +53,6 @@ type upstreamResponseDebugInfo struct {
 	Error         string    `json:"error,omitempty"`
 }
 
-func (h *Handler) debugf(format string, args ...any) {
-	if !h.cfg.VerboseLogging {
-		return
-	}
-	slog.Debug(fmt.Sprintf(format, args...))
-}
-
 func (h *Handler) debugfRound(round *archive.Round, r *http.Request, format string, args ...any) {
 	if !h.cfg.VerboseLogging {
 		return
@@ -114,15 +107,6 @@ func (h *Handler) archiveAndLogClientRequest(round *archive.Round, r *http.Reque
 		bodyBytes,
 		headerSummary(info.Headers),
 	)
-}
-
-func (h *Handler) archiveAndLogProviderSelection(round *archive.Round, r *http.Request, providerName string, provider config.Provider, model string, stream bool) {
-	h.archiveAndLogTransportPlan(round, r, TransportPlan{
-		ModelID:          model,
-		RouteOwner:       providerName,
-		UpstreamProtocol: provider.Protocol,
-		Mode:             TransportModeNative,
-	}, provider, stream)
 }
 
 // archiveAndLogTransportPlan 记录 RouteOwner 选择与 TransportPlan 权威字段。

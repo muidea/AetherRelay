@@ -23,6 +23,9 @@
 - `codexoauth` 是只读内建 Provider，上游 Responses、模型发现和用量端点由实现固定，不参与管理型 Provider 的 protocol/base URL/endpoints 切换；如需切换上游接入端点，必须使用独立的管理型直连 Provider。
 - 非流式请求在内部要求上游 SSE；优先返回 `response.completed` 的原始 Response 对象，也可从完整 `output_item.done` 重建标准文本和 function-call output。上游若返回原生 JSON Response 也接受。
 - 流式响应透传标准 Responses 事件。若工具调用已收到完整 `function_call_arguments.done` 和 `response.output_item.done`，随后 clean EOF 可作为成功结束；代理不会伪造缺失的 `response.completed` data。
+- `/v1/responses/compact` 的客户端形态仍保留，但 OAuth 上游统一改写为 streaming `/backend-api/codex/responses`：强制 `stream=true`、`store=false`，并在 input 末尾放置唯一 `compaction_trigger`。只有响应中确实出现 `compaction`/`compaction_summary` item 才学习为支持；旧 unary compact 端点的能力缓存会自动失效。
+- `X-Codex-Beta-Features` 是会话 profile：客户端未声明时默认 `remote_compaction_v2`，显式非空集合保持原样，原生压缩请求则强制包含 v2。`X-Codex-Turn-State` 作为有界 opaque 值转发和回传，只记录其哈希对应的铸造账号；已知跨账号回放在 failover 出站前剥离。
+- 账号指纹收敛默认关闭。管理员可逐账号显式选择 `device`、`session` 或 `full`；HTTP、SSE、compact 与 WebSocket 共用同一类型化 profile，header 与 `client_metadata` 使用同一组 ID，切换到 `off` 账号时不会继承上一 attempt 的身份。
 - WebSocket 支持规范入口 `GET /v1/responses`；`GET /v1/responses/ws` 仅见于参考实现的 SDK 测试，不作为生产兼容入口。Realtime、网页会话或插件能力不在本合同范围。
 
 ## 账号韧性
@@ -36,4 +39,5 @@
 
 ## 演进记录
 
+- 2026-08-17：对齐 sub2api 的 native remote compaction v2、会话 beta、Turn-State 来源守卫和显式 opt-in 指纹收敛。
 - 2026-07-30：Codex OAuth 账号池收口设计 → 归档 `docs/archive/codex-oauth-account-pool-design-2026-07-30.md`

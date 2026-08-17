@@ -490,7 +490,7 @@ func TestNormalizeCodexHTTPRequestResponsesLiteAndRemoteCompaction(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !features.RemoteCompactionV2 || !features.ResponsesLite || body["reasoning"].(map[string]any)["context"] != "all_turns" {
+	if !codexBetaFeaturePresent(features.BetaFeatures, codexRemoteCompactionV2Feature) || !features.ResponsesLite || body["reasoning"].(map[string]any)["context"] != "all_turns" {
 		t.Fatalf("features=%+v body=%s", features, normalized)
 	}
 	tools := body["tools"].([]any)
@@ -503,10 +503,47 @@ func TestNormalizeCodexHTTPRequestResponsesLiteAndRemoteCompaction(t *testing.T)
 	}
 }
 
-func TestNormalizeCodexHTTPRequestRejectsUnknownBeta(t *testing.T) {
-	headers := http.Header{"X-Codex-Beta-Features": []string{"remote_compaction_v2,unknown"}}
+func TestNormalizeCodexHTTPDetectsHeaderlessNativeCompactionAndDefaultsSessionBeta(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","stream":true,"input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
+	_, _, _, features, err := normalizeCodexHTTPRequest(raw, false, nil)
+	if err != nil || features.BetaFeatures != codexRemoteCompactionV2Feature {
+		t.Fatalf("features=%+v err=%v", features, err)
+	}
+	headers := http.Header{"X-Codex-Beta-Features": []string{"responses_websockets_v2"}}
+	_, _, _, features, err = normalizeCodexHTTPRequest([]byte(`{"model":"gpt-test","stream":true,"input":"hello"}`), false, headers)
+	if err != nil || codexBetaFeaturePresent(features.BetaFeatures, codexRemoteCompactionV2Feature) || features.BetaFeatures != "responses_websockets_v2" {
+		t.Fatalf("explicit session beta was not preserved: features=%+v err=%v", features, err)
+	}
+}
+
+func TestNormalizeCodexHTTPPreservesBoundedTurnState(t *testing.T) {
+	headers := http.Header{"X-Codex-Turn-State": []string{"opaque-state"}}
+	_, _, _, features, err := normalizeCodexHTTPRequest([]byte(`{"model":"gpt-test","input":"hello"}`), false, headers)
+	if err != nil || features.TurnState != "opaque-state" {
+		t.Fatalf("features=%+v err=%v", features, err)
+	}
+	headers.Set("X-Codex-Turn-State", strings.Repeat("x", codexTurnStateLimit+1))
 	if _, _, _, _, err := normalizeCodexHTTPRequest([]byte(`{"model":"gpt-test","input":"hello"}`), false, headers); err == nil {
-		t.Fatal("unknown beta feature was accepted")
+		t.Fatal("oversized turn state was accepted")
+	}
+}
+
+func TestNormalizeCodexHTTPPreservesExplicitBetaProfile(t *testing.T) {
+	headers := http.Header{"X-Codex-Beta-Features": []string{"remote_compaction_v2,unknown"}}
+	_, _, _, features, err := normalizeCodexHTTPRequest([]byte(`{"model":"gpt-test","input":"hello"}`), false, headers)
+	if err != nil || features.BetaFeatures != "remote_compaction_v2,unknown" || !codexBetaFeaturePresent(features.BetaFeatures, codexRemoteCompactionV2Feature) {
+		t.Fatalf("explicit beta profile was not preserved: features=%+v err=%v", features, err)
+	}
+}
+
+func TestNormalizeCodexHTTPRejectsOversizedBetaProfile(t *testing.T) {
+	tokens := make([]string, codexBetaFeatureTokenLimit+1)
+	for index := range tokens {
+		tokens[index] = fmt.Sprintf("feature_%d", index)
+	}
+	headers := http.Header{"X-Codex-Beta-Features": []string{strings.Join(tokens, ",")}}
+	if _, _, _, _, err := normalizeCodexHTTPRequest([]byte(`{"model":"gpt-test","input":"hello"}`), false, headers); err == nil {
+		t.Fatal("oversized beta profile was accepted")
 	}
 }
 

@@ -196,11 +196,11 @@ func (s *Account) handleUpdate(ev event.Event, result event.Result) {
 		return
 	}
 	cmd, ok := ev.Data().(events.UpdateCommand)
-	if !ok || strings.TrimSpace(cmd.ID) == "" || (cmd.Status == nil && cmd.Proxy == nil) {
+	if !ok || strings.TrimSpace(cmd.ID) == "" || (cmd.Status == nil && cmd.Proxy == nil && cmd.FingerprintMode == nil) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account update command"))
 		return
 	}
-	item, err := s.store.Update(cmd.ID, cmd.Status, cmd.Proxy)
+	item, err := s.store.Update(cmd.ID, cmd.Status, cmd.Proxy, cmd.FingerprintMode)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return

@@ -39,6 +39,15 @@ const (
 )
 
 const (
+	// Fingerprint convergence is deliberately opt-in. Missing and invalid
+	// persisted values are normalized to off by the account owner.
+	FingerprintModeOff     = "off"
+	FingerprintModeDevice  = "device"
+	FingerprintModeSession = "session"
+	FingerprintModeFull    = "full"
+)
+
+const (
 	ErrorInvalidToken   = "invalid_token"
 	ErrorRateLimit      = "rate_limit"
 	ErrorTimeout        = "timeout"
@@ -77,6 +86,7 @@ type AccountView struct {
 	UsageRefreshError        string                `json:"usage_refresh_error,omitempty"`
 	CompactSupported         *bool                 `json:"compact_supported,omitempty"`
 	WebsocketSupported       *bool                 `json:"websocket_supported,omitempty"`
+	FingerprintMode          string                `json:"fingerprint_mode"`
 }
 
 type CooldownView struct {
@@ -98,14 +108,15 @@ type QuotaObservation struct {
 // CredentialInput is the deliberate secret-bearing Admin import contract.
 // It never appears in a list or health response.
 type CredentialInput struct {
-	CredentialType string `json:"credential_type,omitempty"`
-	AccessToken    string `json:"access_token"`
-	RefreshToken   string `json:"refresh_token"`
-	IDToken        string `json:"id_token,omitempty"`
-	AccountID      string `json:"account_id,omitempty"`
-	Email          string `json:"email,omitempty"`
-	Expired        string `json:"expired,omitempty"`
-	Proxy          string `json:"proxy,omitempty"`
+	CredentialType  string `json:"credential_type,omitempty"`
+	AccessToken     string `json:"access_token"`
+	RefreshToken    string `json:"refresh_token"`
+	IDToken         string `json:"id_token,omitempty"`
+	AccountID       string `json:"account_id,omitempty"`
+	Email           string `json:"email,omitempty"`
+	Expired         string `json:"expired,omitempty"`
+	Proxy           string `json:"proxy,omitempty"`
+	FingerprintMode string `json:"fingerprint_mode,omitempty"`
 	// TargetID is an internal import selector. It is populated only by the
 	// Admin account-bundle orchestration and is never serialized or exported.
 	TargetID string `json:"-"`
@@ -130,9 +141,10 @@ type DeleteResult struct {
 }
 
 type UpdateCommand struct {
-	ID     string
-	Status *string
-	Proxy  *string
+	ID              string
+	Status          *string
+	Proxy           *string
+	FingerprintMode *string
 }
 type UpdateResult struct {
 	Item AccountView `json:"item"`
@@ -153,6 +165,7 @@ type AcquireResult struct {
 	AccountIDHeader string
 	Proxy           string
 	LeaseID         string
+	FingerprintMode string
 }
 
 type ReleaseCommand struct{ LeaseID string }
@@ -188,6 +201,7 @@ type RefreshTokenResult struct {
 	AccessToken      string
 	AccountIDHeader  string
 	Proxy            string
+	FingerprintMode  string
 	Refreshed        bool
 	PermanentFailure bool
 	ErrorClass       string

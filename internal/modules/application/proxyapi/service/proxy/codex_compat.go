@@ -16,6 +16,15 @@ import (
 
 const codexInputItemIDLimit = 64
 
+const (
+	codexRemoteCompactionV2Feature = "remote_compaction_v2"
+	codexDefaultBetaFeatures       = codexRemoteCompactionV2Feature
+	codexTurnStateHeader           = "X-Codex-Turn-State"
+	codexTurnStateLimit            = 16 << 10
+	codexBetaFeatureTokenLimit     = 32
+	codexBetaFeatureValueLimit     = 4096
+)
+
 type codexNormalizationOptions struct {
 	compact             bool
 	allowPreviousID     bool
@@ -24,13 +33,13 @@ type codexNormalizationOptions struct {
 }
 
 type codexRequestFeatures struct {
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	BetaFeatures  string
+	ResponsesLite bool
+	TurnState     string
 }
 
 var codexDropCompatibleHeaders = []string{
 	"X-Codex-Turn-Metadata",
-	"X-Codex-Turn-State",
 	"Version",
 }
 
@@ -70,8 +79,8 @@ func normalizeCodexHTTPRequest(raw []byte, compact bool, headers http.Header) ([
 		return nil, nil, nil, codexRequestFeatures{}, err
 	}
 	features.ResponsesLite = features.ResponsesLite || rawCodexResponsesLite(raw)
-	if compact && features.RemoteCompactionV2 {
-		return nil, nil, nil, codexRequestFeatures{}, fmt.Errorf("remote_compaction_v2 is only valid on /v1/responses")
+	if compact || rawCodexNativeCompactionV2(raw) {
+		features.BetaFeatures = ensureCodexBetaFeature(features.BetaFeatures, codexRemoteCompactionV2Feature)
 	}
 	normalized, body, ignored, err := normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact, responsesLite: features.ResponsesLite})
 	if err != nil {
@@ -91,24 +100,95 @@ func rawCodexResponsesLite(raw []byte) bool {
 }
 
 func codexFeaturesFromHeaders(headers http.Header) (codexRequestFeatures, error) {
-	features := codexRequestFeatures{}
+	features := codexRequestFeatures{BetaFeatures: codexDefaultBetaFeatures}
 	if headers == nil {
 		return features, nil
 	}
 	features.ResponsesLite = strings.EqualFold(strings.TrimSpace(headers.Get("X-OpenAI-Internal-Codex-Responses-Lite")), "true")
+	turnState := strings.TrimSpace(headers.Get(codexTurnStateHeader))
+	if len(turnState) > codexTurnStateLimit || strings.ContainsFunc(turnState, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return codexRequestFeatures{}, fmt.Errorf("X-Codex-Turn-State is invalid")
+	}
+	features.TurnState = turnState
+	tokens := make([]string, 0, 4)
+	seen := map[string]struct{}{}
 	for _, raw := range headers.Values("X-Codex-Beta-Features") {
 		for _, token := range strings.Split(raw, ",") {
 			token = strings.TrimSpace(token)
 			if token == "" {
 				continue
 			}
-			if token != "remote_compaction_v2" {
-				return codexRequestFeatures{}, fmt.Errorf("X-Codex-Beta-Features value %q is not supported", token)
+			if len(token) > 128 || strings.ContainsFunc(token, func(r rune) bool {
+				return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.')
+			}) {
+				return codexRequestFeatures{}, fmt.Errorf("X-Codex-Beta-Features value %q is invalid", token)
 			}
-			features.RemoteCompactionV2 = true
+			if _, exists := seen[token]; exists {
+				continue
+			}
+			projectedLength := len(token)
+			if len(tokens) > 0 {
+				projectedLength++
+			}
+			for _, existing := range tokens {
+				projectedLength += len(existing)
+			}
+			if len(tokens) >= codexBetaFeatureTokenLimit || projectedLength > codexBetaFeatureValueLimit {
+				return codexRequestFeatures{}, fmt.Errorf("X-Codex-Beta-Features is too large")
+			}
+			seen[token] = struct{}{}
+			tokens = append(tokens, token)
 		}
 	}
+	if len(tokens) > 0 {
+		features.BetaFeatures = strings.Join(tokens, ",")
+	}
 	return features, nil
+}
+
+func ensureCodexBetaFeature(value, feature string) string {
+	if codexBetaFeaturePresent(value, feature) {
+		return value
+	}
+	if strings.TrimSpace(value) == "" {
+		return feature
+	}
+	return strings.TrimSpace(value) + "," + feature
+}
+
+func codexBetaFeaturePresent(value, feature string) bool {
+	for _, token := range strings.Split(value, ",") {
+		if strings.TrimSpace(token) == feature {
+			return true
+		}
+	}
+	return false
+}
+
+func rawCodexNativeCompactionV2(raw []byte) bool {
+	var envelope struct {
+		Stream bool            `json:"stream"`
+		Input  json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || !envelope.Stream {
+		return false
+	}
+	return rawCodexInputHasCompactionTrigger(envelope.Input)
+}
+
+func rawCodexInputHasCompactionTrigger(raw json.RawMessage) bool {
+	var items []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &items) != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Type == "compaction_trigger" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOptions) ([]byte, map[string]any, []string, error) {

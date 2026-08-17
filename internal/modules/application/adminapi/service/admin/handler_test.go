@@ -148,6 +148,11 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
 	}
+	for _, marker := range []string{"function codexFingerprintControl(account)", "async function updateCodexFingerprintMode(select)", `JSON.stringify({fingerprint_mode:mode})`, "function validCodexImportFingerprintMode(value)"} {
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("admin page missing Codex fingerprint marker %q", marker)
+		}
+	}
 	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`, `id="cgTaskReload"`, `id="usageExport"`, `id="storeDot"`, `id="storeLabel"`, "async function importAccountFiles(files,parse,post)"} {
 		if strings.Contains(rec.Body.String(), obsolete) {
 			t.Fatalf("admin page still exposes obsolete Codex statistic %q", obsolete)

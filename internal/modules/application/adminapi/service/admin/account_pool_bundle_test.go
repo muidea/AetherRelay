@@ -50,7 +50,7 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	codex := &codexAccountRuntimeStub{
 		accounts: []codexevents.AccountView{{ID: "codex-1", Email: "user@example.com"}},
-		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh"}},
+		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeSession}},
 	}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/export", strings.NewReader(`{}`))
@@ -74,6 +74,9 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	if payload.Accounts[0].Slots.ChatGPT.IdentityKey == "" || payload.Accounts[0].Slots.Codex.IdentityKey == "" {
 		t.Fatalf("export did not retain fallback identity keys: %+v", payload.Accounts[0].Slots)
 	}
+	if payload.Accounts[0].Slots.Codex.FingerprintMode != codexevents.FingerprintModeSession {
+		t.Fatalf("export lost fingerprint mode: %+v", payload.Accounts[0].Slots.Codex)
+	}
 	exportedAt, err := time.Parse(time.RFC3339, payload.ExportedAt)
 	if err != nil {
 		t.Fatalf("exported_at=%q: %v", payload.ExportedAt, err)
@@ -92,7 +95,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh"}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SESSION "}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -101,7 +104,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" {
+	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeSession {
 		t.Fatalf("web imports=%+v codex imports=%+v", web.addedAccounts, codex.imported)
 	}
 }
@@ -157,6 +160,21 @@ func TestAccountPoolBundleImportValidatesProxyBeforeWriting(t *testing.T) {
 	}
 	if len(web.addedAccounts) != 0 || len(codex.imported) != 0 {
 		t.Fatalf("invalid proxy was partially imported: web=%+v codex=%+v", web.addedAccounts, codex.imported)
+	}
+}
+
+func TestAccountPoolBundleImportValidatesFingerprintModeBeforeWriting(t *testing.T) {
+	web := &chatGPTAccountRuntimeStub{}
+	codex := &codexAccountRuntimeStub{}
+	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":"automatic"}}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || len(web.addedAccounts) != 0 || len(codex.imported) != 0 {
+		t.Fatalf("invalid fingerprint mode was partially imported: status=%d body=%s web=%+v codex=%+v", rec.Code, rec.Body.String(), web.addedAccounts, codex.imported)
 	}
 }
 

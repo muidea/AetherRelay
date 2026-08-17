@@ -9,11 +9,12 @@ import (
 type Header struct{ Name, Value string }
 
 type Request struct {
-	Model              string
-	Body               []byte
-	SessionHash        string
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	Model         string
+	Body          []byte
+	SessionHash   string
+	BetaFeatures  string
+	ResponsesLite bool
+	TurnState     string
 }
 
 type Result struct {
@@ -28,10 +29,11 @@ type Completion struct {
 type StreamStart struct{ Headers []Header }
 
 type WebsocketOpenRequest struct {
-	Model              string
-	SessionHash        string
-	RemoteCompactionV2 bool
-	ResponsesLite      bool
+	Model         string
+	SessionHash   string
+	BetaFeatures  string
+	ResponsesLite bool
+	TurnState     string
 }
 type WebsocketOpenResult struct{ SessionID string }
 

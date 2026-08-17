@@ -67,10 +67,11 @@ type Proxy struct {
 	codexDiscoveryJobs map[string]proxyevents.CodexDiscoveryProgress
 	codexUsageJobs     map[string]proxyevents.CodexUsageProgress
 	codexWebsockets    map[string]codexWebsocketBinding
+	codexTurnStates    map[string]codexTurnStateOrigin
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {
-	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}, codexWebsockets: map[string]codexWebsocketBinding{}}
+	biz := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexDiscoveryJobs: map[string]proxyevents.CodexDiscoveryProgress{}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}, codexWebsockets: map[string]codexWebsocketBinding{}, codexTurnStates: map[string]codexTurnStateOrigin{}}
 	bootstrap, err := configevents.RequestBootstrap(ctx, biz.EventHub(), biz.ID())
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
@@ -124,6 +125,7 @@ func (s *Proxy) Teardown(context.Context) {
 	s.mu.Lock()
 	websockets := s.codexWebsockets
 	s.codexWebsockets = nil
+	s.codexTurnStates = nil
 	s.mu.Unlock()
 	for sessionID, binding := range websockets {
 		_, _ = s.SendEvent(event.NewEvent(upevents.TopicWSClose, s.ID(), upcommon.UnitID, nil, upevents.WSCloseCommand{SessionID: sessionID})).Get()

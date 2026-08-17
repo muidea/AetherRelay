@@ -49,7 +49,8 @@ accountidentity.Key(account_id, email)
           "refresh_token": "...",
           "id_token": "...",
           "expired": "2026-08-08T12:00:00Z",
-          "proxy": "http://proxy.example"
+          "proxy": "http://proxy.example",
+          "fingerprint_mode": "off"
         }
       }
     }
@@ -65,6 +66,7 @@ accountidentity.Key(account_id, email)
 - `identity.email` 明文保留，用于展示和跨槽位匹配；邮箱为空时允许仅有一个槽位，但不能据此强行合并两个不同账号。
 - `slots` 的键只允许 `chatgpt_web`、`codex_cli`；至少一个槽位存在。
 - 槽位的 `account_id`、`identity_key` 保留上游/源实例信息，但不作为目标实例的本地 ID。
+- `codex_cli.fingerprint_mode` 只允许 `off/device/session/full`；缺失视为 `off`。它是显式的账号级行为设置，随凭据迁移但不包含任何派生 ID。
 - 凭据字段只允许出现在明确的凭据导出接口响应中；导出文件必须按凭据文件处理，禁止写入日志。
 - 不导出状态、额度、刷新错误、冷却、模型快照、用量、Provider、API Key、图片和交互记录。
 

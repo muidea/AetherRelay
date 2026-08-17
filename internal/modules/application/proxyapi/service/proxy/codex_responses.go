@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -72,7 +71,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
 	if clientStream {
 		h.handleCodexCompactStream(w, r, round, started, plan, model, clientBody, request)
 		return
@@ -207,7 +206,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		h.writeCodexResponsesError(w, r, round, started, provider, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite}
+	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
 	if !stream {
 		response, err := executor.CompleteCodexResponses(r.Context(), request)
 		if err != nil {
@@ -361,17 +360,6 @@ func codexResponsesFailureSSE(failure *streamFail) []byte {
 	return []byte("event: response.failed\ndata: " + string(payload) + "\n\n")
 }
 
-func (h *Handler) completeCodexOAuthResponse(ctx context.Context, model string, raw []byte, sessionHash ...string) (codexresponses.Result, error) {
-	if h.codexResponses == nil {
-		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable"))
-	}
-	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw)}
-	if len(sessionHash) > 0 {
-		request.SessionHash = sessionHash[0]
-	}
-	return h.codexResponses.CompleteCodexResponses(ctx, request)
-}
-
 func (h *Handler) writeCodexOAuthCompleteSuccess(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, requestBody map[string]any, response codexresponses.Result) {
 	copyCodexHeaders(w.Header(), response.Headers)
 	if w.Header().Get("Content-Type") == "" {
@@ -440,7 +428,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {
 	for _, header := range headers {
 		name, value := strings.TrimSpace(header.Name), strings.TrimSpace(header.Value)
-		if name == "Content-Type" || name == "X-Request-ID" {
+		if strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "X-Request-ID") || strings.EqualFold(name, codexTurnStateHeader) {
 			if value != "" {
 				target.Set(name, value)
 			}

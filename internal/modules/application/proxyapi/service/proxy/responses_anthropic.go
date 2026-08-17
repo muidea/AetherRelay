@@ -76,10 +76,6 @@ const (
 	maxConversionTools             = 128
 )
 
-func serveConvertedSSE(ctx context.Context, w http.ResponseWriter, input io.Reader, mapper conversionSSEMapper, state *textConversionStreamState, includeEventName bool) error {
-	return serveConvertedSSEWithTimeouts(ctx, w, input, mapper, state, includeEventName, 0, 0)
-}
-
 // serveConvertedSSEWithTimeouts converts one upstream SSE stream while
 // enforcing first-event and inter-event deadlines.  The input is closed when
 // the client cancels or a deadline fires so a blocked upstream read cannot

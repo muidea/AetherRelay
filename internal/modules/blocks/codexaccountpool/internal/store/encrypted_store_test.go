@@ -56,6 +56,43 @@ func TestEncryptedAccountPersistenceDoesNotExposeTokens(t *testing.T) {
 	}
 }
 
+func TestEncryptedAccountLoadMigratesFingerprintDefaultAndCompactProtocol(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	codec := encryptedTestCodec(t)
+	store, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.Import([]events.CredentialInput{ReadOnlyCredential()}); err != nil {
+		t.Fatal(err)
+	}
+	item := store.items[store.order[0]]
+	legacySupported := false
+	item.CompactSupported = &legacySupported
+	item.CompactProtocol = ""
+	item.FingerprintMode = "legacy-default"
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	view := restored.List()[0]
+	if view.FingerprintMode != events.FingerprintModeOff || view.CompactSupported != nil {
+		t.Fatalf("migrated view=%+v", view)
+	}
+	loaded := restored.items[restored.order[0]]
+	if loaded.CompactProtocol != nativeCompactProtocol {
+		t.Fatalf("compact protocol=%q", loaded.CompactProtocol)
+	}
+}
+
 func ReadOnlyCredential() events.CredentialInput {
 	return events.CredentialInput{AccessToken: "codex-access-secret", RefreshToken: "codex-refresh-secret", IDToken: "codex-id-secret"}
 }

@@ -132,7 +132,7 @@ func TestAcquireIgnoresExpiredOrIneligibleAffinity(t *testing.T) {
 		t.Fatal("CP-SCHED-004: expired affinity was reused")
 	}
 	status := events.StatusDisabled
-	if _, err := account.store.Update(first.AccountID, &status, nil); err != nil {
+	if _, err := account.store.Update(first.AccountID, &status, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	account.sessions["disabled"] = sessionBinding{accountID: first.AccountID, expiresAt: now.Add(time.Hour)}

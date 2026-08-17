@@ -26,7 +26,7 @@ func (f *fakeRuntime) UpdateConfig(cfg config.Config) error {
 
 func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	store := usage.NewMemoryStore()
-	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Add(-time.Minute)
 	_ = store.Start(context.Background(), usage.StartRecord{
 		EventID: "e1", StartedAt: now, APIKeyID: "codex",
 		Operation: "chat_completions", ClientEndpoint: "/v1/chat/completions", ClientProtocol: "openai",
@@ -93,7 +93,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 
 func TestUsageFilterOptionsMergeAndLoopback(t *testing.T) {
 	store := usage.NewMemoryStore()
-	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Add(-time.Minute)
 	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "codex", Hash: "sha256:codex", Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()})
 	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "unused-key", Hash: "sha256:unused", Enabled: false, CreatedAt: now, ProviderAccess: clientaccess.All()})
 	_ = store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "retired", Hash: "sha256:retired", Enabled: true, CreatedAt: now, ProviderAccess: clientaccess.All()})

@@ -1242,7 +1242,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			return
 		}
 		if !rawStream {
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, RemoteCompactionV2: features.RemoteCompactionV2, ResponsesLite: features.ResponsesLite})
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
@@ -1686,34 +1686,6 @@ func (h *Handler) handleStreamResponse(w http.ResponseWriter, resp *http.Respons
 	}
 	h.recordAndPrintFail(round, r, providerName, model, true, resp.StatusCode, duration, usage, streamErr)
 	h.writeArchiveMetadata(round, providerName, model, true, resp.StatusCode, duration, usage, "response.sse", errMsg, fullPath, outcomeFromStreamFail(streamErr, resp.StatusCode))
-}
-
-func trackSSELine(line []byte, usage *tokenUsage, content *strings.Builder) {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-	if payload == "" || payload == "[DONE]" {
-		return
-	}
-	var event map[string]any
-	if err := json.Unmarshal([]byte(payload), &event); err != nil {
-		return
-	}
-	if parsed, ok := usageFromMap(event["usage"]); ok {
-		*usage = parsed
-	}
-	choices, _ := event["choices"].([]any)
-	for _, item := range choices {
-		choice, _ := item.(map[string]any)
-		if delta, ok := choice["delta"].(map[string]any); ok {
-			content.WriteString(flattenValue(delta["content"]))
-		}
-		if text, ok := choice["text"].(string); ok {
-			content.WriteString(text)
-		}
-	}
 }
 
 func parseRawRequestBody(body []byte) (map[string]any, string, bool) {
@@ -2285,10 +2257,6 @@ func recordRequestPlanMetric(reg metricsport.Port, plan TransportPlan, route str
 		plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
 }
 
-func (h *Handler) doUpstream(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool) (upstreamResult, error) {
-	return h.doUpstreamPath(r, round, providerName, provider, body, bodyBytes, stream, r.URL.Path, r.URL.RawQuery, r.Method)
-}
-
 func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool, path, rawQuery, method string) (upstreamResult, error) {
 	// A caller may execute one candidate or the bounded safe native candidate
 	// chain. This helper itself owns only one upstream HTTP attempt.
@@ -2495,10 +2463,6 @@ func (p *prefixReadCloser) Close() error {
 	return p.rest.Close()
 }
 
-func providerSupportsInboundPath(provider config.Provider, path string) bool {
-	return config.ProviderSupportsInboundPath(provider, path)
-}
-
 func (h *Handler) upstreamContext(parent context.Context, stream bool) (context.Context, context.CancelFunc) {
 	if stream {
 		return context.WithCancel(parent)
@@ -2508,10 +2472,6 @@ func (h *Handler) upstreamContext(parent context.Context, stream bool) (context.
 		return context.WithTimeout(parent, requestTimeout)
 	}
 	return parent, nil
-}
-
-func (h *Handler) newUpstreamRequest(ctx context.Context, r *http.Request, provider config.Provider, body []byte) (*http.Request, error) {
-	return h.newUpstreamRequestForPath(ctx, r, provider, body, r.URL.Path, r.URL.RawQuery, r.Method, false)
 }
 
 // newUpstreamRequestForPath 按指定上游 path 构建请求,用于协议转换时改写目标路径。
@@ -2643,16 +2603,6 @@ func joinUpstreamPath(basePath, incomingPath string) string {
 	return basePath + incomingPath
 }
 
-// resolveTransportPlan 是执行端点的唯一路由入口：从 EffectiveCatalog 解析 TransportPlan。
-// 已禁用 X-AI-Provider / ?provider= / provider/model 显式选择;不允许修改 RouteOwner。
-func (h *Handler) resolveTransportPlan(r *http.Request, model string) (TransportPlan, *APIError) {
-	plans, apiErr := h.resolveTransportPlans(r, model)
-	if apiErr != nil {
-		return TransportPlan{}, apiErr
-	}
-	return plans[0], nil
-}
-
 func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]TransportPlan, *APIError) {
 	method := ""
 	path := ""
@@ -2738,14 +2688,6 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 		return eligible[i].RouteOwner < eligible[j].RouteOwner
 	})
 	return eligible, nil
-}
-
-func providerMatchesModel(name string, provider config.Provider, model string) bool {
-	return config.ProviderMatchesModel(name, provider, model)
-}
-
-func matchModelPattern(model, pattern string) bool {
-	return config.MatchModelPattern(model, pattern)
 }
 
 func copyHeader(dst, src http.Header) {
