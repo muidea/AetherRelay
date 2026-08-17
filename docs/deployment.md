@@ -158,7 +158,7 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml
 
 ### 一键部署脚本（推荐）
 
-仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：生成配置（含容器适配）、初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、拉取镜像、启动容器并等待就绪。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略），运行数据直接持久化到其中的 `data/` 子目录。
+仓库提供 [`scripts/deploy-docker.sh`](../scripts/deploy-docker.sh) 自动化完整流程：先拉取部署镜像，从该镜像提取配套配置模板（含容器适配），再初始化 Admin 凭据、生成自包含的 `docker-compose.yml` 与 `.env`、启动容器并等待就绪。模板提取和服务启动之间不会再次拉取 mutable tag，确保配置模板与程序来自同一份本地镜像。产物全部落在部署目录（默认 `./deploy`，已被 `.gitignore` 忽略），运行数据直接持久化到其中的 `data/` 子目录。
 
 ```bash
 # 交互式：按实时提示输入两次 Admin 密码（输入不回显）
@@ -184,10 +184,12 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml
 - **Admin 凭据初始化**：密码提示直接显示在当前 TTY，输入不回显；`password-hash` 在容器内运行，密码不进入参数、环境变量或日志。其 stdout 通过临时挂载文件回传哈希，随即写入 `.env` 的 `AETHERRELAY_ADMIN_PASSWORD_HASH` 并删除临时文件；`config.yaml` 中仅以 `${AETHERRELAY_ADMIN_PASSWORD_HASH}` 引用。
 - **凭据加密**：脚本首次运行自动生成 `AETHERRELAY_CREDENTIAL_KEY`；Provider 与两类账号池凭据均以该密钥加密写入 DuckDB。重复运行保留原密钥，禁止随意重置。
 - **Provider 配置**：默认配置不内置 Provider，因此脚本不询问任何固定厂商 Key。部署完成后从管理台添加任意 Provider，或在账号池页面导入 ChatGPT Web / Codex OAuth 凭据。
+- **配置版本一致性**：无论从仓库执行还是通过 `bash <(curl ...)` 单文件执行，脚本都先显式拉取 `--image` 指定的镜像，再以 `--pull=never` 从该镜像读取 `/usr/share/aetherrelay/config.example.yaml`；后续直接使用本地镜像启动，避免缓存模板与新程序错配。
+- **旧配置收口**：重复部署仍保留用户配置，但会识别曾由错误模板写入 `chatgpt_web` 的 `websocket_max_sessions`、`websocket_max_message_bytes`、`websocket_idle_timeout_seconds` 与 `websocket_max_lifetime_seconds`，保留原值迁移至 `codex_oauth`。目标节点已有同名配置时以目标值为准；发生迁移前会在同目录生成 `config.yaml.bak.websocket-section.*`，后续重跑保持幂等。
 - **就绪判定**：容器在等待窗口内未通过 `/healthz` 时脚本返回非零并停止，不会继续打印“部署完成”；已生成的配置、`.env` 与数据目录会保留，按错误提示查看日志后可直接重跑。
 - 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
 - `.env` 生成后为 `chmod 600`，包含凭据主密钥与 Admin 哈希，务必保持私有、不入版本库。
-- 重复运行时保留已有 `config.yaml` 不覆盖；`.env` 中已配置的值保留为默认。
+- 重复运行时保留已有 `config.yaml`（除上述已知错位字段迁移外）不覆盖；`.env` 中已配置的值保留为默认。
 - 脚本创建 `config/` 与 `data/`，并尽力将两者设为 UID/GID `10001:10001`；权限不足时会提示手动修正。配置目录不可写时，内建 Provider 路由策略、客户端 Key 与管理偏好只读；Provider 目录仍由 DuckDB 安全存储负责。数据目录不可写时服务无法保存运行数据。
 
 ### Docker Compose（手动）

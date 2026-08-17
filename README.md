@@ -56,7 +56,7 @@ git clone https://github.com/muidea/AetherRelay.git && cd AetherRelay && ./scrip
 bash <(curl -fsSL https://raw.githubusercontent.com/muidea/AetherRelay/main/scripts/deploy-docker.sh)
 ```
 
-脚本会实时提示输入两次 Admin 密码（输入不回显，密码不进入参数、环境变量或日志），完成后登录管理台添加 Provider 或导入账号池凭据。无交互场景用 `--admin-password-hash '...'` 注入预生成哈希，或 `--skip-admin` 跳过；完整参数见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
+脚本会先拉取镜像，再从同一份本地镜像提取配置模板并启动服务，避免 mutable `latest` 的缓存模板与新程序错配；重复部署会保留用户配置，并自动备份、迁移曾短暂出现在 `chatgpt_web` 下的四个 Codex WebSocket 字段。脚本会实时提示输入两次 Admin 密码（输入不回显，密码不进入参数、环境变量或日志），完成后登录管理台添加 Provider 或导入账号池凭据。无交互场景用 `--admin-password-hash '...'` 注入预生成哈希，或 `--skip-admin` 跳过；完整参数见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
 
 也可以手动复制配置、按容器网络调整 `listen_addr` 与 `state.dir`，再启动：
 
