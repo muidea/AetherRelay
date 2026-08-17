@@ -52,6 +52,26 @@ type providerBundleResult struct {
 	Items         []providerBundleItemResult `json:"items"`
 }
 
+// collapseProviderBundleItems applies the bundle's same-name overwrite rule.
+// Names are case-insensitive and trimmed; the last definition wins while the
+// first occurrence keeps its output position for deterministic results.
+func collapseProviderBundleItems(items []providerBundleItem) []providerBundleItem {
+	result := make([]providerBundleItem, 0, len(items))
+	positions := make(map[string]int, len(items))
+	for _, item := range items {
+		item.Name = strings.ToLower(strings.TrimSpace(item.Name))
+		if item.Name != "" {
+			if index, exists := positions[item.Name]; exists {
+				result[index] = item
+				continue
+			}
+			positions[item.Name] = len(result)
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
 func (h *Handler) exportProviderBundle(w http.ResponseWriter, r *http.Request) {
 	includeSecrets := false
 	if r.Body != nil {
@@ -113,6 +133,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode must be merge, replace, or skip")
 		return
 	}
+	providers := collapseProviderBundleItems(payload.Providers)
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
 	current := h.runtime.ConfigSnapshot()
@@ -120,10 +141,10 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 	for name, provider := range current.Providers {
 		next[name] = provider
 	}
-	result := providerBundleResult{Format: "aetherrelay.provider-bundle-result", SchemaVersion: providerBundleSchemaVersion, Items: make([]providerBundleItemResult, 0, len(payload.Providers))}
-	seen := make(map[string]struct{}, len(payload.Providers))
-	for _, item := range payload.Providers {
-		name := strings.ToLower(strings.TrimSpace(item.Name))
+	result := providerBundleResult{Format: "aetherrelay.provider-bundle-result", SchemaVersion: providerBundleSchemaVersion, Items: make([]providerBundleItemResult, 0, len(providers))}
+	included := make(map[string]struct{}, len(providers))
+	for _, item := range providers {
+		name := item.Name
 		itemResult := providerBundleItemResult{Name: name}
 		if name == "" {
 			itemResult.Status, itemResult.Action, itemResult.Error = "error", "rejected", "provider name is required"
@@ -131,13 +152,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 			result.Items = append(result.Items, itemResult)
 			continue
 		}
-		if _, duplicate := seen[name]; duplicate {
-			itemResult.Status, itemResult.Action, itemResult.Error = "error", "rejected", "duplicate provider name"
-			result.Failed++
-			result.Items = append(result.Items, itemResult)
-			continue
-		}
-		seen[name] = struct{}{}
+		included[name] = struct{}{}
 		if name == "chatgptweb" || name == "codexoauth" || item.Protocol == "chatgptweb" || item.Protocol == "codexoauth" {
 			itemResult.Status, itemResult.Action, itemResult.Error = "error", "rejected", "builtin providers are not importable"
 			result.Failed++
@@ -158,6 +173,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		provider := config.Provider{Name: name, Protocol: strings.ToLower(strings.TrimSpace(item.Protocol)), BaseURL: strings.TrimSpace(item.BaseURL), Models: append([]string(nil), item.Models...), Endpoints: append([]string(nil), item.Endpoints...), Priority: item.Priority, Fallback: item.Fallback, Disabled: !item.Enabled}
+		config.ConfigureProviderPolicy(&provider, item.Priority, item.Fallback)
 		if item.APIKey != nil {
 			provider.APIKey = strings.TrimSpace(*item.APIKey)
 			if provider.APIKey == "" {
@@ -198,7 +214,7 @@ func (h *Handler) importProviderBundle(w http.ResponseWriter, r *http.Request) {
 			if name == "chatgptweb" || name == "codexoauth" {
 				continue
 			}
-			if _, included := seen[name]; !included {
+			if _, exists := included[name]; !exists {
 				delete(next, name)
 			}
 		}

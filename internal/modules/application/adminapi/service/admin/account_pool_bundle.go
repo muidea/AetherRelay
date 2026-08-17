@@ -277,6 +277,23 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 	if len(payload.Accounts) == 0 || len(payload.Accounts) > maxAccountImportItems {
 		return nil, nil, nil, fmt.Errorf("accounts must contain 1 to 1000 entries")
 	}
+	// account_id is the explicit same-name key within one slot type. Collapse
+	// before validating credentials so only the last definition is effective.
+	// Email is deliberately excluded because several workspaces may share it.
+	lastChatByAccountID := make(map[string]int, len(payload.Accounts))
+	lastCodexByAccountID := make(map[string]int, len(payload.Accounts))
+	for i, account := range payload.Accounts {
+		if slot := account.Slots.ChatGPT; slot != nil {
+			if accountID := strings.TrimSpace(slot.AccountID); accountID != "" {
+				lastChatByAccountID[accountID] = i
+			}
+		}
+		if slot := account.Slots.Codex; slot != nil {
+			if accountID := strings.TrimSpace(slot.AccountID); accountID != "" {
+				lastCodexByAccountID[accountID] = i
+			}
+		}
+	}
 	seenRefs := make(map[string]int, len(payload.Accounts))
 	seenCredentials := map[string]map[string]string{
 		"chatgpt_web": {},
@@ -286,23 +303,19 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 		"chatgpt_web": {},
 		"codex_cli":   {},
 	}
-	seenAccountIDs := map[string]map[string]string{
-		"chatgpt_web": {},
-		"codex_cli":   {},
-	}
+	chatRefs := make([]string, 0, len(payload.Accounts))
+	codexRefs := make([]string, 0, len(payload.Accounts))
 
 	addConflict := func(accountRef, slot, reason string) {
 		conflicts = append(conflicts, accountPoolBundleConflict{AccountRef: accountRef, Slot: slot, Reason: reason})
 	}
-	rememberAccountID := func(accountRef, kind, accountID string) {
-		if accountID = strings.TrimSpace(accountID); accountID == "" {
-			return
-		}
-		if previous, exists := seenAccountIDs[kind][accountID]; exists && previous != accountRef {
-			addConflict(accountRef, kind, "same upstream account_id is assigned to another account_ref")
-			return
-		}
-		seenAccountIDs[kind][accountID] = accountRef
+	appendChat := func(accountRef string, item accevents.ExportItem) {
+		chat = append(chat, item)
+		chatRefs = append(chatRefs, accountRef)
+	}
+	appendCodex := func(accountRef string, item codexevents.CredentialInput) {
+		codex = append(codex, item)
+		codexRefs = append(codexRefs, accountRef)
 	}
 	validateSlotText := func(value string, max int, field string) error {
 		if value == "" {
@@ -315,6 +328,24 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 	}
 	for i := range payload.Accounts {
 		account := &payload.Accounts[i]
+		if account.Slots.ChatGPT == nil && account.Slots.Codex == nil {
+			return nil, nil, nil, fmt.Errorf("accounts[%d] must contain at least one slot", i)
+		}
+		chatEffective := account.Slots.ChatGPT != nil
+		if chatEffective {
+			if accountID := strings.TrimSpace(account.Slots.ChatGPT.AccountID); accountID != "" && lastChatByAccountID[accountID] != i {
+				chatEffective = false
+			}
+		}
+		codexEffective := account.Slots.Codex != nil
+		if codexEffective {
+			if accountID := strings.TrimSpace(account.Slots.Codex.AccountID); accountID != "" && lastCodexByAccountID[accountID] != i {
+				codexEffective = false
+			}
+		}
+		if !chatEffective && !codexEffective {
+			continue
+		}
 		account.AccountRef = strings.TrimSpace(account.AccountRef)
 		if !bundleTextValid(account.AccountRef, 128) {
 			return nil, nil, nil, fmt.Errorf("accounts[%d].account_ref is invalid", i)
@@ -328,10 +359,7 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 		if err := validateSlotText(account.Identity.Email, 320, fmt.Sprintf("accounts[%d].identity.email", i)); err != nil {
 			return nil, nil, nil, err
 		}
-		if account.Slots.ChatGPT == nil && account.Slots.Codex == nil {
-			return nil, nil, nil, fmt.Errorf("accounts[%d] must contain at least one slot", i)
-		}
-		if account.Slots.ChatGPT != nil && account.Slots.Codex != nil {
+		if chatEffective && codexEffective {
 			webEmail := bundleEmail(firstNonEmpty(account.Slots.ChatGPT.Email, account.Identity.Email))
 			codexEmail := bundleEmail(firstNonEmpty(account.Slots.Codex.Email, account.Identity.Email))
 			if webEmail == "" || codexEmail == "" || webEmail != codexEmail {
@@ -339,7 +367,7 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			}
 		}
 
-		if slot := account.Slots.ChatGPT; slot != nil {
+		if slot := account.Slots.ChatGPT; slot != nil && chatEffective {
 			const kind = "chatgpt_web"
 			if value := strings.ToLower(strings.TrimSpace(slot.CredentialType)); value != "" && value != kind {
 				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.chatgpt_web has invalid credential_type", i)
@@ -356,7 +384,6 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			if err := validateSlotText(slot.AccountID, 512, fmt.Sprintf("accounts[%d].slots.chatgpt_web.account_id", i)); err != nil {
 				return nil, nil, nil, err
 			}
-			rememberAccountID(account.AccountRef, kind, slot.AccountID)
 			if err := validateSlotText(slot.IdentityKey, 256, fmt.Sprintf("accounts[%d].slots.chatgpt_web.identity_key", i)); err != nil {
 				return nil, nil, nil, err
 			}
@@ -384,20 +411,10 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			if err := validateBundleProxy(slot.Proxy, fmt.Sprintf("accounts[%d].slots.chatgpt_web.proxy", i)); err != nil {
 				return nil, nil, nil, err
 			}
-			if previous, exists := seenCredentials[kind][slot.RefreshToken]; exists {
-				addConflict(account.AccountRef, kind, fmt.Sprintf("duplicate refresh credential (also used by %s)", previous))
-			} else {
-				seenCredentials[kind][slot.RefreshToken] = account.AccountRef
-			}
-			if previous, exists := seenAccess[kind][slot.AccessToken]; exists {
-				addConflict(account.AccountRef, kind, fmt.Sprintf("duplicate access credential (also used by %s)", previous))
-			} else {
-				seenAccess[kind][slot.AccessToken] = account.AccountRef
-			}
-			chat = append(chat, accevents.ExportItem{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy})
+			appendChat(account.AccountRef, accevents.ExportItem{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy})
 		}
 
-		if slot := account.Slots.Codex; slot != nil {
+		if slot := account.Slots.Codex; slot != nil && codexEffective {
 			const kind = "codex_cli"
 			credentialType := strings.ToLower(strings.TrimSpace(slot.CredentialType))
 			if credentialType != "" && credentialType != kind && credentialType != "codex_oauth" {
@@ -421,7 +438,6 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			if err := validateSlotText(slot.AccountID, 512, fmt.Sprintf("accounts[%d].slots.codex_cli.account_id", i)); err != nil {
 				return nil, nil, nil, err
 			}
-			rememberAccountID(account.AccountRef, kind, slot.AccountID)
 			if err := validateSlotText(slot.IdentityKey, 256, fmt.Sprintf("accounts[%d].slots.codex_cli.identity_key", i)); err != nil {
 				return nil, nil, nil, err
 			}
@@ -449,18 +465,26 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			if err := validateBundleProxy(slot.Proxy, fmt.Sprintf("accounts[%d].slots.codex_cli.proxy", i)); err != nil {
 				return nil, nil, nil, err
 			}
-			if previous, exists := seenCredentials[kind][slot.RefreshToken]; exists {
-				addConflict(account.AccountRef, kind, fmt.Sprintf("duplicate refresh credential (also used by %s)", previous))
-			} else {
-				seenCredentials[kind][slot.RefreshToken] = account.AccountRef
-			}
-			if previous, exists := seenAccess[kind][slot.AccessToken]; exists {
-				addConflict(account.AccountRef, kind, fmt.Sprintf("duplicate access credential (also used by %s)", previous))
-			} else {
-				seenAccess[kind][slot.AccessToken] = account.AccountRef
-			}
-			codex = append(codex, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode})
+			appendCodex(account.AccountRef, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode})
 		}
+	}
+	rememberCredentials := func(accountRef, kind, accessToken, refreshToken string) {
+		if previous, exists := seenCredentials[kind][refreshToken]; exists {
+			addConflict(accountRef, kind, fmt.Sprintf("duplicate refresh credential (also used by %s)", previous))
+		} else {
+			seenCredentials[kind][refreshToken] = accountRef
+		}
+		if previous, exists := seenAccess[kind][accessToken]; exists {
+			addConflict(accountRef, kind, fmt.Sprintf("duplicate access credential (also used by %s)", previous))
+		} else {
+			seenAccess[kind][accessToken] = accountRef
+		}
+	}
+	for i, item := range chat {
+		rememberCredentials(chatRefs[i], "chatgpt_web", item.AccessToken, item.RefreshToken)
+	}
+	for i, item := range codex {
+		rememberCredentials(codexRefs[i], "codex_cli", item.AccessToken, item.RefreshToken)
 	}
 	if len(chat) > maxAccountImportItems || len(codex) > maxAccountImportItems {
 		return nil, nil, nil, fmt.Errorf("each credential slot type may contain at most 1000 accounts")
@@ -510,7 +534,10 @@ func resolveBundleTarget(accountID, email string, views []bundleTargetView, repl
 			return exact[0].ID, ""
 		}
 		if len(exact) > 1 {
-			return "", "multiple existing slots match account_id"
+			// account_id identifies an upstream account or workspace, not an
+			// individual OAuth session. Leave session selection to the owner,
+			// which can safely match an existing access/refresh credential.
+			return "", ""
 		}
 	}
 	if email == "" {
@@ -543,6 +570,20 @@ func resolveBundleTarget(accountID, email string, views []bundleTargetView, repl
 	return emailMatches[0].ID, ""
 }
 
+// bundleTargetSelector identifies effective inputs that would otherwise
+// compete for the same metadata-derived target. Repeated account_id values
+// have already converged by last-write-wins; repeated email-only inputs must
+// remain unbound so the owner can match exact credentials without guessing.
+func bundleTargetSelector(accountID, email string) string {
+	if accountID = strings.TrimSpace(accountID); accountID != "" {
+		return "account:" + accountidentity.Key(accountID, email)
+	}
+	if email = bundleEmail(email); email != "" {
+		return "email:" + email
+	}
+	return ""
+}
+
 func bundleTargetViews(items []accevents.AccountView) []bundleTargetView {
 	views := make([]bundleTargetView, 0, len(items))
 	for _, item := range items {
@@ -560,20 +601,49 @@ func codexBundleTargetViews(items []codexevents.AccountView) []bundleTargetView 
 }
 
 func resolveAccountPoolBundleTargets(payload accountPoolBundle, chat []accevents.ExportItem, codex []codexevents.CredentialInput, webViews []accevents.AccountView, codexViews []codexevents.AccountView) (conflicts []accountPoolBundleConflict) {
-	chatRefs := make(map[string]string, len(chat))
-	codexRefs := make(map[string]string, len(codex))
+	chatRefsByAccess := make(map[string]string, len(chat))
+	chatRefsByAccountID := make(map[string]string, len(chat))
+	codexRefsByAccess := make(map[string]string, len(codex))
+	codexRefsByAccountID := make(map[string]string, len(codex))
+	chatSelectors := make(map[string]int, len(chat))
+	codexSelectors := make(map[string]int, len(codex))
 	for _, account := range payload.Accounts {
-		if account.Slots.ChatGPT != nil {
-			chatRefs[strings.TrimSpace(account.Slots.ChatGPT.AccessToken)] = account.AccountRef
+		if slot := account.Slots.ChatGPT; slot != nil {
+			chatRefsByAccess[strings.TrimSpace(slot.AccessToken)] = account.AccountRef
+			if accountID := strings.TrimSpace(slot.AccountID); accountID != "" {
+				chatRefsByAccountID[accountID] = account.AccountRef
+			}
 		}
-		if account.Slots.Codex != nil {
-			codexRefs[strings.TrimSpace(account.Slots.Codex.AccessToken)] = account.AccountRef
+		if slot := account.Slots.Codex; slot != nil {
+			codexRefsByAccess[strings.TrimSpace(slot.AccessToken)] = account.AccountRef
+			if accountID := strings.TrimSpace(slot.AccountID); accountID != "" {
+				codexRefsByAccountID[accountID] = account.AccountRef
+			}
+		}
+	}
+	for _, item := range chat {
+		if selector := bundleTargetSelector(item.AccountID, item.Email); selector != "" {
+			chatSelectors[selector]++
+		}
+	}
+	for _, item := range codex {
+		if selector := bundleTargetSelector(item.AccountID, item.Email); selector != "" {
+			codexSelectors[selector]++
 		}
 	}
 	webTargets := bundleTargetViews(webViews)
 	webTargetRefs := make(map[string]string, len(chat))
 	for i := range chat {
-		ref := chatRefs[chat[i].AccessToken]
+		if selector := bundleTargetSelector(chat[i].AccountID, chat[i].Email); selector != "" && chatSelectors[selector] > 1 {
+			// Preserve every session in a repeated metadata cohort. The owner
+			// still deduplicates exact credentials and creates unmatched ones.
+			chat[i].TargetID = ""
+			continue
+		}
+		ref := chatRefsByAccess[chat[i].AccessToken]
+		if accountID := strings.TrimSpace(chat[i].AccountID); accountID != "" {
+			ref = chatRefsByAccountID[accountID]
+		}
 		target, reason := resolveBundleTarget(chat[i].AccountID, chat[i].Email, webTargets, payload.Replace)
 		if reason != "" {
 			conflicts = append(conflicts, accountPoolBundleConflict{AccountRef: ref, Slot: "chatgpt_web", Reason: reason})
@@ -591,7 +661,14 @@ func resolveAccountPoolBundleTargets(payload accountPoolBundle, chat []accevents
 	codexTargets := codexBundleTargetViews(codexViews)
 	codexTargetRefs := make(map[string]string, len(codex))
 	for i := range codex {
-		ref := codexRefs[codex[i].AccessToken]
+		if selector := bundleTargetSelector(codex[i].AccountID, codex[i].Email); selector != "" && codexSelectors[selector] > 1 {
+			codex[i].TargetID = ""
+			continue
+		}
+		ref := codexRefsByAccess[codex[i].AccessToken]
+		if accountID := strings.TrimSpace(codex[i].AccountID); accountID != "" {
+			ref = codexRefsByAccountID[accountID]
+		}
 		target, reason := resolveBundleTarget(codex[i].AccountID, codex[i].Email, codexTargets, payload.Replace)
 		if reason != "" {
 			conflicts = append(conflicts, accountPoolBundleConflict{AccountRef: ref, Slot: "codex_cli", Reason: reason})

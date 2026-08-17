@@ -294,18 +294,38 @@ func TestAccountPoolBundleImportReturnsFileConflictsWithoutWriting(t *testing.T)
 	}
 }
 
-func TestAccountPoolBundleImportRejectsDuplicateUpstreamAccountID(t *testing.T) {
+func TestAccountPoolBundleImportLastSameAccountIDWins(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct-a","slots":{"chatgpt_web":{"account_id":"same-upstream","access_token":"web-a","refresh_token":"refresh-a"}}},{"account_ref":"acct-b","slots":{"chatgpt_web":{"account_id":"same-upstream","access_token":"web-b","refresh_token":"refresh-b"}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct-web-a","slots":{"chatgpt_web":{"account_id":"same-web","access_token":"superseded-web-without-refresh"}}},{"account_ref":"acct-web-b","slots":{"chatgpt_web":{"account_id":"same-web","access_token":"web-b","refresh_token":"web-refresh-b"}}},{"account_ref":"acct-codex-a","slots":{"codex_cli":{"account_id":"same-codex","access_token":"superseded-codex","fingerprint_mode":"automatic"}}},{"account_ref":"acct-codex-b","slots":{"codex_cli":{"account_id":"same-codex","access_token":"codex-b","refresh_token":"codex-refresh-b","fingerprint_mode":"session"}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict || len(web.addedAccounts) != 0 || len(codex.imported) != 0 {
-		t.Fatalf("expected upstream identity conflict status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("same-name overwrite status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(web.addedAccounts) != 1 || web.addedAccounts[0].AccessToken != "web-b" || web.addedAccounts[0].RefreshToken != "web-refresh-b" {
+		t.Fatalf("ChatGPT same-name winner=%+v", web.addedAccounts)
+	}
+	if len(codex.imported) != 1 || codex.imported[0].AccessToken != "codex-b" || codex.imported[0].RefreshToken != "codex-refresh-b" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeSession {
+		t.Fatalf("Codex same-name winner=%+v", codex.imported)
+	}
+}
+
+func TestAccountPoolBundleImportStillRejectsCredentialReuseAcrossAccountIDs(t *testing.T) {
+	web := &chatGPTAccountRuntimeStub{}
+	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web)
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct-a","slots":{"chatgpt_web":{"account_id":"upstream-a","access_token":"shared-access","refresh_token":"refresh-a"}}},{"account_ref":"acct-b","slots":{"chatgpt_web":{"account_id":"upstream-b","access_token":"shared-access","refresh_token":"refresh-b"}}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || len(web.addedAccounts) != 0 {
+		t.Fatalf("credential reuse status=%d body=%s imports=%+v", rec.Code, rec.Body.String(), web.addedAccounts)
 	}
 }
 

@@ -67,6 +67,43 @@ func TestProviderBundleExportUsesPayloadTimestampAndProfileFilename(t *testing.T
 	}
 }
 
+func TestProviderBundleImportLastSameNameWins(t *testing.T) {
+	t.Setenv("ADMIN_TEST_API_KEY", "existing-secret")
+	cfg, err := config.Load(writeAdminTestConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := config.Provider{Name: "gateway", Protocol: "openai", BaseURL: "https://existing.example/v1", APIKey: "existing-gateway-secret", Models: []string{"existing-model"}, Endpoints: []string{"chat_completions"}, Priority: 10, Fallback: true}
+	config.ConfigureProviderPolicy(&existing, existing.Priority, existing.Fallback)
+	cfg.Providers["gateway"] = existing
+	cfg, err = config.ReplaceProviders(cfg, cfg.Providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{cfg: cfg}
+	h := NewHandler("", runtime)
+	body := `{"format":"aetherrelay.provider-bundle","schema_version":1,"providers":[{"name":" Gateway ","enabled":true},{"name":"gateway","protocol":"openai","base_url":"https://new.example/v1","api_key":"new-secret","models":["new-model"],"endpoints":["chat_completions"],"priority":42,"enabled":true}]}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers/import", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("same-name Provider overwrite status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var result providerBundleResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.Added != 0 || result.Updated != 1 || result.Failed != 0 || len(result.Items) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	provider := runtime.ConfigSnapshot().Providers["gateway"]
+	if provider.BaseURL != "https://new.example/v1" || provider.APIKey != "new-secret" || len(provider.Models) != 1 || provider.Models[0] != "new-model" || provider.Priority != 42 {
+		t.Fatalf("last same-name Provider did not win: %+v", provider)
+	}
+}
+
 func boolString(value bool) string {
 	if value {
 		return "true"
