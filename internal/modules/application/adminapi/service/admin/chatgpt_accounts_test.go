@@ -34,6 +34,7 @@ type chatGPTAccountRuntimeStub struct {
 	imageBytesErr      error
 	exportedIDs        []string
 	exportedItems      []accevents.ExportItem
+	exportedByID       map[string]accevents.ExportItem
 	retryOwner         string
 	retryTaskID        string
 	retryBaseURL       string
@@ -99,6 +100,13 @@ func (s *chatGPTAccountRuntimeStub) UpdateChatGPTAccount(_ context.Context, comm
 }
 func (s *chatGPTAccountRuntimeStub) ExportChatGPTAccounts(_ context.Context, ids []string) (accevents.ExportResult, error) {
 	s.exportedIDs = append([]string(nil), ids...)
+	if len(ids) == 1 && s.exportedByID != nil {
+		item, ok := s.exportedByID[ids[0]]
+		if !ok {
+			return accevents.ExportResult{}, nil
+		}
+		return accevents.ExportResult{Items: []accevents.ExportItem{item}}, nil
+	}
 	return accevents.ExportResult{Items: append([]accevents.ExportItem(nil), s.exportedItems...)}, nil
 }
 func (s *chatGPTAccountRuntimeStub) RefreshChatGPTAccountsByID(context.Context, []string) (accevents.RefreshResult, error) {

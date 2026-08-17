@@ -1272,28 +1272,44 @@ async function loadCodexAccounts(){
   }
 }
 
-function unifiedIdentityKey(slot,kind){
-  const email=String(slot?.email||"").trim().toLowerCase();
-  if(email)return `email:${email}`;
-  const identity=String(slot?.identity_key||"").trim();
-  return identity||`${kind}:${String(slot?.id||"")}`;
-}
+function unifiedSlotEmail(slot){return String(slot?.email||"").trim().toLowerCase()}
+function unifiedSlotIdentity(slot){return String(slot?.identity_key||"").trim()}
 function unifiedAccountIdentity(account){
   const email=String(account?.email||"").trim();
   const id=String(account?.id||"").trim();
   return `<div class="unified-account-identity"><div class="unified-account-email" title="${esc(email)}">${esc(email||"未提供邮箱")}</div>${email?"":`<div class="unified-account-ref mono subtle" title="${esc(id)}">${esc(id||"—")}</div>`}</div>`;
 }
 function unifiedAccounts(){
-  const rows=new Map();
-  for(const web of state.cg.accounts||[]){
-    const key=unifiedIdentityKey(web,"chatgpt_web"),row=rows.get(key)||{id:key,email:web.email||"",web:null,codex:null};
-    row.web=web;if(!row.email)row.email=web.email||"";rows.set(key,row);
-  }
-  for(const codex of state.codex.accounts||[]){
-    const key=unifiedIdentityKey(codex,"codex_cli"),row=rows.get(key)||{id:key,email:codex.email||"",web:null,codex:null};
-    row.codex=codex;if(!row.email)row.email=codex.email||"";rows.set(key,row);
-  }
-  return [...rows.values()].sort((a,b)=>String(a.email||a.id).localeCompare(String(b.email||b.id)));
+  const candidates=[];
+  for(const web of state.cg.accounts||[])candidates.push({kind:"web",slot:web,position:candidates.length});
+  for(const codex of state.codex.accounts||[])candidates.push({kind:"codex",slot:codex,position:candidates.length});
+  const paired=new Set(),rows=[];
+  const addPair=(webIndex,codexIndex)=>{
+    const web=candidates[webIndex].slot,codex=candidates[codexIndex].slot,position=Math.min(webIndex,codexIndex),email=String(web.email||codex.email||"").trim();
+    paired.add(webIndex);paired.add(codexIndex);rows.push({id:`pair:${position}`,email,web,codex,position});
+  };
+  const pairUnique=(keyOf,requireCompatibleEmail)=>{
+    const buckets=new Map();
+    candidates.forEach((candidate,index)=>{
+      if(paired.has(index))return;
+      const key=keyOf(candidate.slot);if(!key)return;
+      const bucket=buckets.get(key)||{web:[],codex:[]};bucket[candidate.kind].push(index);buckets.set(key,bucket);
+    });
+    for(const bucket of buckets.values()){
+      if(bucket.web.length!==1||bucket.codex.length!==1)continue;
+      const webIndex=bucket.web[0],codexIndex=bucket.codex[0],webEmail=unifiedSlotEmail(candidates[webIndex].slot),codexEmail=unifiedSlotEmail(candidates[codexIndex].slot);
+      if(requireCompatibleEmail&&((!webEmail&&!codexEmail)||(webEmail&&codexEmail&&webEmail!==codexEmail)))continue;
+      addPair(webIndex,codexIndex);
+    }
+  };
+  pairUnique(unifiedSlotIdentity,true);
+  pairUnique(unifiedSlotEmail,false);
+  candidates.forEach((candidate,index)=>{
+    if(paired.has(index))return;
+    const slot=candidate.slot,email=String(slot.email||"").trim(),identity=unifiedSlotIdentity(slot),id=identity||`${candidate.kind}:${String(slot.id||index)}`;
+    rows.push({id,email,web:candidate.kind==="web"?slot:null,codex:candidate.kind==="codex"?slot:null,position:index});
+  });
+  return rows.sort((a,b)=>String(a.email||a.id).localeCompare(String(b.email||b.id))||a.position-b.position);
 }
 function unifiedAccountStatus(row){
   const statuses=[row?.web?.status,row?.codex?.status].map(value=>String(value||"").toLowerCase()).filter(Boolean);

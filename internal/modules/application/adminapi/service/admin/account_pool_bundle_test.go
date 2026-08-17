@@ -21,13 +21,26 @@ func TestResolveBundleTargetEmailOnlyUsesEmailFallback(t *testing.T) {
 	}
 }
 
-func TestResolveBundleTargetDifferentAccountIDRequiresReplace(t *testing.T) {
+func TestResolveBundleTargetPreservesDifferentAccountIDUnlessReplace(t *testing.T) {
 	views := []bundleTargetView{{ID: "local-1", IdentityKey: "acct_existing", Email: "user@example.com"}}
-	if target, reason := resolveBundleTarget("other-upstream", "user@example.com", views, false); target != "" || reason == "" {
-		t.Fatalf("expected conflict without replace, target=%q reason=%q", target, reason)
+	if target, reason := resolveBundleTarget("other-upstream", "user@example.com", views, false); target != "" || reason != "" {
+		t.Fatalf("expected a new workspace without replace, target=%q reason=%q", target, reason)
 	}
 	if target, reason := resolveBundleTarget("other-upstream", "user@example.com", views, true); target != "local-1" || reason != "" {
 		t.Fatalf("expected replacement target=%q reason=%q", target, reason)
+	}
+}
+
+func TestResolveBundleTargetDoesNotGuessAmongSharedEmailWorkspaces(t *testing.T) {
+	views := []bundleTargetView{
+		{ID: "local-1", IdentityKey: "acct_existing_1", Email: "user@example.com"},
+		{ID: "local-2", IdentityKey: "acct_existing_2", Email: "USER@example.com"},
+	}
+	if target, reason := resolveBundleTarget("new-upstream", "user@example.com", views, false); target != "" || reason != "" {
+		t.Fatalf("expected a new workspace without replace, target=%q reason=%q", target, reason)
+	}
+	if target, reason := resolveBundleTarget("new-upstream", "user@example.com", views, true); target != "" || reason != "multiple existing slots match email" {
+		t.Fatalf("expected ambiguous replacement conflict, target=%q reason=%q", target, reason)
 	}
 }
 
@@ -88,6 +101,87 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	wantFilename := bundleExportFilename(bundleExportArtifactAccountPool, accountPoolBundleSchemaVersion, bundleExportProfileComplete, exportedAt)
 	if mediaType != "attachment" || params["filename"] != wantFilename {
 		t.Fatalf("Content-Disposition=%q, want attachment filename %q", rec.Header().Get("Content-Disposition"), wantFilename)
+	}
+}
+
+func TestAccountPoolBundleExportPreservesAmbiguousSameEmailSlots(t *testing.T) {
+	const email = "shared@example.com"
+	web := &chatGPTAccountRuntimeStub{
+		accounts: []accevents.AccountView{
+			{ID: "web-1", IdentityKey: "identity-web-1", Email: email},
+			{ID: "web-2", IdentityKey: "identity-web-2", Email: email},
+		},
+		exportedByID: map[string]accevents.ExportItem{
+			"web-1": {AccountID: "upstream-web-1", Email: email, AccessToken: "web-access-1", RefreshToken: "web-refresh-1"},
+			"web-2": {AccountID: "upstream-web-2", Email: email, AccessToken: "web-access-2", RefreshToken: "web-refresh-2"},
+		},
+	}
+	codex := &codexAccountRuntimeStub{
+		accounts: []codexevents.AccountView{{ID: "codex-1", IdentityKey: "identity-codex-1", Email: email}},
+		exportedByID: map[string]codexevents.CredentialInput{
+			"codex-1": {AccountID: "upstream-codex-1", Email: email, AccessToken: "codex-access-1", RefreshToken: "codex-refresh-1"},
+		},
+	}
+	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/export", strings.NewReader(`{}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload accountPoolBundle
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	webSlots, codexSlots, dualSlots := 0, 0, 0
+	for _, account := range payload.Accounts {
+		if account.Slots.ChatGPT != nil {
+			webSlots++
+		}
+		if account.Slots.Codex != nil {
+			codexSlots++
+		}
+		if account.Slots.ChatGPT != nil && account.Slots.Codex != nil {
+			dualSlots++
+		}
+	}
+	if len(payload.Accounts) != 3 || webSlots != 2 || codexSlots != 1 || dualSlots != 0 {
+		t.Fatalf("ambiguous email cohort was merged or dropped: %+v", payload.Accounts)
+	}
+}
+
+func TestGroupAccountPoolBundleExportSlotsPairsUniqueIdentityBeforeEmail(t *testing.T) {
+	const email = "shared@example.com"
+	accounts := groupAccountPoolBundleExportSlots([]accountPoolBundleExportSlot{
+		{position: 0, email: email, identity: "identity-1", chatGPT: &accountPoolBundleChatGPT{AccessToken: "web-1"}},
+		{position: 1, email: email, identity: "identity-2", chatGPT: &accountPoolBundleChatGPT{AccessToken: "web-2"}},
+		{position: 2, email: email, identity: "identity-2", codex: &accountPoolBundleCodex{AccessToken: "codex-2"}},
+		{position: 3, email: email, identity: "identity-1", codex: &accountPoolBundleCodex{AccessToken: "codex-1"}},
+	})
+	if len(accounts) != 2 {
+		t.Fatalf("accounts=%+v", accounts)
+	}
+	for _, account := range accounts {
+		if account.Slots.ChatGPT == nil || account.Slots.Codex == nil || account.Slots.ChatGPT.AccessToken[len("web-"):] != account.Slots.Codex.AccessToken[len("codex-"):] {
+			t.Fatalf("identity pairing mismatch: %+v", account)
+		}
+	}
+}
+
+func TestGroupAccountPoolBundleExportSlotsDoesNotPairIdentityWithoutEmail(t *testing.T) {
+	accounts := groupAccountPoolBundleExportSlots([]accountPoolBundleExportSlot{
+		{position: 0, identity: "identity-1", chatGPT: &accountPoolBundleChatGPT{AccessToken: "web-1"}},
+		{position: 1, identity: "identity-1", codex: &accountPoolBundleCodex{AccessToken: "codex-1"}},
+	})
+	if len(accounts) != 2 {
+		t.Fatalf("email-less slots were paired into an invalid dual-slot account: %+v", accounts)
+	}
+	for _, account := range accounts {
+		if (account.Slots.ChatGPT == nil) == (account.Slots.Codex == nil) {
+			t.Fatalf("expected exactly one slot per account: %+v", account)
+		}
 	}
 }
 
@@ -215,18 +309,18 @@ func TestAccountPoolBundleImportRejectsDuplicateUpstreamAccountID(t *testing.T) 
 	}
 }
 
-func TestAccountPoolBundleImportRejectsEmailSplitAcrossAccountRefs(t *testing.T) {
+func TestAccountPoolBundleImportAllowsDistinctSlotsWithSharedEmail(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_web","identity":{"email":"same@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"}}},{"account_ref":"acct_codex","identity":{"email":"same@example.com"},"slots":{"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh"}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_web","identity":{"email":"same@example.com"},"slots":{"chatgpt_web":{"account_id":"web-account","access_token":"web-access","refresh_token":"web-refresh"}}},{"account_ref":"acct_codex","identity":{"email":"same@example.com"},"slots":{"codex_cli":{"account_id":"codex-account","access_token":"codex-access","refresh_token":"codex-refresh"}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict || len(web.addedAccounts) != 0 || len(codex.imported) != 0 {
-		t.Fatalf("expected cross-slot email conflict status=%d body=%s web=%+v codex=%+v", rec.Code, rec.Body.String(), web.addedAccounts, codex.imported)
+	if rec.Code != http.StatusCreated || len(web.addedAccounts) != 1 || len(codex.imported) != 1 {
+		t.Fatalf("shared-email slots were not preserved status=%d body=%s web=%+v codex=%+v", rec.Code, rec.Body.String(), web.addedAccounts, codex.imported)
 	}
 }
 
@@ -263,7 +357,7 @@ func TestAccountPoolBundleImportNormalizesCredentialFields(t *testing.T) {
 	}
 }
 
-func TestAccountPoolBundleImportRequiresReplaceForDifferentAccountID(t *testing.T) {
+func TestAccountPoolBundleImportPreservesDifferentAccountIDUnlessReplace(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
@@ -273,8 +367,8 @@ func TestAccountPoolBundleImportRequiresReplaceForDifferentAccountID(t *testing.
 	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict || len(web.addedAccounts) != 0 {
-		t.Fatalf("expected safe conflict status=%d body=%s imports=%+v", rec.Code, rec.Body.String(), web.addedAccounts)
+	if rec.Code != http.StatusCreated || len(web.addedAccounts) != 1 || web.addedAccounts[0].TargetID != "" {
+		t.Fatalf("distinct workspace import status=%d body=%s imports=%+v", rec.Code, rec.Body.String(), web.addedAccounts)
 	}
 
 	body = `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"replace":true,"accounts":[{"account_ref":"acct_01","identity":{"email":"operator@example.invalid"},"slots":{"chatgpt_web":{"account_id":"different-upstream","access_token":"new-access","refresh_token":"new-refresh"}}}]}`

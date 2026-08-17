@@ -21,6 +21,7 @@ type codexAccountRuntimeStub struct {
 	usageStarted [][]string
 	exportedIDs  []string
 	exported     []codexevents.CredentialInput
+	exportedByID map[string]codexevents.CredentialInput
 	imported     []codexevents.CredentialInput
 	importErr    error
 	updated      codexevents.UpdateCommand
@@ -48,6 +49,13 @@ func (s *codexAccountRuntimeStub) RefreshCodexAccounts(context.Context, []string
 }
 func (s *codexAccountRuntimeStub) ExportCodexAccounts(_ context.Context, ids []string) (codexevents.ExportByIDResult, error) {
 	s.exportedIDs = append([]string(nil), ids...)
+	if len(ids) == 1 && s.exportedByID != nil {
+		item, ok := s.exportedByID[ids[0]]
+		if !ok {
+			return codexevents.ExportByIDResult{}, nil
+		}
+		return codexevents.ExportByIDResult{Items: []codexevents.CredentialInput{item}}, nil
+	}
 	return codexevents.ExportByIDResult{Items: append([]codexevents.CredentialInput(nil), s.exported...)}, nil
 }
 func (s *codexAccountRuntimeStub) StartCodexOAuth(context.Context, string, string) (codexevents.OAuthStartResult, error) {
