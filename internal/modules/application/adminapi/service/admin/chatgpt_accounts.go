@@ -162,11 +162,12 @@ func (h *Handler) chatGPTAccountRefreshProgress(w http.ResponseWriter, r *http.R
 func (h *Handler) startChatGPTOAuth(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		EmailHint string `json:"email_hint"`
+		TargetID  string `json:"target_id"`
 	}
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	result, err := h.chatGPT.StartChatGPTOAuth(r.Context(), body.EmailHint)
+	result, err := h.chatGPT.StartChatGPTOAuth(r.Context(), body.EmailHint, body.TargetID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

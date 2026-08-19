@@ -118,8 +118,8 @@ func (s *Admin) ChatGPTAccountRefreshProgress(ctx context.Context, id string) (a
 	return result.Progress, nil
 }
 
-func (s *Admin) StartChatGPTOAuth(ctx context.Context, hint string) (accevents.OAuthStartResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicOAuthStart, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.OAuthStartCommand{EmailHint: hint})).Get()
+func (s *Admin) StartChatGPTOAuth(ctx context.Context, hint, targetID string) (accevents.OAuthStartResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicOAuthStart, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.OAuthStartCommand{EmailHint: hint, TargetID: targetID})).Get()
 	if err != nil {
 		return accevents.OAuthStartResult{}, fmt.Errorf("chatgpt OAuth start failed")
 	}

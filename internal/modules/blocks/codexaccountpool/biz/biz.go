@@ -43,6 +43,7 @@ type oauthSession struct {
 	verifier string
 	state    string
 	proxy    string
+	targetID string
 	created  time.Time
 }
 
@@ -541,7 +542,7 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex OAuth exchange failed"))
 		return
 	}
-	added, updated, skipped, importErr := s.store.Import([]events.CredentialInput{{CredentialType: "codex_cli", AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken, AccountID: tokens.AccountID, Email: tokens.Email, Expired: tokens.Expired, Proxy: session.proxy}})
+	added, updated, skipped, importErr := s.store.Import([]events.CredentialInput{{CredentialType: "codex_cli", AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken, AccountID: tokens.AccountID, Email: tokens.Email, Expired: tokens.Expired, Proxy: session.proxy, TargetID: session.targetID, Reauthenticate: true}})
 	if importErr != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, importErr.Error()))
 		return
@@ -619,6 +620,19 @@ func (s *Account) startOAuth(command events.OAuthStartCommand) (events.OAuthStar
 	if _, err := url.ParseRequestURI("http://localhost:1455"); err != nil {
 		return events.OAuthStartResult{}, err
 	}
+	command.TargetID = strings.TrimSpace(command.TargetID)
+	if command.TargetID != "" {
+		items := s.store.ExportByIDs([]string{command.TargetID})
+		if len(items) != 1 {
+			return events.OAuthStartResult{}, fmt.Errorf("Codex OAuth target account is unavailable")
+		}
+		if strings.TrimSpace(command.EmailHint) == "" {
+			command.EmailHint = items[0].Email
+		}
+		if strings.TrimSpace(command.Proxy) == "" {
+			command.Proxy = items[0].Proxy
+		}
+	}
 	if strings.TrimSpace(command.Proxy) != "" {
 		parsed, err := url.ParseRequestURI(strings.TrimSpace(command.Proxy))
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -641,7 +655,7 @@ func (s *Account) startOAuth(command events.OAuthStartCommand) (events.OAuthStar
 	}
 	s.oauthMu.Lock()
 	s.pruneOAuthLocked(time.Now())
-	s.oauthSessions[sessionID] = oauthSession{verifier: verifier, state: state, proxy: strings.TrimSpace(command.Proxy), created: time.Now()}
+	s.oauthSessions[sessionID] = oauthSession{verifier: verifier, state: state, proxy: strings.TrimSpace(command.Proxy), targetID: strings.TrimSpace(command.TargetID), created: time.Now()}
 	s.oauthMu.Unlock()
 	return events.OAuthStartResult{SessionID: sessionID, AuthorizeURL: oauth.AuthorizeURL + "?" + params.Encode(), ExpiresIn: int(oauthSessionTTL.Seconds()), RedirectURIPrefix: oauth.RedirectURI}, nil
 }

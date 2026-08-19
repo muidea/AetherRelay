@@ -120,6 +120,9 @@ type CredentialInput struct {
 	// TargetID is an internal import selector. It is populated only by the
 	// Admin account-bundle orchestration and is never serialized or exported.
 	TargetID string `json:"-"`
+	// Reauthenticate marks an OAuth credential rotation. It lets the owner
+	// preserve stable local metadata and clear failures from the retired token.
+	Reauthenticate bool `json:"-"`
 }
 
 type ListCommand struct{}
@@ -362,6 +365,7 @@ type HealthResult struct {
 type OAuthStartCommand struct {
 	EmailHint string
 	Proxy     string
+	TargetID  string
 }
 type OAuthStartResult struct {
 	SessionID         string `json:"session_id"`

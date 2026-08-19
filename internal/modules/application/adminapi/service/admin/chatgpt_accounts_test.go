@@ -56,6 +56,8 @@ type chatGPTAccountRuntimeStub struct {
 	searchHistory      proxyevents.ListFeatureSearchHistoryResult
 	searchHistoryItem  proxyevents.GetFeatureSearchHistoryResult
 	searchHistoryErr   error
+	oauthHint          string
+	oauthTargetID      string
 }
 
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
@@ -115,11 +117,25 @@ func (s *chatGPTAccountRuntimeStub) RefreshChatGPTAccountsByID(context.Context, 
 func (s *chatGPTAccountRuntimeStub) ChatGPTAccountRefreshProgress(context.Context, string) (accevents.RefreshProgress, error) {
 	return accevents.RefreshProgress{}, nil
 }
-func (s *chatGPTAccountRuntimeStub) StartChatGPTOAuth(context.Context, string) (accevents.OAuthStartResult, error) {
-	return accevents.OAuthStartResult{}, nil
+func (s *chatGPTAccountRuntimeStub) StartChatGPTOAuth(_ context.Context, hint, targetID string) (accevents.OAuthStartResult, error) {
+	s.oauthHint, s.oauthTargetID = hint, targetID
+	return accevents.OAuthStartResult{SessionID: "oauth-session", AuthorizeURL: "https://auth.example.invalid"}, nil
 }
 func (s *chatGPTAccountRuntimeStub) FinishChatGPTOAuth(context.Context, string, string) (accevents.OAuthFinishResult, error) {
 	return accevents.OAuthFinishResult{}, nil
+}
+
+func TestChatGPTOAuthStartForwardsStableTarget(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/oauth/start", strings.NewReader(`{"email_hint":"operator@example.invalid","target_id":"account-1"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.oauthHint != "operator@example.invalid" || runtime.oauthTargetID != "account-1" {
+		t.Fatalf("status=%d body=%s hint=%q target=%q", rec.Code, rec.Body.String(), runtime.oauthHint, runtime.oauthTargetID)
+	}
 }
 func (s *chatGPTAccountRuntimeStub) ListChatGPTImages(context.Context, string, string, string, string) (imgevents.ListResult, error) {
 	if s.imageListErr != nil {

@@ -244,11 +244,12 @@ func (h *Handler) startCodexOAuth(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		EmailHint string `json:"email_hint"`
 		Proxy     string `json:"proxy"`
+		TargetID  string `json:"target_id"`
 	}
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	result, err := h.codex.StartCodexOAuth(r.Context(), body.EmailHint, body.Proxy)
+	result, err := h.codex.StartCodexOAuth(r.Context(), body.EmailHint, body.Proxy, body.TargetID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

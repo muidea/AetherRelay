@@ -104,8 +104,8 @@ func (s *Admin) ExportCodexAccounts(ctx context.Context, ids []string) (events.E
 	}
 	return result, nil
 }
-func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy string) (events.OAuthStartResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(events.TopicOAuthStart, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthStartCommand{EmailHint: hint, Proxy: proxy})).Get()
+func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy, targetID string) (events.OAuthStartResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(events.TopicOAuthStart, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthStartCommand{EmailHint: hint, Proxy: proxy, TargetID: targetID})).Get()
 	if err != nil {
 		return events.OAuthStartResult{}, fmt.Errorf("Codex OAuth start failed")
 	}

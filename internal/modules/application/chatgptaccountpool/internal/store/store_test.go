@@ -413,6 +413,92 @@ func TestAddOAuthPersistsRefreshAndIDTokenWithoutPublicLeak(t *testing.T) {
 	}
 }
 
+func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	oldAccess := testJWTWithClaims(map[string]any{
+		"jti":                            "old",
+		"https://api.openai.com/auth":    map[string]any{"chatgpt_account_id": "acct-stable"},
+		"https://api.openai.com/profile": map[string]any{"email": "operator@example.invalid"},
+	})
+	newAccess := testJWTWithClaims(map[string]any{
+		"jti":                            "new",
+		"https://api.openai.com/auth":    map[string]any{"chatgpt_account_id": "acct-stable"},
+		"https://api.openai.com/profile": map[string]any{"email": "renamed@example.invalid"},
+	})
+	first, added, err := s.AddOAuth(oldAccess, "refresh-old", testJWTWithClaims(map[string]any{"email": "operator@example.invalid"}))
+	if err != nil || !added {
+		t.Fatalf("initial OAuth item=%+v added=%v err=%v", first, added, err)
+	}
+	account := s.items[oldAccess]
+	account.Status = StatusAbnormal
+	account.Proxy = "http://127.0.0.1:8080"
+	account.Extra["last_token_refresh_error_at"] = "2026-08-19T00:00:00Z"
+	account.Extra["last_token_refresh_error_class"] = "invalid_token"
+	account.Extra[textCooldownExtraKey] = map[string]any{"gpt-test": map[string]any{"until": "2027-01-01T00:00:00Z"}}
+	second, added, err := s.UpsertOAuth(newAccess, "refresh-new", testJWTWithClaims(map[string]any{"email": "renamed@example.invalid"}), "")
+	if err != nil || added {
+		t.Fatalf("reauthenticated item=%+v added=%v err=%v", second, added, err)
+	}
+	if second.ID != first.ID || second.Status != StatusNormal || second.Email != "renamed@example.invalid" || second.Proxy != "http://127.0.0.1:8080" {
+		t.Fatalf("reauthenticated view=%+v first=%+v", second, first)
+	}
+	if len(s.List()) != 1 || s.items[oldAccess] != nil || s.items[newAccess] == nil {
+		t.Fatalf("rotated credential did not converge: list=%+v", s.List())
+	}
+	updated := s.items[newAccess]
+	if extraString(updated, "last_token_refresh_error_class") != "" || updated.Extra[textCooldownExtraKey] != nil {
+		t.Fatalf("credential failures survived reauthentication: %+v", updated.Extra)
+	}
+}
+
+func TestOAuthReauthenticationPreservesDifferentWorkspaceWithSameEmail(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	accessOne := testJWTWithClaims(map[string]any{"jti": "one", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-one"}, "https://api.openai.com/profile": map[string]any{"email": "shared@example.invalid"}})
+	accessTwo := testJWTWithClaims(map[string]any{"jti": "two", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-two"}, "https://api.openai.com/profile": map[string]any{"email": "shared@example.invalid"}})
+	if _, _, err := s.AddOAuth(accessOne, "refresh-one", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, added, err := s.AddOAuth(accessTwo, "refresh-two", ""); err != nil || !added {
+		t.Fatalf("second workspace added=%v err=%v", added, err)
+	}
+	if got := len(s.List()); got != 2 {
+		t.Fatalf("same-email workspaces converged: %d", got)
+	}
+}
+
+func TestOAuthReauthenticationRejectsMismatchedExplicitTarget(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	accessOne := testJWTWithClaims(map[string]any{"jti": "one", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-one"}})
+	accessTwo := testJWTWithClaims(map[string]any{"jti": "two", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-two"}})
+	first, _, err := s.AddOAuth(accessOne, "refresh-one", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.UpsertOAuth(accessTwo, "refresh-two", "", first.ID); err == nil {
+		t.Fatal("mismatched OAuth identity replaced explicit target")
+	}
+	if got := s.List(); len(got) != 1 || got[0].ID != first.ID {
+		t.Fatalf("target changed after rejected reauthentication: %+v", got)
+	}
+}
+
+func TestOAuthReauthenticationTargetDisambiguatesLegacyDuplicateIdentity(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	oldOne := testJWTWithClaims(map[string]any{"jti": "old-one", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-duplicate"}})
+	oldTwo := testJWTWithClaims(map[string]any{"jti": "old-two", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-duplicate"}})
+	for _, item := range []events.ExportItem{{AccessToken: oldOne, RefreshToken: "refresh-one", AccountID: "acct-duplicate"}, {AccessToken: oldTwo, RefreshToken: "refresh-two", AccountID: "acct-duplicate"}} {
+		if added, _, _, err := s.Import(nil, []events.ExportItem{item}, ""); err != nil || added != 1 {
+			t.Fatalf("legacy duplicate import added=%d err=%v", added, err)
+		}
+	}
+	targetID := s.List()[0].ID
+	rotated := testJWTWithClaims(map[string]any{"jti": "rotated", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-duplicate"}})
+	item, added, err := s.UpsertOAuth(rotated, "refresh-rotated", "", targetID)
+	if err != nil || added || item.ID != targetID || len(s.List()) != 2 {
+		t.Fatalf("targeted legacy reauthentication item=%+v added=%v err=%v list=%+v", item, added, err, s.List())
+	}
+}
+
 func TestExportReturnsOnlyCompleteOAuthAccounts(t *testing.T) {
 	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
 	if _, _, err := s.AddOAuth("access-complete", "refresh-complete", "id-complete"); err != nil {

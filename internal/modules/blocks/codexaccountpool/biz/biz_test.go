@@ -79,6 +79,20 @@ func releaseForTest(t *testing.T, account *Account, leaseID string) events.Relea
 	return value.(events.ReleaseResult)
 }
 
+func TestOAuthSessionBindsStableReauthenticationTarget(t *testing.T) {
+	account, _, ids := newSchedulingAccount(t)
+	started, err := account.startOAuth(events.OAuthStartCommand{TargetID: ids[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account.oauthMu.Lock()
+	session := account.oauthSessions[started.SessionID]
+	account.oauthMu.Unlock()
+	if session.targetID != ids[0] {
+		t.Fatalf("OAuth target=%q want=%q", session.targetID, ids[0])
+	}
+}
+
 func TestAcquireKeepsHealthySessionAffinity(t *testing.T) {
 	account, _, _ := newSchedulingAccount(t)
 	first := acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", SessionHash: "hashed-session"})

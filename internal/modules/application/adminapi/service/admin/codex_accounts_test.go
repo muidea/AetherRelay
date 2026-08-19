@@ -25,6 +25,9 @@ type codexAccountRuntimeStub struct {
 	imported     []codexevents.CredentialInput
 	importErr    error
 	updated      codexevents.UpdateCommand
+	oauthHint    string
+	oauthProxy   string
+	oauthTarget  string
 }
 
 func (s *codexAccountRuntimeStub) ListCodexAccounts(context.Context) ([]codexevents.AccountView, error) {
@@ -58,8 +61,22 @@ func (s *codexAccountRuntimeStub) ExportCodexAccounts(_ context.Context, ids []s
 	}
 	return codexevents.ExportByIDResult{Items: append([]codexevents.CredentialInput(nil), s.exported...)}, nil
 }
-func (s *codexAccountRuntimeStub) StartCodexOAuth(context.Context, string, string) (codexevents.OAuthStartResult, error) {
-	return codexevents.OAuthStartResult{}, nil
+func (s *codexAccountRuntimeStub) StartCodexOAuth(_ context.Context, hint, proxy, targetID string) (codexevents.OAuthStartResult, error) {
+	s.oauthHint, s.oauthProxy, s.oauthTarget = hint, proxy, targetID
+	return codexevents.OAuthStartResult{SessionID: "oauth-session", AuthorizeURL: "https://auth.example.invalid"}, nil
+}
+
+func TestCodexOAuthStartForwardsStableTarget(t *testing.T) {
+	runtime := &codexAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/codex/accounts/oauth/start", strings.NewReader(`{"email_hint":"operator@example.invalid","proxy":"http://127.0.0.1:8080","target_id":"account-1"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.oauthHint != "operator@example.invalid" || runtime.oauthProxy != "http://127.0.0.1:8080" || runtime.oauthTarget != "account-1" {
+		t.Fatalf("status=%d body=%s hint=%q proxy=%q target=%q", rec.Code, rec.Body.String(), runtime.oauthHint, runtime.oauthProxy, runtime.oauthTarget)
+	}
 }
 
 func TestCodexAccountSlotExportEndpointRemoved(t *testing.T) {

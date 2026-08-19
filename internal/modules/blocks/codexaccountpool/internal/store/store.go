@@ -201,6 +201,52 @@ func (s *Store) Import(inputs []events.CredentialInput) (added, updated, skipped
 	return added, updated, skipped, err
 }
 
+func normalizedEmail(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func (s *Store) reauthenticationIdentityLocked(input events.CredentialInput) (*account, error) {
+	accountID := strings.TrimSpace(input.AccountID)
+	email := normalizedEmail(input.Email)
+	var match *account
+	for _, candidate := range s.items {
+		matched := false
+		if accountID != "" {
+			matched = strings.TrimSpace(candidate.AccountIDHeader) == accountID
+		} else if email != "" {
+			matched = normalizedEmail(candidate.Email) == email
+		}
+		if !matched {
+			continue
+		}
+		if match != nil && match != candidate {
+			return nil, fmt.Errorf("multiple Codex accounts match OAuth identity")
+		}
+		match = candidate
+	}
+	return match, nil
+}
+
+func validateReauthenticationTarget(target *account, input events.CredentialInput) error {
+	if target == nil {
+		return nil
+	}
+	incomingAccountID := strings.TrimSpace(input.AccountID)
+	existingAccountID := strings.TrimSpace(target.AccountIDHeader)
+	if incomingAccountID != "" && existingAccountID != "" {
+		if incomingAccountID != existingAccountID {
+			return fmt.Errorf("Codex OAuth identity does not match target account")
+		}
+		return nil
+	}
+	incomingEmail := normalizedEmail(input.Email)
+	existingEmail := normalizedEmail(target.Email)
+	if incomingEmail != "" && existingEmail != "" && incomingEmail != existingEmail {
+		return fmt.Errorf("Codex OAuth email does not match target account")
+	}
+	return nil
+}
+
 // ImportWithIDs imports credentials and returns the stable IDs affected by
 // this batch. Management orchestration uses these IDs to scope follow-up
 // discovery and usage work to the imported accounts only.
@@ -266,12 +312,34 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 				break
 			}
 		}
+		var byIdentity *account
+		if input.Reauthenticate && strings.TrimSpace(input.TargetID) == "" {
+			var identityErr error
+			byIdentity, identityErr = s.reauthenticationIdentityLocked(input)
+			if identityErr != nil {
+				return 0, 0, 0, nil, identityErr
+			}
+		}
 		if byTarget != nil && byCredential != nil && byTarget != byCredential {
 			return 0, 0, 0, nil, fmt.Errorf("Codex account target conflicts with credential")
+		}
+		if byTarget != nil && byIdentity != nil && byTarget != byIdentity {
+			return 0, 0, 0, nil, fmt.Errorf("Codex account target conflicts with OAuth identity")
+		}
+		if byCredential != nil && byIdentity != nil && byCredential != byIdentity {
+			return 0, 0, 0, nil, fmt.Errorf("Codex credential conflicts with OAuth identity")
 		}
 		resolved[i] = byTarget
 		if resolved[i] == nil {
 			resolved[i] = byCredential
+		}
+		if resolved[i] == nil {
+			resolved[i] = byIdentity
+		}
+		if input.Reauthenticate && resolved[i] != nil {
+			if err := validateReauthenticationTarget(resolved[i], input); err != nil {
+				return 0, 0, 0, nil, err
+			}
 		}
 		if resolved[i] != nil {
 			if _, duplicate := seenAccounts[resolved[i].ID]; duplicate {
@@ -283,6 +351,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 	changed := false
 	for i, input := range normalized {
 		existing := resolved[i]
+		reauthenticated := input.Reauthenticate && existing != nil
 		if existing == nil {
 			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeOff}
 			s.items[existing.ID] = existing
@@ -295,18 +364,33 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		changed = true
 		existing.AccessToken = input.AccessToken
 		existing.RefreshToken = input.RefreshToken
-		existing.IDToken = strings.TrimSpace(input.IDToken)
-		existing.AccountIDHeader = strings.TrimSpace(input.AccountID)
-		existing.Email = strings.TrimSpace(input.Email)
+		if value := strings.TrimSpace(input.IDToken); value != "" || !reauthenticated {
+			existing.IDToken = value
+		}
+		if value := strings.TrimSpace(input.AccountID); value != "" || !reauthenticated {
+			existing.AccountIDHeader = value
+		}
+		if value := strings.TrimSpace(input.Email); value != "" || !reauthenticated {
+			existing.Email = value
+		}
 		existing.Expired = strings.TrimSpace(input.Expired)
-		existing.Proxy = strings.TrimSpace(input.Proxy)
+		if value := strings.TrimSpace(input.Proxy); value != "" || !reauthenticated {
+			existing.Proxy = value
+		}
 		if strings.TrimSpace(input.FingerprintMode) != "" {
 			existing.FingerprintMode = input.FingerprintMode
 		} else if existing.FingerprintMode == "" {
 			existing.FingerprintMode = events.FingerprintModeOff
 		}
-		if existing.Status == "" {
+		if existing.Status == "" || (reauthenticated && existing.Status == events.StatusAbnormal) {
 			existing.Status = events.StatusNormal
+		}
+		if input.Reauthenticate {
+			existing.LastRefreshAt = time.Now().UTC().Format(time.RFC3339)
+			existing.LastRefreshErrAt = ""
+			existing.LastRefreshErrClass = ""
+			existing.Cooldowns = nil
+			existing.QuotaObservations = nil
 		}
 		// An import may replace a credential for a different account. Do not
 		// route from a capability snapshot or show a usage observation learned

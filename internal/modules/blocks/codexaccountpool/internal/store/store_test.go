@@ -148,6 +148,90 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	}
 }
 
+func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *testing.T) {
+	store := openTestStore(t)
+	first := events.CredentialInput{AccessToken: "old-access", RefreshToken: "old-refresh", AccountID: "acct-stable", Email: "operator@example.invalid", Proxy: "http://127.0.0.1:8080", FingerprintMode: events.FingerprintModeSession}
+	if added, _, _, err := store.Import([]events.CredentialInput{first}); err != nil || added != 1 {
+		t.Fatalf("initial import added=%d err=%v", added, err)
+	}
+	view := store.List()[0]
+	status := events.StatusAbnormal
+	if _, err := store.Update(view.ID, &status, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordRefreshFailure(view.ID, "refresh_token_invalidated", true); err != nil {
+		t.Fatal(err)
+	}
+	store.items[view.ID].Cooldowns = map[string]cooldown{"gpt-test": {Until: time.Now().Add(time.Hour), ErrorClass: "invalid_token"}}
+	store.items[view.ID].QuotaObservations = map[string]quotaObservation{"gpt-test": {State: "exhausted", ObservedAt: time.Now().UTC().Format(time.RFC3339)}}
+	rotated := events.CredentialInput{AccessToken: "new-access", RefreshToken: "new-refresh", IDToken: "new-id", AccountID: "acct-stable", Email: "renamed@example.invalid", Reauthenticate: true}
+	added, updated, skipped, err := store.Import([]events.CredentialInput{rotated})
+	if err != nil || added != 0 || updated != 1 || skipped != 0 {
+		t.Fatalf("reauthentication added=%d updated=%d skipped=%d err=%v", added, updated, skipped, err)
+	}
+	items := store.List()
+	if len(items) != 1 || items[0].ID != view.ID || items[0].Status != events.StatusNormal || items[0].Email != "renamed@example.invalid" {
+		t.Fatalf("reauthenticated items=%+v", items)
+	}
+	if items[0].LastTokenRefreshErrorClass != "" || len(items[0].Cooldowns) != 0 || len(items[0].QuotaObservations) != 0 || items[0].FingerprintMode != events.FingerprintModeSession {
+		t.Fatalf("reauthentication metadata=%+v", items[0])
+	}
+	exported := store.ExportByIDs([]string{view.ID})
+	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].Proxy != first.Proxy {
+		t.Fatalf("reauthenticated credential=%+v", exported)
+	}
+}
+
+func TestOAuthReauthenticationPreservesDifferentWorkspaceWithSameEmail(t *testing.T) {
+	store := openTestStore(t)
+	inputs := []events.CredentialInput{
+		{AccessToken: "access-one", RefreshToken: "refresh-one", AccountID: "acct-one", Email: "shared@example.invalid", Reauthenticate: true},
+		{AccessToken: "access-two", RefreshToken: "refresh-two", AccountID: "acct-two", Email: "shared@example.invalid", Reauthenticate: true},
+	}
+	if added, _, _, err := store.Import(inputs[:1]); err != nil || added != 1 {
+		t.Fatalf("first OAuth added=%d err=%v", added, err)
+	}
+	if added, _, _, err := store.Import(inputs[1:]); err != nil || added != 1 {
+		t.Fatalf("second workspace added=%d err=%v", added, err)
+	}
+	if got := len(store.List()); got != 2 {
+		t.Fatalf("same-email workspaces converged: %d", got)
+	}
+}
+
+func TestOAuthReauthenticationRejectsMismatchedExplicitTarget(t *testing.T) {
+	store := openTestStore(t)
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access-one", RefreshToken: "refresh-one", AccountID: "acct-one", Email: "one@example.invalid"}}); err != nil || added != 1 {
+		t.Fatalf("initial import added=%d err=%v", added, err)
+	}
+	targetID := store.List()[0].ID
+	input := events.CredentialInput{AccessToken: "access-two", RefreshToken: "refresh-two", AccountID: "acct-two", Email: "two@example.invalid", TargetID: targetID, Reauthenticate: true}
+	if _, _, _, err := store.Import([]events.CredentialInput{input}); err == nil {
+		t.Fatal("mismatched OAuth identity replaced explicit target")
+	}
+	if got := store.List(); len(got) != 1 || got[0].ID != targetID {
+		t.Fatalf("target changed after rejected reauthentication: %+v", got)
+	}
+}
+
+func TestOAuthReauthenticationTargetDisambiguatesLegacyDuplicateIdentity(t *testing.T) {
+	store := openTestStore(t)
+	for _, input := range []events.CredentialInput{
+		{AccessToken: "old-access-one", RefreshToken: "old-refresh-one", AccountID: "acct-duplicate"},
+		{AccessToken: "old-access-two", RefreshToken: "old-refresh-two", AccountID: "acct-duplicate"},
+	} {
+		if added, _, _, err := store.Import([]events.CredentialInput{input}); err != nil || added != 1 {
+			t.Fatalf("legacy duplicate import added=%d err=%v", added, err)
+		}
+	}
+	targetID := store.List()[0].ID
+	input := events.CredentialInput{AccessToken: "rotated-access", RefreshToken: "rotated-refresh", AccountID: "acct-duplicate", TargetID: targetID, Reauthenticate: true}
+	added, updated, _, err := store.Import([]events.CredentialInput{input})
+	if err != nil || added != 0 || updated != 1 || len(store.List()) != 2 {
+		t.Fatalf("targeted legacy reauthentication added=%d updated=%d err=%v list=%+v", added, updated, err, store.List())
+	}
+}
+
 func TestMergeUsageSnapshotPreservesUnobservedWindows(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, _ = store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})

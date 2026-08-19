@@ -1012,36 +1012,165 @@ func validateProxy(value string) error {
 	return nil
 }
 
-// AddOAuth persists the complete OAuth token set. Refresh/id tokens never
-// leave the account owner through the public AccountView projection.
+type oauthIdentity struct {
+	accountID string
+	email     string
+}
+
+func oauthTokenIdentity(accessToken, idToken string) oauthIdentity {
+	accessClaims := jwtClaims(accessToken)
+	authClaims := mapValue(accessClaims["https://api.openai.com/auth"])
+	profileClaims := mapValue(accessClaims["https://api.openai.com/profile"])
+	idClaims := jwtClaims(idToken)
+	return oauthIdentity{
+		accountID: strings.TrimSpace(asString(authClaims["chatgpt_account_id"])),
+		email:     strings.ToLower(strings.TrimSpace(firstNonEmpty(asString(profileClaims["email"]), asString(idClaims["email"])))),
+	}
+}
+
+func accountOAuthIdentity(acc *Account) oauthIdentity {
+	if acc == nil {
+		return oauthIdentity{}
+	}
+	identity := oauthTokenIdentity(acc.AccessToken, extraString(acc, "id_token"))
+	identity.accountID = firstNonEmpty(extraString(acc, "account_id"), identity.accountID)
+	identity.email = strings.ToLower(strings.TrimSpace(firstNonEmpty(acc.Email, identity.email)))
+	return identity
+}
+
+func validateChatGPTOAuthTarget(acc *Account, incoming oauthIdentity) error {
+	existing := accountOAuthIdentity(acc)
+	if incoming.accountID != "" && existing.accountID != "" {
+		if incoming.accountID != existing.accountID {
+			return fmt.Errorf("chatgpt OAuth identity does not match target account")
+		}
+		return nil
+	}
+	if incoming.email != "" && existing.email != "" && incoming.email != existing.email {
+		return fmt.Errorf("chatgpt OAuth email does not match target account")
+	}
+	return nil
+}
+
+func (s *Store) resolveOAuthAccountLocked(accessToken, targetID string, incoming oauthIdentity) (*Account, error) {
+	var target *Account
+	if targetID = trim(targetID); targetID != "" {
+		token, found := s.tokenForIDLocked(targetID)
+		if !found {
+			return nil, fmt.Errorf("chatgpt OAuth target account is unavailable")
+		}
+		target = s.items[token]
+		if err := validateChatGPTOAuthTarget(target, incoming); err != nil {
+			return nil, err
+		}
+	}
+	byCredential := s.items[accessToken]
+	var byIdentity *Account
+	if targetID == "" {
+		for _, candidate := range s.items {
+			identity := accountOAuthIdentity(candidate)
+			matched := false
+			if incoming.accountID != "" {
+				matched = identity.accountID == incoming.accountID
+			} else if incoming.email != "" {
+				matched = identity.email == incoming.email
+			}
+			if !matched {
+				continue
+			}
+			if byIdentity != nil && byIdentity != candidate {
+				return nil, fmt.Errorf("multiple chatgpt accounts match OAuth identity")
+			}
+			byIdentity = candidate
+		}
+	}
+	for _, candidate := range []*Account{byCredential, byIdentity} {
+		if target != nil && candidate != nil && target != candidate {
+			return nil, fmt.Errorf("chatgpt OAuth target conflicts with existing credential")
+		}
+		if target == nil {
+			target = candidate
+		}
+	}
+	if target != nil {
+		if err := validateChatGPTOAuthTarget(target, incoming); err != nil {
+			return nil, err
+		}
+	}
+	return target, nil
+}
+
+// AddOAuth persists a complete OAuth token set and automatically converges a
+// rotated credential when its upstream identity still names one account.
 func (s *Store) AddOAuth(accessToken, refreshToken, idToken string) (events.AccountView, bool, error) {
+	return s.UpsertOAuth(accessToken, refreshToken, idToken, "")
+}
+
+// UpsertOAuth optionally binds a credential rotation to a stable local
+// account. Refresh/id tokens never leave the owner through AccountView.
+func (s *Store) UpsertOAuth(accessToken, refreshToken, idToken, targetID string) (events.AccountView, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	accessToken, refreshToken = trim(accessToken), trim(refreshToken)
+	accessToken, refreshToken, idToken = trim(accessToken), trim(refreshToken), trim(idToken)
 	if accessToken == "" || refreshToken == "" {
 		return events.AccountView{}, false, fmt.Errorf("oauth access and refresh tokens are required")
 	}
-	acc, exists := s.items[accessToken]
-	if !exists {
+	incoming := oauthTokenIdentity(accessToken, idToken)
+	acc, err := s.resolveOAuthAccountLocked(accessToken, targetID, incoming)
+	if err != nil {
+		return events.AccountView{}, false, err
+	}
+	added := acc == nil
+	if added {
 		acc = &Account{ID: shortID(accessToken), AccessToken: accessToken, RefreshToken: refreshToken, SourceType: "oauth_login", Status: StatusNormal, CreatedAt: time.Now().UTC().Format(time.RFC3339), Extra: map[string]any{}}
 		s.items[accessToken] = acc
 		s.order = append(s.order, accessToken)
-	} else {
-		acc.RefreshToken, acc.SourceType = refreshToken, "oauth_login"
+	} else if acc.AccessToken != accessToken {
+		oldToken := acc.AccessToken
+		delete(s.items, oldToken)
+		s.items[accessToken] = acc
+		for i, token := range s.order {
+			if token == oldToken {
+				s.order[i] = accessToken
+				break
+			}
+		}
+		if s.aliases == nil {
+			s.aliases = map[string]string{}
+		}
+		s.aliases[oldToken] = accessToken
+		if inflight := s.imageInflight[oldToken]; inflight > 0 {
+			s.imageInflight[accessToken] += inflight
+			delete(s.imageInflight, oldToken)
+		}
+		acc.AccessToken = accessToken
 	}
+	acc.RefreshToken, acc.SourceType = refreshToken, "oauth_login"
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
 	}
-	if idToken = trim(idToken); idToken != "" {
+	if idToken != "" {
 		acc.Extra["id_token"] = idToken
+	}
+	if incoming.accountID != "" {
+		acc.Extra["account_id"] = incoming.accountID
+	}
+	if incoming.email != "" {
+		acc.Email = incoming.email
+	}
+	if acc.Status == StatusAbnormal {
+		acc.Status = StatusNormal
+	}
+	acc.ModelSnapshot = nil
+	acc.Extra["last_token_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
+	for _, key := range []string{"last_token_refresh_error", "last_token_refresh_error_at", "last_token_refresh_error_class", "model_discovery_failures", "model_discovery_retry_at", "model_discovery_error_class", "model_discovery_last_error", textCooldownExtraKey, imageCooldownExtraKey} {
+		delete(acc.Extra, key)
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
 	}
-	if !exists {
-		s.bumpCatalogLocked()
-	}
-	return toView(acc, true), !exists, nil
+	s.bumpCatalogLocked()
+	return toView(acc, true), added, nil
 }
 
 func (s *Store) Delete(tokens []string) (deleted int, err error) {

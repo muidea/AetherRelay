@@ -26,6 +26,7 @@ const (
 
 type oauthBridgeSession struct {
 	verifier, state string
+	targetID        string
 	created         time.Time
 }
 type oauthBridge struct {
@@ -33,7 +34,7 @@ type oauthBridge struct {
 	sessions map[string]oauthBridgeSession
 }
 
-func (b *oauthBridge) start(emailHint string) (events.OAuthStartResult, error) {
+func (b *oauthBridge) start(emailHint, targetID string) (events.OAuthStartResult, error) {
 	verifier, err := oauthRandom(64)
 	if err != nil {
 		return events.OAuthStartResult{}, err
@@ -55,33 +56,33 @@ func (b *oauthBridge) start(emailHint string) (events.OAuthStartResult, error) {
 	if b.sessions == nil {
 		b.sessions = map[string]oauthBridgeSession{}
 	}
-	b.sessions[sessionID] = oauthBridgeSession{verifier: verifier, state: state, created: time.Now()}
+	b.sessions[sessionID] = oauthBridgeSession{verifier: verifier, state: state, targetID: strings.TrimSpace(targetID), created: time.Now()}
 	return events.OAuthStartResult{SessionID: sessionID, AuthorizeURL: oauthAuthorizeURL + "?" + params.Encode(), ExpiresIn: int(oauthBridgeTTL.Seconds()), RedirectURIPrefix: oauthRedirectURI}, nil
 }
 
-func (b *oauthBridge) finish(sessionID, callback string) (string, string, string, error) {
+func (b *oauthBridge) finish(sessionID, callback string) (string, string, string, string, error) {
 	code, state, err := oauthCodeFromCallback(callback)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if stateSession := strings.SplitN(state, ".", 2)[0]; stateSession != "" {
 		sessionID = stateSession
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return "", "", "", fmt.Errorf("oauth session_id or callback state is required")
+		return "", "", "", "", fmt.Errorf("oauth session_id or callback state is required")
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pruneLocked(time.Now())
 	session, ok := b.sessions[sessionID]
 	if !ok {
-		return "", "", "", fmt.Errorf("oauth session expired or does not exist")
+		return "", "", "", "", fmt.Errorf("oauth session expired or does not exist")
 	}
 	if state != "" && state != session.state {
-		return "", "", "", fmt.Errorf("oauth state mismatch")
+		return "", "", "", "", fmt.Errorf("oauth state mismatch")
 	}
-	return code, session.verifier, sessionID, nil
+	return code, session.verifier, sessionID, session.targetID, nil
 }
 
 func (b *oauthBridge) consume(sessionID string) {

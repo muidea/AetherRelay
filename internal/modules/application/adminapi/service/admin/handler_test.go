@@ -153,6 +153,11 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing Codex fingerprint marker %q", marker)
 		}
 	}
+	for _, marker := range []string{`data-ua-web-reauth=`, `data-ua-codex-reauth=`, `data-acc-reauth=`, `data-codex-reauth=`, `body.target_id=state.cg.oauth.targetId`, `target_id:state.codex.oauth.targetId`} {
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("admin page missing OAuth reauthentication marker %q", marker)
+		}
+	}
 	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`, `id="cgTaskReload"`, `id="usageExport"`, `id="storeDot"`, `id="storeLabel"`, "async function importAccountFiles(files,parse,post)"} {
 		if strings.Contains(rec.Body.String(), obsolete) {
 			t.Fatalf("admin page still exposes obsolete Codex statistic %q", obsolete)

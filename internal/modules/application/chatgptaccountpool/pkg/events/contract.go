@@ -299,7 +299,10 @@ type HealthResult struct {
 	Disabled int `json:"disabled"`
 }
 
-type OAuthStartCommand struct{ EmailHint string }
+type OAuthStartCommand struct {
+	EmailHint string
+	TargetID  string
+}
 type OAuthStartResult struct {
 	SessionID         string `json:"session_id"`
 	AuthorizeURL      string `json:"authorize_url"`

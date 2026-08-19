@@ -4,6 +4,7 @@ package biz
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -254,7 +255,18 @@ func (s *Account) handleOAuthStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid oauth start command"))
 		return
 	}
-	out, err := s.bridge.start(cmd.EmailHint)
+	cmd.TargetID = strings.TrimSpace(cmd.TargetID)
+	if cmd.TargetID != "" {
+		items := s.store.ExportByIDs([]string{cmd.TargetID})
+		if len(items) != 1 {
+			result.Set(nil, cd.NewError(cd.IllegalParam, "chatgpt OAuth target account is unavailable"))
+			return
+		}
+		if strings.TrimSpace(cmd.EmailHint) == "" {
+			cmd.EmailHint = items[0].Email
+		}
+	}
+	out, err := s.bridge.start(cmd.EmailHint, cmd.TargetID)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -271,7 +283,7 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid oauth finish command"))
 		return
 	}
-	code, verifier, sessionID, err := s.bridge.finish(cmd.SessionID, cmd.Callback)
+	code, verifier, sessionID, targetID, err := s.bridge.finish(cmd.SessionID, cmd.Callback)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -281,7 +293,7 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
-	item, added, err := s.store.AddOAuth(tokens.AccessToken, tokens.RefreshToken, tokens.IDToken)
+	item, added, err := s.store.UpsertOAuth(tokens.AccessToken, tokens.RefreshToken, tokens.IDToken, targetID)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
