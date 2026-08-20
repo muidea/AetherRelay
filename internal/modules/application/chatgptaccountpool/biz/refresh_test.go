@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"net/url"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycredential"
+	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
@@ -49,6 +51,19 @@ func (c *refreshTestOAuthClient) Refresh(_ context.Context, request oauth.Reques
 
 type failedRefreshOAuthClient struct{ err error }
 
+type oauthExchangeTestClient struct{}
+
+func (oauthExchangeTestClient) Refresh(context.Context, oauth.Request) (oauth.Result, error) {
+	return oauth.Result{}, errors.New("unexpected OAuth credential refresh")
+}
+
+func (oauthExchangeTestClient) ExchangeAuthorizationCode(_ context.Context, request oauth.AuthorizationCodeRequest) (oauth.Result, error) {
+	if request.Code != "oauth-code" || request.CodeVerifier == "" || request.RedirectURI != oauthRedirectURI {
+		return oauth.Result{}, errors.New("unexpected authorization-code exchange")
+	}
+	return oauth.Result{AccessToken: "oauth-access", RefreshToken: "oauth-refresh", IDToken: "oauth-id"}, nil
+}
+
 func (c failedRefreshOAuthClient) Refresh(context.Context, oauth.Request) (oauth.Result, error) {
 	return oauth.Result{}, c.err
 }
@@ -59,6 +74,61 @@ func (failedRefreshOAuthClient) ExchangeAuthorizationCode(context.Context, oauth
 
 func (*refreshTestOAuthClient) ExchangeAuthorizationCode(context.Context, oauth.AuthorizationCodeRequest) (oauth.Result, error) {
 	return oauth.Result{}, errors.New("not implemented")
+}
+
+func TestOAuthFinishStartsAccountInformationRefresh(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+
+	accounts := store.New(filepath.Join(t.TempDir(), "accounts.json"), 1, refreshTestCodec(t))
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicGetUserInfo, func(ev event.Event, result event.Result) {
+		command, ok := ev.Data().(upevents.GetUserInfoCommand)
+		if !ok || command.AccessToken != "oauth-access" {
+			result.Set(nil, cd.NewError(cd.Unexpected, "unexpected upstream command"))
+			return
+		}
+		result.Set(upevents.GetUserInfoResult{Email: "operator@example.invalid", PlanType: "plus", Quota: 9}, nil)
+	})
+	account := newAccount(hub, background, accounts, 0)
+	defer account.Teardown(context.Background())
+	account.oauth = oauthExchangeTestClient{}
+
+	started, err := account.bridge.start("operator@example.invalid", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizeURL, err := url.Parse(started.AuthorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := oauthRedirectURI + "?code=oauth-code&state=" + url.QueryEscape(authorizeURL.Query().Get("state"))
+	value, sendErr := hub.Send(event.NewEvent(accevents.TopicOAuthFinish, "test", acccommon.UnitID, nil, accevents.OAuthFinishCommand{SessionID: started.SessionID, Callback: callback})).Get()
+	if sendErr != nil {
+		t.Fatal(sendErr)
+	}
+	finished, ok := value.(accevents.OAuthFinishResult)
+	if !ok || !finished.Added || finished.Item.ID == "" || finished.AccountRefresh == nil || finished.AccountRefresh.ProgressID == "" || finished.AccountRefreshError != "" {
+		t.Fatalf("finish result=%#v", value)
+	}
+
+	var progress accevents.RefreshProgress
+	deadline := time.Now().Add(time.Second)
+	for !progress.Done && time.Now().Before(deadline) {
+		progress, _ = account.getProgress(finished.AccountRefresh.ProgressID)
+		if !progress.Done {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !progress.Done || progress.Refreshed != 1 || progress.TotalQuota != 9 || len(progress.Errors) != 0 {
+		t.Fatalf("progress=%#v", progress)
+	}
+	items := accounts.List()
+	if len(items) != 1 || items[0].Quota != 9 || items[0].Email != "operator@example.invalid" {
+		t.Fatalf("accounts=%#v", items)
+	}
 }
 
 func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {

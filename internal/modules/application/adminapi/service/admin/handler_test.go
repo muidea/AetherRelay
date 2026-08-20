@@ -158,9 +158,14 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing OAuth reauthentication marker %q", marker)
 		}
 	}
-	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`, `id="cgTaskReload"`, `id="usageExport"`, `id="storeDot"`, `id="storeLabel"`, "async function importAccountFiles(files,parse,post)"} {
+	for _, marker := range []string{`class="toolbar cg-account-toolbar account-pool-toolbar"`, `function syncAccountPoolToolbarOffset()`, `beginChatGPTRefreshPolling(result.account_refresh,{visible:false})`, `同步图片额度和账号状态，必要时续期 OAuth 凭证`, `强制续期 OAuth 凭证；成功后自动同步模型与上游用量`, `凭据刷新完成：成功 {succeeded}，失败 {failed}；模型与用量同步已启动`} {
+		if !strings.Contains(rec.Body.String(), marker) {
+			t.Fatalf("admin page missing account-pool action marker %q", marker)
+		}
+	}
+	for _, obsolete := range []string{`id="codexAccAvailable"`, `id="codexAccUsageLimited"`, `id="codexAccDisabled"`, `id="cgTaskReload"`, `id="usageExport"`, `id="storeDot"`, `id="storeLabel"`, `id="uaSearch"`, `id="codexAccSearch"`, `state.unified.query`, `state.codex.query`, "async function importAccountFiles(files,parse,post)"} {
 		if strings.Contains(rec.Body.String(), obsolete) {
-			t.Fatalf("admin page still exposes obsolete Codex statistic %q", obsolete)
+			t.Fatalf("admin page still exposes obsolete marker %q", obsolete)
 		}
 	}
 	for _, id := range []string{`id="uaBundleImport"`, `id="uaBundleExport"`} {

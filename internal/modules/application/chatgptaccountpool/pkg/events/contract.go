@@ -314,8 +314,10 @@ type OAuthFinishCommand struct {
 	Callback  string
 }
 type OAuthFinishResult struct {
-	Added bool        `json:"added"`
-	Item  AccountView `json:"item"`
+	Added               bool           `json:"added"`
+	Item                AccountView    `json:"item"`
+	AccountRefresh      *RefreshResult `json:"account_refresh,omitempty"`
+	AccountRefreshError string         `json:"account_refresh_error,omitempty"`
 }
 
 type ExportItem struct {

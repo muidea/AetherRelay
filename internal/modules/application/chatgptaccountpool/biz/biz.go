@@ -185,14 +185,26 @@ func (s *Account) handleRefreshByID(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid account refresh-by-id command"))
 		return
 	}
-	progressID := uuid.NewString()
-	s.putProgress(events.RefreshProgress{ProgressID: progressID, Errors: []events.RefreshError{}})
-	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runManualRefreshByID(progressID, cmd.IDs) }); err != nil {
-		s.finishProgress(progressID, err.Error())
+	started, err := s.startManualRefreshByID(cmd.IDs)
+	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, "account refresh task unavailable"))
 		return
 	}
-	result.Set(events.RefreshResult{ProgressID: progressID}, nil)
+	result.Set(started, nil)
+}
+
+func (s *Account) startManualRefreshByID(ids []string) (events.RefreshResult, error) {
+	if s.stopping.Load() {
+		return events.RefreshResult{}, context.Canceled
+	}
+	selectedIDs := append([]string(nil), ids...)
+	progressID := uuid.NewString()
+	s.putProgress(events.RefreshProgress{ProgressID: progressID, Errors: []events.RefreshError{}})
+	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runManualRefreshByID(progressID, selectedIDs) }); err != nil {
+		s.finishProgress(progressID, err.Error())
+		return events.RefreshResult{}, err
+	}
+	return events.RefreshResult{ProgressID: progressID}, nil
 }
 
 func (s *Account) handleRefreshProgress(ev event.Event, result event.Result) {
@@ -299,7 +311,14 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 		return
 	}
 	s.bridge.consume(sessionID)
-	result.Set(events.OAuthFinishResult{Added: added, Item: item}, nil)
+	out := events.OAuthFinishResult{Added: added, Item: item}
+	refresh, refreshErr := s.startManualRefreshByID([]string{item.ID})
+	if refreshErr != nil {
+		out.AccountRefreshError = "account refresh task unavailable"
+	} else {
+		out.AccountRefresh = &refresh
+	}
+	result.Set(out, nil)
 }
 
 func (s *Account) Run(ctx context.Context) *cd.Error {

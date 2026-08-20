@@ -58,6 +58,9 @@ type chatGPTAccountRuntimeStub struct {
 	searchHistoryErr   error
 	oauthHint          string
 	oauthTargetID      string
+	oauthSessionID     string
+	oauthCallback      string
+	oauthFinished      accevents.OAuthFinishResult
 }
 
 func (s *chatGPTAccountRuntimeStub) ListChatGPTAccounts(context.Context) ([]accevents.AccountView, error) {
@@ -121,8 +124,9 @@ func (s *chatGPTAccountRuntimeStub) StartChatGPTOAuth(_ context.Context, hint, t
 	s.oauthHint, s.oauthTargetID = hint, targetID
 	return accevents.OAuthStartResult{SessionID: "oauth-session", AuthorizeURL: "https://auth.example.invalid"}, nil
 }
-func (s *chatGPTAccountRuntimeStub) FinishChatGPTOAuth(context.Context, string, string) (accevents.OAuthFinishResult, error) {
-	return accevents.OAuthFinishResult{}, nil
+func (s *chatGPTAccountRuntimeStub) FinishChatGPTOAuth(_ context.Context, sessionID, callback string) (accevents.OAuthFinishResult, error) {
+	s.oauthSessionID, s.oauthCallback = sessionID, callback
+	return s.oauthFinished, nil
 }
 
 func TestChatGPTOAuthStartForwardsStableTarget(t *testing.T) {
@@ -135,6 +139,30 @@ func TestChatGPTOAuthStartForwardsStableTarget(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || runtime.oauthHint != "operator@example.invalid" || runtime.oauthTargetID != "account-1" {
 		t.Fatalf("status=%d body=%s hint=%q target=%q", rec.Code, rec.Body.String(), runtime.oauthHint, runtime.oauthTargetID)
+	}
+}
+
+func TestChatGPTOAuthFinishReturnsAutomaticAccountRefresh(t *testing.T) {
+	runtime := &chatGPTAccountRuntimeStub{oauthFinished: accevents.OAuthFinishResult{
+		Added:          false,
+		Item:           accevents.AccountView{ID: "account-1", Email: "operator@example.invalid"},
+		AccountRefresh: &accevents.RefreshResult{ProgressID: "refresh-1"},
+	}}
+	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/oauth/finish", strings.NewReader(`{"session_id":"oauth-session","callback":"http://localhost/callback?code=oauth-code"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.oauthSessionID != "oauth-session" || runtime.oauthCallback != "http://localhost/callback?code=oauth-code" {
+		t.Fatalf("status=%d body=%s session=%q callback=%q", rec.Code, rec.Body.String(), runtime.oauthSessionID, runtime.oauthCallback)
+	}
+	var response accevents.OAuthFinishResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Added || response.Item.ID != "account-1" || response.AccountRefresh == nil || response.AccountRefresh.ProgressID != "refresh-1" {
+		t.Fatalf("response=%#v", response)
 	}
 }
 func (s *chatGPTAccountRuntimeStub) ListChatGPTImages(context.Context, string, string, string, string) (imgevents.ListResult, error) {
