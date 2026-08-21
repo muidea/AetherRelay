@@ -6,12 +6,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 )
 
+// CP-HDR-021: credential requests share UA/originator and omit Version.
 func TestRefreshUsesCurrentCodexJSONContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("request method=%q content-type=%q", r.Method, r.Header.Get("Content-Type"))
+		}
+		identity := codexidentity.Current()
+		if r.Header.Get("User-Agent") != identity.UserAgent || r.Header.Get("Originator") != identity.Originator || r.Header.Get("Version") != "" {
+			t.Fatalf("credential identity headers=%v", r.Header)
 		}
 		var body map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

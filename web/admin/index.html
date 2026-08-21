@@ -515,7 +515,8 @@
       <div class="notice model-metadata-note">转换能力由模型和上游端点的固定模板自动匹配，此处只维护模型自身的容量和原生能力。</div>
       <div class="form-grid">
         <div class="field full"><label class="label" for="mmModel">模型</label><input class="control" id="mmModel" readonly></div>
-        <div class="field"><label class="label required" for="mmContextWindow">上下文窗口</label><input class="control" id="mmContextWindow" type="number" min="0" step="1" required><div class="help">Token 数；填写 0 表示未声明。</div></div>
+        <div class="field"><label class="label required" for="mmContextWindow">上下文窗口</label><input class="control" id="mmContextWindow" type="number" min="0" step="1" required><div class="help">当前客户端默认使用的 Token 窗口；填写 0 表示未声明。</div></div>
+        <div class="field"><label class="label required" for="mmMaxContextWindow">最大上下文窗口</label><input class="control" id="mmMaxContextWindow" type="number" min="0" step="1" required><div class="help">服务端允许的最大 Token 窗口；填写 0 时回退到上下文窗口。</div></div>
         <div class="field"><label class="label required" for="mmMaxOutput">最大输出</label><input class="control" id="mmMaxOutput" type="number" min="0" step="1" required><div class="help">Token 数；填写 0 表示未声明，且必须小于上下文窗口。</div></div>
         <div class="field full"><div class="inline-setting"><div><strong>支持 Reasoning</strong><span id="mmReasoningHelp">向业务应用发布可选的 reasoning effort。</span></div><label class="switch"><input id="mmReasoningSupported" type="checkbox"><span class="slider"></span></label></div></div>
         <div class="field" id="mmReasoningDefaultField"><label class="label" for="mmReasoningDefault">默认 Reasoning Effort</label><select class="control" id="mmReasoningDefault"><option value="">请选择</option><option value="none">none</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></div>
@@ -2394,7 +2395,7 @@ async function openClientKeyAccess(id){const key=state.clientKeys.find(item=>ite
 function invalidateClientKeyModels(){state.clientKeyModelsVersion=(Number(state.clientKeyModelsVersion)||0)+1;const controller=state.clientKeyModelsAbort;state.clientKeyModelsAbort=null;if(controller)controller.abort();return state.clientKeyModelsVersion}
 function isCurrentClientKeyModelsLoad(id,version,controller){return state.clientKeyModelsID===id&&state.clientKeyModelsVersion===version&&state.clientKeyModelsAbort===controller&&!controller.signal.aborted}
 async function openClientKeyModels(id){id=String(id||"").trim();if(!id)return;const version=invalidateClientKeyModels(),controller=new AbortController();state.clientKeyModelsID=id;state.clientKeyModelsAbort=controller;state.clientKeyModels=[];$("clientKeyModelsTitle").textContent=`${id} · 有效模型`;$("clientKeyModelsSearch").value="";$("clientKeyModelsTable").className="loading";$("clientKeyModelsTable").textContent="正在加载有效模型…";if(!$("clientKeyModelsDialog").open)$("clientKeyModelsDialog").showModal();try{const data=await request(apiURL(`/api/client-api-keys/${encodeURIComponent(id)}/models`),{signal:controller.signal});if(!isCurrentClientKeyModelsLoad(id,version,controller))return;state.clientKeyModels=data.data||[];renderClientKeyModels()}catch(e){if(!isCurrentClientKeyModelsLoad(id,version,controller))return;$("clientKeyModelsTable").className="";$("clientKeyModelsTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`}finally{if(state.clientKeyModelsAbort===controller)state.clientKeyModelsAbort=null}}
-function renderClientKeyModels(){const query=$("clientKeyModelsSearch").value.trim().toLowerCase();const items=state.clientKeyModels.filter(item=>!query||[item.id,...(item.provider_ids||[]),...(item.supported_endpoints||[])].join(" ").toLowerCase().includes(query));$("clientKeyModelsTable").className="";$("clientKeyModelsTable").innerHTML=`<div class="table-wrap"><table class="key-model-table"><thead><tr><th>模型</th><th>Provider</th><th>支持端点</th><th>上下文 / 最大输出</th></tr></thead><tbody>${items.map(item=>`<tr><td class="key-id">${esc(item.id)}</td><td>${esc((item.provider_ids||[]).join(", "))}</td><td><div class="tags">${(item.supported_endpoints||[]).map(v=>`<span class="tag tag-default">${esc(v)}</span>`).join("")}</div></td><td>${esc(item.context_window_tokens||"—")} / ${esc(item.max_output_tokens||"—")}</td></tr>`).join("")||`<tr><td colspan="4" class="empty">暂无可用模型</td></tr>`}</tbody></table></div>`}
+function renderClientKeyModels(){const query=$("clientKeyModelsSearch").value.trim().toLowerCase();const items=state.clientKeyModels.filter(item=>!query||[item.id,...(item.provider_ids||[]),...(item.supported_endpoints||[])].join(" ").toLowerCase().includes(query));$("clientKeyModelsTable").className="";$("clientKeyModelsTable").innerHTML=`<div class="table-wrap"><table class="key-model-table"><thead><tr><th>模型</th><th>Provider</th><th>支持端点</th><th>上下文 / 最大上下文 / 最大输出</th></tr></thead><tbody>${items.map(item=>`<tr><td class="key-id">${esc(item.id)}</td><td>${esc((item.provider_ids||[]).join(", "))}</td><td><div class="tags">${(item.supported_endpoints||[]).map(v=>`<span class="tag tag-default">${esc(v)}</span>`).join("")}</div></td><td>${esc(item.context_window_tokens||"—")} / ${esc(item.max_context_window_tokens||"—")} / ${esc(item.max_output_tokens||"—")}</td></tr>`).join("")||`<tr><td colspan="4" class="empty">暂无可用模型</td></tr>`}</tbody></table></div>`}
 
 async function loadProviders(){try{const data=await request(apiURL("/api/providers"));state.providers=data.providers||[];state.providerWritable=Boolean(data.provider_writable);state.configWritable=Boolean(data.config_writable);$("readonlyNotice").style.display=state.providerWritable?"none":"block";$("addButton").disabled=!state.providerWritable;renderProviders()}catch(e){$("content").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 function providerAvailabilityMeta(a){const status=a?.status||"unknown";const map={healthy:[t("正常"),"healthy"],degraded:[t("降级"),"degraded"],unhealthy:[t("异常"),"unhealthy"],unavailable:[t("不可用"),"unhealthy"],credential_error:[t("凭据异常"),"unhealthy"],endpoint_drift:[t("端点漂移"),"degraded"],disabled:[t("已禁用"),"disabled"],unknown:[t("待观测"),"unknown"]};const [label,tone]=map[status]||map.unknown;const detail=a?.last_success_at?`${t("最近成功")}：${formatDate(a.last_success_at)}`:t("尚无成功请求");return {status,label,tone,detail}}
@@ -3573,7 +3574,7 @@ function conversionSummary(capabilities){
   }
   return rows.length?`<div class="capability-list">${rows.join("")}</div>`:"—";
 }
-function metadataTokenSummary(m){return `<div class="metadata-lines"><div class="metadata-line"><span>上下文</span><strong>${m.context_window_tokens?formatNumber(m.context_window_tokens):"—"}</strong></div><div class="metadata-line"><span>最大输出</span><strong>${m.max_output_tokens?formatNumber(m.max_output_tokens):"—"}</strong></div></div>`}
+function metadataTokenSummary(m){return `<div class="metadata-lines"><div class="metadata-line"><span>上下文</span><strong>${m.context_window_tokens?formatNumber(m.context_window_tokens):"—"}</strong></div><div class="metadata-line"><span>最大上下文</span><strong>${m.max_context_window_tokens?formatNumber(m.max_context_window_tokens):"—"}</strong></div><div class="metadata-line"><span>最大输出</span><strong>${m.max_output_tokens?formatNumber(m.max_output_tokens):"—"}</strong></div></div>`}
 function metadataReasoningSummary(m){if(!m.reasoning_supported)return "—";return `<div class="metadata-lines"><div class="metadata-line"><span>默认</span><strong>${esc(m.reasoning_default_effort||"—")}</strong></div><div class="tags">${(m.reasoning_efforts||[]).map(v=>`<span class="tag">${esc(v)}</span>`).join("")}</div></div>`}
 function metadataNativeSummary(m){const values=[];if(m.native_responses_tools)values.push("Function tools");if(m.native_responses_images)values.push("图片输入");return values.length?`<div class="tags">${values.map(v=>`<span class="tag tag-green">${esc(v)}</span>`).join("")}</div>`:"—"}
 function setModelMetadataReasoningState(){
@@ -3586,6 +3587,7 @@ function openModelMetadataEditor(m){
   editingModelMetadata=m;
   $("mmModel").value=m.id;
   $("mmContextWindow").value=m.context_window_tokens||0;
+  $("mmMaxContextWindow").value=m.max_context_window_tokens||0;
   $("mmMaxOutput").value=m.max_output_tokens||0;
   const conversionNeedsReasoning=Object.values(m.conversion_capabilities||{}).some(value=>value.reasoning);
   $("mmReasoningSupported").checked=!!m.reasoning_supported;
@@ -3603,15 +3605,16 @@ function closeModelMetadataEditor(){editingModelMetadata=null;$("modelMetadataDi
 async function submitModelMetadata(e){
   e.preventDefault();
   if(!editingModelMetadata)return;
-  const context=Number($("mmContextWindow").value),output=Number($("mmMaxOutput").value),supported=$("mmReasoningSupported").checked;
+  const context=Number($("mmContextWindow").value),maxContext=Number($("mmMaxContextWindow").value),output=Number($("mmMaxOutput").value),supported=$("mmReasoningSupported").checked;
   const efforts=[...$("mmReasoningEfforts").querySelectorAll('input:checked')].map(input=>input.value),defaultEffort=$("mmReasoningDefault").value;
-  if(!Number.isSafeInteger(context)||context<0||!Number.isSafeInteger(output)||output<0){toast("Token 容量必须是非负整数","error");return}
+  if(!Number.isSafeInteger(context)||context<0||!Number.isSafeInteger(maxContext)||maxContext<0||!Number.isSafeInteger(output)||output<0){toast("Token 容量必须是非负整数","error");return}
+  if(context>0&&maxContext>0&&maxContext<context){toast("最大上下文窗口不能小于上下文窗口","error");return}
   if(context>0&&output>0&&output>=context){toast("最大输出必须小于上下文窗口","error");return}
   if(supported&&(!defaultEffort||efforts.length===0)){toast("启用 Reasoning 后必须选择默认值和至少一个允许值","error");return}
   if(supported&&!efforts.includes(defaultEffort)){toast("默认 Reasoning Effort 必须包含在允许值中","error");return}
   const button=$("saveModelMetadata");button.disabled=true;
   try{
-    await request(apiURL('/api/model-metadata/'+encodeURIComponent(editingModelMetadata.id)),{method:'PATCH',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({context_window_tokens:context,max_output_tokens:output,reasoning_supported:supported,reasoning_default_effort:supported?defaultEffort:"",reasoning_efforts:supported?efforts:[],native_responses_tools:$("mmNativeTools").checked,native_responses_images:$("mmNativeImages").checked})});
+    await request(apiURL('/api/model-metadata/'+encodeURIComponent(editingModelMetadata.id)),{method:'PATCH',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({context_window_tokens:context,max_context_window_tokens:maxContext,max_output_tokens:output,reasoning_supported:supported,reasoning_default_effort:supported?defaultEffort:"",reasoning_efforts:supported?efforts:[],native_responses_tools:$("mmNativeTools").checked,native_responses_images:$("mmNativeImages").checked})});
     invalidateFeatureCatalog();closeModelMetadataEditor();toast('模型元数据已保存');await loadModelMetadata();
   }catch(error){toast(error.message,'error')}
   finally{button.disabled=false}

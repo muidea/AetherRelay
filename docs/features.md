@@ -19,7 +19,7 @@
 | — 功能集：临时对话 / 在线搜索 / 图片任务 / 图片库 | Admin「功能集」 | 始终装配（临时对话可单独关闭） |
 | ChatGPT Web 文本与图片代理 | 同上标准端点路由到内建 `chatgptweb` | `chatgpt_web.provider_enabled` |
 | ChatGPT Web 在线搜索 | `/v1/search`、协议内 `web_search` 工具 | 始终装配，需可用账号与模型 |
-| Codex OAuth 原生 Responses | `/v1/responses` HTTP/SSE/WebSocket、`/v1/responses/compact` 路由到内建 `codexoauth` | `codex_oauth.provider_enabled` |
+| Codex OAuth 原生 Responses | `/v1/responses` HTTP/SSE/WebSocket、`/v1/responses/compact`；`/v1/responses/input_tokens` 本地预估 | `codex_oauth.provider_enabled` 或其它 Responses 候选 |
 | Prometheus 指标 / 统计快照 | `/metrics`、`/stats`、`/stats/stream` | 默认 loopback-only |
 | SLO 违规 webhook | 状态变化时异步 POST | `slo_violation_webhook` 配置 |
 | 交互归档 | `state.dir/interactions/{api_key_id}/{round_id}/` | 默认启用 |
@@ -29,12 +29,14 @@
 
 入站白名单（其它 `/v1/*` 一律 404）：
 
-- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET /v1/models`
+- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/responses/input_tokens`、`POST /v1/completions`、`POST /v1/embeddings`，`GET /v1/models`
 - **Anthropic**：`POST /v1/messages`
 - **AetherRelay 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
 - **OpenAI Images**：`POST /v1/images/generations|edits`（OpenAI native 或内建 `chatgptweb` 图片能力）
 
 `GET /v1/models` **本地合成**，不访问上游；普通请求返回有效目录中的 OpenAI-compatible 模型清单，携带 `client_version` query 时返回 Codex models manifest。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`POST /v1/models` 不受支持。
+
+`POST /v1/responses/input_tokens` 复用 `/v1/responses` 的认证、exact model、Provider access 与目录能力检查，然后用本地 tokenizer 返回 `response.input_tokens` 估算。它不选择账号、不读取上游凭据、不发网络请求，也不产生计费 token；因此即使同一模型有多个 Responses 候选，预估结果也不锁定 Provider。
 
 `supported_endpoints` 只表示模型至少有一个已配置或已发现的目录候选具备该客户端路径合同，不包含请求期健康度和熔断过滤。例如 Anthropic Provider 声明原生 `messages` 时，模型可以同时显示 `/v1/messages` 与经协议转换的 `/v1/chat/completions`；ChatGPT Web 的 `chat_completions` 还会派生 `/v1/search`，`images` 会派生图片生成和编辑两个路径。系统信息中的“开放 API 端点”是实例级路由清单，需与模型的 `supported_endpoints` 取交集后再发起请求；即使目录命中，全部候选临时熔断时仍会返回 `provider_unavailable`。
 
@@ -53,6 +55,7 @@
 | `/v1/responses` | anthropic | `messages` | `/v1/messages` | `responses_to_anthropic`（需发布 capability） |
 | `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
 | `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
+| `/v1/responses/input_tokens` | local | Responses 目录能力 | 无 | `responses_input_tokens` |
 | `/v1/completions` | openai | `completions` | 同 path | native |
 | `/v1/embeddings` | openai | `embeddings` | 同 path | native |
 | `/v1/search` | chatgptweb | `chat_completions` | `chatgptweb_search` | native |
@@ -156,9 +159,9 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 进程自动注入只读内建 Provider `codexoauth`，服务原生 Responses HTTP/SSE、compact 与 WebSocket，并为 `/v1/chat/completions` 和 `/v1/messages` 提供受限协议适配：
 
 - 模型按账号从 ChatGPT 上游 `/backend-api/codex/models` 自动发现并缓存 6 小时，该路径不作为 AetherRelay 入站端点；失败指数退避；可路由模型是全部健康账号模型快照的并集，不提供 allowlist。
-- 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；`429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE 输出后不切换账号；明确 `usage_limit_reached` 记录账号/模型额度耗尽与上游恢复时间（运行期观察，非官方额度）。
+- 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；`429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE/WS 业务输出后不切换账号；明确 `usage_limit_reached` 记录账号/模型额度耗尽与上游恢复时间（运行期观察，非官方额度）。WebSocket 第二个及后续 turn 只有在尚未输出、完整 transcript 可在消息上限内重建且工具 call/output 覆盖完整时，才会关闭旧 session 并最多迁移两次。
 - 非流式 `/v1/responses` 在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象。
-- WebSocket 支持规范入口 `GET /v1/responses`；compact 对客户端支持 unary JSON 和最小 SSE 投影，但上游使用原生 streaming `/responses` + `compaction_trigger`，不再调用已下线的 unary compact 端点。所有 OAuth 请求携带会话级 beta profile；Turn-State 有界回传并防止已知跨账号 echo。不提供 `/backend-api/codex/*` 入站别名。Realtime、网页会话和插件不属于该能力；`/v1/search` 与临时对话不经过 Codex 账号域。
+- WebSocket 支持规范入口 `GET /v1/responses`；compact 对客户端支持 unary JSON 和最小 SSE 投影，但上游使用原生 streaming `/responses` + `compaction_trigger`，不再调用已下线的 unary compact 端点。compact 的 request fault 停止切号，非 credential 临时故障不会污染普通 Responses 冷却；401/402/结构化 403/429 仍保留账号反馈。所有 OAuth 请求携带会话级 beta profile；Turn-State 有界回传并防止已知跨账号 echo。不提供 `/backend-api/codex/*` 入站别名。Realtime、网页会话和插件不属于该能力；`/v1/search` 与临时对话不经过 Codex 账号域。
 - 账号凭据、代理与到期时间只写 `state.database`；管理 API 直接显示邮箱，但不返回 token、账号 ID 或代理。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。
 - 管理页不提供 Codex 槽位单独导出；选中的统一账号通过整体账号池导出接口获取完整凭据包，该接口显式返回 `Cache-Control: no-store`，页面不预览且仅用短生命周期 Blob 触发下载。
 
@@ -181,7 +184,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - Chat Completions↔Messages 转换仅保证纯文本与纯文本 SSE；Responses↔Messages 可按公开 Level 3 合同支持非流式 function tools。多模态、JSON Schema、continuation 和流式 tools 在转换路径访问上游前拒绝。
 - `completions` / `embeddings` 不能由 chat/messages 转换派生，必须由具备对应 `endpoints` 的上游直连服务。
-- Codex OAuth 提供 Responses WebSocket（`GET /v1/responses` upgrade）和 `/v1/responses/compact`；不提供 OpenAI Realtime 代理。`/v1/search` 不是 OpenAI 官方端点别名。
+- Codex OAuth 提供 Responses WebSocket（`GET /v1/responses` upgrade）和 `/v1/responses/compact`；`POST /v1/responses/input_tokens` 是所有 Responses 模型共享的本地预估端点；不提供 OpenAI Realtime 代理。`/v1/search` 不是 OpenAI 官方端点别名。
 - 不提供请求侧 Provider 覆盖；候选顺序由语义等级、配置的 `priority` / `fallback`、请求期健康状态和稳定名称共同决定。
 - ChatGPT Web 不提供通用 function/tool calling、工具循环、深度研究、网页插件；Codex 不提供网页会话与插件能力。
 - 单进程单工作区：`state.database` 不可多实例共享；账号定时刷新间隔修改后必须重启。

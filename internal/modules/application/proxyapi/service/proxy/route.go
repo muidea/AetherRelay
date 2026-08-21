@@ -69,6 +69,8 @@ func RouteLabel(r *http.Request) string {
 		return "messages"
 	case "/v1/responses":
 		return "responses"
+	case "/v1/responses/input_tokens":
+		return "responses_input_tokens"
 	case "/v1/responses/compact":
 		return "responses_compact"
 	case "/v1/search":
@@ -96,7 +98,7 @@ func ClientProtocolForPath(path string) string {
 	switch path {
 	case "/v1/messages":
 		return ClientProtocolAnthropic
-	case "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
+	case "/v1/chat/completions", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
 		return ClientProtocolOpenAI
 	default:
 		return ""

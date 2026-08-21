@@ -78,6 +78,9 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 	model := ""
 	sessionID := ""
 	var sessionFeatures codexRequestFeatures
+	var sessionOpenRequest codexresponses.WebsocketOpenRequest
+	replayState := newCodexWebsocketReplayState(maxMessageBytes)
+	turnNumber := 0
 	defer func() {
 		if sessionID != "" {
 			h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
@@ -112,7 +115,8 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				return
 			}
 			sessionHash := codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})
-			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState})
+			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
+			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 			if openErr != nil {
 				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket could not be opened")
 				return
@@ -139,30 +143,74 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			writeCodexWebsocketError(conn, "invalid_request", cacheErr.Error())
 			return
 		}
-		if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, normalized); err != nil {
-			writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket send failed")
+		turnReplay, replayErr := replayState.prepare(normalized)
+		if replayErr != nil {
+			writeCodexWebsocketError(conn, "invalid_request", "Codex websocket replay state is invalid")
 			return
 		}
+		turnNumber++
 		turnStarted := time.Now()
-		terminal, reusable, turnUsage, forwardErr := h.forwardCodexWebsocketTurn(ctx, conn, sessionID)
-		if forwardErr != nil {
-			writeCodexWebsocketError(conn, "upstream_failed", forwardErr.Error())
-			h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, forwardErr.Error())
-			h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, "websocket", forwardErr.Error(), "", "upstream_failed")
-			return
+		attemptPayload := normalized
+		migrationAttempts := 0
+		var turnResult codexWebsocketForwardResult
+		for {
+			if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, attemptPayload); err != nil {
+				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket send failed")
+				return
+			}
+			turnResult, err = h.forwardCodexWebsocketTurn(ctx, conn, sessionID, maxMessageBytes)
+			if err != nil {
+				writeCodexWebsocketError(conn, "upstream_failed", err.Error())
+				h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, err.Error())
+				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, "websocket", err.Error(), "", "upstream_failed")
+				return
+			}
+			canMigrate := turnNumber > 1 && migrationAttempts < maxCodexWebsocketTurnMigrations && !turnResult.downstreamWritten && turnResult.failure != nil && turnResult.failure.Kind == codexresponses.KindRateLimit
+			if canMigrate {
+				retryPayload, retrySafe, retryErr := buildCodexWebsocketRetryPayload(attemptPayload, turnReplay, maxMessageBytes)
+				if retryErr != nil {
+					writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket replay could not be prepared")
+					return
+				}
+				if retrySafe {
+					h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
+					sessionID = ""
+					opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
+					if openErr != nil {
+						writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket replacement account is unavailable")
+						return
+					}
+					sessionID = opened.SessionID
+					attemptPayload = retryPayload
+					migrationAttempts++
+					continue
+				}
+			}
+			if len(turnResult.deferred) > 0 {
+				if err := writeCodexWebsocketFrames(conn, turnResult.deferred); err != nil {
+					return
+				}
+				turnResult.downstreamWritten = true
+			}
+			if turnResult.failure != nil && !turnResult.downstreamWritten {
+				writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket turn failed")
+			}
+			break
 		}
-		if !terminal {
+		if !turnResult.terminal {
 			return
 		}
 		outcome := "success"
 		message := ""
-		if !reusable {
+		if !turnResult.reusable {
 			outcome = "upstream_failed"
 			message = "Codex websocket turn failed"
+		} else {
+			replayState.commit(turnReplay, turnResult.outputItems)
 		}
-		h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, message)
-		h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnUsage, "websocket", message, "", outcome)
-		if !reusable {
+		h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, message)
+		h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, "websocket", message, "", outcome)
+		if !turnResult.reusable {
 			return
 		}
 	}
@@ -247,28 +295,119 @@ func websocketPromptCacheKey(raw []byte) string {
 	return value
 }
 
-func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket.Conn, sessionID string) (bool, bool, tokenUsage, error) {
-	usage := tokenUsage{Estimated: true, Known: true}
+type codexWebsocketForwardResult struct {
+	terminal          bool
+	reusable          bool
+	downstreamWritten bool
+	usage             tokenUsage
+	failure           *codexresponses.Failure
+	deferred          [][]byte
+	outputItems       []json.RawMessage
+}
+
+func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket.Conn, sessionID string, deferredLimit int64) (codexWebsocketForwardResult, error) {
+	result := codexWebsocketForwardResult{usage: tokenUsage{Estimated: true, Known: true}}
+	collector := codexWebsocketOutputCollector{}
+	deferredBytes := int64(0)
 	for {
-		payload, done, err := h.codexResponses.PullCodexWebsocket(ctx, sessionID)
+		update, err := h.codexResponses.PullCodexWebsocket(ctx, sessionID)
 		if err != nil {
-			return false, false, usage, err
+			result.outputItems = collector.result()
+			return result, err
 		}
+		payload := update.Payload
 		if len(payload) > 0 {
 			payload = normalizeCodexWebsocketEvent(payload)
-			usage = codexWebsocketUsage(payload, usage)
+			result.usage = codexWebsocketUsage(payload, result.usage)
+			collector.addEvent(payload)
 			payload, _ = sanitizeCodexCapacityEventForClient(payload)
-			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-				return false, false, usage, err
+			if update.Failure != nil && update.Failure.Kind == codexresponses.KindRateLimit && !result.downstreamWritten {
+				result.failure = update.Failure
+				result.terminal = true
+				result.deferred = append(result.deferred, append([]byte(nil), payload...))
+				result.outputItems = collector.result()
+				return result, nil
+			}
+			if codexWebsocketNeutralPrelude(payload) && !result.downstreamWritten {
+				result.deferred = append(result.deferred, append([]byte(nil), payload...))
+				deferredBytes += int64(len(payload))
+				if deferredLimit > 0 && deferredBytes > deferredLimit {
+					if err := writeCodexWebsocketFrames(conn, result.deferred); err != nil {
+						result.outputItems = collector.result()
+						return result, err
+					}
+					result.deferred = nil
+					result.downstreamWritten = true
+				}
+			} else {
+				if len(result.deferred) > 0 {
+					if err := writeCodexWebsocketFrames(conn, result.deferred); err != nil {
+						result.outputItems = collector.result()
+						return result, err
+					}
+					result.deferred = nil
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+					result.outputItems = collector.result()
+					return result, err
+				}
+				result.downstreamWritten = true
 			}
 			if terminal, reusable := codexWebsocketTerminalOutcome(payload); terminal {
-				return true, reusable, usage, nil
+				result.terminal, result.reusable, result.failure = true, reusable, update.Failure
+				result.outputItems = collector.result()
+				return result, nil
 			}
 		}
-		if done {
-			return false, false, usage, nil
+		if update.Failure != nil {
+			result.failure = update.Failure
+			result.outputItems = collector.result()
+			if update.Failure.Kind == codexresponses.KindRateLimit && !result.downstreamWritten {
+				result.terminal = true
+				return result, nil
+			}
+			return result, update.Failure
+		}
+		if update.Done {
+			if len(result.deferred) > 0 {
+				if err := writeCodexWebsocketFrames(conn, result.deferred); err != nil {
+					result.outputItems = collector.result()
+					return result, err
+				}
+				result.deferred = nil
+				result.downstreamWritten = true
+			}
+			result.outputItems = collector.result()
+			return result, nil
 		}
 	}
+}
+
+func codexWebsocketNeutralPrelude(payload []byte) bool {
+	var event struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	switch event.Type {
+	case "response.created", "response.in_progress", "response.queued":
+		return true
+	default:
+		return false
+	}
+}
+
+func writeCodexWebsocketFrames(conn *websocket.Conn, frames [][]byte) error {
+	for _, payload := range frames {
+		if len(payload) == 0 {
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func codexWebsocketTerminalOutcome(payload []byte) (bool, bool) {

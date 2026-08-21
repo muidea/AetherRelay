@@ -397,6 +397,12 @@ func requireResolvedConfig(cfg config.Config) error {
 		if info.ContextWindowTokens < 0 {
 			return fmt.Errorf("model_metadata.%s: context_window_tokens must be zero or positive", id)
 		}
+		if info.MaxContextWindowTokens < 0 {
+			return fmt.Errorf("model_metadata.%s: max_context_window_tokens must be zero or positive", id)
+		}
+		if info.ContextWindowTokens > 0 && info.MaxContextWindowTokens > 0 && info.MaxContextWindowTokens < info.ContextWindowTokens {
+			return fmt.Errorf("model_metadata.%s: max_context_window_tokens must be greater than or equal to context_window_tokens", id)
+		}
 		if info.MaxOutputTokens < 0 {
 			return fmt.Errorf("model_metadata.%s: max_output_tokens must be zero or positive", id)
 		}
@@ -539,6 +545,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleAnthropicMessages(w, r, requestID)
 	case r.URL.Path == "/v1/responses/compact" && r.Method == http.MethodPost:
 		h.handleCodexCompact(w, r, requestID)
+	case r.URL.Path == "/v1/responses/input_tokens" && r.Method == http.MethodPost:
+		h.handleResponsesInputTokens(w, r, requestID)
 	case r.URL.Path == "/v1/responses" && r.Method == http.MethodGet:
 		h.handleCodexWebsocket(w, r, requestID)
 	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
@@ -924,7 +932,7 @@ func isSupportedInbound(method, path string) bool {
 	switch path {
 	case "/v1/responses":
 		return method == http.MethodPost || method == http.MethodGet
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
+	case "/v1/chat/completions", "/v1/messages", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
 		return method == http.MethodPost
 	case "/v1/models":
 		return method == http.MethodGet

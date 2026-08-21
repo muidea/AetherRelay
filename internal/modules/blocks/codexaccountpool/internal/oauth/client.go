@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 )
 
 const (
@@ -91,6 +93,11 @@ func exchange(ctx context.Context, endpoint string, requestBody io.Reader, conte
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
+	identity := codexidentity.Current()
+	// The auth.openai.com credential face emitted by the verified client sends
+	// the canonical UA/originator pair, but no inference-only Version header.
+	req.Header.Set("User-Agent", identity.UserAgent)
+	req.Header.Set("Originator", identity.Originator)
 	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, &Error{Class: classifyTransport(err), Cause: fmt.Errorf("OAuth request failed: %w", err)}

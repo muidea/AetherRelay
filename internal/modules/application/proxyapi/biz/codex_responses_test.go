@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
@@ -150,6 +151,87 @@ func TestCodexCompactSwitchesWhenNativeV2ProducesNoCompactionItem(t *testing.T) 
 	}
 }
 
+// CP-COMPACT-005: transient compact failure does not taint normal routing.
+func TestCodexCompactTransientFailuresAreAvailabilityNeutral(t *testing.T) {
+	hub := event.NewHub(32)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	acquires := 0
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		acquires++
+		result.Set(accevents.AcquireResult{AccountID: fmt.Sprintf("account-%d", acquires), AccessToken: fmt.Sprintf("token-%d", acquires), LeaseID: fmt.Sprintf("lease-%d", acquires)}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	recorded := make(chan accevents.RecordResultCommand, 2)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRecordTransportCapability, func(_ event.Event, result event.Result) { result.Set(accevents.RecordTransportCapabilityResult{}, nil) })
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicCompact, func(ev event.Event, result event.Result) {
+		if ev.Data().(upevents.CompactCommand).AccessToken == "token-1" {
+			result.Set(upevents.CompactResult{ErrorClass: upevents.ErrorUpstream, HTTPStatus: http.StatusInternalServerError}, nil)
+			return
+		}
+		result.Set(upevents.CompactResult{Body: []byte(`{"id":"resp_compact"}`)}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	completed, err := proxy.CompleteCodexCompact(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)})
+	if err != nil || string(completed.Body) != `{"id":"resp_compact"}` || acquires != 2 {
+		t.Fatalf("completed=%s acquires=%d err=%v", completed.Body, acquires, err)
+	}
+	first, second := <-recorded, <-recorded
+	if first.AccountID != "account-1" || !first.AvailabilityNeutral || first.ErrorClass != accevents.ErrorUpstream {
+		t.Fatalf("compact transient feedback=%+v", first)
+	}
+	if second.AccountID != "account-2" || !second.Success || second.AvailabilityNeutral {
+		t.Fatalf("compact success feedback=%+v", second)
+	}
+}
+
+// CP-COMPACT-005: deterministic compact faults stop fallback without cooldown.
+func TestCodexCompactRequestFaultStopsFallbackWithoutCooldown(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	acquires := 0
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		acquires++
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "token-1", LeaseID: "lease-1"}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	recorded := make(chan accevents.RecordResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicCompact, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CompactResult{ErrorClass: upevents.ErrorInvalidRequest, HTTPStatus: http.StatusNotFound}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	_, err := proxy.CompleteCodexCompact(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)})
+	failure, ok := codexresponses.AsFailure(err)
+	if !ok || failure.HTTPStatus != http.StatusNotFound || acquires != 1 {
+		t.Fatalf("failure=%+v acquires=%d err=%v", failure, acquires, err)
+	}
+	if command := <-recorded; !command.AvailabilityNeutral || command.ErrorClass != accevents.ErrorInvalidRequest {
+		t.Fatalf("request fault feedback=%+v", command)
+	}
+}
+
+// CP-COMPACT-005: quota/rate-limit feedback remains cooldown-bearing.
+func TestCodexCompactRateLimitRemainsCooldownBearing(t *testing.T) {
+	failure := codexresponses.NewQuotaFailure(codexresponses.KindRateLimit, 60, true, "2026-08-21T16:00:00Z", fmt.Errorf("limited"))
+	failure.HTTPStatus = http.StatusTooManyRequests
+	if codexCompactAvailabilityNeutral(failure) || codexCompactRequestFault(failure) {
+		t.Fatalf("rate limit classification=%+v", failure)
+	}
+}
+
 func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 	off := resolveCodexFingerprint("account-1", accevents.FingerprintModeOff, "client-session")
 	if off != (upevents.CodexFingerprint{}) {
@@ -287,6 +369,43 @@ func TestCodexWebsocketEvidenceRejectsEmptyOutputSkeletons(t *testing.T) {
 		if !codexWebsocketPayloadHasEvidence(payload) {
 			t.Fatalf("CP-STREAM-006/008 semantic payload missed: %s", payload)
 		}
+	}
+}
+
+// CP-WS-012: the old account cooldown is synchronously recorded before migration.
+func TestPullCodexWebsocketPreservesRateLimitFeedback(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	resetAt := time.Now().UTC().Add(2 * time.Minute).Format(time.RFC3339)
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicWSPull, func(_ event.Event, result event.Result) {
+		result.Set(upevents.WSPullResult{
+			Done:              true,
+			ErrorClass:        upevents.ErrorRateLimit,
+			RetryAfterSeconds: 45,
+			RateLimit:         upevents.RateLimitObservation{UsageLimited: true, ResetAt: resetAt},
+		}, nil)
+	})
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	recorded := make(chan accevents.RecordResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	proxy := &Proxy{
+		Base: basebiz.New(proxycommon.UnitID, hub, background),
+		codexWebsockets: map[string]codexWebsocketBinding{
+			"session-1": {accountID: "account-1", model: "gpt-test"},
+		},
+	}
+	update, err := proxy.PullCodexWebsocket(context.Background(), "session-1")
+	if err != nil || update.Failure == nil || update.Failure.Kind != codexresponses.KindRateLimit || update.Failure.RetryAfterSeconds != 45 || !update.Failure.QuotaExhausted || update.Failure.QuotaResetAt != resetAt {
+		t.Fatalf("update=%+v err=%v", update, err)
+	}
+	command := <-recorded
+	if command.AccountID != "account-1" || command.Model != "gpt-test" || command.ErrorClass != accevents.ErrorRateLimit || command.RetryAfterSeconds != 45 || !command.QuotaExhausted || command.QuotaResetAt != resetAt {
+		t.Fatalf("feedback=%+v", command)
 	}
 }
 

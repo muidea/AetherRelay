@@ -115,6 +115,10 @@ github.com/bogdanfinn/websocket
 # github.com/buger/jsonparser v1.1.2
 ## explicit; go 1.13
 github.com/buger/jsonparser
+# github.com/dlclark/regexp2 v1.11.5
+## explicit; go 1.13
+github.com/dlclark/regexp2
+github.com/dlclark/regexp2/syntax
 # github.com/duckdb/duckdb-go-bindings v0.10504.0
 ## explicit; go 1.24
 github.com/duckdb/duckdb-go-bindings
@@ -206,7 +210,7 @@ github.com/klauspost/cpuid/v2
 ## explicit; go 1.18
 github.com/leodido/go-urn
 github.com/leodido/go-urn/scim/schema
-# github.com/muidea/magicCommon v1.5.10
+# github.com/muidea/magicCommon v1.5.11
 ## explicit; go 1.24.0
 github.com/muidea/magicCommon/def
 github.com/muidea/magicCommon/event
@@ -224,7 +228,7 @@ github.com/muidea/magicCommon/framework/plugin/initiator
 github.com/muidea/magicCommon/framework/plugin/module
 github.com/muidea/magicCommon/framework/service
 github.com/muidea/magicCommon/task
-# github.com/muidea/magicEngine v1.4.9
+# github.com/muidea/magicEngine v1.5.1
 ## explicit; go 1.24.0
 github.com/muidea/magicEngine/http
 # github.com/openai/openai-go v1.12.0
@@ -287,6 +291,10 @@ github.com/tidwall/pretty
 # github.com/tidwall/sjson v1.2.5
 ## explicit; go 1.14
 github.com/tidwall/sjson
+# github.com/tiktoken-go/tokenizer v0.7.0
+## explicit; go 1.23
+github.com/tiktoken-go/tokenizer
+github.com/tiktoken-go/tokenizer/codec
 # github.com/zeebo/xxh3 v1.1.0
 ## explicit; go 1.22
 github.com/zeebo/xxh3

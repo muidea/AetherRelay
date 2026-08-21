@@ -1,12 +1,12 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`3.5.0`
+> 合同版本：`3.6.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-08-17
+> 生效日期：2026-08-21
 >
-> 参考基线：AetherRelay `21a24bd`、CLIProxyAPI `f43aad76`、sub2api `396a9d113`
+> 参考基线：AetherRelay `f7337e87`、CLIProxyAPI `85d2fadd`、sub2api `35482567`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -60,7 +60,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`3.5.0` 将 compact 上游切换为原生 remote compaction v2，固化会话级 beta、Turn-State 来源保护，以及默认关闭、显式 opt-in 的账号级指纹收敛。`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。
+版本记录：`3.6.0` 新增本地 Responses input-token preflight、默认/最大上下文双容量、nested cache breakpoint 清洗、compact availability-neutral 反馈、OAuth 统一身份，以及后续 WebSocket turn 的有界安全迁移。`3.5.0` 将 compact 上游切换为原生 remote compaction v2，固化会话级 beta、Turn-State 来源保护，以及默认关闭、显式 opt-in 的账号级指纹收敛。`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。
 
 ## 3. 支持对象与版本策略
 
@@ -89,10 +89,13 @@
 | `CP-EP-012` | GET | `/v1/responses/ws` | retired | 无生产路由证据；固定返回 404 | rejected |
 | `CP-EP-013` | GET | `/v1/models` | core | 自定义 Provider 模式的模型发现；与有效目录同代 | implemented |
 | `CP-EP-014` | POST | `/v1/models` | retired | 无 Codex 或参考实现依据；固定返回 404 | rejected |
+| `CP-EP-015` | POST | `/v1/responses/input_tokens` | core | Responses 输入 token 预估；本地、非计费、不访问上游 | implemented |
 
 `GET /v1/models` 在 query 中存在 `client_version` 时返回 Codex models manifest `{"models":[...]}`；未携带该 query 时返回 OpenAI-compatible `{"object":"list","data":[...]}`。两种表示必须读取同一 effective catalog generation，并执行相同的客户端 Provider access 过滤。Codex manifest 只列出实际支持 `/v1/responses` 的模型；`use_responses_lite` 与 `prefer_websockets` 只能按 AetherRelay 已实现能力声明。
 
 `POST /v1/models` 曾是 AetherRelay 通用兼容端点，但请求体不参与结果、与 GET 完全重复，且 CLIProxyAPI、sub2api 与已核对的 Codex 客户端历史均没有要求该 method。该端点现已退出合同并固定返回 404。
+
+`POST /v1/responses/input_tokens` 必须复用 `/v1/responses` 的客户端认证、exact model、Provider access 和 effective catalog 判定，但只用本地 tokenizer 返回 `{"object":"response.input_tokens","input_tokens":N}`。它不得选择或占用账号、读取 Provider/Codex 凭据、访问任何上游或产生计费 token；实现无法精确复刻上游封装开销时必须返回稳定的保守估算，最小值为 1。
 
 `GET /v1/responses/ws` 与全部 `/backend-api/codex/*` 入站路径不属于支持合同，必须返回 404，不能作为隐藏别名保留。CLIProxyAPI 和 sub2api 中的同名路径仅作为历史证据记录，不覆盖最新 Codex 的自定义 Provider 配置合同。
 
@@ -126,6 +129,7 @@
 | `client_metadata` | 只接受已知 Codex 键；默认不做账号级收敛，显式启用时由统一 fingerprint profile 重建有界身份集合 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
 | `stream_options` | 仅保留已验证的 `reasoning_summary_delivery=sequential_cutoff`；其它键 drop-compatible | 删除 | `CP-REQ-028` |
+| `input[].content[].prompt_cache_breakpoint` | drop-compatible，保留所在 content part 及其它字段 | 同左 | `CP-REQ-029` |
 | `metadata/user/safety_identifier` | drop-compatible | drop-compatible | `CP-REQ-018` |
 | `truncation/prompt_cache_options` | drop-compatible | drop-compatible | `CP-REQ-027` |
 | `service_tier` | 仅 `priority` pass；其它值 drop-compatible | 同左 | `CP-REQ-027` |
@@ -148,6 +152,8 @@
 `CP-REQ-027` ChatGPT Codex 明确不支持但删除后仍保持标准执行语义的 `truncation`、`prompt_cache_options` 和非 `priority` `service_tier` 必须在账号选择前 drop-compatible；字段名进入有界 ignored-features 记录，字段值不得记录。
 
 `CP-REQ-028` 普通流式 Responses 只允许 `stream_options.reasoning_summary_delivery` 的已验证值 `sequential_cutoff` 进入上游；`include_usage` 等其它键删除。未知值或错误类型必须在账号选择前拒绝，不能静默改变 reasoning summary 的事件交付语义。
+
+`CP-REQ-029` 客户端附在 `input[].content[]` 单项上的 `prompt_cache_breakpoint` 不属于 ChatGPT Codex 支持字段。普通 Responses、compact 和 WebSocket 规范化必须在账号选择前仅删除该键，保留 content 顺序、文本、角色和同项其它字段，并把有界字段路径记入 ignored-features。
 
 ## 6. 上游身份与 Header 合同
 
@@ -177,6 +183,8 @@
 `CP-HDR-018` token、完整 account ID、原始 turn metadata 和 session 原值不得写入日志、归档、指标或错误响应。
 
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
+
+`CP-HDR-021` Codex OAuth 授权码交换和 refresh token 请求必须与 inference transport 读取同一个版本化身份 authority，生成相同的 `User-Agent` 与 `Originator`；OAuth credential endpoint 不发送 inference-only `Version` header。任何 profile 升级必须同时覆盖 credential 与 inference 测试。
 
 `CP-FP-001` 账号 `fingerprint_mode` 取值只能为 `off/device/session/full`。缺失、空值、非法存量值均按 `off`；只有管理员显式设置后三种值才启用收敛。
 
@@ -214,6 +222,8 @@
 
 `CP-COMPACT-004` HTTP 2xx 只有在 `response.output_item.done/added`、终态 `response.output[]` 或 JSON fallback 中观察到 `compaction`/`compaction_summary` item 才算支持；无该 item 必须标记账号 native-v2 compact 不支持，不能把普通空 Response 伪装成成功。旧 unary endpoint 学到的 capability cache 必须失效。
 
+`CP-COMPACT-005` compact 的 400/404/405/409/413/422/501 request/capability fault 必须停止切号并原样保留安全状态；其它非 credential 临时失败可以在账号间回退，但账号结果必须标记 availability-neutral，只累计失败观测，不改变状态、普通 Responses 冷却或额度事实。401/402/结构化 403/429 仍按 credential/cooldown 处理；未结构化 endpoint 403 继续服从 `CP-FAIL-015`。
+
 `CP-WS-001` WebSocket 握手必须执行与 HTTP 相同的客户端认证、Provider access 和模型授权。
 
 `CP-WS-002` 上游连接使用已验证的 `OpenAI-Beta: responses_websockets=<profile-date>`，每个 turn 使用 `response.create`。
@@ -235,6 +245,8 @@
 `CP-WS-010` 每个 WebSocket terminal 必须携带与 HTTP/SSE 相同的有界错误分类、quota/reset observation 和 turn outcome。`response.failed`、`error`、transport/protocol failure 后必须失效当前上游连接；`response.incomplete` 保持合法终态并允许连接继续复用。
 
 `CP-WS-011` 生产 listener、HTTP middleware、RouteRegistry 与响应记账 wrapper 必须完整透传 `http.Hijacker`；成功 Upgrade 必须被标记为已写，框架不得在 `101 Switching Protocols` 后追加 204 或错误正文。验收必须使用真实 TCP listener 完成握手，不能只调用 handler 或使用 recorder。
+
+`CP-WS-012` 原生 WebSocket 只允许在第二个及后续 turn、收到 429/usage-limit 且尚未向客户端写出任何业务帧时迁移账号。代理必须先同步登记旧账号的 typed rate-limit/cooldown，再关闭旧 session；只有能够在消息上限内重建完整有序 transcript、删除 `previous_response_id`、并重新验证全部 function/custom/MCP call-output 配对时，才可最多迁移两次。`response.created/in_progress/queued` 可为此短暂延迟；任一 delta、output、tool、usage 或其它语义帧写出后禁止迁移和重放。
 
 ## 8. 账号调度与会话粘性
 
@@ -292,6 +304,8 @@
 
 `CP-CAP-005` 新鲜且明确标记 `LimitReached`、且 reset 尚未到期的账号用量窗口必须参与账号准入；未知、缺失或已过期快照不得阻止尝试。请求失败产生的 model cooldown 仍是更高优先级的即时事实。
 
+`CP-CAP-006` 模型容量必须区分客户端默认 `context_window` 与服务端允许的 `max_context_window`。两者缺失时使用同一个保守默认值；显式最大值不得小于默认值。OpenAI-compatible 模型目录分别发布 `contextWindowTokens` 与可选 `maxContextWindowTokens`，Codex manifest 分别发布 `context_window` 与 `max_context_window`。`gpt-5.6-luna/sol/terra` 的已验证值固定为 272,000 与 921,000。
+
 ## 11. 安全、资源与可观测性
 
 `CP-SEC-001` OAuth 凭据继续由 Codex account owner 加密保存；不得进入配置 YAML、普通 DuckDB 表、请求归档或浏览器存储。
@@ -318,6 +332,8 @@
 
 `CP-ARCH-005` observer 不执行无限网络读取。网络读取必须提交到注入的 BackgroundRoutine；shutdown 后不得继续提交任务。
 
+`CP-ARCH-006` magicEngine 行为修改的源码 authority 是独立源码仓（当前开发布局为 `~/codespace/magicEngine`）。`vendor/github.com/muidea/magicEngine` 只能由已发布 tag 经依赖命令刷新，禁止直接手改；开发期临时 `replace` 必须在正式 tag 发布后移除。源码测试必须先通过，再执行 AetherRelay 的 vendor 与真实 listener 验收。
+
 ## 13. 验收与发布门禁
 
 `CP-DOD-001` 必须维护脱敏 golden corpus，至少覆盖：HTTP 非流式、SSE、function tools、tool continuation、reasoning、compact unary/SSE、WS 首 turn/续 turn、取消、401、403、429、5xx、断流。
@@ -340,17 +356,18 @@
 | --- | --- | --- | --- | --- |
 | Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..010 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
-| 核心端点 | CP-EP-001..003, CP-EP-013 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go` |
+| 核心端点 | CP-EP-001..003, CP-EP-013, CP-EP-015 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go`, `proxy/responses_input_tokens.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go`, `responses_input_tokens_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012, CP-EP-014 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..028 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
-| 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `codexupstream/biz/identity.go`, `codexupstream/biz/codex_identity.go` | `codexupstream/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
-| compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `codexupstream/biz/codex_compact.go` | `codex_responses_test.go`, `biz_test.go` |
+| 请求兼容层 | CP-REQ-001..029 | implemented | `proxy/codex_compat.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
+| 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `aetherrelaycodexidentity/identity.go`, `codexupstream/biz/identity.go`, `codexupstream/biz/codex_identity.go`, `codexaccountpool/internal/oauth/client.go` | `codexupstream/biz/biz_test.go`, `codexaccountpool/internal/oauth/client_test.go`, `proxyapi/biz/codex_responses_test.go` |
+| compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/codex_compact.go`, `codexaccountpool/internal/store/store.go` | `codex_responses_test.go`, `proxyapi/biz/codex_responses_test.go`, `store_test.go`, `biz_test.go` |
 | 指纹收敛 | CP-FP-001..003 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
 | 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
-| Responses WebSocket | CP-EP-002, CP-WS-001..011 | implemented | `proxy/codex_websocket.go`, `codexupstream/biz/biz.go`, `magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses WebSocket | CP-EP-002, CP-WS-001..012 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_replay_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
+| 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |
 | 真实上游差分 corpus | CP-DOD-002 | planned | - | - |
@@ -358,9 +375,12 @@
 ## 15. 已知基线差异
 
 - AetherRelay 已使用本机核对的 Codex CLI `0.147.0` 版本 profile；内部 Codex header 仅按本合同逐项处理，新增 header 必须先建立独立能力合同。
+- OAuth credential 与 inference transport 共用同一份 Codex identity profile；token endpoint 不携带 `Version`。
 - HTTP/SSE、compact 与 WebSocket 已有主链路；custom/namespace/parallel 工具、原生图片输入与 compact namespace 历史清理已纳入离线合同。图片生成/Images API bridge 仍不属于 Codex core。真实账号/参考实现差分仍需显式运维执行。
+- WebSocket 后续 turn 的 429 迁移只在完整历史可重放且客户端尚未收到业务帧时启用；无法证明安全时保持原失败，不尝试跨账号猜测续链。
 - `/v1/models` 与请求路由读取同一 effective catalog generation；不提供 Codex OAuth 专用入站模型别名。
-- Codex manifest 使用本地稳定基础模板字段；未知模型容量使用保守默认值，不透传账号私有 `description` 或 `base_instructions`。
+- Codex manifest 使用本地稳定基础模板字段；默认与最大上下文分别建模，未知模型容量使用保守默认值，不透传账号私有 `description` 或 `base_instructions`。
+- `/v1/responses/input_tokens` 是 authenticated、model/access-aware 的本地预估，不获取账号或访问上游。
 - Codex HTTP/SSE、compact、adapter 与 WebSocket 均为上游 body 补齐稳定 `prompt_cache_key`；显式客户端值保持不变。
 - Chat Completions 与 Anthropic Messages 已通过独立适配器转入 Codex Responses；支持范围以 `CP-EP-007..008` 测试和 fail-closed 字段校验为准。
 
@@ -369,6 +389,7 @@
 | 端点/能力 | Git 证据 | 判定 |
 | --- | --- | --- |
 | `POST /v1/responses`、`GET /v1/responses` | CLIProxyAPI `f43aad76` 的 `internal/api/server_routes.go`；sub2api `0e82efe48` 的生产路由 | Codex core，必须保留 |
+| `POST /v1/responses/input_tokens` | sub2api `bfac49fef` 增加原生 preflight，并在自定义 relay/不支持上游时使用本地 tokenizer | 复用 Responses 权限目录，本地非计费估算，不触碰账号和上游 |
 | `POST /v1/responses/compact` | CLIProxyAPI `95096bc3` 首次加入；sub2api `2fb212b7`、`a56eb5b4`、`84bb7d07` 持续修复原生 compact 链路 | 当前工作流能力，必须保留 |
 | `/backend-api/codex/responses*` | CLIProxyAPI `f43aad76` 注释为 `chatgpt_base_url compatible` direct aliases；sub2api `0e82efe48` 同样注册；最新 OpenAI 配置参考明确 `chatgpt_base_url` 只覆盖登录流程，模型请求使用 `model_providers.<id>.base_url` | 仅历史参考，不提供入站兼容 |
 | `GET /v1/models?client_version=...`、`GET /backend-api/codex/models` | CLIProxyAPI `f43aad76` 按 `client_version` 分流 Codex manifest；sub2api `13e773ef` 引入 manifest 透传，`806bb230` 增加根 alias；最新自定义 Provider 只需要 base URL 下的 `/models` | 前者 core，后者不提供入站兼容 |
@@ -377,9 +398,15 @@
 | `POST /v1/models` | AetherRelay `2260888c` 已存在；请求体不影响结果，参考实现与 Codex 客户端没有该 method 依据 | 重复的历史兼容端点，退出并固定返回 404 |
 | `POST /v1/chat/completions`、`POST /v1/messages` | AetherRelay `2260888c` 已存在，Codex 补全只新增协议转换 | AetherRelay adapter，不是 Codex 官方或历史直连端点 |
 | `prompt_cache_options`、`truncation`、`service_tier` 清洗 | CLIProxyAPI `2ab25eae` 明确记录 ChatGPT Codex 不支持 `prompt_cache_options`；`f43aad76` 的 Responses translator 同时删除 `truncation`，只保留 `priority` tier | 删除后不改变标准执行语义，按 `CP-REQ-027` drop-compatible |
+| nested `prompt_cache_breakpoint` | CLIProxyAPI `6edf9c48` 验证 Copilot CLI 会附在 `input[].content[]`，而 ChatGPT Codex 明确拒绝 | 只删除该 nested hint，保留内容、顺序与角色 |
 | 空 `response.completed` | sub2api `280c1c862` 的脱敏样本为 completed + empty output、无 usage/error，真实结果是 silent refusal | 按 `CP-STREAM-006` 在未提交业务输出前失败并允许 HTTP/SSE 切号；WS 返回明确失败 |
 | 确定性 upstream 400 | sub2api `591d47fb9` 覆盖 `invalid_function_parameters`、`missing_required_parameter` 等结构化 400 | 保持 400、不切号；只投影 `CP-FAIL-013` 允许的有界安全字段 |
 | 原生 remote compaction v2 | sub2api `9662cff2`、`a8b9ea22`、`8ae6d8f6`：裸 `/responses` body 信号识别、native/legacy 分流、legacy upstream 404 与 v2 item 探测 | 客户端 compact 保留，OAuth upstream 统一使用 streaming `/responses` + trigger，并以 compaction item 为成功证据 |
+| compact 冷却与回退 | CLIProxyAPI `ec105dac`：request fault 停止 fallback，非 credential 临时失败 availability-neutral，401/402/403/429 保持冷却 | compact 故障不污染普通 Responses 路由；credential/quota 事实仍保留 |
+| GPT-5.6 双上下文容量 | CLIProxyAPI `745fb38d`：Luna/Sol/Terra `context_window=272000`、`max_context_window=921000` | effective catalog、普通模型目录、Codex manifest 与 Admin 使用同一双字段模型 |
+| WebSocket 后续 turn 429 迁移 | sub2api `82cbe6aff`：输出前重建完整上下文并切换账号，输出后禁止重放 | 采用更严格的有界 transcript、tool coverage 与最多两次迁移合同 |
+| OAuth identity header | sub2api `bb6c3b4f6`、`a34123959`：credential 请求复用 Codex UA/originator，并避免 inference-only version | credential 与 inference 共用不可变 profile authority |
+| HTTP upgrade wrapper | magicEngine `v1.5.1` / `4d359d0`：response writer 透传 Hijacker、标记 101、支持 Unwrap，并让 Flush 正确提交状态 | AetherRelay 依赖正式 tag，vendor 只由 module 刷新，不保留本地补丁 |
 | Turn-State | sub2api `8219dcfc`：响应 relay、来源登记及 failover 跨账号 echo guard | opaque 有界透传；只保存状态哈希到账号来源的短期映射 |
 | 指纹收敛 | sub2api `fce41e31`：默认 off、显式 opt-in、普通/透传路径共享解析结果 | AetherRelay 账号配置同样默认 off；HTTP/SSE/compact/WS 共享类型化 fingerprint profile |
 

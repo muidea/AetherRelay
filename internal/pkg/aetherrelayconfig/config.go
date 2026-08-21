@@ -207,6 +207,7 @@ type TemporaryChatConfig struct {
 type ModelMetadata struct {
 	ID                      string
 	ContextWindowTokens     int
+	MaxContextWindowTokens  int
 	MaxOutputTokens         int
 	ReasoningDeclared       bool
 	ReasoningSupported      bool
@@ -878,6 +879,12 @@ func setModelMetadata(cfg *Config, id, key, value string) error {
 			return fmt.Errorf("model_metadata.%s.%s: %w", id, key, err)
 		}
 		info.ContextWindowTokens = n
+	case "max_context_window_tokens", "maxcontextwindowtokens", "max_context_window":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("model_metadata.%s.%s: %w", id, key, err)
+		}
+		info.MaxContextWindowTokens = n
 	case "max_output_tokens", "maxoutputtokens":
 		n, err := parseStrictNonNegativeInt(value)
 		if err != nil {
@@ -1826,6 +1833,12 @@ func validateModelMetadata(cfg Config) error {
 	for id, info := range cfg.ModelMetadata {
 		if info.ContextWindowTokens < 0 {
 			return fmt.Errorf("model_metadata.%s: context_window_tokens must be zero or positive", id)
+		}
+		if info.MaxContextWindowTokens < 0 {
+			return fmt.Errorf("model_metadata.%s: max_context_window_tokens must be zero or positive", id)
+		}
+		if info.ContextWindowTokens > 0 && info.MaxContextWindowTokens > 0 && info.MaxContextWindowTokens < info.ContextWindowTokens {
+			return fmt.Errorf("model_metadata.%s: max_context_window_tokens must be greater than or equal to context_window_tokens", id)
 		}
 		if info.MaxOutputTokens < 0 {
 			return fmt.Errorf("model_metadata.%s: max_output_tokens must be zero or positive", id)

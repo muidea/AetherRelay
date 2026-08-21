@@ -21,10 +21,11 @@ type ModelsListResponse struct {
 
 // ModelRecord 是 catalog 中单个模型的稳定输出。
 type ModelRecord struct {
-	ID                  string `json:"id"`
-	Object              string `json:"object"`
-	ContextWindowTokens int    `json:"contextWindowTokens,omitempty"`
-	MaxOutputTokens     int    `json:"maxOutputTokens,omitempty"`
+	ID                     string `json:"id"`
+	Object                 string `json:"object"`
+	ContextWindowTokens    int    `json:"contextWindowTokens,omitempty"`
+	MaxContextWindowTokens int    `json:"maxContextWindowTokens,omitempty"`
+	MaxOutputTokens        int    `json:"maxOutputTokens,omitempty"`
 	// SupportedEndpoints is derived at runtime from the model's eligible
 	// providers and the shared transport matrix. It contains client-facing
 	// paths, never provider configuration endpoint names.
@@ -182,7 +183,7 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			InputModalities: modalities, UseResponsesLite: false,
 			PreferWebsockets: modelHasRouteOwner(snap, record.ID, effectivecatalog.CodexOAuthProviderID, policy),
 			ContextWindow:    manifestContextWindow(record.ContextWindowTokens),
-			MaxContextWindow: manifestContextWindow(record.ContextWindowTokens),
+			MaxContextWindow: manifestMaxContextWindow(record.ContextWindowTokens, record.MaxContextWindowTokens),
 			BaseInstructions: "You are Codex, an AI coding assistant.", MinimalClientVersion: "0.147.0",
 			Visibility: "list", Priority: priority + 1, ServiceTiers: []any{}, SupportedInAPI: true,
 		})
@@ -195,6 +196,13 @@ func manifestContextWindow(value int) int {
 		return value
 	}
 	return 128000
+}
+
+func manifestMaxContextWindow(contextWindow, maxContextWindow int) int {
+	if maxContextWindow > 0 {
+		return maxContextWindow
+	}
+	return manifestContextWindow(contextWindow)
 }
 
 func containsString(values []string, target string) bool {
@@ -271,6 +279,9 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot, policy clientaccess
 		if route.ContextWindowTokens > 0 {
 			rec.ContextWindowTokens = route.ContextWindowTokens
 		}
+		if route.MaxContextWindowTokens > 0 {
+			rec.MaxContextWindowTokens = route.MaxContextWindowTokens
+		}
 		if route.MaxOutputTokens > 0 {
 			rec.MaxOutputTokens = route.MaxOutputTokens
 		}
@@ -326,8 +337,11 @@ func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string, pol
 	if modelHasRouteOwner(snap, modelID, effectivecatalog.CodexOAuthProviderID, policy) {
 		seen["/v1/responses/compact"] = true
 	}
+	if seen["/v1/responses"] {
+		seen["/v1/responses/input_tokens"] = true
+	}
 	paths := []string{
-		"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/compact", "/v1/search",
+		"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/search",
 		"/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits",
 	}
 	result := make([]string, 0, len(paths))

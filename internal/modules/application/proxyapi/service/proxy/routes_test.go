@@ -19,6 +19,15 @@ func TestRegisterRoutesIncludesDedicatedSearchEndpoint(t *testing.T) {
 	}
 }
 
+// CP-EP-015: the preflight route is part of the explicit inbound allowlist.
+func TestRegisterRoutesIncludesResponsesInputTokens(t *testing.T) {
+	routes := enginehttp.NewRouteRegistry()
+	RegisterRoutes(routes, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	if !routes.ExistHandler("/v1/responses/input_tokens", http.MethodPost) {
+		t.Fatal("POST /v1/responses/input_tokens was not registered")
+	}
+}
+
 func TestRouteRegistryPreservesWebsocketHijacker(t *testing.T) {
 	routes := enginehttp.NewRouteRegistry()
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}

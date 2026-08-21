@@ -2,15 +2,18 @@ package http
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 )
 
 type HTTPServer interface {
 	Use(handler MiddleWareHandler)
 	Bind(routeRegistry RouteRegistry)
-	Run()
+	Run() error
+	Shutdown(ctx context.Context) error
 }
 
 type HTTPServerOption func(*httpServer)
@@ -43,6 +46,8 @@ type httpServer struct {
 	middlewareChains MiddleWareChains
 	staticOptions    *StaticOptions
 	enableStatic     bool
+	serverLock       sync.Mutex
+	server           *http.Server
 }
 
 func NewHTTPServer(opts ...HTTPServerOption) HTTPServer {
@@ -82,8 +87,33 @@ func (s *httpServer) Bind(routeRegistry RouteRegistry) {
 	s.routeRegistry = routeRegistry
 }
 
-func (s *httpServer) Run() {
+func (s *httpServer) Run() error {
+	server := &http.Server{Addr: s.listenAddr, Handler: s}
+	s.serverLock.Lock()
+	s.server = server
+	s.serverLock.Unlock()
+	defer func() {
+		s.serverLock.Lock()
+		if s.server == server {
+			s.server = nil
+		}
+		s.serverLock.Unlock()
+	}()
+
 	slog.Info("server listening", "addr", s.listenAddr)
-	err := http.ListenAndServe(s.listenAddr, s)
-	slog.Error("server fatal error", "err", err)
+	err := server.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *httpServer) Shutdown(ctx context.Context) error {
+	s.serverLock.Lock()
+	server := s.server
+	s.serverLock.Unlock()
+	if server == nil {
+		return nil
+	}
+	return server.Shutdown(ctx)
 }

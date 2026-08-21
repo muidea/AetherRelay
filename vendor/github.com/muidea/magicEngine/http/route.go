@@ -173,19 +173,23 @@ func NewRouteRegistry() RouteRegistry {
 }
 
 func (s *routeRegistry) SetApiVersion(version string) {
+	s.routesLock.Lock()
+	defer s.routesLock.Unlock()
 	s.currentApiVersion = version
 }
 
 func (s *routeRegistry) GetApiVersion() string {
+	s.routesLock.RLock()
+	defer s.routesLock.RUnlock()
 	return s.currentApiVersion
 }
 
 func (s *routeRegistry) AddRoute(rt Route, filters ...MiddleWareHandler) {
-	curApiVersion := s.currentApiVersion
-
-	slog.Info("addRoute", "apiVersion", s.currentApiVersion, "pattern", rt.Pattern(), "method", rt.Method())
 	s.routesLock.Lock()
 	defer s.routesLock.Unlock()
+	curApiVersion := s.currentApiVersion
+
+	slog.Info("addRoute", "apiVersion", curApiVersion, "pattern", rt.Pattern(), "method", rt.Method())
 
 	routeSlice, ok := s.routes[rt.Method()]
 	if ok {
@@ -234,11 +238,10 @@ func (s *routeRegistry) RemoveHandler(uriPattern, method string) {
 }
 
 func (s *routeRegistry) removeRouteImpl(uriPattern, method string) {
-	curApiVersion := s.currentApiVersion
-	slog.Info("removeRoute", "apiVersion", s.currentApiVersion, "pattern", uriPattern, "method", method)
-
 	s.routesLock.Lock()
 	defer s.routesLock.Unlock()
+	curApiVersion := s.currentApiVersion
+	slog.Info("removeRoute", "apiVersion", curApiVersion, "pattern", uriPattern, "method", method)
 
 	routeSlice, ok := s.routes[method]
 	if !ok {
@@ -246,22 +249,19 @@ func (s *routeRegistry) removeRouteImpl(uriPattern, method string) {
 		panicInfo(msg)
 	}
 
-	newRoutes := routeItemSlice{}
+	removeIndex := -1
 	for idx, val := range *routeSlice {
 		if val.equalPattern(curApiVersion, uriPattern) {
-			if idx > 0 {
-				newRoutes = append(newRoutes, (*routeSlice)[0:idx]...)
-			}
-
-			idx++
-			if idx < len(*routeSlice) {
-				newRoutes = append(newRoutes, (*routeSlice)[idx:]...)
-			}
-
+			removeIndex = idx
 			break
 		}
 	}
+	if removeIndex < 0 {
+		return
+	}
 
+	newRoutes := append(routeItemSlice(nil), (*routeSlice)[:removeIndex]...)
+	newRoutes = append(newRoutes, (*routeSlice)[removeIndex+1:]...)
 	s.routes[method] = &newRoutes
 }
 
@@ -301,8 +301,8 @@ func (s *routeRegistry) ExistRoute(rt Route) bool {
 }
 
 func (s *routeRegistry) ExistHandler(uriPattern, method string) bool {
-	s.routesLock.Lock()
-	defer s.routesLock.Unlock()
+	s.routesLock.RLock()
+	defer s.routesLock.RUnlock()
 
 	routeSlice, ok := s.routes[method]
 	if !ok {

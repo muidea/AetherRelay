@@ -87,9 +87,11 @@ ChatGPT Web 使用 conversation 协议，而不是 OpenAI Images API；协议没
       "id": "model-id",
       "object": "model",
       "contextWindowTokens": 1000000,
+      "maxContextWindowTokens": 1000000,
       "maxOutputTokens": 29000,
       "supported_endpoints": [
         "/v1/responses",
+        "/v1/responses/input_tokens",
         "/v1/messages"
       ],
       "capabilities": {
@@ -131,7 +133,8 @@ ChatGPT Web 使用 conversation 协议，而不是 OpenAI Images API；协议没
 | 字段 | 语义 | 客户端要求 |
 | --- | --- | --- |
 | `id` | 请求体中使用的精确模型 ID | 大小写敏感，不做名称归一化 |
-| `contextWindowTokens` | 已知的上下文窗口 | 缺失表示未知，不等于 `0` |
+| `contextWindowTokens` | 已知的客户端默认上下文窗口 | 缺失表示未知，不等于 `0` |
+| `maxContextWindowTokens` | 已知的服务端最大上下文窗口 | 缺失时不自行推断；有值时不小于默认窗口 |
 | `maxOutputTokens` | 已知的最大输出 token 数 | 缺失表示未知；有值时请求不得超过它 |
 | `supported_endpoints` | 当前目录中至少一个已配置或已发现候选具备该客户端路径合同 | 必须按完整路径匹配；不代表实时健康 |
 | `capabilities.reasoning` | 模型级 reasoning 能力和可选 effort | 只发送列入 `efforts` 的值 |
@@ -209,11 +212,24 @@ Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。�
 
 `grok-4.5` 在 Krill Provider 上已分别通过 Anthropic Messages 与 OpenAI Responses transport 的文本、SSE、非流式 function tools、工具结果闭环及 reasoning/thinking 降级验证。当前模型元数据发布 `none/low/high/max`，转换固定降级目标为 `low`，图片与流式工具保持关闭。Krill 原生 Responses 接受 `store=false`、`reasoning.effort=high` 和 `text.verbosity=high`；但 hosted `web_search` 即使要求 `tool_choice=required` 也未产生真实搜索工具事件，因此 `web_search=live` 应由应用端工具能力负责，不能依据该配置推断上游已支持实时搜索。
 
-`gpt-5.6-luna`、`gpt-5.6-sol` 与 `gpt-5.6-terra` 的模型目录均发布 `272,000` context window、`128,000` max output tokens，以及一致的 reasoning 枚举 `none/low/medium/high/xhigh/max`，默认值均为 `medium`。其中 Luna 已完成双向 Level 3 验证，固定转换目标为 `medium`；该验证结论不自动扩展到尚未配置转换模板的 Sol 与 Terra。Responses output item 的私有 metadata 会被代理有界省略并记录 degraded feature，不向 Anthropic 内容泄漏内部元数据。
+`gpt-5.6-luna`、`gpt-5.6-sol` 与 `gpt-5.6-terra` 的模型目录均发布 `272,000` default context window、`921,000` max context window、`128,000` max output tokens，以及一致的 reasoning 枚举 `none/low/medium/high/xhigh/max`，默认值均为 `medium`。其中 Luna 已完成双向 Level 3 验证，固定转换目标为 `medium`；该验证结论不自动扩展到尚未配置转换模板的 Sol 与 Terra。Responses output item 的私有 metadata 会被代理有界省略并记录 degraded feature，不向 Anthropic 内容泄漏内部元数据。
 
 `gpt-5.5` 由内建 `codexoauth` 发布原生 `/v1/responses`，模型目录返回 `272,000` context window 和 `128,000` max output tokens。实测 `none/low/medium/high/xhigh` reasoning、非流式文本、文本 SSE、function call、tool result 闭环和流式工具事件均可用；默认 effort 为 `medium`。不要发送 `max` effort。图片能力保持关闭；客户端 `max_output_tokens` 受固定 Codex OAuth transport 限制，会在调用上游前返回明确的 400。
 
 ## 4. OpenAI Responses 集成
+
+### 4.0 输入 token 预估
+
+当模型的 `supported_endpoints` 包含 `/v1/responses/input_tokens` 时，可在提交生成前做本地预估：
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/responses/input_tokens \
+  -H 'Authorization: Bearer <client-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model-id","instructions":"Be concise.","input":"hello"}'
+```
+
+响应为 `{"object":"response.input_tokens","input_tokens":N}`。该请求复用 `/v1/responses` 的认证、模型和 Provider access 判定，但不选择账号、不访问上游，也不产生计费 token；结果是稳定的本地 tokenizer 估算，不应当作上游账单或绝对配额值。
 
 ### 4.1 Level 1：非流式文本
 

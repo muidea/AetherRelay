@@ -701,7 +701,7 @@ func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (eve
 	return events.RefreshTokenResult{AccountID: item.ID, PermanentFailure: permanent, ErrorClass: errorClass}, nil
 }
 
-func (s *Store) RecordResult(id, model string, success bool, errorClass string, retryAfterSeconds int, quotaExhausted bool, quotaResetAt string) (events.AccountView, error) {
+func (s *Store) RecordResult(id, model string, success bool, errorClass string, retryAfterSeconds int, quotaExhausted bool, quotaResetAt string, availabilityNeutral bool) (events.AccountView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
@@ -720,7 +720,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 		}
 	} else {
 		item.Fail++
-		if quotaExhausted && model != "" {
+		if quotaExhausted && model != "" && !availabilityNeutral {
 			if item.QuotaObservations == nil {
 				item.QuotaObservations = map[string]quotaObservation{}
 			}
@@ -730,32 +730,34 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 				ResetAt:    normalizeQuotaResetAt(quotaResetAt),
 			}
 		}
-		switch strings.TrimSpace(errorClass) {
-		case events.ErrorInvalidToken:
-			if item.Status != events.StatusAbnormal {
-				item.Status = events.StatusAbnormal
-				statusChanged = true
-			}
-		case events.ErrorRateLimit, events.ErrorTimeout, events.ErrorNetwork, events.ErrorUpstream:
-			until := now.Add(defaultTransientCooldown)
-			if errorClass == events.ErrorRateLimit {
-				until = now.Add(defaultRateLimitCooldown)
-			}
-			if retryAfterSeconds > 0 {
-				until = now.Add(time.Duration(retryAfterSeconds) * time.Second)
-			}
-			// A verified Codex usage-limit reset is more precise than Retry-After.
-			// Keep this account/model out of selection until that upstream-provided
-			// recovery point, even when the generic retry hint is capped.
-			if quotaExhausted {
-				if resetAt, ok := parseExpiry(quotaResetAt); ok && resetAt.After(now) {
-					until = resetAt
+		if !availabilityNeutral {
+			switch strings.TrimSpace(errorClass) {
+			case events.ErrorInvalidToken:
+				if item.Status != events.StatusAbnormal {
+					item.Status = events.StatusAbnormal
+					statusChanged = true
 				}
+			case events.ErrorRateLimit, events.ErrorTimeout, events.ErrorNetwork, events.ErrorUpstream:
+				until := now.Add(defaultTransientCooldown)
+				if errorClass == events.ErrorRateLimit {
+					until = now.Add(defaultRateLimitCooldown)
+				}
+				if retryAfterSeconds > 0 {
+					until = now.Add(time.Duration(retryAfterSeconds) * time.Second)
+				}
+				// A verified Codex usage-limit reset is more precise than Retry-After.
+				// Keep this account/model out of selection until that upstream-provided
+				// recovery point, even when the generic retry hint is capped.
+				if quotaExhausted {
+					if resetAt, ok := parseExpiry(quotaResetAt); ok && resetAt.After(now) {
+						until = resetAt
+					}
+				}
+				if item.Cooldowns == nil {
+					item.Cooldowns = map[string]cooldown{}
+				}
+				item.Cooldowns[model] = cooldown{Until: until, ErrorClass: errorClass}
 			}
-			if item.Cooldowns == nil {
-				item.Cooldowns = map[string]cooldown{}
-			}
-			item.Cooldowns[model] = cooldown{Until: until, ErrorClass: errorClass}
 		}
 	}
 	if err := s.saveLocked(); err != nil {

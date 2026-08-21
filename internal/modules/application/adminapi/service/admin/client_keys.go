@@ -53,11 +53,12 @@ type updateClientKeyRequest struct {
 }
 
 type adminKeyModel struct {
-	ID                  string   `json:"id"`
-	ProviderIDs         []string `json:"provider_ids"`
-	SupportedEndpoints  []string `json:"supported_endpoints"`
-	ContextWindowTokens int      `json:"context_window_tokens,omitempty"`
-	MaxOutputTokens     int      `json:"max_output_tokens,omitempty"`
+	ID                     string   `json:"id"`
+	ProviderIDs            []string `json:"provider_ids"`
+	SupportedEndpoints     []string `json:"supported_endpoints"`
+	ContextWindowTokens    int      `json:"context_window_tokens,omitempty"`
+	MaxContextWindowTokens int      `json:"max_context_window_tokens,omitempty"`
+	MaxOutputTokens        int      `json:"max_output_tokens,omitempty"`
 }
 
 func (h *Handler) listClientAPIKeys(w http.ResponseWriter) {
@@ -322,7 +323,7 @@ func (h *Handler) getClientAPIKeyModels(w http.ResponseWriter, ctx context.Conte
 		}
 		models = append(models, adminKeyModel{
 			ID: modelID, ProviderIDs: sortedSet(providerSet), SupportedEndpoints: sortedSet(endpointSet),
-			ContextWindowTokens: candidates[0].ContextWindowTokens, MaxOutputTokens: candidates[0].MaxOutputTokens,
+			ContextWindowTokens: candidates[0].ContextWindowTokens, MaxContextWindowTokens: candidates[0].MaxContextWindowTokens, MaxOutputTokens: candidates[0].MaxOutputTokens,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": models})

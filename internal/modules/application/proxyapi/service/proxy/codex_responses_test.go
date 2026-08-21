@@ -73,12 +73,13 @@ func TestCodexEndpointFailurePreservesUpstreamStatus(t *testing.T) {
 }
 
 type codexResponsesExecutorStub struct {
-	complete func(context.Context, codexresponses.Request) (codexresponses.Result, error)
-	stream   func(context.Context, codexresponses.Request, func(codexresponses.StreamStart) error, func([]byte) error) error
-	wsOpen   func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error)
-	wsSend   func(context.Context, string, []byte) error
-	wsPull   func(context.Context, string) ([]byte, bool, error)
-	wsClose  func(context.Context, string)
+	complete     func(context.Context, codexresponses.Request) (codexresponses.Result, error)
+	stream       func(context.Context, codexresponses.Request, func(codexresponses.StreamStart) error, func([]byte) error) error
+	wsOpen       func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error)
+	wsSend       func(context.Context, string, []byte) error
+	wsPull       func(context.Context, string) ([]byte, bool, error)
+	wsPullUpdate func(context.Context, string) (codexresponses.WebsocketUpdate, error)
+	wsClose      func(context.Context, string)
 }
 
 func (s codexResponsesExecutorStub) CompleteCodexResponses(ctx context.Context, request codexresponses.Request) (codexresponses.Result, error) {
@@ -130,11 +131,15 @@ func (s codexResponsesExecutorStub) SendCodexWebsocket(ctx context.Context, sess
 	}
 	return nil
 }
-func (s codexResponsesExecutorStub) PullCodexWebsocket(ctx context.Context, sessionID string) ([]byte, bool, error) {
-	if s.wsPull != nil {
-		return s.wsPull(ctx, sessionID)
+func (s codexResponsesExecutorStub) PullCodexWebsocket(ctx context.Context, sessionID string) (codexresponses.WebsocketUpdate, error) {
+	if s.wsPullUpdate != nil {
+		return s.wsPullUpdate(ctx, sessionID)
 	}
-	return []byte(`{"type":"response.completed","response":{"id":"resp_1"}}`), false, nil
+	if s.wsPull != nil {
+		payload, done, err := s.wsPull(ctx, sessionID)
+		return codexresponses.WebsocketUpdate{Payload: payload, Done: done}, err
+	}
+	return codexresponses.WebsocketUpdate{Payload: []byte(`{"type":"response.completed","response":{"id":"resp_1"}}`)}, nil
 }
 func (s codexResponsesExecutorStub) CloseCodexWebsocket(ctx context.Context, sessionID string) {
 	if s.wsClose != nil {
@@ -238,6 +243,22 @@ func TestCodexOAuthDropsUnsupportedCacheAndTierFields(t *testing.T) {
 	priority, _, ignored, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","input":"hello","service_tier":"priority"}`), false)
 	if err != nil || !bytes.Contains(priority, []byte(`"service_tier":"priority"`)) || slices.Contains(ignored, "service_tier") {
 		t.Fatalf("CP-REQ-027 priority ignored=%v body=%s err=%v", ignored, priority, err)
+	}
+}
+
+func TestCodexOAuthDropsNestedPromptCacheBreakpoint(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello","prompt_cache_breakpoint":{"mode":"explicit"}},{"type":"input_text","text":"world"}]}]}`)
+	normalized, body, ignored, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(normalized, []byte("prompt_cache_breakpoint")) || !slices.Contains(ignored, "input[].content[].prompt_cache_breakpoint") {
+		t.Fatalf("CP-REQ-029 ignored=%v body=%s", ignored, normalized)
+	}
+	input := body["input"].([]any)
+	parts := input[0].(map[string]any)["content"].([]any)
+	if parts[0].(map[string]any)["text"] != "hello" || parts[1].(map[string]any)["text"] != "world" {
+		t.Fatalf("content changed: %#v", parts)
 	}
 }
 

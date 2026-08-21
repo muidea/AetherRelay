@@ -13,9 +13,10 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.12
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/muidea/magicCommon v1.5.10
-	github.com/muidea/magicEngine v1.4.9
+	github.com/muidea/magicCommon v1.5.11
+	github.com/muidea/magicEngine v1.5.1
 	github.com/openai/openai-go v1.12.0
+	github.com/tiktoken-go/tokenizer v0.7.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/crypto v0.47.0
 	golang.org/x/sys v0.40.0
@@ -30,6 +31,7 @@ require (
 	github.com/bogdanfinn/quic-go-utls v1.0.9-utls // indirect
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/duckdb/duckdb-go-bindings v0.10504.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10504.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/darwin-arm64 v0.10504.0 // indirect

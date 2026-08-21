@@ -25,22 +25,22 @@ model_metadata:
 - enabled Provider 的精确 `models` 条目会自动进入运行时模型目录，无需在 `model_metadata` 重复登记。Embedding 模型通常只需配置在 Provider 中。
 - `*`、`prefix-*` 等 pattern 只能参与匹配，不能枚举具体模型 ID；具体 ID 必须来自某个 enabled Provider 的精确 `models` 条目或账号池发现。
 - metadata 条目不会让模型进入 `/v1/models`，不会建立路由，也不要求当前存在匹配模型；模型以后被配置或发现时会自动获得对应 metadata。
-- `context_window_tokens` 与 `max_output_tokens` 都是可选元数据；省略或为 `0` 表示未知或不适用。两者都显式大于 `0` 时，`max_output_tokens` 必须小于 `context_window_tokens`。
+- `context_window_tokens`、`max_context_window_tokens` 与 `max_output_tokens` 都是可选元数据；省略或为 `0` 表示未知或不适用。前两者分别表示客户端默认上下文窗口和服务端允许的最大上下文窗口；二者都显式大于 `0` 时，最大值不得小于默认值。`max_output_tokens` 与 `context_window_tokens` 都显式大于 `0` 时，最大输出必须小于默认上下文窗口。
 
 当前容量元数据：
 
-| Exact model ID | Context window | Max output |
-| --- | ---: | ---: |
-| `deepseek-v4-flash` / `DeepSeek-V4-Flash` | 1,000,000 | 29,000 |
-| `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 128,000 |
-| `gpt-5.4-mini` | 400,000 | 128,000 |
-| `gpt-5.4` | 1,050,000 | 128,000 |
-| `gpt-5.5` | 272,000 | 128,000 |
-| `gpt-5.3-codex-spark` / `gpt-5.3-codex` | 128,000 | 未声明 |
-| `codex-auto-review` | 1,050,000 | 128,000 |
-| `grok-4.5` | 500,000 | 未声明 |
-| `minimax-m3` | 1,050,000 | 131,100 |
-| `minimax-m2.7-highspeed` | 204,800 | 131,100 |
+| Exact model ID | Default context | Max context | Max output |
+| --- | ---: | ---: | ---: |
+| `deepseek-v4-flash` / `DeepSeek-V4-Flash` | 1,000,000 | 未声明 | 29,000 |
+| `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 921,000 | 128,000 |
+| `gpt-5.4-mini` | 400,000 | 未声明 | 128,000 |
+| `gpt-5.4` | 1,050,000 | 未声明 | 128,000 |
+| `gpt-5.5` | 272,000 | 未声明 | 128,000 |
+| `gpt-5.3-codex-spark` / `gpt-5.3-codex` | 128,000 | 未声明 | 未声明 |
+| `codex-auto-review` | 1,050,000 | 未声明 | 128,000 |
+| `grok-4.5` | 500,000 | 未声明 | 未声明 |
+| `minimax-m3` | 1,050,000 | 未声明 | 131,100 |
+| `minimax-m2.7-highspeed` | 204,800 | 未声明 | 131,100 |
 
 表中 `/` 分隔的是大小写敏感的独立 exact ID，不是别名匹配规则。最大输出未声明时 `/v1/models` 省略 `maxOutputTokens`，应用不得自行推断。
 
@@ -120,6 +120,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 - `/v1/chat/completions` 返回 OpenAI Chat Completions SSE，必要时转换 Anthropic 上游事件；转换期间识别并省略上游 thinking 块及 delta，不将推理内容折叠为 assistant 文本。
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
+- `/v1/responses/input_tokens` 只要 exact model 在当前客户端 Key 的有效目录中支持 `/v1/responses` 即可调用。它在本地以 o200k/cl100k tokenizer 做稳定估算，不选账号、不读取 Provider 凭据、不访问上游；响应固定为 `response.input_tokens`，最小估算为 1。
 - `/v1/search` 是 AetherRelay 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
 - 内建 `codexoauth` 服务原生 Responses HTTP/SSE、compact 与 WebSocket：请求与事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。WebSocket 入口是 `GET /v1/responses`；compact 使用 `/v1/responses/compact`。`/v1/chat/completions` 与 `/v1/messages` 通过受限、保留 function tools 的协议适配进入同一 Codex Responses 执行链。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；Realtime、网页会话和插件仍不支持。
 - 跨协议转换按模型方向化 capability 开放：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；流式工具、多模态、结构化输出、continuation 仍在访问上游前拒绝。thinking/reasoning 只有配置方向专用 adapter 时才以降级模式开放。最近调用、usage 与 Prometheus 请求指标会同时记录 `conversion_mode`、`conversion_level`、转换耗时和拒绝/降级能力。
@@ -200,7 +201,7 @@ codex_oauth:
 - 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现模型；该路径不作为 AetherRelay 入站端点。结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。
 - 管理页可按账号读取 `GET /backend-api/wham/usage`，并展示上游观测到的套餐类型、主/次窗口、代码审查和附加窗口的 `used_percent`、恢复时间与限制状态。导入、凭据刷新、OAuth 完成会触发一次账号范围刷新；也可在账号池选中账号后手动刷新。快照有效期为 15 分钟，刷新失败会保留上一份快照并标记错误；不会高频轮询，也不把窗口百分比伪装为 Token 数、请求数或路由可用性。
-- Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
+- Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。授权码交换和刷新都从统一 Codex identity profile 生成 `User-Agent` 与 `Originator`，且不向 credential endpoint 发送 inference-only `Version`。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
 - Codex 的 refresh token 健康与当前 access token 路由健康分别投影：凭据刷新失败会保留安全错误类别和时间，但不会仅凭该结果把仍能通过鉴权的账号移出路由。成功的模型发现、用量查询或 Responses 请求会恢复系统判定的异常状态；操作员显式设置的 `disabled` 永不被后台成功结果覆盖。恢复状态后会立即刷新有效模型目录。
 - Codex Responses 在账号切换耗尽时保留最后一个真实上游失败，不再用后续的“无可用账号”覆盖首个 401、403、429 或 5xx。安全错误响应和日志会携带上游 HTTP 状态但不记录响应正文、Token、账号头或代理；上游 401 且 refresh token 恢复失败时按 `invalid_token` 反馈，不再误记为普通“上游故障”。
 - 调用中上游明确返回的 `usage_limit_reached` 仍会另行记录为账号/模型级额度耗尽与可选恢复时间，并驱动该模型冷却；普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
@@ -208,9 +209,10 @@ codex_oauth:
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）以 AES-256-GCM 加密载荷写入 `state.database`。管理列表直接显示邮箱，但不返回 token、账号 ID 或代理 URL。
 - 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新、模型发现、`https://chatgpt.com/backend-api/wham/usage` 和 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新、发现、用量读取与实际调用的出口 IP 不一致。
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
+- compact 单独区分账号可用性反馈：400/404/405/409/413/422/501 request fault 立即停止切号；其它非 credential 临时失败仍可换账号，但只累计失败数，不改变普通 Responses 的账号状态、模型冷却或额度观察。401/402/结构化 403/429 仍保留冷却，HTML endpoint 403 仍按端点故障处理。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
 - `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
-- WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。
+- WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。第二个及后续 turn 若在任何业务帧输出前收到 429，代理只在完整 transcript 不超过消息上限且 function/custom/MCP call-output 重新校验通过时关闭旧 session、切换账号并重放，单 turn 最多迁移两次；已有增量输出时绝不重放。
 - Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。
 - `device` 只统一 installation ID；`session` 再统一账号 session，并按下游隔离 session 稳定派生 thread；`full` 将 thread 也统一到账号 session。启用模式会同时改写上游 header 与 `client_metadata`；默认 `off` 仍使用 AetherRelay 原有的客户端隔离 session，不做账号级收敛。
 

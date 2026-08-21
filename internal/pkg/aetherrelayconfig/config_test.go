@@ -1353,6 +1353,7 @@ providers:
 model_metadata:
   shared-model:
     context_window_tokens: 128000
+    max_context_window_tokens: 921000
     max_output_tokens: 16384
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1362,8 +1363,32 @@ model_metadata:
 		t.Fatal(err)
 	}
 	info := cfg.ModelMetadata["shared-model"]
-	if info.ContextWindowTokens != 128000 || info.MaxOutputTokens != 16384 {
+	if info.ContextWindowTokens != 128000 || info.MaxContextWindowTokens != 921000 || info.MaxOutputTokens != 16384 {
 		t.Fatalf("metadata = %#v", info)
+	}
+}
+
+// CP-CAP-006: explicit maximum context cannot be below the default window.
+func TestLoadRejectsMaxContextWindowBelowContextWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  openai:
+    protocol: openai
+    base_url: https://api.openai.com
+    api_key: test
+    endpoints: responses
+    models: gpt-test
+model_metadata:
+  gpt-test:
+    context_window_tokens: 272000
+    max_context_window_tokens: 128000
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "max_context_window_tokens must be greater than or equal to context_window_tokens") {
+		t.Fatalf("error = %v, want max context relation error", err)
 	}
 }
 
@@ -1524,13 +1549,13 @@ model_metadata:
 		t.Fatal(err)
 	}
 	info := cfg.ModelMetadata["gpt-test"]
-	if info.ID != "gpt-test" || info.ContextWindowTokens != 0 || info.MaxOutputTokens != 0 {
+	if info.ID != "gpt-test" || info.ContextWindowTokens != 0 || info.MaxContextWindowTokens != 0 || info.MaxOutputTokens != 0 {
 		t.Fatalf("metadata defaults = %#v", info)
 	}
 }
 
 func TestLoadRejectsNegativeMetadataCapacity(t *testing.T) {
-	for _, field := range []string{"context_window_tokens", "max_output_tokens"} {
+	for _, field := range []string{"context_window_tokens", "max_context_window_tokens", "max_output_tokens"} {
 		t.Run(field, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			body := fmt.Sprintf(`

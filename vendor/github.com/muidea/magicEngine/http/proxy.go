@@ -82,10 +82,15 @@ func applyProxyTarget(targetURI *url.URL, req *http.Request) *url.URL {
 	}
 
 	for k, v := range reqQuery {
-		targetQuery.Set(k, v[0])
+		targetQuery[k] = append([]string(nil), v...)
 	}
 	target.RawQuery = targetQuery.Encode()
 	return target
+}
+
+func proxyErrorHandler(res http.ResponseWriter, req *http.Request, err error) {
+	slog.Error("proxy request failed", "method", req.Method, "url", req.URL.String(), "err", err)
+	http.Error(res, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 }
 
 func (s *proxyRoute) applyTarget(req *http.Request) *url.URL {
@@ -119,8 +124,7 @@ func ProxyHTTP(res http.ResponseWriter, req *http.Request, targetURL string, err
 			errorHandler(res, req, err)
 			return
 		}
-		res.WriteHeader(http.StatusInternalServerError)
-		_, _ = res.Write([]byte(err.Error()))
+		proxyErrorHandler(res, req, err)
 	}
 	proxy.ServeHTTP(res, req)
 	return nil
@@ -141,17 +145,10 @@ func (s *proxyRoute) proxyFun(_ context.Context, res http.ResponseWriter, req *h
 		return
 	}
 
-	// errorHandler 处理代理转发过程中的错误
-	errorHandler := func(res http.ResponseWriter, req *http.Request, err error) {
-		res.WriteHeader(http.StatusInternalServerError)
-		_, _ = res.Write([]byte(err.Error()))
-	}
-
 	if s.proxy == nil {
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	s.proxy.ErrorHandler = errorHandler
 	s.proxy.ServeHTTP(res, req)
 }
 
@@ -177,18 +174,22 @@ func CreateProxyRoute(uriPattern, method, targetURL string, rewriteURL bool) Rou
 				req.URL.Path = target.Path
 				req.URL.RawQuery = target.RawQuery
 			},
+			ErrorHandler: proxyErrorHandler,
 		}
 		return route
 	}
 
 	route.proxy = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
-			target := route.applyTarget(req)
-			req.URL.Scheme = target.Scheme
-			req.URL.Host = target.Host
-			req.URL.Path = target.Path
-			req.URL.RawQuery = target.RawQuery
+			target := *targetURI
+			dynamicTAG := req.Header.Get(DynamicTag)
+			dynamicValue := req.Header.Get(DynamicValue)
+			if dynamicTAG != "" && dynamicValue != "" {
+				target.Path = strings.ReplaceAll(target.Path, dynamicTAG, dynamicValue)
+			}
+			httputil.NewSingleHostReverseProxy(&target).Director(req)
 		},
 	}
+	route.proxy.ErrorHandler = proxyErrorHandler
 	return route
 }

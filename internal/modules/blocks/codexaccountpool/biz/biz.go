@@ -286,7 +286,7 @@ func (s *Account) handleRecordResult(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account result command"))
 		return
 	}
-	item, err := s.store.RecordResult(cmd.AccountID, cmd.Model, cmd.Success, cmd.ErrorClass, cmd.RetryAfterSeconds, cmd.QuotaExhausted, cmd.QuotaResetAt)
+	item, err := s.store.RecordResult(cmd.AccountID, cmd.Model, cmd.Success, cmd.ErrorClass, cmd.RetryAfterSeconds, cmd.QuotaExhausted, cmd.QuotaResetAt, cmd.AvailabilityNeutral)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return

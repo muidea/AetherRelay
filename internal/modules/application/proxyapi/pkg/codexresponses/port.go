@@ -37,6 +37,15 @@ type WebsocketOpenRequest struct {
 }
 type WebsocketOpenResult struct{ SessionID string }
 
+// WebsocketUpdate keeps upstream failure classification typed across the local
+// proxyapi port. Payload may be present with Failure when the upstream emitted
+// a terminal response.failed/error event.
+type WebsocketUpdate struct {
+	Payload []byte
+	Done    bool
+	Failure *Failure
+}
+
 type ErrorKind string
 
 const (
@@ -97,6 +106,6 @@ type Executor interface {
 	StreamCodexResponses(context.Context, Request, func(StreamStart) error, func([]byte) error) error
 	OpenCodexWebsocket(context.Context, WebsocketOpenRequest) (WebsocketOpenResult, error)
 	SendCodexWebsocket(context.Context, string, []byte) error
-	PullCodexWebsocket(context.Context, string) ([]byte, bool, error)
+	PullCodexWebsocket(context.Context, string) (WebsocketUpdate, error)
 	CloseCodexWebsocket(context.Context, string)
 }

@@ -42,6 +42,12 @@
     "error_contains": "previous_response_id"
   },
   {
+    "name": "copilot nested cache breakpoint",
+    "compact": false,
+    "input": {"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello","prompt_cache_breakpoint":{"mode":"explicit"}}]}]},
+    "expected": {"model":"gpt-test","instructions":"","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"stream":true,"store":false}
+  },
+  {
     "name": "file input rejected",
     "compact": false,
     "input": {"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_file","file_id":"file_external"}]}]},

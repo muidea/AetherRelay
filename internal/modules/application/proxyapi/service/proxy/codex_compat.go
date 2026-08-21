@@ -206,6 +206,7 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 			"content": []any{map[string]any{"type": "input_text", "text": input}},
 		}}
 	}
+	cacheBreakpointsIgnored := stripCodexInputPromptCacheBreakpoints(body["input"])
 	if instructions, exists := body["instructions"]; !exists || instructions == nil {
 		body["instructions"] = ""
 	} else if _, ok := instructions.(string); !ok {
@@ -247,6 +248,9 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 	}
 	ignored := append([]string(nil), metadataIgnored...)
 	ignored = append(ignored, streamOptionsIgnored...)
+	if cacheBreakpointsIgnored {
+		ignored = append(ignored, "input[].content[].prompt_cache_breakpoint")
+	}
 	for _, field := range codexDropCompatibleFields {
 		if _, ok := body[field]; ok {
 			delete(body, field)
@@ -267,6 +271,38 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
 	}
 	return encoded, body, ignored, nil
+}
+
+// stripCodexInputPromptCacheBreakpoints removes the per-content cache hint
+// emitted by clients such as GitHub Copilot CLI. ChatGPT Codex rejects this
+// field even though removing it leaves the standard Responses meaning intact.
+func stripCodexInputPromptCacheBreakpoints(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		parts, ok := item["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawPart := range parts {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, exists := part["prompt_cache_breakpoint"]; exists {
+				delete(part, "prompt_cache_breakpoint")
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 // sanitizeCodexToolParameterTypes repairs the explicit null emitted by Codex

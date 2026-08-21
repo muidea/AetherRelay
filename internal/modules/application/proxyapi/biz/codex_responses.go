@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -106,21 +107,23 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 	return nil
 }
 
-func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) ([]byte, bool, error) {
+func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codexresponses.WebsocketUpdate, error) {
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSPullCommand{SessionID: sessionID, TimeoutMillis: 1000})).Get()
 	if err != nil {
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorUpstream)
-		return nil, false, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket pull failed"))
+		return codexresponses.WebsocketUpdate{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket pull failed"))
 	}
 	update, ok := value.(upevents.WSPullResult)
 	if !ok {
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
-		return nil, false, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket update"))
+		return codexresponses.WebsocketUpdate{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket update"))
 	}
+	result := codexresponses.WebsocketUpdate{Payload: update.Payload, Done: update.Done}
 	if update.ErrorClass != "" && len(update.Payload) == 0 {
-		failure := failureFromUpstream(update.ErrorClass, 0, upevents.RateLimitObservation{}, 0, upevents.SafeError{})
-		s.recordCodexWebsocketTurn(ctx, sessionID, false, string(failure.Kind))
-		return nil, update.Done, failure
+		failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+		s.recordCodexWebsocketTurnResult(ctx, sessionID, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+		result.Failure = failure
+		return result, nil
 	}
 	if len(update.Payload) > 0 {
 		evidence := codexWebsocketPayloadHasEvidence(update.Payload)
@@ -137,15 +140,18 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) ([]byt
 				failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
 				class = string(failure.Kind)
 				s.recordCodexWebsocketTurnResult(ctx, sessionID, false, class, failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+				result.Failure = failure
 			} else {
 				s.recordCodexWebsocketTurn(ctx, sessionID, success, class)
 			}
 			if !success && codexWebsocketEmptyCompleted(update.Payload) && !turnEvidence {
-				return nil, true, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream returned an empty response.completed"))
+				result.Payload = nil
+				result.Done = true
+				result.Failure = codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream returned an empty response.completed"))
 			}
 		}
 	}
-	return update.Payload, update.Done, nil
+	return result, nil
 }
 
 func (s *Proxy) CloseCodexWebsocket(ctx context.Context, sessionID string) {
@@ -368,6 +374,40 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 	}
 }
 
+func codexCompactRequestFault(failure *codexresponses.Failure) bool {
+	if failure == nil || failure.Kind == codexresponses.KindInvalidToken || failure.Kind == codexresponses.KindRateLimit {
+		return false
+	}
+	switch failure.HTTPStatus {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed,
+		http.StatusConflict, http.StatusRequestEntityTooLarge,
+		http.StatusUnprocessableEntity, http.StatusNotImplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+func codexCompactAvailabilityNeutral(failure *codexresponses.Failure) bool {
+	if failure == nil {
+		return false
+	}
+	// Contract CP-FAIL-015 keeps an unstructured endpoint/CDN 403 neutral even
+	// though credential-scoped structured 403s remain cooldown-bearing.
+	if failure.Kind == codexresponses.KindEndpoint {
+		return true
+	}
+	if failure.Kind == codexresponses.KindInvalidToken || failure.Kind == codexresponses.KindRateLimit {
+		return false
+	}
+	switch failure.HTTPStatus {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests:
+		return false
+	default:
+		return true
+	}
+}
+
 func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses.Request) (codexresponses.Result, error) {
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
@@ -411,7 +451,19 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			continue
 		}
 		s.releaseCodexAccount(ctx, account.LeaseID)
-		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+		availabilityNeutral := codexCompactAvailabilityNeutral(failure)
+		if availabilityNeutral {
+			s.recordCodexAvailabilityNeutralResult(ctx, account.AccountID, request.Model, failure)
+		} else {
+			class := string(failure.Kind)
+			if failure.HTTPStatus == http.StatusPaymentRequired {
+				class = accevents.ErrorUpstream
+			}
+			s.recordCodexResult(ctx, account.AccountID, request.Model, false, class, failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+		}
+		if codexCompactRequestFault(failure) {
+			return codexresponses.Result{}, failure
+		}
 		if retryableCodexFailure(failure) {
 			tried = append(tried, account.AccountID)
 			continue
@@ -729,6 +781,16 @@ func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
 		AccountID: id, Model: model, Success: success, ErrorClass: class, RetryAfterSeconds: retryAfter,
 		QuotaExhausted: quotaExhausted, QuotaResetAt: quotaResetAt,
+	})).Get()
+}
+
+func (s *Proxy) recordCodexAvailabilityNeutralResult(ctx context.Context, id, model string, failure *codexresponses.Failure) {
+	if strings.TrimSpace(id) == "" || failure == nil {
+		return
+	}
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
+		AccountID: id, Model: model, Success: false, ErrorClass: string(failure.Kind),
+		RetryAfterSeconds: failure.RetryAfterSeconds, AvailabilityNeutral: true,
 	})).Get()
 }
 

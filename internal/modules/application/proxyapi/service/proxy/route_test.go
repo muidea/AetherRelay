@@ -482,6 +482,9 @@ func TestClientProtocolForPath(t *testing.T) {
 	if got := ClientProtocolForPath("/v1/embeddings"); got != ClientProtocolOpenAI {
 		t.Fatalf("embeddings protocol = %q", got)
 	}
+	if got := ClientProtocolForPath("/v1/responses/input_tokens"); got != ClientProtocolOpenAI {
+		t.Fatalf("responses input tokens protocol = %q", got)
+	}
 }
 
 func TestConvertUpstreamErrorForClient(t *testing.T) {

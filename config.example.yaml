@@ -171,6 +171,7 @@ model_metadata:
     native_responses_images: false
   gpt-5.6-luna:
     context_window_tokens: 272000
+    max_context_window_tokens: 921000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
@@ -184,12 +185,14 @@ model_metadata:
         profile: level3_reasoning
   gpt-5.6-sol:
     context_window_tokens: 272000
+    max_context_window_tokens: 921000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
     reasoning_efforts: [none, low, medium, high, xhigh, max]
   gpt-5.6-terra:
     context_window_tokens: 272000
+    max_context_window_tokens: 921000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium

@@ -78,15 +78,16 @@ type Snapshot struct {
 
 // Candidate is one eligible upstream source for a model.
 type Candidate struct {
-	ModelID             string
-	RouteOwner          string
-	Builtin             bool
-	CreatedAt           int64
-	OwnedBy             string
-	Priority            int
-	Fallback            bool
-	ContextWindowTokens int
-	MaxOutputTokens     int
+	ModelID                string
+	RouteOwner             string
+	Builtin                bool
+	CreatedAt              int64
+	OwnedBy                string
+	Priority               int
+	Fallback               bool
+	ContextWindowTokens    int
+	MaxContextWindowTokens int
+	MaxOutputTokens        int
 	// SupportedEndpoints is the generation-consistent client path projection
 	// calculated from the provider transport matrix when the snapshot is built.
 	SupportedEndpoints []string
@@ -103,8 +104,9 @@ type Route struct {
 	CreatedAt  int64
 	OwnedBy    string
 	// Optional capacity fields; zero means unknown / omit from /v1/models.
-	ContextWindowTokens int
-	MaxOutputTokens     int
+	ContextWindowTokens    int
+	MaxContextWindowTokens int
+	MaxOutputTokens        int
 }
 
 // Build constructs a snapshot from static config and account-pool catalog models.
@@ -261,7 +263,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: name,
 				Priority: config.EffectiveProviderPriority(provider), Fallback: config.EffectiveProviderFallback(provider),
-				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
+				ContextWindowTokens: metadata.ContextWindowTokens, MaxContextWindowTokens: metadata.MaxContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
 				SupportedEndpoints: serviceablePathsForModel(provider, id, metadata),
 				ConversionModes:    conversionModesForModel(provider, id, metadata),
 			})
@@ -274,7 +276,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: CodexOAuthProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveCodexOAuthProviderPriority(cfg.CodexOAuth), Fallback: true,
-				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
+				ContextWindowTokens: metadata.ContextWindowTokens, MaxContextWindowTokens: metadata.MaxContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
 				SupportedEndpoints: config.ServiceableInboundPaths(providerView),
 			})
 		}
@@ -286,7 +288,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 			snap.Candidates[id] = append(snap.Candidates[id], Candidate{
 				ModelID: id, RouteOwner: BuiltinProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb), Fallback: false,
-				ContextWindowTokens: metadata.ContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
+				ContextWindowTokens: metadata.ContextWindowTokens, MaxContextWindowTokens: metadata.MaxContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
 				SupportedEndpoints: config.ServiceableInboundPaths(providerView),
 			})
 		}
@@ -437,7 +439,7 @@ func (s Snapshot) Lookup(modelID string) (Route, bool) {
 	primary := candidates[0]
 	return Route{
 		ModelID: primary.ModelID, RouteOwner: primary.RouteOwner, Builtin: primary.Builtin,
-		CreatedAt: primary.CreatedAt, OwnedBy: primary.OwnedBy, ContextWindowTokens: primary.ContextWindowTokens, MaxOutputTokens: primary.MaxOutputTokens,
+		CreatedAt: primary.CreatedAt, OwnedBy: primary.OwnedBy, ContextWindowTokens: primary.ContextWindowTokens, MaxContextWindowTokens: primary.MaxContextWindowTokens, MaxOutputTokens: primary.MaxOutputTokens,
 	}, true
 }
 
@@ -449,7 +451,7 @@ func (s Snapshot) LookupForAccess(modelID string, policy clientaccess.Policy) (R
 	primary := candidates[0]
 	return Route{
 		ModelID: primary.ModelID, RouteOwner: primary.RouteOwner, Builtin: primary.Builtin,
-		CreatedAt: primary.CreatedAt, OwnedBy: primary.OwnedBy, ContextWindowTokens: primary.ContextWindowTokens, MaxOutputTokens: primary.MaxOutputTokens,
+		CreatedAt: primary.CreatedAt, OwnedBy: primary.OwnedBy, ContextWindowTokens: primary.ContextWindowTokens, MaxContextWindowTokens: primary.MaxContextWindowTokens, MaxOutputTokens: primary.MaxOutputTokens,
 	}, true
 }
 

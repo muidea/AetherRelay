@@ -37,10 +37,11 @@ func TestUnsupportedCodexCompatibilityEndpointsReturnNotFound(t *testing.T) {
 	}
 }
 
+// CP-CAP-006: Codex manifests project default and maximum context separately.
 func TestCodexModelsManifestUsesEffectiveCatalogCapabilities(t *testing.T) {
 	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
 		"gpt-codex": {
-			ID: "gpt-codex", ContextWindowTokens: 400000,
+			ID: "gpt-codex", ContextWindowTokens: 400000, MaxContextWindowTokens: 921000,
 			ReasoningDeclared: true, ReasoningSupported: true, ReasoningDefaultEffort: "high", ReasoningEfforts: []string{"low", "high"},
 			NativeResponsesDeclared: true, NativeResponsesImages: true,
 		},
@@ -53,11 +54,11 @@ func TestCodexModelsManifestUsesEffectiveCatalogCapabilities(t *testing.T) {
 		t.Fatalf("CP-EP-013 models=%#v", manifest.Models)
 	}
 	model := manifest.Models[0]
-	if model.Slug != "gpt-codex" || model.ContextWindow != 400000 || model.MaxContextWindow != 400000 || model.DefaultReasoningLevel != "high" ||
+	if model.Slug != "gpt-codex" || model.ContextWindow != 400000 || model.MaxContextWindow != 921000 || model.DefaultReasoningLevel != "high" ||
 		!reflect.DeepEqual(model.SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "low"}, {Effort: "high"}}) ||
 		!reflect.DeepEqual(model.InputModalities, []string{"text", "image"}) || !model.PreferWebsockets || model.UseResponsesLite ||
 		model.BaseInstructions == "" || model.MinimalClientVersion == "" || model.Visibility != "list" || model.Priority != 1 || !model.SupportedInAPI || model.ServiceTiers == nil {
-		t.Fatalf("CP-EP-013 model=%#v", model)
+		t.Fatalf("CP-EP-013/CP-CAP-006 model=%#v", model)
 	}
 }
 
@@ -70,6 +71,7 @@ func TestCodexModelsManifestExcludesModelsWithoutResponses(t *testing.T) {
 	}
 }
 
+// CP-EP-015: every accessible Responses route projects local preflight support.
 func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 	snap := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
 		"claude": {
@@ -78,7 +80,7 @@ func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 		},
 	}}
 	got := modelSupportedEndpoints(snap, "claude", clientaccess.All())
-	want := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"}
+	want := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens"}
 	if len(got) != len(want) {
 		t.Fatalf("supported endpoints=%v, want %v", got, want)
 	}
@@ -93,7 +95,7 @@ func TestCodexModelSupportedEndpointsIncludeAdapterEntrypoints(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{})
 	snap := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}}})
 	got := modelSupportedEndpoints(snap, "gpt-codex", clientaccess.All())
-	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/compact"} {
+	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"} {
 		found := false
 		for _, item := range got {
 			if item == path {
@@ -164,10 +166,11 @@ func TestModelsProjectsDegradedReasoningConversion(t *testing.T) {
 	}
 }
 
+// CP-CAP-006: OpenAI-compatible model records retain both context capacities.
 func TestModelsProjectsMetadataForCodexOAuthDiscoveredModel(t *testing.T) {
 	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
 		"gpt-pool": {
-			ID: "gpt-pool", ContextWindowTokens: 400000, MaxOutputTokens: 128000,
+			ID: "gpt-pool", ContextWindowTokens: 400000, MaxContextWindowTokens: 921000, MaxOutputTokens: 128000,
 			ReasoningDeclared: true, ReasoningSupported: true, ReasoningDefaultEffort: "none", ReasoningEfforts: []string{"none", "low"},
 		},
 	}}
@@ -179,7 +182,7 @@ func TestModelsProjectsMetadataForCodexOAuthDiscoveredModel(t *testing.T) {
 		t.Fatalf("models=%#v", response.Data)
 	}
 	record := response.Data[0]
-	if record.ContextWindowTokens != 400000 || record.MaxOutputTokens != 128000 || record.Capabilities == nil || record.Capabilities.Reasoning == nil || record.Capabilities.Reasoning.DefaultEffort != "none" || !reflect.DeepEqual(record.Capabilities.Reasoning.Efforts, []string{"none", "low"}) {
+	if record.ContextWindowTokens != 400000 || record.MaxContextWindowTokens != 921000 || record.MaxOutputTokens != 128000 || record.Capabilities == nil || record.Capabilities.Reasoning == nil || record.Capabilities.Reasoning.DefaultEffort != "none" || !reflect.DeepEqual(record.Capabilities.Reasoning.Efforts, []string{"none", "low"}) {
 		t.Fatalf("Codex OAuth metadata=%#v", record)
 	}
 }
@@ -210,7 +213,7 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 	if conversions.ResponsesToAnthropic != nil {
 		t.Fatalf("responses_to_anthropic projected without an Anthropic provider: %#v", conversions)
 	}
-	wantEndpoints := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"}
+	wantEndpoints := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens"}
 	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, wantEndpoints) {
 		t.Fatalf("supported endpoints = %v, want %v", response.Data[0].SupportedEndpoints, wantEndpoints)
 	}

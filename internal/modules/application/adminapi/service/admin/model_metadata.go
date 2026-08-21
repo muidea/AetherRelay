@@ -15,6 +15,7 @@ import (
 type modelMetadataView struct {
 	ID                     string                                 `json:"id"`
 	ContextWindowTokens    int                                    `json:"context_window_tokens,omitempty"`
+	MaxContextWindowTokens int                                    `json:"max_context_window_tokens,omitempty"`
 	MaxOutputTokens        int                                    `json:"max_output_tokens,omitempty"`
 	ReasoningDeclared      bool                                   `json:"reasoning_declared"`
 	ReasoningSupported     bool                                   `json:"reasoning_supported"`
@@ -27,6 +28,7 @@ type modelMetadataView struct {
 
 type modelMetadataPatch struct {
 	ContextWindowTokens    *int      `json:"context_window_tokens"`
+	MaxContextWindowTokens *int      `json:"max_context_window_tokens"`
 	MaxOutputTokens        *int      `json:"max_output_tokens"`
 	ReasoningSupported     *bool     `json:"reasoning_supported"`
 	ReasoningDefaultEffort *string   `json:"reasoning_default_effort"`
@@ -45,7 +47,7 @@ func (h *Handler) listModelMetadata(w http.ResponseWriter) {
 	items := make([]modelMetadataView, 0, len(ids))
 	for _, id := range ids {
 		m := cfg.ModelMetadata[id]
-		items = append(items, modelMetadataView{ID: id, ContextWindowTokens: m.ContextWindowTokens, MaxOutputTokens: m.MaxOutputTokens, ReasoningDeclared: m.ReasoningDeclared, ReasoningSupported: m.ReasoningSupported, ReasoningDefaultEffort: m.ReasoningDefaultEffort, ReasoningEfforts: append([]string(nil), m.ReasoningEfforts...), NativeResponsesTools: m.NativeResponsesTools, NativeResponsesImages: m.NativeResponsesImages, ConversionCapabilities: m.ConversionCapabilities})
+		items = append(items, modelMetadataView{ID: id, ContextWindowTokens: m.ContextWindowTokens, MaxContextWindowTokens: m.MaxContextWindowTokens, MaxOutputTokens: m.MaxOutputTokens, ReasoningDeclared: m.ReasoningDeclared, ReasoningSupported: m.ReasoningSupported, ReasoningDefaultEffort: m.ReasoningDefaultEffort, ReasoningEfforts: append([]string(nil), m.ReasoningEfforts...), NativeResponsesTools: m.NativeResponsesTools, NativeResponsesImages: m.NativeResponsesImages, ConversionCapabilities: m.ConversionCapabilities})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "writable": strings.TrimSpace(h.configPath) != ""})
 }
@@ -63,15 +65,27 @@ func (h *Handler) patchModelMetadata(w http.ResponseWriter, r *http.Request, rel
 		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	if input.ContextWindowTokens != nil && *input.ContextWindowTokens < 0 || input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
+	if input.ContextWindowTokens != nil && *input.ContextWindowTokens < 0 || input.MaxContextWindowTokens != nil && *input.MaxContextWindowTokens < 0 || input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
 		writeError(w, http.StatusBadRequest, "token limits must be non-negative")
 		return
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
 	current := h.runtime.ConfigSnapshot()
-	if _, ok := current.ModelMetadata[id]; !ok {
+	metadata, ok := current.ModelMetadata[id]
+	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("model metadata %q not found", id))
+		return
+	}
+	contextWindow, maxContextWindow := metadata.ContextWindowTokens, metadata.MaxContextWindowTokens
+	if input.ContextWindowTokens != nil {
+		contextWindow = *input.ContextWindowTokens
+	}
+	if input.MaxContextWindowTokens != nil {
+		maxContextWindow = *input.MaxContextWindowTokens
+	}
+	if contextWindow > 0 && maxContextWindow > 0 && maxContextWindow < contextWindow {
+		writeError(w, http.StatusBadRequest, "max_context_window_tokens must be greater than or equal to context_window_tokens")
 		return
 	}
 	base := current.AdminAuth.BasePath
@@ -119,6 +133,9 @@ func mutateModelMetadataYAML(root *yaml.Node, id string, input modelMetadataPatc
 	}
 	if input.ContextWindowTokens != nil {
 		set("context_window_tokens", fmt.Sprint(*input.ContextWindowTokens))
+	}
+	if input.MaxContextWindowTokens != nil {
+		set("max_context_window_tokens", fmt.Sprint(*input.MaxContextWindowTokens))
 	}
 	if input.MaxOutputTokens != nil {
 		set("max_output_tokens", fmt.Sprint(*input.MaxOutputTokens))
