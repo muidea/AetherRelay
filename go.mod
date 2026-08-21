@@ -1,8 +1,8 @@
 module aetherrelay
 
-go 1.24.1
+go 1.26.0
 
-toolchain go1.24.13
+toolchain go1.26.7
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.57.0

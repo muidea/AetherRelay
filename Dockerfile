@@ -3,7 +3,7 @@
 # DuckDB uses CGO and its platform-specific bindings. Build each target image
 # on that target platform (Buildx uses QEMU for the non-native architecture),
 # rather than attempting a host-side cross build.
-ARG GO_VERSION=1.24.13
+ARG GO_VERSION=1.26.7
 FROM golang:${GO_VERSION}-bookworm AS build
 
 WORKDIR /src

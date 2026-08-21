@@ -15,7 +15,7 @@
 
 ## 快速开始
 
-以下快速体验需要 Go 1.24+（源码运行）；也可以直接用发布二进制或容器镜像，见[安装与部署](docs/deployment.md)。先从示例创建配置，再启动：
+以下快速体验需要 Go 1.26+（源码运行）；也可以直接用发布二进制或容器镜像，见[安装与部署](docs/deployment.md)。先从示例创建配置，再启动：
 
 ```bash
 cp config.example.yaml config.yaml
