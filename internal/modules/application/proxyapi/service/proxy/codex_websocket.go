@@ -132,13 +132,12 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		var normalizedBody map[string]any
-		if err := json.Unmarshal(normalized, &normalizedBody); err != nil {
+		if err := decodeCodexJSON(normalized, &normalizedBody); err != nil {
 			writeCodexWebsocketError(conn, "invalid_request", "invalid normalized response.create message")
 			return
 		}
-		sessionHash := codexSessionHash(r, model, normalizedBody)
 		var cacheErr error
-		normalized, normalizedBody, cacheErr = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+		normalized, normalizedBody, cacheErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 		if cacheErr != nil {
 			writeCodexWebsocketError(conn, "invalid_request", cacheErr.Error())
 			return
@@ -236,7 +235,7 @@ func hasCodexWebsocketPlan(plans []TransportPlan) bool {
 
 func normalizeCodexWebsocketCreate(raw []byte, currentModel string, headers http.Header, inherited codexRequestFeatures) ([]byte, string, codexRequestFeatures, error) {
 	var envelope map[string]any
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	if err := decodeCodexJSON(raw, &envelope); err != nil {
 		return nil, "", codexRequestFeatures{}, fmt.Errorf("invalid JSON websocket message")
 	}
 	if typ, _ := envelope["type"].(string); typ != "response.create" {
@@ -290,7 +289,7 @@ func envelopeRawInput(envelope map[string]any) json.RawMessage {
 
 func websocketPromptCacheKey(raw []byte) string {
 	var body map[string]any
-	_ = json.Unmarshal(raw, &body)
+	_ = decodeCodexJSON(raw, &body)
 	value, _ := body["prompt_cache_key"].(string)
 	return value
 }
@@ -449,7 +448,7 @@ func codexWebsocketTerminal(payload []byte) bool {
 
 func normalizeCodexWebsocketEvent(payload []byte) []byte {
 	var event map[string]any
-	if json.Unmarshal(payload, &event) != nil || event["type"] != "response.done" {
+	if decodeCodexJSON(payload, &event) != nil || event["type"] != "response.done" {
 		return payload
 	}
 	event["type"] = "response.completed"

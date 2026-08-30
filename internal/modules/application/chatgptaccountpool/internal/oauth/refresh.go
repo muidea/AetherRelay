@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 )
 
 const (
@@ -230,18 +232,10 @@ func refreshHTTPError(status int, body []byte) error {
 
 func newHTTPClient(accountProxy string) (*http.Client, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
-	transport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return client, nil
+	transport, err := accountproxy.NewHTTPTransport(accountProxy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ChatGPT OAuth proxy URL")
 	}
-	cloned := transport.Clone()
-	if proxy := strings.TrimSpace(accountProxy); proxy != "" {
-		parsed, err := url.ParseRequestURI(proxy)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return nil, fmt.Errorf("invalid ChatGPT OAuth proxy URL")
-		}
-		cloned.Proxy = http.ProxyURL(parsed)
-	}
-	client.Transport = cloned
+	client.Transport = transport
 	return client, nil
 }

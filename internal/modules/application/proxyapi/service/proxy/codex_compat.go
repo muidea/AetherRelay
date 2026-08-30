@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"sort"
@@ -193,7 +195,7 @@ func rawCodexInputHasCompactionTrigger(raw json.RawMessage) bool {
 
 func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOptions) ([]byte, map[string]any, []string, error) {
 	var body map[string]any
-	if err := json.Unmarshal(raw, &body); err != nil {
+	if err := decodeCodexJSON(raw, &body); err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid JSON request body")
 	}
 	model, _ := body["model"].(string)
@@ -271,6 +273,21 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
 	}
 	return encoded, body, ignored, nil
+}
+
+// decodeCodexJSON preserves protocol integers across map/any normalization.
+// Codex uses numeric sequence fields that can exceed JavaScript's safe integer
+// range, so a float64 round trip is not acceptable here.
+func decodeCodexJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("multiple JSON values are not supported")
+	}
+	return nil
 }
 
 // stripCodexInputPromptCacheBreakpoints removes the per-content cache hint
@@ -820,11 +837,28 @@ func stripCodexCompactInputNamespaces(value any) {
 // codexSessionHash implements CP-SCHED-002..003 without retaining the raw
 // client session signal outside this request.
 func codexSessionHash(r *http.Request, model string, body map[string]any) string {
+	return codexSessionDigest(r, model, body, true)
+}
+
+// codexPromptCacheHash deliberately excludes routing-only signals. Claude
+// Code's session id stabilizes account selection for /v1/messages but must not
+// become an upstream prompt_cache_key.
+func codexPromptCacheHash(r *http.Request, model string, body map[string]any) string {
+	return codexSessionDigest(r, model, body, false)
+}
+
+func codexSessionDigest(r *http.Request, model string, body map[string]any, includeRoutingOnly bool) string {
 	if r == nil {
 		return ""
 	}
 	signal := ""
+	if includeRoutingOnly && r.URL != nil && strings.TrimRight(r.URL.Path, "/") == "/v1/messages" {
+		signal = strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id"))
+	}
 	for _, header := range []string{"Session-Id", "session_id", "conversation_id", "X-Session-Affinity", "X-Session-Id", "X-OpenCode-Session", "X-Conversation-ID"} {
+		if signal != "" {
+			break
+		}
 		if signal = strings.TrimSpace(r.Header.Get(header)); signal != "" {
 			break
 		}

@@ -37,7 +37,7 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 	}
 	markConversionDegraded(round, ignored)
 	sessionHash := codexSessionHash(r, model, normalizedBody)
-	normalized, _, err = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+	normalized, _, err = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 	if err != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())
 		return

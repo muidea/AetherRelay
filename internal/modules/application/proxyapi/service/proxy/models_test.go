@@ -49,7 +49,7 @@ func TestCodexModelsManifestUsesEffectiveCatalogCapabilities(t *testing.T) {
 	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
 		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
 	})
-	manifest := buildCodexModelsManifest(snapshot, clientaccess.All())
+	manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), "")
 	if len(manifest.Models) != 1 {
 		t.Fatalf("CP-EP-013 models=%#v", manifest.Models)
 	}
@@ -66,8 +66,31 @@ func TestCodexModelsManifestExcludesModelsWithoutResponses(t *testing.T) {
 	snapshot := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
 		"emb": {{ModelID: "emb", RouteOwner: "openai", SupportedEndpoints: []string{"/v1/embeddings"}}},
 	}}
-	if manifest := buildCodexModelsManifest(snapshot, clientaccess.All()); len(manifest.Models) != 0 {
+	if manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), ""); len(manifest.Models) != 0 {
 		t.Fatalf("CP-EP-013 manifest=%#v", manifest)
+	}
+}
+
+// CP-CAP-007: legacy clients must not receive reasoning levels they cannot parse.
+func TestCodexModelsManifestFiltersExtendedReasoningForLegacyClients(t *testing.T) {
+	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
+		"gpt-codex": {
+			ID: "gpt-codex", ReasoningDeclared: true, ReasoningSupported: true,
+			ReasoningDefaultEffort: "ultra", ReasoningEfforts: []string{"medium", "high", "max", "ultra"},
+		},
+	}}
+	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
+		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
+	})
+	legacy := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.143.9")
+	if len(legacy.Models) != 1 || !reflect.DeepEqual(legacy.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}}) || legacy.Models[0].DefaultReasoningLevel != "medium" {
+		t.Fatalf("legacy manifest=%#v", legacy.Models)
+	}
+	for _, version := range []string{"0.144.0", "v0.149.1", "unparseable", ""} {
+		modern := buildCodexModelsManifest(snapshot, clientaccess.All(), version)
+		if len(modern.Models) != 1 || !reflect.DeepEqual(modern.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}, {Effort: "max"}, {Effort: "ultra"}}) {
+			t.Fatalf("modern version=%q manifest=%#v", version, modern.Models)
+		}
 	}
 }
 

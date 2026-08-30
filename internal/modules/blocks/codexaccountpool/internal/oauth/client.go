@@ -16,6 +16,7 @@ import (
 	"time"
 
 	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
+	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 )
 
 const (
@@ -183,16 +184,11 @@ func safeOAuthErrorCode(value string) string {
 }
 
 func newHTTPClient(rawProxy string) (*http.Client, error) {
-	transport, _ := http.DefaultTransport.(*http.Transport)
-	cloned := transport.Clone()
-	if rawProxy = strings.TrimSpace(rawProxy); rawProxy != "" {
-		proxyURL, err := url.ParseRequestURI(rawProxy)
-		if err != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
-			return nil, fmt.Errorf("invalid account proxy URL")
-		}
-		cloned.Proxy = http.ProxyURL(proxyURL)
+	transport, err := accountproxy.NewHTTPTransport(rawProxy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid account proxy URL")
 	}
-	return &http.Client{Transport: cloned}, nil
+	return &http.Client{Transport: transport}, nil
 }
 
 func classifyTransport(err error) string {

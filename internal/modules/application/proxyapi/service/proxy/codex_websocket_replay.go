@@ -80,7 +80,7 @@ func buildCodexWebsocketRetryPayload(payload []byte, turn codexWebsocketTurnRepl
 		return nil, false, nil
 	}
 	var body map[string]any
-	if err := json.Unmarshal(payload, &body); err != nil {
+	if err := decodeCodexJSON(payload, &body); err != nil {
 		return nil, false, err
 	}
 	encodedInput, err := json.Marshal(turn.items)
@@ -88,7 +88,7 @@ func buildCodexWebsocketRetryPayload(payload []byte, turn codexWebsocketTurnRepl
 		return nil, false, err
 	}
 	var input []any
-	if err := json.Unmarshal(encodedInput, &input); err != nil {
+	if err := decodeCodexJSON(encodedInput, &input); err != nil {
 		return nil, false, err
 	}
 	body["input"] = input
@@ -163,7 +163,7 @@ func codexWebsocketRawItemsHavePrefix(items, prefix []json.RawMessage) bool {
 	}
 	for index := range prefix {
 		var left, right any
-		if json.Unmarshal(items[index], &left) != nil || json.Unmarshal(prefix[index], &right) != nil || !reflect.DeepEqual(left, right) {
+		if decodeCodexJSON(items[index], &left) != nil || decodeCodexJSON(prefix[index], &right) != nil || !reflect.DeepEqual(left, right) {
 			return false
 		}
 	}

@@ -207,7 +207,7 @@ codex_oauth:
 - 调用中上游明确返回的 `usage_limit_reached` 仍会另行记录为账号/模型级额度耗尽与可选恢复时间，并驱动该模型冷却；普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
 - 可路由模型始终是全部健康账号模型快照的并集；不提供 `codex_oauth.models` 筛选项。管理型 Provider 使用同名模型时，两者都会进入候选链；其默认优先级为 `100`，Codex OAuth 默认 `90`，可在安全的原生 Responses 失败场景回退。`provider_enabled` 与 `priority` 是可热更新的路由策略。
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）以 AES-256-GCM 加密载荷写入 `state.database`。管理列表直接显示邮箱，但不返回 token、账号 ID 或代理 URL。
-- 账号代理一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新、模型发现、`https://chatgpt.com/backend-api/wham/usage` 和 `https://chatgpt.com/backend-api/codex/responses` 请求，避免刷新、发现、用量读取与实际调用的出口 IP 不一致。
+- 账号代理支持 `http://` 与 `https://`，一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新、模型发现、`https://chatgpt.com/backend-api/wham/usage`、Responses HTTP/compact 与 WebSocket 请求，避免刷新、发现、用量读取与实际调用的出口 IP 不一致。HTTPS 代理的 CONNECT TLS 腿固定协商 HTTP/1.1，不能依赖代理端 HTTP/2 CONNECT。
 - 上游 `401` 会按本地账号 ID 单飞刷新，然后仅重试一次尚未向客户端写出的请求；刷新永久失败或第二次仍被拒绝时账号标为异常。`429`、超时、网络和上游失败按模型冷却，`Retry-After`（最多 3600 秒）优先。
 - compact 单独区分账号可用性反馈：400/404/405/409/413/422/501 request fault 立即停止切号；其它非 credential 临时失败仍可换账号，但只累计失败数，不改变普通 Responses 的账号状态、模型冷却或额度观察。401/402/结构化 403/429 仍保留冷却，HTML endpoint 403 仍按端点故障处理。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。

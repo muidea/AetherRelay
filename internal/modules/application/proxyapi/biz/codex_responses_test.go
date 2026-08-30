@@ -71,6 +71,57 @@ func TestCloseCodexWebsocketDoesNotInventAccountSuccess(t *testing.T) {
 	}
 }
 
+func TestOpenCodexWebsocketRecordsSemanticHandshakeQuotaByModel(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	acquires := 0
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		acquires++
+		if acquires > 1 {
+			result.Set(nil, cd.NewError(cd.Unexpected, "no more accounts"))
+			return
+		}
+		result.Set(accevents.AcquireResult{AccountID: "account-spark", AccessToken: "token", LeaseID: "lease"}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	recorded := make(chan accevents.RecordResultCommand, 1)
+	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
+		recorded <- ev.Data().(accevents.RecordResultCommand)
+		result.Set(accevents.RecordResultResult{}, nil)
+	})
+	merged := make(chan accevents.MergeUsageSnapshotCommand, 1)
+	accounts.Subscribe(accevents.TopicMergeUsageSnapshot, func(ev event.Event, result event.Result) {
+		merged <- ev.Data().(accevents.MergeUsageSnapshotCommand)
+		result.Set(accevents.MergeUsageSnapshotResult{OK: true}, nil)
+	})
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicWSOpen, func(_ event.Event, result event.Result) {
+		result.Set(upevents.WSOpenResult{
+			HTTPStatus: http.StatusTooManyRequests, ErrorClass: upevents.ErrorRateLimit, RetryAfterSeconds: 120,
+			RateLimit: upevents.RateLimitObservation{UsageLimited: true, ResetAt: "2026-08-30T18:00:00Z"},
+			SafeError: upevents.SafeError{Type: "usage_limit_reached", Code: "usage_limit_reached", Message: "quota exhausted"},
+			Headers:   []upevents.Header{{Name: "X-Codex-Primary-Used-Percent", Value: "100"}, {Name: "X-Codex-Primary-Reset-After-Seconds", Value: "120"}},
+		}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	_, err := proxy.OpenCodexWebsocket(context.Background(), codexresponses.WebsocketOpenRequest{Model: "gpt-5.3-codex-spark", SessionHash: "session"})
+	failure, ok := codexresponses.AsFailure(err)
+	if !ok || !failure.QuotaExhausted || failure.QuotaResetAt == "" || failure.UpstreamType != "usage_limit_reached" || failure.UpstreamMessage != "quota exhausted" {
+		t.Fatalf("failure=%+v err=%v", failure, err)
+	}
+	command := <-recorded
+	if command.Model != "gpt-5.3-codex-spark" || !command.QuotaExhausted || command.QuotaResetAt == "" || command.RetryAfterSeconds != 120 {
+		t.Fatalf("model cooldown feedback=%+v", command)
+	}
+	select {
+	case snapshot := <-merged:
+		t.Fatalf("failed Spark handshake leaked model quota into account snapshot=%+v", snapshot)
+	default:
+	}
+}
+
 func TestCompleteCodexResponsesSwitchesBeforeOutputForRetryableStatuses(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -21,7 +21,7 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers <- r.Header.Clone()
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := upgrader.Upgrade(w, r, http.Header{"X-Codex-Primary-Used-Percent": []string{"42"}})
 		if err != nil {
 			return
 		}
@@ -53,6 +53,9 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 	if opened.SessionID == "" || opened.ErrorClass != "" {
 		t.Fatalf("CP-WS-002 opened=%+v", opened)
 	}
+	if len(opened.Headers) == 0 {
+		t.Fatalf("CP-WS-011 handshake headers=%+v", opened.Headers)
+	}
 	gotHeaders := <-headers
 	if gotHeaders.Get("Authorization") != "Bearer secret-token" || gotHeaders.Get("ChatGPT-Account-ID") != "account-header" || gotHeaders.Get("OpenAI-Beta") != currentIdentity.WebsocketBeta || gotHeaders.Get("User-Agent") != currentIdentity.UserAgent || gotHeaders.Get("Originator") != currentIdentity.Originator {
 		t.Fatalf("CP-HDR/CP-WS-002 headers=%v", gotHeaders)
@@ -78,6 +81,55 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 	}
 }
 
+// CP-WS-010: a rejected handshake carries the same quota semantics as HTTP/SSE.
+func TestWebsocketHandshakeRejectionPreservesQuotaSemantics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "17")
+		w.Header().Set("X-Codex-Primary-Used-Percent", "100")
+		w.Header().Set("X-Codex-Primary-Reset-After-Seconds", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"quota exhausted","resets_in_seconds":120}}`))
+	}))
+	defer server.Close()
+	previous := responsesWebsocketURL
+	responsesWebsocketURL = "ws" + strings.TrimPrefix(server.URL, "http")
+	t.Cleanup(func() { responsesWebsocketURL = previous })
+
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(2)
+	upstream := New(hub, background)
+	t.Cleanup(func() {
+		upstream.Teardown(context.Background())
+		background.Shutdown(context.Background())
+		hub.Terminate(context.Background())
+	})
+	openResult := event.NewResult(events.TopicWSOpen, "test", "upstream")
+	upstream.handleWSOpen(event.NewEventWithContext(events.TopicWSOpen, "test", "upstream", nil, context.Background(), events.WSOpenCommand{AccessToken: "secret-token"}), openResult)
+	value, err := openResult.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := value.(events.WSOpenResult)
+	if opened.HTTPStatus != http.StatusTooManyRequests || opened.ErrorClass != events.ErrorRateLimit || !opened.RateLimit.UsageLimited || opened.RateLimit.ResetAt == "" || opened.RetryAfterSeconds < 17 {
+		t.Fatalf("CP-WS-010/011 opened=%+v", opened)
+	}
+	if opened.SafeError.Type != "usage_limit_reached" || opened.SafeError.Code != "usage_limit_reached" || opened.SafeError.Message != "quota exhausted" || len(opened.Headers) == 0 {
+		t.Fatalf("CP-FAIL-013 opened=%+v", opened)
+	}
+}
+
+func TestWebsocketDialerConfiguresHTTPSProxyTLS(t *testing.T) {
+	httpsDialer, err := newWebsocketDialer("https://proxy.invalid:8443")
+	if err != nil || httpsDialer.Proxy == nil || httpsDialer.NetDialTLSContext == nil {
+		t.Fatalf("CP-SEC-004 HTTPS dialer=%+v err=%v", httpsDialer, err)
+	}
+	httpDialer, err := newWebsocketDialer("http://proxy.invalid:8080")
+	if err != nil || httpDialer.Proxy == nil || httpDialer.NetDialTLSContext != nil {
+		t.Fatalf("CP-SEC-004 HTTP dialer=%+v err=%v", httpDialer, err)
+	}
+}
+
 func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
 	value, err := forceStream([]byte(`{"model":"gpt-5.2","input":"hello","stream":false,"tools":[{"type":"function"}],"metadata":{"tenant":"alpha"}}`))
 	if err != nil {
@@ -96,14 +148,41 @@ func TestForceStreamPreservesNativeResponseFields(t *testing.T) {
 
 func TestCompletedResponseSupportsJSONAndSSE(t *testing.T) {
 	jsonResponse := &http.Response{Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"object":"response","id":"resp_1"}`))}
-	value, class, observation, err := completedResponse(jsonResponse, 1024)
+	value, class, observation, _, err := completedResponse(jsonResponse, 1024)
 	if err != nil || class != "" || observation.UsageLimited || string(value) != `{"object":"response","id":"resp_1"}` {
 		t.Fatalf("json completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
 	}
 	sseResponse := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello \"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_2\"}}\n\n"))}
-	value, class, observation, err = completedResponse(sseResponse, 1024)
+	value, class, observation, _, err = completedResponse(sseResponse, 1024)
 	if err != nil || class != "" || observation.UsageLimited || !strings.Contains(string(value), `"resp_2"`) || !strings.Contains(string(value), `"output_text":"hello world"`) {
 		t.Fatalf("sse completed response = %s class=%s observation=%+v err=%v", value, class, observation, err)
+	}
+}
+
+// CP-STREAM-008: buffered and streaming terminal errors share one classifier.
+func TestCompletedResponseUsesTerminalFailureClassifier(t *testing.T) {
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		`data: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"context_length_exceeded","param":"input","message":"context is too long"}}}` + "\n\n"))}
+	_, class, observation, safeError, err := completedResponse(response, 4096)
+	if err == nil || class != events.ErrorInvalidRequest || observation.UsageLimited {
+		t.Fatalf("class=%q observation=%+v err=%v", class, observation, err)
+	}
+	if safeError.Type != "invalid_request_error" || safeError.Code != "context_length_exceeded" || safeError.Param != "input" || safeError.Message != "context is too long" {
+		t.Fatalf("safe error=%+v", safeError)
+	}
+
+	contentPolicy := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		`data: {"type":"response.failed","error":{"type":"content_policy_violation","message":"blocked by policy"}}` + "\n\n"))}
+	_, class, _, _, err = completedResponse(contentPolicy, 4096)
+	if err == nil || class != events.ErrorInvalidRequest {
+		t.Fatalf("content policy class=%q err=%v", class, err)
+	}
+
+	capacity := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		`data: {"type":"response.failed","error":{"type":"invalid_request_error","message":"selected model is at capacity"}}` + "\n\n"))}
+	_, class, _, _, err = completedResponse(capacity, 4096)
+	if err == nil || class != events.ErrorUpstream {
+		t.Fatalf("capacity class=%q err=%v", class, err)
 	}
 }
 
@@ -111,7 +190,7 @@ func TestCompletedResponseRecoversCompactionFromAddedEvent(t *testing.T) {
 	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
 		"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"cmp_added\",\"type\":\"compaction\",\"encrypted_content\":\"safe\"}}\n\n" +
 			"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_added\",\"object\":\"response\",\"output\":[{\"type\":\"message\",\"content\":[]}]}}\n\n"))}
-	payload, class, _, err := completedResponse(response, 4096)
+	payload, class, _, _, err := completedResponse(response, 4096)
 	if err != nil || class != "" || !strings.Contains(string(payload), `"id":"cmp_added"`) {
 		t.Fatalf("added compaction payload=%s class=%q err=%v", payload, class, err)
 	}
@@ -124,7 +203,7 @@ func TestCompletedResponseAddedOnlyCompactionDoesNotInventMessage(t *testing.T) 
 	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
 		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"cmp_only\",\"type\":\"compaction\",\"encrypted_content\":\"safe\"}}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_only\",\"object\":\"response\",\"output\":[]}}\n\n"))}
-	payload, class, _, err := completedResponse(response, 4096)
+	payload, class, _, _, err := completedResponse(response, 4096)
 	if err != nil || class != "" || !strings.Contains(string(payload), `"id":"cmp_only"`) || strings.Contains(string(payload), `"type":"message"`) {
 		t.Fatalf("added-only payload=%s class=%q err=%v", payload, class, err)
 	}
@@ -134,14 +213,14 @@ func TestCompletedResponseRejectsEmptyCompletedWithoutUsageOrOutput(t *testing.T
 	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
 		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\"}}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[]}}\n\n"))}
-	_, class, _, err := completedResponse(response, 4096)
+	_, class, _, _, err := completedResponse(response, 4096)
 	if err == nil || class != events.ErrorUpstream {
 		t.Fatalf("CP-STREAM-006 class=%q err=%v", class, err)
 	}
 
 	usageOnly := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_usage\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n"))}
-	value, class, _, err := completedResponse(usageOnly, 4096)
+	value, class, _, _, err := completedResponse(usageOnly, 4096)
 	if err != nil || class != "" || !strings.Contains(string(value), `"input_tokens":3`) {
 		t.Fatalf("CP-STREAM-006 usage-only value=%s class=%q err=%v", value, class, err)
 	}
@@ -151,7 +230,7 @@ func TestCompletedResponsePreservesIncompletePartialOutputAndUsage(t *testing.T)
 	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
 		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n" +
 			"data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_partial\",\"status\":\"incomplete\",\"output\":[],\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n"))}
-	value, class, _, err := completedResponse(response, 4096)
+	value, class, _, _, err := completedResponse(response, 4096)
 	if err != nil || class != "" || !strings.Contains(string(value), `"status":"incomplete"`) || !strings.Contains(string(value), `"output_text":"partial"`) || !strings.Contains(string(value), `"output_tokens":2`) {
 		t.Fatalf("CP-STREAM-001/007 value=%s class=%q err=%v", value, class, err)
 	}
@@ -174,7 +253,7 @@ func TestCompletedResponseRebuildsFunctionCallOutputItem(t *testing.T) {
 		"event: response.completed\n" +
 		"data: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_1\",\"output\":[]}}\n\n"
 	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}
-	value, class, _, err := completedResponse(response, 4096)
+	value, class, _, _, err := completedResponse(response, 4096)
 	if err != nil || class != "" {
 		t.Fatalf("completed class=%q err=%v", class, err)
 	}

@@ -477,6 +477,41 @@ func TestEnsureCodexPromptCacheKeyUsesStableSessionHash(t *testing.T) {
 	}
 }
 
+// CP-REQ-030: map/any normalization must not round Codex protocol integers.
+func TestCodexNormalizationPreservesLargeIntegers(t *testing.T) {
+	const sequence = "900719925474099312345"
+	normalized, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","input":[],"sequence":`+sequence+`}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(normalized, []byte(`"sequence":`+sequence)) {
+		t.Fatalf("large sequence was changed: %s", normalized)
+	}
+	websocketEvent := normalizeCodexWebsocketEvent([]byte(`{"type":"response.done","sequence":` + sequence + `,"response":{"id":"resp_1"}}`))
+	if !bytes.Contains(websocketEvent, []byte(`"sequence":`+sequence)) || !bytes.Contains(websocketEvent, []byte(`"type":"response.completed"`)) {
+		t.Fatalf("large websocket sequence was changed: %s", websocketEvent)
+	}
+	capacityEvent, changed := sanitizeCodexCapacityEventForClient([]byte(`{"type":"response.failed","sequence":` + sequence + `,"response":{"error":{"code":"server_is_overloaded"}}}`))
+	if !changed || !bytes.Contains(capacityEvent, []byte(`"sequence":`+sequence)) {
+		t.Fatalf("large capacity sequence was changed: %s", capacityEvent)
+	}
+}
+
+// CP-SCHED-002: Claude Code session IDs are routing-only affinity signals.
+func TestClaudeCodeSessionIDIsRoutingOnly(t *testing.T) {
+	requestA := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	requestA.Header.Set("X-Claude-Code-Session-Id", "claude-session-a")
+	requestB := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	requestB.Header.Set("X-Claude-Code-Session-Id", "claude-session-b")
+	body := map[string]any{"model": "gpt-test"}
+	if codexSessionHash(requestA, "gpt-test", body) == codexSessionHash(requestB, "gpt-test", body) {
+		t.Fatal("Claude Code session id did not affect routing affinity")
+	}
+	if codexPromptCacheHash(requestA, "gpt-test", body) != codexPromptCacheHash(requestB, "gpt-test", body) {
+		t.Fatal("Claude Code session id leaked into prompt cache identity")
+	}
+}
+
 func TestCodexRequestDropsOverlongEncryptedReasoningItem(t *testing.T) {
 	longID := "rs_" + strings.Repeat("a", codexInputItemIDLimit)
 	raw := []byte(`{"model":"gpt-test","input":[{"type":"reasoning","id":"` + longID + `","encrypted_content":"sealed","summary":[]},{"type":"message","id":"user-1","role":"user","content":"continue"}]}`)

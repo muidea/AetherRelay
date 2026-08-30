@@ -34,7 +34,7 @@
 - **AetherRelay 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
 - **OpenAI Images**：`POST /v1/images/generations|edits`（OpenAI native 或内建 `chatgptweb` 图片能力）
 
-`GET /v1/models` **本地合成**，不访问上游；普通请求返回有效目录中的 OpenAI-compatible 模型清单，携带 `client_version` query 时返回 Codex models manifest。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`POST /v1/models` 不受支持。
+`GET /v1/models` **本地合成**，不访问上游；普通请求返回有效目录中的 OpenAI-compatible 模型清单，携带 `client_version` query 时返回 Codex models manifest。可解析且低于 `0.144.0` 的 Codex CLI 版本不会收到 `max/ultra` reasoning level；空或非法版本保留现代能力。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`POST /v1/models` 不受支持。
 
 `POST /v1/responses/input_tokens` 复用 `/v1/responses` 的认证、exact model、Provider access 与目录能力检查，然后用本地 tokenizer 返回 `response.input_tokens` 估算。它不选择账号、不读取上游凭据、不发网络请求，也不产生计费 token；因此即使同一模型有多个 Responses 候选，预估结果也不锁定 Provider。
 

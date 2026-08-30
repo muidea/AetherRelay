@@ -66,7 +66,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	sessionHash := codexSessionHash(r, model, clientBody)
-	normalized, _, normalizeErr = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+	normalized, _, normalizeErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, clientBody))
 	if normalizeErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
 		return
@@ -308,7 +308,7 @@ func sanitizeCodexCapacitySSEForClient(line []byte) ([]byte, bool) {
 
 func sanitizeCodexCapacityEventForClient(payload []byte) ([]byte, bool) {
 	var event map[string]any
-	if json.Unmarshal(payload, &event) != nil {
+	if decodeCodexJSON(payload, &event) != nil {
 		return payload, false
 	}
 	typ, _ := event["type"].(string)

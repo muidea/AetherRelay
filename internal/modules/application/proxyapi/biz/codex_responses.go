@@ -61,16 +61,17 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 				tried = append(tried, account.AccountID)
 				continue
 			}
-			failure := failureFromUpstream(opened.ErrorClass, 0, upevents.RateLimitObservation{}, opened.HTTPStatus)
+			failure := failureFromUpstream(opened.ErrorClass, opened.RetryAfterSeconds, opened.RateLimit, opened.HTTPStatus, opened.SafeError)
 			lastFailure = failure
 			s.releaseCodexAccount(ctx, account.LeaseID)
-			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), 0, false, "")
+			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 			if retryableCodexFailure(failure) {
 				tried = append(tried, account.AccountID)
 				continue
 			}
 			return codexresponses.WebsocketOpenResult{}, failure
 		}
+		s.mergeCodexUsageHeaders(ctx, account.AccountID, opened.Headers)
 		if strings.TrimSpace(opened.SessionID) == "" {
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			return codexresponses.WebsocketOpenResult{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex websocket session is missing"))
@@ -81,6 +82,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		}
 		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, model: request.Model, fingerprint: fingerprint}
 		s.mu.Unlock()
+		s.noteCodexTurnState(account.AccountID, opened.Headers)
 		s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
 		return codexresponses.WebsocketOpenResult{SessionID: opened.SessionID}, nil
 	}

@@ -1244,7 +1244,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 		}
 		sessionHash := codexSessionHash(r, rawModel, rawBody)
-		codexBody, _, normalizeErr = ensureCodexPromptCacheKey(codexBody, normalizedBody, sessionHash)
+		codexBody, _, normalizeErr = ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
 		if normalizeErr != nil {
 			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, normalizeErr.Error())
 			return
@@ -1382,7 +1382,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 			}
 			sessionHash := codexSessionHash(r, rawModel, rawBody)
-			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, sessionHash)
+			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
 			if keyErr != nil {
 				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, keyErr.Error())
 				return
@@ -1410,7 +1410,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 			}
 			sessionHash := codexSessionHash(r, rawModel, rawBody)
-			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, sessionHash)
+			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
 			if keyErr != nil {
 				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, keyErr.Error())
 				return

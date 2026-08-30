@@ -161,9 +161,13 @@ type WSOpenCommand struct {
 	Fingerprint     CodexFingerprint
 }
 type WSOpenResult struct {
-	SessionID  string
-	HTTPStatus int
-	ErrorClass ErrorClass
+	SessionID         string
+	Headers           []Header
+	HTTPStatus        int
+	ErrorClass        ErrorClass
+	RetryAfterSeconds int
+	RateLimit         RateLimitObservation
+	SafeError         SafeError
 }
 
 type WSSendCommand struct {

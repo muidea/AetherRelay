@@ -3,6 +3,8 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -129,7 +131,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	snapshot := h.EffectiveCatalog()
 	var payload any
 	if _, codexClient := r.URL.Query()["client_version"]; codexClient {
-		payload = buildCodexModelsManifest(snapshot, identity.ProviderAccess)
+		payload = buildCodexModelsManifest(snapshot, identity.ProviderAccess, r.URL.Query().Get("client_version"))
 	} else {
 		payload = buildModelsListResponse(snapshot, identity.ProviderAccess)
 	}
@@ -151,7 +153,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request, requestID
 	h.writeArchiveMetadata(round, "", "", false, http.StatusOK, duration, tokenUsage{}, "response.json", "", "", "success")
 }
 
-func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientaccess.Policy) CodexModelsManifest {
+func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientaccess.Policy, clientVersion string) CodexModelsManifest {
 	models := make([]CodexModelManifestRecord, 0)
 	for priority, record := range buildModelsListResponse(snap, policy).Data {
 		if !containsString(record.SupportedEndpoints, "/v1/responses") {
@@ -166,6 +168,21 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			if containsString(efforts, record.Capabilities.Reasoning.DefaultEffort) {
 				defaultEffort = record.Capabilities.Reasoning.DefaultEffort
 			} else {
+				defaultEffort = efforts[0]
+			}
+		}
+		if !codexClientSupportsExtendedReasoning(clientVersion) {
+			filtered := efforts[:0]
+			for _, effort := range efforts {
+				if effort != "max" && effort != "ultra" {
+					filtered = append(filtered, effort)
+				}
+			}
+			efforts = filtered
+			if len(efforts) == 0 {
+				efforts = []string{"medium"}
+			}
+			if !containsString(efforts, defaultEffort) {
 				defaultEffort = efforts[0]
 			}
 		}
@@ -189,6 +206,62 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 		})
 	}
 	return CodexModelsManifest{Models: models}
+}
+
+func codexClientSupportsExtendedReasoning(clientVersion string) bool {
+	clientVersion = strings.TrimSpace(clientVersion)
+	if clientVersion == "" {
+		return true
+	}
+	comparison, valid := compareCodexClientVersions(clientVersion, "0.144.0")
+	return !valid || comparison >= 0
+}
+
+func compareCodexClientVersions(left, right string) (int, bool) {
+	parse := func(value string) ([]int64, bool) {
+		value = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(value, "v"), "V"))
+		if index := strings.IndexAny(value, "-+"); index >= 0 {
+			value = value[:index]
+		}
+		parts := strings.Split(value, ".")
+		values := make([]int64, 0, len(parts))
+		for _, part := range parts {
+			if strings.TrimSpace(part) == "" {
+				return nil, false
+			}
+			number, err := strconv.ParseInt(part, 10, 64)
+			if err != nil || number < 0 {
+				return nil, false
+			}
+			values = append(values, number)
+		}
+		return values, len(values) > 0
+	}
+	leftParts, leftOK := parse(left)
+	rightParts, rightOK := parse(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	length := len(leftParts)
+	if len(rightParts) > length {
+		length = len(rightParts)
+	}
+	for index := 0; index < length; index++ {
+		var leftValue, rightValue int64
+		if index < len(leftParts) {
+			leftValue = leftParts[index]
+		}
+		if index < len(rightParts) {
+			rightValue = rightParts[index]
+		}
+		if leftValue < rightValue {
+			return -1, true
+		}
+		if leftValue > rightValue {
+			return 1, true
+		}
+	}
+	return 0, true
 }
 
 func manifestContextWindow(value int) int {

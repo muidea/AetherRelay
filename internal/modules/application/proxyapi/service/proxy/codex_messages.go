@@ -31,7 +31,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	}
 	markConversionDegraded(round, append(degraded, ignored...))
 	sessionHash := codexSessionHash(r, model, normalizedBody)
-	normalized, _, err = ensureCodexPromptCacheKey(normalized, normalizedBody, sessionHash)
+	normalized, _, err = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 	if err != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())
 		return

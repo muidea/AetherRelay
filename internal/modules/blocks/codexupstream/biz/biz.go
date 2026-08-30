@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	basebiz "aetherrelay/internal/modules/base/biz"
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 	fhttp "github.com/bogdanfinn/fhttp"
 	wsclient "github.com/bogdanfinn/websocket"
 	"github.com/google/uuid"
@@ -121,9 +121,9 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	payload, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
+	payload, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation}, nil)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	payload, supported, err := nativeCompactResponse(payload)
@@ -171,14 +171,10 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex upstream is stopping"))
 		return
 	}
-	dialer := &wsclient.Dialer{HandshakeTimeout: 30 * time.Second, EnableCompression: true}
-	if rawProxy := strings.TrimSpace(cmd.Proxy); rawProxy != "" {
-		proxyURL, err := url.ParseRequestURI(rawProxy)
-		if err != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
-			result.Set(events.WSOpenResult{ErrorClass: events.ErrorProtocol}, nil)
-			return
-		}
-		dialer.Proxy = fhttp.ProxyURL(proxyURL)
+	dialer, err := newWebsocketDialer(cmd.Proxy)
+	if err != nil {
+		result.Set(events.WSOpenResult{ErrorClass: events.ErrorProtocol}, nil)
+		return
 	}
 	headers := fhttp.Header{}
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(cmd.AccessToken))
@@ -194,15 +190,32 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	conn, response, err := dialer.DialContext(ev.Context(), responsesWebsocketURL, headers)
 	if err != nil {
 		status := 0
+		var responseBody []byte
+		var observation events.RateLimitObservation
+		var retryAfter int
+		var safeError events.SafeError
+		var responseHeader []events.Header
 		if response != nil {
 			status = response.StatusCode
+			responseHeader = responseHeaders(response.Header)
+			responseBody, observation, retryAfter, safeError = readErrorObservationParts(response.Header, response.Body)
+			if response.Body != nil {
+				_ = response.Body.Close()
+			}
 		}
 		class := classifyTransport(err)
 		if status > 0 {
-			class = classifyStatus(status)
+			class = errorClassWithBody(status, responseBody, observation)
 		}
-		result.Set(events.WSOpenResult{HTTPStatus: status, ErrorClass: class}, nil)
+		result.Set(events.WSOpenResult{Headers: responseHeader, HTTPStatus: status, ErrorClass: class, RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
+	}
+	var responseHeader []events.Header
+	if response != nil {
+		responseHeader = responseHeaders(response.Header)
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
 	}
 	limit := cmd.MaxMessageBytes
 	if limit <= 0 || limit > 16<<20 {
@@ -227,7 +240,23 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket reader unavailable"))
 		return
 	}
-	result.Set(events.WSOpenResult{SessionID: sessionID}, nil)
+	result.Set(events.WSOpenResult{SessionID: sessionID, Headers: responseHeader}, nil)
+}
+
+func newWebsocketDialer(rawProxy string) (*wsclient.Dialer, error) {
+	dialer := &wsclient.Dialer{HandshakeTimeout: 30 * time.Second, EnableCompression: true}
+	if strings.TrimSpace(rawProxy) == "" {
+		return dialer, nil
+	}
+	proxyURL, err := accountproxy.ParseHTTPURL(rawProxy)
+	if err != nil {
+		return nil, err
+	}
+	dialer.Proxy = fhttp.ProxyURL(proxyURL)
+	if proxyURL.Scheme == "https" {
+		dialer.NetDialTLSContext = accountproxy.HTTPSProxyDialTLSContext(proxyURL, nil, dialer.HandshakeTimeout, nil)
+	}
+	return dialer, nil
 }
 
 func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
@@ -405,9 +434,9 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	completed, class, observation, err := completedResponse(response, cmd.MaxResponseBytes)
+	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation}, nil)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	result.Set(events.CompleteResult{Body: completed, Headers: responseHeaders(response.Header)}, nil)
@@ -1039,9 +1068,9 @@ func forceStream(body []byte) ([]byte, error) {
 	return json.Marshal(values)
 }
 
-func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.ErrorClass, events.RateLimitObservation, error) {
+func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.ErrorClass, events.RateLimitObservation, events.SafeError, error) {
 	if response == nil || response.Body == nil {
-		return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response body is unavailable")
+		return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response body is unavailable")
 	}
 	if maxBytes <= 0 {
 		maxBytes = 32 << 20
@@ -1049,18 +1078,18 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
 		payload, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 		if err != nil {
-			return nil, classifyTransport(err), events.RateLimitObservation{}, err
+			return nil, classifyTransport(err), events.RateLimitObservation{}, events.SafeError{}, err
 		}
 		if int64(len(payload)) > maxBytes {
-			return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
+			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
 		}
 		var object struct {
 			Object string `json:"object"`
 		}
 		if err := json.Unmarshal(payload, &object); err != nil || object.Object != "response" {
-			return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("invalid native Codex response object")
+			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("invalid native Codex response object")
 		}
-		return payload, "", events.RateLimitObservation{}, nil
+		return payload, "", events.RateLimitObservation{}, events.SafeError{}, nil
 	}
 	reader := bufio.NewReader(response.Body)
 	var outputText strings.Builder
@@ -1114,22 +1143,21 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
 								completed = responseWithCompactionItems(completed, compactionItems)
 								if responseObjectIsEmpty(completed) && !semanticEvidence {
-									return nil, events.ErrorUpstream, events.RateLimitObservation{}, fmt.Errorf("Codex upstream returned an empty response.completed")
+									return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.completed")
 								}
-								return completed, "", events.RateLimitObservation{}, nil
+								return completed, "", events.RateLimitObservation{}, events.SafeError{}, nil
 							}
 						case "response.incomplete":
 							if len(event.Response) > 0 {
-								return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, nil
+								return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, events.SafeError{}, nil
 							}
-							return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response.incomplete omitted response")
-						case "response.failed":
-							observation := rateLimitObservation(payload, time.Now().UTC())
-							class := events.ErrorUpstream
-							if observation.UsageLimited {
-								class = events.ErrorRateLimit
+							return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response.incomplete omitted response")
+						case "response.failed", "error":
+							class, observation, safeError := codexTerminalFailure(payload)
+							if class == "" {
+								class = events.ErrorUpstream
 							}
-							return nil, class, observation, fmt.Errorf("Codex response did not complete")
+							return nil, class, observation, safeError, fmt.Errorf("Codex response did not complete")
 						}
 					}
 				}
@@ -1137,9 +1165,9 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, events.ErrorProtocol, events.RateLimitObservation{}, fmt.Errorf("Codex response ended without response.completed")
+				return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response ended without response.completed")
 			}
-			return nil, classifyTransport(err), events.RateLimitObservation{}, err
+			return nil, classifyTransport(err), events.RateLimitObservation{}, events.SafeError{}, err
 		}
 	}
 }
@@ -1398,40 +1426,51 @@ func sseData(line []byte) []byte {
 }
 
 func websocketTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitObservation) {
+	class, observation, _ := codexTerminalFailure(payload)
+	return class, observation
+}
+
+func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitObservation, events.SafeError) {
 	var event struct {
 		Type  string `json:"type"`
 		Error struct {
-			Type string `json:"type"`
-			Code string `json:"code"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 		Response struct {
 			Error struct {
-				Type string `json:"type"`
-				Code string `json:"code"`
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
 			} `json:"error"`
 		} `json:"response"`
 	}
 	if json.Unmarshal(payload, &event) != nil || event.Type != "response.failed" && event.Type != "error" {
-		return "", events.RateLimitObservation{}
+		return "", events.RateLimitObservation{}, events.SafeError{}
 	}
-	errorType, errorCode := event.Error.Type, event.Error.Code
-	if errorType == "" && errorCode == "" {
-		errorType, errorCode = event.Response.Error.Type, event.Response.Error.Code
+	errorType, errorCode, errorMessage := event.Error.Type, event.Error.Code, event.Error.Message
+	if errorType == "" && errorCode == "" && errorMessage == "" {
+		errorType, errorCode, errorMessage = event.Response.Error.Type, event.Response.Error.Code, event.Response.Error.Message
 	}
 	observation := rateLimitObservation(payload, time.Now().UTC())
+	safeError := safeUpstreamError(payload)
 	if observation.UsageLimited {
-		return events.ErrorRateLimit, observation
+		return events.ErrorRateLimit, observation, safeError
 	}
 	combined := strings.ToLower(strings.TrimSpace(errorType + " " + errorCode))
+	message := strings.ToLower(strings.TrimSpace(errorMessage))
 	switch {
+	case strings.Contains(combined, "server_is_overloaded"), strings.Contains(combined, "slow_down"), strings.Contains(combined, "temporarily_unavailable"), strings.Contains(message, "at capacity"), strings.Contains(message, "temporarily overloaded"):
+		return events.ErrorUpstream, observation, safeError
 	case strings.Contains(combined, "authentication"), strings.Contains(combined, "unauthorized"), strings.Contains(combined, "invalid_api_key"):
-		return events.ErrorInvalidToken, observation
+		return events.ErrorInvalidToken, observation, safeError
 	case strings.Contains(combined, "rate_limit"):
-		return events.ErrorRateLimit, observation
-	case strings.Contains(combined, "invalid_request"), strings.Contains(combined, "bad_request"), strings.Contains(combined, "context_length"):
-		return events.ErrorInvalidRequest, observation
+		return events.ErrorRateLimit, observation, safeError
+	case strings.Contains(combined, "invalid_request"), strings.Contains(combined, "bad_request"), strings.Contains(combined, "context_length"), strings.Contains(combined, "content_policy"), strings.Contains(combined, "content_filter"):
+		return events.ErrorInvalidRequest, observation, safeError
 	default:
-		return events.ErrorUpstream, observation
+		return events.ErrorUpstream, observation, safeError
 	}
 }
 
@@ -1439,9 +1478,16 @@ func readErrorObservation(response *http.Response) ([]byte, events.RateLimitObse
 	if response == nil || response.Body == nil {
 		return nil, events.RateLimitObservation{}, 0, events.SafeError{}
 	}
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	return readErrorObservationParts(response.Header, response.Body)
+}
+
+func readErrorObservationParts(headers headerGetter, bodyReader io.Reader) ([]byte, events.RateLimitObservation, int, events.SafeError) {
+	if bodyReader == nil {
+		return nil, events.RateLimitObservation{}, 0, events.SafeError{}
+	}
+	body, _ := io.ReadAll(io.LimitReader(bodyReader, 64<<10))
 	observation := rateLimitObservation(body, time.Now().UTC())
-	return body, observation, maxRetryAfter(retryAfterSeconds(response.Header), retryAfterFromObservation(observation)), safeUpstreamError(body)
+	return body, observation, maxRetryAfter(retryAfterSeconds(headers), retryAfterFromObservation(observation)), safeUpstreamError(body)
 }
 
 func safeUpstreamError(body []byte) events.SafeError {
@@ -1452,16 +1498,28 @@ func safeUpstreamError(body []byte) events.SafeError {
 			Param   json.RawMessage `json:"param"`
 			Message string          `json:"message"`
 		} `json:"error"`
+		Response struct {
+			Error struct {
+				Type    string          `json:"type"`
+				Code    string          `json:"code"`
+				Param   json.RawMessage `json:"param"`
+				Message string          `json:"message"`
+			} `json:"error"`
+		} `json:"response"`
 	}
 	if json.Unmarshal(body, &payload) != nil {
 		return events.SafeError{}
 	}
-	param := strings.Trim(strings.TrimSpace(string(payload.Error.Param)), `"`)
+	errorValue := payload.Error
+	if errorValue.Type == "" && errorValue.Code == "" && errorValue.Message == "" && !rawPresent(errorValue.Param) {
+		errorValue = payload.Response.Error
+	}
+	param := strings.Trim(strings.TrimSpace(string(errorValue.Param)), `"`)
 	return events.SafeError{
-		Type:    safeErrorToken(payload.Error.Type, 64),
-		Code:    safeErrorToken(payload.Error.Code, 96),
+		Type:    safeErrorToken(errorValue.Type, 64),
+		Code:    safeErrorToken(errorValue.Code, 96),
 		Param:   safeErrorToken(param, 256),
-		Message: safeErrorText(payload.Error.Message, 512),
+		Message: safeErrorText(errorValue.Message, 512),
 	}
 }
 
@@ -1641,7 +1699,10 @@ func compactResponseHeaders(headers headerGetter) []events.Header {
 	return append(out, events.Header{Name: "Content-Type", Value: "application/json"})
 }
 
-func retryAfterSeconds(headers http.Header) int {
+func retryAfterSeconds(headers headerGetter) int {
+	if headers == nil {
+		return 0
+	}
 	value := strings.TrimSpace(headers.Get("Retry-After"))
 	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 && seconds <= 3600 {
 		return seconds
@@ -1677,14 +1738,9 @@ func classifyTransport(err error) events.ErrorClass {
 	return events.ErrorNetwork
 }
 func newHTTPClient(rawProxy string) (*http.Client, error) {
-	base, _ := http.DefaultTransport.(*http.Transport)
-	transport := base.Clone()
-	if rawProxy = strings.TrimSpace(rawProxy); rawProxy != "" {
-		proxyURL, err := url.ParseRequestURI(rawProxy)
-		if err != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
-			return nil, fmt.Errorf("invalid account proxy URL")
-		}
-		transport.Proxy = http.ProxyURL(proxyURL)
+	transport, err := accountproxy.NewHTTPTransport(rawProxy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid account proxy URL")
 	}
 	return &http.Client{Transport: transport}, nil
 }
