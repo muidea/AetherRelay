@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
 )
@@ -32,6 +34,7 @@ type codexNormalizationOptions struct {
 	allowPreviousID     bool
 	allowIncrementalOut bool
 	responsesLite       bool
+	allowBootstrap      bool
 }
 
 type codexRequestFeatures struct {
@@ -70,7 +73,7 @@ var codexDropCompatibleFields = []string{
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
-// CP-REQ-001..024 before an account is acquired.
+// CP-REQ-001..031 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
 	return normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact})
 }
@@ -81,10 +84,11 @@ func normalizeCodexHTTPRequest(raw []byte, compact bool, headers http.Header) ([
 		return nil, nil, nil, codexRequestFeatures{}, err
 	}
 	features.ResponsesLite = features.ResponsesLite || rawCodexResponsesLite(raw)
-	if compact || rawCodexNativeCompactionV2(raw) {
+	nativeCompaction := rawCodexNativeCompactionV2(raw)
+	if compact || nativeCompaction {
 		features.BetaFeatures = ensureCodexBetaFeature(features.BetaFeatures, codexRemoteCompactionV2Feature)
 	}
-	normalized, body, ignored, err := normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact, responsesLite: features.ResponsesLite})
+	normalized, body, ignored, err := normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact, responsesLite: features.ResponsesLite, allowBootstrap: !compact && !nativeCompaction})
 	if err != nil {
 		return nil, nil, nil, codexRequestFeatures{}, err
 	}
@@ -198,6 +202,11 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 	if err := decodeCodexJSON(raw, &body); err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid JSON request body")
 	}
+	if options.allowBootstrap {
+		if !normalizeCodexCallOutputBootstrap(raw, body, isCodexAutomationBootstrap) {
+			normalizeCodexCallOutputBootstrap(raw, body, isCodexDelegationBootstrap)
+		}
+	}
 	model, _ := body["model"].(string)
 	if trimmed := strings.TrimSpace(model); trimmed != "" {
 		body["model"] = trimmed
@@ -288,6 +297,284 @@ func decodeCodexJSON(raw []byte, target any) error {
 		return fmt.Errorf("multiple JSON values are not supported")
 	}
 	return nil
+}
+
+// normalizeCodexCallOutputBootstrap implements CP-REQ-031 before the ordinary
+// HTTP tool-history validator. It accepts only an isolated, fully recognized
+// Codex bootstrap family; every ambiguous shape remains an orphan output and
+// is rejected by validateCodexInput.
+func normalizeCodexCallOutputBootstrap(raw []byte, body map[string]any, candidate func(map[string]any) bool) bool {
+	if candidate == nil || !hasUniqueCodexJSONMembers(raw) {
+		return false
+	}
+	if previous, exists := body["previous_response_id"]; exists {
+		value, ok := previous.(string)
+		if !ok || strings.TrimSpace(value) != "" {
+			return false
+		}
+	}
+	input, ok := body["input"].([]any)
+	if !ok {
+		return false
+	}
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := item["type"].(string)
+		if typ == "item_reference" || strings.HasSuffix(typ, "_call") {
+			return false
+		}
+		if isCodexCallOutputType(typ) {
+			callIDValue, exists := item["call_id"]
+			callID, isString := callIDValue.(string)
+			if exists && (!isString || strings.TrimSpace(callID) != "") {
+				return false
+			}
+			if !candidate(item) {
+				return false
+			}
+		}
+	}
+	changed := false
+	for index, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok || !candidate(item) {
+			continue
+		}
+		output, ok := item["output"].(string)
+		if !ok {
+			continue
+		}
+		input[index] = map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{map[string]any{
+				"type": "input_text",
+				"text": output,
+			}},
+		}
+		changed = true
+	}
+	return changed
+}
+
+func isCodexCallOutputType(typ string) bool {
+	return strings.HasSuffix(typ, "_call_output") || typ == "tool_search_output"
+}
+
+func isCodexDelegationBootstrap(item map[string]any) bool {
+	if codexStringField(item, "type") != "function_call_output" {
+		return false
+	}
+	namespace := codexStringField(item, "namespace")
+	name := codexStringField(item, "name")
+	if (namespace != "codex_app" && namespace != "codex_tui") || (name != "create_thread" && name != "send_message_to_thread") {
+		return false
+	}
+	output, ok := item["output"].(string)
+	return ok && validCodexDelegationEnvelope(output)
+}
+
+func isCodexAutomationBootstrap(item map[string]any) bool {
+	if codexStringField(item, "type") != "function_call_output" || codexStringField(item, "namespace") != "codex_app" || codexStringField(item, "name") != "automation_update" {
+		return false
+	}
+	output, ok := item["output"].(string)
+	return ok && validCodexAutomationBootstrap(output)
+}
+
+func codexStringField(item map[string]any, key string) string {
+	value, _ := item[key].(string)
+	return value
+}
+
+func validCodexAutomationBootstrap(value string) bool {
+	normalized := strings.ReplaceAll(value, "\r\n", "\n")
+	if strings.ContainsRune(normalized, '\r') {
+		return false
+	}
+	lines := strings.Split(normalized, "\n")
+	if len(lines) < 6 {
+		return false
+	}
+	if _, ok := codexAutomationHeaderValue(lines[0], "Automation: "); !ok {
+		return false
+	}
+	automationID, ok := codexAutomationHeaderValue(lines[1], "Automation ID: ")
+	if !ok || !validCodexAutomationID(automationID) {
+		return false
+	}
+	if lines[2] != "Automation memory: $CODEX_HOME/automations/"+automationID+"/memory.md" {
+		return false
+	}
+	lastRun, ok := codexAutomationHeaderValue(lines[3], "Last run: ")
+	if !ok || !validCodexAutomationLastRun(lastRun) || lines[4] != "" {
+		return false
+	}
+	return strings.TrimSpace(strings.Join(lines[5:], "\n")) != ""
+}
+
+func codexAutomationHeaderValue(line, prefix string) (string, bool) {
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	value := strings.TrimPrefix(line, prefix)
+	return value, value != "" && strings.TrimSpace(value) == value
+}
+
+func validCodexAutomationID(value string) bool {
+	if len(value) == 0 || len(value) > 128 || value == "." || value == ".." {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validCodexAutomationLastRun(value string) bool {
+	if value == "never" {
+		return true
+	}
+	separator := strings.LastIndex(value, " (")
+	if separator <= 0 || !strings.HasSuffix(value, ")") {
+		return false
+	}
+	runAt, err := time.Parse(time.RFC3339Nano, value[:separator])
+	if err != nil {
+		return false
+	}
+	epochMillis, err := strconv.ParseInt(value[separator+2:len(value)-1], 10, 64)
+	return err == nil && runAt.UnixMilli() == epochMillis
+}
+
+func validCodexDelegationEnvelope(value string) bool {
+	decoder := xml.NewDecoder(strings.NewReader(value))
+	var rootSeen, sourceSeen, inputSeen bool
+	var childName string
+	var childText bytes.Buffer
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return rootSeen && depth == 0 && sourceSeen && inputSeen
+		}
+		if err != nil {
+			return false
+		}
+		switch current := token.(type) {
+		case xml.StartElement:
+			depth++
+			if current.Name.Space != "" || len(current.Attr) != 0 || depth == 1 && current.Name.Local != "codex_delegation" || depth > 2 {
+				return false
+			}
+			if depth == 1 {
+				if rootSeen {
+					return false
+				}
+				rootSeen = true
+				continue
+			}
+			if current.Name.Local != "source_thread_id" && current.Name.Local != "input" {
+				return false
+			}
+			childName = current.Name.Local
+			childText.Reset()
+		case xml.EndElement:
+			if current.Name.Space != "" {
+				return false
+			}
+			if depth == 2 {
+				if current.Name.Local != childName || strings.TrimSpace(childText.String()) == "" {
+					return false
+				}
+				if childName == "source_thread_id" {
+					if sourceSeen {
+						return false
+					}
+					sourceSeen = true
+				} else {
+					if inputSeen {
+						return false
+					}
+					inputSeen = true
+				}
+				childName = ""
+			}
+			depth--
+			if depth < 0 {
+				return false
+			}
+		case xml.CharData:
+			if depth == 2 {
+				_, _ = childText.Write(current)
+			} else if len(bytes.TrimSpace(current)) != 0 {
+				return false
+			}
+		case xml.Comment, xml.ProcInst, xml.Directive:
+			return false
+		}
+	}
+}
+
+func hasUniqueCodexJSONMembers(raw []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if !consumeUniqueCodexJSONValue(decoder) {
+		return false
+	}
+	_, err := decoder.Token()
+	return err == io.EOF
+}
+
+func consumeUniqueCodexJSONValue(decoder *json.Decoder) bool {
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return true
+	}
+	switch delimiter {
+	case '{':
+		members := map[string]struct{}{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return false
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return false
+			}
+			if _, duplicate := members[key]; duplicate {
+				return false
+			}
+			members[key] = struct{}{}
+			if !consumeUniqueCodexJSONValue(decoder) {
+				return false
+			}
+		}
+		end, err := decoder.Token()
+		return err == nil && end == json.Delim('}')
+	case '[':
+		for decoder.More() {
+			if !consumeUniqueCodexJSONValue(decoder) {
+				return false
+			}
+		}
+		end, err := decoder.Token()
+		return err == nil && end == json.Delim(']')
+	default:
+		return false
+	}
 }
 
 // stripCodexInputPromptCacheBreakpoints removes the per-content cache hint

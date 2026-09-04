@@ -2,6 +2,7 @@
 package store
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -829,12 +830,39 @@ func (s *Store) RefreshDue(now time.Time, lead time.Duration) []string {
 		if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.RefreshToken) == "" {
 			continue
 		}
-		expiresAt, ok := parseExpiry(item.Expired)
+		expiresAt, ok := accessTokenExpiry(item.AccessToken)
+		if !ok {
+			expiresAt, ok = parseExpiry(item.Expired)
+		}
 		if ok && !expiresAt.After(now.Add(lead)) {
 			due = append(due, item.ID)
 		}
 	}
 	return due
+}
+
+// accessTokenExpiry extracts an unverified JWT exp claim for refresh
+// scheduling only. Upstream authentication remains authoritative.
+func accessTokenExpiry(token string) (time.Time, bool) {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) != 3 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
+	if err != nil {
+		return time.Time{}, false
+	}
+	var claims struct {
+		ExpiresAt json.Number `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.ExpiresAt == "" {
+		return time.Time{}, false
+	}
+	seconds, err := strconv.ParseInt(claims.ExpiresAt.String(), 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(seconds, 0).UTC(), true
 }
 
 func cooling(item *account, model string, now time.Time) bool {

@@ -90,8 +90,8 @@ type CodexModelManifestRecord struct {
 	Slug                     string                      `json:"slug"`
 	DisplayName              string                      `json:"display_name"`
 	Description              string                      `json:"description"`
-	DefaultReasoningLevel    string                      `json:"default_reasoning_level"`
-	SupportedReasoningLevels []CodexReasoningLevelRecord `json:"supported_reasoning_levels"`
+	DefaultReasoningLevel    string                      `json:"default_reasoning_level,omitempty"`
+	SupportedReasoningLevels []CodexReasoningLevelRecord `json:"supported_reasoning_levels,omitempty"`
 	InputModalities          []string                    `json:"input_modalities"`
 	UseResponsesLite         bool                        `json:"use_responses_lite"`
 	PreferWebsockets         bool                        `json:"prefer_websockets"`
@@ -180,9 +180,8 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			}
 			efforts = filtered
 			if len(efforts) == 0 {
-				efforts = []string{"medium"}
-			}
-			if !containsString(efforts, defaultEffort) {
+				defaultEffort = ""
+			} else if !containsString(efforts, defaultEffort) {
 				defaultEffort = efforts[0]
 			}
 		}

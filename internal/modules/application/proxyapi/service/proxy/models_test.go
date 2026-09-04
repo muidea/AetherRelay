@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -91,6 +93,31 @@ func TestCodexModelsManifestFiltersExtendedReasoningForLegacyClients(t *testing.
 		if len(modern.Models) != 1 || !reflect.DeepEqual(modern.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}, {Effort: "max"}, {Effort: "ultra"}}) {
 			t.Fatalf("modern version=%q manifest=%#v", version, modern.Models)
 		}
+	}
+}
+
+// CP-CAP-007: legacy manifests must omit reasoning metadata instead of
+// advertising a level that the upstream model does not support.
+func TestCodexModelsManifestOmitsFullyFilteredLegacyReasoning(t *testing.T) {
+	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
+		"gpt-codex": {
+			ID: "gpt-codex", ReasoningDeclared: true, ReasoningSupported: true,
+			ReasoningDefaultEffort: "ultra", ReasoningEfforts: []string{"max", "ultra"},
+		},
+	}}
+	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
+		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
+	})
+	manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.143.9")
+	if len(manifest.Models) != 1 || manifest.Models[0].DefaultReasoningLevel != "" || len(manifest.Models[0].SupportedReasoningLevels) != 0 {
+		t.Fatalf("legacy manifest=%#v", manifest.Models)
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "default_reasoning_level") || strings.Contains(string(encoded), "supported_reasoning_levels") {
+		t.Fatalf("CP-CAP-007 filtered reasoning fields must be absent: %s", encoded)
 	}
 }
 

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -270,6 +272,37 @@ func TestCooldownAndRefreshDue(t *testing.T) {
 	}
 	if len(account.Cooldowns) != 1 {
 		t.Fatal("read-only cooldown check must not mutate persisted account state")
+	}
+}
+
+// CP-FAIL-016: JWT exp is an unverified refresh-scheduling hint. It takes
+// precedence over explicit expiry when valid and falls back safely otherwise.
+func TestRefreshDueUsesAccessTokenJWTExpiration(t *testing.T) {
+	store := openTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	jwt := func(exp int64) string {
+		header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+		claims := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, exp)))
+		return header + "." + claims + ".signature"
+	}
+	dueJWT := jwt(now.Add(time.Minute).Unix())
+	futureJWT := jwt(now.Add(time.Hour).Unix())
+	invalidJWT := "header.not-base64.signature"
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: dueJWT, RefreshToken: "refresh-jwt-due"},
+		{AccessToken: futureJWT, RefreshToken: "refresh-jwt-future", Expired: now.Add(time.Minute).Format(time.RFC3339)},
+		{AccessToken: invalidJWT, RefreshToken: "refresh-explicit-fallback", Expired: now.Add(time.Minute).Format(time.RFC3339)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dueIDs := store.RefreshDue(now, 5*time.Minute)
+	due := make(map[string]bool, len(dueIDs))
+	for _, id := range dueIDs {
+		due[store.items[id].AccessToken] = true
+	}
+	if !due[dueJWT] || due[futureJWT] || !due[invalidJWT] {
+		t.Fatalf("CP-FAIL-016 due=%v", due)
 	}
 }
 

@@ -331,6 +331,105 @@ func TestCodexRequestRejectsUnsupportedStateAndCapabilityBeforeUpstream(t *testi
 	}
 }
 
+// CP-REQ-021/031: only exact, isolated Codex initial bootstraps may be
+// downgraded from an orphan call output to an ordinary user message.
+func TestCodexHTTPRequestNormalizesKnownCallOutputBootstraps(t *testing.T) {
+	delegation := `<codex_delegation><source_thread_id>thread-1</source_thread_id><input>do the work</input></codex_delegation>`
+	automation := "Automation: Scheduled project review\n" +
+		"Automation ID: wiki-maintenance\n" +
+		"Automation memory: $CODEX_HOME/automations/wiki-maintenance/memory.md\n" +
+		"Last run: 2026-09-01T02:06:34.536Z (1788228394536)\n\n" +
+		"Review the project and report important changes."
+	for _, testCase := range []struct {
+		name      string
+		namespace string
+		tool      string
+		output    string
+	}{
+		{name: "delegation", namespace: "codex_tui", tool: "send_message_to_thread", output: delegation},
+		{name: "automation", namespace: "codex_app", tool: "automation_update", output: automation},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			output, err := json.Marshal(testCase.output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte(fmt.Sprintf(`{"model":"gpt-test","sequence":9007199254740993,"input":[{"type":"message","role":"user","content":"before"},{"type":"function_call_output","namespace":%q,"name":%q,"call_id":"  ","output":%s}]}`, testCase.namespace, testCase.tool, output))
+			normalized, body, _, _, err := normalizeCodexHTTPRequest(raw, false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := body["input"].([]any)
+			message := items[1].(map[string]any)
+			content := message["content"].([]any)[0].(map[string]any)
+			if message["type"] != "message" || message["role"] != "user" || content["type"] != "input_text" || content["text"] != testCase.output {
+				t.Fatalf("CP-REQ-031 message=%#v", message)
+			}
+			if bytes.Contains(normalized, []byte("call_id")) || !bytes.Contains(normalized, []byte(`"sequence":9007199254740993`)) {
+				t.Fatalf("CP-REQ-030/031 normalized=%s", normalized)
+			}
+		})
+	}
+}
+
+func TestCodexHTTPBootstrapIsNormalizedBeforeExecution(t *testing.T) {
+	var received codexresponses.Request
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+		received = request
+		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_bootstrap"}`)}, nil
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":[{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":"<codex_delegation><source_thread_id>thread-1</source_thread_id><input>continue</input></codex_delegation>"}]}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(received.Body, []byte(`"type":"message"`)) || bytes.Contains(received.Body, []byte("function_call_output")) {
+		t.Fatalf("CP-REQ-022/031 status=%d upstream=%s body=%s", response.Code, received.Body, response.Body.String())
+	}
+}
+
+func TestCodexHTTPRequestRejectsAmbiguousCallOutputBootstraps(t *testing.T) {
+	delegation := `<codex_delegation><source_thread_id>thread-1</source_thread_id><input>do the work</input></codex_delegation>`
+	automation := "Automation: Scheduled project review\nAutomation ID: wiki\nAutomation memory: $CODEX_HOME/automations/wiki/memory.md\nLast run: never\n\nReview the project."
+	encode := func(value string) string {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	delegationItem := `{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":` + encode(delegation) + `}`
+	automationItem := `{"type":"function_call_output","namespace":"codex_app","name":"automation_update","output":` + encode(automation) + `}`
+	tests := []struct {
+		name    string
+		body    string
+		compact bool
+	}{
+		{name: "nonempty previous response", body: `{"model":"gpt-test","previous_response_id":"resp-1","input":[` + delegationItem + `]}`},
+		{name: "call anchor", body: `{"model":"gpt-test","input":[{"type":"function_call","call_id":"call-1"},` + delegationItem + `]}`},
+		{name: "mixed bootstrap families", body: `{"model":"gpt-test","input":[` + delegationItem + `,` + automationItem + `]}`},
+		{name: "duplicate discriminator", body: `{"model":"gpt-test","input":[{"type":"message","type":"function_call_output","namespace":"codex_app","name":"create_thread","output":` + encode(delegation) + `}]}`},
+		{name: "incomplete delegation", body: `{"model":"gpt-test","input":[{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":"<codex_delegation><input>work</input></codex_delegation>"}]}`},
+		{name: "unsafe automation id", body: `{"model":"gpt-test","input":[{"type":"function_call_output","namespace":"codex_app","name":"automation_update","output":` + encode(strings.Replace(automation, "wiki", "../wiki", 1)) + `}]}`},
+		{name: "compact", body: `{"model":"gpt-test","input":[` + delegationItem + `]}`, compact: true},
+		{name: "native v2 compact", body: `{"model":"gpt-test","stream":true,"input":[{"type":"compaction_trigger"},` + delegationItem + `]}`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, _, _, _, err := normalizeCodexHTTPRequest([]byte(testCase.body), testCase.compact, nil); err == nil {
+				t.Fatal("CP-REQ-021/031 ambiguous bootstrap was accepted")
+			}
+		})
+	}
+	initialBody := []byte(`{"model":"gpt-test","input":[` + delegationItem + `]}`)
+	if _, _, _, err := normalizeCodexRequest(initialBody, false); err == nil {
+		t.Fatal("CP-REQ-031 adapter normalization accepted a Codex bootstrap")
+	}
+	websocketBody := []byte(`{"type":"response.create","model":"gpt-test","input":[` + delegationItem + `]}`)
+	if _, _, _, err := normalizeCodexWebsocketCreate(websocketBody, "", nil, codexRequestFeatures{}); err == nil {
+		t.Fatal("CP-REQ-031 websocket normalization accepted a Codex bootstrap")
+	}
+}
+
 func TestCodexRequestSupportsNativeToolAndImageProtocol(t *testing.T) {
 	raw := []byte(`{"model":"gpt-test","parallel_tool_calls":true,"client_metadata":{"x-codex-installation-id":"private-installation","x-codex-turn-metadata":"{\"turn_id\":\"private-turn\"}"},"tools":[{"type":"custom","name":"exec","description":"execute"},{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}],"input":[{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]},{"type":"custom_tool_call","call_id":"call_custom_1","name":"exec","input":"pwd","namespace":"tools"},{"type":"custom_tool_call_output","call_id":"call_custom_1","output":"/tmp"}]}`)
 	normalized, body, ignored, err := normalizeCodexRequest(raw, false)
