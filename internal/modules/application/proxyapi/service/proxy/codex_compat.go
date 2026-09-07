@@ -74,7 +74,7 @@ var codexDropCompatibleFields = []string{
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
-// CP-REQ-001..032 before an account is acquired.
+// CP-REQ-001..034 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
 	return normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact})
 }
@@ -810,7 +810,7 @@ func normalizeCodexResponsesLite(body map[string]any) error {
 		}
 		typ, _ := tool["type"].(string)
 		switch strings.TrimSpace(typ) {
-		case "function", "custom", "tool_search":
+		case "function", "custom", "tool_search", "web_search":
 			top = append(top, raw)
 		case "namespace":
 			moved = append(moved, raw)
@@ -971,14 +971,21 @@ func validateCodexRequest(body map[string]any, options codexNormalizationOptions
 			delete(body, "parallel_tool_calls")
 		}
 	}
-	if err := validateCodexTools(body["tools"], options.responsesLite); err != nil {
+	if err := validateCodexTools(body["tools"]); err != nil {
+		return err
+	}
+	if err := validateCodexWebSearchChoice(body["tool_choice"], body["tools"]); err != nil {
 		return err
 	}
 	previous, _ := body["previous_response_id"].(string)
 	return validateCodexInput(body["input"], options.allowIncrementalOut, options.allowHistoricalAnchors, options.allowHistoricalAnchors && strings.TrimSpace(previous) != "")
 }
 
-func validateCodexTools(value any, allowToolSearch ...bool) error {
+func validateCodexTools(value any) error {
+	return validateCodexToolList(value, true)
+}
+
+func validateCodexToolList(value any, allowWebSearch bool) error {
 	if value == nil {
 		return nil
 	}
@@ -1004,12 +1011,19 @@ func validateCodexTools(value any, allowToolSearch ...bool) error {
 			if _, ok := tool["tools"].([]any); !ok {
 				return fmt.Errorf("namespace tool %q tools must be an array", tool["name"])
 			}
-			if err := validateCodexTools(tool["tools"], allowToolSearch...); err != nil {
+			if err := validateCodexToolList(tool["tools"], false); err != nil {
 				return fmt.Errorf("namespace tool %q: %w", tool["name"], err)
 			}
 		case "tool_search":
-			if len(allowToolSearch) == 0 || !allowToolSearch[0] {
-				return fmt.Errorf("tool type %q is not supported by the Codex proxy", typ)
+			if err := validateCodexToolSearch(tool); err != nil {
+				return err
+			}
+		case "web_search":
+			if !allowWebSearch {
+				return fmt.Errorf("web_search must be declared in top-level tools")
+			}
+			if err := validateCodexWebSearchTool(tool); err != nil {
+				return err
 			}
 		default:
 			return fmt.Errorf("tool type %q is not supported by the Codex proxy", typ)
@@ -1103,7 +1117,7 @@ func validateCodexInput(value any, allowIncrementalOutputs bool, allowHistorical
 				return fmt.Errorf("%s references an unknown call_id", typ)
 			}
 		case "additional_tools":
-			if err := validateCodexTools(item["tools"], true); err != nil {
+			if err := validateCodexToolList(item["tools"], false); err != nil {
 				return fmt.Errorf("additional_tools: %w", err)
 			}
 		}

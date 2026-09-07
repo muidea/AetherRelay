@@ -1105,6 +1105,8 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 					if json.Unmarshal(payload, &event) == nil {
 						semanticEvidence = semanticEvidence || rawPresent(event.Usage) || rawPresent(event.Error)
 						switch event.Type {
+						case "response.web_search_call.searching", "response.web_search_call.completed":
+							semanticEvidence = true
 						case "response.output_text.delta":
 							outputText.WriteString(event.Delta)
 							semanticEvidence = semanticEvidence || event.Delta != ""
@@ -1127,6 +1129,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 						case "response.completed":
 							if len(event.Response) > 0 {
 								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
+								completed = responseWithWebSearchItems(completed, outputItems)
 								completed = responseWithCompactionItems(completed, compactionItems)
 								if responseObjectIsEmpty(completed) && !semanticEvidence {
 									return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.completed")
@@ -1135,7 +1138,8 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 							}
 						case "response.incomplete":
 							if len(event.Response) > 0 {
-								return responseWithOutputItems(event.Response, outputItems, outputText.String()), "", events.RateLimitObservation{}, events.SafeError{}, nil
+								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
+								return responseWithWebSearchItems(completed, outputItems), "", events.RateLimitObservation{}, events.SafeError{}, nil
 							}
 							return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response.incomplete omitted response")
 						case "response.failed", "error":
@@ -1266,6 +1270,9 @@ func codexItemHasOutput(raw json.RawMessage) bool {
 		return false
 	}
 	var item struct {
+		Type      string            `json:"type"`
+		Status    string            `json:"status"`
+		Action    json.RawMessage   `json:"action"`
 		Text      json.RawMessage   `json:"text"`
 		Arguments json.RawMessage   `json:"arguments"`
 		Input     json.RawMessage   `json:"input"`
@@ -1275,6 +1282,17 @@ func codexItemHasOutput(raw json.RawMessage) bool {
 	}
 	if json.Unmarshal(raw, &item) != nil {
 		return false
+	}
+	if item.Type == "web_search_call" {
+		var action struct {
+			Query   string            `json:"query"`
+			Queries []string          `json:"queries"`
+			URL     string            `json:"url"`
+			Pattern string            `json:"pattern"`
+			Sources []json.RawMessage `json:"sources"`
+		}
+		_ = json.Unmarshal(item.Action, &action)
+		return item.Status == "completed" || action.Query != "" || strings.Join(action.Queries, "") != "" || action.URL != "" || action.Pattern != "" || len(action.Sources) > 0
 	}
 	return rawNonEmptyValue(item.Text) || rawNonEmptyValue(item.Arguments) || rawNonEmptyValue(item.Input) || rawNonEmptyValue(item.Output) || rawNonEmptyValue(item.Result) || len(item.Content) > 0
 }
@@ -1297,6 +1315,10 @@ func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, empty
 		return false, false
 	}
 	switch event.Type {
+	case "response.web_search_call.searching", "response.web_search_call.completed":
+		// Search execution is observable output, even before an answer delta.
+		// Once delivered it must prevent account failover/replay.
+		return true, false
 	case "response.completed", "response.done":
 		if semanticOutputSeen {
 			return true, false

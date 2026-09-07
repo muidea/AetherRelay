@@ -185,59 +185,69 @@ func TestCodexWebsocketLaterTurnRateLimitMigratesWithFullReplay(t *testing.T) {
 
 // CP-WS-012: any downstream business output permanently closes migration.
 func TestCodexWebsocketDoesNotMigrateAfterDownstreamOutput(t *testing.T) {
-	var mu sync.Mutex
-	openCount, pullCount := 0, 0
-	executor := codexResponsesExecutorStub{
-		wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			openCount++
-			return codexresponses.WebsocketOpenResult{SessionID: "session"}, nil
-		},
-		wsPullUpdate: func(context.Context, string) (codexresponses.WebsocketUpdate, error) {
-			mu.Lock()
-			pullCount++
-			pull := pullCount
-			mu.Unlock()
-			switch pull {
-			case 1:
-				return codexresponses.WebsocketUpdate{Payload: []byte(`{"type":"response.completed","response":{"id":"resp_first","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`)}, nil
-			case 2:
-				return codexresponses.WebsocketUpdate{Payload: []byte(`{"type":"response.output_text.delta","delta":"partial"}`)}, nil
-			default:
-				return codexresponses.WebsocketUpdate{Payload: []byte(`{"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"limited"}}}`), Failure: codexresponses.NewFailure(codexresponses.KindRateLimit, 60, nil)}, nil
+	for _, output := range []string{
+		`{"type":"response.output_text.delta","delta":"partial"}`,
+		`{"type":"response.web_search_call.searching","item_id":"ws_1"}`,
+		`{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_1","status":"completed"}}`,
+	} {
+		t.Run(output, func(t *testing.T) {
+			var mu sync.Mutex
+			openCount, pullCount := 0, 0
+			executor := codexResponsesExecutorStub{
+				wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					openCount++
+					return codexresponses.WebsocketOpenResult{SessionID: "session"}, nil
+				},
+				wsPullUpdate: func(context.Context, string) (codexresponses.WebsocketUpdate, error) {
+					mu.Lock()
+					pullCount++
+					pull := pullCount
+					mu.Unlock()
+					switch pull {
+					case 1:
+						return codexresponses.WebsocketUpdate{Payload: []byte(`{"type":"response.completed","response":{"id":"resp_first","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`)}, nil
+					case 2:
+						return codexresponses.WebsocketUpdate{Payload: []byte(output)}, nil
+					default:
+						return codexresponses.WebsocketUpdate{Payload: []byte(`{"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"limited"}}}`), Failure: codexresponses.NewFailure(codexresponses.KindRateLimit, 60, nil)}, nil
+					}
+				},
 			}
-		},
-	}
-	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", http.Header{"Authorization": []string{"Bearer test-client-key"}})
-	if err != nil {
-		t.Fatalf("handshake response=%v err=%v", response, err)
-	}
-	defer conn.Close()
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"gpt-5.2-codex","input":"first"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := conn.ReadMessage(); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","previous_response_id":"resp_first","input":"second"}`)); err != nil {
-		t.Fatal(err)
-	}
-	_, delta, err := conn.ReadMessage()
-	if err != nil || !bytes.Contains(delta, []byte("partial")) {
-		t.Fatalf("delta=%s err=%v", delta, err)
-	}
-	_, failed, err := conn.ReadMessage()
-	if err != nil || !bytes.Contains(failed, []byte(`"type":"response.failed"`)) {
-		t.Fatalf("failed=%s err=%v", failed, err)
-	}
-	mu.Lock()
-	gotOpenCount := openCount
-	mu.Unlock()
-	if gotOpenCount != 1 {
-		t.Fatalf("open count=%d, want no migration after downstream output", gotOpenCount)
+			handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", http.Header{"Authorization": []string{"Bearer test-client-key"}})
+			if err != nil {
+				t.Fatalf("handshake response=%v err=%v", response, err)
+			}
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"gpt-5.2-codex","input":"first"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","previous_response_id":"resp_first","input":"second"}`)); err != nil {
+				t.Fatal(err)
+			}
+			_, delta, err := conn.ReadMessage()
+			if err != nil || !bytes.Equal(delta, []byte(output)) {
+				t.Fatalf("delta=%s err=%v", delta, err)
+			}
+			_, failed, err := conn.ReadMessage()
+			if err != nil || !bytes.Contains(failed, []byte(`"type":"response.failed"`)) {
+				t.Fatalf("failed=%s err=%v", failed, err)
+			}
+			mu.Lock()
+			gotOpenCount := openCount
+			mu.Unlock()
+			if gotOpenCount != 1 {
+				t.Fatalf("open count=%d, want no migration after downstream output", gotOpenCount)
+			}
+
+		})
 	}
 }

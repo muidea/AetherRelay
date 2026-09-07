@@ -83,6 +83,18 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 
 ## Codex OAuth 用量与账号池
 
+### Codex 原生搜索工具
+
+标准 Responses HTTP/SSE、WebSocket 和 Responses Lite 接受顶层 `tools: [{"type":"web_search"}]`。它由 Codex 上游执行，与本地 ChatGPT Web `/v1/search` 无关；代理不自动注入搜索工具、不删除工具绕过错误、不自动替换模型。Lite 中搜索工具留在顶层，namespace 仍按原规则迁移到 `input.additional_tools`。
+
+`external_web_access`（包括 `false`）、`search_context_size`、`filters`、`user_location` 及 `include` 来源选项保持原值；已知选项做基本类型校验，未验证扩展交给上游裁决。当前不提供 preview 工具别名兼容，也不把标准工具降级成 preview，以免缓存搜索限制失效。搜索调用、来源引用及多轮历史保留；搜索进度/结果已交付后禁止重放，必须收到完整 Responses 终态才能按正常完成处理。
+
+代理兼容不代表每个 OAuth 账号/模型都具备搜索权限。上线验收应分别用普通 Responses 和 Lite 发起最小请求，覆盖“携带搜索工具但无需搜索的问答”、实际搜索、`external_web_access=false` 和历史续接，检查完整终态、来源引用及 usage。离线测试不访问真实账号，发布前真实 smoke 需单独执行。工具错误与 `model_not_found`、compaction 模型选择问题分别排查。
+
+`tool_search` 是工具发现，不是网页搜索，也不是 Lite 专属功能。普通 Responses、WS 和 Lite 均保留其配置；`execution=client` 时由客户端执行发现并返回配对的 `tool_search_output`，代理不代为执行、不仅凭该工具自动开启 Lite。两种搜索工具可同时声明，普通问答不要求一定调用它们。缺少 Lite 标记导致的本地 `tool_search` 400 与上游模型权限 404 是两类独立问题。
+
+### 账号池与用量
+
 进程始终注入只读内建 Provider `codexoauth`。它与 `chatgptweb` 是两个独立账号域：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
 
 | 路径 | `provider` | `api_key_id` | token |

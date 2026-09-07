@@ -820,9 +820,9 @@ func TestNormalizeCodexHTTPRejectsOversizedBetaProfile(t *testing.T) {
 	}
 }
 
-func TestNormalizeCodexRequestRejectsToolSearchOutsideLite(t *testing.T) {
-	if _, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","tools":[{"type":"tool_search"}],"input":"hello"}`), false); err == nil {
-		t.Fatal("ordinary Responses accepted Lite-only tool_search")
+func TestNormalizeCodexRequestAcceptsToolSearchOutsideLite(t *testing.T) {
+	if _, _, _, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","tools":[{"type":"tool_search"}],"input":"hello"}`), false); err != nil {
+		t.Fatalf("ordinary Responses rejected tool_search: %v", err)
 	}
 }
 

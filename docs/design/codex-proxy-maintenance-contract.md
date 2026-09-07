@@ -1,12 +1,12 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`4.0.3`
+> 合同版本：`4.0.4`
 >
 > 状态：`active`
 >
 > 生效日期：2026-09-07
 >
-> 参考基线：AetherRelay `e04badb`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
+> 参考基线：AetherRelay `83edaa3`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -15,6 +15,8 @@
 `4.0.2` 同步 Codex CLI `0.153.2` 实际请求与官方 `responses_metadata`：`client_metadata` 的已知兼容投影新增 `session_id`、`thread_id`、`turn_id`、`parent_turn_id`、`root_turn_id`、`x-codex-parent-thread-id` 和 `x-openai-subagent`。这些字段只作为有界 drop-compatible 输入，不得把客户端原始身份透传到上游；未知键继续在账号选择前拒绝。验收覆盖普通 turn、root turn、parent/subagent 和未知键拒绝。
 
 `4.0.1` 评审收口：`CP-CAP-008` 的可信 profile 只补充未声明能力，显式 reasoning（包括禁用）、图片能力和容量必须优先使用 effective catalog；发现的 reasoning levels 必须符合请求期校验。`CP-REQ-031` 的 delegation 不得仅凭非空 call ID 放行孤立 output：无 `previous_response_id` 时，output 必须匹配此前同类型调用，item reference 必须拒绝。`CP-FAIL-017` 的 quota observation 单调合并只保留尚未到期的旧 reset；新耗尽事件未提供 reset 时，不得继承过期 reset 而从管理视图消失。验收分别覆盖显式覆盖/禁用、孤立及错类型工具输出、过期 reset 后再次耗尽。
+
+`4.0.4` 补齐标准 `web_search` 的原生透传合同：部署版本 `83edaa3` 的第 12、13 轮分别在 `gpt-5.4-mini`、`gpt-5.5` 上因本地工具白名单返回 400。普通 Responses、Responses Lite、WS 接受顶层标准搜索工具，保留缓存访问限制与来源引用；搜索执行进度和完整搜索调用属于有效输出，不能触发输出后重放。此版本不扩展 preview 别名、图片搜索或跨协议搜索桥接，不改模型、UA 或压缩模型选择。真实 OAuth/Lite 账号兼容性仍须按 `CP-DOD-006` 独立 smoke 验证，不以离线测试或官方公共 API 文档冒充线上验证。
 
 当本文与其它说明冲突时，按以下顺序裁决：
 
@@ -124,7 +126,7 @@
 | `store` | 上游强制 false | 上游强制 false | `CP-REQ-005` |
 | `reasoning` | 保留并保证所需 include | 按 compact 合同处理 | `CP-REQ-006` |
 | `include` | 去重并补 `reasoning.encrypted_content` | 不注入普通 Responses 专属值 | `CP-REQ-007` |
-| `tools` | 支持 `function`、`custom`、递归 `namespace`；Responses Lite 额外支持 `tool_search`，并把顶层 `namespace` 迁移到 `input.additional_tools` | 保序；不自动注入图片工具 | `CP-REQ-008` |
+| `tools` | 支持 `function`、`custom`、递归 `namespace`、`tool_search` 与顶层标准 `web_search`；Responses Lite 把顶层 `namespace` 迁移到 `input.additional_tools`，搜索工具仍留在顶层 | 保序；不自动注入图片工具 | `CP-REQ-008` |
 | `tool_choice` | 规范化；目标不支持则拒绝 | 删除或拒绝，以能力合同为准 | `CP-REQ-009` |
 | `functions/function_call` | 转为 `tools/tool_choice` | 同左 | `CP-REQ-010` |
 | `parallel_tool_calls` | boolean 且存在工具时保留；无工具时删除；Responses Lite 强制 false | 删除 | `CP-REQ-011` |
@@ -167,6 +169,10 @@
 `CP-REQ-031` 原生 `/v1/responses` HTTP 可以把 Codex 客户端生成的无 `call_id` delegation 或 automation bootstrap 降级为等价的 user/input_text message，但原始 JSON 全树必须没有重复成员，候选 `call_id` 必须缺失或空白，且全部无锚点 call-output 型 item 都是同一种已知 bootstrap。delegation 只接受 `codex_app|codex_tui` 的 `create_thread|send_message_to_thread` 以及无属性、无 namespace、恰含非空 `source_thread_id` 和 `input` 的完整 `codex_delegation` XML；它可以携带非空 `previous_response_id`，并与具有非空 `call_id`/`id` 的明确历史 `*_call`、`*_call_output`、`item_reference` 共存。automation 仍只能用于无历史续链锚点的初始请求，只接受 `codex_app.automation_update`，以及安全 scheduled prompt 或无属性、无 namespace、仅含一个安全 `automation_id` 的完整 `heartbeat` XML。转换必须保留 output 原文、历史锚点、`previous_response_id` 与 input 顺序；compact、WebSocket、adapter、混合 bootstrap 和任何歧义形态继续按 `CP-REQ-021` 拒绝。
 
 `CP-REQ-032` Codex multi-agent v2 的顶层 `agent_message` 及其字符串 `encrypted_content` part 必须在原生 Codex HTTP/WS/compact 中保序透传，并在账号选择前拒绝空 content、未知 part 或非字符串载荷。Responses→Anthropic 转换必须把它规范为 `role=user` 的 `message`，把 `encrypted_content` 规范为同位置的 `input_text.text`，并保留普通文本；agent 路由元数据只能作为转换期有界忽略字段，不能进入 Anthropic 内容。该语义不扩展到通用跨协议输出。
+
+`CP-REQ-033` 标准 `web_search` 只允许在顶层 `tools` 声明，不要求 function 的 `name`/`parameters`，不得自动注入、改为 preview、迁移到 namespace/additional_tools 或替换为本地 `/v1/search`。对已知 `external_web_access`、`search_context_size`、`user_location`、`filters` 校验类型，合法参数（含 false）和扩展字段保持原值，由上游裁决未验证扩展。引用搜索的 `tool_choice` 必须有对应顶层声明，`include` 中的来源请求不得丢失。历史 `web_search_call` 的 ID、action、status 与引用保序保留，不要求客户端 function output；未知工具仍拒绝。不因工具失败自动改模型或删除工具重试。依据：[OpenAI Web search](https://developers.openai.com/api/docs/guides/tools-web-search)，以及上述基线 CLIProxyAPI Responses 工具透传、sub2api Codex transform 测试。
+
+`CP-REQ-034` `tool_search` 不是 Responses Lite 专属工具，不得因缺少 Lite header/metadata 拒绝普通 HTTP/WS/compact 请求，也不得根据工具存在隐式启用 Lite。保留 execution、description、parameters 及扩展字段，对已知选项做基本类型校验；client 执行仍由客户端完成，历史 `tool_search_call`/`tool_search_output` 保持原有 call_id 配对和保序规则。该规则修正部署基线第 27 轮 client-executed 工具声明被本地 400 的问题，不等于验证上游账号能力。验收覆盖无 Lite 标记、Lite、两种搜索共存、客户端工具续接和非法选项。依据：[OpenAI Tool search](https://developers.openai.com/api/docs/guides/tools-tool-search)。
 
 ## 6. 上游身份与 Header 合同
 
@@ -228,6 +234,8 @@
 `CP-STREAM-010` 网关已经无法执行 failover、必须向客户端转发上游 capacity 降载事件时，写给客户端的 `error`/`response.failed` 副本必须把 `server_is_overloaded` 和 `slow_down` code 投影为可重试的 `server_error`。账号分类、额度观察和审计必须继续使用未改写的原始事件；`rate_limit_exceeded` 等其它错误码不得改写。HTTP/SSE 与 WebSocket 必须一致。
 
 `CP-STREAM-011` `codexupstream` 在转发可解析的 terminal data 后提前关闭上游时，必须先确保该 SSE 事件以完整空行结束，再发送 typed done。保留 JSON 正文、LF/CRLF 风格及已完整事件边界；允许为完整 terminal JSON 的行尾/EOF 补齐分隔符，但不得为不完整 JSON、单独 event 名或 output-item-done 伪造成功终态。输出前错误继续保持缓冲和 failover，输出后错误按原 typed 分类完整交付。依据：[SSE 事件分发规范](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation)。
+
+`CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
@@ -375,17 +383,19 @@
 
 `CP-DOD-006` 真实账号 smoke test 只能由显式运维命令触发，不能在单元测试或服务启动时访问上游。
 
+`CP-DOD-007` 搜索验收覆盖：普通问答携带工具、cache-only/live 参数原值、Lite 顶层搜索与 namespace 共存、强制/限定 tool_choice、未知工具和错误参数拒绝、HTTP/SSE/WS 搜索输出及引用、历史续接/compact、搜索后错误禁止重放、取消及 EOF 无终态。线上 smoke 与离线回归结果必须分开记录。
+
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..011 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..012 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `web_search_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006, CP-FAIL-016..017 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `codexupstream/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go`, `codexaccountpool/internal/store/store_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013, CP-EP-015 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go`, `proxy/responses_input_tokens.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go`, `responses_input_tokens_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012, CP-EP-014 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..032 | implemented | `proxy/codex_compat.go`, `proxy/responses_anthropic.go`, `proxy/codex_websocket_replay.go` | `codex_responses_test.go`, `codex_normalization_golden.json` |
+| 请求兼容层 | CP-REQ-001..034 | implemented | `proxy/codex_compat.go`, `proxy/codex_web_search.go`, `proxy/codex_tool_search.go`, `proxy/responses_anthropic.go`, `proxy/codex_websocket_replay.go` | `codex_responses_test.go`, `codex_web_search_test.go`, `codex_tool_search_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `aetherrelaycodexidentity/identity.go`, `codexupstream/biz/identity.go`, `codexupstream/biz/codex_identity.go`, `codexaccountpool/internal/oauth/client.go` | `codexupstream/biz/biz_test.go`, `codexaccountpool/internal/oauth/client_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/codex_compact.go`, `codexaccountpool/internal/store/store.go` | `codex_responses_test.go`, `proxyapi/biz/codex_responses_test.go`, `store_test.go`, `biz_test.go` |
 | 指纹收敛 | CP-FP-001..003 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `codex_responses_test.go`, `biz_test.go` |

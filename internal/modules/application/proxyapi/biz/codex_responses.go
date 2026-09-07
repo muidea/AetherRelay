@@ -225,6 +225,9 @@ func codexWebsocketPayloadHasEvidence(payload []byte) bool {
 	if event.Type == "response.completed" || event.Type == "response.done" {
 		return !codexResponseObjectEmpty(event.Response)
 	}
+	if event.Type == "response.web_search_call.searching" || event.Type == "response.web_search_call.completed" {
+		return true
+	}
 	if event.Type == "response.created" || event.Type == "response.in_progress" || event.Type == "response.queued" {
 		return false
 	}
@@ -247,6 +250,17 @@ func codexWebsocketItemHasEvidence(raw json.RawMessage) bool {
 	_ = json.Unmarshal(item["type"], &typ)
 	_ = json.Unmarshal(item["status"], &status)
 	_ = json.Unmarshal(item["name"], &name)
+	if typ == "web_search_call" {
+		var action struct {
+			Query   string            `json:"query"`
+			Queries []string          `json:"queries"`
+			URL     string            `json:"url"`
+			Pattern string            `json:"pattern"`
+			Sources []json.RawMessage `json:"sources"`
+		}
+		_ = json.Unmarshal(item["action"], &action)
+		return status == "completed" || action.Query != "" || strings.Join(action.Queries, "") != "" || action.URL != "" || action.Pattern != "" || len(action.Sources) > 0
+	}
 	return status == "completed" && name != "" && strings.Contains(typ, "call")
 }
 

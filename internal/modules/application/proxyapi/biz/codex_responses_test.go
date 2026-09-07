@@ -34,6 +34,35 @@ func TestCodexWebsocketTurnOutcomeRequiresNonEmptyCompleted(t *testing.T) {
 	}
 }
 
+func TestCodexWebSearchWebsocketEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    bool
+	}{
+		{`{"type":"response.web_search_call.in_progress","item_id":"ws_1"}`, false},
+		{`{"type":"response.web_search_call.searching","item_id":"ws_1"}`, true},
+		{`{"type":"response.web_search_call.completed","item_id":"ws_1"}`, true},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","action":{"type":"search","queries":["example"]}}}`, true},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","action":{"type":"open_page","url":"https://example.com"}}}`, true},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","action":{"type":"find_in_page","pattern":"example"}}}`, true},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","action":{"type":"search","sources":[{"type":"url","url":"https://example.com"}]}}}`, true},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","action":{"type":"search","extension":true}}}`, false},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","status":"in_progress","action":{"type":"search","queries":[]}}}`, false},
+		{`{"type":"response.output_item.added","item":{"type":"web_search_call","action":{"type":"search","query":"example"}}}`, true},
+		{`{"type":"response.output_item.done","item":{"type":"web_search_call","id":"ws_1","status":"completed"}}`, true},
+	} {
+		if got := codexWebsocketPayloadHasEvidence([]byte(tc.payload)); got != tc.want {
+			t.Fatalf("evidence=%t want=%t payload=%s", got, tc.want, tc.payload)
+		}
+		if tc.want {
+			success, terminal, class := codexWebsocketTurnOutcomeWithEvidence([]byte(`{"type":"response.completed","response":{"output":[]}}`), true)
+			if !success || !terminal || class != "" {
+				t.Fatalf("search terminal rejected: success=%t terminal=%t class=%s", success, terminal, class)
+			}
+		}
+	}
+}
+
 func TestCloseCodexWebsocketDoesNotInventAccountSuccess(t *testing.T) {
 	hub := event.NewHub(16)
 	background := task.NewBackgroundRoutine(4)
