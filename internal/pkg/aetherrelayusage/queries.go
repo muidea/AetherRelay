@@ -211,7 +211,9 @@ SELECT
     count(*) FILTER (WHERE state = 'completed' AND outcome IS DISTINCT FROM 'success') AS failed_requests,
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
-    coalesce(sum(total_tokens), 0) AS total_tokens
+    coalesce(sum(total_tokens), 0) AS total_tokens,
+    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
 FROM usage_events
 WHERE ` + where
 	var sum Summary
@@ -222,6 +224,8 @@ WHERE ` + where
 		&sum.InputTokens,
 		&sum.OutputTokens,
 		&sum.TotalTokens,
+		&sum.CachedInputTokens,
+		&sum.CacheCreationInputTokens,
 	)
 	if err != nil {
 		return Summary{}, ErrStoreUnavailable
@@ -237,7 +241,9 @@ SELECT
     count(*) AS requests,
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
-    coalesce(sum(total_tokens), 0) AS total_tokens
+    coalesce(sum(total_tokens), 0) AS total_tokens,
+    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
 FROM usage_events
 WHERE ` + where + `
 GROUP BY usage_date
@@ -251,9 +257,10 @@ ORDER BY usage_date`
 	var out []DailyBucket
 	for rows.Next() {
 		var b DailyBucket
-		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens); err != nil {
+		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens); err != nil {
 			return nil, ErrStoreUnavailable
 		}
+		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.InputTokens)
 		// 规范化日期字符串。
 		if len(b.Date) > 10 {
 			b.Date = b.Date[:10]
@@ -276,7 +283,9 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    max(started_at) AS last_used_at
+    max(started_at) AS last_used_at,
+    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
 FROM usage_events
 WHERE ` + where + `
 GROUP BY api_key_id
@@ -300,6 +309,8 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			&k.OutputTokens,
 			&k.TotalTokens,
 			&last,
+			&k.CachedInputTokens,
+			&k.CacheCreationInputTokens,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}
@@ -307,6 +318,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			t := last.Time.UTC()
 			k.LastUsedAt = &t
 		}
+		k.CacheHitRate = cacheHitRate(k.CachedInputTokens, k.InputTokens)
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
@@ -403,6 +415,7 @@ LIMIT ?`
 			return EventPage{}, ErrStoreUnavailable
 		}
 		e.StartedAt = e.StartedAt.UTC()
+		e.CacheHitRate = cacheHitRate(e.CachedInputTokens, e.InputTokens)
 		if completedAt.Valid {
 			t := completedAt.Time.UTC()
 			e.CompletedAt = &t
@@ -458,7 +471,9 @@ SELECT
     count(*) FILTER (WHERE state = 'completed' AND outcome IS DISTINCT FROM 'success') AS failed_requests,
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
-    coalesce(sum(total_tokens), 0) AS total_tokens
+    coalesce(sum(total_tokens), 0) AS total_tokens,
+    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
 FROM usage_events
 GROUP BY api_key_id`
 	rows, err := s.db.QueryContext(ctx, q)
@@ -479,6 +494,8 @@ GROUP BY api_key_id`
 			&sum.InputTokens,
 			&sum.OutputTokens,
 			&sum.TotalTokens,
+			&sum.CachedInputTokens,
+			&sum.CacheCreationInputTokens,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}

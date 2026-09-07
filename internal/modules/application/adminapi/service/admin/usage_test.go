@@ -33,7 +33,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	})
 	_ = store.Complete(context.Background(), usage.CompleteRecord{
 		EventID: "e1", CompletedAt: now.Add(time.Second), Provider: "openai", Model: "gpt-4o",
-		InputTokens: 10, OutputTokens: 5, HTTPStatus: 200, Outcome: "success",
+		InputTokens: 10, OutputTokens: 5, CachedInputTokens: 4, CacheCreationInputTokens: 2, HTTPStatus: 200, Outcome: "success",
 	})
 
 	rt := &fakeRuntime{cfg: config.Config{}}
@@ -51,6 +51,11 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary := body["summary"].(map[string]any)
+	for _, row := range []map[string]any{summary, body["by_api_key"].([]any)[0].(map[string]any)} {
+		if row["cached_input_tokens"] != float64(4) || row["cache_creation_input_tokens"] != float64(2) || row["cache_hit_rate"] != 0.4 {
+			t.Fatalf("cache statistics=%v", row)
+		}
+	}
 	if int(summary["requests"].(float64)) != 1 {
 		t.Fatalf("requests=%v", summary["requests"])
 	}
@@ -73,6 +78,13 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("events status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var page usage.EventPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].CacheHitRate != 0.4 {
+		t.Fatalf("event cache statistics=%+v", page)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/admin/api/usage/export.csv?range=30d", nil)

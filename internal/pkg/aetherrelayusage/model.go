@@ -83,36 +83,45 @@ type EventFilter struct {
 
 // Summary 是聚合统计口径。
 type Summary struct {
-	Requests        int64   `json:"requests"`
-	SuccessRequests int64   `json:"success_requests"`
-	FailedRequests  int64   `json:"failed_requests"`
-	InputTokens     int64   `json:"input_tokens"`
-	OutputTokens    int64   `json:"output_tokens"`
-	TotalTokens     int64   `json:"total_tokens"`
-	AvgTokensPerReq float64 `json:"average_tokens_per_request"`
-	SuccessRate     float64 `json:"success_rate"`
+	CachedInputTokens        int64   `json:"cached_input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	CacheHitRate             float64 `json:"cache_hit_rate"`
+	Requests                 int64   `json:"requests"`
+	SuccessRequests          int64   `json:"success_requests"`
+	FailedRequests           int64   `json:"failed_requests"`
+	InputTokens              int64   `json:"input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	TotalTokens              int64   `json:"total_tokens"`
+	AvgTokensPerReq          float64 `json:"average_tokens_per_request"`
+	SuccessRate              float64 `json:"success_rate"`
 }
 
 // DailyBucket 是按 UTC 日期的趋势点。
 type DailyBucket struct {
-	Date         string `json:"date"`
-	Requests     int64  `json:"requests"`
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
-	TotalTokens  int64  `json:"total_tokens"`
+	CachedInputTokens        int64   `json:"cached_input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	CacheHitRate             float64 `json:"cache_hit_rate"`
+	Date                     string  `json:"date"`
+	Requests                 int64   `json:"requests"`
+	InputTokens              int64   `json:"input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	TotalTokens              int64   `json:"total_tokens"`
 }
 
 // KeySummary 是按 api_key_id 的汇总。
 type KeySummary struct {
-	APIKeyID        string     `json:"api_key_id"`
-	Status          string     `json:"status,omitempty"`
-	Requests        int64      `json:"requests"`
-	SuccessRequests int64      `json:"success_requests"`
-	FailedRequests  int64      `json:"failed_requests"`
-	InputTokens     int64      `json:"input_tokens"`
-	OutputTokens    int64      `json:"output_tokens"`
-	TotalTokens     int64      `json:"total_tokens"`
-	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
+	CachedInputTokens        int64      `json:"cached_input_tokens"`
+	CacheCreationInputTokens int64      `json:"cache_creation_input_tokens"`
+	CacheHitRate             float64    `json:"cache_hit_rate"`
+	APIKeyID                 string     `json:"api_key_id"`
+	Status                   string     `json:"status,omitempty"`
+	Requests                 int64      `json:"requests"`
+	SuccessRequests          int64      `json:"success_requests"`
+	FailedRequests           int64      `json:"failed_requests"`
+	InputTokens              int64      `json:"input_tokens"`
+	OutputTokens             int64      `json:"output_tokens"`
+	TotalTokens              int64      `json:"total_tokens"`
+	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
 }
 
 // ClientAPIKeyMetadata stores lifecycle timestamps independently from the
@@ -150,6 +159,7 @@ type ScopeInfo struct {
 
 // Event 是一条安全明细(无正文/密钥)。
 type Event struct {
+	CacheHitRate             float64    `json:"cache_hit_rate"`
 	EventID                  string     `json:"event_id"`
 	RoundID                  int64      `json:"round_id,omitempty"`
 	StartedAt                time.Time  `json:"started_at"`

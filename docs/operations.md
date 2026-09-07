@@ -174,6 +174,13 @@ Prometheus 指标均以 `aetherrelay_` 为前缀：
 
 每个已接受请求会先写入 DuckDB `started` 事件，随后结算为 `completed`。管理页可按时间、API Key、Provider、Model、Outcome 与估算标记筛选查看用量。
 
+使用统计页同时展示缓存使用率、缓存读取 / 创建 Token、每日使用率趋势、API Key 缓存汇总和每次调用的缓存使用率。`/admin/api/usage/dashboard` 的 `summary`、`daily`、`by_api_key` 均返回 `cached_input_tokens`、`cache_creation_input_tokens`、`cache_hit_rate`；明细接口也返回 `cache_hit_rate`。
+
+- 口径沿用现有日志与 Prometheus：`cache_hit_rate = sum(cached_input_tokens) / sum(input_tokens)`，先累计 Token 再计算比例，不平均单次请求的百分比，也不是有缓存的请求数占比。
+- 缓存创建 Token 单独展示，不计入使用率分子；输入 Token 沿用现有上游记账值，不在统计层重写或截断比例。不同上游的输入统计口径可能不同，可按 Provider / Model 筛选比较。
+- 所有缓存统计遵循当前时间和维度筛选，未限定 Outcome 时也包含失败请求已记录的用量；默认同时包含精确与估算数据，可切换为“仅精确”。未报告缓存的历史记录按已有的 0 值统计，不推测是否命中。
+- 输入 Token 为 0 时接口比例返回 `0`，页面显示 `—`（无分母）；有输入但无缓存时显示 `0%`。字段由已有 DuckDB 明细聚合，无需数据库迁移或回填。
+
 旧 `usage.csv` 只可显式一次性导入：
 
 ```bash

@@ -120,6 +120,7 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.TotalTokens = total
 	e.CachedInputTokens = rec.CachedInputTokens
 	e.CacheCreationInputTokens = rec.CacheCreationInputTokens
+	e.CacheHitRate = cacheHitRate(e.CachedInputTokens, e.InputTokens)
 	e.HTTPStatus = rec.HTTPStatus
 	e.Outcome = rec.Outcome
 	e.ErrorCode = rec.ErrorCode
@@ -210,6 +211,8 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
 		sum.TotalTokens += e.TotalTokens
+		sum.CachedInputTokens += e.CachedInputTokens
+		sum.CacheCreationInputTokens += e.CacheCreationInputTokens
 		if e.Outcome == "success" {
 			sum.SuccessRequests++
 		} else if e.State == StateCompleted {
@@ -226,6 +229,8 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		b.InputTokens += e.InputTokens
 		b.OutputTokens += e.OutputTokens
 		b.TotalTokens += e.TotalTokens
+		b.CachedInputTokens += e.CachedInputTokens
+		b.CacheCreationInputTokens += e.CacheCreationInputTokens
 
 		k, ok := keyMap[e.APIKeyID]
 		if !ok {
@@ -236,6 +241,8 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		k.InputTokens += e.InputTokens
 		k.OutputTokens += e.OutputTokens
 		k.TotalTokens += e.TotalTokens
+		k.CachedInputTokens += e.CachedInputTokens
+		k.CacheCreationInputTokens += e.CacheCreationInputTokens
 		if e.Outcome == "success" {
 			k.SuccessRequests++
 		} else if e.State == StateCompleted {
@@ -250,6 +257,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 
 	var daily []DailyBucket
 	for _, b := range dailyMap {
+		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.InputTokens)
 		daily = append(daily, *b)
 	}
 	sort.Slice(daily, func(i, j int) bool { return daily[i].Date < daily[j].Date })
@@ -259,6 +267,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 
 	var byKey []KeySummary
 	for _, k := range keyMap {
+		k.CacheHitRate = cacheHitRate(k.CachedInputTokens, k.InputTokens)
 		byKey = append(byKey, *k)
 	}
 	sort.Slice(byKey, func(i, j int) bool {
@@ -458,6 +467,8 @@ func (s *MemoryStore) AllTimeByKey(_ context.Context) (map[string]Summary, error
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
 		sum.TotalTokens += e.TotalTokens
+		sum.CachedInputTokens += e.CachedInputTokens
+		sum.CacheCreationInputTokens += e.CacheCreationInputTokens
 		if e.Outcome == "success" {
 			sum.SuccessRequests++
 		} else if e.State == StateCompleted {
