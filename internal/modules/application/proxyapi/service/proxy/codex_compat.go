@@ -1239,9 +1239,16 @@ func shortenCodexInputItemID(id string, attempt int) string {
 }
 
 var codexClientMetadataAllowlist = map[string]struct{}{
-	"x-codex-installation-id": {},
-	"x-codex-turn-metadata":   {},
-	"x-codex-window-id":       {},
+	"parent_turn_id":           {},
+	"root_turn_id":             {},
+	"session_id":               {},
+	"thread_id":                {},
+	"turn_id":                  {},
+	"x-codex-installation-id":  {},
+	"x-codex-parent-thread-id": {},
+	"x-codex-turn-metadata":    {},
+	"x-codex-window-id":        {},
+	"x-openai-subagent":        {},
 	"ws_request_header_x_openai_internal_codex_responses_lite": {},
 }
 

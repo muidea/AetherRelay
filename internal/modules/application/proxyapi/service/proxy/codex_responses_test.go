@@ -289,15 +289,38 @@ func TestCodexOAuthProjectsKnownClientMetadataBeforeUpstream(t *testing.T) {
 		received = request
 		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_metadata"}`)}, nil
 	}})
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello","client_metadata":{"x-codex-installation-id":"private-installation","x-codex-window-id":"private-window"}}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello","client_metadata":{"x-codex-installation-id":"private-installation","session_id":"private-session","thread_id":"private-thread","turn_id":"private-turn","root_turn_id":"private-root-turn","parent_turn_id":"private-parent-turn","x-codex-parent-thread-id":"private-parent-thread","x-codex-window-id":"private-window","x-codex-turn-metadata":"{\"request_kind\":\"turn\"}","x-openai-subagent":"collab_spawn"}}`))
 	request.Header.Set("Authorization", "Bearer test-client-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if bytes.Contains(received.Body, []byte("client_metadata")) || bytes.Contains(received.Body, []byte("private-installation")) || bytes.Contains(received.Body, []byte("private-window")) {
+	if bytes.Contains(received.Body, []byte("client_metadata")) || bytes.Contains(received.Body, []byte("private-")) || bytes.Contains(received.Body, []byte("collab_spawn")) {
 		t.Fatalf("CP-REQ-016 sensitive metadata reached upstream: %s", received.Body)
+	}
+}
+
+func TestCodexKnownClientMetadataProjectionIsBounded(t *testing.T) {
+	body := map[string]any{"client_metadata": map[string]any{
+		"x-codex-installation-id": "installation", "session_id": "session", "thread_id": "thread", "turn_id": "turn",
+		"root_turn_id": "root", "parent_turn_id": "parent-turn", "x-codex-parent-thread-id": "parent-thread",
+		"x-codex-window-id": "window", "x-codex-turn-metadata": "{}", "x-openai-subagent": "collab_spawn",
+		"ws_request_header_x_openai_internal_codex_responses_lite": "true",
+	}}
+	responsesLite, ignored, err := projectCodexClientMetadata(body)
+	if err != nil || !responsesLite || body["client_metadata"] != nil {
+		t.Fatalf("CP-REQ-016 projection body=%#v lite=%v ignored=%v err=%v", body, responsesLite, ignored, err)
+	}
+	want := []string{
+		"client_metadata.parent_turn_id", "client_metadata.root_turn_id", "client_metadata.session_id",
+		"client_metadata.thread_id", "client_metadata.turn_id",
+		"client_metadata.ws_request_header_x_openai_internal_codex_responses_lite",
+		"client_metadata.x-codex-installation-id", "client_metadata.x-codex-parent-thread-id",
+		"client_metadata.x-codex-turn-metadata", "client_metadata.x-codex-window-id", "client_metadata.x-openai-subagent",
+	}
+	if !slices.Equal(ignored, want) {
+		t.Fatalf("CP-REQ-016 ignored=%v want=%v", ignored, want)
 	}
 }
 

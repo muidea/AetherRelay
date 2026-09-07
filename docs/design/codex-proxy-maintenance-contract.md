@@ -1,14 +1,16 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`4.0.1`
+> 合同版本：`4.0.2`
 >
 > 状态：`active`
 >
 > 生效日期：2026-09-07
 >
-> 参考基线：AetherRelay `eeda54d`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
+> 参考基线：AetherRelay `122b4f3`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`4.0.2` 同步 Codex CLI `0.153.2` 实际请求与官方 `responses_metadata`：`client_metadata` 的已知兼容投影新增 `session_id`、`thread_id`、`turn_id`、`parent_turn_id`、`root_turn_id`、`x-codex-parent-thread-id` 和 `x-openai-subagent`。这些字段只作为有界 drop-compatible 输入，不得把客户端原始身份透传到上游；未知键继续在账号选择前拒绝。验收覆盖普通 turn、root turn、parent/subagent 和未知键拒绝。
 
 `4.0.1` 评审收口：`CP-CAP-008` 的可信 profile 只补充未声明能力，显式 reasoning（包括禁用）、图片能力和容量必须优先使用 effective catalog；发现的 reasoning levels 必须符合请求期校验。`CP-REQ-031` 的 delegation 不得仅凭非空 call ID 放行孤立 output：无 `previous_response_id` 时，output 必须匹配此前同类型调用，item reference 必须拒绝。`CP-FAIL-017` 的 quota observation 单调合并只保留尚未到期的旧 reset；新耗尽事件未提供 reset 时，不得继承过期 reset 而从管理视图消失。验收分别覆盖显式覆盖/禁用、孤立及错类型工具输出、过期 reset 后再次耗尽。
 
@@ -62,7 +64,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-版本记录：`4.0.0` 将默认出站身份更新为本机实测 Codex CLI `0.153.4` 的当前 UA，加入 GPT-6 Astra 的本地可信 manifest profile、multi-agent `agent_message`、历史 delegation、automation heartbeat、credential-wide 单调 quota cooldown 与共享正文的有界 WebSocket replay，并修正旧客户端 reasoning level 全部过滤后的空数组语义。`3.8.0` 固化 Codex delegation/scheduled automation 初始 bootstrap 的窄范围兼容、JWT access-token `exp` 的刷新调度提示，以及旧客户端 reasoning level 全部被过滤时的字段省略语义。`3.7.0` 固化 WebSocket 握手 quota/error 语义、非流式 terminal 统一分类、旧客户端 reasoning manifest 过滤、大整数无损规范化、Claude Code 路由专用会话信号和 HTTPS 代理 HTTP/1.1 ALPN。`3.6.0` 新增本地 Responses input-token preflight、默认/最大上下文双容量、nested cache breakpoint 清洗、compact availability-neutral 反馈、OAuth 统一身份，以及后续 WebSocket turn 的有界安全迁移。`3.5.0` 将 compact 上游切换为原生 remote compaction v2，固化会话级 beta、Turn-State 来源保护，以及默认关闭、显式 opt-in 的账号级指纹收敛。`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。
+版本记录：`4.0.2` 同步 Codex CLI `0.153.2` flat `client_metadata` 投影并保持未知键 fail closed。`4.0.1` 收口可信 manifest 与有效目录交集、delegation 历史配对和过期 quota reset。`4.0.0` 将默认出站身份更新为本机实测 Codex CLI `0.153.4` 的当前 UA，加入 GPT-6 Astra 的本地可信 manifest profile、multi-agent `agent_message`、历史 delegation、automation heartbeat、credential-wide 单调 quota cooldown 与共享正文的有界 WebSocket replay，并修正旧客户端 reasoning level 全部过滤后的空数组语义。`3.8.0` 固化 Codex delegation/scheduled automation 初始 bootstrap 的窄范围兼容、JWT access-token `exp` 的刷新调度提示，以及旧客户端 reasoning level 全部被过滤时的字段省略语义。`3.7.0` 固化 WebSocket 握手 quota/error 语义、非流式 terminal 统一分类、旧客户端 reasoning manifest 过滤、大整数无损规范化、Claude Code 路由专用会话信号和 HTTPS 代理 HTTP/1.1 ALPN。`3.6.0` 新增本地 Responses input-token preflight、默认/最大上下文双容量、nested cache breakpoint 清洗、compact availability-neutral 反馈、OAuth 统一身份，以及后续 WebSocket turn 的有界安全迁移。`3.5.0` 将 compact 上游切换为原生 remote compaction v2，固化会话级 beta、Turn-State 来源保护，以及默认关闭、显式 opt-in 的账号级指纹收敛。`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。
 
 ## 3. 支持对象与版本策略
 
@@ -128,7 +130,7 @@
 | input item `id` | 按 item 类型规范为 `msg_`/`rs_`/`fc_`/`ctc_`/`ctco_`，最长 64 字符，稳定压缩并处理冲突 | 保留顺序并执行同一规范化 | `CP-REQ-013` |
 | `previous_response_id` | HTTP 无本地状态时拒绝；原生持久 WS 同 session 增量 turn 保留 | reject | `CP-REQ-014` |
 | `prompt_cache_key` | 显式值保留；缺失时按客户端 key+model+session 生成稳定隔离值并写入上游 body | 同左；compact 不改变 input 顺序 | `CP-REQ-015` |
-| `client_metadata` | 只接受已知 Codex 键；默认不做账号级收敛，显式启用时由统一 fingerprint profile 重建有界身份集合 | 同左 | `CP-REQ-016` |
+| `client_metadata` | 只接受已知 Codex 键；当前 flat 兼容投影包含 installation/window/turn metadata、session/thread/turn/root/parent/subagent 和 Responses Lite 信号；全部先删除，默认不做账号级收敛，显式启用时由统一 fingerprint profile 重建有界身份集合 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
 | `stream_options` | 仅保留已验证的 `reasoning_summary_delivery=sequential_cutoff`；其它键 drop-compatible | 删除 | `CP-REQ-028` |
 | `input[].content[].prompt_cache_breakpoint` | drop-compatible，保留所在 content part 及其它字段 | 同左 | `CP-REQ-029` |
