@@ -270,6 +270,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case rel == "/assets/aetherrelay.png" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveSiteIcon(w, r)
 		return
+	case rel == "/assets/login-background.webp" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		h.serveLoginBackground(w, r)
+		return
 	case rel == "/login" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		h.serveLoginPage(w, r)
 		return
@@ -854,14 +857,22 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveSiteIcon(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "image/png")
+	serveAdminImage(w, r, adminweb.AdminSiteIcon, "image/png")
+}
+
+func (h *Handler) serveLoginBackground(w http.ResponseWriter, r *http.Request) {
+	serveAdminImage(w, r, adminweb.AdminLoginBackground, "image/webp")
+}
+
+func serveAdminImage(w http.ResponseWriter, r *http.Request, content []byte, contentType string) {
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = w.Write(adminweb.AdminSiteIcon)
+	_, _ = w.Write(content)
 }
 
 // injectAdminBasePath 在 HTML 开头注入安全的 basePath JSON 字面量。

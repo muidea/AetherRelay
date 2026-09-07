@@ -11,3 +11,8 @@ var AdminIndexHTML []byte
 //
 //go:embed admin/assets/aetherrelay.png
 var AdminSiteIcon []byte
+
+// AdminLoginBackground is the decorative relay-network artwork for sign-in.
+//
+//go:embed admin/assets/login-background.webp
+var AdminLoginBackground []byte

@@ -524,9 +524,10 @@ func loginPageHTML(basePath, defaultLanguage string) []byte {
 <link id="aetherrelaySiteIcon" rel="icon" type="image/png">
 <link id="aetherrelayAppleTouchIcon" rel="apple-touch-icon">
 <style>
-:root{--primary:#1677ff;--border:#d9d9d9;--bg:#f5f7fa;--text:#1f1f1f;--muted:#8c8c8c;--danger:#ff4d4f}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-.card{width:min(400px,calc(100vw - 32px));background:#fff;border:1px solid #f0f0f0;border-radius:10px;padding:28px 24px;box-shadow:0 6px 16px rgba(0,0,0,.06)}
+:root{--primary:#1677ff;--border:#d9d9d9;--bg:#edf5fc;--text:#1f1f1f;--muted:#667085;--danger:#ff4d4f}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100svh;padding:24px 0;display:grid;place-items:center;isolation:isolate;background:radial-gradient(ellipse at center,#fff,var(--bg));color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.login-background{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;pointer-events:none;z-index:-1}
+.card{width:min(400px,calc(100vw - 32px));background:#fff;border:1px solid #dce8f5;border-radius:14px;padding:28px 24px;box-shadow:0 20px 64px rgba(59,103,151,.12),0 2px 8px rgba(59,103,151,.04)}
 h1{margin:0 0 6px;font-size:20px}p{margin:0 0 20px;color:var(--muted)}.field{margin-bottom:14px}label{display:block;margin-bottom:6px}
 input{width:100%;height:36px;padding:6px 11px;border:1px solid var(--border);border-radius:6px;outline:none}input:focus{border-color:var(--primary)}
 button{width:100%;height:36px;border:0;border-radius:6px;background:var(--primary);color:#fff;cursor:pointer;margin-top:6px}button:disabled{opacity:.55;cursor:not-allowed}
@@ -534,6 +535,7 @@ button{width:100%;height:36px;border:0;border-radius:6px;background:var(--primar
 </style>
 </head>
 <body>
+<img id="aetherrelayLoginBackground" class="login-background" alt="" aria-hidden="true" decoding="async">
 <div class="card">
   <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><label for="language" style="font-size:12px;margin:0">语言 <select id="language" style="width:auto;height:28px;padding:2px 5px"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label></div>
   <h1 data-i18n="title">AetherRelay 管理登录</h1>
@@ -549,6 +551,7 @@ button{width:100%;height:36px;border:0;border-radius:6px;background:var(--primar
 window.__AETHERRELAY_ADMIN_BASE_PATH__=BASE_PATH_JSON;
 window.__AETHERRELAY_ADMIN_DEFAULT_LANGUAGE__=DEFAULT_LANGUAGE_JSON;
 const base=window.__AETHERRELAY_ADMIN_BASE_PATH__||"/admin";
+document.getElementById("aetherrelayLoginBackground").src=base+"/assets/login-background.webp";
 for(const id of ["aetherrelaySiteIcon","aetherrelayAppleTouchIcon"]){const icon=document.getElementById(id);if(icon)icon.href=base+"/assets/aetherrelay.png";}
 const supported=new Set(["zh-CN","en-US"]),cookieName="aetherrelay_admin_lang";
 const zh={title:"AetherRelay 管理登录",subtitle:"请输入管理员账号与密码",username:"用户名",password:"密码",login:"登录",language:"语言"};
