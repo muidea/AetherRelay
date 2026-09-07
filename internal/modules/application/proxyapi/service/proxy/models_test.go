@@ -153,6 +153,46 @@ func TestCodexModelsManifestUsesTrustedAstraProfile(t *testing.T) {
 	}
 }
 
+func TestCodexAstraManifestHonorsExplicitMetadata(t *testing.T) {
+	for _, supported := range []bool{true, false} {
+		t.Run(map[bool]string{true: "restricted", false: "disabled"}[supported], func(t *testing.T) {
+			metadata := config.ModelMetadata{
+				ID: "gpt-6-astra", ReasoningDeclared: true, ReasoningSupported: supported,
+				ReasoningDefaultEffort: "high", ReasoningEfforts: []string{"low", "high"},
+				NativeResponsesDeclared: true, NativeResponsesImages: false,
+				ContextWindowTokens: 64000, MaxContextWindowTokens: 128000,
+			}
+			if !supported {
+				metadata.ReasoningDefaultEffort, metadata.ReasoningEfforts = "", nil
+			}
+			cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{metadata.ID: metadata}}
+			snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
+				Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: metadata.ID}},
+			})
+			model := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.153.4").Models[0]
+			if model.ContextWindow != 64000 || model.MaxContextWindow != 128000 ||
+				!reflect.DeepEqual(model.InputModalities, []string{"text"}) || model.SupportsImageDetailOriginal {
+				t.Fatalf("explicit capacity/image metadata ignored: %+v", model)
+			}
+			if model.DefaultReasoningLevel != metadata.ReasoningDefaultEffort || len(model.SupportedReasoningLevels) != len(metadata.ReasoningEfforts) || model.MultiAgentReasoningEffort != metadata.ReasoningDefaultEffort {
+				t.Fatalf("explicit reasoning metadata ignored: %+v", model)
+			}
+			handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, nil)
+			for index, level := range model.SupportedReasoningLevels {
+				if level.Effort != metadata.ReasoningEfforts[index] {
+					t.Fatalf("unexpected effort: %+v", level)
+				}
+				if err := handler.applyModelReasoning(metadata.ID, map[string]any{"reasoning": map[string]any{"effort": level.Effort}}); err != nil {
+					t.Fatalf("advertised effort rejected: %v", err)
+				}
+			}
+			if err := handler.applyModelReasoning(metadata.ID, map[string]any{"reasoning": map[string]any{"effort": "ultra"}}); err == nil {
+				t.Fatal("undeclared effort accepted")
+			}
+		})
+	}
+}
+
 // CP-EP-015: every accessible Responses route projects local preflight support.
 func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 	snap := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{

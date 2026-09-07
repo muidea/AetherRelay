@@ -218,14 +218,19 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 		if trusted {
 			efforts = append([]string(nil), profile.SupportedReasoningLevels...)
 			defaultEffort = profile.DefaultReasoningLevel
-		} else if record.Capabilities != nil && record.Capabilities.Reasoning != nil && record.Capabilities.Reasoning.Supported {
-			if len(record.Capabilities.Reasoning.Efforts) > 0 {
-				efforts = append([]string(nil), record.Capabilities.Reasoning.Efforts...)
-			}
-			if containsString(efforts, record.Capabilities.Reasoning.DefaultEffort) {
-				defaultEffort = record.Capabilities.Reasoning.DefaultEffort
+		}
+		if record.Capabilities != nil && record.Capabilities.Reasoning != nil {
+			if !record.Capabilities.Reasoning.Supported {
+				efforts = nil
+				defaultEffort = ""
 			} else {
-				defaultEffort = efforts[0]
+				efforts = append([]string(nil), record.Capabilities.Reasoning.Efforts...)
+				defaultEffort = ""
+				if containsString(efforts, record.Capabilities.Reasoning.DefaultEffort) {
+					defaultEffort = record.Capabilities.Reasoning.DefaultEffort
+				} else if len(efforts) > 0 {
+					defaultEffort = efforts[0]
+				}
 			}
 		}
 		if !codexClientSupportsExtendedReasoning(clientVersion) {
@@ -280,6 +285,21 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			manifest.ContextWindow = profile.ContextWindow
 			manifest.MaxContextWindow = profile.MaxContextWindow
 			manifest.ServiceTiers = append([]any(nil), profile.ServiceTiers...)
+			if !containsString(efforts, manifest.MultiAgentReasoningEffort) {
+				manifest.MultiAgentReasoningEffort = defaultEffort
+			}
+		}
+		if record.Capabilities != nil && record.Capabilities.Native != nil && record.Capabilities.Native.Responses != nil {
+			manifest.InputModalities = []string{"text"}
+			if record.Capabilities.Native.Responses.Images {
+				manifest.InputModalities = append(manifest.InputModalities, "image")
+			} else {
+				manifest.SupportsImageDetailOriginal = false
+			}
+		}
+		if record.ContextWindowTokens > 0 {
+			manifest.ContextWindow = manifestContextWindow(record.ContextWindowTokens)
+			manifest.MaxContextWindow = manifestMaxContextWindow(record.ContextWindowTokens, record.MaxContextWindowTokens)
 		}
 		models = append(models, manifest)
 	}

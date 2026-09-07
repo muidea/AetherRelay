@@ -974,7 +974,8 @@ func validateCodexRequest(body map[string]any, options codexNormalizationOptions
 	if err := validateCodexTools(body["tools"], options.responsesLite); err != nil {
 		return err
 	}
-	return validateCodexInput(body["input"], options.allowIncrementalOut, options.allowHistoricalAnchors)
+	previous, _ := body["previous_response_id"].(string)
+	return validateCodexInput(body["input"], options.allowIncrementalOut, options.allowHistoricalAnchors, options.allowHistoricalAnchors && strings.TrimSpace(previous) != "")
 }
 
 func validateCodexTools(value any, allowToolSearch ...bool) error {
@@ -1025,6 +1026,8 @@ func validateCodexInput(value any, allowIncrementalOutputs bool, allowHistorical
 	functionCalls := map[string]struct{}{}
 	customCalls := map[string]struct{}{}
 	historicalAnchors := len(allowHistoricalAnchors) > 0 && allowHistoricalAnchors[0]
+	historicalContinuation := len(allowHistoricalAnchors) > 1 && allowHistoricalAnchors[1]
+	historicalCalls := map[string]map[string]bool{}
 	for _, raw := range items {
 		item, ok := raw.(map[string]any)
 		if !ok {
@@ -1038,12 +1041,30 @@ func validateCodexInput(value any, allowIncrementalOutputs bool, allowHistorical
 		typ, _ := item["type"].(string)
 		if historicalAnchors {
 			if typ == "item_reference" {
+				if !historicalContinuation {
+					return fmt.Errorf("item_reference requires a historical continuation")
+				}
 				if id, _ := item["id"].(string); strings.TrimSpace(id) != "" {
 					continue
 				}
 			}
 			if strings.HasSuffix(typ, "_call") || isCodexCallOutputType(typ) {
 				if callID, _ := item["call_id"].(string); strings.TrimSpace(callID) != "" {
+					callID = strings.TrimSpace(callID)
+					if isCodexCallOutputType(typ) {
+						callType := strings.TrimSuffix(typ, "_output")
+						if typ == "tool_search_output" {
+							callType = "tool_search_call"
+						}
+						if !historicalContinuation && !historicalCalls[callType][callID] {
+							return fmt.Errorf("%s references an unknown call_id", typ)
+						}
+					} else {
+						if historicalCalls[typ] == nil {
+							historicalCalls[typ] = map[string]bool{}
+						}
+						historicalCalls[typ][callID] = true
+					}
 					continue
 				}
 			}

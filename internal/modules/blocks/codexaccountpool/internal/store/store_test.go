@@ -308,6 +308,37 @@ func TestRefreshDueUsesAccessTokenJWTExpiration(t *testing.T) {
 
 // CP-FAIL-017: an upstream usage limit is credential-wide, monotonic, and is
 // not cleared by a success observed for one model.
+func TestQuotaObservationDoesNotInheritExpiredReset(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(map[bool]string{false: "expired", true: "active"}[active], func(t *testing.T) {
+			store := openTestStore(t)
+			if _, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+				t.Fatal(err)
+			}
+			id := store.List()[0].ID
+			delta := -time.Hour
+			if active {
+				delta = time.Hour
+			}
+			reset := time.Now().UTC().Add(delta).Format(time.RFC3339)
+			if _, err := store.RecordResult(id, "gpt-test", false, events.ErrorRateLimit, 30, true, reset, false); err != nil {
+				t.Fatal(err)
+			}
+			view, err := store.RecordResult(id, "gpt-test", false, events.ErrorRateLimit, 30, true, "", false)
+			if err != nil || len(view.QuotaObservations) != 1 {
+				t.Fatalf("new quota observation hidden: %+v err=%v", view, err)
+			}
+			wantReset := ""
+			if active {
+				wantReset = reset
+			}
+			if view.QuotaObservations[0].ResetAt != wantReset || len(view.Cooldowns) != 1 {
+				t.Fatalf("invalid quota reset/cooldown: %+v", view)
+			}
+		})
+	}
+}
+
 func TestQuotaObservationIsCredentialScopedAndCooldownIsMonotonic(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})

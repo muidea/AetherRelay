@@ -392,6 +392,30 @@ func TestCodexHTTPRequestNormalizesHistoricalDelegation(t *testing.T) {
 	}
 }
 
+func TestCodexHistoricalDelegationRequiresPairedOutputsWithoutContinuation(t *testing.T) {
+	bootstrap := `{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":"<codex_delegation><source_thread_id>thread-1</source_thread_id><input>continue</input></codex_delegation>"}`
+	for _, tc := range []struct {
+		name, history string
+		valid         bool
+	}{
+		{"orphan", `{"type":"function_call_output","call_id":"call-1","output":"done"}`, false},
+		{"wrong type", `{"type":"custom_tool_call","call_id":"call-1","name":"inspect","input":"x"},{"type":"function_call_output","call_id":"call-1","output":"done"}`, false},
+		{"output before call", `{"type":"function_call_output","call_id":"call-1","output":"done"},{"type":"function_call","call_id":"call-1","name":"inspect","arguments":"{}"}`, false},
+		{"reference", `{"type":"item_reference","id":"msg-1"}`, false},
+		{"paired", `{"type":"function_call","call_id":"call-1","name":"inspect","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"done"}`, true},
+		{"paired custom", `{"type":"custom_tool_call","call_id":"call-1","name":"inspect","input":"x"},{"type":"custom_tool_call_output","call_id":"call-1","output":"done"}`, true},
+		{"paired search", `{"type":"tool_search_call","call_id":"call-1"},{"type":"tool_search_output","call_id":"call-1","output":"done"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(`{"model":"gpt-test","input":[` + tc.history + `,` + bootstrap + `]}`)
+			_, _, _, _, err := normalizeCodexHTTPRequest(raw, false, nil)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestCodexHTTPBootstrapIsNormalizedBeforeExecution(t *testing.T) {
 	var received codexresponses.Request
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {

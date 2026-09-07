@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`4.0.0`
+> 合同版本：`4.0.1`
 >
 > 状态：`active`
 >
@@ -9,6 +9,8 @@
 > 参考基线：AetherRelay `eeda54d`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`4.0.1` 评审收口：`CP-CAP-008` 的可信 profile 只补充未声明能力，显式 reasoning（包括禁用）、图片能力和容量必须优先使用 effective catalog；发现的 reasoning levels 必须符合请求期校验。`CP-REQ-031` 的 delegation 不得仅凭非空 call ID 放行孤立 output：无 `previous_response_id` 时，output 必须匹配此前同类型调用，item reference 必须拒绝。`CP-FAIL-017` 的 quota observation 单调合并只保留尚未到期的旧 reset；新耗尽事件未提供 reset 时，不得继承过期 reset 而从管理视图消失。验收分别覆盖显式覆盖/禁用、孤立及错类型工具输出、过期 reset 后再次耗尽。
 
 当本文与其它说明冲突时，按以下顺序裁决：
 

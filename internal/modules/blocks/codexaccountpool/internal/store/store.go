@@ -734,7 +734,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 			if existing, ok := item.QuotaObservations[cooldownModel]; ok {
 				existingReset, existingOK := parseExpiry(existing.ResetAt)
 				candidateReset, candidateOK := parseExpiry(resetAt)
-				if existingOK && (!candidateOK || existingReset.After(candidateReset)) {
+				if existingOK && existingReset.After(now) && (!candidateOK || existingReset.After(candidateReset)) {
 					resetAt = existing.ResetAt
 				}
 			}
