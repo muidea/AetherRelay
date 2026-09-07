@@ -306,7 +306,9 @@ func TestRefreshDueUsesAccessTokenJWTExpiration(t *testing.T) {
 	}
 }
 
-func TestQuotaObservationIsAccountAndModelScopedAndClearsOnSuccess(t *testing.T) {
+// CP-FAIL-017: an upstream usage limit is credential-wide, monotonic, and is
+// not cleared by a success observed for one model.
+func TestQuotaObservationIsCredentialScopedAndCooldownIsMonotonic(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
 	if err != nil {
@@ -319,19 +321,23 @@ func TestQuotaObservationIsAccountAndModelScopedAndClearsOnSuccess(t *testing.T)
 		t.Fatalf("quota record view=%+v err=%v", view, err)
 	}
 	observation := view.QuotaObservations[0]
-	if observation.Model != "gpt-5.2-codex" || observation.State != "exhausted" || observation.ResetAt != resetAt {
+	if observation.Model != "" || observation.State != "exhausted" || observation.ResetAt != resetAt {
 		t.Fatalf("quota observation=%+v", observation)
 	}
-	if len(view.Cooldowns) != 1 || view.Cooldowns[0].Until != resetAt {
-		t.Fatalf("quota reset must define the model cooldown: %+v", view.Cooldowns)
+	if len(view.Cooldowns) != 1 || view.Cooldowns[0].Model != "" || view.Cooldowns[0].Until != resetAt {
+		t.Fatalf("quota reset must define the credential cooldown: %+v", view.Cooldowns)
 	}
 	view, err = store.RecordResult(accountID, "gpt-5.2-codex", true, "", 0, false, "", false)
-	if err != nil || len(view.QuotaObservations) != 0 {
-		t.Fatalf("successful account result did not clear quota observation: %+v err=%v", view, err)
+	if err != nil || len(view.QuotaObservations) != 1 || len(view.Cooldowns) != 1 {
+		t.Fatalf("model success cleared credential quota: %+v err=%v", view, err)
 	}
-	view, err = store.RecordResult(accountID, "gpt-5.2-codex", false, events.ErrorRateLimit, 30, false, resetAt, false)
-	if err != nil || len(view.QuotaObservations) != 0 {
-		t.Fatalf("generic rate limit must not create quota observation: %+v err=%v", view, err)
+	shorterReset := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	view, err = store.RecordResult(accountID, "gpt-6-astra", false, events.ErrorRateLimit, 30, true, shorterReset, false)
+	if err != nil || len(view.Cooldowns) != 1 || view.Cooldowns[0].Until != resetAt || len(view.QuotaObservations) != 1 || view.QuotaObservations[0].ResetAt != resetAt {
+		t.Fatalf("later shorter failure shortened credential cooldown: %+v err=%v", view, err)
+	}
+	if !cooling(store.items[accountID], "gpt-5.2-codex", time.Now().UTC()) || !cooling(store.items[accountID], "gpt-6-astra", time.Now().UTC()) {
+		t.Fatal("credential cooldown did not cover every model")
 	}
 }
 

@@ -67,6 +67,28 @@ func TestBuildCodexWebsocketRetryPayloadRejectsOrphanToolOutput(t *testing.T) {
 	}
 }
 
+// CP-WS-013: committing a turn allocates only a new slice header/backing list;
+// immutable RawMessage bodies are shared instead of copied with every turn.
+func TestCodexWebsocketReplaySharesImmutableItemBodies(t *testing.T) {
+	state := newCodexWebsocketReplayState(1 << 20)
+	turn, err := state.prepare([]byte(`{"type":"response.create","input":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := []json.RawMessage{json.RawMessage(`{"id":"msg-1","type":"message","role":"assistant","content":"world"}`)}
+	state.commit(turn, output)
+	if len(state.items) != 2 || &state.items[0][0] != &turn.items[0][0] || &state.items[1][0] != &output[0][0] {
+		t.Fatal("CP-WS-013 replay deep-copied immutable item bodies")
+	}
+	prefixed, err := state.prepare([]byte(`{"type":"response.create","previous_response_id":"resp-1","input":[{"role":"user","content":"hello"},{"id":"msg-1","type":"message","role":"assistant","content":"world"},{"role":"user","content":"next"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prefixed.safe || len(prefixed.items) != 3 {
+		t.Fatalf("prefix replay=%+v", prefixed)
+	}
+}
+
 // CP-WS-012: a later pre-output 429 migrates with full bounded history.
 func TestCodexWebsocketLaterTurnRateLimitMigratesWithFullReplay(t *testing.T) {
 	var mu sync.Mutex

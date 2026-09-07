@@ -714,6 +714,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 	model = strings.TrimSpace(model)
 	if success {
 		item.Success++
+		// A model success cannot prove recovery from a credential-wide quota.
 		delete(item.QuotaObservations, model)
 		if item.Status == events.StatusAbnormal {
 			item.Status = events.StatusNormal
@@ -721,14 +722,26 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 		}
 	} else {
 		item.Fail++
-		if quotaExhausted && model != "" && !availabilityNeutral {
+		cooldownModel := model
+		if quotaExhausted {
+			cooldownModel = ""
+		}
+		if quotaExhausted && !availabilityNeutral {
 			if item.QuotaObservations == nil {
 				item.QuotaObservations = map[string]quotaObservation{}
 			}
-			item.QuotaObservations[model] = quotaObservation{
+			resetAt := normalizeQuotaResetAt(quotaResetAt)
+			if existing, ok := item.QuotaObservations[cooldownModel]; ok {
+				existingReset, existingOK := parseExpiry(existing.ResetAt)
+				candidateReset, candidateOK := parseExpiry(resetAt)
+				if existingOK && (!candidateOK || existingReset.After(candidateReset)) {
+					resetAt = existing.ResetAt
+				}
+			}
+			item.QuotaObservations[cooldownModel] = quotaObservation{
 				State:      "exhausted",
 				ObservedAt: now.Format(time.RFC3339),
-				ResetAt:    normalizeQuotaResetAt(quotaResetAt),
+				ResetAt:    resetAt,
 			}
 		}
 		if !availabilityNeutral {
@@ -757,7 +770,9 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 				if item.Cooldowns == nil {
 					item.Cooldowns = map[string]cooldown{}
 				}
-				item.Cooldowns[model] = cooldown{Until: until, ErrorClass: errorClass}
+				if existing, ok := item.Cooldowns[cooldownModel]; !ok || !existing.Until.After(until) {
+					item.Cooldowns[cooldownModel] = cooldown{Until: until, ErrorClass: errorClass}
+				}
 			}
 		}
 	}
@@ -882,7 +897,7 @@ func cooling(item *account, model string, now time.Time) bool {
 
 // usageLimitCooling applies only to a fresh, explicit upstream quota snapshot.
 // Unknown or expired snapshots remain routable; request failures still create
-// the authoritative model cooldown in RecordResult.
+// the authoritative model- or credential-scoped cooldown in RecordResult.
 func usageLimitCooling(item *account, now time.Time) bool {
 	if item == nil || item.UsageSnapshot == nil {
 		return false

@@ -34,7 +34,7 @@
 - **AetherRelay 扩展**：`POST /v1/search`（非 OpenAI 官方别名，仅服务内建 `chatgptweb` 搜索）
 - **OpenAI Images**：`POST /v1/images/generations|edits`（OpenAI native 或内建 `chatgptweb` 图片能力）
 
-`GET /v1/models` **本地合成**，不访问上游；普通请求返回有效目录中的 OpenAI-compatible 模型清单，携带 `client_version` query 时返回 Codex models manifest。可解析且低于 `0.144.0` 的 Codex CLI 版本不会收到 `max/ultra` reasoning level；空或非法版本保留现代能力。reasoning 能力由 `model_metadata` 按 exact model ID 声明，未声明模型不会被推断支持。`POST /v1/models` 不受支持。
+`GET /v1/models` **本地合成**，不访问上游；普通请求返回有效目录中的 OpenAI-compatible 模型清单，携带 `client_version` query 时返回 Codex models manifest。可解析且低于 `0.144.0` 的 Codex CLI 版本不会收到 `max/ultra` reasoning level；过滤后没有可用 level 时返回显式空数组，空或非法版本保留现代能力。`gpt-6-astra` 使用本地可信 manifest profile 发布 Responses Lite、multi-agent v2、search、图片和 priority tier，WebSocket 标志仍取决于有效路由；其它 reasoning 能力由 `model_metadata` 按 exact model ID 声明。`POST /v1/models` 不受支持。
 
 `POST /v1/responses/input_tokens` 复用 `/v1/responses` 的认证、exact model、Provider access 与目录能力检查，然后用本地 tokenizer 返回 `response.input_tokens` 估算。它不选择账号、不读取上游凭据、不发网络请求，也不产生计费 token；因此即使同一模型有多个 Responses 候选，预估结果也不锁定 Provider。
 
@@ -159,7 +159,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 进程自动注入只读内建 Provider `codexoauth`，服务原生 Responses HTTP/SSE、compact 与 WebSocket，并为 `/v1/chat/completions` 和 `/v1/messages` 提供受限协议适配：
 
 - 模型按账号从 ChatGPT 上游 `/backend-api/codex/models` 自动发现并缓存 6 小时，该路径不作为 AetherRelay 入站端点；失败指数退避；可路由模型是全部健康账号模型快照的并集，不提供 allowlist。
-- 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；`429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE/WS 业务输出后不切换账号；明确 `usage_limit_reached` 记录账号/模型额度耗尽与上游恢复时间（运行期观察，非官方额度）。WebSocket 第二个及后续 turn 只有在尚未输出、完整 transcript 可在消息上限内重建且工具 call/output 覆盖完整时，才会关闭旧 session 并最多迁移两次。
+- 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；普通 `429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE/WS 业务输出后不切换账号；明确 `usage_limit_reached` 记录凭据级额度耗尽与上游恢复时间，并冷却该凭据的全部模型（运行期观察，非官方额度）。WebSocket 第二个及后续 turn 只有在尚未输出、完整 transcript 可在消息上限内重建且工具 call/output 覆盖完整时，才会关闭旧 session 并最多迁移两次。
 - 非流式 `/v1/responses` 在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象。
 - WebSocket 支持规范入口 `GET /v1/responses`；compact 对客户端支持 unary JSON 和最小 SSE 投影，但上游使用原生 streaming `/responses` + `compaction_trigger`，不再调用已下线的 unary compact 端点。compact 的 request fault 停止切号，非 credential 临时故障不会污染普通 Responses 冷却；401/402/结构化 403/429 仍保留账号反馈。所有 OAuth 请求携带会话级 beta profile；Turn-State 有界回传并防止已知跨账号 echo。不提供 `/backend-api/codex/*` 入站别名。Realtime、网页会话和插件不属于该能力；`/v1/search` 与临时对话不经过 Codex 账号域。
 - 账号凭据、代理与到期时间只写 `state.database`；管理 API 直接显示邮箱，但不返回 token、账号 ID 或代理。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。

@@ -1556,8 +1556,10 @@ func safeErrorText(value string, limit int) string {
 
 func rateLimitObservation(body []byte, now time.Time) events.RateLimitObservation {
 	var payload struct {
-		Type  string `json:"type"`
-		Error struct {
+		Type            string          `json:"type"`
+		ResetsAt        json.RawMessage `json:"resets_at"`
+		ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
+		Error           struct {
 			Type            string          `json:"type"`
 			ResetsAt        json.RawMessage `json:"resets_at"`
 			ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
@@ -1569,15 +1571,36 @@ func rateLimitObservation(body []byte, now time.Time) events.RateLimitObservatio
 				ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
 			} `json:"error"`
 		} `json:"response"`
+		Body struct {
+			Error struct {
+				Type            string          `json:"type"`
+				ResetsAt        json.RawMessage `json:"resets_at"`
+				ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
+			} `json:"error"`
+		} `json:"body"`
 	}
 	if json.Unmarshal(body, &payload) != nil {
 		return events.RateLimitObservation{}
 	}
-	errorType, resetsAt, resetsIn := payload.Error.Type, payload.Error.ResetsAt, payload.Error.ResetsInSeconds
-	if errorType == "" {
-		errorType, resetsAt, resetsIn = payload.Response.Error.Type, payload.Response.Error.ResetsAt, payload.Response.Error.ResetsInSeconds
+	candidates := []struct {
+		typ      string
+		resetsAt json.RawMessage
+		resetsIn json.RawMessage
+	}{
+		{payload.Type, payload.ResetsAt, payload.ResetsInSeconds},
+		{payload.Error.Type, payload.Error.ResetsAt, payload.Error.ResetsInSeconds},
+		{payload.Response.Error.Type, payload.Response.Error.ResetsAt, payload.Response.Error.ResetsInSeconds},
+		{payload.Body.Error.Type, payload.Body.Error.ResetsAt, payload.Body.Error.ResetsInSeconds},
 	}
-	if !strings.EqualFold(strings.TrimSpace(errorType), "usage_limit_reached") {
+	var resetsAt, resetsIn json.RawMessage
+	matched := false
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate.typ), "usage_limit_reached") {
+			resetsAt, resetsIn, matched = candidate.resetsAt, candidate.resetsIn, true
+			break
+		}
+	}
+	if !matched {
 		return events.RateLimitObservation{}
 	}
 	observation := events.RateLimitObservation{UsageLimited: true}

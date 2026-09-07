@@ -87,26 +87,79 @@ type CodexModelsManifest struct {
 }
 
 type CodexModelManifestRecord struct {
-	Slug                     string                      `json:"slug"`
-	DisplayName              string                      `json:"display_name"`
-	Description              string                      `json:"description"`
-	DefaultReasoningLevel    string                      `json:"default_reasoning_level,omitempty"`
-	SupportedReasoningLevels []CodexReasoningLevelRecord `json:"supported_reasoning_levels,omitempty"`
-	InputModalities          []string                    `json:"input_modalities"`
-	UseResponsesLite         bool                        `json:"use_responses_lite"`
-	PreferWebsockets         bool                        `json:"prefer_websockets"`
-	ContextWindow            int                         `json:"context_window,omitempty"`
-	MaxContextWindow         int                         `json:"max_context_window,omitempty"`
-	BaseInstructions         string                      `json:"base_instructions"`
-	MinimalClientVersion     string                      `json:"minimal_client_version"`
-	Visibility               string                      `json:"visibility"`
-	Priority                 int                         `json:"priority"`
-	ServiceTiers             []any                       `json:"service_tiers"`
-	SupportedInAPI           bool                        `json:"supported_in_api"`
+	Slug                        string                      `json:"slug"`
+	DisplayName                 string                      `json:"display_name"`
+	Description                 string                      `json:"description"`
+	DefaultReasoningLevel       string                      `json:"default_reasoning_level,omitempty"`
+	SupportedReasoningLevels    []CodexReasoningLevelRecord `json:"supported_reasoning_levels"`
+	InputModalities             []string                    `json:"input_modalities"`
+	UseResponsesLite            bool                        `json:"use_responses_lite"`
+	PreferWebsockets            bool                        `json:"prefer_websockets"`
+	SupportsImageDetailOriginal bool                        `json:"supports_image_detail_original,omitempty"`
+	SupportsSearchTool          bool                        `json:"supports_search_tool,omitempty"`
+	MultiAgentVersion           string                      `json:"multi_agent_version,omitempty"`
+	MultiAgentReasoningEffort   string                      `json:"multi_agent_reasoning_effort,omitempty"`
+	CompHash                    string                      `json:"comp_hash,omitempty"`
+	ContextWindow               int                         `json:"context_window,omitempty"`
+	MaxContextWindow            int                         `json:"max_context_window,omitempty"`
+	BaseInstructions            string                      `json:"base_instructions"`
+	MinimalClientVersion        string                      `json:"minimal_client_version"`
+	Visibility                  string                      `json:"visibility"`
+	Priority                    int                         `json:"priority"`
+	ServiceTiers                []any                       `json:"service_tiers"`
+	SupportedInAPI              bool                        `json:"supported_in_api"`
 }
 
 type CodexReasoningLevelRecord struct {
-	Effort string `json:"effort"`
+	Effort      string `json:"effort"`
+	Description string `json:"description,omitempty"`
+}
+
+type codexTrustedModelProfile struct {
+	DisplayName                 string
+	Description                 string
+	MinimalClientVersion        string
+	BaseInstructions            string
+	UseResponsesLite            bool
+	InputModalities             []string
+	SupportsImageDetailOriginal bool
+	SupportsSearchTool          bool
+	MultiAgentVersion           string
+	MultiAgentReasoningEffort   string
+	CompHash                    string
+	ContextWindow               int
+	MaxContextWindow            int
+	DefaultReasoningLevel       string
+	SupportedReasoningLevels    []string
+	ServiceTiers                []any
+}
+
+func trustedCodexModelProfile(model string) (codexTrustedModelProfile, bool) {
+	if model != "gpt-6-astra" {
+		return codexTrustedModelProfile{}, false
+	}
+	return codexTrustedModelProfile{
+		DisplayName:                 "GPT-6-Astra",
+		Description:                 "Our most capable model for complex, demanding work.",
+		MinimalClientVersion:        "0.153.0",
+		BaseInstructions:            "You are Codex, an agent based on GPT-6.",
+		UseResponsesLite:            true,
+		InputModalities:             []string{"text", "image"},
+		SupportsImageDetailOriginal: true,
+		SupportsSearchTool:          true,
+		MultiAgentVersion:           "v2",
+		MultiAgentReasoningEffort:   "xhigh",
+		CompHash:                    "3000",
+		ContextWindow:               272000,
+		MaxContextWindow:            872000,
+		DefaultReasoningLevel:       "medium",
+		SupportedReasoningLevels:    []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		ServiceTiers: []any{map[string]any{
+			"id":          "priority",
+			"name":        "Fast",
+			"description": "2x speed, increased usage",
+		}},
+	}, true
 }
 
 // handleModels returns the effective catalog as either an OpenAI-compatible
@@ -159,9 +212,13 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 		if !containsString(record.SupportedEndpoints, "/v1/responses") {
 			continue
 		}
+		profile, trusted := trustedCodexModelProfile(record.ID)
 		efforts := []string{"medium"}
 		defaultEffort := "medium"
-		if record.Capabilities != nil && record.Capabilities.Reasoning != nil && record.Capabilities.Reasoning.Supported {
+		if trusted {
+			efforts = append([]string(nil), profile.SupportedReasoningLevels...)
+			defaultEffort = profile.DefaultReasoningLevel
+		} else if record.Capabilities != nil && record.Capabilities.Reasoning != nil && record.Capabilities.Reasoning.Supported {
 			if len(record.Capabilities.Reasoning.Efforts) > 0 {
 				efforts = append([]string(nil), record.Capabilities.Reasoning.Efforts...)
 			}
@@ -187,13 +244,19 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 		}
 		levels := make([]CodexReasoningLevelRecord, 0, len(efforts))
 		for _, effort := range efforts {
-			levels = append(levels, CodexReasoningLevelRecord{Effort: effort})
+			level := CodexReasoningLevelRecord{Effort: effort}
+			if trusted {
+				level.Description = codexReasoningLevelDescription(effort)
+			}
+			levels = append(levels, level)
 		}
 		modalities := []string{"text"}
-		if record.Capabilities != nil && record.Capabilities.Native != nil && record.Capabilities.Native.Responses != nil && record.Capabilities.Native.Responses.Images {
+		if trusted {
+			modalities = append([]string(nil), profile.InputModalities...)
+		} else if record.Capabilities != nil && record.Capabilities.Native != nil && record.Capabilities.Native.Responses != nil && record.Capabilities.Native.Responses.Images {
 			modalities = append(modalities, "image")
 		}
-		models = append(models, CodexModelManifestRecord{
+		manifest := CodexModelManifestRecord{
 			Slug: record.ID, DisplayName: record.ID, Description: record.ID,
 			DefaultReasoningLevel: defaultEffort, SupportedReasoningLevels: levels,
 			InputModalities: modalities, UseResponsesLite: false,
@@ -202,9 +265,44 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			MaxContextWindow: manifestMaxContextWindow(record.ContextWindowTokens, record.MaxContextWindowTokens),
 			BaseInstructions: "You are Codex, an AI coding assistant.", MinimalClientVersion: "0.147.0",
 			Visibility: "list", Priority: priority + 1, ServiceTiers: []any{}, SupportedInAPI: true,
-		})
+		}
+		if trusted {
+			manifest.DisplayName = profile.DisplayName
+			manifest.Description = profile.Description
+			manifest.BaseInstructions = profile.BaseInstructions
+			manifest.MinimalClientVersion = profile.MinimalClientVersion
+			manifest.UseResponsesLite = profile.UseResponsesLite
+			manifest.SupportsImageDetailOriginal = profile.SupportsImageDetailOriginal
+			manifest.SupportsSearchTool = profile.SupportsSearchTool
+			manifest.MultiAgentVersion = profile.MultiAgentVersion
+			manifest.MultiAgentReasoningEffort = profile.MultiAgentReasoningEffort
+			manifest.CompHash = profile.CompHash
+			manifest.ContextWindow = profile.ContextWindow
+			manifest.MaxContextWindow = profile.MaxContextWindow
+			manifest.ServiceTiers = append([]any(nil), profile.ServiceTiers...)
+		}
+		models = append(models, manifest)
 	}
 	return CodexModelsManifest{Models: models}
+}
+
+func codexReasoningLevelDescription(effort string) string {
+	switch effort {
+	case "low":
+		return "Fast responses with lighter reasoning"
+	case "medium":
+		return "Balances speed and reasoning depth for everyday tasks"
+	case "high":
+		return "Greater reasoning depth for complex problems"
+	case "xhigh":
+		return "Extra high reasoning depth for complex problems"
+	case "max":
+		return "Maximum reasoning depth for the hardest problems"
+	case "ultra":
+		return "Maximum reasoning with automatic task delegation"
+	default:
+		return ""
+	}
 }
 
 func codexClientSupportsExtendedReasoning(clientVersion string) bool {

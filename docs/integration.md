@@ -214,6 +214,8 @@ Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。�
 
 `gpt-5.6-luna`、`gpt-5.6-sol` 与 `gpt-5.6-terra` 的模型目录均发布 `272,000` default context window、`921,000` max context window、`128,000` max output tokens，以及一致的 reasoning 枚举 `none/low/medium/high/xhigh/max`，默认值均为 `medium`。其中 Luna 已完成双向 Level 3 验证，固定转换目标为 `medium`；该验证结论不自动扩展到尚未配置转换模板的 Sol 与 Terra。Responses output item 的私有 metadata 会被代理有界省略并记录 degraded feature，不向 Anthropic 内容泄漏内部元数据。
 
+`gpt-6-astra` 的 Codex manifest 使用本地可信 profile：`272,000` default context、`872,000` max context、`low/medium/high/xhigh/max/ultra` reasoning（默认 `medium`）、Responses Lite、文本/图片输入、search、multi-agent v2 与 priority tier。该 profile 只补充稳定客户端能力；模型仍须由账号发现进入有效目录，`prefer_websockets` 仍要求实际 Codex OAuth 路由可用。
+
 `gpt-5.5` 由内建 `codexoauth` 发布原生 `/v1/responses`，模型目录返回 `272,000` context window 和 `128,000` max output tokens。实测 `none/low/medium/high/xhigh` reasoning、非流式文本、文本 SSE、function call、tool result 闭环和流式工具事件均可用；默认 effort 为 `medium`。不要发送 `max` effort。图片能力保持关闭；客户端 `max_output_tokens` 受固定 Codex OAuth transport 限制，会在调用上游前返回明确的 400。
 
 ## 4. OpenAI Responses 集成

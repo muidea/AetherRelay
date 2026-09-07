@@ -13,9 +13,9 @@ type Profile struct {
 }
 
 var current = Profile{
-	ClientVersion: "0.147.0",
-	UserAgent:     "codex-tui/0.147.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.147.0)",
-	Originator:    "codex-tui",
+	ClientVersion: "0.153.4",
+	UserAgent:     "codex_exec/0.153.4 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex_exec; 0.153.4)",
+	Originator:    "codex_exec",
 	WebsocketBeta: "responses_websockets=2026-02-06",
 }
 

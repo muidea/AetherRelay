@@ -30,11 +30,12 @@ const (
 )
 
 type codexNormalizationOptions struct {
-	compact             bool
-	allowPreviousID     bool
-	allowIncrementalOut bool
-	responsesLite       bool
-	allowBootstrap      bool
+	compact                bool
+	allowPreviousID        bool
+	allowIncrementalOut    bool
+	responsesLite          bool
+	allowBootstrap         bool
+	allowHistoricalAnchors bool
 }
 
 type codexRequestFeatures struct {
@@ -73,7 +74,7 @@ var codexDropCompatibleFields = []string{
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
-// CP-REQ-001..031 before an account is acquired.
+// CP-REQ-001..032 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
 	return normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact})
 }
@@ -203,8 +204,13 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		return nil, nil, nil, fmt.Errorf("invalid JSON request body")
 	}
 	if options.allowBootstrap {
-		if !normalizeCodexCallOutputBootstrap(raw, body, isCodexAutomationBootstrap) {
-			normalizeCodexCallOutputBootstrap(raw, body, isCodexDelegationBootstrap)
+		if !normalizeCodexCallOutputBootstrap(raw, body, isCodexAutomationBootstrap, false) {
+			if normalizeCodexCallOutputBootstrap(raw, body, isCodexDelegationBootstrap, true) {
+				options.allowHistoricalAnchors = true
+				if previous, ok := body["previous_response_id"].(string); ok && strings.TrimSpace(previous) != "" {
+					options.allowPreviousID = true
+				}
+			}
 		}
 	}
 	model, _ := body["model"].(string)
@@ -300,16 +306,16 @@ func decodeCodexJSON(raw []byte, target any) error {
 }
 
 // normalizeCodexCallOutputBootstrap implements CP-REQ-031 before the ordinary
-// HTTP tool-history validator. It accepts only an isolated, fully recognized
-// Codex bootstrap family; every ambiguous shape remains an orphan output and
-// is rejected by validateCodexInput.
-func normalizeCodexCallOutputBootstrap(raw []byte, body map[string]any, candidate func(map[string]any) bool) bool {
+// HTTP tool-history validator. It accepts only a fully recognized Codex
+// bootstrap family; delegation may retain unambiguous historical anchors,
+// while every ambiguous orphan output is rejected by validateCodexInput.
+func normalizeCodexCallOutputBootstrap(raw []byte, body map[string]any, candidate func(map[string]any) bool, allowHistorical bool) bool {
 	if candidate == nil || !hasUniqueCodexJSONMembers(raw) {
 		return false
 	}
 	if previous, exists := body["previous_response_id"]; exists {
 		value, ok := previous.(string)
-		if !ok || strings.TrimSpace(value) != "" {
+		if !ok || !allowHistorical && strings.TrimSpace(value) != "" {
 			return false
 		}
 	}
@@ -323,18 +329,27 @@ func normalizeCodexCallOutputBootstrap(raw []byte, body map[string]any, candidat
 			continue
 		}
 		typ, _ := item["type"].(string)
-		if typ == "item_reference" || strings.HasSuffix(typ, "_call") {
-			return false
-		}
-		if isCodexCallOutputType(typ) {
+		if candidate(item) {
 			callIDValue, exists := item["call_id"]
 			callID, isString := callIDValue.(string)
 			if exists && (!isString || strings.TrimSpace(callID) != "") {
 				return false
 			}
-			if !candidate(item) {
+			continue
+		}
+		if typ == "item_reference" {
+			id, _ := item["id"].(string)
+			if !allowHistorical || strings.TrimSpace(id) == "" {
 				return false
 			}
+			continue
+		}
+		if strings.HasSuffix(typ, "_call") || isCodexCallOutputType(typ) {
+			callID, _ := item["call_id"].(string)
+			if !allowHistorical || strings.TrimSpace(callID) == "" {
+				return false
+			}
+			continue
 		}
 	}
 	changed := false
@@ -391,6 +406,9 @@ func codexStringField(item map[string]any, key string) string {
 }
 
 func validCodexAutomationBootstrap(value string) bool {
+	if validCodexAutomationHeartbeat(value) {
+		return true
+	}
 	normalized := strings.ReplaceAll(value, "\r\n", "\n")
 	if strings.ContainsRune(normalized, '\r') {
 		return false
@@ -414,6 +432,91 @@ func validCodexAutomationBootstrap(value string) bool {
 		return false
 	}
 	return strings.TrimSpace(strings.Join(lines[5:], "\n")) != ""
+}
+
+func validCodexAutomationHeartbeat(value string) bool {
+	decoder := xml.NewDecoder(strings.NewReader(value))
+	var rootSeen, idSeen bool
+	var idText bytes.Buffer
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			id := idText.String()
+			return rootSeen && idSeen && depth == 0 && strings.TrimSpace(id) == id && validCodexAutomationID(id)
+		}
+		if err != nil {
+			return false
+		}
+		switch current := token.(type) {
+		case xml.StartElement:
+			depth++
+			if current.Name.Space != "" || len(current.Attr) != 0 || depth > 2 {
+				return false
+			}
+			if depth == 1 {
+				if rootSeen || current.Name.Local != "heartbeat" {
+					return false
+				}
+				rootSeen = true
+			} else if idSeen || current.Name.Local != "automation_id" {
+				return false
+			}
+			idSeen = depth == 2
+		case xml.EndElement:
+			if current.Name.Space != "" || depth == 2 && current.Name.Local != "automation_id" || depth == 1 && current.Name.Local != "heartbeat" {
+				return false
+			}
+			depth--
+			if depth < 0 {
+				return false
+			}
+		case xml.CharData:
+			if depth == 2 {
+				_, _ = idText.Write(current)
+			} else if len(bytes.TrimSpace(current)) != 0 {
+				return false
+			}
+		case xml.Comment, xml.ProcInst, xml.Directive:
+			return false
+		}
+	}
+}
+
+func normalizeCodexAgentMessages(value any) error {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	for index, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok || strings.TrimSpace(codexStringField(item, "type")) != "agent_message" {
+			continue
+		}
+		content, ok := item["content"].([]any)
+		if !ok {
+			return fmt.Errorf("input[%d].content must be an array", index)
+		}
+		for partIndex, rawPart := range content {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				return fmt.Errorf("input[%d].content[%d] must be an object", index, partIndex)
+			}
+			if strings.TrimSpace(codexStringField(part, "type")) != "encrypted_content" {
+				continue
+			}
+			encrypted, ok := part["encrypted_content"].(string)
+			if !ok {
+				return fmt.Errorf("input[%d].content[%d].encrypted_content must be a string", index, partIndex)
+			}
+			part["type"] = "input_text"
+			part["text"] = encrypted
+			delete(part, "encrypted_content")
+		}
+		item["type"] = "message"
+		item["role"] = "user"
+	}
+	return nil
 }
 
 func codexAutomationHeaderValue(line, prefix string) (string, bool) {
@@ -871,7 +974,7 @@ func validateCodexRequest(body map[string]any, options codexNormalizationOptions
 	if err := validateCodexTools(body["tools"], options.responsesLite); err != nil {
 		return err
 	}
-	return validateCodexInput(body["input"], options.allowIncrementalOut)
+	return validateCodexInput(body["input"], options.allowIncrementalOut, options.allowHistoricalAnchors)
 }
 
 func validateCodexTools(value any, allowToolSearch ...bool) error {
@@ -914,13 +1017,14 @@ func validateCodexTools(value any, allowToolSearch ...bool) error {
 	return nil
 }
 
-func validateCodexInput(value any, allowIncrementalOutputs bool) error {
+func validateCodexInput(value any, allowIncrementalOutputs bool, allowHistoricalAnchors ...bool) error {
 	items, ok := value.([]any)
 	if !ok {
 		return nil
 	}
 	functionCalls := map[string]struct{}{}
 	customCalls := map[string]struct{}{}
+	historicalAnchors := len(allowHistoricalAnchors) > 0 && allowHistoricalAnchors[0]
 	for _, raw := range items {
 		item, ok := raw.(map[string]any)
 		if !ok {
@@ -932,7 +1036,24 @@ func validateCodexInput(value any, allowIncrementalOutputs bool) error {
 			}
 		}
 		typ, _ := item["type"].(string)
+		if historicalAnchors {
+			if typ == "item_reference" {
+				if id, _ := item["id"].(string); strings.TrimSpace(id) != "" {
+					continue
+				}
+			}
+			if strings.HasSuffix(typ, "_call") || isCodexCallOutputType(typ) {
+				if callID, _ := item["call_id"].(string); strings.TrimSpace(callID) != "" {
+					continue
+				}
+			}
+		}
 		switch typ {
+		case "agent_message":
+			if err := validateCodexAgentMessageContent(item["content"]); err != nil {
+				return err
+			}
+			continue
 		case "input_image":
 			imageURL, _ := item["image_url"].(string)
 			if strings.TrimSpace(imageURL) == "" {
@@ -967,6 +1088,33 @@ func validateCodexInput(value any, allowIncrementalOutputs bool) error {
 		}
 		if err := rejectCodexMultimodalContent(item["content"]); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateCodexAgentMessageContent(value any) error {
+	parts, ok := value.([]any)
+	if !ok || len(parts) == 0 {
+		return fmt.Errorf("agent_message content must be a non-empty array")
+	}
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("agent_message content block must be an object")
+		}
+		typ, _ := part["type"].(string)
+		switch typ {
+		case "input_text", "text":
+			if _, ok := part["text"].(string); !ok {
+				return fmt.Errorf("agent_message content text must be a string")
+			}
+		case "encrypted_content":
+			if _, ok := part["encrypted_content"].(string); !ok {
+				return fmt.Errorf("agent_message encrypted_content must be a string")
+			}
+		default:
+			return fmt.Errorf("agent_message content type %q is not supported by the Codex proxy", typ)
 		}
 	}
 	return nil

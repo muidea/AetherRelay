@@ -96,9 +96,9 @@ func TestCodexModelsManifestFiltersExtendedReasoningForLegacyClients(t *testing.
 	}
 }
 
-// CP-CAP-007: legacy manifests must omit reasoning metadata instead of
-// advertising a level that the upstream model does not support.
-func TestCodexModelsManifestOmitsFullyFilteredLegacyReasoning(t *testing.T) {
+// CP-CAP-007: a known empty legacy result remains distinct from an unknown
+// reasoning manifest while the now-invalid default is omitted.
+func TestCodexModelsManifestPreservesFullyFilteredLegacyReasoning(t *testing.T) {
 	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
 		"gpt-codex": {
 			ID: "gpt-codex", ReasoningDeclared: true, ReasoningSupported: true,
@@ -116,8 +116,40 @@ func TestCodexModelsManifestOmitsFullyFilteredLegacyReasoning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "default_reasoning_level") || strings.Contains(string(encoded), "supported_reasoning_levels") {
-		t.Fatalf("CP-CAP-007 filtered reasoning fields must be absent: %s", encoded)
+	if strings.Contains(string(encoded), "default_reasoning_level") || !strings.Contains(string(encoded), `"supported_reasoning_levels":[]`) {
+		t.Fatalf("CP-CAP-007 filtered reasoning levels must be an explicit empty array: %s", encoded)
+	}
+}
+
+// CP-CAP-008: known models use a trusted client manifest profile while
+// transport claims remain intersected with the effective route catalog.
+func TestCodexModelsManifestUsesTrustedAstraProfile(t *testing.T) {
+	snapshot := effectivecatalog.BuildWithCodex(config.Config{}, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
+		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-6-astra"}},
+	})
+	manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.153.4")
+	if len(manifest.Models) != 1 {
+		t.Fatalf("models=%#v", manifest.Models)
+	}
+	model := manifest.Models[0]
+	wantLevels := []CodexReasoningLevelRecord{
+		{Effort: "low", Description: "Fast responses with lighter reasoning"},
+		{Effort: "medium", Description: "Balances speed and reasoning depth for everyday tasks"},
+		{Effort: "high", Description: "Greater reasoning depth for complex problems"},
+		{Effort: "xhigh", Description: "Extra high reasoning depth for complex problems"},
+		{Effort: "max", Description: "Maximum reasoning depth for the hardest problems"},
+		{Effort: "ultra", Description: "Maximum reasoning with automatic task delegation"},
+	}
+	if model.DisplayName != "GPT-6-Astra" || model.Description != "Our most capable model for complex, demanding work." ||
+		model.ContextWindow != 272000 || model.MaxContextWindow != 872000 || model.MinimalClientVersion != "0.153.0" ||
+		!model.UseResponsesLite || !model.PreferWebsockets || !model.SupportsImageDetailOriginal || !model.SupportsSearchTool ||
+		model.MultiAgentVersion != "v2" || model.MultiAgentReasoningEffort != "xhigh" || model.CompHash != "3000" || model.DefaultReasoningLevel != "medium" ||
+		!reflect.DeepEqual(model.SupportedReasoningLevels, wantLevels) || !reflect.DeepEqual(model.InputModalities, []string{"text", "image"}) || len(model.ServiceTiers) != 1 {
+		t.Fatalf("CP-CAP-008 model=%#v", model)
+	}
+	tier, ok := model.ServiceTiers[0].(map[string]any)
+	if !ok || tier["id"] != "priority" || tier["name"] != "Fast" || tier["description"] != "2x speed, increased usage" {
+		t.Fatalf("CP-CAP-008 service tier=%#v", model.ServiceTiers)
 	}
 }
 

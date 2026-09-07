@@ -419,6 +419,14 @@ func TestRateLimitObservationReadsCodexUsageReset(t *testing.T) {
 	if class := errorClassWithRateLimit(http.StatusInternalServerError, isoObservation); class != events.ErrorRateLimit {
 		t.Fatalf("usage limit class=%q", class)
 	}
+	topLevel := rateLimitObservation([]byte(`{"type":"USAGE_LIMIT_REACHED","resets_at":1700000300000}`), now)
+	if !topLevel.UsageLimited || topLevel.ResetAt != now.Add(300*time.Second).Format(time.RFC3339) {
+		t.Fatalf("CP-FAIL-017 top-level observation=%+v", topLevel)
+	}
+	websocketBody := rateLimitObservation([]byte(`{"type":"error","body":{"error":{"type":"usage_limit_reached","resets_in_seconds":45}}}`), now)
+	if !websocketBody.UsageLimited || websocketBody.ResetAt != now.Add(45*time.Second).Format(time.RFC3339) {
+		t.Fatalf("CP-FAIL-017 websocket body observation=%+v", websocketBody)
+	}
 }
 
 func TestRateLimitObservationDoesNotTreatGeneric429AsQuotaExhaustion(t *testing.T) {

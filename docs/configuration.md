@@ -32,6 +32,7 @@ model_metadata:
 | Exact model ID | Default context | Max context | Max output |
 | --- | ---: | ---: | ---: |
 | `deepseek-v4-flash` / `DeepSeek-V4-Flash` | 1,000,000 | 未声明 | 29,000 |
+| `gpt-6-astra` | 272,000 | 872,000 | 128,000 |
 | `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 921,000 | 128,000 |
 | `gpt-5.4-mini` | 400,000 | 未声明 | 128,000 |
 | `gpt-5.4` | 1,050,000 | 未声明 | 128,000 |
@@ -204,7 +205,7 @@ codex_oauth:
 - Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。授权码交换和刷新都从统一 Codex identity profile 生成 `User-Agent` 与 `Originator`，且不向 credential endpoint 发送 inference-only `Version`。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
 - Codex 的 refresh token 健康与当前 access token 路由健康分别投影：凭据刷新失败会保留安全错误类别和时间，但不会仅凭该结果把仍能通过鉴权的账号移出路由。成功的模型发现、用量查询或 Responses 请求会恢复系统判定的异常状态；操作员显式设置的 `disabled` 永不被后台成功结果覆盖。恢复状态后会立即刷新有效模型目录。
 - Codex Responses 在账号切换耗尽时保留最后一个真实上游失败，不再用后续的“无可用账号”覆盖首个 401、403、429 或 5xx。安全错误响应和日志会携带上游 HTTP 状态但不记录响应正文、Token、账号头或代理；上游 401 且 refresh token 恢复失败时按 `invalid_token` 反馈，不再误记为普通“上游故障”。
-- 调用中上游明确返回的 `usage_limit_reached` 仍会另行记录为账号/模型级额度耗尽与可选恢复时间，并驱动该模型冷却；普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
+- 调用中上游明确返回的 `usage_limit_reached` 会另行记录为凭据级额度耗尽与可选恢复时间，并驱动该凭据全部模型的单调冷却；成功请求或后续较短失败不会提前释放。普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
 - 可路由模型始终是全部健康账号模型快照的并集；不提供 `codex_oauth.models` 筛选项。管理型 Provider 使用同名模型时，两者都会进入候选链；其默认优先级为 `100`，Codex OAuth 默认 `90`，可在安全的原生 Responses 失败场景回退。`provider_enabled` 与 `priority` 是可热更新的路由策略。
 - 账号（access/refresh/id token、ChatGPT account ID、邮箱、到期时间与账号代理）以 AES-256-GCM 加密载荷写入 `state.database`。管理列表直接显示邮箱，但不返回 token、账号 ID 或代理 URL。
 - 账号代理支持 `http://` 与 `https://`，一旦配置，会同时用于 OAuth 授权码换令牌、refresh token 刷新、模型发现、`https://chatgpt.com/backend-api/wham/usage`、Responses HTTP/compact 与 WebSocket 请求，避免刷新、发现、用量读取与实际调用的出口 IP 不一致。HTTPS 代理的 CONNECT TLS 腿固定协商 HTTP/1.1，不能依赖代理端 HTTP/2 CONNECT。

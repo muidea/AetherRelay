@@ -95,9 +95,9 @@ type CooldownView struct {
 	ErrorClass string `json:"error_class"`
 }
 
-// QuotaObservation is an upstream-observed account/model limit state. It is
-// intentionally not a claimed remaining quota: Codex does not provide that
-// value through the account model endpoint.
+// QuotaObservation is an upstream-observed limit state. An empty Model denotes
+// a credential-wide usage limit; it is intentionally not a claimed remaining
+// quota because Codex does not provide that value through the model endpoint.
 type QuotaObservation struct {
 	Model      string `json:"model"`
 	State      string `json:"state"`

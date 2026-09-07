@@ -340,6 +340,7 @@ func TestCodexHTTPRequestNormalizesKnownCallOutputBootstraps(t *testing.T) {
 		"Automation memory: $CODEX_HOME/automations/wiki-maintenance/memory.md\n" +
 		"Last run: 2026-09-01T02:06:34.536Z (1788228394536)\n\n" +
 		"Review the project and report important changes."
+	heartbeat := `<heartbeat><automation_id>wiki-maintenance</automation_id></heartbeat>`
 	for _, testCase := range []struct {
 		name      string
 		namespace string
@@ -348,6 +349,7 @@ func TestCodexHTTPRequestNormalizesKnownCallOutputBootstraps(t *testing.T) {
 	}{
 		{name: "delegation", namespace: "codex_tui", tool: "send_message_to_thread", output: delegation},
 		{name: "automation", namespace: "codex_app", tool: "automation_update", output: automation},
+		{name: "automation heartbeat", namespace: "codex_app", tool: "automation_update", output: heartbeat},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			output, err := json.Marshal(testCase.output)
@@ -369,6 +371,24 @@ func TestCodexHTTPRequestNormalizesKnownCallOutputBootstraps(t *testing.T) {
 				t.Fatalf("CP-REQ-030/031 normalized=%s", normalized)
 			}
 		})
+	}
+}
+
+// CP-REQ-031: delegation can retain a provider-owned continuation and
+// well-identified historical call records while normalizing only the orphan
+// bootstrap output.
+func TestCodexHTTPRequestNormalizesHistoricalDelegation(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","previous_response_id":"resp-1","input":[{"type":"function_call","call_id":"call-1","name":"inspect","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"done"},{"type":"item_reference","id":"msg-1"},{"type":"computer_call","call_id":"call-2"},{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":"<codex_delegation><source_thread_id>thread-1</source_thread_id><input>continue the task</input></codex_delegation>"}]}`)
+	normalized, body, _, _, err := normalizeCodexHTTPRequest(raw, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["previous_response_id"] != "resp-1" || !bytes.Contains(normalized, []byte(`"call_id":"call-1"`)) || !bytes.Contains(normalized, []byte(`"id":"msg-1"`)) {
+		t.Fatalf("CP-REQ-031 historical fields were not preserved: %s", normalized)
+	}
+	items := body["input"].([]any)
+	if items[4].(map[string]any)["type"] != "message" {
+		t.Fatalf("bootstrap was not normalized: %#v", items[4])
 	}
 }
 
@@ -404,12 +424,15 @@ func TestCodexHTTPRequestRejectsAmbiguousCallOutputBootstraps(t *testing.T) {
 		body    string
 		compact bool
 	}{
-		{name: "nonempty previous response", body: `{"model":"gpt-test","previous_response_id":"resp-1","input":[` + delegationItem + `]}`},
-		{name: "call anchor", body: `{"model":"gpt-test","input":[{"type":"function_call","call_id":"call-1"},` + delegationItem + `]}`},
+		{name: "nonstring previous response", body: `{"model":"gpt-test","previous_response_id":42,"input":[` + delegationItem + `]}`},
+		{name: "blank call anchor", body: `{"model":"gpt-test","input":[{"type":"function_call","call_id":" "},` + delegationItem + `]}`},
+		{name: "blank item reference", body: `{"model":"gpt-test","input":[{"type":"item_reference","id":""},` + delegationItem + `]}`},
+		{name: "candidate with call id", body: `{"model":"gpt-test","input":[{"type":"function_call_output","namespace":"codex_app","name":"create_thread","call_id":"call-1","output":` + encode(delegation) + `}]}`},
 		{name: "mixed bootstrap families", body: `{"model":"gpt-test","input":[` + delegationItem + `,` + automationItem + `]}`},
 		{name: "duplicate discriminator", body: `{"model":"gpt-test","input":[{"type":"message","type":"function_call_output","namespace":"codex_app","name":"create_thread","output":` + encode(delegation) + `}]}`},
 		{name: "incomplete delegation", body: `{"model":"gpt-test","input":[{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":"<codex_delegation><input>work</input></codex_delegation>"}]}`},
 		{name: "unsafe automation id", body: `{"model":"gpt-test","input":[{"type":"function_call_output","namespace":"codex_app","name":"automation_update","output":` + encode(strings.Replace(automation, "wiki", "../wiki", 1)) + `}]}`},
+		{name: "heartbeat extra child", body: `{"model":"gpt-test","input":[{"type":"function_call_output","namespace":"codex_app","name":"automation_update","output":"<heartbeat><automation_id>wiki</automation_id><extra/></heartbeat>"}]}`},
 		{name: "compact", body: `{"model":"gpt-test","input":[` + delegationItem + `]}`, compact: true},
 		{name: "native v2 compact", body: `{"model":"gpt-test","stream":true,"input":[{"type":"compaction_trigger"},` + delegationItem + `]}`},
 	}
@@ -427,6 +450,24 @@ func TestCodexHTTPRequestRejectsAmbiguousCallOutputBootstraps(t *testing.T) {
 	websocketBody := []byte(`{"type":"response.create","model":"gpt-test","input":[` + delegationItem + `]}`)
 	if _, _, _, err := normalizeCodexWebsocketCreate(websocketBody, "", nil, codexRequestFeatures{}); err == nil {
 		t.Fatal("CP-REQ-031 websocket normalization accepted a Codex bootstrap")
+	}
+}
+
+func TestCodexAutomationHeartbeatRejectsUnsafeXML(t *testing.T) {
+	for _, value := range []string{
+		`<result><automation_id>wiki</automation_id></result>`,
+		`<heartbeat status="ok"><automation_id>wiki</automation_id></heartbeat>`,
+		`<heartbeat xmlns="urn:codex"><automation_id>wiki</automation_id></heartbeat>`,
+		`<heartbeat><automation_id>wiki</automation_id><status>ok</status></heartbeat>`,
+		`<heartbeat><automation_id><value>wiki</value></automation_id></heartbeat>`,
+		`<heartbeat><automation_id> wiki </automation_id></heartbeat>`,
+		`<heartbeat><automation_id>../wiki</automation_id></heartbeat>`,
+		`<heartbeat><!-- ok --><automation_id>wiki</automation_id></heartbeat>`,
+		`<heartbeat><automation_id>wiki</automation_id></heartbeat>extra`,
+	} {
+		if validCodexAutomationHeartbeat(value) {
+			t.Fatalf("CP-REQ-031 unsafe heartbeat accepted: %s", value)
+		}
 	}
 }
 
@@ -460,6 +501,36 @@ func TestCodexRequestSupportsNativeToolAndImageProtocol(t *testing.T) {
 	}
 	if bytes.Contains(normalized, []byte("private-installation")) || bytes.Contains(normalized, []byte("private-turn")) {
 		t.Fatalf("CP-REQ-016 metadata value reached upstream: %s", normalized)
+	}
+}
+
+// CP-REQ-032: native Codex paths retain the multi-agent v2 envelope, while
+// Responses-to-Anthropic exposes its task text as an ordinary user message.
+func TestCodexRequestHandlesAgentMessageByTargetProtocol(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","input":[{"type":"agent_message","id":"task-1","author":"/root","recipient":"/root/worker","content":[{"type":"encrypted_content","encrypted_content":"delegate this"},{"type":"input_text","text":" context"}]}]}`)
+	normalized, body, _, err := normalizeCodexRequest(raw, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := body["input"].([]any)[0].(map[string]any)
+	if item["type"] != "agent_message" || item["role"] != nil || !bytes.Contains(normalized, []byte(`"type":"encrypted_content"`)) || !bytes.Contains(normalized, []byte(`"recipient":"/root/worker"`)) {
+		t.Fatalf("CP-REQ-032 native message changed: %s", normalized)
+	}
+	messages, _, err := responsesInputMessages([]any{map[string]any{
+		"type": "agent_message", "author": "/root", "recipient": "/root/worker",
+		"internal_chat_message_metadata_passthrough": map[string]any{"turn_id": "turn-1"},
+		"content": []any{map[string]any{"type": "encrypted_content", "encrypted_content": "delegate this"}},
+	}})
+	if err != nil || len(messages) != 1 || messages[0]["role"] != "user" || messages[0]["content"] != "delegate this" {
+		t.Fatalf("CP-REQ-032 adapter messages=%#v err=%v", messages, err)
+	}
+	compact, compactBody, _, err := normalizeCodexRequest(raw, true)
+	if err != nil || compactBody["input"].([]any)[0].(map[string]any)["type"] != "agent_message" || !bytes.Contains(compact, []byte("encrypted_content")) {
+		t.Fatalf("CP-REQ-032 compact did not preserve native history: %s err=%v", compact, err)
+	}
+	invalid := []byte(`{"model":"gpt-test","input":[{"type":"agent_message","content":[{"type":"encrypted_content","encrypted_content":42}]}]}`)
+	if _, _, _, err := normalizeCodexRequest(invalid, false); err == nil {
+		t.Fatal("CP-REQ-032 non-string encrypted task was accepted")
 	}
 }
 

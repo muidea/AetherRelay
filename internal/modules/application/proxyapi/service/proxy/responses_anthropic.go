@@ -703,6 +703,9 @@ func responsesInputMessages(input any) ([]map[string]any, string, error) {
 	if !ok || len(items) == 0 {
 		return nil, "", fmt.Errorf("input")
 	}
+	if err := normalizeCodexAgentMessages(items); err != nil {
+		return nil, "", err
+	}
 	if len(items) > maxConversionContentBlocks {
 		return nil, "", fmt.Errorf("input exceeds %d content blocks", maxConversionContentBlocks)
 	}
@@ -739,7 +742,10 @@ func responsesInputMessages(input any) ([]map[string]any, string, error) {
 		if typ != "" && typ != "message" {
 			return nil, "", fmt.Errorf("input[%d].type", i)
 		}
-		if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "role": {}, "status": {}, "content": {}}); err != nil {
+		if err := rejectConversionFields(item, map[string]struct{}{
+			"type": {}, "id": {}, "role": {}, "status": {}, "content": {},
+			"author": {}, "recipient": {}, "internal_chat_message_metadata_passthrough": {},
+		}); err != nil {
 			return nil, "", fmt.Errorf("input[%d].%w", i, err)
 		}
 		role, _ := item["role"].(string)

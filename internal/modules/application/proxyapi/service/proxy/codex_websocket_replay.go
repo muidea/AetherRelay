@@ -38,12 +38,12 @@ func (s *codexWebsocketReplayState) prepare(payload []byte) (codexWebsocketTurnR
 	if err != nil {
 		return codexWebsocketTurnReplay{}, err
 	}
-	full, exists := cloneCodexWebsocketRawItems(current), currentExists
+	full, exists := current, currentExists
 	if needsHistory && s != nil && s.exists {
 		if codexWebsocketRawItemsHavePrefix(current, s.items) {
-			full = cloneCodexWebsocketRawItems(current)
+			full = current
 		} else {
-			full = append(cloneCodexWebsocketRawItems(s.items), cloneCodexWebsocketRawItems(current)...)
+			full = combineCodexWebsocketRawItems(s.items, current)
 		}
 		exists = true
 	}
@@ -65,7 +65,7 @@ func (s *codexWebsocketReplayState) commit(turn codexWebsocketTurnReplay, output
 	if s == nil {
 		return
 	}
-	items := append(cloneCodexWebsocketRawItems(turn.items), cloneCodexWebsocketRawItems(output)...)
+	items := combineCodexWebsocketRawItems(turn.items, output)
 	if !codexWebsocketRawItemsWithinLimit(items, s.limit) {
 		s.items = nil
 		s.exists = false
@@ -124,7 +124,7 @@ func codexWebsocketInputSequence(payload []byte) ([]json.RawMessage, bool, error
 		if err := json.Unmarshal(trimmed, &items); err != nil {
 			return nil, true, err
 		}
-		return cloneCodexWebsocketRawItems(items), true, nil
+		return items, true, nil
 	}
 	return []json.RawMessage{append(json.RawMessage(nil), trimmed...)}, true, nil
 }
@@ -162,6 +162,9 @@ func codexWebsocketRawItemsHavePrefix(items, prefix []json.RawMessage) bool {
 		return false
 	}
 	for index := range prefix {
+		if bytes.Equal(items[index], prefix[index]) {
+			continue
+		}
 		var left, right any
 		if decodeCodexJSON(items[index], &left) != nil || decodeCodexJSON(prefix[index], &right) != nil || !reflect.DeepEqual(left, right) {
 			return false
@@ -174,18 +177,29 @@ func codexWebsocketRawItemsWithinLimit(items []json.RawMessage, limit int64) boo
 	if limit <= 0 {
 		return true
 	}
-	encoded, err := json.Marshal(items)
-	return err == nil && int64(len(encoded)) <= limit
+	// RawMessage bodies are already valid JSON. Counting their stored bytes is
+	// a conservative bound that avoids re-encoding the entire transcript on
+	// every turn.
+	size := int64(2)
+	for index, item := range items {
+		if index > 0 {
+			size++
+		}
+		size += int64(len(item))
+		if size > limit {
+			return false
+		}
+	}
+	return size <= limit
 }
 
-func cloneCodexWebsocketRawItems(items []json.RawMessage) []json.RawMessage {
-	if items == nil {
+func combineCodexWebsocketRawItems(left, right []json.RawMessage) []json.RawMessage {
+	if len(left) == 0 && len(right) == 0 {
 		return nil
 	}
-	result := make([]json.RawMessage, 0, len(items))
-	for _, item := range items {
-		result = append(result, append(json.RawMessage(nil), item...))
-	}
+	result := make([]json.RawMessage, 0, len(left)+len(right))
+	result = append(result, left...)
+	result = append(result, right...)
 	return result
 }
 
@@ -246,5 +260,5 @@ func (c *codexWebsocketOutputCollector) add(raw json.RawMessage) {
 }
 
 func (c *codexWebsocketOutputCollector) result() []json.RawMessage {
-	return cloneCodexWebsocketRawItems(c.items)
+	return append([]json.RawMessage(nil), c.items...)
 }

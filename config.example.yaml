@@ -183,6 +183,15 @@ model_metadata:
         profile: level3_reasoning
       responses:
         profile: level3_reasoning
+  gpt-6-astra:
+    context_window_tokens: 272000
+    max_context_window_tokens: 872000
+    max_output_tokens: 128000
+    reasoning_supported: true
+    reasoning_default_effort: medium
+    reasoning_efforts: [low, medium, high, xhigh, max, ultra]
+    native_responses_tools: true
+    native_responses_images: true
   gpt-5.6-sol:
     context_window_tokens: 272000
     max_context_window_tokens: 921000
