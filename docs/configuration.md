@@ -27,16 +27,16 @@ model_metadata:
 - metadata 条目不会让模型进入 `/v1/models`，不会建立路由，也不要求当前存在匹配模型；模型以后被配置或发现时会自动获得对应 metadata。
 - `context_window_tokens`、`max_context_window_tokens` 与 `max_output_tokens` 都是可选元数据；省略或为 `0` 表示未知或不适用。前两者分别表示客户端默认上下文窗口和服务端允许的最大上下文窗口；二者都显式大于 `0` 时，最大值不得小于默认值。`max_output_tokens` 与 `context_window_tokens` 都显式大于 `0` 时，最大输出必须小于默认上下文窗口。
 
-当前容量元数据：
+当前容量元数据（GPT-6/GPT-5.6/GPT-5.5/GPT-5.4-mini 使用 Codex 客户端预算）：
 
 | Exact model ID | Default context | Max context | Max output |
 | --- | ---: | ---: | ---: |
 | `deepseek-v4-flash` / `DeepSeek-V4-Flash` | 1,000,000 | 未声明 | 29,000 |
 | `gpt-6-astra` | 272,000 | 872,000 | 128,000 |
-| `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 921,000 | 128,000 |
-| `gpt-5.4-mini` | 400,000 | 未声明 | 128,000 |
+| `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 872,000 | 128,000 |
+| `gpt-5.4-mini` | 272,000 | 272,000 | 128,000 |
 | `gpt-5.4` | 1,050,000 | 未声明 | 128,000 |
-| `gpt-5.5` | 272,000 | 未声明 | 128,000 |
+| `gpt-5.5` | 272,000 | 272,000 | 128,000 |
 | `gpt-5.3-codex-spark` / `gpt-5.3-codex` | 128,000 | 未声明 | 未声明 |
 | `codex-auto-review` | 1,050,000 | 未声明 | 128,000 |
 | `grok-4.5` | 500,000 | 未声明 | 未声明 |
@@ -44,6 +44,10 @@ model_metadata:
 | `minimax-m2.7-highspeed` | 204,800 | 未声明 | 131,100 |
 
 表中 `/` 分隔的是大小写敏感的独立 exact ID，不是别名匹配规则。最大输出未声明时 `/v1/models` 省略 `maxOutputTokens`，应用不得自行推断。
+
+GPT 系列的客户端预算来自本机 Codex `0.153.4` 于 2026-09-07 获取的能力快照。它与公共 API 标称窗口不同：[GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra)、[GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)、[Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)、[Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) 和 [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) 的公共 API 页面标称 1,050,000，而 [GPT-5.4-mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 为 400,000。这里不据此提高 OAuth 通道配额；API-only 部署可按已确认的上游限制显式覆盖 metadata。`max_output_tokens` 是模型能力上限，不保证在每个输入长度下仍有同等剩余输出空间。
+
+这里的 GPT-6 精确 ID 是 `gpt-6-astra`；不创建 `gpt-6` 别名或把请求模型自动改写为 Astra。静态能力声明不证明账号有模型访问权限，也不能修复上游 `model_not_found`。旧部署须同步自己的 `model_metadata`（安装新二进制不会覆盖现有 YAML），重启或通过管理页保存后核对 `/v1/models` 与 `/v1/models?client_version=0.153.4`；不要覆盖已有 Provider、凭据或非目标模型配置。
 
 | 字段 | 层级 | 枚举 |
 | --- | --- | --- |
@@ -309,8 +313,16 @@ endpoint 下只允许选择固定 profile：`level1`、`level2`、`level2_reason
 
 当前 `gpt-5.6-luna` 同样完成双向 Level 3 验证。模型元数据发布 `272,000` context window 和 `128,000` max output tokens。Luna 的 Responses output item 私有 metadata 会被有界省略并标记降级，不属于可转换内容。
 
-`gpt-5.6-luna`、`gpt-5.6-sol` 与 `gpt-5.6-terra` 统一声明 reasoning 支持：允许值均为 `none/low/medium/high/xhigh/max`，默认值均为 `medium`。Reasoning 声明只用于能力发布；Sol 与 Terra 未配置方向化转换模板时，不会因此自动开放跨协议转换。
+当前示例面向 Codex 通道，六个模型均声明原生 Responses tools 和图片输入，并使用以下客户端 reasoning/Lite profile：
 
-`gpt-5.5` 发布 `272,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `medium`。当前模型由内建 `codexoauth` 发现并只发布原生 `/v1/responses`，已验证文本、SSE、function tools、tool result 闭环及全部五档 reasoning；不据此开放跨协议转换或图片能力。
+| Exact model ID | 默认 effort | 可选 effort | Responses Lite | Multi-agent |
+| --- | --- | --- | --- | --- |
+| `gpt-6-astra` | medium | low / medium / high / xhigh / max / ultra | 是 | v2 |
+| `gpt-5.6-sol` | low | low / medium / high / xhigh / max / ultra | 是 | v2 |
+| `gpt-5.6-terra` | medium | low / medium / high / xhigh / max / ultra | 是 | v2 |
+| `gpt-5.6-luna` | medium | low / medium / high / xhigh / max | 是 | v1 |
+| `gpt-5.5` / `gpt-5.4-mini` | medium | low / medium / high / xhigh | 否 | 未声明 |
 
-`gpt-5.4-mini` 按 [OpenAI 官方模型页](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 发布 `400,000` context window、`128,000` max output tokens，以及 `none/low/medium/high/xhigh` reasoning effort；默认值为 `none`。当前模型由内建 `codexoauth` 发现并发布原生 Responses 能力，已验证文本、SSE、function tools 与 tool result 闭环，不据此开放跨协议转换。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理按兼容策略删除该字段并只记录字段名；目录中的 `maxOutputTokens` 仅表示模型输出能力上限。
+这些档位来自 Codex 客户端快照，不与公共 API 的 reasoning 枚举混用；例如公共 GPT-5.6 支持 `none`，而 Codex Sol/Terra profile 另含 `ultra`。显式配置 `reasoning_supported=false`、限制 `reasoning_efforts` 或关闭 `native_responses_images` 时，manifest 必须服从配置；缺少 metadata 时，已知模型才使用可信 profile，未知 ID 继续保守回退。低于 `0.144.0` 的客户端仍过滤 `max` 和 `ultra`。
+
+能力元数据不等于新一轮真实账号 smoke。Sol、Terra、Astra、5.5 和 5.4-mini 不因这些字段获得新的跨协议转换模板；Luna 保留原有双向 Level 3 模板，原生图片输入声明不开放转换图片。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理仍按兼容策略删除该字段并只记录字段名。

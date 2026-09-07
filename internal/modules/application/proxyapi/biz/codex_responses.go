@@ -55,7 +55,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			return codexresponses.WebsocketOpenResult{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket result"))
 		}
 		if opened.ErrorClass != "" {
-			if transportExplicitlyUnsupported(accevents.TransportWebsocket, opened.HTTPStatus) {
+			if opened.ErrorClass != upevents.ErrorModelNotFound && transportExplicitlyUnsupported(accevents.TransportWebsocket, opened.HTTPStatus) {
 				s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, false)
 				s.releaseCodexAccount(ctx, account.LeaseID)
 				tried = append(tried, account.AccountID)
@@ -341,6 +341,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 			}
 			return codexresponses.Result{}, err
 		}
+		request.AccountAttempt = len(tried) + 1
 		out, failure := s.completeCodexOnce(ctx, account, request)
 		if failure == nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -382,7 +383,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		}
 		s.releaseCodexAccount(ctx, account.LeaseID)
 		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
-		if retryableCodexFailure(failure) {
+		if ctx.Err() == nil && retryableCodexRequestFailure(failure, request, tried) {
 			tried = append(tried, account.AccountID)
 			continue
 		}
@@ -391,7 +392,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 }
 
 func codexCompactRequestFault(failure *codexresponses.Failure) bool {
-	if failure == nil || failure.Kind == codexresponses.KindInvalidToken || failure.Kind == codexresponses.KindRateLimit {
+	if failure == nil || failure.Kind == codexresponses.KindInvalidToken || failure.Kind == codexresponses.KindRateLimit || failure.Kind == codexresponses.KindModelNotFound {
 		return false
 	}
 	switch failure.HTTPStatus {
@@ -413,7 +414,7 @@ func codexCompactAvailabilityNeutral(failure *codexresponses.Failure) bool {
 	if failure.Kind == codexresponses.KindEndpoint {
 		return true
 	}
-	if failure.Kind == codexresponses.KindInvalidToken || failure.Kind == codexresponses.KindRateLimit {
+	if failure.Kind == codexresponses.KindInvalidToken || failure.Kind == codexresponses.KindRateLimit || failure.Kind == codexresponses.KindModelNotFound {
 		return false
 	}
 	switch failure.HTTPStatus {
@@ -445,12 +446,14 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex compact upstream unavailable"))
 		}
+		request.AccountAttempt = len(tried) + 1
 		completed, ok := value.(upevents.CompactResult)
 		if !ok {
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex compact result"))
 		}
 		if completed.ErrorClass == "" {
+			logCodexAttempt(request, nil)
 			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
 			s.noteCodexTurnState(account.AccountID, completed.Headers)
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, true)
@@ -459,6 +462,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 		}
 		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
+		logCodexAttempt(request, failure)
 		lastFailure = failure
 		if completed.NativeCompactionUnsupported {
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, false)
@@ -480,7 +484,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		if codexCompactRequestFault(failure) {
 			return codexresponses.Result{}, failure
 		}
-		if retryableCodexFailure(failure) {
+		if ctx.Err() == nil && retryableCodexRequestFailure(failure, request, tried) {
 			tried = append(tried, account.AccountID)
 			continue
 		}
@@ -511,6 +515,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 			}
 			return err
 		}
+		request.AccountAttempt = len(tried) + 1
 		emitted := false
 		err = s.streamCodexOnce(ctx, account, request, started, func(line []byte) error {
 			emitted = emitted || len(line) > 0
@@ -587,7 +592,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		}
 		s.releaseCodexAccount(ctx, account.LeaseID)
 		s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
-		if retryableCodexFailure(failure) {
+		if ctx.Err() == nil && retryableCodexRequestFailure(failure, request, tried) {
 			tried = append(tried, account.AccountID)
 			continue
 		}
@@ -605,6 +610,23 @@ func retryableCodexFailure(failure *codexresponses.Failure) bool {
 	default:
 		return false
 	}
+}
+
+// CP-FAIL-018: this exception is HTTP-only. Stateful WS migration keeps its
+// separate rate-limit/replay contract; do not add this kind to the shared list.
+func retryableCodexRequestFailure(failure *codexresponses.Failure, request codexresponses.Request, tried []string) bool {
+	if failure == nil || failure.Kind != codexresponses.KindModelNotFound {
+		return retryableCodexFailure(failure)
+	}
+	if len(tried) >= 2 || strings.TrimSpace(request.TurnState) != "" {
+		return false
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(request.Body, &body) != nil || body == nil {
+		return false
+	}
+	previous := bytes.TrimSpace(body["previous_response_id"])
+	return len(previous) == 0 || bytes.Equal(previous, []byte("null")) || bytes.Equal(previous, []byte(`""`))
 }
 
 func (s *Proxy) acquireCodexAccount(ctx context.Context, model string, exclude []string, sessionHash ...string) (accevents.AcquireResult, error) {
@@ -653,7 +675,8 @@ func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRelease, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.ReleaseCommand{LeaseID: leaseID})).Get()
 }
 
-func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (codexresponses.Result, *codexresponses.Failure) {
+func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (out codexresponses.Result, failure *codexresponses.Failure) {
+	defer func() { logCodexAttempt(request, failure) }()
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
 	fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
@@ -673,7 +696,8 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
 }
 
-func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) (resultErr error) {
+	defer func() { failure, _ := codexresponses.AsFailure(resultErr); logCodexAttempt(request, failure) }()
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
 	fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
@@ -719,7 +743,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
-				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
 			}
 			return nil
 		}
@@ -820,6 +844,8 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int, safeErrors ...upevents.SafeError) *codexresponses.Failure {
 	var failure *codexresponses.Failure
 	switch class {
+	case upevents.ErrorModelNotFound:
+		failure = codexresponses.NewFailure(codexresponses.KindModelNotFound, 0, fmt.Errorf("Codex upstream model is unavailable for the selected account"))
 	case upevents.ErrorInvalidRequest:
 		failure = codexresponses.NewFailure(codexresponses.KindInvalidRequest, retryAfter, fmt.Errorf("Codex upstream rejected the request"))
 	case upevents.ErrorInvalidToken:
@@ -842,11 +868,20 @@ func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit up
 		failure = codexresponses.NewFailure(codexresponses.KindUpstream, retryAfter, fmt.Errorf("Codex upstream failed"))
 	}
 	failure.HTTPStatus = httpStatus
+	if class == upevents.ErrorModelNotFound && httpStatus == 0 {
+		failure.HTTPStatus = http.StatusNotFound
+	}
 	if len(safeErrors) > 0 {
 		failure.UpstreamType = safeErrors[0].Type
 		failure.UpstreamCode = safeErrors[0].Code
 		failure.UpstreamParam = safeErrors[0].Param
 		failure.UpstreamMessage = safeErrors[0].Message
+	}
+	if class == upevents.ErrorModelNotFound {
+		failure.UpstreamCode = "model_not_found"
+		if failure.UpstreamType == "" {
+			failure.UpstreamType = "invalid_request_error"
+		}
 	}
 	return failure
 }

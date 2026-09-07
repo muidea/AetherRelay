@@ -72,6 +72,8 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
+	request.Diagnostics = features.Diagnostics
+	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if clientStream {
 		h.handleCodexCompactStream(w, r, round, started, plan, model, clientBody, request)
 		return
@@ -207,6 +209,8 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
+	request.Diagnostics = features.Diagnostics
+	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {
 		response, err := executor.CompleteCodexResponses(r.Context(), request)
 		if err != nil {
@@ -385,6 +389,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	status := http.StatusBadGateway
 	code := ErrorCodeUpstreamUnavailable
 	switch failure.ErrorCode {
+	case string(codexresponses.KindModelNotFound):
+		status = http.StatusNotFound
+		code = string(codexresponses.KindModelNotFound)
 	case string(codexresponses.KindInvalidRequest):
 		status = http.StatusBadRequest
 		code = ErrorCodeInvalidRequest
@@ -412,7 +419,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	errorType, param := "", ""
-	if codexFailure != nil && codexFailure.Kind == codexresponses.KindInvalidRequest {
+	if codexFailure != nil && (codexFailure.Kind == codexresponses.KindInvalidRequest || codexFailure.Kind == codexresponses.KindModelNotFound) {
 		if codexFailure.UpstreamCode != "" {
 			code = codexFailure.UpstreamCode
 		}
@@ -471,7 +478,7 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind = streamKindClientWrite
 	case codexresponses.KindProtocol:
 		kind = streamKindProtocol
-	case codexresponses.KindRateLimit, codexresponses.KindInvalidToken, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream, codexresponses.KindEndpoint:
+	case codexresponses.KindRateLimit, codexresponses.KindInvalidToken, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream, codexresponses.KindEndpoint, codexresponses.KindModelNotFound:
 		kind, countUpstream = streamKindUpstreamFailed, true
 	default:
 		kind = streamKindError

@@ -1,14 +1,16 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`4.0.4`
+> 合同版本：`5.0.1`
 >
 > 状态：`active`
 >
 > 生效日期：2026-09-07
 >
-> 参考基线：AetherRelay `83edaa3`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
+> 参考基线：AetherRelay `85aaabb`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`4.0.5` 补齐 GPT-6 Astra、GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.4-mini 的模型元数据与可信客户端 profile。客户端参数基线为本机 Codex `0.153.4` 于 2026-09-07T09:41:51Z 获取的模型快照，仅提取白名单能力字段，不复制提示词或账号数据。公共 API 模型规格与 Codex 客户端窗口分开记录；不添加 `gpt-6` 别名、不修改 exact model 路由、不更改 UA、不因静态 profile 开放额外转换。显式 metadata 仍优先，未发现的模型仍不进入目录。
 
 `4.0.3` 修复 SSE terminal 转发缺少结束空行引发的客户端重试：2026-09-07 部署版本 `e04badb` 的第 4～9 轮均记录 success，但归档末尾为 `data: {"type":"response.completed",...}\n`，Codex CLI `0.153.2` 因无法分发未闭合事件而重复请求。`CP-STREAM-011` 固化终态完整帧交付，并按 `CP-STREAM-002` 拒绝仅 event 名或 output-item-done 后的 EOF；验收必须按空行解析完整事件，不能仅搜索 terminal 字符串。
 
@@ -275,6 +277,8 @@
 
 ## 8. 账号调度与会话粘性
 
+`5.0.1` 固化 `CP-SCHED-009`：首次选择、PreferredID/session 粘性及任何重试切号，必须在账号 owner 锁内用与 `CP-CAP-010` 管理投影相同的模型可用性判定重新检查。只 trim 首尾空白，模型 ID 大小写敏感、精确匹配；不得用目录并集、静态 profile、相似名称或别名替代账号自身的有效快照。模型缺失/未知、快照过期、账号不可用、模型或账号冷却、有效额度耗尽均不得选中；并发及 transport 约束只可进一步收紧。无候选立即失败，不放宽模型条件。验收覆盖三个 transport 的不支持/过期/冷却/粘性候选跳过、切号前状态变化和全部候选不可用。
+
 `CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → LRU/round-robin。
 
 `CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。无显式信号时可以生成请求域 session，但不能用完整敏感正文作为持久化 key。
@@ -321,7 +325,15 @@
 
 `CP-FAIL-017` `usage_limit_reached` 必须大小写不敏感地从顶层、`error`、`response.error` 或 WebSocket `body.error` 解析；reset 可来自相同层的绝对秒/毫秒时间或相对秒。该错误是 credential-wide quota：账号级空 model cooldown 必须阻止该凭据的全部模型，而非只阻止本次 exact model。已有未到期 cooldown 只能保持或延长，后续较短失败不得缩短；任一模型成功也不得提前清除仍有效的账号级 quota cooldown。
 
+`CP-FAIL-018` 结构化 `error.code=model_not_found` 的 HTTP 404 或 Responses failed/error 终态必须单独分类；普通 404、错误消息中的同名文本及参数错误不属于该类别。仅记录账号 × exact model 的 5 分钟冷却，不改变账号状态、quota 或 compact/WS 能力；过期自动恢复准入，显式替换凭据清除旧观察，目录刷新不能提前解除实际失败观察。HTTP Responses/compact 在未输出、无 `previous_response_id`、无非空 turn-state 时允许保持同模型最多尝试 3 个不同账号；禁止模型替换、同账号循环及输出后重放。耗尽保留最后真实上游错误。该窄例外优先于 `CP-COMPACT-005` 的普通 404 规则；WS 只分类和记录，不扩展 `CP-WS-012` 的迁移边界。
+
+`CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码和白名单 request_kind/compaction reason/phase。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
+
+`5.0.0` 验收：HTTP 404 与 SSE/WS typed 错误分类、普通错误不重试、同模型限次切号及耗尽保真、stateful/输出后不重放、模型冷却隔离/持久化/过期/凭据替换恢复、诊断白名单；客户端跨模型压缩恢复与真实账号可用性另行 smoke 验证，不以离线测试宣称已修复 CLI。
+
 ## 10. 模型与能力目录
+
+`CP-CAP-010` Codex 账号管理必须显示每账号完整的模型列表（可展开），同时提供按当前快照、账号状态、额度与模型/账号冷却计算的 `available_models` 和逐模型不可用原因/恢复时间。缺失/过期快照不得宣称可用；“可用”仅是当前 Responses 调度准入，不保证上游调用成功或并发槽可用。统一号池与独立 Codex 号池使用同一投影，模型字符串必须转义；不触发页面刷新时的额外上游探测。
 
 `CP-CAP-001` 模型来自账号级 `/backend-api/codex/models` 快照；可路由目录是健康账号能力并集，但账号选择仍按账号自身快照过滤。
 
@@ -333,11 +345,13 @@
 
 `CP-CAP-005` 新鲜且明确标记 `LimitReached`、且 reset 尚未到期的账号用量窗口必须参与账号准入；未知、缺失或已过期快照不得阻止尝试。请求失败产生的 model cooldown 仍是更高优先级的即时事实。
 
-`CP-CAP-006` 模型容量必须区分客户端默认 `context_window` 与服务端允许的 `max_context_window`。两者缺失时使用同一个保守默认值；显式最大值不得小于默认值。OpenAI-compatible 模型目录分别发布 `contextWindowTokens` 与可选 `maxContextWindowTokens`，Codex manifest 分别发布 `context_window` 与 `max_context_window`。`gpt-5.6-luna/sol/terra` 的已验证值固定为 272,000 与 921,000。
+`CP-CAP-006` 模型容量必须区分客户端默认 `context_window` 与服务端允许的 `max_context_window`。两者缺失时使用同一个保守默认值；显式最大值不得小于默认值。OpenAI-compatible 模型目录分别发布 `contextWindowTokens` 与可选 `maxContextWindowTokens`，Codex manifest 分别发布 `context_window` 与 `max_context_window`。当前 Codex 客户端快照中 `gpt-6-astra` 与 `gpt-5.6-luna/sol/terra` 为 272,000 / 872,000；GPT-5.6 的旧 921,000 值不再作为默认配置基线。公共 API 标称 1,050,000 不能覆盖这份 Codex 配额；真实账号允许容量仍由上游裁决。
 
 `CP-CAP-007` `GET /v1/models?client_version=...` 必须解析可识别的 dotted Codex CLI 版本；低于 `0.144.0` 时从 manifest 删除 `max`、`ultra` reasoning level 并回退被删除的默认值。若过滤后没有兼容 level，必须保留 `supported_reasoning_levels: []` 并省略 `default_reasoning_level`，让旧客户端明确区分“已知无兼容 level”和字段未知；缺失或无法解析的版本保持现代能力，避免错误降级。
 
 `CP-CAP-008` Codex manifest 必须先匹配本地可信 per-model profile，未知模型才使用通用保守 profile。`gpt-6-astra` 的已验证 profile 为：显示名 `GPT-6-Astra`、272,000 默认上下文、872,000 最大上下文、最小客户端 `0.153.0`、Responses Lite、文本/图片输入、search、multi-agent v2、multi-agent reasoning `xhigh`、comp hash `3000`、默认 reasoning `medium`、`low|medium|high|xhigh|max|ultra` levels 和 `priority` service tier；`prefer_websockets` 仍必须与当前路由真实 transport 能力相交，不能仅凭静态 profile 宣称。
+
+`CP-CAP-009` 可信客户端 profile 扩展到 GPT-5.6 Sol/Terra/Luna、GPT-5.5 与 GPT-5.4-mini。Sol/Terra 为 Lite + multi-agent v2，Luna 为 Lite + v1；Sol 默认 low，其余默认 medium；Astra/Sol/Terra 提供 low/medium/high/xhigh/max/ultra，Luna 不提供 ultra，5.5/5.4-mini 提供 low/medium/high/xhigh。六者支持文本/图片输入与 search；5.5/5.4-mini 不启用 Lite，默认与最大窗口均为 272,000。上述为客户端 profile，不将 Codex 特有 ultra 或窗口值当成公共 API 规格。默认配置发布 128,000 max output；显式 metadata（含 reasoning/image 禁用和容量覆盖）必须优先于 profile。测试覆盖示例加载、普通目录/manifest 容量一致、无 metadata 的 profile、旧客户端过滤、显式覆盖、无路由不发布及未知 exact ID 回退。不得根据 profile 声明为账号新增模型或权限。
 
 ## 11. 安全、资源与可观测性
 
@@ -389,6 +403,17 @@
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 
+`5.0.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 模型级不可用与有限切号 | CP-FAIL-018 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `model_not_found_test.go`, `codex_model_not_found_test.go`, `model_availability_test.go` |
+| 压缩请求白名单诊断 | CP-OBS-006 | implemented | `proxyapi/pkg/codexresponses/diagnostics.go`, `proxyapi/biz/codex_diagnostics.go` | `diagnostics_test.go`, `proxyapi/service/proxy/codex_model_not_found_test.go` |
+| 逐账号完整模型列表 | CP-CAP-010 | implemented | `codexaccountpool/internal/store/model_availability.go`, `web/admin/index.html` | `model_availability_test.go`, `web/admin/models.test.cjs` |
+| 切号严格匹配账号模型 | CP-SCHED-009 | implemented | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/strict_model_selection_test.go`, `codexaccountpool/biz/strict_model_selection_test.go` |
+
+前端合同测试使用 Node.js 18+ 内建 test runner，无需 npm 依赖；`scripts/check-codex-contract.sh` 同时执行 Go/race、前端测试、vet 与凭据扫描。真实 CLI 跨模型恢复仍按 CP-DOD-006 单独验收。
+
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
 | Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..012 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `web_search_test.go` |
@@ -403,7 +428,7 @@
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
 | 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
-| Codex manifest profile 与客户端版本过滤 | CP-CAP-007..008 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `aetherrelayconfig/config_test.go` |
+| Codex manifest profile 与客户端版本过滤 | CP-CAP-007..009 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `model_profiles_test.go`, `aetherrelayconfig/config_test.go` |
 | HTTPS 账号代理 ALPN | CP-SEC-002, CP-SEC-004 | implemented | `aetherrelayproxy/transport.go`, `codexupstream/biz/biz.go` | `aetherrelayproxy/transport_test.go`, `codexupstream/biz/biz_test.go` |
 | Responses WebSocket | CP-EP-002, CP-WS-001..013 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_replay_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
 | 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |
@@ -450,7 +475,7 @@
 | 确定性 upstream 400 | sub2api `591d47fb9` 覆盖 `invalid_function_parameters`、`missing_required_parameter` 等结构化 400 | 保持 400、不切号；只投影 `CP-FAIL-013` 允许的有界安全字段 |
 | 原生 remote compaction v2 | sub2api `9662cff2`、`a8b9ea22`、`8ae6d8f6`：裸 `/responses` body 信号识别、native/legacy 分流、legacy upstream 404 与 v2 item 探测 | 客户端 compact 保留，OAuth upstream 统一使用 streaming `/responses` + trigger，并以 compaction item 为成功证据 |
 | compact 冷却与回退 | CLIProxyAPI `ec105dac`：request fault 停止 fallback，非 credential 临时失败 availability-neutral，401/402/403/429 保持冷却 | compact 故障不污染普通 Responses 路由；credential/quota 事实仍保留 |
-| GPT-5.6 双上下文容量 | CLIProxyAPI `745fb38d`：Luna/Sol/Terra `context_window=272000`、`max_context_window=921000` | effective catalog、普通模型目录、Codex manifest 与 Admin 使用同一双字段模型 |
+| GPT-5.6 双上下文容量 | 历史 CLIProxyAPI `745fb38d` 为 272000/921000；`4.0.5` 依据 Codex `0.153.4` 的 2026-09-07 快照更新为 272000/872000 | effective catalog、普通模型目录、Codex manifest 与 Admin 使用同一双字段模型；旧容量不再作为默认基线 |
 | WebSocket 后续 turn 429 迁移 | sub2api `82cbe6aff`：输出前重建完整上下文并切换账号，输出后禁止重放 | 采用更严格的有界 transcript、tool coverage 与最多两次迁移合同 |
 | WebSocket 握手拒绝 quota | CLIProxyAPI `fcea738f`、`ca601db0`；sub2api `5d9c7abed`、`571d1e1d9`；脱敏样本 HTTP 429 + `usage_limit_reached` + `resets_in_seconds` | 握手体只投影安全错误；明确 usage-limit 进入 credential-wide cooldown，普通 429 保持 exact-model；只有 101 quota header 合并账号快照，Spark 不污染普通模型 |
 | 非流式 HTTP 200 terminal fault | sub2api `81ac8ccd6`；脱敏样本 SSE `response.failed` + `invalid_request_error` | 与 streaming 共用 terminal 分类；确定性请求错误停止 failover |

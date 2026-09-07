@@ -710,6 +710,7 @@ Object.assign(enUS,{
   "查看当前服务版本、运行状态、外部接入方式和已开放的数据面 API。":"View the service version, runtime status, external access methods, and exposed data-plane APIs.","当前版本":"Version","运行时间":"Uptime","启动时间":"Started at","Go 版本":"Go version","服务信息":"Service information","当前支持的接入方式":"Supported access methods","开放的 API 端点":"Exposed API endpoints","实际注册路由":"Registered routes","正在加载系统信息…":"Loading system information…","服务名称":"Service name","访问基址":"Base URL","服务器时间":"Server time","认证方式":"Authentication","协议":"Protocol","远程访问":"Remote access","说明":"Description","无需认证":"None","客户端 API Key":"Client API key","网络策略":"Network policy","监听地址可达":"Available on listener","仅本机":"Loopback only","已允许远程访问":"Remote access enabled","配置的网络范围":"Configured networks","无法加载系统信息":"Could not load system information","天":"d","小时":"h","分钟":"m","秒":"s"
 });
 Object.assign(enUS,{"刷新所选账号":"Refresh selected accounts","刷新账号":"Refresh account","重新认证":"Reauthenticate"});
+Object.assign(enUS,{"上游模型不可用":"Upstream model unavailable","模型快照已过期":"Model snapshot expired","账号已禁用":"Account disabled","账号异常":"Account abnormal","缺少凭据":"Credentials missing","额度受限":"Quota limited","超时冷却":"Timeout cooldown","网络冷却":"Network cooldown","上游错误冷却":"Upstream error cooldown","可用性未知":"Availability unknown","恢复于 {time}":"Retry after {time}","可用模型 {available}/{total} · 展开核对":"Available models {available}/{total} · Expand to inspect","根据当前快照与冷却判断，不保证上游调用成功；刷新列表更新状态。":"Based on current snapshots and cooldowns, not a guarantee of upstream access. Reload the list to update status."});
 Object.assign(enUS,{"允许按邮箱替换已有的不同上游账号":"Allow replacing an existing slot with a different upstream account","默认保留不同 account_id 的工作区；仅在确认目标槽位应按唯一邮箱替换时启用。":"Different account_id workspaces are preserved by default; enable this only to replace a target selected by a unique email.","仅接受 aetherrelay.account-pool-bundle v2；同类型槽位的 account_id 重名时后者覆盖，同邮箱不同账号仍会保留。":"Only aetherrelay.account-pool-bundle v2 is accepted. For slots of the same type, the last duplicate account_id wins; distinct accounts sharing an email are preserved.","目标实例同名 Provider 处理方式":"Same-name Provider handling on target","同名覆盖（推荐）":"Overwrite same name (recommended)","仅接受 aetherrelay.provider-bundle v1；文件内同名 Provider 后者覆盖前者。安全配置更新已有 Provider 时保留原密钥。":"Only aetherrelay.provider-bundle v1 is accepted. The last same-name Provider in the file wins; safe imports preserve the existing key when updating.","导出响应缺少有效 exported_at":"Export response is missing a valid exported_at"});
 Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。":"Manage separate ChatGPT Web and Codex CLI credential slots under one account identity. Each slot is renewed only by its matching OAuth client.","统一账号 / 双凭据账号":"Unified / dual-credential accounts","ChatGPT Web / Codex CLI 凭据":"ChatGPT Web / Codex CLI credentials","可用图片额度":"Available image quota","凭据刷新失败（Web / Codex）":"Credential refresh failures (Web / Codex)","导入 Web 凭据":"Import Web credentials","导入 Codex 凭据":"Import Codex credentials","ChatGPT Web 凭据槽":"ChatGPT Web credential slot","Codex CLI 凭据槽":"Codex CLI credential slot","未配置 ChatGPT Web 凭据":"ChatGPT Web credentials not configured","未配置 Codex CLI 凭据":"Codex CLI credentials not configured","刷新额度/凭据":"Refresh quota/credentials","删除槽位":"Delete slot","导入账号 ▾":"Import credentials ▾","选择账号类型和导入方式":"Choose a credential type and import method","导入整体账号池":"Import account pool bundle","账号池迁移 ▾":"Account pool migration ▾","整体账号池文件":"Account pool bundle file","导出整体账号池":"Export account pool bundle","整体账号池 JSON":"Account pool bundle JSON","仅接受 aetherrelay.account-pool-bundle v2；文件包含 ChatGPT Web 和 Codex 两类槽位，最大 1 MiB、最多 1000 个统一账号。":"Only aetherrelay.account-pool-bundle v2 is accepted. The file may contain ChatGPT Web and Codex slots; the limit is 1 MiB and 1,000 unified accounts.","请选择整体账号池 JSON 文件":"Choose an account pool bundle JSON file","JSON 文件不能超过 1 MiB":"The JSON file must not exceed 1 MiB","只支持 aetherrelay.account-pool-bundle v2":"Only aetherrelay.account-pool-bundle v2 is supported","整体账号池 accounts 数量无效":"The account pool bundle accounts count is invalid","整体导入部分完成":"Account pool bundle import partially completed","整体导入完成":"Account pool bundle import completed","整体导入存在":"Account pool bundle import has","项冲突，请修正后重试":"conflicts. Fix them and try again","整体账号池导出文件已开始下载":"The account pool bundle export has started downloading"});
 Object.assign(enUS,{"刷新所选额度/凭据":"Refresh selected quota/credentials","同步图片额度和账号状态，必要时续期 OAuth 凭证":"Synchronize image quota and account status, renewing OAuth credentials when needed","强制续期 OAuth 凭证；成功后自动同步模型与上游用量":"Force-renew OAuth credentials, then synchronize models and upstream usage","凭据刷新完成：成功 {succeeded}，失败 {failed}；模型与用量同步已启动":"Credential refresh complete: {succeeded} succeeded, {failed} failed; model and usage synchronization started"});
@@ -1105,11 +1106,30 @@ function codexModelSnapshotBadge(account){
     if(!state.codex.discovery.done)return `<div class="subtle">${esc(t("模型发现中"))}</div>`;
     return `<div class="subtle">${esc(t("等待模型同步"))}</div>`;
   }
-  const visible=models.slice(0,2).map(model=>`<span class="tag tag-purple" title="${esc(model.id||"")}">${esc(model.id||"")}</span>`).join("");
-  const more=models.length>2?`<span class="tag tag-default">+${models.length-2}</span>`:"";
   const discovered=`<div class="subtle">${esc(t("已发现 {count} 个模型",{count:models.length}))}</div>`;
   const expires=snapshot.expires_at?`<div class="subtle">${esc(t("缓存有效至 {time}",{time:formatAccountDate(snapshot.expires_at)}))}</div>`:"";
-  return `${discovered}<div class="tags">${visible||`<span class="subtle">${esc(t("未发现模型"))}</span>`}${more}</div>${expires}${modelDiscoveryBadge(account)}`;
+  return `${discovered}${codexAccountModelList(account)}${expires}${modelDiscoveryBadge(account)}`;
+}
+// CP-CAP-010: shared by unified and standalone Codex account management.
+function codexAccountModelList(account){
+  const models=Array.isArray(account?.model_snapshot?.models)?account.model_snapshot.models:[];
+  if(!account?.model_snapshot)return `<div class="subtle">${esc(t("等待模型同步"))}</div>`;
+  if(!models.length)return `<div class="subtle">${esc(t("未发现模型"))}</div>`;
+  const availability=new Map((Array.isArray(account.model_availability)?account.model_availability:[]).map(item=>[item.model,item]));
+  const expiry=account.model_snapshot.expires_at;
+  const stale=Boolean(expiry)&&!(Date.parse(expiry)>Date.now());
+  const available=models.filter(item=>!stale&&availability.get(item.id)?.available===true);
+  const unavailable=models.filter(item=>stale||availability.get(item.id)?.available!==true);
+  const labels={model_not_found:"上游模型不可用",snapshot_expired:"模型快照已过期",account_disabled:"账号已禁用",account_abnormal:"账号异常",credential_missing:"缺少凭据",usage_limit:"额度受限",rate_limit:"限流",timeout:"超时冷却",network:"网络冷却",upstream:"上游错误冷却"};
+  const availableHTML=available.map(item=>`<span class="tag tag-purple">${esc(item.id)}</span>`).join("");
+  const unavailableHTML=unavailable.map(item=>{
+    const entry=availability.get(item.id)||{};
+    const reason=stale?"snapshot_expired":entry.reason;
+    const label=labels[reason]?t(labels[reason]):t("可用性未知");
+    const recovery=entry.until?` · ${t("恢复于 {time}",{time:formatAccountDate(entry.until)})}`:"";
+    return `<div><code>${esc(item.id)}</code><span class="subtle"> · ${esc(label+recovery)}</span></div>`;
+  }).join("");
+  return `<details class="account-model-list"><summary>${esc(t("可用模型 {available}/{total} · 展开核对",{available:available.length,total:models.length}))}</summary><div style="max-height:240px;overflow:auto;overflow-wrap:anywhere"><div class="subtle">${esc(t("根据当前快照与冷却判断，不保证上游调用成功；刷新列表更新状态。"))}</div><div class="tags">${availableHTML||esc(t("暂无可用模型"))}</div>${unavailableHTML}</div></details>`;
 }
 function codexQuotaObservationBadges(account){
   const observations=Array.isArray(account?.quota_observations)?account.quota_observations:[];
@@ -1338,7 +1358,7 @@ function unifiedCodexSummary(account){
   const usage=first?`剩余 ${Math.round(remaining)}%`:(windows.length?"用量未知":"用量未同步");
   const usageClass=remaining===null?"":remaining<=0?" exhausted":remaining<=30?" warning":"";
   const usageView=remaining===null?`<span class="unified-slot-meta-text">${esc(usage)}</span>`:`<div class="unified-usage"><div class="unified-usage-head"><span>用量</span><strong>${esc(usage)}</strong></div><div class="unified-usage-meter${usageClass}"><i style="width:${Math.round(remaining)}%"></i></div></div>`;
-  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span><span>${esc(t("指纹"))} ${esc(normalizedCodexFingerprintMode(account?.fingerprint_mode))}</span>${usageView}</div>${codexRefreshBadge(account)}${modelDiscoveryBadge(account)}`;
+  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span><span>${esc(t("指纹"))} ${esc(normalizedCodexFingerprintMode(account?.fingerprint_mode))}</span>${usageView}</div>${codexAccountModelList(account)}${codexRefreshBadge(account)}${modelDiscoveryBadge(account)}`;
 }
 function unifiedCodexSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 Codex CLI 凭据</div>`;
@@ -1376,7 +1396,7 @@ function renderCodexAccounts(){
     if(counts[status]!=null)counts[status]++;
     const snapshot=item?.model_snapshot;
     const models=Array.isArray(snapshot?.models)?snapshot.models:[];
-    if(status==="normal"&&models.length&&(!snapshot?.expires_at||new Date(snapshot.expires_at).getTime()>Date.now()))counts.routable++;
+    if(status==="normal"&&Array.isArray(item.available_models)&&item.available_models.length&&(!snapshot?.expires_at||new Date(snapshot.expires_at).getTime()>Date.now()))counts.routable++;
   });
   $("codexAccTotal").textContent=all.length;
   $("codexAccNormal").textContent=counts.normal;

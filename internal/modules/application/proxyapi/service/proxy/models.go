@@ -135,20 +135,16 @@ type codexTrustedModelProfile struct {
 }
 
 func trustedCodexModelProfile(model string) (codexTrustedModelProfile, bool) {
-	if model != "gpt-6-astra" {
-		return codexTrustedModelProfile{}, false
-	}
-	return codexTrustedModelProfile{
-		DisplayName:                 "GPT-6-Astra",
-		Description:                 "Our most capable model for complex, demanding work.",
+	// CP-CAP-009: sanitized client capability snapshot, Codex 0.153.4,
+	// fetched 2026-09-07. These are Codex budgets, not public API limits.
+	profile := codexTrustedModelProfile{
 		MinimalClientVersion:        "0.153.0",
-		BaseInstructions:            "You are Codex, an agent based on GPT-6.",
+		BaseInstructions:            "You are Codex, an agent based on GPT-5.6.",
 		UseResponsesLite:            true,
 		InputModalities:             []string{"text", "image"},
 		SupportsImageDetailOriginal: true,
 		SupportsSearchTool:          true,
 		MultiAgentVersion:           "v2",
-		MultiAgentReasoningEffort:   "xhigh",
 		CompHash:                    "3000",
 		ContextWindow:               272000,
 		MaxContextWindow:            872000,
@@ -157,9 +153,49 @@ func trustedCodexModelProfile(model string) (codexTrustedModelProfile, bool) {
 		ServiceTiers: []any{map[string]any{
 			"id":          "priority",
 			"name":        "Fast",
-			"description": "2x speed, increased usage",
+			"description": "1.5x speed, increased usage",
 		}},
-	}, true
+	}
+	switch model {
+	case "gpt-6-astra":
+		profile.DisplayName = "GPT-6-Astra"
+		profile.Description = "Our most capable model for complex, demanding work."
+		profile.BaseInstructions = "You are Codex, an agent based on GPT-6."
+		profile.MultiAgentReasoningEffort = "xhigh"
+		profile.ServiceTiers[0].(map[string]any)["description"] = "2x speed, increased usage"
+	case "gpt-5.6-sol":
+		profile.DisplayName = "GPT-5.6-Sol"
+		profile.Description = "Reliable agentic workhorse for everyday tasks."
+		profile.DefaultReasoningLevel = "low"
+	case "gpt-5.6-terra":
+		profile.DisplayName = "GPT-5.6-Terra"
+		profile.Description = "Balanced agentic coding model for everyday work."
+	case "gpt-5.6-luna":
+		profile.DisplayName = "GPT-5.6-Luna"
+		profile.Description = "Fast and affordable agentic coding model."
+		profile.MultiAgentVersion = "v1"
+		profile.SupportedReasoningLevels = []string{"low", "medium", "high", "xhigh", "max"}
+	case "gpt-5.5", "gpt-5.4-mini":
+		profile.MinimalClientVersion = "0.147.0"
+		profile.UseResponsesLite = false
+		profile.MultiAgentVersion = ""
+		profile.CompHash = "2911"
+		profile.MaxContextWindow = 272000
+		profile.SupportedReasoningLevels = []string{"low", "medium", "high", "xhigh"}
+		if model == "gpt-5.5" {
+			profile.DisplayName = "GPT-5.5"
+			profile.Description = "Proven previous-generation model for coding and general work."
+			profile.BaseInstructions = "You are Codex, an agent based on GPT-5.5."
+		} else {
+			profile.DisplayName = "GPT-5.4-Mini"
+			profile.Description = "Small, fast, and cost-efficient model for simpler coding tasks."
+			profile.BaseInstructions = "You are Codex, an agent based on GPT-5.4."
+			profile.ServiceTiers = []any{}
+		}
+	default:
+		return codexTrustedModelProfile{}, false
+	}
+	return profile, true
 }
 
 // handleModels returns the effective catalog as either an OpenAI-compatible
@@ -285,7 +321,7 @@ func buildCodexModelsManifest(snap effectivecatalog.Snapshot, policy clientacces
 			manifest.ContextWindow = profile.ContextWindow
 			manifest.MaxContextWindow = profile.MaxContextWindow
 			manifest.ServiceTiers = append([]any(nil), profile.ServiceTiers...)
-			if !containsString(efforts, manifest.MultiAgentReasoningEffort) {
+			if manifest.MultiAgentReasoningEffort != "" && !containsString(efforts, manifest.MultiAgentReasoningEffort) {
 				manifest.MultiAgentReasoningEffort = defaultEffort
 			}
 		}

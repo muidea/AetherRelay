@@ -1250,13 +1250,14 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			return
 		}
 		if !rawStream {
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState})
+			features.Diagnostics.RequestID = requestIDFromContext(r.Context())
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
 				return
 			}
-			if failure, ok := codexresponses.AsFailure(codexErr); ok && failure.Kind == codexresponses.KindInvalidRequest {
+			if failure, ok := codexresponses.AsFailure(codexErr); ok && (failure.Kind == codexresponses.KindInvalidRequest || failure.Kind == codexresponses.KindModelNotFound) {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexResponsesError(w, r, round, start, plan.RouteOwner, rawModel, false, codexErr)
 				return

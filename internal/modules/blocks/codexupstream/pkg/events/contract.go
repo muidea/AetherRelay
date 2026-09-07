@@ -36,6 +36,7 @@ type ErrorClass string
 
 const (
 	ErrorInvalidRequest ErrorClass = "invalid_request"
+	ErrorModelNotFound  ErrorClass = "model_not_found"
 	ErrorInvalidToken   ErrorClass = "invalid_token"
 	ErrorRateLimit      ErrorClass = "rate_limit"
 	ErrorTimeout        ErrorClass = "timeout"
@@ -144,6 +145,7 @@ type PullResult struct {
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
 	RateLimit         RateLimitObservation
+	SafeError         SafeError
 }
 
 type CancelCommand struct{ StreamID string }

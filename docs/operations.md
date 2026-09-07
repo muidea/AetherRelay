@@ -95,6 +95,18 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 
 ### 账号池与用量
 
+Codex 模型不可用排查（`CP-FAIL-018` / `CP-CAP-010`）：
+
+账号选择严格复用逐账号 `available_models` 的服务端计算规则（`CP-SCHED-009`），在每次选择/切号时重新计算，而不是信任浏览器已显示的旧列表。粘性账号、首次请求和重试都必须精确匹配原模型；号池并集出现某模型，不代表所有账号都支持。没有满足模型、账号状态、快照有效期、额度、冷却以及 transport/并发限制的候选时直接失败，不降级到不支持的账号或另一模型。
+
+- 统一账号池的 Codex 槽位和独立 Codex 账号页均可展开完整模型列表。管理 API 新增 `available_models` 与 `model_availability`（model/available/reason/until）。可用性按账号自身模型快照、账号状态、额度及冷却判断；不等于公共 API 模型能力、不保证即时并发或上游权限。缺失/过期快照显示待同步或过期，不宣称可用；刷新列表更新状态，“同步模型”更新发现快照。
+- 上游 HTTP 404 且结构化 `error.code=model_not_found`，或 SSE/WS 的同码失败终态，记录 5 分钟的账号 × exact model 冷却。其它模型和账号状态不受影响；过期自动恢复准入，普通目录刷新不会提前清除此观察，显式重新导入替换凭据会清除旧模型不可用观察。
+- HTTP Responses/compact 在尚未输出、无 `previous_response_id`、无非空 turn-state 时，最多尝试 3 个不同账号且始终使用原模型；候选耗尽保留本次最后真实上游错误。普通 404/参数错误不适用；WS 不因该错误迁移会话。冷却期间新的请求若已无可调度账号，可能直接收到 `provider_unavailable`，可在逐账号列表核对具体原因。
+- `Codex attempt failed` 日志包含服务端 `request_id`、`inbound_model`、`upstream_model`、`account_attempt`、白名单 `request_kind` / `compaction_reason` / `compaction_phase` 和错误码；成功逐次日志为 DEBUG。`account_attempt` 是本次请求内的账号尝试序号，同账号认证刷新不增加序号。日志不记录完整 turn metadata、上下文或凭据，也不猜测 UI 目标模型。
+- `comp_hash_changed` / `pre_turn` 表示客户端在正式对话前请求压缩；这次实际入站仍是旧模型时，代理不强制换成新模型。保持各模型真实的 `comp_hash` 差异，不把所有 hash 改成同值。若旧模型在全部账号均不可用，新建独立会话使用可用模型；旧线程能否恢复需要对应 CLI 版本另行验证。
+
+部署验收：先刷新并核对模型发现结果，再测试新会话及 Astra → 5.5 → Astra 切换，按 request_id 区分 turn 与 compaction。离线回归覆盖错误分类、限次切号、输出后不重放、冷却隔离和管理显示；不代表已验证真实 OAuth 账号访问权限或已修复客户端恢复逻辑。
+
 进程始终注入只读内建 Provider `codexoauth`。它与 `chatgptweb` 是两个独立账号域：不共享 refresh token、账号代理、模型发现、网页会话或临时对话。
 
 | 路径 | `provider` | `api_key_id` | token |
@@ -106,7 +118,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 - 401 触发单飞 refresh 后只重试一次；普通 429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。若上游明确返回 `usage_limit_reached`，账号表会记录凭据级“额度耗尽”及上游提供的恢复时间，并冷却该凭据全部模型；这只是运行期观察，不能当作官方剩余额度。
 - `/v1/responses` 的非流式请求在内部要求上游 SSE，并在 `response.completed` 或合法的 `response.incomplete` 终态返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。请求中的 `reasoning.effort` 按模型元数据枚举校验，允许值以 `/v1/models` 的 `capabilities.reasoning.efforts` 为准，不支持时返回 400。`POST /v1/responses/input_tokens` 复用同一模型与权限目录但只做本地非计费预估，不获取账号或访问上游。Responses WebSocket 使用同一路径的 GET upgrade，`/v1/responses/compact` 提供 unary JSON 及最小 SSE 投影；Realtime、网页会话和插件仍不属于 Codex OAuth 能力。
 - `/v1/responses/compact` 的上游实际走原生 remote compaction v2 `/responses`。若某账号返回 2xx 但没有 compaction item，该账号会被标记为 native compact 不支持；升级后旧 unary 端点留下的支持/不支持缓存会自动清空并重新学习。
-- compact 的 request/capability fault 不继续切号，非 credential 临时失败不会污染普通 Responses 的账号状态、模型冷却或额度观察；credential/429 事实仍保留。WebSocket 后续 turn 只在任何业务帧输出前、完整历史和工具调用可在消息上限内安全重放时迁移账号，最多两次；输出后禁止重放。
+- compact 的普通 request/capability fault 不继续切号；结构化 `model_not_found` 是上述模型级冷却及有限切号的窄例外。其它非 credential 临时失败不会污染普通 Responses 的账号状态、模型冷却或额度观察；credential/429 事实仍保留。WebSocket 后续 turn 只在任何业务帧输出前、完整历史和工具调用可在消息上限内安全重放时迁移账号，最多两次；输出后禁止重放。
 - 指纹收敛是逐账号显式 opt-in，默认 `off`。只有确有共享账号身份收敛需求时才选择 `device/session/full`；排查额度或设备识别异常时先恢复 `off` 做对照。Turn-State 仅保存哈希来源，不应把其 opaque 原值加入日志或工单。
 - 账号定时刷新间隔是启动期设置，修改后需重启；账号池本身始终装配。
 

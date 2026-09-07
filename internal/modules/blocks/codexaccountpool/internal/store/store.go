@@ -396,6 +396,11 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		// An import may replace a credential for a different account. Do not
 		// route from a capability snapshot or show a usage observation learned
 		// with the old credential.
+		for model, observation := range existing.Cooldowns {
+			if observation.ErrorClass == events.ErrorModelNotFound {
+				delete(existing.Cooldowns, model)
+			}
+		}
 		existing.ModelSnapshot = nil
 		existing.ModelDiscoveryFailures = 0
 		existing.ModelDiscoveryRetryAt = ""
@@ -504,13 +509,14 @@ func (s *Store) AcquirePreferred(model string, exclude []string, preferredID str
 func (s *Store) AcquirePreferredTransport(model string, exclude []string, preferredID, transport string) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	model = strings.TrimSpace(model)
 	now := time.Now().UTC()
 	excluded := make(map[string]struct{}, len(exclude))
 	for _, id := range exclude {
 		excluded[strings.TrimSpace(id)] = struct{}{}
 	}
-	if preferred := s.items[strings.TrimSpace(preferredID)]; preferred != nil && preferred.Status == events.StatusNormal && strings.TrimSpace(preferred.AccessToken) != "" {
-		if _, found := excluded[preferred.ID]; !found && !cooling(preferred, model, now) && !usageLimitCooling(preferred, now) && accountSupportsModel(preferred, model, now) && transportSupport(preferred, transport) == 1 {
+	if preferred := s.items[strings.TrimSpace(preferredID)]; modelAvailability(preferred, model, now).Available {
+		if _, found := excluded[preferred.ID]; !found && transportSupport(preferred, transport) == 1 {
 			preferred.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
@@ -522,10 +528,10 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 		for offset := 0; offset < len(s.order); offset++ {
 			pos := (s.index + offset) % len(s.order)
 			item := s.items[s.order[pos]]
-			if item == nil || item.Status != events.StatusNormal || strings.TrimSpace(item.AccessToken) == "" || transportSupport(item, transport) != tier {
+			if !modelAvailability(item, model, now).Available || transportSupport(item, transport) != tier {
 				continue
 			}
-			if _, found := excluded[item.ID]; found || cooling(item, model, now) || usageLimitCooling(item, now) || !accountSupportsModel(item, model, now) {
+			if _, found := excluded[item.ID]; found {
 				continue
 			}
 			s.index = (pos + 1) % len(s.order)
@@ -751,6 +757,18 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 					item.Status = events.StatusAbnormal
 					statusChanged = true
 				}
+			case events.ErrorModelNotFound:
+				// CP-FAIL-018: bounded model-local negative observation. A discovery
+				// listing is not proof of recovery; admission resumes after expiry.
+				if model != "" {
+					until := now.Add(5 * time.Minute)
+					if item.Cooldowns == nil {
+						item.Cooldowns = map[string]cooldown{}
+					}
+					if old, ok := item.Cooldowns[model]; !ok || !old.Until.After(until) {
+						item.Cooldowns[model] = cooldown{Until: until, ErrorClass: events.ErrorModelNotFound}
+					}
+				}
 			case events.ErrorRateLimit, events.ErrorTimeout, events.ErrorNetwork, events.ErrorUpstream:
 				until := now.Add(defaultTransientCooldown)
 				if errorClass == events.ErrorRateLimit {
@@ -943,6 +961,8 @@ func parseExpiry(value string) (time.Time, bool) {
 
 func toView(item *account, now time.Time) events.AccountView {
 	view := events.AccountView{
+		AvailableModels:            []string{},
+		ModelAvailability:          []events.ModelAvailabilityView{},
 		ID:                         item.ID,
 		IdentityKey:                accountidentity.Key(item.AccountIDHeader, item.Email),
 		Email:                      item.Email,
@@ -966,6 +986,13 @@ func toView(item *account, now time.Time) events.AccountView {
 	if item.ModelSnapshot != nil {
 		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)
 		view.ModelSnapshot = &snapshot
+		for _, model := range snapshot.Models {
+			availability := modelAvailability(item, model.ID, now)
+			view.ModelAvailability = append(view.ModelAvailability, availability)
+			if availability.Available {
+				view.AvailableModels = append(view.AvailableModels, model.ID)
+			}
+		}
 	}
 	if item.UsageSnapshot != nil {
 		snapshot := normalizeUsageSnapshot(*item.UsageSnapshot)
@@ -1237,9 +1264,9 @@ func (s *Store) RecordUsageFailure(accountID, message string) (bool, error) {
 	return true, nil
 }
 
-// CatalogSnapshot builds the deduplicated union across routable accounts and
-// non-expired snapshots. A model is published only if the selected account can
-// actually be acquired for it.
+// CatalogSnapshot builds the discovered union across normal accounts and
+// non-expired snapshots. Temporary admission (quota/model cooldowns) is checked
+// at acquisition and exposed separately in AccountView.ModelAvailability.
 func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()

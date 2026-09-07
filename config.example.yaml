@@ -127,6 +127,9 @@ codex_oauth:
 # 所有现有 profile 均不开放图片、文档、结构化输出、continuation 或流式 tools。
 model_metadata:
   # 同一份 metadata 会覆盖所有同 ID 的管理型与内建候选。
+  # GPT-6/GPT-5.6/GPT-5.5/GPT-5.4-mini 使用 Codex 0.153.4 (2026-09-07)
+  # 客户端能力与上下文预算，不等于公共 API 标称窗口或账号权限。
+  # API-only 部署可按上游实测限制覆盖；字段含义与来源见 docs/configuration.md。
   DeepSeek-V4-Flash:
     context_window_tokens: 1000000
     max_output_tokens: 29000
@@ -155,29 +158,31 @@ model_metadata:
         profile: level3_reasoning
   gpt-5.5:
     context_window_tokens: 272000
+    max_context_window_tokens: 272000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
-    reasoning_efforts: [none, low, medium, high, xhigh]
+    reasoning_efforts: [low, medium, high, xhigh]
     native_responses_tools: true
-    native_responses_images: false
+    native_responses_images: true
   gpt-5.4-mini:
-    context_window_tokens: 400000
+    context_window_tokens: 272000
+    max_context_window_tokens: 272000
     max_output_tokens: 128000
     reasoning_supported: true
-    reasoning_default_effort: none
-    reasoning_efforts: [none, low, medium, high, xhigh]
+    reasoning_default_effort: medium
+    reasoning_efforts: [low, medium, high, xhigh]
     native_responses_tools: true
-    native_responses_images: false
+    native_responses_images: true
   gpt-5.6-luna:
     context_window_tokens: 272000
-    max_context_window_tokens: 921000
+    max_context_window_tokens: 872000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
-    reasoning_efforts: [none, low, medium, high, xhigh, max]
+    reasoning_efforts: [low, medium, high, xhigh, max]
     native_responses_tools: true
-    native_responses_images: false
+    native_responses_images: true
     conversion_capabilities:
       messages:
         profile: level3_reasoning
@@ -194,18 +199,22 @@ model_metadata:
     native_responses_images: true
   gpt-5.6-sol:
     context_window_tokens: 272000
-    max_context_window_tokens: 921000
+    max_context_window_tokens: 872000
     max_output_tokens: 128000
     reasoning_supported: true
-    reasoning_default_effort: medium
-    reasoning_efforts: [none, low, medium, high, xhigh, max]
+    reasoning_default_effort: low
+    reasoning_efforts: [low, medium, high, xhigh, max, ultra]
+    native_responses_tools: true
+    native_responses_images: true
   gpt-5.6-terra:
     context_window_tokens: 272000
-    max_context_window_tokens: 921000
+    max_context_window_tokens: 872000
     max_output_tokens: 128000
     reasoning_supported: true
     reasoning_default_effort: medium
-    reasoning_efforts: [none, low, medium, high, xhigh, max]
+    reasoning_efforts: [low, medium, high, xhigh, max, ultra]
+    native_responses_tools: true
+    native_responses_images: true
   gpt-5.4:
     context_window_tokens: 1050000
     max_output_tokens: 128000

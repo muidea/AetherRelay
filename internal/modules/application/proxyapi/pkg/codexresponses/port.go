@@ -9,12 +9,14 @@ import (
 type Header struct{ Name, Value string }
 
 type Request struct {
-	Model         string
-	Body          []byte
-	SessionHash   string
-	BetaFeatures  string
-	ResponsesLite bool
-	TurnState     string
+	Diagnostics    Diagnostics
+	AccountAttempt int
+	Model          string
+	Body           []byte
+	SessionHash    string
+	BetaFeatures   string
+	ResponsesLite  bool
+	TurnState      string
 }
 
 type Result struct {
@@ -52,6 +54,7 @@ const (
 	KindProviderUnavailable ErrorKind = "provider_unavailable"
 	KindEndpoint            ErrorKind = "endpoint_error"
 	KindInvalidRequest      ErrorKind = "invalid_request"
+	KindModelNotFound       ErrorKind = "model_not_found"
 	KindInvalidToken        ErrorKind = "invalid_token"
 	KindRateLimit           ErrorKind = "rate_limit"
 	KindTimeout             ErrorKind = "timeout"

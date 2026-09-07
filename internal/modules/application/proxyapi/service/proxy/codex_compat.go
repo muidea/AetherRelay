@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
 )
 
@@ -39,6 +40,7 @@ type codexNormalizationOptions struct {
 }
 
 type codexRequestFeatures struct {
+	Diagnostics   codexresponses.Diagnostics
 	BetaFeatures  string
 	ResponsesLite bool
 	TurnState     string
@@ -85,6 +87,16 @@ func normalizeCodexHTTPRequest(raw []byte, compact bool, headers http.Header) ([
 		return nil, nil, nil, codexRequestFeatures{}, err
 	}
 	features.ResponsesLite = features.ResponsesLite || rawCodexResponsesLite(raw)
+	metadata := headers.Get("X-Codex-Turn-Metadata")
+	if metadata == "" {
+		var source struct {
+			ClientMetadata map[string]json.RawMessage `json:"client_metadata"`
+		}
+		if json.Unmarshal(raw, &source) == nil {
+			_ = json.Unmarshal(source.ClientMetadata["x-codex-turn-metadata"], &metadata)
+		}
+	}
+	features.Diagnostics = codexresponses.ParseDiagnostics(metadata)
 	nativeCompaction := rawCodexNativeCompactionV2(raw)
 	if compact || nativeCompaction {
 		features.BetaFeatures = ensureCodexBetaFeature(features.BetaFeatures, codexRemoteCompactionV2Feature)

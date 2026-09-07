@@ -44,6 +44,8 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 	}
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
 	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash}
+	request.Diagnostics = codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
+	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if stream {
 		h.streamChatFromCodex(w, r, started, plan, model, request)
 		return

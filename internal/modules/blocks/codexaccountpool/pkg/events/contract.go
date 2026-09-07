@@ -55,6 +55,7 @@ const (
 	ErrorUpstream       = "upstream"
 	ErrorProtocol       = "protocol"
 	ErrorInvalidRequest = "invalid_request"
+	ErrorModelNotFound  = "model_not_found"
 	ErrorClient         = "client"
 )
 
@@ -62,22 +63,24 @@ const (
 // access, refresh, and ID tokens, upstream account IDs, and proxy URLs are
 // never included.
 type AccountView struct {
-	ID                         string                `json:"id"`
-	IdentityKey                string                `json:"identity_key,omitempty"`
-	Email                      string                `json:"email,omitempty"`
-	PlanType                   string                `json:"plan_type,omitempty"`
-	Status                     string                `json:"status"`
-	Success                    int                   `json:"success"`
-	Fail                       int                   `json:"fail"`
-	CreatedAt                  string                `json:"created_at,omitempty"`
-	LastUsedAt                 string                `json:"last_used_at,omitempty"`
-	LastTokenRefreshAt         string                `json:"last_token_refresh_at,omitempty"`
-	LastTokenRefreshErrorAt    string                `json:"last_token_refresh_error_at,omitempty"`
-	LastTokenRefreshErrorClass string                `json:"last_token_refresh_error_class,omitempty"`
-	Cooldowns                  []CooldownView        `json:"cooldowns,omitempty"`
-	QuotaObservations          []QuotaObservation    `json:"quota_observations,omitempty"`
-	ModelSnapshot              *AccountModelSnapshot `json:"model_snapshot,omitempty"`
-	ModelDiscoveryRetryAt      string                `json:"model_discovery_retry_at,omitempty"`
+	ID                         string                  `json:"id"`
+	IdentityKey                string                  `json:"identity_key,omitempty"`
+	Email                      string                  `json:"email,omitempty"`
+	PlanType                   string                  `json:"plan_type,omitempty"`
+	Status                     string                  `json:"status"`
+	Success                    int                     `json:"success"`
+	Fail                       int                     `json:"fail"`
+	CreatedAt                  string                  `json:"created_at,omitempty"`
+	LastUsedAt                 string                  `json:"last_used_at,omitempty"`
+	LastTokenRefreshAt         string                  `json:"last_token_refresh_at,omitempty"`
+	LastTokenRefreshErrorAt    string                  `json:"last_token_refresh_error_at,omitempty"`
+	LastTokenRefreshErrorClass string                  `json:"last_token_refresh_error_class,omitempty"`
+	Cooldowns                  []CooldownView          `json:"cooldowns,omitempty"`
+	QuotaObservations          []QuotaObservation      `json:"quota_observations,omitempty"`
+	ModelSnapshot              *AccountModelSnapshot   `json:"model_snapshot,omitempty"`
+	AvailableModels            []string                `json:"available_models"`
+	ModelAvailability          []ModelAvailabilityView `json:"model_availability"`
+	ModelDiscoveryRetryAt      string                  `json:"model_discovery_retry_at,omitempty"`
 	// Model discovery health uses a stable category rather than raw upstream
 	// diagnostics, which can contain proxy or transport details.
 	ModelDiscoveryErrorClass string                `json:"model_discovery_error_class,omitempty"`
@@ -93,6 +96,15 @@ type CooldownView struct {
 	Model      string `json:"model"`
 	Until      string `json:"until"`
 	ErrorClass string `json:"error_class"`
+}
+
+// ModelAvailabilityView is current Responses admission, not a live probe or
+// a promise of upstream access/available concurrency.
+type ModelAvailabilityView struct {
+	Model     string `json:"model"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	Until     string `json:"until,omitempty"`
 }
 
 // QuotaObservation is an upstream-observed limit state. An empty Model denotes

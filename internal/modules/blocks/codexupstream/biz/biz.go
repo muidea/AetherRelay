@@ -47,6 +47,7 @@ type streamUpdate struct {
 	errorClass        events.ErrorClass
 	retryAfterSeconds int
 	rateLimit         events.RateLimitObservation
+	safeError         events.SafeError
 }
 
 type responseStream struct {
@@ -514,7 +515,7 @@ func (s *Upstream) handlePull(ev event.Event, result event.Result) {
 		if update.done {
 			s.removeStream(cmd.StreamID)
 		}
-		result.Set(events.PullResult{Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
+		result.Set(events.PullResult{Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit, SafeError: update.safeError}, nil)
 	case <-time.After(timeout):
 		result.Set(events.PullResult{}, nil)
 	case <-ev.Context().Done():
@@ -619,7 +620,7 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 					}
 				}
 				if done {
-					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
+					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation, safeError: safeUpstreamError(sseData(expanded))})
 					return
 				}
 			}
@@ -1440,6 +1441,9 @@ func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitOb
 	}
 	observation := rateLimitObservation(payload, time.Now().UTC())
 	safeError := safeUpstreamError(payload)
+	if safeError.Code == "model_not_found" {
+		return events.ErrorModelNotFound, events.RateLimitObservation{}, safeError
+	}
 	if observation.UsageLimited {
 		return events.ErrorRateLimit, observation, safeError
 	}
@@ -1657,6 +1661,10 @@ func errorClassWithRateLimit(statusCode int, observation events.RateLimitObserva
 }
 
 func errorClassWithBody(statusCode int, body []byte, observation events.RateLimitObservation) events.ErrorClass {
+	// CP-FAIL-018: never infer model availability from a generic 404/message.
+	if statusCode == http.StatusNotFound && safeUpstreamError(body).Code == "model_not_found" {
+		return events.ErrorModelNotFound
+	}
 	if statusCode == http.StatusForbidden && responseLooksHTML(body) {
 		return events.ErrorEndpoint
 	}
