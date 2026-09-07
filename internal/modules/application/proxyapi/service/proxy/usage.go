@@ -118,6 +118,11 @@ func applyUsageDetails(usage *tokenUsage, payload map[string]any) {
 		if value, ok := numberAsInt(details["cache_creation_tokens"]); ok {
 			usage.CacheCreationInputTokens = value
 		}
+		// Responses reports cache writes separately from ordinary uncached input.
+		// The canonical field wins over compatibility aliases, including zero.
+		if value, ok := numberAsInt(details["cache_write_tokens"]); ok {
+			usage.CacheCreationInputTokens = value
+		}
 	}
 }
 

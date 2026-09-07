@@ -202,6 +202,7 @@ Prometheus 指标均以 `aetherrelay_` 为前缀：
 
 - 口径沿用现有日志与 Prometheus：`cache_hit_rate = sum(cached_input_tokens) / sum(input_tokens)`，先累计 Token 再计算比例，不平均单次请求的百分比，也不是有缓存的请求数占比。
 - 缓存创建 Token 单独展示，不计入使用率分子；输入 Token 沿用现有上游记账值，不在统计层重写或截断比例。不同上游的输入统计口径可能不同，可按 Provider / Model 筛选比较。
+- 缓存读取是逐次请求命中的累计 Token，不是缓存容量。Responses 的 `usage.input_tokens_details.cached_tokens` 计入读取量，`cache_write_tokens` 计入创建量；普通响应、SSE 和 compact 使用同一缓存字段解析。继续兼容 `cache_creation_input_tokens` / `input_tokens_details.cache_creation_tokens`，但有效的 `cache_write_tokens`（包括显式 `0`）优先，不能将别名相加或用“输入减读取”推算创建量。上游未报告写入时保留现有 `0` 口径；显示 `0` 不代表缓存没有生效，也不据此回填历史数据。
 - 所有缓存统计遵循当前时间和维度筛选，未限定 Outcome 时也包含失败请求已记录的用量；默认同时包含精确与估算数据，可切换为“仅精确”。未报告缓存的历史记录按已有的 0 值统计，不推测是否命中。
 - 输入 Token 为 0 时接口比例返回 `0`，页面显示 `—`（无分母）；有输入但无缓存时显示 `0%`。字段由已有 DuckDB 明细聚合，无需数据库迁移或回填。
 

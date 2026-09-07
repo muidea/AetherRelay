@@ -1914,7 +1914,7 @@ func TestResponsesStreamRecordsUsageFromCompleted(t *testing.T) {
 			"",
 			`data: {"type":"response.output_text.delta","delta":"hello"}`,
 			"",
-			`data: {"type":"response.completed","response":{"id":"resp_1","model":"deepseek-chat","usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_1","model":"deepseek-chat","usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":5,"cache_write_tokens":3}}}}`,
 			"",
 		}, "\n")
 		return sseResponse(body), nil
@@ -1935,6 +1935,16 @@ func TestResponsesStreamRecordsUsageFromCompleted(t *testing.T) {
 	if got := csvField(t, records, 1, "output_tokens"); got != "7" {
 		t.Fatalf("output tokens = %s, want 7 from response.completed", got)
 	}
+	if got := csvField(t, records, 1, "cached_input_tokens"); got != "5" {
+		t.Fatalf("cached input tokens = %s, want 5", got)
+	}
+	if got := csvField(t, records, 1, "cache_creation_input_tokens"); got != "3" {
+		t.Fatalf("cache creation tokens = %s, want 3", got)
+	}
+	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.4545" {
+		t.Fatalf("cache hit rate = %s, want read/input only", got)
+	}
+	assertFileContains(t, filepath.Join(tmpDir, "interactions", "000001", "metadata.json"), `"cache_creation_input_tokens": 3`)
 	if got := csvField(t, records, 1, "outcome"); got != "success" {
 		t.Fatalf("outcome = %s", got)
 	}

@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`5.0.1`
+> 合同版本：`5.0.2`
 >
 > 状态：`active`
 >
@@ -369,6 +369,8 @@
 
 `CP-OBS-003` 指标和日志只记录有界错误类别，不记录上游正文、token、代理凭据、原始 session 或完整 account ID。
 
+`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率仍为累计读取 / 累计输入；缺失写入沿用零值，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态，以及事件结算与 dashboard 汇总。
+
 ## 12. 运行时与组件边界
 
 `CP-ARCH-001` 进程只使用 `framework/application` 创建的一套 EventHub 和 BackgroundRoutine。
@@ -409,6 +411,7 @@
 | --- | --- | --- | --- | --- |
 | 模型级不可用与有限切号 | CP-FAIL-018 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `model_not_found_test.go`, `codex_model_not_found_test.go`, `model_availability_test.go` |
 | 压缩请求白名单诊断 | CP-OBS-006 | implemented | `proxyapi/pkg/codexresponses/diagnostics.go`, `proxyapi/biz/codex_diagnostics.go` | `diagnostics_test.go`, `proxyapi/service/proxy/codex_model_not_found_test.go` |
+| 缓存读写统一采集 | CP-OBS-007 | implemented | `proxyapi/service/proxy/usage.go`, `proxyapi/service/proxy/stream_archive.go` | `cache_write_usage_test.go`, `handler_test.go`, `aetherrelayusage/cache_statistics_test.go` |
 | 逐账号完整模型列表 | CP-CAP-010 | implemented | `codexaccountpool/internal/store/model_availability.go`, `web/admin/index.html` | `model_availability_test.go`, `web/admin/models.test.cjs` |
 | 切号严格匹配账号模型 | CP-SCHED-009 | implemented | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/strict_model_selection_test.go`, `codexaccountpool/biz/strict_model_selection_test.go` |
 

@@ -437,12 +437,8 @@ func (a *responsesStreamAccumulator) TrackSSELine(line []byte) {
 					a.Usage.CompletionTokens = n
 					a.Usage.Known = true
 				}
-				// 可选缓存字段
-				if details, ok := usage["input_tokens_details"].(map[string]any); ok {
-					if n, ok := numberAsInt(details["cached_tokens"]); ok {
-						a.Usage.CachedInputTokens = n
-					}
-				}
+				// Share cache read/write parsing with buffered Responses and compact.
+				applyUsageDetails(&a.Usage, usage)
 			}
 		}
 	}
