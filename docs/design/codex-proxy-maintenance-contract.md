@@ -1,14 +1,16 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`4.0.2`
+> 合同版本：`4.0.3`
 >
 > 状态：`active`
 >
 > 生效日期：2026-09-07
 >
-> 参考基线：AetherRelay `122b4f3`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
+> 参考基线：AetherRelay `e04badb`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`4.0.3` 修复 SSE terminal 转发缺少结束空行引发的客户端重试：2026-09-07 部署版本 `e04badb` 的第 4～9 轮均记录 success，但归档末尾为 `data: {"type":"response.completed",...}\n`，Codex CLI `0.153.2` 因无法分发未闭合事件而重复请求。`CP-STREAM-011` 固化终态完整帧交付，并按 `CP-STREAM-002` 拒绝仅 event 名或 output-item-done 后的 EOF；验收必须按空行解析完整事件，不能仅搜索 terminal 字符串。
 
 `4.0.2` 同步 Codex CLI `0.153.2` 实际请求与官方 `responses_metadata`：`client_metadata` 的已知兼容投影新增 `session_id`、`thread_id`、`turn_id`、`parent_turn_id`、`root_turn_id`、`x-codex-parent-thread-id` 和 `x-openai-subagent`。这些字段只作为有界 drop-compatible 输入，不得把客户端原始身份透传到上游；未知键继续在账号选择前拒绝。验收覆盖普通 turn、root turn、parent/subagent 和未知键拒绝。
 
@@ -225,6 +227,8 @@
 
 `CP-STREAM-010` 网关已经无法执行 failover、必须向客户端转发上游 capacity 降载事件时，写给客户端的 `error`/`response.failed` 副本必须把 `server_is_overloaded` 和 `slow_down` code 投影为可重试的 `server_error`。账号分类、额度观察和审计必须继续使用未改写的原始事件；`rate_limit_exceeded` 等其它错误码不得改写。HTTP/SSE 与 WebSocket 必须一致。
 
+`CP-STREAM-011` `codexupstream` 在转发可解析的 terminal data 后提前关闭上游时，必须先确保该 SSE 事件以完整空行结束，再发送 typed done。保留 JSON 正文、LF/CRLF 风格及已完整事件边界；允许为完整 terminal JSON 的行尾/EOF 补齐分隔符，但不得为不完整 JSON、单独 event 名或 output-item-done 伪造成功终态。输出前错误继续保持缓冲和 failover，输出后错误按原 typed 分类完整交付。依据：[SSE 事件分发规范](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation)。
+
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
 `CP-COMPACT-002` 客户端要求流式 compact 时，AetherRelay 必须把 unary JSON 合成为最小合法事件序列：每个 output item 一个 `response.output_item.done`，最后是 `response.completed`。
@@ -377,7 +381,7 @@
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..010 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..011 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006, CP-FAIL-016..017 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `codexupstream/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go`, `codexaccountpool/internal/store/store_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013, CP-EP-015 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go`, `proxy/responses_input_tokens.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go`, `responses_input_tokens_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012, CP-EP-014 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |

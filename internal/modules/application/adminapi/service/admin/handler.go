@@ -246,6 +246,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Set before authentication can return a redirect: caching either direction
+	// of the login flow can send a newly authenticated browser back to /login.
+	w.Header().Set("Cache-Control", "no-store")
 	rel := "/"
 	if path != base {
 		rel = strings.TrimPrefix(path, base)

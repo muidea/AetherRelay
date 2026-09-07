@@ -50,3 +50,19 @@ func expandCodexSSELine(line []byte) [][]byte {
 	}
 	return result
 }
+
+// completeCodexSSEEvent closes an already validated terminal data event without
+// waiting for another read. A complete JSON value at EOF still needs a blank
+// line for downstream SSE parsers to dispatch it.
+func completeCodexSSEEvent(line []byte) []byte {
+	switch {
+	case bytes.HasSuffix(line, []byte("\n\n")), bytes.HasSuffix(line, []byte("\r\n\r\n")):
+		return line
+	case bytes.HasSuffix(line, []byte("\r\n")):
+		return append(line, '\r', '\n')
+	case bytes.HasSuffix(line, []byte("\n")):
+		return append(line, '\n')
+	default:
+		return append(line, '\n', '\n')
+	}
+}

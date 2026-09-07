@@ -578,9 +578,6 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 	defer body.Close()
 	defer close(stream.updates)
 	reader := bufio.NewReader(body)
-	pendingTerminal := false
-	pendingClass := events.ErrorClass("")
-	sawOutputDone := false
 	semanticOutput := false
 	pending := make([][]byte, 0, 8)
 	pendingBytes := 0
@@ -595,6 +592,12 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 				if emptyCompleted {
 					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorUpstream})
 					return
+				}
+				done, class, observation := terminalOutcome(expanded)
+				if done {
+					// CP-STREAM-011: returning after a terminal data line skips
+					// the upstream blank line. Deliver a dispatchable event first.
+					expanded = completeCodexSSEEvent(expanded)
 				}
 				if !semanticOutput {
 					pendingBytes += len(expanded)
@@ -615,32 +618,15 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 						return
 					}
 				}
-				if done, class, observation := terminalOutcome(expanded); done {
+				if done {
 					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation})
 					return
-				}
-				if done, class := terminalEvent(expanded); done {
-					pendingTerminal, pendingClass = true, class
-				}
-				if sseEventName(expanded) == "response.output_item.done" {
-					sawOutputDone = true
 				}
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				if pendingTerminal {
-					for _, buffered := range pending {
-						if !sendUpdate(ctx, stream, streamUpdate{data: buffered}) {
-							return
-						}
-					}
-					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: pendingClass})
-				} else if sawOutputDone {
-					sendUpdate(ctx, stream, streamUpdate{done: true})
-				} else {
-					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol})
-				}
+				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol})
 				return
 			}
 			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyTransport(err)})
@@ -1379,29 +1365,6 @@ func terminalClass(line []byte) (bool, events.ErrorClass) {
 	default:
 		return false, ""
 	}
-}
-
-func terminalEvent(line []byte) (bool, events.ErrorClass) {
-	switch sseEventName(line) {
-	case "response.completed":
-		return true, ""
-	case "response.failed":
-		return true, events.ErrorUpstream
-	case "response.incomplete":
-		return true, ""
-	case "error":
-		return true, events.ErrorUpstream
-	default:
-		return false, ""
-	}
-}
-
-func sseEventName(line []byte) string {
-	value := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(value, "event:") {
-		return ""
-	}
-	return strings.TrimSpace(strings.TrimPrefix(value, "event:"))
 }
 
 func terminalOutcome(line []byte) (bool, events.ErrorClass, events.RateLimitObservation) {

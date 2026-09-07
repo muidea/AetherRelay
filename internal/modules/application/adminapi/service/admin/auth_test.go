@@ -48,6 +48,56 @@ func TestAuthDisabledRejectsRemote(t *testing.T) {
 	}
 }
 
+// Authentication changes must take effect on the next navigation: a browser
+// must never reuse a redirect to /login after a session has been established.
+func TestAdminAuthResponsesDisableCaching(t *testing.T) {
+	for _, base := range []string{"/admin", "/ops/AetherRelay"} {
+		t.Run(base, func(t *testing.T) {
+			h := newAuthHandler(t, config.AdminAuthConfig{Enabled: true, BasePath: base, SessionTTLSeconds: 3600})
+			session, err := h.auth.createSession("ops-admin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name, method, path, location string
+				authenticated                bool
+				status                       int
+			}{
+				{"root without slash", http.MethodGet, "", "/login", false, http.StatusSeeOther},
+				{"root", http.MethodGet, "/", "/login", false, http.StatusSeeOther},
+				{"protected page", http.MethodGet, "/settings", "/login", false, http.StatusSeeOther},
+				{"login", http.MethodGet, "/login", "", false, http.StatusOK},
+				{"unauthenticated API", http.MethodGet, "/api/auth/session", "", false, http.StatusUnauthorized},
+				{"unauthenticated HEAD", http.MethodHead, "/", "", false, http.StatusUnauthorized},
+				{"authenticated login", http.MethodGet, "/login", "/", true, http.StatusSeeOther},
+				{"authenticated login HEAD", http.MethodHead, "/login", "/", true, http.StatusSeeOther},
+				{"authenticated root", http.MethodGet, "/", "", true, http.StatusOK},
+				{"authenticated API", http.MethodGet, "/api/auth/session", "", true, http.StatusOK},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					req := httptest.NewRequest(tc.method, base+tc.path, nil)
+					req.RemoteAddr = "203.0.113.8:9"
+					if tc.authenticated {
+						req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: session.ID})
+					}
+					rec := httptest.NewRecorder()
+					h.ServeHTTP(rec, req)
+					wantLocation := ""
+					if tc.location != "" {
+						wantLocation = base + tc.location
+					}
+					if rec.Code != tc.status || rec.Header().Get("Location") != wantLocation {
+						t.Fatalf("status=%d location=%q", rec.Code, rec.Header().Get("Location"))
+					}
+					if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+						t.Fatalf("authentication-dependent response may be cached: Cache-Control=%q", got)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestAuthEnabledAllowsRemoteLoginFlow(t *testing.T) {
 	auth := enabledAuthConfig(t, "ops-admin", "s3cret-pass")
 	h := newAuthHandler(t, auth)

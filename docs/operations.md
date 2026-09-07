@@ -54,6 +54,7 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml
 运维注意：
 
 - 启用后任意来源都必须登录；不再保留 loopback 特权旁路。
+- Admin 路径的响应（包括未登录跳转、已登录访问登录页的跳转及认证错误）统一使用 `Cache-Control: no-store`。反向代理不得为整个 Admin 路径追加 `private, max-age=300` 等缓存规则；否则旧的登录跳转可能在会话变化后继续被浏览器复用。Nginx 配置示例见[部署说明](deployment.md#admin-反向代理缓存)。修正后若浏览器仍反复跳转，清除此站点缓存或在禁用缓存状态下重新访问，以排除已缓存的旧 303。
 - 修改密码哈希、账号或开关并成功热更新后，全部内存会话立即失效。
 - 管理接口成功修改 Provider 后，旧 transport 产生的健康样本和熔断会在 PATCH 返回前同步清除；恢复上游后无需等待原 30 秒 cooldown。未修改 Provider 的普通配置热更新不会重置其健康状态。
 - 客户端 Key 的 Provider 范围修改在 Admin 临界区内按“准备认证索引 → Store 事务 → 原子激活”执行。Provider 被 `selected` Key 引用时删除返回 409 并列出 Key ID；先在“客户端 Key”中编辑权限。`all` Key 不形成删除引用。

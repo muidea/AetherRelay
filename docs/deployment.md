@@ -154,6 +154,32 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml
 
 然后在 `server` 中配置 `admin_auth_enabled: true`、`admin_username` 与 `admin_password_hash`（或对应环境变量），并经 HTTPS 反向代理暴露 `<admin_base_path>`（默认 `/admin`）。完整要点见[配置参考](configuration.md#安全登录模式)。
 
+### Admin 反向代理缓存
+
+Admin 的页面、认证跳转和 API 响应依赖当前会话，应用统一返回 `Cache-Control: no-store`。Nginx 必须保留该响应头，不要对整个 `/admin/` 添加 `Cache-Control: private, max-age=300`、`expires` 等缓存规则。特别是未登录的 `/admin/ → /admin/login` 与已登录的反向跳转，缓存任一方向都会造成重复 redirect。
+
+在已有站点的 `server` 中配置（自定义 `admin_base_path` 时同步替换路径）：
+
+```nginx
+location = /admin {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_cache off;
+    expires off;
+    add_header Cache-Control "no-store" always;
+}
+
+location ^~ /admin/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_cache off;
+    expires off;
+    add_header Cache-Control "no-store" always;
+}
+```
+
+这里额外添加 `no-store`，也可保护尚未升级的应用产生的 303。若应用已返回同名 `no-store`，重复指令语义一致；不要隐藏上游的禁止缓存头，也不要同时保留旧的 `max-age=300`。将这些路径规则合入现有反向代理配置，保留已有的其它转发与安全设置。先运行 `nginx -t`，再 reload。通过外部入口检查未登录 `/admin/` 的响应，应该是 `303`、`Location: /admin/login` 并带 `Cache-Control: no-store`；浏览器已有的旧跳转缓存需要清除或禁用缓存后重新访问。
+
 ## 容器部署
 
 ### 一键部署脚本（推荐）

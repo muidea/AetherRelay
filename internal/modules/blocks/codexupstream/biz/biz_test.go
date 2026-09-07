@@ -1,6 +1,7 @@
 package biz
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -309,17 +310,8 @@ func TestTerminalClass(t *testing.T) {
 	if done, class := terminalClass([]byte("data: {\"type\":\"response.failed\"}\n")); !done || class != events.ErrorUpstream {
 		t.Fatalf("failed terminal = done=%v class=%q", done, class)
 	}
-	if done, class := terminalEvent([]byte("event: response.completed\n")); !done || class != "" {
-		t.Fatalf("event-only completed terminal = done=%v class=%q", done, class)
-	}
-	if done, class := terminalEvent([]byte("event: response.failed\n")); !done || class != events.ErrorUpstream {
-		t.Fatalf("event-only failed terminal = done=%v class=%q", done, class)
-	}
 	if done, class := terminalClass([]byte("data: {\"type\":\"response.incomplete\"}\n")); !done || class != "" {
 		t.Fatalf("incomplete terminal = done=%v class=%q", done, class)
-	}
-	if got := sseEventName([]byte("event: response.output_item.done\n")); got != "response.output_item.done" {
-		t.Fatalf("output done event=%q", got)
 	}
 }
 
@@ -378,7 +370,7 @@ func TestTerminalOutcomeClassifiesStreamErrorsBeforeOutput(t *testing.T) {
 	}
 }
 
-func TestRunStreamAcceptsCleanEOFAfterOutputItemDoneEvent(t *testing.T) {
+func TestRunStreamRejectsEOFAfterOutputItemDoneEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	stream := &responseStream{cancel: cancel, updates: make(chan streamUpdate, 8)}
@@ -391,15 +383,127 @@ func TestRunStreamAcceptsCleanEOFAfterOutputItemDoneEvent(t *testing.T) {
 	for update := range stream.updates {
 		if update.done {
 			done = true
-			if update.errorClass != "" {
+			if update.errorClass != events.ErrorProtocol {
 				t.Fatalf("terminal class=%q", update.errorClass)
 			}
 		}
 	}
 	if !done {
-		t.Fatal("clean EOF after output_item.done was not completed")
+		t.Fatal("CP-STREAM-002 EOF after output_item.done was not reported")
 	}
 	upstream.removeStream("stream-1")
+}
+
+// CP-STREAM-011: a data line is not a delivered SSE event until its blank line
+// arrives. Parse only complete frames, as a client does, before checking done.
+func TestRunStreamDeliversCompleteTerminalEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		class         events.ErrorClass
+	}{
+		{"response.completed", `{"type":"response.completed","response":{"status":"completed"}}`, ""},
+		{"response.incomplete", `{"type":"response.incomplete","response":{"status":"incomplete"}}`, ""},
+		{"response.failed", `{"type":"response.failed","response":{"error":{"type":"server_error"}}}`, events.ErrorUpstream},
+		{"error", `{"type":"error","error":{"type":"usage_limit_reached","resets_in_seconds":120}}`, events.ErrorRateLimit},
+	} {
+		for _, ending := range []struct{ name, newline, suffix string }{
+			{"LF", "\n", "\n\n"},
+			{"CRLF", "\r\n", "\r\n\r\n"},
+			{"EOF after line", "\n", "\n"},
+			{"EOF after JSON", "\n", ""},
+			{"concatenated JSON", "\n", "\n\n"},
+		} {
+			t.Run(tc.name+"/"+ending.name, func(t *testing.T) {
+				delta := `{"type":"response.output_text.delta","delta":"hello"}`
+				body := "data: " + delta + ending.newline + ending.newline + "event: " + tc.name + ending.newline + "data: " + tc.payload + ending.suffix
+				if ending.name == "concatenated JSON" {
+					body = "data: " + delta + tc.payload + ending.suffix
+				}
+				stream := &responseStream{updates: make(chan streamUpdate, 32)}
+				upstream := &Upstream{}
+				upstream.runStream(context.Background(), "test", stream, io.NopCloser(strings.NewReader(body)), 4096)
+				var wire strings.Builder
+				doneCount := 0
+				for update := range stream.updates {
+					if doneCount != 0 {
+						t.Fatal("data/update after done")
+					}
+					wire.Write(update.data)
+					if !update.done {
+						continue
+					}
+					doneCount++
+					if update.errorClass != tc.class {
+						t.Fatalf("class=%q want=%q", update.errorClass, tc.class)
+					}
+					if tc.class == events.ErrorRateLimit && (!update.rateLimit.UsageLimited || update.retryAfterSeconds <= 0) {
+						t.Fatalf("quota classification lost: %+v", update)
+					}
+					// EOF alone must not dispatch the last event: only blank lines do.
+					scanner := bufio.NewScanner(strings.NewReader(wire.String()))
+					var data string
+					var types []string
+					for scanner.Scan() {
+						line := scanner.Text()
+						if strings.HasPrefix(line, "data: ") {
+							data = strings.TrimPrefix(line, "data: ")
+						}
+						if line == "" && data != "" {
+							var event struct {
+								Type string `json:"type"`
+							}
+							if err := json.Unmarshal([]byte(data), &event); err != nil {
+								t.Fatal(err)
+							}
+							types = append(types, event.Type)
+							data = ""
+						}
+					}
+					if err := scanner.Err(); err != nil {
+						t.Fatal(err)
+					}
+					if len(types) != 2 || types[0] != "response.output_text.delta" || types[1] != tc.name || data != "" {
+						t.Fatalf("CP-STREAM-011 terminal not dispatched exactly once: events=%v pending=%q", types, data)
+					}
+					if !strings.HasSuffix(wire.String(), ending.newline+ending.newline) {
+						t.Fatal("terminal newline style changed")
+					}
+				}
+				if doneCount != 1 {
+					t.Fatalf("done count=%d", doneCount)
+				}
+			})
+		}
+	}
+}
+
+// CP-STREAM-002/011: event names or item completion cannot replace a valid
+// response terminal payload, even when earlier text was delivered.
+func TestRunStreamRejectsTruncatedTerminals(t *testing.T) {
+	for _, tail := range []string{
+		"", "event: response.completed\n", "event: response.failed\n\n",
+		"event: response.completed\ndata: {\"type\":\"response.completed\"\n\n",
+		"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n\n",
+	} {
+		t.Run(tail, func(t *testing.T) {
+			stream := &responseStream{updates: make(chan streamUpdate, 32)}
+			upstream := &Upstream{}
+			body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" + tail
+			upstream.runStream(context.Background(), "test", stream, io.NopCloser(strings.NewReader(body)), 4096)
+			done := false
+			for update := range stream.updates {
+				if update.done {
+					done = true
+					if update.errorClass != events.ErrorProtocol {
+						t.Fatalf("truncated stream class=%q", update.errorClass)
+					}
+				}
+			}
+			if !done {
+				t.Fatal("missing terminal result")
+			}
+		})
+	}
 }
 
 func TestRateLimitObservationReadsCodexUsageReset(t *testing.T) {
