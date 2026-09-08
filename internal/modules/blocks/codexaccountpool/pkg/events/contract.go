@@ -175,12 +175,15 @@ type AcquireCommand struct {
 	PreferredID string
 }
 type AcquireResult struct {
-	AccountID       string
-	AccessToken     string
-	AccountIDHeader string
-	Proxy           string
-	LeaseID         string
-	FingerprintMode string
+	// Admission denial carries no credentials; time is known only for bounded cooldowns.
+	UnavailableReason string
+	RetryAfterSeconds int
+	AccountID         string
+	AccessToken       string
+	AccountIDHeader   string
+	Proxy             string
+	LeaseID           string
+	FingerprintMode   string
 }
 
 type ReleaseCommand struct{ LeaseID string }

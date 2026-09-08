@@ -99,6 +99,8 @@ chatgpt_web:
 # 不写入 YAML。模型按账号自动发现并缓存，健康账号快照的并集会对外发布；
 # 它们仅服务原生 POST /v1/responses。
 codex_oauth:
+  # HTTP 流单次尝试的独立总时限；0 关闭。首事件和空闲超时仍由 server 控制。
+  stream_max_duration_seconds: 0
   # 控制内建 Provider 是否参与模型路由；不影响 Codex 账号池维护。
   # 省略时为 true；Provider 管理页可热更新此项。
   provider_enabled: true

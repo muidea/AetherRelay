@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -1098,7 +1099,7 @@ func (h *Handler) writeArchivedError(w http.ResponseWriter, round *archive.Round
 	h.writeArchivedAPIError(w, round, r, start, provider, model, stream, status, apiErr)
 }
 
-func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, apiErr APIError) {
+func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, apiErr APIError, failures ...*streamFail) {
 	if apiErr.ClientProtocol == "" {
 		apiErr.ClientProtocol = clientProtocolFromRequest(r)
 	}
@@ -1140,8 +1141,12 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	duration := time.Since(start)
 	usage := tokenUsage{}
 	msg := apiErr.Code + ": " + apiErr.Message
-	h.recordAndPrint(round, r, provider, model, stream, status, duration, usage, msg)
-	h.writeArchiveMetadata(round, provider, model, stream, status, duration, usage, "response.json", msg, "", "")
+	failure := streamFailFromMessage(msg)
+	if len(failures) > 0 && failures[0] != nil {
+		failure = failures[0]
+	}
+	h.recordAndPrintFail(round, r, provider, model, stream, status, duration, usage, failure)
+	h.writeArchiveMetadata(round, provider, model, stream, status, duration, usage, "response.json", msg, "", outcomeFromStreamFail(failure, status))
 }
 
 func chatGPTWebUsageEndpoint(r *http.Request) string {
@@ -2649,24 +2654,25 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 	health := h.metricsRegistry.ProviderHealthSnapshot()
 	eligible := make([]TransportPlan, 0, len(plans))
 	modelHealth := make(map[string]metrics.StatsProviderHealth, len(plans))
+	var earliestRetry time.Time
+	now := time.Now()
 	for _, plan := range plans {
 		providerValue, providerOK := health[plan.RouteOwner]
 		specific, specificOK := h.metricsRegistry.ProviderModelHealth(plan.RouteOwner, plan.ModelID)
-		// Health status is a rolling quality score, not a routing quarantine. An
-		// unhealthy score (for example, one truncated stream in a small window)
-		// must remain routable so the provider can receive a recovery probe. Only
-		// an active circuit or an explicit model-scoped credential failure may
-		// block this exact model.
-		if specificOK && (specific.Status == "credential_error" || specific.CircuitState == "open") {
-			continue
-		}
-		// Credential failures are model-scoped: one Provider key may be
-		// authorized for some exact models but not others. Transport failures
-		// and open provider circuits remain shared across all models.
-		// Provider-level rolling scores are used for ordering/observability. Do
-		// not turn them into a permanent fail-fast gate; an active circuit is the
-		// authoritative availability decision.
-		if providerOK && providerValue.CircuitState == "open" {
+		// Only active circuits or model-local credential faults block routing.
+		// Report the earliest candidate whose applicable circuits can expire;
+		// rolling quality scores alone never quarantine a provider.
+		modelBlocked := specificOK && (specific.Status == "credential_error" || specific.CircuitState == "open")
+		providerBlocked := providerOK && providerValue.CircuitState == "open"
+		if modelBlocked || providerBlocked {
+			retryAt := specific.CircuitRetryAt
+			if providerBlocked && providerValue.CircuitRetryAt.After(retryAt) {
+				retryAt = providerValue.CircuitRetryAt
+			}
+			known := !modelBlocked || specific.CircuitState == "open"
+			if known && retryAt.After(now) && (earliestRetry.IsZero() || retryAt.Before(earliestRetry)) {
+				earliestRetry = retryAt
+			}
 			continue
 		}
 		eligible = append(eligible, plan)
@@ -2679,7 +2685,12 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 	}
 	if len(eligible) == 0 {
 		first := plans[0]
-		return nil, &APIError{Code: ErrorCodeProviderUnavailable, Message: fmt.Sprintf("all providers for model %q are unhealthy", model), Model: model, ClientEndpoint: first.ClientEndpoint, ClientProtocol: first.ClientProtocol}
+		failure := &APIError{Code: ErrorCodeProviderUnavailable, Message: fmt.Sprintf("all providers for model %q are unhealthy", model), Model: model, ClientEndpoint: first.ClientEndpoint, ClientProtocol: first.ClientProtocol}
+		if !earliestRetry.IsZero() {
+			failure.RetryAfterSeconds = int(math.Ceil(earliestRetry.Sub(now).Seconds()))
+			failure.FailureClass = "circuit_open"
+		}
+		return nil, failure
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		if left, right := transportPlanSemanticRank(eligible[i]), transportPlanSemanticRank(eligible[j]); left != right {

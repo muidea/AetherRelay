@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -42,6 +43,7 @@ type AnthropicError struct {
 // APIError 描述稳定错误合同;不得包含 API Key、Authorization 或上游敏感体。
 // 可选上下文字段用于客户端与 WorkOrch 诊断,均不泄露 secret。
 type APIError struct {
+	RetryAfterSeconds   int      `json:"-"`
 	Code                string   `json:"code"`
 	Message             string   `json:"message"`
 	Type                string   `json:"type,omitempty"` // OpenAI error.type
@@ -59,6 +61,9 @@ type APIError struct {
 // OpenAI: {"error":{code,message,type,...}}
 // Anthropic: {"type":"error","error":{"type":"...","message":"..."}}
 func writeClientProtocolError(w http.ResponseWriter, status int, clientProtocol string, apiErr APIError) {
+	if apiErr.RetryAfterSeconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(apiErr.RetryAfterSeconds))
+	}
 	if apiErr.Type == "" {
 		apiErr.Type = openAIErrorType(apiErr.Code)
 	}

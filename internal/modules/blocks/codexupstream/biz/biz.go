@@ -473,7 +473,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 	// The EventHub command is synchronous and may finish before its SSE reader.
 	// Keep request values, but let explicit Pull/Cancel own stream lifetime.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ev.Context()))
-	stream := &responseStream{cancel: cancel, updates: make(chan streamUpdate, 64)}
+	stream := &responseStream{cancel: func() { cancel(); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64)}
 	s.mu.Lock()
 	s.streams[streamID] = stream
 	s.mu.Unlock()

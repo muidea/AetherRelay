@@ -1,10 +1,10 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`5.0.2`
+> 合同版本：`6.0.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-07
+> 生效日期：2026-09-08
 >
 > 参考基线：AetherRelay `85aaabb`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
 
@@ -239,6 +239,8 @@
 
 `CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
+`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
+
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
 `CP-COMPACT-002` 客户端要求流式 compact 时，AetherRelay 必须把 unary JSON 合成为最小合法事件序列：每个 output item 一个 `response.output_item.done`，最后是 `response.completed`。
@@ -327,6 +329,10 @@
 
 `CP-FAIL-018` 结构化 `error.code=model_not_found` 的 HTTP 404 或 Responses failed/error 终态必须单独分类；普通 404、错误消息中的同名文本及参数错误不属于该类别。仅记录账号 × exact model 的 5 分钟冷却，不改变账号状态、quota 或 compact/WS 能力；过期自动恢复准入，显式替换凭据清除旧观察，目录刷新不能提前解除实际失败观察。HTTP Responses/compact 在未输出、无 `previous_response_id`、无非空 turn-state 时允许保持同模型最多尝试 3 个不同账号；禁止模型替换、同账号循环及输出后重放。耗尽保留最后真实上游错误。该窄例外优先于 `CP-COMPACT-005` 的普通 404 规则；WS 只分类和记录，不扩展 `CP-WS-012` 的迁移边界。
 
+`CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。账号冷却只能由账号 owner 按 exact model 与 credential-wide 事实计算。
+
+`CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、事件数、字节数、最后事件时间和耗时；不输出请求正文、凭据或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
+
 `CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码和白名单 request_kind/compaction reason/phase。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
 
 `5.0.0` 验收：HTTP 404 与 SSE/WS typed 错误分类、普通错误不重试、同模型限次切号及耗尽保真、stateful/输出后不重放、模型冷却隔离/持久化/过期/凭据替换恢复、诊断白名单；客户端跨模型压缩恢复与真实账号可用性另行 smoke 验证，不以离线测试宣称已修复 CLI。
@@ -404,6 +410,18 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`6.0.0` 现场证据：2026-09-08 部署 `a8a19ee` 的脱敏 round 565 在约 96 秒后 network 失败；566/567 账号准入失败后触发 Provider 熔断；574 在约 300 秒持续工具参数输出后被总时限终止。归档只用事件类别和计数作为证据，不复制真实正文。
+
+验收：持续输出超过缩短的旧总时限仍成功；首事件等待、空闲、显式最大时长、客户端取消分类正确；注释不续期；输出后不重放；reader/body/lease 回收；账号准入返回冷却时间；连续准入拒绝不污染模型或 Provider 健康；半开真实成功关闭熔断。实现状态：implemented。
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| Codex 流独立超时与取消回收 | CP-STREAM-013 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/biz.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `codexupstream/biz/stream_cancel_test.go`, `aetherrelayconfig/codex_stream_timeout_test.go` |
+| 准入等待提示与健康隔离 | CP-FAIL-019 | implemented | `codexaccountpool/internal/store/model_availability.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/handler.go`, `aetherrelaymetrics/registry.go` | `codexaccountpool/biz/admission_retry_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/service/proxy/codex_health_test.go`, `aetherrelaymetrics/admission_health_test.go` |
+| 流停止诊断及原因保真 | CP-OBS-008 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_stream_timeout_test.go`（含清理延迟超过总时限仍保留原网络故障） |
+
+以上为离线回归证据；真实上游与部署后的长流恢复按 CP-DOD-006 单独验证。
 
 `5.0.0` 新增实施追踪：
 

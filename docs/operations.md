@@ -259,3 +259,9 @@ make release VERSION=v1.2.3
 普通提交 CI 只执行 Linux amd64 的格式、依赖、vet、全量测试与构建。推送 `vX.Y.Z` tag 后，Release workflow 会统一验证源码一次，并在 Linux amd64/arm64、macOS arm64 原生 runner 上打包 `.tar.gz` 与 SHA-256 文件，然后创建 GitHub Release。Windows 不发布原生二进制（依赖 Unix termios，需 MinGW CGO 工具链，从未验证）；Windows 用户用 WSL2 或容器部署。
 
 不要从 amd64 强制交叉编译 Linux arm64：DuckDB Go bindings 需要相应的原生目标 runner。手动重跑 Release workflow 时，输入的版本必须是已有 tag。
+
+### Codex 长流超时与账号冷却排查
+
+Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex stream stopped` 的 `phase`、`error_class`、`event_count`、`stream_bytes` 和 `last_event_at`：`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
+
+账号池 503 的 `accounts_cooling` 与 `Retry-After` 表示暂时冷却，不等于新一次上游故障；`no_eligible_account` 或 `accounts_busy_or_excluded` 需结合账号模型、状态和并发占用检查。准入拒绝、客户端取消/写失败和本地最大流时长不会追加 Provider 熔断样本。已有熔断到期后允许恢复请求，真实成功才清零连续失败；HTTP 200 的流仍须以合法终态确认成功。

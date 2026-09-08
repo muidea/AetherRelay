@@ -157,6 +157,8 @@ type ChatGPTWebConfig struct {
 // CodexOAuthConfig enables the native Codex Responses account pool. Its
 // routable model catalog is always derived from account-level discovery.
 type CodexOAuthConfig struct {
+	// StreamMaxDuration bounds an HTTP streaming attempt independently of unary requests. Zero disables it.
+	StreamMaxDuration time.Duration
 	// ProviderEnabled controls routing only. The account pool itself is always active.
 	ProviderEnabled           bool
 	providerEnabledConfigured bool
@@ -700,6 +702,15 @@ func setChatGPTWeb(cfg *Config, key, value string) error {
 
 func setCodexOAuth(cfg *Config, key, value string) error {
 	switch key {
+	case "stream_max_duration_seconds":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.stream_max_duration_seconds: %w", err)
+		}
+		if int64(n) > int64((1<<63-1)/time.Second) {
+			return fmt.Errorf("codex_oauth.stream_max_duration_seconds: duration overflow")
+		}
+		cfg.CodexOAuth.StreamMaxDuration = time.Duration(n) * time.Second
 	case "provider_enabled":
 		b, err := parseStrictBool(value)
 		if err != nil {

@@ -58,6 +58,9 @@ const (
 	KindInvalidToken        ErrorKind = "invalid_token"
 	KindRateLimit           ErrorKind = "rate_limit"
 	KindTimeout             ErrorKind = "timeout"
+	KindFirstEventTimeout   ErrorKind = "first_event_timeout"
+	KindIdleTimeout         ErrorKind = "idle_timeout"
+	KindStreamLifetime      ErrorKind = "stream_lifetime_timeout"
 	KindNetwork             ErrorKind = "network"
 	KindUpstream            ErrorKind = "upstream"
 	KindProtocol            ErrorKind = "protocol"
@@ -69,6 +72,7 @@ type Failure struct {
 	Kind              ErrorKind
 	HTTPStatus        int
 	RetryAfterSeconds int
+	UnavailableReason string
 	QuotaExhausted    bool
 	QuotaResetAt      string
 	UpstreamType      string

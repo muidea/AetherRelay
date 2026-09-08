@@ -241,7 +241,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 	}
 	item, err := s.store.AcquirePreferredTransport(cmd.Model, exclude, preferred, cmd.Transport)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex account unavailable"))
+		result.Set(item, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return
 	}
 	leaseID := uuid.NewString()

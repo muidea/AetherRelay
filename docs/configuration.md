@@ -101,7 +101,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `max_request_body_bytes` / `AETHERRELAY_MAX_REQUEST_BODY_BYTES` | 客户端请求体上限。 |
 | `max_upstream_response_bytes` / `AETHERRELAY_MAX_UPSTREAM_RESPONSE_BYTES` | 非流式上游响应上限。 |
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
-| `request_timeout_seconds` | 非流式总超时及流式等待响应头超时。 |
+| `request_timeout_seconds` | 非流式总超时及通用 HTTP 流式等待响应头超时；Codex HTTP 流使用独立的首事件/空闲限制，不受此总时限截断。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
 | `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `30` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
@@ -194,6 +194,7 @@ chatgpt_web:
 
 ```yaml
 codex_oauth:
+  stream_max_duration_seconds: 0
   provider_enabled: true
   priority: 90
   refresh_account_interval_minute: 0
@@ -202,6 +203,9 @@ codex_oauth:
   websocket_idle_timeout_seconds: 300
   websocket_max_lifetime_seconds: 1800
 ```
+
+- Codex HTTP SSE（含复用执行链的 Chat/Messages 流）使用 `server.stream_first_event_timeout_seconds` 限制从发起上游请求到首个可交付业务事件的等待，`server.stream_idle_timeout_seconds` 限制后续 SSE data 空闲；两者为 `0` 时关闭对应限制，空行/注释不续期。持续工具参数输出不会因 `request_timeout_seconds` 到期中断。`codex_oauth.stream_max_duration_seconds` 为可选单次上游流总时限，默认 `0` 关闭；到期属于本地策略失败，不冷却账号、不触发 Provider 熔断，也不切号重放。此项只用于 HTTP 流；compact/unary 与 WS 保留各自超时合同。
+- 账号池暂时无可用账号时返回 503；已知冷却恢复时间时附 `Retry-After` 秒数与 `failure_class=accounts_cooling`。该准入拒绝不增加 Provider 健康失败，不延长现有熔断；并发槽占满或无法确定恢复时间时不编造恢复时间。真实上游首事件/空闲超时仍记故障，已输出后禁止自动重放。
 
 - 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现模型；该路径不作为 AetherRelay 入站端点。结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。

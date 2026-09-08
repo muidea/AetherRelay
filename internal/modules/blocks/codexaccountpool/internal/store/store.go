@@ -542,7 +542,7 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 			return acquireResult(item), nil
 		}
 	}
-	return events.AcquireResult{}, fmt.Errorf("no eligible Codex OAuth account")
+	return s.unavailableResult(model, excluded, transport, now), fmt.Errorf("no eligible Codex OAuth account")
 }
 
 func acquireResult(item *account) events.AcquireResult {

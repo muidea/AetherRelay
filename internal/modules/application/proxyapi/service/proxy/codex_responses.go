@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -403,7 +404,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		code = ErrorCodeUpstreamUnavailable
 	case string(codexresponses.KindRateLimit):
 		status = http.StatusTooManyRequests
-	case string(codexresponses.KindTimeout):
+	case string(codexresponses.KindTimeout), string(codexresponses.KindFirstEventTimeout), string(codexresponses.KindIdleTimeout), string(codexresponses.KindStreamLifetime):
 		status = http.StatusGatewayTimeout
 	case string(codexresponses.KindClientCanceled):
 		status = 499
@@ -429,7 +430,14 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		errorType = codexFailure.UpstreamType
 		param = codexFailure.UpstreamParam
 	}
-	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID})
+	if codexFailure != nil && codexFailure.RetryAfterSeconds > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(codexFailure.RetryAfterSeconds))
+	}
+	reason := ""
+	if codexFailure != nil {
+		reason = codexFailure.UnavailableReason
+	}
+	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, FailureClass: reason, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID}, failure)
 }
 
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {
@@ -472,6 +480,12 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 	switch failure.Kind {
 	case codexresponses.KindInvalidRequest:
 		kind = streamKindError
+	case codexresponses.KindProviderUnavailable:
+		kind = streamKind("provider_unavailable")
+	case codexresponses.KindStreamLifetime:
+		kind = streamKind("stream_lifetime_timeout")
+	case codexresponses.KindFirstEventTimeout, codexresponses.KindIdleTimeout:
+		kind, countUpstream = streamKindIdleTimeout, true
 	case codexresponses.KindClientCanceled:
 		kind = streamKindClientCanceled
 	case codexresponses.KindClientWrite:

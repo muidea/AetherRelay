@@ -460,6 +460,12 @@ func applyProviderHealthSample(health providerHealth, sample healthSample) provi
 // local 4xx outcomes remain request metrics but must not make a healthy
 // upstream look degraded.
 func shouldTrackProviderHealth(status int, outcome string) bool {
+	// CP-FAIL-019: local admission/policy/client failures are still request
+	// metrics, but must not manufacture upstream circuit observations.
+	switch outcome {
+	case "provider_unavailable", "stream_lifetime_timeout", "client_canceled", "client_write":
+		return false
+	}
 	if status >= 200 && status < 400 && outcome == "success" {
 		return true
 	}

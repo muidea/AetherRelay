@@ -1,11 +1,50 @@
 package store
 
 import (
+	"math"
 	"strings"
 	"time"
 
 	"aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
+
+// unavailableResult is called under the store lock after selection failed.
+// CP-FAIL-019: derive retry hints from the same exact-model admission facts,
+// without exposing account identities or changing any cooldown.
+func (s *Store) unavailableResult(model string, excluded map[string]struct{}, transport string, now time.Time) events.AcquireResult {
+	result := events.AcquireResult{UnavailableReason: "no_eligible_account"}
+	var earliest time.Time
+	for _, item := range s.items {
+		if transportSupport(item, transport) < 0 {
+			continue
+		}
+		view := modelAvailability(item, model, now)
+		if _, found := excluded[item.ID]; found {
+			if view.Available {
+				result.UnavailableReason = "accounts_busy_or_excluded"
+			}
+			continue
+		}
+		if view.Until == "" || usageLimitCooling(item, now) {
+			continue
+		}
+		// Keep sub-second precision; management's RFC3339 projection truncates it.
+		var until time.Time
+		for key, entry := range item.Cooldowns {
+			if (key == "" || key == strings.TrimSpace(model)) && entry.Until.After(until) {
+				until = entry.Until
+			}
+		}
+		if until.After(now) && (earliest.IsZero() || until.Before(earliest)) {
+			earliest = until
+		}
+	}
+	if !earliest.IsZero() {
+		result.UnavailableReason = "accounts_cooling"
+		result.RetryAfterSeconds = int(math.Ceil(earliest.Sub(now).Seconds()))
+	}
+	return result
+}
 
 func modelAvailability(item *account, model string, now time.Time) events.ModelAvailabilityView {
 	// CP-SCHED-009: shared admission for management and every account selection.
