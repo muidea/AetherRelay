@@ -16,7 +16,8 @@ server:
   stream_idle_timeout_seconds: 300
   # Converted SSE first-event deadline. Keep it shorter than the inter-event
   # idle window so an upstream that never starts cannot occupy a request.
-  stream_first_event_timeout_seconds: 30
+  # 60 seconds accommodates the observed Codex OAuth gpt-6-astra cold starts.
+  stream_first_event_timeout_seconds: 60
   upstream_body_idle_timeout_seconds: 180
   # 可观测性端点(/metrics, /stats)访问控制。默认仅 loopback 可访问,
   # 在受信内网可以设为 true 开放给 Prometheus / TUI 拉取。
