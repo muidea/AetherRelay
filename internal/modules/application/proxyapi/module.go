@@ -8,6 +8,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/biz"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
 	"aetherrelay/internal/modules/application/proxyapi/service/proxy"
+	"aetherrelay/internal/pkg/aetherrelaycredential"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -29,6 +30,10 @@ func (m *Module) ID() string  { return proxycommon.UnitID }
 func (m *Module) Weight() int { return 120 }
 
 func (m *Module) Setup(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) *cd.Error {
+	imageSigningKey, signingErr := aetherrelaycredential.DeriveKeyFromEnvironment("proxy-image-url-signing")
+	if signingErr != nil {
+		return cd.NewError(cd.IllegalParam, signingErr.Error())
+	}
 	bizPtr, err := biz.New(ctx, hub, background)
 	if err != nil {
 		return err
@@ -41,7 +46,7 @@ func (m *Module) Setup(ctx context.Context, hub event.Hub, background task.Backg
 		return cd.NewError(cd.IllegalParam, "http route registry is unavailable")
 	}
 	proxy.ReserveMetricsModels(bizPtr.Metrics(), bizPtr.Config())
-	m.handler = proxy.NewHandler(bizPtr.Config(), bizPtr.UsageStore(), bizPtr.Recorder(), bizPtr.Metrics()).WithChatGPTTextExecutor(bizPtr).WithChatGPTSearchExecutor(bizPtr).WithChatGPTImageExecutor(bizPtr).WithCodexResponsesExecutor(bizPtr)
+	m.handler = proxy.NewHandler(bizPtr.Config(), bizPtr.UsageStore(), bizPtr.Recorder(), bizPtr.Metrics()).WithChatGPTTextExecutor(bizPtr).WithChatGPTSearchExecutor(bizPtr).WithChatGPTImageExecutor(bizPtr).WithChatGPTImageContentReader(bizPtr).WithImageURLSigningKey(imageSigningKey[:]).WithCodexResponsesExecutor(bizPtr)
 	bizPtr.BindConfigUpdater(m.handler)
 	bizPtr.BindCatalogPublisher(m.handler)
 	bizPtr.BindFeatureExecutor(m.handler)

@@ -101,8 +101,20 @@ func (s *Admin) PrepareClientKeyIndex(records map[string]usage.ClientAPIKeyRecor
 	return response.Index, nil
 }
 
-func (s *Admin) ActivateClientKeyIndex(index *clientauth.Index) {
-	_, _ = s.SendEvent(event.NewEventWithContext(proxyevents.TopicActivateClientKeyIndex, s.ID(), proxycommon.UnitID, event.NewHeader(), context.Background(), proxyevents.ActivateClientKeyIndexCommand{Index: index})).Get()
+func (s *Admin) ActivateClientKeyIndex(index *clientauth.Index) error {
+	_, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicActivateClientKeyIndex, s.ID(), proxycommon.UnitID, event.NewHeader(), context.Background(), proxyevents.ActivateClientKeyIndexCommand{Index: index})).Get()
+	if err != nil {
+		return fmt.Errorf("activate client keys: %s", err.Message)
+	}
+	return nil
+}
+
+func (s *Admin) WaitClientRequests(ctx context.Context, keyID string) error {
+	_, err := s.SendEvent(event.NewEventWithContext(proxyevents.TopicWaitClientRequests, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.WaitClientRequestsCommand{KeyID: keyID})).Get()
+	if err != nil {
+		return fmt.Errorf("wait client requests: %s", err.Message)
+	}
+	return nil
 }
 
 func (s *Admin) EffectiveCatalogSnapshot() effectivecatalog.Snapshot {

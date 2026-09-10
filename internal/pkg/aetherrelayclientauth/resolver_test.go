@@ -2,9 +2,11 @@ package clientauth
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 )
@@ -185,5 +187,53 @@ func TestEmptyIndexRejectsAllCredentials(t *testing.T) {
 	h.Set("Authorization", "Bearer anything")
 	if _, err := ResolveHeaders(h, idx); err != ErrAuthenticationFailed {
 		t.Fatalf("unknown against empty index: %v", err)
+	}
+}
+
+func TestResourceURLSignatureFollowsCredentialLifecycle(t *testing.T) {
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	path := "/images/codex/2026/09/10/result.png"
+	expiresAt := now.Add(time.Hour).Unix()
+	idx := testIndex(t)
+	signingKey := []byte("server-only-image-signing-key-32b")
+	signature, ok := SignResourceURL(idx, signingKey, "codex", path, expiresAt)
+	if !ok || signature == "" {
+		t.Fatal("enabled key did not sign resource URL")
+	}
+	if !VerifyResourceURL(idx, signingKey, "codex", path, expiresAt, signature, now) {
+		t.Fatal("valid resource URL signature was rejected")
+	}
+	clientDigest := sha256.Sum256([]byte("sk-codex-secret"))
+	if VerifyResourceURL(idx, clientDigest[:], "codex", path, expiresAt, signature, now) {
+		t.Fatal("client credential digest was accepted as the server signing key")
+	}
+	for name, valid := range map[string]bool{
+		"wrong path":       VerifyResourceURL(idx, signingKey, "codex", path+".tampered", expiresAt, signature, now),
+		"wrong key":        VerifyResourceURL(idx, signingKey, "workorch", path, expiresAt, signature, now),
+		"wrong server key": VerifyResourceURL(idx, []byte("another-server-image-signing-key-32"), "codex", path, expiresAt, signature, now),
+		"expired":          VerifyResourceURL(idx, signingKey, "codex", path, expiresAt, signature, now.Add(time.Hour)),
+		"malformed":        VerifyResourceURL(idx, signingKey, "codex", path, expiresAt, "not a signature", now),
+	} {
+		if valid {
+			t.Fatalf("%s signature unexpectedly accepted", name)
+		}
+	}
+	if _, ok := SignResourceURL(idx, signingKey, "disabled-bot", path, expiresAt); ok {
+		t.Fatal("disabled key signed a resource URL")
+	}
+
+	rotated := BuildIndex([]KeyEntry{{ID: "codex", APIKey: "rotated-secret", Enabled: true, ProviderAccess: clientaccess.All()}})
+	if VerifyResourceURL(rotated, signingKey, "codex", path, expiresAt, signature, now) {
+		t.Fatal("signature survived credential rotation")
+	}
+}
+
+func TestPrepareIndexRejectsDuplicateEnabledKeyID(t *testing.T) {
+	_, err := PrepareIndex([]KeyEntry{
+		{ID: "duplicate", APIKey: "first", Enabled: true, ProviderAccess: clientaccess.All()},
+		{ID: "duplicate", APIKey: "second", Enabled: true, ProviderAccess: clientaccess.All()},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate enabled client api key id") {
+		t.Fatalf("duplicate id error=%v", err)
 	}
 }

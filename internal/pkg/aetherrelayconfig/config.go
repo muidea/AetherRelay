@@ -71,7 +71,10 @@ type Config struct {
 	UpstreamBodyIdleTimeout time.Duration
 	MetricsRemoteAccess     bool
 	MetricsAllowedCIDRs     []string
-	SLO                     SLOConfig
+	// TrustedProxyCIDRs lists immediate reverse proxies whose forwarded scheme
+	// may define externally visible response URLs.
+	TrustedProxyCIDRs []string
+	SLO               SLOConfig
 	// AdminAuth 描述可选的 Admin 登录安全配置。默认关闭,保持 loopback-only 兼容行为。
 	AdminAuth AdminAuthConfig
 	// UsageStore 描述进程内嵌 DuckDB 持久化统计存储。路径与资源参数变更需重启。
@@ -580,6 +583,8 @@ func setTopLevel(cfg *Config, key, value string) error {
 		cfg.MetricsRemoteAccess = b
 	case "metrics_allowed_cidrs":
 		cfg.MetricsAllowedCIDRs = parseList(value)
+	case "trusted_proxy_cidrs":
+		cfg.TrustedProxyCIDRs = parseList(value)
 	case "slo_cache_hit_rate_min":
 		f, err := parseStrictFloat(value)
 		if err != nil {
@@ -1213,6 +1218,9 @@ func applyEnv(cfg *Config) error {
 	if value := os.Getenv("AETHERRELAY_METRICS_ALLOWED_CIDRS"); value != "" {
 		cfg.MetricsAllowedCIDRs = parseList(value)
 	}
+	if value := os.Getenv("AETHERRELAY_TRUSTED_PROXY_CIDRS"); value != "" {
+		cfg.TrustedProxyCIDRs = parseList(value)
+	}
 	if value := os.Getenv("AETHERRELAY_ADMIN_AUTH_ENABLED"); value != "" {
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -1423,6 +1431,10 @@ func ReplaceProviders(cfg Config, providers map[string]Provider) (Config, error)
 // validate 在启动期做完整校验,把配置错误尽早暴露。
 
 func validateMetricsCIDRs(cidrs []string) error {
+	return validateCIDRs("metrics_allowed_cidrs", cidrs)
+}
+
+func validateCIDRs(field string, cidrs []string) error {
 	for _, cidr := range cidrs {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
@@ -1432,7 +1444,7 @@ func validateMetricsCIDRs(cidrs []string) error {
 			continue
 		}
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("metrics_allowed_cidrs: invalid entry %q", cidr)
+			return fmt.Errorf("%s: invalid entry %q", field, cidr)
 		}
 	}
 	return nil
@@ -1460,6 +1472,9 @@ func validate(cfg Config) error {
 		return err
 	}
 	if err := validateMetricsCIDRs(cfg.MetricsAllowedCIDRs); err != nil {
+		return err
+	}
+	if err := validateCIDRs("trusted_proxy_cidrs", cfg.TrustedProxyCIDRs); err != nil {
 		return err
 	}
 	if err := validateAdminAuth(cfg.AdminAuth); err != nil {

@@ -44,3 +44,22 @@ func TestCodecRejectsInvalidKeyAndPlaintext(t *testing.T) {
 		t.Fatal("plaintext credential accepted")
 	}
 }
+
+func TestDeriveKeyIsStableAndPurposeBound(t *testing.T) {
+	root := testKey(9)
+	first, err := DeriveKey(root, "image-url-signing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := DeriveKey(root, "image-url-signing")
+	if err != nil || first != again {
+		t.Fatalf("stable derivation failed: equal=%t err=%v", first == again, err)
+	}
+	other, err := DeriveKey(root, "another-purpose")
+	if err != nil || first == other {
+		t.Fatalf("purpose separation failed: equal=%t err=%v", first == other, err)
+	}
+	if _, err := DeriveKey(root, " "); err == nil {
+		t.Fatal("empty purpose was accepted")
+	}
+}

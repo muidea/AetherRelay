@@ -10,6 +10,32 @@ import (
 	"testing"
 )
 
+func TestOpenContentStreamsOnlyWithinClientScope(t *testing.T) {
+	s := New(t.TempDir())
+	saved, err := s.Save([]byte("scoped image payload"), "", "client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file, _, err := s.OpenContent(saved.RelativePath, "client-b"); !os.IsNotExist(err) {
+		if file != nil {
+			_ = file.Close()
+		}
+		t.Fatalf("other scope error=%v", err)
+	}
+	file, info, err := s.OpenContent(saved.RelativePath, "client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	buffer := make([]byte, 6)
+	if n, err := file.Read(buffer); err != nil || n != len(buffer) || string(buffer) != "scoped" {
+		t.Fatalf("read=%q bytes=%d err=%v", buffer, n, err)
+	}
+	if info.Size() != int64(len("scoped image payload")) {
+		t.Fatalf("size=%d", info.Size())
+	}
+}
+
 func TestImageIndexPersistsInStateDatabase(t *testing.T) {
 	dir := t.TempDir()
 	s := New(dir)
@@ -130,7 +156,8 @@ func TestCleanupToTargetSupportsDryRunAndRemovesImageMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := stats.DiskFreeMB + 1
+	// Keep the target unattainable even when concurrent builds free disk space.
+	target := stats.DiskTotalMB + 1
 	dryRun, err := s.CleanupToTarget(target, true)
 	if err != nil || dryRun.Removed != 1 || !s.Exists(saved.RelativePath) {
 		t.Fatalf("dryRun=%#v exists=%v err=%v", dryRun, s.Exists(saved.RelativePath), err)
@@ -157,5 +184,33 @@ func TestCompressImagesLeavesValidImageReadable(t *testing.T) {
 	}
 	if _, err := s.GetBytes(saved.RelativePath); err != nil {
 		t.Fatalf("compressed image not readable: %v", err)
+	}
+}
+
+func TestOpenContentRejectsSymlinkOutsideScope(t *testing.T) {
+	s := New(t.TempDir())
+	saved, err := s.Save([]byte("inside"), "", "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(s.root, "images", scopeDir("client"), "escape.png")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	file, _, err := s.OpenContent("escape.png", "client")
+	if file != nil {
+		file.Close()
+	}
+	if err == nil {
+		t.Fatal("opened symlink outside client scope")
+	}
+	if file, _, err := s.OpenContent(saved.RelativePath, "client"); err != nil {
+		t.Fatal(err)
+	} else {
+		file.Close()
 	}
 }

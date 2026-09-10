@@ -4,6 +4,7 @@ package chatgptimage
 import (
 	"context"
 	"errors"
+	"io"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
@@ -35,6 +36,7 @@ type Data struct {
 type Result struct {
 	Created        int64             `json:"created"`
 	Data           []Data            `json:"data"`
+	ResponseFormat string            `json:"response_format,omitempty"`
 	Usage          *tokenusage.Usage `json:"-"`
 	ConversationID string            `json:"-"`
 	AccountID      string            `json:"-"`
@@ -47,6 +49,22 @@ type Result struct {
 type Executor interface {
 	GenerateImage(context.Context, Request) (Result, error)
 	EditImage(context.Context, Request) (Result, error)
+}
+
+var ErrContentNotFound = errors.New("image content not found")
+
+// Content is a scoped persisted image stream. The HTTP adapter owns Reader
+// after a successful open and must close it.
+type Content struct {
+	Reader io.ReadSeekCloser
+	Name   string
+}
+
+// ContentReader exposes scoped persisted images to the HTTP delivery adapter.
+// Implementations keep filesystem paths and EventHub details inside the owning
+// application layer.
+type ContentReader interface {
+	OpenImage(context.Context, string, string) (Content, error)
 }
 
 // ResponseArchiver persists image bytes already present in a native provider

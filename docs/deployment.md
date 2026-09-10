@@ -180,6 +180,23 @@ location ^~ /admin/ {
 
 这里额外添加 `no-store`，也可保护尚未升级的应用产生的 303。若应用已返回同名 `no-store`，重复指令语义一致；不要隐藏上游的禁止缓存头，也不要同时保留旧的 `max-age=300`。将这些路径规则合入现有反向代理配置，保留已有的其它转发与安全设置。先运行 `nginx -t`，再 reload。通过外部入口检查未登录 `/admin/` 的响应，应该是 `303`、`Location: /admin/login` 并带 `Cache-Control: no-store`；浏览器已有的旧跳转缓存需要清除或禁用缓存后重新访问。
 
+### 图片签名 URL 反向代理
+
+ChatGPT Web 图片路由在 `response_format=url` 时返回的 `/images/` 地址必须转发给 AetherRelay，由应用校验短期签名、有效期和 Client Key 生命周期。原生 Images Provider 的 URL 仍由对应上游托管。不要使用 Nginx `alias` 直接暴露 `state.dir/images`，否则会绕过作用域校验和凭据撤销。将下面规则放在通用 `location /` 之前：
+
+```nginx
+location ^~ /images/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_cache off;
+    proxy_buffering on;
+    access_log off;
+}
+```
+
+同时将 Nginx 的直接连接地址加入 `server.trusted_proxy_cidrs`；同机进程一般为 `127.0.0.1/32`，容器部署应使用应用日志中看到的 bridge gateway 地址。`$http_host` 会保留非标准外部端口。图片内容由应用返回 `Cache-Control: private, no-store`，支持 `GET`、`HEAD` 与 Range 请求。查询参数包含一小时有效的访问签名，因此该路径关闭 access log；Nginx 不应覆盖这些响应头，也不应把图片目录映射到静态文件系统。
+
 ## 容器部署
 
 ### 一键部署脚本（推荐）
@@ -238,6 +255,8 @@ ${EDITOR:-vi} deploy/config/config.yaml
 ```yaml
 server:
   listen_addr: 0.0.0.0:8080
+  # 填写反向代理连接在容器内呈现的实际来源地址。
+  trusted_proxy_cidrs: 172.18.0.1/32
   # Docker 转发连接在容器内不是 loopback。若要使用 /admin，必须开启登录保护。
   admin_auth_enabled: true
   admin_username: ops-admin

@@ -17,7 +17,7 @@ func (s *DuckDBStore) ListClientAPIKeys(ctx context.Context) (map[string]ClientA
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, e := tx.QueryContext(ctx, `SELECT api_key_id,coalesce(key_hash,''),coalesce(enabled,TRUE),created_at,last_used_at,last_rotated_at,revoked_at,provider_access_mode FROM client_api_key_metadata`)
+	rows, e := tx.QueryContext(ctx, `SELECT api_key_id,coalesce(key_hash,''),coalesce(enabled,TRUE),created_at,last_used_at,last_rotated_at,revoked_at,deleting_at,provider_access_mode FROM client_api_key_metadata`)
 	if e != nil {
 		return nil, e
 	}
@@ -25,8 +25,8 @@ func (s *DuckDBStore) ListClientAPIKeys(ctx context.Context) (map[string]ClientA
 	out := map[string]ClientAPIKeyRecord{}
 	for rows.Next() {
 		var r ClientAPIKeyRecord
-		var a, b, c sql.NullTime
-		if e := rows.Scan(&r.ID, &r.Hash, &r.Enabled, &r.CreatedAt, &a, &b, &c, &r.ProviderAccess.Mode); e != nil {
+		var a, b, c, d sql.NullTime
+		if e := rows.Scan(&r.ID, &r.Hash, &r.Enabled, &r.CreatedAt, &a, &b, &c, &d, &r.ProviderAccess.Mode); e != nil {
 			return nil, e
 		}
 		if a.Valid {
@@ -37,6 +37,9 @@ func (s *DuckDBStore) ListClientAPIKeys(ctx context.Context) (map[string]ClientA
 		}
 		if c.Valid {
 			r.RevokedAt = &c.Time
+		}
+		if d.Valid {
+			r.DeletingAt = &d.Time
 		}
 		out[r.ID] = r
 	}
@@ -125,7 +128,7 @@ func (s *DuckDBStore) SetClientAPIKeyProviderAccess(ctx context.Context, id stri
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `UPDATE client_api_key_metadata SET provider_access_mode=? WHERE api_key_id=?`, policy.Mode, id)
+	result, err := tx.ExecContext(ctx, `UPDATE client_api_key_metadata SET provider_access_mode=? WHERE api_key_id=? AND deleting_at IS NULL`, policy.Mode, id)
 	if err != nil {
 		return err
 	}
@@ -162,7 +165,7 @@ func (s *DuckDBStore) ClientAPIKeyIDsForProvider(ctx context.Context, providerID
 func (s *DuckDBStore) SetClientAPIKeyEnabled(ctx context.Context, id string, v bool) error {
 	s.write.Lock()
 	defer s.write.Unlock()
-	res, e := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET enabled=?,revoked_at=CASE WHEN ? THEN NULL ELSE COALESCE(revoked_at,NOW()) END WHERE api_key_id=?`, v, v, id)
+	res, e := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET enabled=?,revoked_at=CASE WHEN ? THEN NULL ELSE COALESCE(revoked_at,NOW()) END WHERE api_key_id=? AND deleting_at IS NULL`, v, v, id)
 	if e == nil {
 		if n, err := res.RowsAffected(); err == nil && n == 0 {
 			return sql.ErrNoRows
@@ -173,7 +176,7 @@ func (s *DuckDBStore) SetClientAPIKeyEnabled(ctx context.Context, id string, v b
 func (s *DuckDBStore) RotateClientAPIKey(ctx context.Context, id, h string, t time.Time) error {
 	s.write.Lock()
 	defer s.write.Unlock()
-	res, e := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=?,enabled=TRUE,revoked_at=NULL,last_rotated_at=? WHERE api_key_id=?`, h, t.UTC(), id)
+	res, e := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=?,enabled=TRUE,revoked_at=NULL,last_rotated_at=? WHERE api_key_id=? AND deleting_at IS NULL`, h, t.UTC(), id)
 	if e == nil {
 		if n, err := res.RowsAffected(); err == nil && n == 0 {
 			return sql.ErrNoRows
@@ -181,6 +184,18 @@ func (s *DuckDBStore) RotateClientAPIKey(ctx context.Context, id, h string, t ti
 	}
 	return e
 }
+func (s *DuckDBStore) BeginClientAPIKeyDeletion(ctx context.Context, id string, t time.Time) error {
+	s.write.Lock()
+	defer s.write.Unlock()
+	res, err := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET enabled=FALSE,deleting_at=COALESCE(deleting_at,?) WHERE api_key_id=?`, t.UTC(), id)
+	if err == nil {
+		if n, e := res.RowsAffected(); e == nil && n == 0 {
+			return sql.ErrNoRows
+		}
+	}
+	return err
+}
+
 func (s *DuckDBStore) RevokeClientAPIKey(ctx context.Context, id string, t time.Time) error {
 	s.write.Lock()
 	defer s.write.Unlock()

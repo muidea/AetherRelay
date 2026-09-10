@@ -62,8 +62,8 @@
 
 - **默认 loopback-only**：`/admin`、`/metrics`、`/stats` 在认证关闭时仅 loopback；远程访问分别由 `admin_auth_enabled` 与 `metrics_remote_access` + `metrics_allowed_cidrs` 控制。
 - 未登录写接口仍需 `X-AetherRelay-Admin: 1` 意图头；它只是浏览器请求意图的表达，可被本机进程伪造，不作身份凭据。
-- **不信任任何 forwarded header**（`X-Forwarded-For` / `X-Forwarded-Proto` 等）作身份或协议判断；不基于 RemoteAddr/CIDR 跳过认证；反向代理部署须保留外部 `Host`。
-- Provider Key 只显示“已配置”，不回显明文；日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header。
+- **forwarded header 仅用于外部 URL 投影**：默认不信任 `X-Forwarded-*`；只有直接来源命中 `server.trusted_proxy_cidrs` 时，`X-Forwarded-Proto` 才可用于生成同源资源 URL。它不参与身份认证、授权、来源放行或基于 RemoteAddr/CIDR 的认证旁路；反向代理部署仍须保留外部 `Host`。
+- Provider Key 只显示“已配置”，不回显明文；日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header，交互归档不得保存 `/images/` 短期 URL 的可重放签名。
 
 ## 可恢复凭据存储
 
@@ -76,3 +76,13 @@
 
 - 2026-07-20：客户端 API Key 管理设计 → 归档 `docs/archive/client-api-key-management-design-2026-07-20.md`
 - 2026-07-23：Admin 登录安全设计 → 归档 `docs/archive/admin-login-security-design-2026-07-23.md`
+
+### Client API Key 删除边界
+
+删除先持久化 `deleting_at` 并禁用 Key，再在同一个管理端修改锁内确认代理凭证索引更新。等待阶段不持有全局修改锁，其他 Key 可继续修改；配置热更新不重新发布凭证索引。
+
+清理前等待该 Key 已进入的全部外部请求结束（包括文本、Responses 和 WebSocket），以及该作用域图片任务的所有运行轮次退出，再删除任务、图片、交互归档与用量数据。正在结束的请求完成统计结算后才离开等待屏障。等待与清理受 `request_timeout` 限制；长连接尚未结束或存储失败时返回 503/5xx，保留待删除状态，不宣称删除成功。
+
+失败或进程重启后，待删除 Key 不能启用、轮换、修改权限或新增图片任务。管理台显示“待完成删除”，通过“重试删除”（再次 DELETE）继续幂等清理；当前不自动重试删除。普通禁用不进入该状态。
+
+图片事件合同仅返回元数据及最多 256 KiB 的内容分段。存储模块独占文件句柄并在每次读取后关闭，作用域目录通过 `os.OpenRoot` 限制符号链接逃逸；读取期间文件尺寸或修改时间变化会终止下载，避免拼接不同版本。

@@ -31,6 +31,7 @@ const (
 	TopicExecuteFeatureImage      = "aetherrelay.proxy.command.execute_feature_image"
 	TopicPrepareClientKeyIndex    = "aetherrelay.proxy.command.prepare_client_key_index"
 	TopicActivateClientKeyIndex   = "aetherrelay.proxy.command.activate_client_key_index"
+	TopicWaitClientRequests       = "aetherrelay.proxy.command.wait_client_requests"
 )
 
 type UpdateConfigCommand struct{ Config config.Config }
@@ -47,6 +48,9 @@ type PrepareClientKeyIndexCommand struct {
 }
 type PrepareClientKeyIndexResult struct{ Index *clientauth.Index }
 type ActivateClientKeyIndexCommand struct{ Index *clientauth.Index }
+type WaitClientRequestsCommand struct {
+	KeyID string
+}
 
 // FeatureCatalog is the proxy-owned projection used by Admin feature pages.
 // It is derived from the same request-time transport plans as /v1 endpoints,

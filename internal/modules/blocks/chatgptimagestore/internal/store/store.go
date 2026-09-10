@@ -211,6 +211,39 @@ func (s *Store) GetBytes(rel string, scopes ...string) ([]byte, error) {
 	return os.ReadFile(full)
 }
 
+// OpenContent opens one regular image file inside the requested client scope.
+// The caller owns the returned descriptor.
+func (s *Store) OpenContent(rel string, scopes ...string) (*os.File, os.FileInfo, error) {
+	apiKeyID := ""
+	if len(scopes) > 0 {
+		apiKeyID = scopes[0]
+	}
+	apiKeyID = cleanAPIKeyID(apiKeyID)
+	rel = safeRel(rel)
+	if apiKeyID == "" || rel == "" {
+		return nil, nil, fmt.Errorf("invalid image scope or path")
+	}
+	scope, err := os.OpenRoot(filepath.Join(s.root, "images", scopeDir(apiKeyID)))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer scope.Close()
+	file, err := scope.Open(filepath.FromSlash(rel))
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("image content is not a regular file")
+	}
+	return file, info, nil
+}
+
 func (s *Store) Exists(rel string, scopes ...string) bool {
 	apiKeyID := ""
 	if len(scopes) > 0 {

@@ -50,6 +50,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(usageevents.TopicClientKeyCreate, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyEnable, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyRotate, biz.handleClientKeyCommand)
+	biz.SubscribeFunc(usageevents.TopicClientKeyBeginDeletion, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyRevoke, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyDelete, biz.handleClientKeyCommand)
 	biz.SubscribeFunc(usageevents.TopicClientKeyAccess, biz.handleClientKeyCommand)
@@ -79,6 +80,7 @@ func (s *UsageRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(usageevents.TopicClientKeyCreate)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyEnable)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyRotate)
+	s.UnsubscribeFunc(usageevents.TopicClientKeyBeginDeletion)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyRevoke)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyDelete)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyAccess)
@@ -309,6 +311,8 @@ func (s *UsageRuntime) handleClientKeyCommand(ev event.Event, result event.Resul
 		err = st.SetClientAPIKeyEnabled(ev.Context(), c.ID, c.Enabled)
 	case usageevents.ClientKeyRotateCommand:
 		err = st.RotateClientAPIKey(ev.Context(), c.ID, c.Hash, c.At)
+	case usageevents.ClientKeyBeginDeletionCommand:
+		err = st.BeginClientAPIKeyDeletion(ev.Context(), c.ID, c.At)
 	case usageevents.ClientKeyRevokeCommand:
 		err = st.RevokeClientAPIKey(ev.Context(), c.ID, c.At)
 	case usageevents.ClientKeyDeleteCommand:

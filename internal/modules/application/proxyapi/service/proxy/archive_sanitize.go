@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net/url"
 	"strings"
 
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
@@ -134,6 +135,11 @@ func sanitizeArchiveValue(value any, key string) (any, bool) {
 		}
 		return result, changed
 	case string:
+		if strings.EqualFold(strings.TrimSpace(key), "url") {
+			if sanitized, ok := redactSignedImageURL(typed); ok {
+				return sanitized, true
+			}
+		}
 		if summary, ok := summarizeDataImageURL(typed); ok {
 			return summary, true
 		}
@@ -147,6 +153,20 @@ func sanitizeArchiveValue(value any, key string) (any, bool) {
 		}
 	}
 	return value, false
+}
+
+func redactSignedImageURL(value string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || !isImageContentPath(parsed.Path) {
+		return value, false
+	}
+	query := parsed.Query()
+	if strings.TrimSpace(query.Get("signature")) == "" {
+		return value, false
+	}
+	query.Set("signature", "[REDACTED]")
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), true
 }
 
 func summarizeDataAttachmentURL(value string) (map[string]any, bool) {

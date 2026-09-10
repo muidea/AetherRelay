@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -29,6 +31,10 @@ type testRuntime struct {
 	version   string
 	startedAt time.Time
 	keyIndex  *clientauth.Index
+	waitedKey string
+	waitErr   error
+	waitStart chan struct{}
+	waitDone  chan struct{}
 }
 
 func (r *testRuntime) PrepareClientKeyIndex(records map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error) {
@@ -39,7 +45,29 @@ func (r *testRuntime) PrepareClientKeyIndex(records map[string]usage.ClientAPIKe
 	return clientauth.PrepareIndex(entries)
 }
 
-func (r *testRuntime) ActivateClientKeyIndex(index *clientauth.Index) { r.keyIndex = index }
+func (r *testRuntime) ActivateClientKeyIndex(index *clientauth.Index) error {
+	r.mu.Lock()
+	r.keyIndex = index
+	r.mu.Unlock()
+	return nil
+}
+func (r *testRuntime) WaitClientRequests(ctx context.Context, keyID string) error {
+	r.mu.Lock()
+	r.waitedKey = keyID
+	waitStart, waitDone, waitErr := r.waitStart, r.waitDone, r.waitErr
+	r.mu.Unlock()
+	if waitStart != nil {
+		close(waitStart)
+	}
+	if waitDone != nil {
+		select {
+		case <-waitDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return waitErr
+}
 
 func (r *testRuntime) EffectiveCatalogSnapshot() effectivecatalog.Snapshot {
 	return effectivecatalog.FromStatic(r.ConfigSnapshot())
@@ -238,7 +266,7 @@ func TestSystemInfoReportsVersionRuntimeAndRegisteredEndpoints(t *testing.T) {
 	if len(response.AccessMethods) != 3 || len(response.Endpoints) < 10 {
 		t.Fatalf("response=%+v", response)
 	}
-	foundHealth, foundResponses := false, false
+	foundHealth, foundResponses, foundSignedImage, foundSignedImageHead := false, false, false, false
 	for _, endpoint := range response.Endpoints {
 		if endpoint.Method == http.MethodGet && endpoint.Path == "/healthz" && endpoint.Authentication == "none" {
 			foundHealth = true
@@ -246,8 +274,14 @@ func TestSystemInfoReportsVersionRuntimeAndRegisteredEndpoints(t *testing.T) {
 		if endpoint.Method == http.MethodPost && endpoint.Path == "/v1/responses" && endpoint.Authentication == "client_api_key" {
 			foundResponses = true
 		}
+		if endpoint.Method == http.MethodGet && endpoint.Path == "/images/{scope}/{path}" && endpoint.Authentication == "short_lived_signature" {
+			foundSignedImage = true
+		}
+		if endpoint.Method == http.MethodHead && endpoint.Path == "/images/{scope}/{path}" && endpoint.Authentication == "short_lived_signature" {
+			foundSignedImageHead = true
+		}
 	}
-	if !foundHealth || !foundResponses {
+	if !foundHealth || !foundResponses || !foundSignedImage || !foundSignedImageHead {
 		t.Fatalf("endpoints=%+v", response.Endpoints)
 	}
 }
@@ -968,6 +1002,113 @@ func TestDeleteClientAPIKeyRemovesInteractionScope(t *testing.T) {
 	if _, ok := keys["ci-agent"]; ok {
 		t.Fatal("client API key metadata still exists")
 	}
+	if runtime.waitedKey != "ci-agent" {
+		t.Fatalf("waited client image key=%q", runtime.waitedKey)
+	}
+}
+
+func TestDeleteClientAPIKeyFailureKeepsKeyDisabledAndCanRetry(t *testing.T) {
+	runtime := &testRuntime{cfg: config.Config{RequestTimeout: time.Second}, waitErr: errors.New("drain failed")}
+	store := usage.NewMemoryStore()
+	if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "ci-agent", Hash: "sha256:test", Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandlerWithUsage("", runtime, store)
+	deleteRequest := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete, "/admin/api/client-api-keys/ci-agent", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AetherRelay-Admin", "1")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	if response := deleteRequest(); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	keys, err := store.ListClientAPIKeys(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record, ok := keys["ci-agent"]; !ok || record.Enabled || record.DeletingAt == nil {
+		t.Fatalf("failed deletion key=%+v exists=%t", record, ok)
+	}
+	handler = NewHandlerWithUsage("", runtime, store)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/client-api-keys/ci-agent", strings.NewReader(`{"enabled":true}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rejected := httptest.NewRecorder()
+	handler.ServeHTTP(rejected, req)
+	if rejected.Code != http.StatusConflict {
+		t.Fatalf("pending deletion enabled after restart: %d %s", rejected.Code, rejected.Body.String())
+	}
+	runtime.mu.Lock()
+	runtime.waitErr = nil
+	runtime.mu.Unlock()
+	if response := deleteRequest(); response.Code != http.StatusNoContent {
+		t.Fatalf("retry delete status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeleteClientAPIKeyDoesNotBlockOtherKeyMutationWhileDraining(t *testing.T) {
+	runtime := &testRuntime{cfg: config.Config{RequestTimeout: time.Second}, waitStart: make(chan struct{}), waitDone: make(chan struct{})}
+	store := usage.NewMemoryStore()
+	for _, id := range []string{"delete-me", "other"} {
+		digest := sha256.Sum256([]byte(id))
+		if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: id, Hash: "sha256:" + hex.EncodeToString(digest[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := NewHandlerWithUsage("", runtime, store)
+	deleteResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodDelete, "/admin/api/client-api-keys/delete-me", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AetherRelay-Admin", "1")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		deleteResult <- response
+	}()
+	select {
+	case <-runtime.waitStart:
+	case <-time.After(time.Second):
+		t.Fatal("delete did not enter drain")
+	}
+
+	mutationResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPatch, "/admin/api/client-api-keys/other", strings.NewReader(`{"enabled":false}`))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AetherRelay-Admin", "1")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		mutationResult <- response
+	}()
+	select {
+	case response := <-mutationResult:
+		if response.Code != http.StatusOK {
+			t.Fatalf("other mutation status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		close(runtime.waitDone)
+		t.Fatal("other key mutation blocked behind delete drain")
+	}
+	close(runtime.waitDone)
+	select {
+	case response := <-deleteResult:
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delete did not finish after drain release")
+	}
+	runtime.mu.Lock()
+	index := runtime.keyIndex
+	runtime.mu.Unlock()
+	headers := http.Header{"Authorization": []string{"Bearer other"}}
+	if _, err := clientauth.ResolveHeaders(headers, index); err == nil {
+		t.Fatal("delete restored stale enabled index for another key")
+	}
+
 }
 
 func TestClientAPIKeyProviderAccessAndEffectiveModels(t *testing.T) {

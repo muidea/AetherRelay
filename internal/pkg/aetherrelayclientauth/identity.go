@@ -2,13 +2,17 @@ package clientauth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 )
@@ -35,6 +39,10 @@ type Index struct {
 	// enabledDigests 与 disabledDigests 分离，便于 disabled 返回 401 而非 default。
 	enabled  map[[32]byte]ClientIdentity
 	disabled map[[32]byte]struct{}
+	// enabledByID supports short-lived resource URL signatures without keeping
+	// raw client credentials in memory. Rotation, disable, and revoke replace
+	// this immutable index and therefore invalidate previously issued URLs.
+	enabledByID map[string][32]byte
 }
 
 // ErrAuthenticationFailed 表示客户端提供了无效、未知、禁用或冲突的凭据。
@@ -52,17 +60,19 @@ func BuildIndex(entries []KeyEntry) *Index {
 
 func emptyIndex() *Index {
 	return &Index{
-		byDigest: make(map[[32]byte]ClientIdentity),
-		enabled:  make(map[[32]byte]ClientIdentity),
-		disabled: make(map[[32]byte]struct{}),
+		byDigest:    make(map[[32]byte]ClientIdentity),
+		enabled:     make(map[[32]byte]ClientIdentity),
+		disabled:    make(map[[32]byte]struct{}),
+		enabledByID: make(map[string][32]byte),
 	}
 }
 
 func PrepareIndex(entries []KeyEntry) (*Index, error) {
 	idx := &Index{
-		byDigest: make(map[[32]byte]ClientIdentity, len(entries)),
-		enabled:  make(map[[32]byte]ClientIdentity, len(entries)),
-		disabled: make(map[[32]byte]struct{}),
+		byDigest:    make(map[[32]byte]ClientIdentity, len(entries)),
+		enabled:     make(map[[32]byte]ClientIdentity, len(entries)),
+		disabled:    make(map[[32]byte]struct{}),
+		enabledByID: make(map[string][32]byte, len(entries)),
 	}
 	for _, e := range entries {
 		id := strings.TrimSpace(e.ID)
@@ -83,12 +93,62 @@ func PrepareIndex(entries []KeyEntry) (*Index, error) {
 		ident := ClientIdentity{KeyID: id, ProviderAccess: clientaccess.Clone(policy)}
 		idx.byDigest[d] = ident
 		if e.Enabled {
+			if previous, exists := idx.enabledByID[id]; exists && previous != d {
+				return nil, fmt.Errorf("duplicate enabled client api key id %q", id)
+			}
 			idx.enabled[d] = ident
+			idx.enabledByID[id] = d
 		} else {
 			idx.disabled[d] = struct{}{}
 		}
 	}
 	return idx, nil
+}
+
+const resourceSignatureContext = "aetherrelay-resource-url-v1"
+
+// SignResourceURL creates a URL-safe HMAC for an enabled client scope. A
+// server-only key signs a payload bound to the current credential digest; the
+// raw client credential is never retained or placed in the URL.
+func SignResourceURL(idx *Index, signingKey []byte, keyID, escapedPath string, expiresAt int64) (string, bool) {
+	keyID = strings.TrimSpace(keyID)
+	escapedPath = strings.TrimSpace(escapedPath)
+	if idx == nil || len(signingKey) < sha256.Size || keyID == "" || escapedPath == "" || expiresAt <= 0 {
+		return "", false
+	}
+	digest, ok := idx.enabledByID[keyID]
+	if !ok {
+		return "", false
+	}
+	mac := hmac.New(sha256.New, signingKey)
+	_, _ = mac.Write(resourceSignaturePayload(digest, keyID, escapedPath, expiresAt))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), true
+}
+
+// VerifyResourceURL accepts only an unexpired signature issued for the exact
+// enabled client scope and escaped path.
+func VerifyResourceURL(idx *Index, signingKey []byte, keyID, escapedPath string, expiresAt int64, signature string, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if expiresAt <= now.Unix() {
+		return false
+	}
+	expected, ok := SignResourceURL(idx, signingKey, keyID, escapedPath, expiresAt)
+	if !ok {
+		return false
+	}
+	provided, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(signature))
+	if err != nil {
+		return false
+	}
+	want, err := base64.RawURLEncoding.DecodeString(expected)
+	return err == nil && hmac.Equal(provided, want)
+}
+
+func resourceSignaturePayload(digest [sha256.Size]byte, keyID, escapedPath string, expiresAt int64) []byte {
+	prefix := []byte(resourceSignatureContext + "\n" + keyID + "\n" + escapedPath + "\n" + strconv.FormatInt(expiresAt, 10) + "\n")
+	return append(prefix, digest[:]...)
 }
 
 func parseHash(value string, target *[32]byte) bool {

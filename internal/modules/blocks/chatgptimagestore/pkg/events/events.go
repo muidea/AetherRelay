@@ -4,6 +4,7 @@ package events
 const (
 	TopicSave            = "aetherrelay.chatgpt.imagestore.command.save"
 	TopicGetBytes        = "aetherrelay.chatgpt.imagestore.command.get_bytes"
+	TopicOpenContent     = "aetherrelay.chatgpt.imagestore.command.open_content"
 	TopicDelete          = "aetherrelay.chatgpt.imagestore.command.delete"
 	TopicDeleteScope     = "aetherrelay.chatgpt.imagestore.command.delete_scope"
 	TopicList            = "aetherrelay.chatgpt.imagestore.command.list"
@@ -35,6 +36,24 @@ type GetBytesCommand struct {
 	RelativePath string
 }
 type GetBytesResult struct{ Bytes []byte }
+
+const MaxContentChunkBytes = 256 * 1024
+
+type OpenContentCommand struct {
+	APIKeyID     string
+	RelativePath string
+	Offset       int64
+	Length       int
+	// Version detects replacement between range reads. Empty means metadata only.
+	Version string
+}
+type OpenContentResult struct {
+	Bytes   []byte
+	Size    int64
+	Version string
+	Name    string
+	Found   bool
+}
 type DeleteCommand struct {
 	APIKeyID string
 	Paths    []string

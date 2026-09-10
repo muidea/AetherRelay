@@ -108,6 +108,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
 | `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
+| `trusted_proxy_cidrs` / `AETHERRELAY_TRUSTED_PROXY_CIDRS` | 允许提供 `X-Forwarded-Proto` 的直接反向代理 IP/CIDR；未命中时忽略转发协议头。 |
 | `admin_auth_enabled` / `AETHERRELAY_ADMIN_AUTH_ENABLED` | Admin 登录开关，默认 `false`（保持 loopback-only）。 |
 | `admin_base_path` / `AETHERRELAY_ADMIN_BASE_PATH` | Admin 页面与 API 前缀，默认 `/admin`；启动期路由，变更需重启。 |
 | `admin_default_language` | Admin Web 的实例默认语言，仅 `zh-CN` 或 `en-US`，默认 `zh-CN`；可在管理页热更新。 |

@@ -19,6 +19,16 @@ func TestRegisterRoutesIncludesDedicatedSearchEndpoint(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutesIncludesSignedImageContent(t *testing.T) {
+	routes := enginehttp.NewRouteRegistry()
+	RegisterRoutes(routes, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if !routes.ExistHandler("/images/**", method) {
+			t.Fatalf("%s /images/** was not registered", method)
+		}
+	}
+}
+
 // CP-EP-015: the preflight route is part of the explicit inbound allowlist.
 func TestRegisterRoutesIncludesResponsesInputTokens(t *testing.T) {
 	routes := enginehttp.NewRouteRegistry()

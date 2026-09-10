@@ -7,8 +7,9 @@ import (
 	enginehttp "github.com/muidea/magicEngine/http"
 )
 
-// RegisterRoutes 只声明协议合同允许的入站路由。
-// 不使用 `/**` 兜底，因而无需通过 Module Weight 隐式约束 Admin 与 Proxy 的注册顺序。
+// RegisterRoutes 只声明协议合同允许的入站路由。唯一的通配路由用于
+// 短期签名图片内容；不使用全局 `/**` 兜底，因而无需通过 Module Weight
+// 隐式约束 Admin 与 Proxy 的注册顺序。
 func RegisterRoutes(routes enginehttp.RouteRegistry, handler http.Handler) {
 	if routes == nil || handler == nil {
 		return
@@ -18,6 +19,8 @@ func RegisterRoutes(routes enginehttp.RouteRegistry, handler http.Handler) {
 		method  string
 	}{
 		{pattern: "/healthz", method: http.MethodGet},
+		{pattern: "/images/**", method: http.MethodGet},
+		{pattern: "/images/**", method: http.MethodHead},
 		{pattern: "/v1/models", method: http.MethodGet},
 		{pattern: "/v1/chat/completions", method: http.MethodPost},
 		{pattern: "/v1/images/generations", method: http.MethodPost},

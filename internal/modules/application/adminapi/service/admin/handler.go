@@ -51,7 +51,8 @@ type managedProviderRuntime interface {
 
 type clientKeyRuntime interface {
 	PrepareClientKeyIndex(map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error)
-	ActivateClientKeyIndex(*clientauth.Index)
+	ActivateClientKeyIndex(*clientauth.Index) error
+	WaitClientRequests(context.Context, string) error
 }
 
 type effectiveCatalogRuntime interface {
@@ -144,6 +145,7 @@ type Handler struct {
 	codex           CodexRuntime
 	startedAt       time.Time
 	updateMu        sync.Mutex
+	deletingKeys    map[string]struct{}
 }
 
 type providerView struct {
@@ -221,7 +223,7 @@ type providerPatchInput struct {
 }
 
 func NewHandler(configPath string, runtime RuntimeConfig) *Handler {
-	h := &Handler{configPath: configPath, runtime: runtime, startedAt: time.Now().UTC()}
+	h := &Handler{configPath: configPath, runtime: runtime, startedAt: time.Now().UTC(), deletingKeys: make(map[string]struct{})}
 	if runtime != nil {
 		h.auth = newAuthState(runtime.ConfigSnapshot().AdminAuth)
 	} else {

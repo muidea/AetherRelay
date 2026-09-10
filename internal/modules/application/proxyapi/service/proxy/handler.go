@@ -39,21 +39,26 @@ import (
 )
 
 type Handler struct {
-	cfgMu               sync.RWMutex
-	clientMu            sync.RWMutex
-	cfg                 config.Config
-	effectiveCatalog    atomic.Pointer[effectivecatalog.Snapshot]
-	clientKeyIndex      atomic.Pointer[clientauth.Index]
-	usageStore          usage.Store
-	interactionRecorder *archive.Recorder
-	metricsRegistry     metricsport.Port
-	driftTracker        *FingerprintDriftTracker
-	client              *http.Client
-	chatGPTText         chatgpttext.Executor
-	chatGPTSearch       chatgptsearch.Executor
-	chatGPTImage        chatgptimage.Executor
-	codexResponses      codexresponses.Executor
-	codexWebsockets     atomic.Int64
+	cfgMu                 sync.RWMutex
+	clientMu              sync.RWMutex
+	cfg                   config.Config
+	effectiveCatalog      atomic.Pointer[effectivecatalog.Snapshot]
+	clientKeyIndex        atomic.Pointer[clientauth.Index]
+	clientRequestMu       sync.Mutex
+	clientRequestInflight map[string]int
+	clientRequestIdle     map[string]chan struct{}
+	usageStore            usage.Store
+	interactionRecorder   *archive.Recorder
+	metricsRegistry       metricsport.Port
+	driftTracker          *FingerprintDriftTracker
+	client                *http.Client
+	chatGPTText           chatgpttext.Executor
+	chatGPTSearch         chatgptsearch.Executor
+	chatGPTImage          chatgptimage.Executor
+	chatGPTImageContent   chatgptimage.ContentReader
+	imageURLSigningKey    []byte
+	codexResponses        codexresponses.Executor
+	codexWebsockets       atomic.Int64
 }
 
 func (h *Handler) currentClient() *http.Client {
@@ -86,6 +91,24 @@ func (h *Handler) WithChatGPTSearchExecutor(executor chatgptsearch.Executor) *Ha
 func (h *Handler) WithChatGPTImageExecutor(executor chatgptimage.Executor) *Handler {
 	h.cfgMu.Lock()
 	h.chatGPTImage = executor
+	h.cfgMu.Unlock()
+	return h
+}
+
+// WithChatGPTImageContentReader binds scoped persisted-image reads. Signed
+// image URLs are served before the model-request authentication and usage path.
+func (h *Handler) WithChatGPTImageContentReader(reader chatgptimage.ContentReader) *Handler {
+	h.cfgMu.Lock()
+	h.chatGPTImageContent = reader
+	h.cfgMu.Unlock()
+	return h
+}
+
+// WithImageURLSigningKey binds the server-only derived key used for delegated
+// image access. The copy prevents callers from mutating an active signer.
+func (h *Handler) WithImageURLSigningKey(key []byte) *Handler {
+	h.cfgMu.Lock()
+	h.imageURLSigningKey = append(h.imageURLSigningKey[:0], key...)
 	h.cfgMu.Unlock()
 	return h
 }
@@ -168,6 +191,7 @@ func (h *Handler) ConfigSnapshot() config.Config {
 	defer h.cfgMu.RUnlock()
 	cfg := h.cfg
 	cfg.MetricsAllowedCIDRs = append([]string(nil), h.cfg.MetricsAllowedCIDRs...)
+	cfg.TrustedProxyCIDRs = append([]string(nil), h.cfg.TrustedProxyCIDRs...)
 	cfg.Providers = make(map[string]config.Provider, len(h.cfg.Providers))
 	for name, provider := range h.cfg.Providers {
 		provider.Models = append([]string(nil), provider.Models...)
@@ -212,23 +236,9 @@ func (h *Handler) ReplaceEffectiveCatalog(snap effectivecatalog.Snapshot) {
 
 // UpdateConfig 在完整请求边界之间原子切换运行时配置。
 // 已进入代理处理的请求继续使用旧配置，新请求使用新配置。
-// Client API keys are reloaded from the usage store; the usage-store path is
-// not hot-swappable.
+// Client keys have their own serialized mutation path; config reloads must not
+// republish a stale credential snapshot. The usage-store path is not hot-swappable.
 func (h *Handler) UpdateConfig(cfg config.Config) error {
-	idx, err := clientauth.PrepareIndex(nil)
-	if err != nil {
-		return err
-	}
-	if h.usageStore != nil {
-		records, err := h.usageStore.ListClientAPIKeys(context.Background())
-		if err != nil {
-			return fmt.Errorf("load client api keys: %w", err)
-		}
-		idx, err = prepareClientKeyIndexFromRecords(records)
-		if err != nil {
-			return err
-		}
-	}
 	if err := requireResolvedConfig(cfg); err != nil {
 		return err
 	}
@@ -250,7 +260,6 @@ func (h *Handler) UpdateConfig(cfg config.Config) error {
 	// account-pool authority. This keeps /v1/models and request routing on the
 	// same effective directory throughout a configuration hot reload.
 	h.ReplaceEffectiveCatalog(effectivecatalog.Reconfigure(cfg, previousCatalog))
-	h.clientKeyIndex.Store(idx)
 	h.clientMu.Lock()
 	h.client = newHTTPClient(cfg.RequestTimeout)
 	h.clientMu.Unlock()
@@ -289,12 +298,14 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 		panic("proxy.NewHandler: " + err.Error() + "; call config.Load or tests.MustHandlerConfig")
 	}
 	h := &Handler{
-		cfg:                 cfg,
-		usageStore:          usageStore,
-		interactionRecorder: interactionRecorder,
-		metricsRegistry:     metricsport.AsPort(metricsSource),
-		driftTracker:        NewFingerprintDriftTracker(2),
-		client:              newHTTPClient(cfg.RequestTimeout),
+		cfg:                   cfg,
+		usageStore:            usageStore,
+		interactionRecorder:   interactionRecorder,
+		metricsRegistry:       metricsport.AsPort(metricsSource),
+		driftTracker:          NewFingerprintDriftTracker(2),
+		client:                newHTTPClient(cfg.RequestTimeout),
+		clientRequestInflight: make(map[string]int),
+		clientRequestIdle:     make(map[string]chan struct{}),
 	}
 	idx, err := clientauth.PrepareIndex(nil)
 	if err != nil {
@@ -310,7 +321,7 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 			panic("proxy.NewHandler: " + err.Error())
 		}
 	}
-	h.clientKeyIndex.Store(idx)
+	h.ActivateClientKeyIndex(idx)
 	h.ReplaceEffectiveCatalog(effectivecatalog.FromStatic(cfg))
 	return h
 }
@@ -324,7 +335,7 @@ func prepareClientKeyIndexFromRecords(records map[string]usage.ClientAPIKeyRecor
 		if config.IsBuiltinClientAPIKeyID(id) {
 			continue
 		}
-		if r.Hash != "" && r.Enabled && r.RevokedAt == nil {
+		if r.Hash != "" && r.Enabled && r.RevokedAt == nil && r.DeletingAt == nil {
 			keys = append(keys, clientauth.KeyEntry{ID: id, APIKeyHash: r.Hash, Enabled: true, ProviderAccess: r.ProviderAccess})
 		}
 	}
@@ -347,7 +358,69 @@ func (h *Handler) ActivateClientKeyIndex(index *clientauth.Index) {
 	if index == nil {
 		index = clientauth.BuildIndex(nil)
 	}
+	h.clientRequestMu.Lock()
 	h.clientKeyIndex.Store(index)
+	h.clientRequestMu.Unlock()
+}
+
+// WaitClientRequests waits until authenticated requests admitted under an older
+// client-key index have finished. Callers publish the replacement index first,
+// preventing another request for the deleted key from entering.
+func (h *Handler) WaitClientRequests(ctx context.Context, keyID string) error {
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return fmt.Errorf("client api key id is required")
+	}
+	h.clientRequestMu.Lock()
+	if h.clientRequestInflight[keyID] == 0 {
+		h.clientRequestMu.Unlock()
+		return nil
+	}
+	idle := h.clientRequestIdle[keyID]
+	h.clientRequestMu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *Handler) resolveClientIdentity(headers http.Header, trackRequest bool) (clientauth.ClientIdentity, func(), error) {
+	h.clientRequestMu.Lock()
+	identity, err := clientauth.ResolveHeaders(headers, h.clientKeyIndex.Load())
+	if err != nil || !trackRequest {
+		h.clientRequestMu.Unlock()
+		return identity, func() {}, err
+	}
+	keyID := identity.KeyID
+	if h.clientRequestInflight == nil {
+		h.clientRequestInflight = make(map[string]int)
+	}
+	if h.clientRequestIdle == nil {
+		h.clientRequestIdle = make(map[string]chan struct{})
+	}
+	if h.clientRequestInflight[keyID] == 0 {
+		h.clientRequestIdle[keyID] = make(chan struct{})
+	}
+	h.clientRequestInflight[keyID]++
+	h.clientRequestMu.Unlock()
+	return identity, func() { h.finishClientRequest(keyID) }, nil
+}
+
+func (h *Handler) finishClientRequest(keyID string) {
+	h.clientRequestMu.Lock()
+	defer h.clientRequestMu.Unlock()
+	remaining := h.clientRequestInflight[keyID] - 1
+	if remaining > 0 {
+		h.clientRequestInflight[keyID] = remaining
+		return
+	}
+	delete(h.clientRequestInflight, keyID)
+	if idle := h.clientRequestIdle[keyID]; idle != nil {
+		close(idle)
+		delete(h.clientRequestIdle, keyID)
+	}
 }
 
 func (h *Handler) EffectiveCatalogSnapshot() effectivecatalog.Snapshot {
@@ -487,15 +560,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 		return
 	}
+	if isImageContentPath(r.URL.Path) && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		h.handleImageContent(w, r)
+		return
+	}
 	if !isSupportedInbound(r.Method, r.URL.Path) {
 		http.NotFound(w, r)
 		return
 	}
 	// 客户端身份解析:缺失、未知、禁用或冲突 Key 均返回 401(不计 usage)。
 	identity, internal := internalFeatureIdentity(r.Context())
+	finishClientRequest := func() {}
 	if !internal {
 		var err error
-		identity, err = clientauth.ResolveHeaders(r.Header, h.clientKeyIndex.Load())
+		identity, finishClientRequest, err = h.resolveClientIdentity(r.Header, true)
 		if err != nil {
 			writeClientProtocolError(w, http.StatusUnauthorized, clientProtocolFromRequest(r), APIError{
 				Code:           ErrorCodeAuthenticationFailed,
@@ -506,6 +584,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	defer finishClientRequest()
 	if strings.TrimSpace(identity.KeyID) == "" {
 		writeClientProtocolError(w, http.StatusUnauthorized, clientProtocolFromRequest(r), APIError{
 			Code:           ErrorCodeAuthenticationFailed,
@@ -1604,7 +1683,7 @@ func (h *Handler) handleBufferedResponse(w http.ResponseWriter, resp *http.Respo
 	if resp.StatusCode < http.StatusBadRequest && (r.URL.Path == "/v1/images/generations" || r.URL.Path == "/v1/images/edits") {
 		if archiver, ok := h.chatGPTImage.(chatgptimage.ResponseArchiver); ok {
 			identity := clientauth.ClientIdentityFromContext(r.Context())
-			if err := archiver.ArchiveResponseImages(r.Context(), identity.KeyID, responseBody, imageBaseURL(r)); err != nil {
+			if err := archiver.ArchiveResponseImages(r.Context(), identity.KeyID, responseBody, h.imageBaseURL(r)); err != nil {
 				h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, "image_archive_error: "+err.Error())
 				return
 			}

@@ -5,7 +5,9 @@ package aetherrelaycredential
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -30,14 +32,38 @@ func FromEnvironment() (*Codec, error) {
 	return New(value)
 }
 
-func New(encodedKey string) (*Codec, error) {
-	encodedKey = strings.TrimSpace(encodedKey)
-	key, err := base64.StdEncoding.DecodeString(encodedKey)
-	if err != nil {
-		key, err = base64.RawStdEncoding.DecodeString(encodedKey)
+// DeriveKeyFromEnvironment derives a stable, purpose-bound server key without
+// exposing or reusing the credential-encryption key directly.
+func DeriveKeyFromEnvironment(purpose string) ([keyBytes]byte, error) {
+	value := strings.TrimSpace(os.Getenv(EnvironmentKey))
+	if value == "" {
+		return [keyBytes]byte{}, fmt.Errorf("%s is required for key derivation", EnvironmentKey)
 	}
-	if err != nil || len(key) != keyBytes {
-		return nil, fmt.Errorf("credential key must be a base64-encoded %d-byte value", keyBytes)
+	return DeriveKey(value, purpose)
+}
+
+// DeriveKey uses HMAC-SHA256 as a domain-separated PRF. Different purposes
+// receive independent keys even though they share the deployment root key.
+func DeriveKey(encodedKey, purpose string) ([keyBytes]byte, error) {
+	key, err := decodeKey(encodedKey)
+	if err != nil {
+		return [keyBytes]byte{}, err
+	}
+	purpose = strings.TrimSpace(purpose)
+	if purpose == "" {
+		return [keyBytes]byte{}, errors.New("derived key purpose is required")
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("aetherrelay-derived-key:v1\n" + purpose))
+	var derived [keyBytes]byte
+	copy(derived[:], mac.Sum(nil))
+	return derived, nil
+}
+
+func New(encodedKey string) (*Codec, error) {
+	key, err := decodeKey(encodedKey)
+	if err != nil {
+		return nil, err
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -48,6 +74,18 @@ func New(encodedKey string) (*Codec, error) {
 		return nil, fmt.Errorf("initialize credential AEAD: %w", err)
 	}
 	return &Codec{aead: aead}, nil
+}
+
+func decodeKey(encodedKey string) ([]byte, error) {
+	encodedKey = strings.TrimSpace(encodedKey)
+	key, err := base64.StdEncoding.DecodeString(encodedKey)
+	if err != nil {
+		key, err = base64.RawStdEncoding.DecodeString(encodedKey)
+	}
+	if err != nil || len(key) != keyBytes {
+		return nil, fmt.Errorf("credential key must be a base64-encoded %d-byte value", keyBytes)
+	}
+	return key, nil
 }
 
 func (c *Codec) Seal(scope, id string, plaintext []byte) ([]byte, error) {

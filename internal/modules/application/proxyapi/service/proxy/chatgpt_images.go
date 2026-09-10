@@ -3,9 +3,11 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -126,7 +128,7 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 		body.ResponseFormat = "b64_json"
 	}
 	identity := clientauth.ClientIdentityFromContext(r.Context())
-	request := chatgptimage.Request{Prompt: body.Prompt, Model: body.Model, N: body.N, Size: body.Size, Quality: body.Quality, ResponseFormat: body.ResponseFormat, BaseURL: imageBaseURL(r), APIKeyID: identity.KeyID}
+	request := chatgptimage.Request{Prompt: body.Prompt, Model: body.Model, N: body.N, Size: body.Size, Quality: body.Quality, ResponseFormat: body.ResponseFormat, BaseURL: h.imageBaseURL(r), APIKeyID: identity.KeyID}
 	var result chatgptimage.Result
 	var err error
 	if r.URL.Path == "/v1/images/edits" {
@@ -171,11 +173,44 @@ func (h *Handler) handleImages(w http.ResponseWriter, r *http.Request, requestID
 		h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, status, APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt image request failed", Model: body.Model}, fail, tok)
 		return
 	}
+	if body.ResponseFormat == "url" {
+		baseURL := h.imageBaseURL(r)
+		if signErr := h.signImageResultURLs(&result, identity.KeyID, baseURL, time.Now()); signErr != nil {
+			resolved := false
+			if errors.Is(signErr, errImageCredentialUnavailable) {
+				if !allowsInlineImageFallback(r.Header) {
+					setFeatureImageTrace(r, plan.RouteOwner, result)
+					fail := newStreamFailWithCode(streamKindError, ErrorCodeAuthenticationFailed, "authentication_failed: client api key became unavailable during image generation", signErr, false)
+					h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, http.StatusUnauthorized, APIError{Code: ErrorCodeAuthenticationFailed, Message: "client api key became unavailable during image generation", Model: body.Model}, fail, tok)
+					return
+				}
+				result.ResponseFormat = "b64_json"
+				if inlineErr := h.inlineLocalImageResult(r.Context(), &result, identity.KeyID, baseURL); inlineErr == nil {
+					resolved = true
+				} else {
+					signErr = errors.Join(signErr, inlineErr)
+				}
+			}
+			if !resolved {
+				setFeatureImageTrace(r, plan.RouteOwner, result)
+				fail := newStreamFailWithCode(streamKindError, ErrorCodeProxyInternalError, "proxy_internal_error: image URL signing failed", signErr, false)
+				h.writeChatGPTImageAPIError(w, round, r, start, plan.RouteOwner, body.Model, false, http.StatusInternalServerError, APIError{Code: ErrorCodeProxyInternalError, Message: "image URL signing failed", Model: body.Model}, fail, tok)
+				return
+			}
+		}
+	}
 	if round != nil {
 		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), false)
 	}
 	setFeatureImageTrace(r, plan.RouteOwner, result)
 	w.Header().Set("Content-Type", "application/json")
+	if body.ResponseFormat == "url" {
+		w.Header().Set("Cache-Control", "private, no-store")
+		w.Header().Set("Pragma", "no-cache")
+		if result.ResponseFormat != "" {
+			w.Header().Set(imageFormatFallbackResultKey, result.ResponseFormat)
+		}
+	}
 	// Encode only the public JSON fields; Usage is json:"-".
 	if encErr := json.NewEncoder(w).Encode(result); encErr != nil {
 		h.settleChatGPTWeb(round, r, plan.RouteOwner, body.Model, false, http.StatusOK, time.Since(start), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", encErr, false))
@@ -323,7 +358,7 @@ func firstForm(values map[string][]string, key string) string {
 	return strings.TrimSpace(values[key][0])
 }
 
-func imageBaseURL(r *http.Request) string {
+func (h *Handler) imageBaseURL(r *http.Request) string {
 	if r == nil || r.Host == "" {
 		return ""
 	}
@@ -331,5 +366,37 @@ func imageBaseURL(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
+	// Reverse proxies terminate TLS before forwarding to AetherRelay. Forwarded
+	// values affect public URLs only when the immediate peer is explicitly
+	// trusted; other callers cannot choose the returned URL scheme.
+	if trustedProxy(r.RemoteAddr, h.currentConfig().TrustedProxyCIDRs) {
+		values := strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")
+		forwarded := strings.ToLower(strings.TrimSpace(values[0]))
+		if forwarded == "http" || forwarded == "https" {
+			scheme = forwarded
+		}
+	}
 	return scheme + "://" + r.Host
+}
+
+func trustedProxy(remoteAddr string, allowed []string) bool {
+	host := strings.TrimSpace(remoteAddr)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	for _, value := range allowed {
+		value = strings.TrimSpace(value)
+		if candidate := net.ParseIP(value); candidate != nil && candidate.Equal(ip) {
+			return true
+		}
+		_, network, err := net.ParseCIDR(value)
+		if err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

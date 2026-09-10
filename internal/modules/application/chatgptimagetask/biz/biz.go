@@ -31,10 +31,11 @@ import (
 
 type ImageTask struct {
 	basebiz.Base
-	store   *store.Store
-	topics  []string
-	runMu   sync.Mutex
-	running map[string]*taskRun
+	store      *store.Store
+	topics     []string
+	runMu      sync.Mutex
+	running    map[string]*taskRun
+	activeRuns map[*taskRun]string
 }
 
 type taskRun struct{ cancel context.CancelFunc }
@@ -81,6 +82,9 @@ func (s *ImageTask) Run(context.Context) *cd.Error { return nil }
 func (s *ImageTask) Teardown(context.Context) {
 	s.runMu.Lock()
 	for _, run := range s.running {
+		run.cancel()
+	}
+	for run := range s.activeRuns {
 		run.cancel()
 	}
 	s.running = map[string]*taskRun{}
@@ -295,9 +299,15 @@ func (s *ImageTask) handleDeleteOwner(ev event.Event, result event.Result) {
 			run.cancel()
 		}
 	}
+	for run, owner := range s.activeRuns {
+		if owner == cmd.OwnerID {
+			run.cancel()
+		}
+	}
 	s.runMu.Unlock()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
 		s.runMu.Lock()
 		active := false
 		for key := range s.running {
@@ -306,11 +316,22 @@ func (s *ImageTask) handleDeleteOwner(ev event.Event, result event.Result) {
 				break
 			}
 		}
+		for _, owner := range s.activeRuns {
+			if owner == cmd.OwnerID {
+				active = true
+				break
+			}
+		}
 		s.runMu.Unlock()
 		if !active {
 			break
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case <-ev.Context().Done():
+			result.Set(nil, cd.NewError(cd.Unexpected, ev.Context().Err().Error()))
+			return
+		case <-ticker.C:
+		}
 	}
 	deleted, err := s.store.DeleteOwner(cmd.OwnerID)
 	if err != nil {
@@ -330,12 +351,17 @@ func (s *ImageTask) startTask(ownerID, taskID string, execute func(context.Conte
 	if previous := s.running[key]; previous != nil {
 		previous.cancel()
 	}
+	if s.activeRuns == nil {
+		s.activeRuns = make(map[*taskRun]string)
+	}
+	s.activeRuns[run] = ownerID
 	s.running[key] = run
 	s.runMu.Unlock()
 	s.AsyncTask(func() {
 		defer func() {
 			cancel()
 			s.runMu.Lock()
+			delete(s.activeRuns, run)
 			if s.running[key] == run {
 				delete(s.running, key)
 			}

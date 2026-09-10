@@ -139,6 +139,7 @@ type ClientAPIKeyRecord struct {
 	CreatedAt      time.Time
 	LastUsedAt     *time.Time
 	LastRotatedAt  *time.Time
+	DeletingAt     *time.Time
 	RevokedAt      *time.Time
 	ProviderAccess clientaccess.Policy
 }
@@ -255,6 +256,7 @@ type Store interface {
 	CreateClientAPIKey(context.Context, ClientAPIKeyRecord) error
 	SetClientAPIKeyEnabled(context.Context, string, bool) error
 	RotateClientAPIKey(context.Context, string, string, time.Time) error
+	BeginClientAPIKeyDeletion(context.Context, string, time.Time) error
 	RevokeClientAPIKey(context.Context, string, time.Time) error
 	DeleteClientAPIKey(context.Context, string) error
 	SetClientAPIKeyProviderAccess(context.Context, string, clientaccess.Policy) error

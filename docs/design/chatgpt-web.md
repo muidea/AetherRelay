@@ -34,7 +34,7 @@
 ## 图片任务与图片库
 
 - **图片任务**：`api_key_id` 缺省时使用内建 `builtin-local`，显式值必须对应已存在客户端 Key；它是任务查询、取消、删除与恢复的隔离边界，切换 Key 清空旧列表与轮询。`size` 只接受 `auto` 或正整数 `WIDTHxHEIGHT`（最大边 8192、总像素 4000 万），`quality` 仍按上游能力传递。ChatGPT Web 没有原生尺寸字段，任务完成后由本地栅格规范化保证明确 `WxH` 的实际结果尺寸；详情和图片库展示实际宽、高、格式。SVG/vector 文件请求明确失败，不伪装成 SVG。所有任务开放详情，`queued` / `running` 可取消，终态记录可删除。取消先持久化 `cancelled`，再传播任务级 context 取消；状态机拒绝迟到进度、成功或失败覆盖该终态。该取消是协作式的，上游已经受理时不承诺停止执行或免除额度消耗。删除只处理任务记录，图片库资产由图片库独立管理。已有会话的失败任务走恢复轮询（`extra_timeout_secs=30`，不重新提交生成），仅 bootstrap 阶段失败的未建会话任务可重新提交，其它失败不开放通用重试。
-- **图片库**：列表、标签、删除（不可恢复）；图片内容经 Admin 鉴权同源只读端点 `GET /api/chatgpt/images/content?path=&thumb=` 读取，路径严格校验、no-store，不暴露通用 `/files/**`。
+- **图片库**：列表、标签、删除（不可恢复）；Admin 图片内容经会话鉴权同源只读端点 `GET /api/chatgpt/images/content?path=&thumb=` 读取。ChatGPT Web Images 的 `response_format=url` 使用独立的短期签名 `GET /images/{scope}/{path}`，由 Proxy 校验完整路径、到期时间和当前启用的 Client Key 后按作用域读取；凭据在生图期间失效时默认返回 `authentication_failed`，显式发送 `X-AetherRelay-Allow-Image-Format-Fallback: b64_json` 的扩展客户端可接收内联 `b64_json`，实际格式同时写入响应正文 `response_format` 和 `X-AetherRelay-Image-Response-Format` 响应头。多张内联图片共享整次 JSON 响应大小预算。删除 Client Key 会先持久化禁用并关闭新图片请求准入，再以按 Key 的清理流程等待已进入的图片请求和任务结束；失败后保持禁用并允许重复 DELETE 继续幂等清理。签名参数在交互归档中脱敏。两类读取均严格校验路径并返回 `no-store`，不暴露通用 `/files/**`。
 
 ## 临时对话
 

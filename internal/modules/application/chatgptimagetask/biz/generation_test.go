@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"aetherrelay/internal/modules/application/chatgptimagetask/internal/store"
 	imgcommon "aetherrelay/internal/modules/application/chatgptimagetask/pkg/common"
@@ -85,5 +86,39 @@ func TestResumableConversationFailure(t *testing.T) {
 	}
 	if isResumableConversationFailure(imgevents.TaskView{Status: imgevents.StatusError}) {
 		t.Fatal("task without an upstream conversation must not be resumed")
+	}
+}
+
+func TestDeleteOwnerWaitsForSupersededTaskRun(t *testing.T) {
+	hub := event.NewHub(8)
+	defer hub.Terminate(context.Background())
+	background := task.NewBackgroundRoutine(8)
+	defer background.Shutdown(context.Background())
+	tasks := store.New(filepath.Join(t.TempDir(), "tasks.duckdb"))
+	defer tasks.Close()
+	if _, _, err := tasks.GetOrCreateGeneration("owner", "task", "prompt", "gpt-image-2", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	s := &ImageTask{Base: basebiz.New(imgcommon.UnitID, hub, background), store: tasks, running: map[string]*taskRun{}}
+	obs := event.NewSimpleObserver(imgcommon.UnitID, hub)
+	obs.Subscribe(imgevents.TopicDeleteOwner, s.handleDeleteOwner)
+	firstStarted, releaseFirst, secondStarted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	s.startTask("owner", "task", func(context.Context) { close(firstStarted); <-releaseFirst })
+	<-firstStarted
+	s.startTask("owner", "task", func(ctx context.Context) { close(secondStarted); <-ctx.Done() })
+	<-secondStarted
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	res := hub.Send(event.NewEventWithContext(imgevents.TopicDeleteOwner, "test", imgcommon.UnitID, event.NewHeader(), ctx, imgevents.DeleteOwnerCommand{OwnerID: "owner"}))
+	_, err := res.Get()
+	close(releaseFirst)
+	if err == nil {
+		t.Fatal("deleted owner before superseded run exited")
+	}
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
+	defer retryCancel()
+	res = hub.Send(event.NewEventWithContext(imgevents.TopicDeleteOwner, "test", imgcommon.UnitID, event.NewHeader(), retryCtx, imgevents.DeleteOwnerCommand{OwnerID: "owner"}))
+	if _, err := res.Get(); err != nil {
+		t.Fatal(err)
 	}
 }

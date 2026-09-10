@@ -69,7 +69,7 @@ curl -sS http://127.0.0.1:8080/v1/models \
 
 ### 图片资产作用域
 
-`POST /v1/images/generations` 与 `POST /v1/images/edits` 成功产生的图片，按认证凭据解析出的稳定 `api_key_id` 存储。应用只需继续使用自己的 API Key，不需要也不能在请求体中指定作用域。ChatGPT Web 内部会通过已认证会话下载其短时图片 URL，再验证并归档 raster bytes；上游只有不可下载/不可解码内容时请求失败，不会声称已满足尺寸或已归档。Admin 图片任务和图片库的 `api_key_id` 缺省为服务端内建 `builtin-local` scope，显式值必须是已存在的客户端 Key；任务、原图、缩略图、标签和读取/删除操作均严格限制在该 Key 内。删除外部客户端 Key 会同步清理其图片任务、图片资产和 `interactions/{api_key_id}/` 交互归档，内建 `builtin-local` 不可删除。
+`POST /v1/images/generations` 与 `POST /v1/images/edits` 成功产生的图片，按认证凭据解析出的稳定 `api_key_id` 存储。应用只需继续使用自己的 API Key，不需要也不能在请求体中指定作用域。ChatGPT Web 内部会通过已认证会话下载其短时图片 URL，再验证并归档 raster bytes；上游只有不可下载/不可解码内容时请求失败，不会声称已满足尺寸或已归档。ChatGPT Web 的 `response_format=url` 返回由 AetherRelay 使用服务端专用派生密钥签发、默认一小时有效的同源 URL；原生 Images Provider 的 URL 仍遵循对应上游的生命周期。客户端读取 AetherRelay 签名 URL 时无需再次附带 API Key，也无法使用自己的 API Key 延长有效期。服务会校验完整路径、签名、有效期和当前凭据状态，并以文件流支持 HEAD 与 Range。禁用、撤销或轮换对应 Client API Key 会立即使已签发 URL 失效。若凭据在生图执行期间失效，标准客户端会收到明确的 `authentication_failed`；只有请求显式发送 `X-AetherRelay-Allow-Image-Format-Fallback: b64_json` 时，已完成的本地图片才以内联 `b64_json` 返回，并在响应正文 `response_format` 和 `X-AetherRelay-Image-Response-Format` 响应头中标明实际格式。内联图片共同受整次 JSON 响应大小上限约束。Admin 图片任务和图片库的 `api_key_id` 缺省为服务端内建 `builtin-local` scope，显式值必须是已存在的客户端 Key；任务、原图、缩略图、标签和读取/删除操作均严格限制在该 Key 内。删除外部客户端 Key 会先持久化禁用并停止新图片请求，再按独立超时等待在途请求、清理图片任务、图片资产和 `interactions/{api_key_id}/` 交互归档；失败时 Key 保持禁用，重复 DELETE 可继续幂等清理，内建 `builtin-local` 不可删除。
 
 ### ChatGPT Web 图片尺寸与格式边界
 

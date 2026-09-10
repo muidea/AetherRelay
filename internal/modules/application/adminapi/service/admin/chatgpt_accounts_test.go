@@ -1,6 +1,7 @@
 package admin
 
 import (
+	usage "aetherrelay/internal/pkg/aetherrelayusage"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	taskevents "aetherrelay/internal/modules/application/chatgptimagetask/pkg/events"
@@ -347,8 +349,12 @@ func TestChatGPTAccountAdminUsesStableIDsAndDisplaysEmail(t *testing.T) {
 
 func TestChatGPTImageTaskRetryGeneration(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/retry-generation", strings.NewReader(`{"owner_id":"owner-1"}`))
+	store := usage.NewMemoryStore()
+	if err := store.EnsureClientAPIKey(context.Background(), "owner-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandlerWithUsage("", &testRuntime{}, store).WithChatGPTRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/retry-generation", strings.NewReader(`{"api_key_id":"owner-1"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
 	rec := httptest.NewRecorder()

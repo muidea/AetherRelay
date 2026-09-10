@@ -35,6 +35,7 @@ type clientKeyView struct {
 	CreatedAt              string            `json:"created_at,omitempty"`
 	LastUsedAt             string            `json:"last_used_at,omitempty"`
 	LastRotatedAt          string            `json:"last_rotated_at,omitempty"`
+	DeletingAt             string            `json:"deleting_at,omitempty"`
 	RevokedAt              string            `json:"revoked_at,omitempty"`
 	ProviderAccess         providerAccessDTO `json:"provider_access"`
 	EffectiveProviderIDs   []string          `json:"effective_provider_ids"`
@@ -95,6 +96,9 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
+	if h.rejectActiveClientKeyDeletion(w, id) {
+		return
+	}
 	policy, err := h.validateProviderAccess(*input.ProviderAccess)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -130,7 +134,10 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "client API key id already exists")
 		return
 	}
-	h.activateClientKeyIndex(index)
+	if err := h.activateClientKeyIndex(index); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "activate client API keys")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "enabled": enabled, "provider_access": providerAccessView(policy), "api_key": secret, "message": "Copy this API key now. It cannot be displayed again."})
 }
@@ -181,6 +188,9 @@ func (h *Handler) rotateClientAPIKey(w http.ResponseWriter, r *http.Request, id 
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
+	if h.rejectDeletingClientKey(w, id) {
+		return
+	}
 	records, record, ok := h.loadClientKeyForMutation(w, r.Context(), id)
 	if !ok {
 		return
@@ -197,7 +207,10 @@ func (h *Handler) rotateClientAPIKey(w http.ResponseWriter, r *http.Request, id 
 		writeError(w, http.StatusNotFound, "client API key not found")
 		return
 	}
-	h.activateClientKeyIndex(index)
+	if err := h.activateClientKeyIndex(index); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "activate client API keys")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "api_key": secret, "message": "Copy this API key now. It cannot be displayed again."})
 }
@@ -209,6 +222,9 @@ func (h *Handler) updateClientAPIKeyEnabled(w http.ResponseWriter, r *http.Reque
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
+	if h.rejectDeletingClientKey(w, id) {
+		return
+	}
 	records, record, ok := h.loadClientKeyForMutation(w, r.Context(), id)
 	if !ok {
 		return
@@ -224,7 +240,10 @@ func (h *Handler) updateClientAPIKeyEnabled(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "client API key not found")
 		return
 	}
-	h.activateClientKeyIndex(index)
+	if err := h.activateClientKeyIndex(index); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "activate client API keys")
+		return
+	}
 	writeJSON(w, http.StatusOK, clientKeyViewFor(record, h.clientKeyCatalog()))
 }
 
@@ -235,6 +254,9 @@ func (h *Handler) updateClientAPIKeyProviderAccess(w http.ResponseWriter, r *htt
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
+	if h.rejectDeletingClientKey(w, id) {
+		return
+	}
 	policy, err := h.validateProviderAccess(input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -255,45 +277,114 @@ func (h *Handler) updateClientAPIKeyProviderAccess(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusNotFound, "client API key not found")
 		return
 	}
-	h.activateClientKeyIndex(index)
+	if err := h.activateClientKeyIndex(index); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "activate client API keys")
+		return
+	}
 	writeJSON(w, http.StatusOK, clientKeyViewFor(record, h.clientKeyCatalog()))
 }
 
 func (h *Handler) deleteClientAPIKey(w http.ResponseWriter, r *http.Request, id string) {
 	h.updateMu.Lock()
-	defer h.updateMu.Unlock()
-	records, _, ok := h.loadClientKeyForMutation(w, r.Context(), id)
-	if !ok {
+	if h.rejectActiveClientKeyDeletion(w, id) {
+		h.updateMu.Unlock()
 		return
 	}
-	delete(records, id)
+	records, record, ok := h.loadClientKeyForMutation(w, r.Context(), id)
+	if !ok {
+		h.updateMu.Unlock()
+		return
+	}
+	record.Enabled = false
+	records[id] = record
 	index, err := h.prepareClientKeyIndex(records)
 	if err != nil {
+		h.updateMu.Unlock()
 		writeError(w, http.StatusInternalServerError, "prepare client API keys")
 		return
 	}
-	if h.runtime != nil {
-		if err := archive.RemoveAPIKeyScope(h.runtime.ConfigSnapshot().InteractionDir, id); err != nil {
-			writeError(w, http.StatusInternalServerError, "remove client interaction archives")
-			return
-		}
-	}
-	if err := h.usageStore.DeleteClientAPIKey(r.Context(), id); err != nil {
-		writeError(w, http.StatusNotFound, "client API key not found")
+	if err := h.usageStore.BeginClientAPIKeyDeletion(r.Context(), id, time.Now().UTC()); err != nil {
+		h.updateMu.Unlock()
+		writeError(w, http.StatusServiceUnavailable, "persist client key deletion; retry DELETE")
 		return
 	}
-	h.activateClientKeyIndex(index)
+	if h.deletingKeys == nil {
+		h.deletingKeys = make(map[string]struct{})
+	}
+	if err := h.activateClientKeyIndex(index); err != nil {
+		h.updateMu.Unlock()
+		writeError(w, http.StatusServiceUnavailable, "activate client key deletion; retry DELETE")
+		return
+	}
+	h.deletingKeys[id] = struct{}{}
+	h.updateMu.Unlock()
+
+	defer func() {
+		h.updateMu.Lock()
+		delete(h.deletingKeys, id)
+		h.updateMu.Unlock()
+	}()
+	drainTimeout := 5 * time.Minute
+	if h.runtime != nil {
+		if configured := h.runtime.ConfigSnapshot().RequestTimeout; configured > 0 {
+			drainTimeout = configured
+		}
+	}
+	drainCtx, cancel := context.WithTimeout(r.Context(), drainTimeout)
+	defer cancel()
+	if err := h.runtime.(clientKeyRuntime).WaitClientRequests(drainCtx, id); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "wait for client requests; client API key remains disabled")
+		return
+	}
 	if runtime, ok := h.chatGPT.(chatGPTImageRuntime); ok {
-		if err := runtime.DeleteChatGPTImageTaskScope(r.Context(), id); err != nil {
-			writeError(w, http.StatusInternalServerError, "remove client image tasks")
+		if err := runtime.DeleteChatGPTImageTaskScope(drainCtx, id); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "remove client image tasks; client API key remains disabled")
 			return
 		}
-		if err := runtime.DeleteChatGPTImageScope(r.Context(), id); err != nil {
-			writeError(w, http.StatusInternalServerError, "remove client image assets")
+		if err := runtime.DeleteChatGPTImageScope(drainCtx, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "remove client image assets; client API key remains disabled")
 			return
 		}
 	}
+	if h.runtime != nil {
+		if err := archive.RemoveAPIKeyScope(h.runtime.ConfigSnapshot().InteractionDir, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "remove client interaction archives; client API key remains disabled")
+			return
+		}
+	}
+	if err := h.usageStore.DeleteClientAPIKey(drainCtx, id); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "remove client API key data; retry deletion")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Call with updateMu held. A failed DELETE remains retryable, but cannot be
+// enabled, rotated or assigned new tasks, including after a process restart.
+func (h *Handler) rejectDeletingClientKey(w http.ResponseWriter, id string) bool {
+	if config.IsBuiltinClientAPIKeyID(id) {
+		return false
+	}
+	if h.rejectActiveClientKeyDeletion(w, id) {
+		return true
+	}
+	records, err := h.clientKeyRecords(context.Background())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "client API key store unavailable")
+		return true
+	}
+	if records[id].DeletingAt != nil {
+		writeError(w, http.StatusConflict, "client API key deletion pending; retry DELETE to finish")
+		return true
+	}
+	return false
+}
+func (h *Handler) rejectActiveClientKeyDeletion(w http.ResponseWriter, id string) bool {
+	if _, deleting := h.deletingKeys[id]; !deleting {
+		return false
+	}
+	writeError(w, http.StatusConflict, "client API key deletion is in progress")
+	return true
 }
 
 func (h *Handler) getClientAPIKeyModels(w http.ResponseWriter, ctx context.Context, id string) {
@@ -385,8 +476,8 @@ func (h *Handler) prepareClientKeyIndex(records map[string]usage.ClientAPIKeyRec
 	return runtime.PrepareClientKeyIndex(records)
 }
 
-func (h *Handler) activateClientKeyIndex(index *clientauth.Index) {
-	h.runtime.(clientKeyRuntime).ActivateClientKeyIndex(index)
+func (h *Handler) activateClientKeyIndex(index *clientauth.Index) error {
+	return h.runtime.(clientKeyRuntime).ActivateClientKeyIndex(index)
 }
 
 func (h *Handler) clientKeyCatalog() effectivecatalog.Snapshot {
@@ -422,6 +513,9 @@ func clientKeyViewFor(record usage.ClientAPIKeyRecord, snapshot effectivecatalog
 	}
 	if record.LastRotatedAt != nil {
 		view.LastRotatedAt = record.LastRotatedAt.UTC().Format(time.RFC3339)
+	}
+	if record.DeletingAt != nil {
+		view.DeletingAt = record.DeletingAt.UTC().Format(time.RFC3339)
 	}
 	if record.RevokedAt != nil {
 		view.RevokedAt = record.RevokedAt.UTC().Format(time.RFC3339)

@@ -647,6 +647,7 @@ func TestLoadParsesMetricsFields(t *testing.T) {
   listen_addr: 127.0.0.1:9090
   metrics_remote_access: true
   metrics_allowed_cidrs: 10.0.0.0/8, 192.168.0.0/16
+  trusted_proxy_cidrs: 127.0.0.1/32, 172.18.0.1
 providers:
   openai:
     protocol: openai
@@ -670,6 +671,28 @@ providers:
 	}
 	if len(cfg.MetricsAllowedCIDRs) != 2 {
 		t.Fatalf("cidrs = %v, want 2 entries", cfg.MetricsAllowedCIDRs)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("trusted proxy cidrs = %v, want 2 entries", cfg.TrustedProxyCIDRs)
+	}
+}
+
+func TestLoadRejectsInvalidTrustedProxyCIDR(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`server:
+  trusted_proxy_cidrs: not-a-network
+providers:
+  openai:
+    protocol: openai
+    base_url: https://api.openai.com
+    api_key: test
+    endpoints: responses
+    models: gpt-*
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "trusted_proxy_cidrs") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -932,6 +955,7 @@ func TestIsLoopbackListenAddr(t *testing.T) {
 
 func TestLoadMetricsRemoteAccessFromEnv(t *testing.T) {
 	t.Setenv("AETHERRELAY_METRICS_REMOTE_ACCESS", "true")
+	t.Setenv("AETHERRELAY_TRUSTED_PROXY_CIDRS", "127.0.0.1/32, 10.10.0.0/16")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 providers:
@@ -950,6 +974,9 @@ providers:
 	}
 	if !cfg.MetricsRemoteAccess {
 		t.Fatalf("MetricsRemoteAccess = false, want true from env")
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("TrustedProxyCIDRs=%v", cfg.TrustedProxyCIDRs)
 	}
 }
 

@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	err = tx.QueryRowContext(ctx, `SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1`).Scan(&version, &name)
 	switch {
 	case err == nil && version == currentSchemaVersion && name == currentSchemaName:
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS deleting_at TIMESTAMPTZ`); err != nil {
+			return fmt.Errorf("initialize deletion state: %w", err)
+		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit schema check: %w", err)
 		}
@@ -140,6 +143,7 @@ func createFinalSchema(ctx context.Context, tx *sql.Tx) error {
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     last_rotated_at TIMESTAMPTZ,
     revoked_at      TIMESTAMPTZ,
+    deleting_at     TIMESTAMPTZ,
     provider_access_mode VARCHAR NOT NULL,
     CHECK (provider_access_mode IN ('all', 'selected'))
 )`,

@@ -8,29 +8,30 @@ import (
 )
 
 const (
-	TopicAcquire           = "aetherrelay.usage.command.acquire"
-	TopicStart             = "aetherrelay.usage.command.start"
-	TopicComplete          = "aetherrelay.usage.command.complete"
-	TopicDashboard         = "aetherrelay.usage.command.dashboard"
-	TopicCount             = "aetherrelay.usage.command.count"
-	TopicEvents            = "aetherrelay.usage.command.events"
-	TopicExport            = "aetherrelay.usage.command.export"
-	TopicFilterOptions     = "aetherrelay.usage.command.filter-options"
-	TopicRecover           = "aetherrelay.usage.command.recover"
-	TopicCheckpoint        = "aetherrelay.usage.command.checkpoint"
-	TopicHealthy           = "aetherrelay.usage.command.healthy"
-	TopicAllTime           = "aetherrelay.usage.command.all-time"
-	TopicClientKeyEnsure   = "aetherrelay.usage.command.client-key-ensure"
-	TopicClientKeyTouch    = "aetherrelay.usage.command.client-key-touch"
-	TopicClientKeyMetadata = "aetherrelay.usage.command.client-key-metadata"
-	TopicClientKeyList     = "aetherrelay.usage.command.client-key-list"
-	TopicClientKeyCreate   = "aetherrelay.usage.command.client-key-create"
-	TopicClientKeyEnable   = "aetherrelay.usage.command.client-key-enable"
-	TopicClientKeyRotate   = "aetherrelay.usage.command.client-key-rotate"
-	TopicClientKeyRevoke   = "aetherrelay.usage.command.client-key-revoke"
-	TopicClientKeyDelete   = "aetherrelay.usage.command.client-key-delete"
-	TopicClientKeyAccess   = "aetherrelay.usage.command.client-key-access"
-	TopicClientKeyRefs     = "aetherrelay.usage.command.client-key-provider-refs"
+	TopicAcquire                = "aetherrelay.usage.command.acquire"
+	TopicStart                  = "aetherrelay.usage.command.start"
+	TopicComplete               = "aetherrelay.usage.command.complete"
+	TopicDashboard              = "aetherrelay.usage.command.dashboard"
+	TopicCount                  = "aetherrelay.usage.command.count"
+	TopicEvents                 = "aetherrelay.usage.command.events"
+	TopicExport                 = "aetherrelay.usage.command.export"
+	TopicFilterOptions          = "aetherrelay.usage.command.filter-options"
+	TopicRecover                = "aetherrelay.usage.command.recover"
+	TopicCheckpoint             = "aetherrelay.usage.command.checkpoint"
+	TopicHealthy                = "aetherrelay.usage.command.healthy"
+	TopicAllTime                = "aetherrelay.usage.command.all-time"
+	TopicClientKeyEnsure        = "aetherrelay.usage.command.client-key-ensure"
+	TopicClientKeyTouch         = "aetherrelay.usage.command.client-key-touch"
+	TopicClientKeyMetadata      = "aetherrelay.usage.command.client-key-metadata"
+	TopicClientKeyList          = "aetherrelay.usage.command.client-key-list"
+	TopicClientKeyCreate        = "aetherrelay.usage.command.client-key-create"
+	TopicClientKeyEnable        = "aetherrelay.usage.command.client-key-enable"
+	TopicClientKeyRotate        = "aetherrelay.usage.command.client-key-rotate"
+	TopicClientKeyBeginDeletion = "aetherrelay.usage.command.client-key-begin-deletion"
+	TopicClientKeyRevoke        = "aetherrelay.usage.command.client-key-revoke"
+	TopicClientKeyDelete        = "aetherrelay.usage.command.client-key-delete"
+	TopicClientKeyAccess        = "aetherrelay.usage.command.client-key-access"
+	TopicClientKeyRefs          = "aetherrelay.usage.command.client-key-provider-refs"
 )
 
 type AcquireCommand struct{}
@@ -79,6 +80,11 @@ type ClientKeyRotateCommand struct {
 	ID, Hash string
 	At       time.Time
 }
+type ClientKeyBeginDeletionCommand struct {
+	ID string
+	At time.Time
+}
+
 type ClientKeyRevokeCommand struct {
 	ID string
 	At time.Time

@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"aetherrelay/internal/modules/application/proxyapi/internal/searchhistory"
@@ -44,6 +45,7 @@ type FeatureExecutor interface {
 type ClientKeyRuntime interface {
 	PrepareClientKeyIndex(map[string]usage.ClientAPIKeyRecord) (*clientauth.Index, error)
 	ActivateClientKeyIndex(*clientauth.Index)
+	WaitClientRequests(context.Context, string) error
 }
 
 type Proxy struct {
@@ -113,6 +115,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicExecuteFeatureImage, biz.handleExecuteFeatureImage)
 	biz.SubscribeFunc(proxyevents.TopicPrepareClientKeyIndex, biz.handlePrepareClientKeyIndex)
 	biz.SubscribeFunc(proxyevents.TopicActivateClientKeyIndex, biz.handleActivateClientKeyIndex)
+	biz.SubscribeFunc(proxyevents.TopicWaitClientRequests, biz.handleWaitClientRequests)
 	return biz, nil
 }
 
@@ -145,6 +148,7 @@ func (s *Proxy) Teardown(context.Context) {
 	s.UnsubscribeFunc(proxyevents.TopicExecuteFeatureImage)
 	s.UnsubscribeFunc(proxyevents.TopicPrepareClientKeyIndex)
 	s.UnsubscribeFunc(proxyevents.TopicActivateClientKeyIndex)
+	s.UnsubscribeFunc(proxyevents.TopicWaitClientRequests)
 	s.mu.Lock()
 	s.updater = nil
 	s.featureExecutor = nil
@@ -213,6 +217,26 @@ func (s *Proxy) handleActivateClientKeyIndex(ev event.Event, result event.Result
 		return
 	}
 	runtime.ActivateClientKeyIndex(command.Index)
+	result.Set(struct{}{}, nil)
+}
+
+func (s *Proxy) handleWaitClientRequests(ev event.Event, result event.Result) {
+	command, ok := ev.Data().(proxyevents.WaitClientRequestsCommand)
+	if !ok || strings.TrimSpace(command.KeyID) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid client request drain command"))
+		return
+	}
+	s.mu.RLock()
+	runtime := s.clientKeyRuntime
+	s.mu.RUnlock()
+	if runtime == nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, "client key runtime is unavailable"))
+		return
+	}
+	if err := runtime.WaitClientRequests(ev.Context(), command.KeyID); err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
 	result.Set(struct{}{}, nil)
 }
 

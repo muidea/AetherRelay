@@ -2,6 +2,8 @@ package biz
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 
 	basebiz "aetherrelay/internal/modules/base/biz"
@@ -38,6 +40,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b.topics = []string{
 		events.TopicSave,
 		events.TopicGetBytes,
+		events.TopicOpenContent,
 		events.TopicDelete,
 		events.TopicDeleteScope,
 		events.TopicList,
@@ -53,6 +56,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	}
 	b.SubscribeFunc(events.TopicSave, b.handleSave)
 	b.SubscribeFunc(events.TopicGetBytes, b.handleGetBytes)
+	b.SubscribeFunc(events.TopicOpenContent, b.handleOpenContent)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
 	b.SubscribeFunc(events.TopicDeleteScope, b.handleDeleteScope)
 	b.SubscribeFunc(events.TopicList, b.handleList)
@@ -120,6 +124,43 @@ func (s *ImageStore) handleGetBytes(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.GetBytesResult{Bytes: data}, nil)
+}
+
+func (s *ImageStore) handleOpenContent(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.OpenContentCommand)
+	if !ok || cmd.Offset < 0 || cmd.Length < 0 || cmd.Length > events.MaxContentChunkBytes || (cmd.Length > 0 && cmd.Version == "") {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid open content command"))
+		return
+	}
+	file, info, err := s.store.OpenContent(cmd.RelativePath, cmd.APIKeyID)
+	if os.IsNotExist(err) {
+		result.Set(events.OpenContentResult{Found: false}, nil)
+		return
+	}
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	defer file.Close()
+	if err := ev.Context().Err(); err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	version := fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+	if cmd.Version != "" && cmd.Version != version {
+		result.Set(nil, cd.NewError(cd.Unexpected, "image changed during read"))
+		return
+	}
+	data := make([]byte, cmd.Length)
+	n, readErr := file.ReadAt(data, cmd.Offset)
+	if readErr != nil && readErr != io.EOF {
+		result.Set(nil, cd.NewError(cd.Unexpected, readErr.Error()))
+		return
+	}
+	result.Set(events.OpenContentResult{Bytes: data[:n], Size: info.Size(), Version: version, Name: info.Name(), Found: true}, nil)
 }
 
 func (s *ImageStore) handleDelete(ev event.Event, result event.Result) {

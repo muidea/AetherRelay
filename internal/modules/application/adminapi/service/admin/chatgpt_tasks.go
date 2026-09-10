@@ -43,8 +43,13 @@ func (h *Handler) submitChatGPTImageGeneration(w http.ResponseWriter, r *http.Re
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
 	if !ok {
+		return
+	}
+	if h.rejectDeletingClientKey(w, apiKeyID) {
 		return
 	}
 	if strings.TrimSpace(body.ClientTaskID) == "" || strings.TrimSpace(body.Prompt) == "" {
@@ -66,8 +71,13 @@ func (h *Handler) submitChatGPTImageEdit(w http.ResponseWriter, r *http.Request)
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
 	if !ok {
+		return
+	}
+	if h.rejectDeletingClientKey(w, apiKeyID) {
 		return
 	}
 	if strings.TrimSpace(body.ClientTaskID) == "" || strings.TrimSpace(body.Prompt) == "" {
@@ -105,6 +115,8 @@ func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
 	if len(parts) != 5 {
 		writeError(w, http.StatusBadRequest, "task_id is required")
@@ -112,6 +124,9 @@ func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 	}
 	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
 	if !ok {
+		return
+	}
+	if h.rejectDeletingClientKey(w, apiKeyID) {
 		return
 	}
 	if body.ExtraTimeoutSecs == 0 {
@@ -130,6 +145,8 @@ func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Req
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
 	if len(parts) != 5 {
 		writeError(w, http.StatusBadRequest, "task_id is required")
@@ -137,6 +154,9 @@ func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Req
 	}
 	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
 	if !ok {
+		return
+	}
+	if h.rejectDeletingClientKey(w, apiKeyID) {
 		return
 	}
 	out, err := h.chatGPT.RetryChatGPTImageGeneration(r.Context(), apiKeyID, parts[3], adminImageBaseURL(r))

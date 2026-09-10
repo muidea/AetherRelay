@@ -98,6 +98,8 @@ func (h *Handler) systemInfo(w http.ResponseWriter) {
 		},
 		Endpoints: []systemEndpoint{
 			{Method: http.MethodGet, Path: "/healthz", Protocol: "health", Authentication: "none", RemoteAccess: "listener", Description: "Service health check."},
+			{Method: http.MethodGet, Path: "/images/{scope}/{path}", Protocol: "image", Authentication: "short_lived_signature", RemoteAccess: "listener", Description: "Read a generated image through its signed response URL."},
+			{Method: http.MethodHead, Path: "/images/{scope}/{path}", Protocol: "image", Authentication: "short_lived_signature", RemoteAccess: "listener", Description: "Inspect generated image metadata through its signed response URL."},
 			{Method: http.MethodGet, Path: "/v1/models", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "List the effective model catalog."},
 			{Method: http.MethodPost, Path: "/v1/chat/completions", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "OpenAI Chat Completions."},
 			{Method: http.MethodPost, Path: "/v1/responses", Protocol: "openai", Authentication: "client_api_key", RemoteAccess: "listener", Description: "OpenAI Responses."},

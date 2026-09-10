@@ -16,6 +16,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -186,7 +187,13 @@ func DecodeRasterInfo(payload []byte) (RasterInfo, error) {
 	if looksLikeSVG(payload) {
 		return RasterInfo{}, ErrSVGUnsupported
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(payload))
+	return DecodeRasterInfoReader(bytes.NewReader(payload))
+}
+
+// DecodeRasterInfoReader validates raster dimensions from a stream without
+// reading or decoding the complete image.
+func DecodeRasterInfoReader(reader io.Reader) (RasterInfo, error) {
+	config, format, err := image.DecodeConfig(reader)
 	if err != nil {
 		return RasterInfo{}, fmt.Errorf("cannot normalize image size: decode raster dimensions: %w", err)
 	}

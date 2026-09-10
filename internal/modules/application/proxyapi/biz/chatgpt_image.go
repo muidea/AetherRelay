@@ -41,6 +41,33 @@ func (s *Proxy) EditImage(ctx context.Context, request chatgptimage.Request) (ch
 	return s.runChatGPTImages(ctx, request, true)
 }
 
+// OpenImage opens one image from the authenticated client scope without
+// exposing the image store or its filesystem layout to the HTTP adapter.
+func (s *Proxy) OpenImage(ctx context.Context, apiKeyID, relativePath string) (chatgptimage.Content, error) {
+	command := imgevents.OpenContentCommand{APIKeyID: apiKeyID, RelativePath: relativePath}
+	result, err := s.readImageContent(ctx, command)
+	if err != nil {
+		return chatgptimage.Content{}, err
+	}
+	command.Version = result.Version
+	return chatgptimage.Content{Reader: &imageContentReader{ctx: ctx, proxy: s, command: command, size: result.Size}, Name: result.Name}, nil
+}
+
+func (s *Proxy) readImageContent(ctx context.Context, command imgevents.OpenContentCommand) (imgevents.OpenContentResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicOpenContent, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, command)).Get()
+	if err != nil {
+		return imgevents.OpenContentResult{}, fmt.Errorf("read image content: %w", err)
+	}
+	result, ok := value.(imgevents.OpenContentResult)
+	if !ok {
+		return result, fmt.Errorf("invalid image content result")
+	}
+	if !result.Found {
+		return result, chatgptimage.ErrContentNotFound
+	}
+	return result, nil
+}
+
 func (s *Proxy) runChatGPTImages(ctx context.Context, request chatgptimage.Request, edit bool) (chatgptimage.Result, error) {
 	if strings.TrimSpace(request.Prompt) == "" {
 		return chatgptimage.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("prompt is required"))

@@ -25,6 +25,9 @@ server:
   # 可选:白名单 CIDR 列表(逗号分隔),仅在 metrics_remote_access=true 时生效。
   # 非空:仅允许列表内网段(+loopback);空:允许任意远程来源。
   metrics_allowed_cidrs:
+  # 仅信任这些直接反向代理提供的 X-Forwarded-Proto。
+  # 同机 Nginx 可配置 127.0.0.1/32；容器部署填写实际 bridge gateway 地址。
+  trusted_proxy_cidrs: 127.0.0.1/32, ::1/128
   # SLO 阈值:任一字段保持 0 即禁用对应规则。
   # slo_cache_hit_rate_min: 单 provider 最低缓存命中率(0~1),样本不足 10 跳过。
   # slo_upstream_error_rate_max: 单 provider 最高上游错误率(0~1)。

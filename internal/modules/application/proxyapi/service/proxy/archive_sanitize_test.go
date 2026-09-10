@@ -25,3 +25,18 @@ func TestSanitizeArchiveBodyRedactsFileData(t *testing.T) {
 		t.Fatalf("sanitized=%s", sanitized)
 	}
 }
+
+func TestSanitizeArchiveBodyRedactsSignedImageCapability(t *testing.T) {
+	body := []byte(`{"data":[{"url":"https://relay.test/images/test-client/2026/09/10/result.png?expires=1789000000&key_id=test-client&signature=replayable-secret"}]}`)
+	sanitized := string(sanitizeArchiveBody(body))
+	if strings.Contains(sanitized, "replayable-secret") || !strings.Contains(sanitized, "REDACTED") {
+		t.Fatalf("sanitized=%s", sanitized)
+	}
+	if !strings.Contains(sanitized, "key_id=test-client") || !strings.Contains(sanitized, "/images/test-client/") {
+		t.Fatalf("archive lost non-secret image reference: %s", sanitized)
+	}
+	external := []byte(`{"data":[{"url":"https://provider.test/result.png?signature=provider-value"}]}`)
+	if got := string(sanitizeArchiveBody(external)); got != string(external) {
+		t.Fatalf("external provider URL was changed: %s", got)
+	}
+}

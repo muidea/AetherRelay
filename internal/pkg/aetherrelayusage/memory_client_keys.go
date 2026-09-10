@@ -141,6 +141,9 @@ func (s *MemoryStore) SetClientAPIKeyProviderAccess(_ context.Context, id string
 	if !ok {
 		return errClientAPIKeyNotFound
 	}
+	if record.DeletingAt != nil {
+		return errors.New("client API key deletion pending")
+	}
 	record.ProviderAccess = policy
 	s.clientKeyRecords[id] = record
 	return nil
@@ -165,6 +168,9 @@ func (s *MemoryStore) SetClientAPIKeyEnabled(_ context.Context, id string, enabl
 	if !ok {
 		return errClientAPIKeyNotFound
 	}
+	if r.DeletingAt != nil {
+		return errors.New("client API key deletion pending")
+	}
 	r.Enabled = enabled
 	s.clientKeyRecords[id] = r
 	return nil
@@ -176,10 +182,28 @@ func (s *MemoryStore) RotateClientAPIKey(_ context.Context, id, hash string, t t
 	if !ok {
 		return errClientAPIKeyNotFound
 	}
+	if r.DeletingAt != nil {
+		return errors.New("client API key deletion pending")
+	}
 	r.Hash, r.Enabled, r.LastRotatedAt, r.RevokedAt = hash, true, &t, nil
 	s.clientKeyRecords[id] = r
 	return nil
 }
+func (s *MemoryStore) BeginClientAPIKeyDeletion(_ context.Context, id string, t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.clientKeyRecords[id]
+	if !ok {
+		return errClientAPIKeyNotFound
+	}
+	r.Enabled = false
+	if r.DeletingAt == nil {
+		r.DeletingAt = &t
+	}
+	s.clientKeyRecords[id] = r
+	return nil
+}
+
 func (s *MemoryStore) RevokeClientAPIKey(_ context.Context, id string, t time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
