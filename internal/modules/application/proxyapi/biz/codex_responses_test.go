@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -569,17 +570,33 @@ func TestStreamCodexResponsesNeverSwitchesAfterBusinessOutput(t *testing.T) {
 	pulls := 0
 	upstream.Subscribe(upevents.TopicPull, func(_ event.Event, result event.Result) {
 		pulls++
-		if pulls == 1 {
+		switch pulls {
+		case 1:
 			result.Set(upevents.PullResult{Data: []byte("event: response.output_text.delta\n")}, nil)
-			return
+		case 2:
+			result.Set(upevents.PullResult{Data: []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n")}, nil)
+		case 3:
+			result.Set(upevents.PullResult{Data: []byte("event: response.output_text.delta\n")}, nil)
+		case 4:
+			result.Set(upevents.PullResult{Data: []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n")}, nil)
+		default:
+			result.Set(upevents.PullResult{Done: true, ErrorClass: upevents.ErrorUpstream}, nil)
 		}
-		result.Set(upevents.PullResult{Done: true, ErrorClass: upevents.ErrorUpstream}, nil)
 	})
 	upstream.Subscribe(upevents.TopicCancel, func(_ event.Event, result event.Result) { result.Set(upevents.CancelResult{Cancelled: true}, nil) })
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-	err := proxy.StreamCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, nil, func([]byte) error { return nil })
-	if err == nil || acquires != 1 {
-		t.Fatalf("CP-STREAM-003/CP-FAIL-008: err=%v acquires=%d", err, acquires)
+	var emitted strings.Builder
+	err := proxy.StreamCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, nil, func(line []byte) error {
+		emitted.Write(line)
+		return nil
+	})
+	output := emitted.String()
+	wantOutput := "event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n"
+	if err == nil || acquires != 1 || output != wantOutput {
+		t.Fatalf("CP-STREAM-003/CP-FAIL-008: err=%v acquires=%d output=%q want=%q", err, acquires, output, wantOutput)
 	}
 }
 

@@ -205,6 +205,28 @@ func TestCodexStreamCommentsDoNotExtendDeadline(t *testing.T) {
 	}
 }
 
+func TestCodexStreamGuardKeepsFirstEventTimestamp(t *testing.T) {
+	_, guard := newCodexStreamGuard(context.Background(), 0, 0, 0)
+	defer guard.close()
+	if !guard.observe([]byte(`data: {"type":"response.output_text.delta","delta":"a"}`)) {
+		t.Fatal("first data line was not identified")
+	}
+	first := guard.firstEventDuration()
+	time.Sleep(10 * time.Millisecond)
+	if guard.observe([]byte(`data: {"type":"response.output_text.delta","delta":"b"}`)) {
+		t.Fatal("second data line was identified as first")
+	}
+	if got := guard.firstEventDuration(); got != first {
+		t.Fatalf("first event duration changed from %s to %s", first, got)
+	}
+	guard.mu.Lock()
+	last := guard.lastEvent.Sub(guard.started)
+	guard.mu.Unlock()
+	if last <= first {
+		t.Fatalf("last event duration=%s first=%s", last, first)
+	}
+}
+
 func TestCodexAcquirePreservesAdmissionHintAndReleasesCanceledLease(t *testing.T) {
 	// CP-FAIL-019: denial data survives the EventHub error; cancellation after
 	// successful acquisition must not discard a live lease.

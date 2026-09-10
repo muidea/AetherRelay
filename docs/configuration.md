@@ -148,7 +148,7 @@ state:
 
 `state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。`builtin-local` 只作为服务端工具调用的稳定 `api_key_id` 元数据，不与管理员登录用户名/临时会话 owner 混用。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
 
-Usage runtime 当前使用重新基线化的最终 schema v1（版本名 `usage_provider_access_v1`），不再执行历史增量 migration。首次遇到旧 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata`、`client_api_key_provider_access` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v1 并保留新产生的数据。升级前如需回查旧数据，应先备份整个 `state.database`。
+Usage runtime 当前使用重新基线化的最终 schema v2（版本名 `usage_first_event_duration_v2`），不再执行历史增量 migration。首次遇到版本或名称不匹配的 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata`、`client_api_key_provider_access` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v2 并保留新产生的数据。Provider 和账号池可通过现有导出、导入流程恢复；升级前如需回查旧统计数据，应先备份整个 `state.database`。
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 

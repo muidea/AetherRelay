@@ -835,7 +835,7 @@ func TestNormalizeCodexRequestRejectsUnknownReasoningSummaryDelivery(t *testing.
 func TestCodexResponsesStreamIncompleteRemainsSuccessful(t *testing.T) {
 	store := usage.NewMemoryStore()
 	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
-		if err := started(codexresponses.StreamStart{}); err != nil {
+		if err := started(codexresponses.StreamStart{FirstEventDuration: 175 * time.Millisecond}); err != nil {
 			return err
 		}
 		return emit([]byte(`data: {"type":"response.incomplete","response":{"id":"resp_partial","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":2,"output_tokens":3}}}` + "\n\n"))
@@ -848,7 +848,7 @@ func TestCodexResponsesStreamIncompleteRemainsSuccessful(t *testing.T) {
 		t.Fatalf("CP-STREAM-007 status=%d body=%s", response.Code, response.Body.String())
 	}
 	events := usageEvents(t, store)
-	if len(events) != 1 || events[0].Outcome != "success" {
+	if len(events) != 1 || events[0].Outcome != "success" || events[0].FirstEventDurationMS != 175 {
 		t.Fatalf("CP-STREAM-007 events=%+v", events)
 	}
 }
@@ -996,8 +996,9 @@ func TestChatCompletionsRoutesToCodexResponsesWithTools(t *testing.T) {
 }
 
 func TestChatCompletionsStreamsCodexToolCallAndDone(t *testing.T) {
-	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
-		if err := started(codexresponses.StreamStart{}); err != nil {
+	store := usage.NewMemoryStore()
+	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		if err := started(codexresponses.StreamStart{FirstEventDuration: 275 * time.Millisecond}); err != nil {
 			return err
 		}
 		for _, line := range []string{
@@ -1019,6 +1020,10 @@ func TestChatCompletionsStreamsCodexToolCallAndDone(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"finish_reason":"tool_calls"`) || !strings.Contains(response.Body.String(), `data: [DONE]`) || !strings.Contains(response.Body.String(), `"arguments":"{\"q\":"`) {
 		t.Fatalf("CP-EP-007 status=%d body=%s", response.Code, response.Body.String())
+	}
+	events := usageEvents(t, store)
+	if len(events) != 1 || events[0].FirstEventDurationMS != 275 {
+		t.Fatalf("chat first-event usage=%+v", events)
 	}
 }
 
@@ -1070,8 +1075,9 @@ func TestAnthropicMessagesRoutesToCodexResponsesWithTools(t *testing.T) {
 }
 
 func TestAnthropicMessagesStreamsFromCodexResponses(t *testing.T) {
-	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
-		if err := started(codexresponses.StreamStart{}); err != nil {
+	store := usage.NewMemoryStore()
+	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{stream: func(_ context.Context, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		if err := started(codexresponses.StreamStart{FirstEventDuration: 375 * time.Millisecond}); err != nil {
 			return err
 		}
 		for _, line := range []string{
@@ -1091,6 +1097,10 @@ func TestAnthropicMessagesStreamsFromCodexResponses(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "text/event-stream") || !strings.Contains(response.Body.String(), "content_block_delta") || !strings.Contains(response.Body.String(), "message_stop") {
 		t.Fatalf("CP-EP-008 status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	events := usageEvents(t, store)
+	if len(events) != 1 || events[0].FirstEventDurationMS != 375 {
+		t.Fatalf("messages first-event usage=%+v", events)
 	}
 }
 

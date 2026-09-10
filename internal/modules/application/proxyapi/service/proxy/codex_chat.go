@@ -353,7 +353,10 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 		}
 		return nil
 	}
-	err := h.codexResponses.StreamCodexResponses(r.Context(), request, func(codexresponses.StreamStart) error { return nil }, emit)
+	err := h.codexResponses.StreamCodexResponses(r.Context(), request, func(info codexresponses.StreamStart) error {
+		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
+		return nil
+	}, emit)
 	usage := tokenUsage{PromptTokens: state.Input, CompletionTokens: state.Output, TotalTokens: state.Input + state.Output, Known: state.Input > 0 || state.Output > 0}
 	duration := time.Since(started)
 	_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())

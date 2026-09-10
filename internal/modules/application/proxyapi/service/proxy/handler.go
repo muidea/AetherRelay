@@ -105,7 +105,10 @@ type usageCompletionKey struct{}
 
 type internalFeatureIdentityKey struct{}
 
-type usageCompletion struct{ done atomic.Bool }
+type usageCompletion struct {
+	done                    atomic.Bool
+	firstEventDurationNanos atomic.Int64
+}
 
 func withArchiveRound(ctx context.Context, round *archive.Round) context.Context {
 	return context.WithValue(ctx, archiveRoundKey{}, round)
@@ -123,6 +126,23 @@ func withUsageCompletion(ctx context.Context, completion *usageCompletion) conte
 func usageCompletionFromContext(ctx context.Context) *usageCompletion {
 	completion, _ := ctx.Value(usageCompletionKey{}).(*usageCompletion)
 	return completion
+}
+
+func recordFirstEventDuration(ctx context.Context, round *archive.Round, duration time.Duration) {
+	round.SetFirstEventDuration(duration)
+	if duration <= 0 {
+		return
+	}
+	if completion := usageCompletionFromContext(ctx); completion != nil {
+		completion.firstEventDurationNanos.CompareAndSwap(0, int64(duration))
+	}
+}
+
+func firstEventDurationFromContext(ctx context.Context) time.Duration {
+	if completion := usageCompletionFromContext(ctx); completion != nil {
+		return time.Duration(completion.firstEventDurationNanos.Load())
+	}
+	return 0
 }
 
 func withInternalFeatureIdentity(ctx context.Context, _ string) context.Context {
@@ -619,13 +639,15 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 	}
 	startedAt := time.Now()
 	upstreamDuration := time.Duration(0)
-	firstEventDuration := time.Duration(0)
+	firstEventDuration := firstEventDurationFromContext(r.Context())
 	if round != nil {
 		if !round.StartedAt.IsZero() {
 			startedAt = round.StartedAt
 		}
 		upstreamDuration = round.UpstreamDuration
-		firstEventDuration = round.FirstEventDuration
+		if firstEventDuration <= 0 {
+			firstEventDuration = round.FirstEventDuration
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -698,6 +720,9 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		Stream:                   stream,
 		Estimated:                tok.Estimated,
 	}
+	if r != nil {
+		rec.FirstEventDuration = firstEventDurationFromContext(r.Context())
+	}
 	if round != nil {
 		rec.UpstreamProtocol = round.UpstreamProtocol
 		rec.UpstreamEndpoint = round.UpstreamEndpoint
@@ -708,7 +733,9 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		rec.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
 		rec.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		rec.UpstreamDuration = round.UpstreamDuration
-		rec.FirstEventDuration = round.FirstEventDuration
+		if rec.FirstEventDuration <= 0 {
+			rec.FirstEventDuration = round.FirstEventDuration
+		}
 		rec.UpstreamStatus = round.UpstreamStatus
 		rec.UpstreamContentType = round.UpstreamContentType
 		rec.UpstreamContentLength = round.UpstreamContentLength

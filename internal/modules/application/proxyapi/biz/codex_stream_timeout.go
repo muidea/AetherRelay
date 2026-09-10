@@ -14,15 +14,15 @@ import (
 // CP-STREAM-013: a request-owned timer guards silence, not cumulative output
 // time. No timer or reader outlives the attempt that owns it.
 type codexStreamGuard struct {
-	mu                 sync.Mutex
-	cancel             context.CancelCauseFunc
-	silence, lifetime  *time.Timer
-	deadline           time.Time
-	idle               time.Duration
-	kind               codexresponses.ErrorKind
-	closed             bool
-	started, lastEvent time.Time
-	events, bytes      int64
+	mu                             sync.Mutex
+	cancel                         context.CancelCauseFunc
+	silence, lifetime              *time.Timer
+	deadline                       time.Time
+	idle                           time.Duration
+	kind                           codexresponses.ErrorKind
+	closed                         bool
+	started, firstEvent, lastEvent time.Time
+	events, bytes                  int64
 }
 
 const firstEventTimeoutRetryAfter = 5
@@ -87,7 +87,11 @@ func (g *codexStreamGuard) observe(data []byte) bool {
 	}
 	first := g.events == 0
 	g.events++
-	g.lastEvent = time.Now()
+	observedAt := time.Now()
+	if first {
+		g.firstEvent = observedAt
+	}
+	g.lastEvent = observedAt
 	g.kind = codexresponses.KindIdleTimeout
 	if g.idle <= 0 {
 		g.deadline = time.Time{}
@@ -103,6 +107,15 @@ func (g *codexStreamGuard) observe(data []byte) bool {
 		g.silence.Reset(g.idle)
 	}
 	return first
+}
+
+func (g *codexStreamGuard) firstEventDuration() time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.firstEvent.IsZero() {
+		return 0
+	}
+	return g.firstEvent.Sub(g.started)
 }
 
 func (g *codexStreamGuard) close() {
@@ -127,10 +140,12 @@ func logCodexStreamAttempt(request codexresponses.Request, failure *codexrespons
 	defer g.mu.Unlock()
 	// CP-OBS-008: bounded phase/class and counters only, never raw transport
 	// errors, credentials, or generated tool arguments.
+	totalDurationMS := time.Since(g.started).Milliseconds()
 	slog.Warn("Codex stream stopped", "request_id", request.Diagnostics.RequestID,
 		"account_attempt", request.AccountAttempt, "phase", phase, "error_class", failure.Kind,
-		"first_event_duration_ms", durationMilliseconds(g.started, g.lastEvent),
-		"total_duration_ms", time.Since(g.started).Milliseconds(), "event_count", g.events,
+		"duration_ms", totalDurationMS,
+		"first_event_duration_ms", durationMilliseconds(g.started, g.firstEvent),
+		"total_duration_ms", totalDurationMS, "event_count", g.events,
 		"stream_bytes", g.bytes, "last_event_at", g.lastEvent)
 }
 

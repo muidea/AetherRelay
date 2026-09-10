@@ -239,7 +239,7 @@
 
 `CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
-`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 90 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得提交客户端响应。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
+`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 90 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得单独触发提交客户端响应。首个业务 data 前的 SSE 字段必须有界暂存，并在业务事件到达后按原顺序交付。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
 
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 

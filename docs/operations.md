@@ -262,6 +262,6 @@ make release VERSION=v1.2.3
 
 ### Codex 长流超时与账号冷却排查
 
-Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex stream stopped` 的 `phase`、`error_class`、`event_count`、`stream_bytes` 和 `last_event_at`：`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
+Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex stream stopped` 的 `phase`、`error_class`、`first_event_duration_ms`、`total_duration_ms`、`event_count`、`stream_bytes` 和 `last_event_at`；兼容字段 `duration_ms` 与 `total_duration_ms` 相同。`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
 
 账号池 503 的 `accounts_cooling` 与 `Retry-After` 表示暂时冷却，不等于新一次上游故障；`no_eligible_account` 或 `accounts_busy_or_excluded` 需结合账号模型、状态和并发占用检查。准入拒绝、客户端取消/写失败和本地最大流时长不会追加 Provider 熔断样本。已有熔断到期后允许恢复请求，真实成功才清零连续失败；HTTP 200 的流仍须以合法终态确认成功。

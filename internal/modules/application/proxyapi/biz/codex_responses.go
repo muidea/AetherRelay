@@ -745,6 +745,8 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 	}
 	streamID = startedUpstream.StreamID
 	clientStarted := false
+	prelude := make([][]byte, 0, 8)
+	preludeBytes := 0
 	for {
 		phase = "pull"
 		value, pullErr := s.SendEvent(event.NewEventWithContext(upevents.TopicPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.PullCommand{StreamID: startedUpstream.StreamID, TimeoutMillis: 1000})).Get()
@@ -758,23 +760,40 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		if len(update.Data) > 0 {
 			firstBusinessEvent := guard.observe(update.Data)
 			if !clientStarted && !firstBusinessEvent {
-				// Do not commit the client response for upstream keepalives. A
-				// later first-event timeout must still be an HTTP error.
+				// Preserve the SSE prelude without committing the client response.
+				// Once a business data line arrives, emit these fields with the
+				// event they describe.
 				if update.Done {
 					if update.ErrorClass != "" {
 						return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
 					}
 					return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream ended before first business event"))
 				}
+				preludeBytes += len(update.Data)
+				if preludeBytes > 1<<20 {
+					return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream prelude exceeds limit"))
+				}
+				prelude = append(prelude, bytes.Clone(update.Data))
 				continue
 			}
 			phase = "emit"
-			if !clientStarted && started != nil {
-				if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: time.Since(guard.started)}); err != nil {
-					return clientFailure(err)
+			if !clientStarted {
+				if started != nil {
+					if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: guard.firstEventDuration()}); err != nil {
+						return clientFailure(err)
+					}
 				}
 				s.noteCodexTurnState(account.AccountID, startedUpstream.Headers)
 				clientStarted = true
+				if emit != nil {
+					for _, buffered := range prelude {
+						if err := emit(buffered); err != nil {
+							return clientFailure(err)
+						}
+					}
+				}
+				prelude = nil
+				preludeBytes = 0
 			}
 			if emit != nil {
 				if err := emit(update.Data); err != nil {

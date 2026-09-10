@@ -158,15 +158,15 @@ ON client_api_key_provider_access(provider_id);
 
 ### 4.2 Schema 基线策略
 
-当前项目明确不要求保留历史数据兼容性。本功能直接调整最终 schema，并继续从初始版本基线开始：
+当前项目明确不要求保留历史统计数据兼容性。Usage runtime 只复用完全匹配的当前 schema：
 
-- `currentSchemaVersion` 保持 `1`。
-- `currentSchemaName` 固定改为 `usage_provider_access_v1`。
-- schema 名不匹配时原子重建 usage runtime 自己拥有的表。
+- `currentSchemaVersion` 当前为 `2`。
+- `currentSchemaName` 当前为 `usage_first_event_duration_v2`。
+- schema 版本或名称不匹配时原子重建 usage runtime 自己拥有的表，不执行增量迁移。
 - reset 顺序先删除 `client_api_key_provider_access`，再删除 `usage_events`、`client_api_key_metadata` 和 migration 记录。
 - Provider、账号池、图片、任务、搜索历史、临时对话和交互文件不属于本 schema，不得删除。
 
-该动作会清除旧 usage 和旧客户端 Key。发布说明必须要求管理员提前备份，并在升级后重新创建客户端 Key 和访问策略。
+该动作会清除旧 usage 和旧客户端 Key。发布说明必须要求管理员提前备份，并在升级后重新创建客户端 Key 和访问策略；Provider 和账号池使用现有导出、导入流程恢复。
 
 ### 4.3 Go 领域模型
 

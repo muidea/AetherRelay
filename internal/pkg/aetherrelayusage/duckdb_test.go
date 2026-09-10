@@ -73,48 +73,9 @@ func TestMigrationFirstAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestMigrationV1PreservesUsageHistory(t *testing.T) {
+func TestPreviousSchemaIsResetToFinalV2(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "v1.duckdb")
-	store, err := OpenDuckDB(testCfg(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	if err := store.Start(ctx, StartRecord{EventID: "preserved", StartedAt: time.Now().UTC(), APIKeyID: "key"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Complete(ctx, CompleteRecord{EventID: "preserved", CompletedAt: time.Now().UTC(), HTTPStatus: 200, Outcome: "success"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`DELETE FROM schema_migrations`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`, previousSchemaVersion, previousSchemaName, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	migrated, err := OpenDuckDB(testCfg(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer migrated.Close()
-	var count int
-	if err := migrated.db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'preserved'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("preserved usage count=%d err=%v", count, err)
-	}
-	var version int
-	if err := migrated.db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != currentSchemaVersion {
-		t.Fatalf("schema version=%d err=%v", version, err)
-	}
-}
-
-func TestHistoricalSchemaIsResetToFinalV1(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "historical.duckdb")
 
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
@@ -132,22 +93,22 @@ CREATE TABLE schema_migrations (
 event_id VARCHAR PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL, usage_date DATE NOT NULL,
 api_key_id VARCHAR NOT NULL, state VARCHAR NOT NULL
 )`); err != nil {
-		t.Fatalf("create historical usage_events: %v", err)
+		t.Fatalf("create v1 usage_events: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO usage_events VALUES ('old-event', now(), current_date, 'old-key', 'started')`); err != nil {
-		t.Fatalf("insert historical event: %v", err)
+		t.Fatalf("insert v1 event: %v", err)
 	}
 	if _, err := db.Exec(
-		`INSERT INTO schema_migrations(version, name, applied_at) VALUES (5, 'upstream_observability_v5', ?)`,
+		`INSERT INTO schema_migrations(version, name, applied_at) VALUES (1, 'usage_provider_access_v1', ?)`,
 		time.Now().UTC(),
 	); err != nil {
-		t.Fatalf("insert historical version: %v", err)
+		t.Fatalf("insert v1 version: %v", err)
 	}
 	_ = db.Close()
 
 	store, err := OpenDuckDB(testCfg(path))
 	if err != nil {
-		t.Fatalf("reset historical schema: %v", err)
+		t.Fatalf("reset v1 schema: %v", err)
 	}
 	defer store.Close()
 	var version int
@@ -163,7 +124,7 @@ api_key_id VARCHAR NOT NULL, state VARCHAR NOT NULL
 		t.Fatal(err)
 	}
 	if oldEvents != 0 {
-		t.Fatalf("historical events retained = %d", oldEvents)
+		t.Fatalf("v1 events retained = %d", oldEvents)
 	}
 	if err := store.Start(context.Background(), StartRecord{EventID: "new-event", StartedAt: time.Now().UTC(), APIKeyID: "new-key"}); err != nil {
 		t.Fatalf("final schema is not writable: %v", err)

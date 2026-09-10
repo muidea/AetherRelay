@@ -70,7 +70,10 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	mapper := responsesEventToAnthropicWithCapability(capability)
 	var archive bytes.Buffer
 	streamStarted := false
-	startStream := func(codexresponses.StreamStart) error { return nil }
+	startStream := func(info codexresponses.StreamStart) error {
+		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
+		return nil
+	}
 	emit := func(line []byte) error {
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed == "" || !strings.HasPrefix(trimmed, "data:") {
