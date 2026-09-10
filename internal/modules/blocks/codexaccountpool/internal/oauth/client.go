@@ -135,7 +135,7 @@ func exchange(ctx context.Context, endpoint string, requestBody io.Reader, conte
 func classifyOAuthResponse(status int, body []byte) (string, bool) {
 	code := oauthErrorCode(body)
 	switch code {
-	case "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated":
+	case "invalid_grant", "invalid_refresh_token", "refresh_token_expired", "refresh_token_revoked", "refresh_token_reused", "refresh_token_invalidated":
 		return code, true
 	}
 	switch status {
@@ -176,7 +176,7 @@ func oauthErrorCode(body []byte) string {
 
 func safeOAuthErrorCode(value string) string {
 	switch value = strings.ToLower(strings.TrimSpace(value)); value {
-	case "invalid_request", "invalid_client", "invalid_grant", "invalid_scope", "unauthorized_client", "unsupported_grant_type", "refresh_token_expired", "refresh_token_reused", "refresh_token_invalidated":
+	case "invalid_request", "invalid_client", "invalid_grant", "invalid_scope", "unauthorized_client", "unsupported_grant_type", "invalid_refresh_token", "refresh_token_expired", "refresh_token_revoked", "refresh_token_reused", "refresh_token_invalidated":
 		return value
 	default:
 		return ""

@@ -17,6 +17,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 )
 
 const codexInputItemIDLimit = 64
@@ -76,7 +77,7 @@ var codexDropCompatibleFields = []string{
 }
 
 // normalizeCodexRequest applies the deterministic client-side portion of
-// CP-REQ-001..034 before an account is acquired.
+// CP-REQ-001..035 before an account is acquired.
 func normalizeCodexRequest(raw []byte, compact bool) ([]byte, map[string]any, []string, error) {
 	return normalizeCodexRequestWithOptions(raw, codexNormalizationOptions{compact: compact})
 }
@@ -251,8 +252,8 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 		ensureCodexReasoningInclude(body)
 	}
 	convertLegacyCodexFunctions(body)
-	sanitizeCodexToolParameterTypes(body["tools"])
-	sanitizeCodexInputToolParameterTypes(body["input"])
+	aetherrelaycodex.NormalizeToolSchemas(body["tools"])
+	normalizeCodexInputToolSchemas(body["input"])
 	streamOptionsIgnored, err := normalizeCodexStreamOptions(body, options.compact)
 	if err != nil {
 		return nil, nil, nil, err
@@ -724,45 +725,14 @@ func stripCodexInputPromptCacheBreakpoints(value any) bool {
 	return changed
 }
 
-// sanitizeCodexToolParameterTypes repairs the explicit null emitted by Codex
-// Desktop for some built-in function schemas. A missing type remains missing,
-// because adding one would narrow an otherwise valid JSON Schema.
-func sanitizeCodexToolParameterTypes(value any) {
-	tools, ok := value.([]any)
-	if !ok {
-		return
-	}
-	for _, raw := range tools {
-		tool, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, key := range []string{"parameters"} {
-			if parameters, ok := tool[key].(map[string]any); ok {
-				if typ, exists := parameters["type"]; exists && typ == nil {
-					parameters["type"] = "object"
-				}
-			}
-		}
-		if function, ok := tool["function"].(map[string]any); ok {
-			if parameters, ok := function["parameters"].(map[string]any); ok {
-				if typ, exists := parameters["type"]; exists && typ == nil {
-					parameters["type"] = "object"
-				}
-			}
-		}
-		sanitizeCodexToolParameterTypes(tool["tools"])
-	}
-}
-
-func sanitizeCodexInputToolParameterTypes(value any) {
+func normalizeCodexInputToolSchemas(value any) {
 	items, ok := value.([]any)
 	if !ok {
 		return
 	}
 	for _, raw := range items {
 		if item, ok := raw.(map[string]any); ok {
-			sanitizeCodexToolParameterTypes(item["tools"])
+			aetherrelaycodex.NormalizeToolSchemas(item["tools"])
 		}
 	}
 }

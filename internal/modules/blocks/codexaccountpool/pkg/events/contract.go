@@ -75,6 +75,7 @@ type AccountView struct {
 	LastTokenRefreshAt         string                  `json:"last_token_refresh_at,omitempty"`
 	LastTokenRefreshErrorAt    string                  `json:"last_token_refresh_error_at,omitempty"`
 	LastTokenRefreshErrorClass string                  `json:"last_token_refresh_error_class,omitempty"`
+	PermanentAuthFailure       bool                    `json:"permanent_auth_failure,omitempty"`
 	Cooldowns                  []CooldownView          `json:"cooldowns,omitempty"`
 	QuotaObservations          []QuotaObservation      `json:"quota_observations,omitempty"`
 	ModelSnapshot              *AccountModelSnapshot   `json:"model_snapshot,omitempty"`
@@ -367,10 +368,11 @@ type CatalogModel struct {
 
 type CatalogSnapshotCommand struct{}
 type CatalogSnapshotResult struct {
-	Version           uint64
-	Models            []CatalogModel
-	AvailableAccounts int
-	UpdatedAt         string
+	Version               uint64
+	Models                []CatalogModel
+	AvailableAccounts     int
+	PermanentAuthFailures int
+	UpdatedAt             string
 }
 
 type HealthCommand struct{}

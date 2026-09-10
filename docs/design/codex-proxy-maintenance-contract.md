@@ -1,14 +1,16 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`7.0.0`
+> 合同版本：`8.0.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-08
+> 生效日期：2026-09-10
 >
-> 参考基线：AetherRelay `85aaabb`、CLIProxyAPI `934fb792`、sub2api `ab99d56e`
+> 参考基线：AetherRelay `1644980`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`8.0.0` 收口 Codex 长流与工具兼容故障：永久 refresh token 失败成为持久化终态，并与并发占满、冷却分别返回；零输出且 `output_tokens=0` 的 `response.incomplete` 视为上游静默失败；Responses→Chat/Anthropic 在缺少 arguments delta 时使用 `response.function_call_arguments.done` 的完整参数补齐；工具 Schema 在账号选择前统一修复 object 形状、清理方言字段、剔除上游不支持的 Unicode property regex，并对大型纯 const union 做等价 enum 规范化；Codex HTTP/2 长流启用主动 PING。所有规则同时覆盖 HTTP、SSE、WebSocket 和 adapter 的适用入口。
 
 `4.0.5` 补齐 GPT-6 Astra、GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.4-mini 的模型元数据与可信客户端 profile。客户端参数基线为本机 Codex `0.153.4` 于 2026-09-07T09:41:51Z 获取的模型快照，仅提取白名单能力字段，不复制提示词或账号数据。公共 API 模型规格与 Codex 客户端窗口分开记录；不添加 `gpt-6` 别名、不修改 exact model 路由、不更改 UA、不因静态 profile 开放额外转换。显式 metadata 仍优先，未发现的模型仍不进入目录。
 
@@ -176,6 +178,8 @@
 
 `CP-REQ-034` `tool_search` 不是 Responses Lite 专属工具，不得因缺少 Lite header/metadata 拒绝普通 HTTP/WS/compact 请求，也不得根据工具存在隐式启用 Lite。保留 execution、description、parameters 及扩展字段，对已知选项做基本类型校验；client 执行仍由客户端完成，历史 `tool_search_call`/`tool_search_output` 保持原有 call_id 配对和保序规则。该规则修正部署基线第 27 轮 client-executed 工具声明被本地 400 的问题，不等于验证上游账号能力。验收覆盖无 Lite 标记、Lite、两种搜索共存、客户端工具续接和非法选项。依据：[OpenAI Tool search](https://developers.openai.com/api/docs/guides/tools-tool-search)。
 
+`CP-REQ-035` function/custom/namespace 中显式提供的工具参数 Schema 必须在账号选择前递归规范化。null 或非法根参数回退为 `type=object,properties={}`；未声明 parameters 的 custom/namespace 工具保持未声明。object 或包含 object 的联合 type 必须包含 properties。递归删除 `$schema`、`$id` 等只描述 Schema 方言、但会被 Codex 上游拒绝的关键字；只在 Schema 关键字位置删除包含不支持 Unicode property escape 的 `pattern` 或 `patternProperties` 项，不能修改 description/default/enum 中同名用户数据。分支不少于 8 的纯、唯一 const oneOf/anyOf 可以等价改为 enum；混合约束、重复语义值、已有非等价 enum 必须保持不变。规范化必须保留大整数原文、特殊属性名、递归 namespace 工具并保持幂等。
+
 ## 6. 上游身份与 Header 合同
 
 | Header | 策略 | 规则 |
@@ -215,7 +219,7 @@
 
 ## 7. HTTP、SSE、compact 与 WebSocket
 
-`CP-STREAM-001` 非流式下游请求仍可使用上游 SSE；接受 `response.completed` 或 `response.incomplete` 中的 Response 对象作为合法结果。incomplete 必须保留 partial output、usage、status 和 incomplete_details，不得切换账号。
+`CP-STREAM-001` 非流式下游请求仍可使用上游 SSE；接受有语义输出的 `response.completed` 或合法 `response.incomplete` 中的 Response 对象作为结果。incomplete 必须保留 partial output、usage、status 和 incomplete_details；`CP-STREAM-014` 的空 incomplete 除外。
 
 `CP-STREAM-002` 流式成功必须观察到合法 terminal event。仅 EOF、仅 delta 或缺失 terminal event 都是 `upstream_truncated`/protocol error。
 
@@ -227,7 +231,7 @@
 
 `CP-STREAM-006` 只有在当前 turn 已观察到语义 output、usage 或明确 error 时，`response.completed`/`response.done` 才能判成功。仅有前导事件和空 completed 是 silent refusal：HTTP 非流式和尚未向客户端提交业务事件的 SSE 必须允许切换账号；原生 WebSocket 必须返回明确失败，不得把空 turn 记为成功。
 
-`CP-STREAM-007` `response.incomplete` 是有界生成、内容过滤等原因形成的合法非成功完成状态，不是账号或 transport 失败。原生 Responses 必须原样保留；Chat/Messages adapter 必须映射对应 finish/stop reason。Chat adapter 的 `max_tokens`/`max_output_tokens` 映射为 `length`，`content_filter` 映射为 `content_filter`，不得把所有 incomplete 原因统一伪装成长度终止。
+`CP-STREAM-007` 携带输出的 `response.incomplete` 是有界生成、内容过滤等原因形成的合法非成功完成状态，不是账号或 transport 失败。原生 Responses 必须原样保留；Chat/Messages adapter 必须映射对应 finish/stop reason。Chat adapter 的 `max_tokens`/`max_output_tokens` 映射为 `length`，`content_filter` 映射为 `content_filter`，不得把所有 incomplete 原因统一伪装成长度终止。
 
 `CP-STREAM-008` created/in_progress、空 delta、空 output/tool 骨架和可重试 error 不算已向客户端产生业务输出。HTTP 200 后、首个真实业务输出前收到 usage limit、capacity、认证、限流或 transport terminal error 时，必须先分类并允许按失败规则切换账号；已有真实输出时只能转发安全终态，禁止重放。非流式 Responses 对 HTTP 200 SSE 的 buffered terminal 必须复用同一分类器，确定性 invalid request/content-policy fault 不得因非流式形态而切换账号。
 
@@ -240,6 +244,12 @@
 `CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
 `CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 90 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得单独触发提交客户端响应。首个业务 data 前的 SSE 字段必须有界暂存，并在业务事件到达后按原顺序交付。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
+
+`CP-STREAM-014` `response.incomplete` 在本 turn 没有非空文本、reasoning、工具参数增量或 output item，`response.output` 也为空，并且 `response.usage.output_tokens` 明确为整数 0 时，是上游静默失败。HTTP 非流式与未提交业务输出的 SSE 必须按 upstream failure 切号；WebSocket 必须返回明确失败并废弃连接；Chat/Anthropic adapter 不得生成正常 stop。缺少 usage、非零 token 或存在任一输出证据时仍按 `CP-STREAM-007` 处理。
+
+`CP-STREAM-015` Responses→Chat 和 Responses→Anthropic 必须消费 `response.function_call_arguments.done`。若此前没有参数 delta，必须把 done 中完整 arguments 作为单个参数增量发送；已有 delta 时不得重复发送完整参数。参数事件必须按 `output_index` 关联工具调用，并支持并行调用；找不到对应调用、事件乱序或 done 后继续参数输出必须明确失败，不能把参数落到索引 0。
+
+`CP-STREAM-016` Codex HTTP/2 transport 必须为长流启用主动 PING：连接读空闲 10 秒时发 PING，5 秒未收到确认则关闭连接并进入既有 network/failover 分类。HTTPS 代理 CONNECT 的 TLS leg 仍只协商 HTTP/1.1；PING 只作用于代理隧道后的上游 HTTP/2 连接。
 
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
@@ -331,6 +341,8 @@
 
 `CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。首事件超时只附 5 秒 Retry-After，因其表明单次上游流静默而不是账号凭据失效；账号 owner 仍只按 exact model 与 credential-wide 事实计算冷却。
 
+`CP-FAIL-020` OAuth refresh 的永久失败必须由账号 owner 持久化为 `credential_permanently_invalid`，立即停止该凭据参与路由，直到显式重新认证或 refresh 成功清除。它不阻止账号用量、额度的独立后台刷新，也不能等同于管理员手动 disabled。最后已知模型 membership 可在过期后继续保留为只读终态路由元数据，使重启、目录刷新和热重载后仍能返回可操作错误，但不得据此向失效凭据发送推理请求。若 exact model 的全部可调度凭据均处于该终态，HTTP 返回 503、`type=authentication_error`、`code=upstream_authentication_required`、`retryable=false`；WebSocket 返回同 code/type/retryable；Anthropic envelope 返回 `authentication_error` 并在 message 中携带稳定 code。并发槽占满返回 `accounts_busy`，冷却返回 `accounts_cooling` 和可计算的 Retry-After，其余本地准入失败保持 `provider_unavailable`。管理投影只显示布尔终态和安全错误类别，不暴露 token 或原始 OAuth 响应。
+
 `CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、首事件耗时、总耗时、事件数、字节数和最后事件时间；用量事件与归档 metadata 在首个有效 SSE data 到达时记录 `first_event_duration_ms`，并始终记录总 `duration_ms`。不输出请求正文、凭据或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
 
 `CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码和白名单 request_kind/compaction reason/phase。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
@@ -340,6 +352,8 @@
 ## 10. 模型与能力目录
 
 `CP-CAP-010` Codex 账号管理必须显示每账号完整的模型列表（可展开），同时提供按当前快照、账号状态、额度与模型/账号冷却计算的 `available_models` 和逐模型不可用原因/恢复时间。缺失/过期快照不得宣称可用；“可用”仅是当前 Responses 调度准入，不保证上游调用成功或并发槽可用。统一号池与独立 Codex 号池使用同一投影，模型字符串必须转义；不触发页面刷新时的额外上游探测。
+
+`CP-CAP-011` ChatGPT Web 目录候选必须按 `/backend-api/models` 返回的模型级 capability 计算入口：`text_generation` 只开放 Chat、Responses 和 search，`image_generation` 只开放 Images generation/edit；同时声明时取并集。旧持久快照没有 capability 时仅按文本能力兼容读取，不能把未知能力扩大为图片生成。热重载必须原样保留 capability，`/v1/models` 与路由继续读取同一 effective catalog generation。
 
 `CP-CAP-001` 模型来自账号级 `/backend-api/codex/models` 快照；可路由目录是健康账号能力并集，但账号选择仍按账号自身快照过滤。
 
@@ -437,16 +451,17 @@
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE | CP-EP-001, CP-STREAM-001..012 | implemented | `codexupstream/biz/biz.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `web_search_test.go` |
+| Responses HTTP/SSE 与长流保活 | CP-EP-001, CP-STREAM-001..016 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_chat.go`, `proxy/responses_anthropic.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `responses_anthropic_test.go`, `web_search_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006, CP-FAIL-016..017 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `codexupstream/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go`, `codexaccountpool/internal/store/store_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013, CP-EP-015 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go`, `proxy/responses_input_tokens.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go`, `responses_input_tokens_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012, CP-EP-014 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
-| 请求兼容层 | CP-REQ-001..034 | implemented | `proxy/codex_compat.go`, `proxy/codex_web_search.go`, `proxy/codex_tool_search.go`, `proxy/responses_anthropic.go`, `proxy/codex_websocket_replay.go` | `codex_responses_test.go`, `codex_web_search_test.go`, `codex_tool_search_test.go`, `codex_normalization_golden.json` |
+| 请求兼容层 | CP-REQ-001..035 | implemented | `proxy/codex_compat.go`, `proxy/codex_web_search.go`, `proxy/codex_tool_search.go`, `proxy/responses_anthropic.go`, `proxy/codex_websocket_replay.go`, `aetherrelaycodex/tool_schema.go` | `codex_responses_test.go`, `codex_web_search_test.go`, `codex_tool_search_test.go`, `aetherrelaycodex/tool_schema_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `aetherrelaycodexidentity/identity.go`, `codexupstream/biz/identity.go`, `codexupstream/biz/codex_identity.go`, `codexaccountpool/internal/oauth/client.go` | `codexupstream/biz/biz_test.go`, `codexaccountpool/internal/oauth/client_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/codex_compact.go`, `codexaccountpool/internal/store/store.go` | `codex_responses_test.go`, `proxyapi/biz/codex_responses_test.go`, `store_test.go`, `biz_test.go` |
 | 指纹收敛 | CP-FP-001..003 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
+| 永久鉴权失败终态 | CP-FAIL-020 | implemented | `codexaccountpool/internal/store/store.go`, `codexaccountpool/internal/store/model_availability.go`, `proxyapi/biz/codex_responses.go`, `proxy/codex_responses.go`, `proxy/codex_websocket.go` | `codexaccountpool/internal/store/store_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/biz/codex_responses_test.go`, `proxy/codex_health_test.go`, `proxy/codex_websocket_test.go` |
 | 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
 | 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
 | Codex manifest profile 与客户端版本过滤 | CP-CAP-007..009 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `model_profiles_test.go`, `aetherrelayconfig/config_test.go` |
@@ -454,6 +469,7 @@
 | Responses WebSocket | CP-EP-002, CP-WS-001..013 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_replay_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
 | 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
+| ChatGPT Web 模型级能力 | CP-CAP-011 | implemented | `proxyapi/biz/discovery.go`, `effectivecatalog/catalog.go` | `effectivecatalog/catalog_test.go`, `proxy/chatgpt_images_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |
 | 真实上游差分 corpus | CP-DOD-002 | planned | - | - |
 

@@ -48,6 +48,8 @@ func TestRefreshClassifiesOnlyKnownCredentialFailuresAsPermanent(t *testing.T) {
 	}{
 		{name: "expired", status: http.StatusBadRequest, body: `{"error":{"code":"refresh_token_expired"}}`, class: "refresh_token_expired", permanent: true},
 		{name: "reused", status: http.StatusUnauthorized, body: `{"error":{"code":"refresh_token_reused"}}`, class: "refresh_token_reused", permanent: true},
+		{name: "standard invalid grant", status: http.StatusBadRequest, body: `{"error":"invalid_grant"}`, class: "invalid_grant", permanent: true},
+		{name: "revoked", status: http.StatusBadRequest, body: `{"error":{"code":"refresh_token_revoked"}}`, class: "refresh_token_revoked", permanent: true},
 		{name: "invalid request", status: http.StatusBadRequest, body: `{"error":"invalid_request"}`, class: "invalid_request", permanent: false},
 		{name: "unknown bad request", status: http.StatusBadRequest, body: `{"error":"unexpected_backend_code"}`, class: "upstream", permanent: false},
 	}

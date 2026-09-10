@@ -35,6 +35,19 @@ func TestCodexWebsocketTurnOutcomeRequiresNonEmptyCompleted(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketEmptyIncompleteIgnoresUsageOnlyEvidence(t *testing.T) {
+	payload := []byte(`{"type":"response.incomplete","response":{"output":[],"usage":{"input_tokens":12,"output_tokens":0}}}`)
+	if success, terminal, class := codexWebsocketTurnOutcomeWithOutputEvidence(payload, true, false); success || !terminal || class != accevents.ErrorUpstream {
+		t.Fatalf("usage-only incomplete outcome=(%v,%v,%q)", success, terminal, class)
+	}
+	if !codexWebsocketPayloadHasOutputEvidence([]byte(`{"type":"response.function_call_arguments.done","arguments":"{}"}`)) {
+		t.Fatal("tool arguments done was not tracked as websocket output evidence")
+	}
+	if !codexWebsocketPayloadHasOutputEvidence([]byte(`{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"lookup"}}`)) {
+		t.Fatal("function call item was not tracked as websocket output evidence")
+	}
+}
+
 func TestCodexWebSearchWebsocketEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		payload string
@@ -745,7 +758,7 @@ func TestCompleteCodexResponsesUsesRefreshFailureClassForCooldownAndSwitchesAcco
 	}
 }
 
-func TestCompleteCodexResponsesPreservesUpstreamInvalidTokenWhenRecoveryIsExhausted(t *testing.T) {
+func TestCompleteCodexResponsesReturnsTerminalAuthWhenPermanentRecoveryIsExhausted(t *testing.T) {
 	hub := event.NewHub(16)
 	background := task.NewBackgroundRoutine(8)
 	t.Cleanup(func() {
@@ -756,7 +769,7 @@ func TestCompleteCodexResponsesPreservesUpstreamInvalidTokenWhenRecoveryIsExhaus
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
 		if len(ev.Data().(accevents.AcquireCommand).Exclude) > 0 {
-			result.Set(nil, cd.NewError(cd.NotFound, "no fallback account"))
+			result.Set(accevents.AcquireResult{UnavailableReason: "credential_permanently_invalid"}, cd.NewError(cd.NotFound, "no fallback account"))
 			return
 		}
 		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "rejected-token"}, nil)
@@ -777,7 +790,7 @@ func TestCompleteCodexResponsesPreservesUpstreamInvalidTokenWhenRecoveryIsExhaus
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
 	_, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)})
 	failure, ok := codexresponses.AsFailure(err)
-	if !ok || failure.Kind != codexresponses.KindInvalidToken || failure.HTTPStatus != 401 {
+	if !ok || failure.Kind != codexresponses.KindAuthentication || failure.UnavailableReason != "credential_permanently_invalid" || failure.Retryable == nil || *failure.Retryable {
 		t.Fatalf("failure=%+v err=%v", failure, err)
 	}
 	if command := <-recorded; command.ErrorClass != accevents.ErrorInvalidToken {

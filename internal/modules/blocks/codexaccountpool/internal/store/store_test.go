@@ -178,6 +178,9 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	if items[0].LastTokenRefreshErrorClass != "" || len(items[0].Cooldowns) != 0 || len(items[0].QuotaObservations) != 0 || items[0].FingerprintMode != events.FingerprintModeSession {
 		t.Fatalf("reauthentication metadata=%+v", items[0])
 	}
+	if items[0].PermanentAuthFailure {
+		t.Fatalf("reauthentication retained permanent auth failure: %+v", items[0])
+	}
 	exported := store.ExportByIDs([]string{view.ID})
 	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].Proxy != first.Proxy {
 		t.Fatalf("reauthenticated credential=%+v", exported)
@@ -549,7 +552,7 @@ func TestUsageSnapshotIsRedactedAndRetainedAfterRefreshFailure(t *testing.T) {
 	}
 }
 
-func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T) {
+func TestPermanentCredentialRefreshFailureSurvivesIndependentHealthRefresh(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
 	if err != nil {
@@ -560,7 +563,7 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 		t.Fatal(err)
 	}
 	view, found := store.View(id)
-	if !found || view.Status != events.StatusNormal || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
+	if !found || view.Status != events.StatusAbnormal || !view.PermanentAuthFailure || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
 		t.Fatalf("refresh failure view=%+v found=%v", view, found)
 	}
 
@@ -573,7 +576,7 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 		t.Fatalf("put usage ok=%v err=%v", ok, err)
 	}
 	view, _ = store.View(id)
-	if view.Status != events.StatusNormal || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
+	if view.Status != events.StatusAbnormal || !view.PermanentAuthFailure || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
 		t.Fatalf("usage recovery view=%+v", view)
 	}
 
@@ -584,8 +587,24 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
 	}
 	view, _ = store.View(id)
-	if view.Status != events.StatusNormal || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
+	if view.Status != events.StatusAbnormal || !view.PermanentAuthFailure || view.LastTokenRefreshErrorClass != events.ErrorInvalidToken {
 		t.Fatalf("model recovery view=%+v", view)
+	}
+	store.mu.Lock()
+	store.items[id].ModelSnapshot.ExpiresAt = now.Add(-time.Hour).Format(time.RFC3339)
+	store.mu.Unlock()
+	catalog := store.CatalogSnapshot()
+	if catalog.AvailableAccounts != 0 || catalog.PermanentAuthFailures != 1 || len(catalog.Models) != 1 || catalog.Models[0].ID != "gpt-test" {
+		t.Fatalf("permanent auth catalog=%+v", catalog)
+	}
+	if health := store.Health(); health.Available != 0 || health.Abnormal != 1 {
+		t.Fatalf("permanent auth health=%+v", health)
+	}
+	if candidates := store.ListUsageCandidates(nil).Candidates; len(candidates) != 1 || candidates[0].AccountID != id {
+		t.Fatalf("permanent auth usage candidates=%+v", candidates)
+	}
+	if got := store.unavailableResult("gpt-test", nil, nil, events.TransportResponses, now); got.UnavailableReason != "credential_permanently_invalid" {
+		t.Fatalf("expired permanent credential denial=%+v", got)
 	}
 
 	disabled := events.StatusDisabled
@@ -605,6 +624,30 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 	view, _ = store.View(id)
 	if view.Status != events.StatusDisabled {
 		t.Fatalf("in-flight response bypassed disabled state: %+v", view)
+	}
+	normal := events.StatusNormal
+	view, err = store.Update(id, &normal, nil, nil)
+	if err != nil || view.Status != events.StatusAbnormal || !view.PermanentAuthFailure {
+		t.Fatalf("manual enable bypassed permanent auth terminal: view=%+v err=%v", view, err)
+	}
+}
+
+func TestPermanentRefreshFailureBumpsCatalogForAlreadyAbnormalAccount(t *testing.T) {
+	store := openTestStore(t)
+	if _, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	abnormal := events.StatusAbnormal
+	if _, err := store.Update(id, &abnormal, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := store.catalogVersion
+	if _, err := store.RecordRefreshFailure(id, "invalid_grant", true); err != nil {
+		t.Fatal(err)
+	}
+	if store.catalogVersion <= before {
+		t.Fatalf("permanent auth transition did not refresh catalog: before=%d after=%d", before, store.catalogVersion)
 	}
 }
 

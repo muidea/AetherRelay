@@ -60,6 +60,7 @@ test('disabled credentials keep quota and usage maintenance available',()=>{
 test('completed quota and usage refreshes reload authoritative account statistics',()=>{
   assert.match(functionSource('pollRefreshProgress'),/if\(done\)[\s\S]*?await loadChatGPTAccounts\(\)/);
   assert.match(functionSource('beginCodexUsagePolling'),/if\(current\.done\)[\s\S]*?await loadCodexAccounts\(\)/);
+  assert.match(functionSource('codexRefreshBadge'),/permanent_auth_failure/);
 });
 
 test('credential switches patch only their matching account-pool owner',async()=>{

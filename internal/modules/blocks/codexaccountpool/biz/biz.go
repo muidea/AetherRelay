@@ -223,6 +223,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 		return
 	}
 	exclude := append([]string(nil), cmd.Exclude...)
+	busy := make([]string, 0)
 	s.scheduleMu.Lock()
 	defer s.scheduleMu.Unlock()
 	now := s.now().UTC()
@@ -236,10 +237,10 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 	}
 	for accountID, count := range s.inflight {
 		if count >= defaultAccountConcurrency {
-			exclude = append(exclude, accountID)
+			busy = append(busy, accountID)
 		}
 	}
-	item, err := s.store.AcquirePreferredTransport(cmd.Model, exclude, preferred, cmd.Transport)
+	item, err := s.store.AcquirePreferredTransportWithBusy(cmd.Model, exclude, busy, preferred, cmd.Transport)
 	if err != nil {
 		result.Set(item, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return

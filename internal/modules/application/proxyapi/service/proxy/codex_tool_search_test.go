@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
@@ -44,6 +45,8 @@ func TestCodexToolSearchIndependentOfLite(t *testing.T) {
 					t.Fatal(err)
 				}
 				_ = decodeCodexJSON(raw, &original)
+				aetherrelaycodex.NormalizeToolSchemas(original["tools"])
+				normalizeCodexInputToolSchemas(original["input"])
 				tools := body["tools"].([]any)
 				input := body["input"].([]any)
 				if body["model"] != "gpt-test" || !reflect.DeepEqual(tools[0], original["tools"].([]any)[0]) || !reflect.DeepEqual(input[:2], original["input"].([]any)[:2]) {

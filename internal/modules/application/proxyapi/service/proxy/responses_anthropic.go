@@ -10,11 +10,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
@@ -1547,6 +1549,16 @@ func rejectConversionFields(body map[string]any, allowed map[string]struct{}) er
 	return nil
 }
 
+type responsesAnthropicToolState struct {
+	BlockIndex       int
+	CallID           string
+	Name             string
+	Arguments        string
+	ArgumentsEmitted bool
+	ArgumentsDone    bool
+	Completed        bool
+}
+
 type textConversionStreamState struct {
 	ID, Model                                      string
 	InputTokens, OutputTokens                      int
@@ -1560,6 +1572,10 @@ type textConversionStreamState struct {
 	ToolStarted, ToolCompleted                     bool
 	ToolIndex                                      int
 	ToolCallID                                     string
+	ResponsesTools                                 map[int]*responsesAnthropicToolState
+	NextResponseToolIndex                          int
+	OutputEvidence                                 bool
+	ResponseTextEmitted                            bool
 	Output                                         bytes.Buffer
 }
 
@@ -1807,6 +1823,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return nil, err
 	}
+	state.OutputEvidence = state.OutputEvidence || aetherrelaycodex.MeaningfulOutputEvent(payload)
 	typ, _ := event["type"].(string)
 	out := []map[string]any{}
 	switch typ {
@@ -1827,6 +1844,8 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 		if !ok {
 			return nil, fmt.Errorf("response.output_text.delta")
 		}
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(text) != ""
+		state.ResponseTextEmitted = state.ResponseTextEmitted || text != ""
 		out = append(out, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
 	case "response.reasoning.delta", "response.reasoning.done", "response.reasoning_text.delta", "response.reasoning_text.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
 		if !capability.Reasoning {
@@ -1837,18 +1856,32 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 		item, _ := event["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
 		if itemType == "function_call" {
-			if !capability.Tools || state.ToolStarted {
+			if !capability.Tools {
 				return nil, fmt.Errorf("responses stream function_call is not supported in this order")
+			}
+			outputIndex, err := responsesAnthropicToolOutputIndex(event, state.ResponsesTools)
+			if err != nil {
+				return nil, err
+			}
+			if state.ResponsesTools == nil {
+				state.ResponsesTools = map[int]*responsesAnthropicToolState{}
+			}
+			if _, exists := state.ResponsesTools[outputIndex]; exists {
+				return nil, fmt.Errorf("responses stream function_call is duplicated")
 			}
 			callID, _ := item["call_id"].(string)
 			name, _ := item["name"].(string)
 			if callID == "" || name == "" {
 				return nil, fmt.Errorf("responses stream function_call")
 			}
+			blockIndex := state.NextResponseToolIndex + 1
+			state.NextResponseToolIndex++
+			toolState := &responsesAnthropicToolState{BlockIndex: blockIndex, CallID: callID, Name: name}
+			state.ResponsesTools[outputIndex] = toolState
 			state.ToolStarted = true
-			state.ToolIndex = 1
+			state.ToolIndex = blockIndex
 			state.ToolCallID = callID
-			out = append(out, map[string]any{"type": "content_block_start", "index": state.ToolIndex, "content_block": map[string]any{"type": "tool_use", "id": callID, "name": name, "input": map[string]any{}}})
+			state.OutputEvidence = true
 			break
 		}
 		if itemType == "reasoning" {
@@ -1875,24 +1908,86 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			return nil, fmt.Errorf("responses stream content part %q", partType)
 		}
 	case "response.output_text.done":
+		if state.ResponseTextEmitted {
+			break
+		}
+		text, ok := event["text"].(string)
+		if !ok || text == "" {
+			break
+		}
+		state.ResponseTextEmitted = true
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(text) != ""
+		out = append(out, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
 	case "response.function_call_arguments.delta":
-		if !state.ToolStarted || state.ToolCompleted {
+		outputIndex, err := responsesAnthropicToolOutputIndex(event, state.ResponsesTools)
+		if err != nil {
+			return nil, err
+		}
+		toolState := state.ResponsesTools[outputIndex]
+		if toolState == nil || toolState.Completed || toolState.ArgumentsDone {
 			return nil, fmt.Errorf("responses stream function arguments are out of order")
 		}
 		delta, ok := event["delta"].(string)
 		if !ok {
 			return nil, fmt.Errorf("response.function_call_arguments.delta")
 		}
-		out = append(out, map[string]any{"type": "content_block_delta", "index": state.ToolIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": delta}})
+		toolState.ArgumentsEmitted = toolState.ArgumentsEmitted || delta != ""
+		if len(toolState.Arguments)+len(delta) > maxConversionToolArgumentBytes {
+			return nil, fmt.Errorf("responses stream function arguments exceed limit")
+		}
+		toolState.Arguments += delta
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(delta) != ""
 	case "response.function_call_arguments.done":
+		outputIndex, err := responsesAnthropicToolOutputIndex(event, state.ResponsesTools)
+		if err != nil {
+			return nil, err
+		}
+		toolState := state.ResponsesTools[outputIndex]
+		if toolState == nil || toolState.Completed || toolState.ArgumentsDone {
+			return nil, fmt.Errorf("responses stream function arguments done is out of order")
+		}
+		toolState.ArgumentsDone = true
+		if !toolState.ArgumentsEmitted {
+			arguments, ok := event["arguments"].(string)
+			if !ok {
+				return nil, fmt.Errorf("response.function_call_arguments.done")
+			}
+			if arguments != "" {
+				if len(arguments) > maxConversionToolArgumentBytes {
+					return nil, fmt.Errorf("responses stream function arguments exceed limit")
+				}
+				toolState.ArgumentsEmitted = true
+				toolState.Arguments = arguments
+				state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(arguments) != ""
+			}
+		}
 	case "response.output_item.done":
 		item, _ := event["item"].(map[string]any)
 		if itemType, _ := item["type"].(string); itemType == "function_call" {
-			if !state.ToolStarted || state.ToolCompleted {
+			outputIndex, err := responsesAnthropicToolOutputIndex(event, state.ResponsesTools)
+			if err != nil {
+				return nil, err
+			}
+			toolState := state.ResponsesTools[outputIndex]
+			if toolState == nil || toolState.Completed {
 				return nil, fmt.Errorf("responses stream function_call completion is out of order")
 			}
-			state.ToolCompleted = true
-			out = append(out, map[string]any{"type": "content_block_stop", "index": state.ToolIndex})
+			if callID, _ := item["call_id"].(string); callID != "" && callID != toolState.CallID {
+				return nil, fmt.Errorf("responses stream function_call identity changed")
+			}
+			if name, _ := item["name"].(string); name != "" && name != toolState.Name {
+				return nil, fmt.Errorf("responses stream function_call identity changed")
+			}
+			if arguments, _ := item["arguments"].(string); !toolState.ArgumentsEmitted && arguments != "" {
+				if len(arguments) > maxConversionToolArgumentBytes {
+					return nil, fmt.Errorf("responses stream function arguments exceed limit")
+				}
+				toolState.Arguments = arguments
+				toolState.ArgumentsEmitted = true
+				state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(arguments) != ""
+			}
+			toolState.Completed = true
+			state.ToolCompleted = responsesAnthropicToolsCompleted(state.ResponsesTools)
 		} else if itemType == "reasoning" {
 			if !capability.Reasoning {
 				return nil, fmt.Errorf("responses stream item %q", itemType)
@@ -1909,11 +2004,15 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 		incompleteReason, _ := incompleteDetails["reason"].(string)
 		if typ == "response.incomplete" {
 			status = "incomplete"
+			if aetherrelaycodex.EmptyIncomplete(payload, 0, state.OutputEvidence) {
+				return nil, fmt.Errorf("Codex upstream returned an empty response.incomplete")
+			}
 		}
-		if state.ToolStarted && !state.ToolCompleted {
+		if len(state.ResponsesTools) > 0 && !responsesAnthropicToolsCompleted(state.ResponsesTools) {
 			return nil, fmt.Errorf("responses stream completed with unfinished function_call")
 		}
-		if _, err := responsesTerminationToAnthropic(status, incompleteReason, state.ToolCompleted); err != nil {
+		hasTools := len(state.ResponsesTools) > 0
+		if _, err := responsesTerminationToAnthropic(status, incompleteReason, hasTools); err != nil {
 			return nil, err
 		}
 		if usage, ok := response["usage"].(map[string]any); ok {
@@ -1921,10 +2020,69 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			state.OutputTokens = intNumber(usage["output_tokens"])
 		}
 		state.Completed = true
-		stopReason, _ := responsesTerminationToAnthropic(status, incompleteReason, state.ToolCompleted)
-		out = append(out, map[string]any{"type": "content_block_stop", "index": 0}, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": state.OutputTokens}}, map[string]any{"type": "message_stop"})
+		stopReason, _ := responsesTerminationToAnthropic(status, incompleteReason, hasTools)
+		out = append(out, map[string]any{"type": "content_block_stop", "index": 0})
+		var err error
+		out, err = appendResponsesAnthropicToolBlocks(out, state.ResponsesTools)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": state.OutputTokens}}, map[string]any{"type": "message_stop"})
 	default:
 		return nil, fmt.Errorf("responses stream event %q", typ)
+	}
+	return out, nil
+}
+
+func responsesAnthropicToolOutputIndex(event map[string]any, tools map[int]*responsesAnthropicToolState) (int, error) {
+	if raw, exists := event["output_index"]; exists {
+		number, ok := raw.(float64)
+		if !ok || number < 0 || number > 1<<20 || number != float64(int(number)) {
+			return 0, fmt.Errorf("response.output_index")
+		}
+		return int(number), nil
+	}
+	if len(tools) == 0 {
+		return 0, nil
+	}
+	if len(tools) == 1 {
+		for index := range tools {
+			return index, nil
+		}
+	}
+	return 0, fmt.Errorf("response.output_index is required for parallel tool calls")
+}
+
+func responsesAnthropicToolsCompleted(tools map[int]*responsesAnthropicToolState) bool {
+	if len(tools) == 0 {
+		return false
+	}
+	for _, tool := range tools {
+		if tool == nil || !tool.Completed {
+			return false
+		}
+	}
+	return true
+}
+
+func appendResponsesAnthropicToolBlocks(out []map[string]any, tools map[int]*responsesAnthropicToolState) ([]map[string]any, error) {
+	ordered := make([]*responsesAnthropicToolState, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil || !tool.Completed || tool.CallID == "" || tool.Name == "" {
+			return nil, fmt.Errorf("responses stream completed with unfinished function_call")
+		}
+		if tool.Arguments != "" && !json.Valid([]byte(tool.Arguments)) {
+			return nil, fmt.Errorf("responses stream function arguments are invalid JSON")
+		}
+		ordered = append(ordered, tool)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].BlockIndex < ordered[j].BlockIndex })
+	for _, tool := range ordered {
+		out = append(out, map[string]any{"type": "content_block_start", "index": tool.BlockIndex, "content_block": map[string]any{"type": "tool_use", "id": tool.CallID, "name": tool.Name, "input": map[string]any{}}})
+		if tool.Arguments != "" {
+			out = append(out, map[string]any{"type": "content_block_delta", "index": tool.BlockIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": tool.Arguments}})
+		}
+		out = append(out, map[string]any{"type": "content_block_stop", "index": tool.BlockIndex})
 	}
 	return out, nil
 }

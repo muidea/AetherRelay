@@ -632,9 +632,10 @@ func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
 	chatGPTModels := make([]effectivecatalog.PoolModel, 0, len(chatGPTResult.Models))
 	for _, model := range chatGPTResult.Models {
 		chatGPTModels = append(chatGPTModels, effectivecatalog.PoolModel{
-			ID:        model.ID,
-			CreatedAt: model.CreatedAt,
-			OwnedBy:   model.OwnedBy,
+			ID:           model.ID,
+			Capabilities: append([]string(nil), model.Capabilities...),
+			CreatedAt:    model.CreatedAt,
+			OwnedBy:      model.OwnedBy,
 		})
 	}
 	codexModels := make([]effectivecatalog.PoolModel, 0, len(codexResult.Models))
@@ -643,7 +644,7 @@ func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
 	}
 	snap := effectivecatalog.BuildWithCodex(s.config,
 		effectivecatalog.CatalogInput{Version: chatGPTResult.Version, AvailableAccounts: chatGPTResult.AvailableAccounts, Models: chatGPTModels, UpdatedAt: chatGPTResult.UpdatedAt},
-		effectivecatalog.CatalogInput{Version: codexResult.Version, AvailableAccounts: codexResult.AvailableAccounts, Models: codexModels, UpdatedAt: codexResult.UpdatedAt},
+		effectivecatalog.CatalogInput{Version: codexResult.Version, AvailableAccounts: codexResult.AvailableAccounts, PermanentAuthFailures: codexResult.PermanentAuthFailures, Models: codexModels, UpdatedAt: codexResult.UpdatedAt},
 	)
 	s.publishCatalog(snap)
 }

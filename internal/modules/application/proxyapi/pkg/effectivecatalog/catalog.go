@@ -32,9 +32,10 @@ const (
 
 // BuiltinModel is one auto-discovered model bound to the chatgptweb owner.
 type BuiltinModel struct {
-	ID        string
-	CreatedAt int64
-	OwnedBy   string
+	ID           string
+	Capabilities []string
+	CreatedAt    int64
+	OwnedBy      string
 	// ConflictWithStatic is true when another source publishes the same exact
 	// model ID. It is display-only overlap information; both sources remain in
 	// the effective candidate chain according to their routing policy.
@@ -43,15 +44,16 @@ type BuiltinModel struct {
 
 // BuiltinProvider is the non-persistent chatgptweb provider projection.
 type BuiltinProvider struct {
-	ID                string
-	Enabled           bool
-	Status            BuiltinProviderStatus
-	AvailableAccounts int
-	ModelCount        int
-	ConflictCount     int
-	ConflictModels    []string
-	UpdatedAt         string
-	UnavailableReason string
+	ID                    string
+	Enabled               bool
+	Status                BuiltinProviderStatus
+	AvailableAccounts     int
+	PermanentAuthFailures int
+	ModelCount            int
+	ConflictCount         int
+	ConflictModels        []string
+	UpdatedAt             string
+	UnavailableReason     string
 }
 
 // Snapshot is the atomic read model shared by /v1/models and ResolveTransportPlan.
@@ -118,10 +120,11 @@ func Build(cfg config.Config, poolVersion uint64, availableAccounts int, poolMod
 // CatalogInput is the constrained union emitted by one account-pool owner.
 // It contains no EventHub or persistence handles.
 type CatalogInput struct {
-	Version           uint64
-	AvailableAccounts int
-	Models            []PoolModel
-	UpdatedAt         string
+	Version               uint64
+	AvailableAccounts     int
+	PermanentAuthFailures int
+	Models                []PoolModel
+	UpdatedAt             string
 }
 
 // BuildWithCodex constructs both builtin projections from their separate,
@@ -141,7 +144,7 @@ func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 		},
 		CodexOAuthModels:   map[string]BuiltinModel{},
 		Candidates:         map[string][]Candidate{},
-		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Enabled: config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth), AvailableAccounts: codex.AvailableAccounts, UpdatedAt: strings.TrimSpace(codex.UpdatedAt)},
+		CodexOAuthProvider: BuiltinProvider{ID: CodexOAuthProviderID, Enabled: config.EffectiveCodexOAuthProviderEnabled(cfg.CodexOAuth), AvailableAccounts: codex.AvailableAccounts, PermanentAuthFailures: codex.PermanentAuthFailures, UpdatedAt: strings.TrimSpace(codex.UpdatedAt)},
 		CodexOAuthVersion:  codex.Version,
 	}
 	if !config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb) {
@@ -155,9 +158,10 @@ func BuildWithCodex(cfg config.Config, chatGPT, codex CatalogInput) Snapshot {
 				continue
 			}
 			entry := BuiltinModel{
-				ID:        id,
-				CreatedAt: model.CreatedAt,
-				OwnedBy:   strings.TrimSpace(model.OwnedBy),
+				ID:           id,
+				Capabilities: uniqueSorted(model.Capabilities),
+				CreatedAt:    model.CreatedAt,
+				OwnedBy:      strings.TrimSpace(model.OwnedBy),
 			}
 			if _, exists := static[id]; exists {
 				entry.ConflictWithStatic = true
@@ -206,7 +210,7 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 		if id == "" {
 			continue
 		}
-		entry := BuiltinModel{ID: id, CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
+		entry := BuiltinModel{ID: id, Capabilities: uniqueSorted(model.Capabilities), CreatedAt: model.CreatedAt, OwnedBy: strings.TrimSpace(model.OwnedBy)}
 		if entry.OwnedBy == "" {
 			entry.OwnedBy = "codex"
 		}
@@ -225,6 +229,9 @@ func buildCodexOAuth(snap *Snapshot, cfg config.Config, static map[string]config
 	provider.ConflictCount = len(provider.ConflictModels)
 	provider.ModelCount = len(snap.CodexOAuthModels)
 	switch {
+	case catalog.AvailableAccounts == 0 && catalog.PermanentAuthFailures > 0 && len(snap.CodexOAuthModels) > 0:
+		provider.Status = StatusDegraded
+		provider.UnavailableReason = "all Codex OAuth credentials require reauthentication"
 	case catalog.AvailableAccounts == 0:
 		provider.Status = StatusEmpty
 		provider.UnavailableReason = "no available Codex OAuth accounts"
@@ -269,7 +276,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 			})
 		}
 	}
-	if snap.CodexOAuthProvider.Status == StatusReady {
+	if snap.CodexOAuthProvider.Status == StatusReady || snap.CodexOAuthProvider.Status == StatusDegraded {
 		for id, model := range snap.CodexOAuthModels {
 			metadata := cfg.ModelMetadata[id]
 			providerView := BuiltinProviderViewFor(CodexOAuthProviderID)
@@ -289,7 +296,7 @@ func buildCandidates(snap *Snapshot, cfg config.Config) {
 				ModelID: id, RouteOwner: BuiltinProviderID, Builtin: true,
 				CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy, Priority: config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb), Fallback: false,
 				ContextWindowTokens: metadata.ContextWindowTokens, MaxContextWindowTokens: metadata.MaxContextWindowTokens, MaxOutputTokens: metadata.MaxOutputTokens,
-				SupportedEndpoints: config.ServiceableInboundPaths(providerView),
+				SupportedEndpoints: chatGPTWebServiceablePaths(providerView, model.Capabilities),
 			})
 		}
 	}
@@ -379,26 +386,56 @@ func Reconfigure(cfg config.Config, previous Snapshot) Snapshot {
 	poolModels := make([]PoolModel, 0, len(previous.BuiltinModels))
 	for _, model := range previous.BuiltinModels {
 		poolModels = append(poolModels, PoolModel{
-			ID:        model.ID,
-			CreatedAt: model.CreatedAt,
-			OwnedBy:   model.OwnedBy,
+			ID:           model.ID,
+			Capabilities: append([]string(nil), model.Capabilities...),
+			CreatedAt:    model.CreatedAt,
+			OwnedBy:      model.OwnedBy,
 		})
 	}
 	codexModels := make([]PoolModel, 0, len(previous.CodexOAuthModels))
 	for _, model := range previous.CodexOAuthModels {
-		codexModels = append(codexModels, PoolModel{ID: model.ID, CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
+		codexModels = append(codexModels, PoolModel{ID: model.ID, Capabilities: append([]string(nil), model.Capabilities...), CreatedAt: model.CreatedAt, OwnedBy: model.OwnedBy})
 	}
 	return BuildWithCodex(cfg,
 		CatalogInput{Version: previous.Version, AvailableAccounts: previous.BuiltinProvider.AvailableAccounts, Models: poolModels, UpdatedAt: previous.BuiltinProvider.UpdatedAt},
-		CatalogInput{Version: previous.CodexOAuthVersion, AvailableAccounts: previous.CodexOAuthProvider.AvailableAccounts, Models: codexModels, UpdatedAt: previous.CodexOAuthProvider.UpdatedAt},
+		CatalogInput{Version: previous.CodexOAuthVersion, AvailableAccounts: previous.CodexOAuthProvider.AvailableAccounts, PermanentAuthFailures: previous.CodexOAuthProvider.PermanentAuthFailures, Models: codexModels, UpdatedAt: previous.CodexOAuthProvider.UpdatedAt},
 	)
 }
 
 // PoolModel is the discovery input DTO (account-pool catalog projection).
 type PoolModel struct {
-	ID        string
-	CreatedAt int64
-	OwnedBy   string
+	ID           string
+	Capabilities []string
+	CreatedAt    int64
+	OwnedBy      string
+}
+
+func chatGPTWebServiceablePaths(provider config.Provider, capabilities []string) []string {
+	textGeneration := len(capabilities) == 0
+	imageGeneration := false
+	for _, capability := range capabilities {
+		switch strings.TrimSpace(capability) {
+		case "text_generation":
+			textGeneration = true
+		case "image_generation":
+			imageGeneration = true
+		}
+	}
+	paths := config.ServiceableInboundPaths(provider)
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		switch path {
+		case "/v1/images/generations", "/v1/images/edits":
+			if imageGeneration {
+				result = append(result, path)
+			}
+		case "/v1/chat/completions", "/v1/responses", "/v1/search":
+			if textGeneration {
+				result = append(result, path)
+			}
+		}
+	}
+	return result
 }
 
 // CandidatesFor resolves all ordered candidates for an exact model ID.

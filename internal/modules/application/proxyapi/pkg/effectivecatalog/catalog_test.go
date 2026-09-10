@@ -199,7 +199,8 @@ func TestMetadataEnrichesDiscoveredModelWithoutCreatingStaticCandidate(t *testin
 
 func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T) {
 	initial := Build(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}, 4, 1, []PoolModel{{
-		ID: "gpt-5",
+		ID:           "gpt-5",
+		Capabilities: []string{"text_generation", "image_generation"},
 	}}, "2026-07-26T00:00:00Z")
 	updated := Reconfigure(config.Config{
 		ChatGPTWeb:    config.ChatGPTWebConfig{},
@@ -214,10 +215,49 @@ func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T)
 	if updated.BuiltinProvider.ConflictCount != 1 || updated.BuiltinProvider.ModelCount != 1 {
 		t.Fatalf("reconfigured provider=%+v", updated.BuiltinProvider)
 	}
+	if got := updated.BuiltinModels["gpt-5"].Capabilities; !containsCatalogValue(got, "text_generation") || !containsCatalogValue(got, "image_generation") {
+		t.Fatalf("reconfigured capabilities=%v", got)
+	}
 	candidates := updated.CandidatesFor("gpt-5")
 	if len(candidates) != 2 || candidates[0].RouteOwner != "openai" || candidates[1].RouteOwner != BuiltinProviderID {
 		t.Fatalf("reconfigured candidates=%+v", candidates)
 	}
+}
+
+func TestChatGPTWebCandidatesRespectDiscoveredCapabilities(t *testing.T) {
+	cfg := config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}
+	snap := Build(cfg, 1, 1, []PoolModel{
+		{ID: "text-only", Capabilities: []string{"text_generation"}},
+		{ID: "image-only", Capabilities: []string{"image_generation"}},
+		{ID: "combined", Capabilities: []string{"image_generation", "text_generation", "image_generation"}},
+		{ID: "legacy"},
+	}, "2026-09-10T00:00:00Z")
+
+	assertEndpoints := func(model string, want, reject []string) {
+		t.Helper()
+		candidates := snap.CandidatesFor(model)
+		if len(candidates) != 1 {
+			t.Fatalf("%s candidates=%+v", model, candidates)
+		}
+		for _, endpoint := range want {
+			if !containsCatalogValue(candidates[0].SupportedEndpoints, endpoint) {
+				t.Errorf("%s endpoints=%v missing %s", model, candidates[0].SupportedEndpoints, endpoint)
+			}
+		}
+		for _, endpoint := range reject {
+			if containsCatalogValue(candidates[0].SupportedEndpoints, endpoint) {
+				t.Errorf("%s endpoints=%v unexpectedly contains %s", model, candidates[0].SupportedEndpoints, endpoint)
+			}
+		}
+	}
+	text := []string{"/v1/chat/completions", "/v1/responses", "/v1/search"}
+	images := []string{"/v1/images/generations", "/v1/images/edits"}
+	assertEndpoints("text-only", text, images)
+	assertEndpoints("image-only", images, text)
+	assertEndpoints("combined", append(append([]string(nil), text...), images...), nil)
+	// Old persisted snapshots without capability metadata remain text-capable,
+	// but do not advertise image routes that were never discovered.
+	assertEndpoints("legacy", text, images)
 }
 
 func TestBuildEmptyStates(t *testing.T) {
@@ -283,6 +323,25 @@ func TestBuildCodexOAuthPublishesAllDiscoveredModels(t *testing.T) {
 	}
 	if route, ok := snap.Lookup("gpt-5.3-codex-mini"); !ok || route.RouteOwner != CodexOAuthProviderID || route.OwnedBy != "openai" {
 		t.Fatalf("Codex discovered route=%+v ok=%v", route, ok)
+	}
+}
+
+func TestBuildCodexOAuthKeepsTerminalAuthRouteForActionableFailure(t *testing.T) {
+	cfg := config.Config{CodexOAuth: config.CodexOAuthConfig{}}
+	snap := BuildWithCodex(cfg, CatalogInput{}, CatalogInput{
+		Version: 9, PermanentAuthFailures: 2,
+		Models: []PoolModel{{ID: "gpt-5.6-sol", OwnedBy: "openai"}},
+	})
+	if snap.CodexOAuthProvider.Status != StatusDegraded || snap.CodexOAuthProvider.AvailableAccounts != 0 || snap.CodexOAuthProvider.PermanentAuthFailures != 2 {
+		t.Fatalf("terminal auth provider=%+v", snap.CodexOAuthProvider)
+	}
+	candidates := snap.CandidatesFor("gpt-5.6-sol")
+	if len(candidates) != 1 || candidates[0].RouteOwner != CodexOAuthProviderID {
+		t.Fatalf("terminal auth route was lost: %+v", candidates)
+	}
+	reloaded := Reconfigure(cfg, snap)
+	if reloaded.CodexOAuthProvider.Status != StatusDegraded || len(reloaded.CandidatesFor("gpt-5.6-sol")) != 1 {
+		t.Fatalf("terminal auth route was lost on reconfigure: %+v", reloaded.CodexOAuthProvider)
 	}
 }
 

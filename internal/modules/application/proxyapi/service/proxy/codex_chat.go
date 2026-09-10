@@ -10,13 +10,24 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 )
 
+type codexChatToolStreamState struct {
+	ChatIndex        int
+	ArgumentsEmitted bool
+	ArgumentsDone    bool
+}
+
 type codexChatStreamState struct {
-	ID, Model     string
-	Input, Output int
-	Started, Done bool
-	HasToolCall   bool
+	ID, Model      string
+	Input, Output  int
+	Started, Done  bool
+	HasToolCall    bool
+	OutputEvidence bool
+	TextEmitted    bool
+	NextToolIndex  int
+	Tools          map[int]*codexChatToolStreamState
 }
 
 func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, started time.Time, plan TransportPlan, model string, stream bool, body map[string]any) {
@@ -382,6 +393,7 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return nil, err
 	}
+	state.OutputEvidence = state.OutputEvidence || aetherrelaycodex.MeaningfulOutputEvent(payload)
 	typ, _ := event["type"].(string)
 	created := time.Now().Unix()
 	chunk := func(delta map[string]any, finish any, usage tokenUsage) []byte {
@@ -404,27 +416,93 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 		if !ok {
 			return nil, fmt.Errorf("response.output_text.delta")
 		}
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(value) != ""
+		state.TextEmitted = state.TextEmitted || value != ""
 		return [][]byte{chunk(map[string]any{"content": value}, nil, tokenUsage{})}, nil
 	case "response.output_item.added":
 		item, _ := event["item"].(map[string]any)
 		if itemType, _ := item["type"].(string); itemType == "function_call" {
+			outputIndex, err := codexToolEventOutputIndex(event, state.Tools)
+			if err != nil {
+				return nil, err
+			}
+			if state.Tools == nil {
+				state.Tools = map[int]*codexChatToolStreamState{}
+			}
+			if _, exists := state.Tools[outputIndex]; exists {
+				return nil, fmt.Errorf("responses stream function_call is duplicated")
+			}
+			toolState := &codexChatToolStreamState{ChatIndex: state.NextToolIndex}
+			state.Tools[outputIndex] = toolState
+			state.NextToolIndex++
 			state.HasToolCall = true
+			state.OutputEvidence = true
 			id, _ := item["call_id"].(string)
 			name, _ := item["name"].(string)
-			return [][]byte{chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": ""}}}}, nil, tokenUsage{})}, nil
+			if id == "" || name == "" {
+				return nil, fmt.Errorf("responses stream function_call")
+			}
+			return [][]byte{chunk(map[string]any{"tool_calls": []any{map[string]any{"index": toolState.ChatIndex, "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": ""}}}}, nil, tokenUsage{})}, nil
 		}
 		return nil, nil
 	case "response.function_call_arguments.delta":
+		outputIndex, err := codexToolEventOutputIndex(event, state.Tools)
+		if err != nil {
+			return nil, err
+		}
+		toolState := state.Tools[outputIndex]
+		if toolState == nil || toolState.ArgumentsDone {
+			return nil, fmt.Errorf("responses stream function arguments are out of order")
+		}
 		value, ok := event["delta"].(string)
 		if !ok {
 			return nil, fmt.Errorf("response.function_call_arguments.delta")
 		}
-		return [][]byte{chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]any{"arguments": value}}}}, nil, tokenUsage{})}, nil
-	case "response.output_text.done", "response.function_call_arguments.done", "response.output_item.done", "response.content_part.added", "response.content_part.done":
+		toolState.ArgumentsEmitted = toolState.ArgumentsEmitted || value != ""
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(value) != ""
+		return [][]byte{chunk(map[string]any{"tool_calls": []any{map[string]any{"index": toolState.ChatIndex, "function": map[string]any{"arguments": value}}}}, nil, tokenUsage{})}, nil
+	case "response.function_call_arguments.done":
+		outputIndex, err := codexToolEventOutputIndex(event, state.Tools)
+		if err != nil {
+			return nil, err
+		}
+		toolState := state.Tools[outputIndex]
+		if toolState == nil || toolState.ArgumentsDone {
+			return nil, fmt.Errorf("responses stream function arguments done is out of order")
+		}
+		toolState.ArgumentsDone = true
+		if toolState.ArgumentsEmitted {
+			return nil, nil
+		}
+		arguments, ok := event["arguments"].(string)
+		if !ok {
+			return nil, fmt.Errorf("response.function_call_arguments.done")
+		}
+		if arguments == "" {
+			return nil, nil
+		}
+		toolState.ArgumentsEmitted = true
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(arguments) != ""
+		return [][]byte{chunk(map[string]any{"tool_calls": []any{map[string]any{"index": toolState.ChatIndex, "function": map[string]any{"arguments": arguments}}}}, nil, tokenUsage{})}, nil
+	case "response.output_text.done":
+		if state.TextEmitted {
+			return nil, nil
+		}
+		value, ok := event["text"].(string)
+		if !ok || value == "" {
+			return nil, nil
+		}
+		state.TextEmitted = true
+		state.OutputEvidence = state.OutputEvidence || strings.TrimSpace(value) != ""
+		return [][]byte{chunk(map[string]any{"content": value}, nil, tokenUsage{})}, nil
+	case "response.output_item.done", "response.content_part.added", "response.content_part.done":
 		return nil, nil
 	case "response.reasoning.delta", "response.reasoning.done", "response.reasoning_text.delta", "response.reasoning_text.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
 		return nil, nil
 	case "response.completed", "response.incomplete":
+		if typ == "response.incomplete" && aetherrelaycodex.EmptyIncomplete(payload, 0, state.OutputEvidence) {
+			return nil, fmt.Errorf("Codex upstream returned an empty response.incomplete")
+		}
 		response, _ := event["response"].(map[string]any)
 		if rawUsage, ok := response["usage"].(map[string]any); ok {
 			state.Input = intNumber(rawUsage["input_tokens"])
@@ -443,6 +521,25 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 	default:
 		return nil, fmt.Errorf("responses stream event %q", typ)
 	}
+}
+
+func codexToolEventOutputIndex(event map[string]any, tools map[int]*codexChatToolStreamState) (int, error) {
+	if raw, exists := event["output_index"]; exists {
+		number, ok := raw.(float64)
+		if !ok || number < 0 || number > 1<<20 || number != float64(int(number)) {
+			return 0, fmt.Errorf("response.output_index")
+		}
+		return int(number), nil
+	}
+	if len(tools) == 0 {
+		return 0, nil
+	}
+	if len(tools) == 1 {
+		for index := range tools {
+			return index, nil
+		}
+	}
+	return 0, fmt.Errorf("response.output_index is required for parallel tool calls")
 }
 
 func codexChatIncompleteFinishReason(response map[string]any) string {

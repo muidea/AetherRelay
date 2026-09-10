@@ -237,6 +237,28 @@ func TestCompletedResponsePreservesIncompletePartialOutputAndUsage(t *testing.T)
 	}
 }
 
+func TestCompletedResponseRejectsEmptyIncomplete(t *testing.T) {
+	response := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\"}}\n\n" +
+			"data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_empty\",\"status\":\"incomplete\",\"output\":[],\"usage\":{\"input_tokens\":7,\"output_tokens\":0}}}\n\n"))}
+	_, class, _, _, err := completedResponse(response, 4096)
+	if err == nil || class != events.ErrorUpstream {
+		t.Fatalf("CP-STREAM-014 class=%q err=%v", class, err)
+	}
+
+	unknownUsage := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(
+		"data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_unknown\",\"status\":\"incomplete\",\"output\":[]}}\n\n"))}
+	if _, class, _, _, err := completedResponse(unknownUsage, 4096); err != nil || class != "" {
+		t.Fatalf("missing usage must remain a legitimate incomplete: class=%q err=%v", class, err)
+	}
+
+	native := &http.Response{Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(
+		`{"object":"response","status":"incomplete","output":[],"usage":{"input_tokens":7,"output_tokens":0}}`))}
+	if _, class, _, _, err := completedResponse(native, 4096); err == nil || class != events.ErrorUpstream {
+		t.Fatalf("native CP-STREAM-014 class=%q err=%v", class, err)
+	}
+}
+
 func TestSafeUpstreamErrorIsBoundedAndRedacted(t *testing.T) {
 	safe := safeUpstreamError([]byte(`{"error":{"type":"invalid_request_error","code":"invalid_function_parameters","param":"input[1].tools[2]","message":"Invalid schema"}}`))
 	if safe.Type != "invalid_request_error" || safe.Code != "invalid_function_parameters" || safe.Param != "input[1].tools[2]" || safe.Message != "Invalid schema" {
@@ -326,6 +348,34 @@ func TestCodexStreamSemanticsRequiresActualOutput(t *testing.T) {
 	}
 	if semantic, _ := codexStreamSemantics([]byte(`data: {"type":"response.output_text.delta","delta":"hello"}`), false); !semantic {
 		t.Fatal("CP-STREAM-008 non-empty delta was not output")
+	}
+	if semantic, _ := codexStreamSemantics([]byte(`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"lookup"}}`), false); !semantic {
+		t.Fatal("CP-STREAM-014 function call item was not output")
+	}
+}
+
+func TestCodexStreamSemanticsRejectsEmptyIncomplete(t *testing.T) {
+	line := []byte(`data: {"type":"response.incomplete","response":{"output":[],"usage":{"output_tokens":0}}}`)
+	if semantic, empty := codexStreamSemanticsWithOutput(line, false, false); semantic || !empty {
+		t.Fatalf("CP-STREAM-014 semantic=%v empty=%v", semantic, empty)
+	}
+	if semantic, empty := codexStreamSemanticsWithOutput(line, true, true); !semantic || empty {
+		t.Fatalf("output evidence lost: semantic=%v empty=%v", semantic, empty)
+	}
+}
+
+func TestConfigureCodexHTTP2Keepalive(t *testing.T) {
+	transport := &http.Transport{}
+	h2, err := configureCodexHTTP2Keepalive(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h2.ReadIdleTimeout != codexHTTP2ReadIdleTimeout || h2.PingTimeout != codexHTTP2PingTimeout {
+		t.Fatalf("CP-STREAM-016 h2=%+v transport=%+v", h2, transport)
+	}
+	client, err := newHTTPClient("")
+	if err != nil || !client.Transport.(*http.Transport).ForceAttemptHTTP2 {
+		t.Fatalf("Codex client did not force HTTP/2: client=%+v err=%v", client, err)
 	}
 }
 

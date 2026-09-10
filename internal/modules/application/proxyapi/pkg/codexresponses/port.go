@@ -59,6 +59,7 @@ type ErrorKind string
 
 const (
 	KindProviderUnavailable ErrorKind = "provider_unavailable"
+	KindAuthentication      ErrorKind = "upstream_authentication_required"
 	KindEndpoint            ErrorKind = "endpoint_error"
 	KindInvalidRequest      ErrorKind = "invalid_request"
 	KindModelNotFound       ErrorKind = "model_not_found"
@@ -80,6 +81,7 @@ type Failure struct {
 	HTTPStatus        int
 	RetryAfterSeconds int
 	UnavailableReason string
+	Retryable         *bool
 	QuotaExhausted    bool
 	QuotaResetAt      string
 	UpstreamType      string

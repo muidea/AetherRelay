@@ -20,6 +20,7 @@ import (
 	basebiz "aetherrelay/internal/modules/base/biz"
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 	fhttp "github.com/bogdanfinn/fhttp"
 	wsclient "github.com/bogdanfinn/websocket"
@@ -27,6 +28,7 @@ import (
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
+	"golang.org/x/net/http2"
 )
 
 var responsesURL = "https://chatgpt.com/backend-api/codex/responses"
@@ -40,6 +42,11 @@ var modelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=" +
 // usageURL is the account-scoped Codex usage endpoint used by CLIProxyAPI's
 // management surface as well. It is intentionally not exposed to clients.
 var usageURL = "https://chatgpt.com/backend-api/wham/usage"
+
+const (
+	codexHTTP2ReadIdleTimeout = 10 * time.Second
+	codexHTTP2PingTimeout     = 5 * time.Second
+)
 
 type streamUpdate struct {
 	data              []byte
@@ -580,13 +587,15 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 	defer close(stream.updates)
 	reader := bufio.NewReader(body)
 	semanticOutput := false
+	generatedOutput := false
 	pending := make([][]byte, 0, 8)
 	pendingBytes := 0
 	for {
 		line, err := readLine(reader, maxLine)
 		if len(line) > 0 {
 			for _, expanded := range expandCodexSSELine(line) {
-				semantic, emptyCompleted := codexStreamSemantics(expanded, semanticOutput)
+				semantic, emptyCompleted := codexStreamSemanticsWithOutput(expanded, semanticOutput, generatedOutput)
+				generatedOutput = generatedOutput || codexStreamOutputEvidence(expanded)
 				if semantic {
 					semanticOutput = true
 				}
@@ -1076,6 +1085,9 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 		if err := json.Unmarshal(payload, &object); err != nil || object.Object != "response" {
 			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("invalid native Codex response object")
 		}
+		if aetherrelaycodex.EmptyIncompleteResponse(payload) {
+			return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
+		}
 		return payload, "", events.RateLimitObservation{}, events.SafeError{}, nil
 	}
 	reader := bufio.NewReader(response.Body)
@@ -1083,6 +1095,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	outputItems := map[int]json.RawMessage{}
 	compactionItems := map[int]json.RawMessage{}
 	semanticEvidence := false
+	outputEvidence := false
 	for {
 		line, err := readLine(reader, 1<<20)
 		if len(line) > 0 {
@@ -1094,6 +1107,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 					documents = [][]byte{payload}
 				}
 				for _, payload := range documents {
+					outputEvidence = outputEvidence || aetherrelaycodex.MeaningfulOutputEvent(payload)
 					var event struct {
 						Type        string          `json:"type"`
 						Delta       string          `json:"delta"`
@@ -1108,6 +1122,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 						switch event.Type {
 						case "response.web_search_call.searching", "response.web_search_call.completed":
 							semanticEvidence = true
+							outputEvidence = true
 						case "response.output_text.delta":
 							outputText.WriteString(event.Delta)
 							semanticEvidence = semanticEvidence || event.Delta != ""
@@ -1139,6 +1154,9 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 							}
 						case "response.incomplete":
 							if len(event.Response) > 0 {
+								if aetherrelaycodex.EmptyIncomplete(payload, len(outputItems), outputEvidence) {
+									return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
+								}
 								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
 								return responseWithWebSearchItems(completed, outputItems), "", events.RateLimitObservation{}, events.SafeError{}, nil
 							}
@@ -1273,6 +1291,8 @@ func codexItemHasOutput(raw json.RawMessage) bool {
 	var item struct {
 		Type      string            `json:"type"`
 		Status    string            `json:"status"`
+		Name      string            `json:"name"`
+		CallID    string            `json:"call_id"`
 		Action    json.RawMessage   `json:"action"`
 		Text      json.RawMessage   `json:"text"`
 		Arguments json.RawMessage   `json:"arguments"`
@@ -1295,10 +1315,17 @@ func codexItemHasOutput(raw json.RawMessage) bool {
 		_ = json.Unmarshal(item.Action, &action)
 		return item.Status == "completed" || action.Query != "" || strings.Join(action.Queries, "") != "" || action.URL != "" || action.Pattern != "" || len(action.Sources) > 0
 	}
+	if strings.Contains(item.Type, "call") && (item.Name != "" || item.CallID != "") {
+		return true
+	}
 	return rawNonEmptyValue(item.Text) || rawNonEmptyValue(item.Arguments) || rawNonEmptyValue(item.Input) || rawNonEmptyValue(item.Output) || rawNonEmptyValue(item.Result) || len(item.Content) > 0
 }
 
 func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, emptyCompleted bool) {
+	return codexStreamSemanticsWithOutput(line, semanticOutputSeen, semanticOutputSeen)
+}
+
+func codexStreamSemanticsWithOutput(line []byte, semanticOutputSeen, generatedOutputSeen bool) (semantic, emptyCompleted bool) {
 	trimmed := strings.TrimSpace(string(line))
 	if !strings.HasPrefix(trimmed, "data:") {
 		return false, false
@@ -1327,7 +1354,8 @@ func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, empty
 		empty := responseObjectIsEmpty(event.Response)
 		return !empty, empty
 	case "response.incomplete":
-		return true, false
+		empty := aetherrelaycodex.EmptyIncomplete(payload, 0, generatedOutputSeen)
+		return !empty, empty
 	case "response.failed", "response.cancelled", "response.canceled", "error":
 		return false, false
 	case "response.created", "response.in_progress", "response.queued":
@@ -1344,6 +1372,27 @@ func codexStreamSemantics(line []byte, semanticOutputSeen bool) (semantic, empty
 		return codexItemHasOutput(event.Item), false
 	}
 	return false, false
+}
+
+func codexStreamOutputEvidence(line []byte) bool {
+	payload := sseData(line)
+	if len(payload) == 0 || aetherrelaycodex.MeaningfulOutputEvent(payload) {
+		return len(payload) > 0
+	}
+	var event struct {
+		Type string          `json:"type"`
+		Item json.RawMessage `json:"item"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	if event.Type == "response.web_search_call.searching" || event.Type == "response.web_search_call.completed" {
+		return true
+	}
+	if event.Type == "response.output_item.added" || event.Type == "response.output_item.done" {
+		return codexItemHasOutput(event.Item)
+	}
+	return false
 }
 
 func readLine(reader *bufio.Reader, limit int64) ([]byte, error) {
@@ -1758,5 +1807,19 @@ func newHTTPClient(rawProxy string) (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid account proxy URL")
 	}
+	transport.ForceAttemptHTTP2 = true
+	if _, err := configureCodexHTTP2Keepalive(transport); err != nil {
+		return nil, fmt.Errorf("configure Codex HTTP/2 transport: %w", err)
+	}
 	return &http.Client{Transport: transport}, nil
+}
+
+func configureCodexHTTP2Keepalive(transport *http.Transport) (*http2.Transport, error) {
+	h2, err := http2.ConfigureTransports(transport)
+	if err != nil {
+		return nil, err
+	}
+	h2.ReadIdleTimeout = codexHTTP2ReadIdleTimeout
+	h2.PingTimeout = codexHTTP2PingTimeout
+	return h2, nil
 }

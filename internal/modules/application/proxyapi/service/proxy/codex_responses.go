@@ -400,6 +400,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	case string(codexresponses.KindProviderUnavailable):
 		status = http.StatusServiceUnavailable
 		code = ErrorCodeProviderUnavailable
+	case string(codexresponses.KindAuthentication):
+		status = http.StatusServiceUnavailable
+		code = ErrorCodeUpstreamAuthRequired
 	case string(codexresponses.KindEndpoint):
 		status = http.StatusForbidden
 		code = ErrorCodeUpstreamUnavailable
@@ -421,6 +424,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	errorType, param := "", ""
+	var retryable *bool
 	if codexFailure != nil && (codexFailure.Kind == codexresponses.KindInvalidRequest || codexFailure.Kind == codexresponses.KindModelNotFound) {
 		if codexFailure.UpstreamCode != "" {
 			code = codexFailure.UpstreamCode
@@ -437,8 +441,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	reason := ""
 	if codexFailure != nil {
 		reason = codexFailure.UnavailableReason
+		retryable = codexFailure.Retryable
 	}
-	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, FailureClass: reason, Model: model, ClientProtocol: ClientProtocolOpenAI, ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID}, failure)
+	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, Retryable: retryable, FailureClass: reason, Model: model, ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID}, failure)
 }
 
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {
@@ -483,6 +488,8 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind = streamKindError
 	case codexresponses.KindProviderUnavailable:
 		kind = streamKind("provider_unavailable")
+	case codexresponses.KindAuthentication:
+		kind = streamKind("upstream_authentication_required")
 	case codexresponses.KindStreamLifetime:
 		kind = streamKind("stream_lifetime_timeout")
 	case codexresponses.KindFirstEventTimeout, codexresponses.KindIdleTimeout:

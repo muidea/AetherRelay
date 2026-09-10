@@ -85,6 +85,40 @@ func TestCodexWebsocketRejectsUnauthenticatedUpgrade(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketExposesPermanentAuthenticationTerminal(t *testing.T) {
+	retryable := false
+	executor := codexResponsesExecutorStub{wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
+		failure := codexresponses.NewFailure(codexresponses.KindAuthentication, 0, nil)
+		failure.UnavailableReason = "credential_permanently_invalid"
+		failure.Retryable = &retryable
+		return codexresponses.WebsocketOpenResult{}, failure
+	}}
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", http.Header{"Authorization": []string{"Bearer test-client-key"}})
+	if err != nil {
+		t.Fatalf("handshake status=%v err=%v", response, err)
+	}
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"gpt-5.2-codex","input":"hello"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event struct {
+		Error APIError `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Error.Type != "authentication_error" || event.Error.Code != ErrorCodeUpstreamAuthRequired || event.Error.Retryable == nil || *event.Error.Retryable {
+		t.Fatalf("terminal websocket event=%s", payload)
+	}
+}
+
 func TestCodexWebsocketDoneNormalizesToCompletedTerminal(t *testing.T) {
 	payload := normalizeCodexWebsocketEvent([]byte(`{"type":"response.done","response":{"id":"resp-1","usage":{"input_tokens":1,"output_tokens":1}}}`))
 	if !codexWebsocketTerminal(payload) || !bytes.Contains(payload, []byte(`"type":"response.completed"`)) {

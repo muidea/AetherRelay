@@ -40,25 +40,26 @@ type quotaObservation struct {
 }
 
 type account struct {
-	ID                  string                      `json:"id"`
-	AccessToken         string                      `json:"access_token"`
-	RefreshToken        string                      `json:"refresh_token"`
-	IDToken             string                      `json:"id_token,omitempty"`
-	AccountIDHeader     string                      `json:"account_id,omitempty"`
-	Email               string                      `json:"email,omitempty"`
-	PlanType            string                      `json:"plan_type,omitempty"`
-	Expired             string                      `json:"expired,omitempty"`
-	Proxy               string                      `json:"proxy,omitempty"`
-	Status              string                      `json:"status"`
-	Success             int                         `json:"success"`
-	Fail                int                         `json:"fail"`
-	CreatedAt           string                      `json:"created_at"`
-	LastUsedAt          string                      `json:"last_used_at,omitempty"`
-	LastRefreshAt       string                      `json:"last_token_refresh_at,omitempty"`
-	LastRefreshErrAt    string                      `json:"last_token_refresh_error_at,omitempty"`
-	LastRefreshErrClass string                      `json:"last_token_refresh_error_class,omitempty"`
-	Cooldowns           map[string]cooldown         `json:"cooldowns,omitempty"`
-	QuotaObservations   map[string]quotaObservation `json:"quota_observations,omitempty"`
+	ID                   string                      `json:"id"`
+	AccessToken          string                      `json:"access_token"`
+	RefreshToken         string                      `json:"refresh_token"`
+	IDToken              string                      `json:"id_token,omitempty"`
+	AccountIDHeader      string                      `json:"account_id,omitempty"`
+	Email                string                      `json:"email,omitempty"`
+	PlanType             string                      `json:"plan_type,omitempty"`
+	Expired              string                      `json:"expired,omitempty"`
+	Proxy                string                      `json:"proxy,omitempty"`
+	Status               string                      `json:"status"`
+	Success              int                         `json:"success"`
+	Fail                 int                         `json:"fail"`
+	CreatedAt            string                      `json:"created_at"`
+	LastUsedAt           string                      `json:"last_used_at,omitempty"`
+	LastRefreshAt        string                      `json:"last_token_refresh_at,omitempty"`
+	LastRefreshErrAt     string                      `json:"last_token_refresh_error_at,omitempty"`
+	LastRefreshErrClass  string                      `json:"last_token_refresh_error_class,omitempty"`
+	PermanentAuthFailure bool                        `json:"permanent_auth_failure,omitempty"`
+	Cooldowns            map[string]cooldown         `json:"cooldowns,omitempty"`
+	QuotaObservations    map[string]quotaObservation `json:"quota_observations,omitempty"`
 	// ModelSnapshot is the constrained account-scoped Codex capability cache.
 	// It never contains raw upstream JSON or credentials beyond this account.
 	ModelSnapshot            *events.AccountModelSnapshot `json:"model_snapshot,omitempty"`
@@ -390,6 +391,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 			existing.LastRefreshAt = time.Now().UTC().Format(time.RFC3339)
 			existing.LastRefreshErrAt = ""
 			existing.LastRefreshErrClass = ""
+			existing.PermanentAuthFailure = false
 			existing.Cooldowns = nil
 			existing.QuotaObservations = nil
 		}
@@ -462,6 +464,9 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (event
 		if normalizedStatus != events.StatusNormal && normalizedStatus != events.StatusAbnormal && normalizedStatus != events.StatusDisabled {
 			return events.AccountView{}, fmt.Errorf("invalid account status")
 		}
+		if normalizedStatus == events.StatusNormal && item.PermanentAuthFailure {
+			normalizedStatus = events.StatusAbnormal
+		}
 	}
 	normalizedProxy := ""
 	if proxy != nil {
@@ -507,6 +512,10 @@ func (s *Store) AcquirePreferred(model string, exclude []string, preferredID str
 }
 
 func (s *Store) AcquirePreferredTransport(model string, exclude []string, preferredID, transport string) (events.AcquireResult, error) {
+	return s.AcquirePreferredTransportWithBusy(model, exclude, nil, preferredID, transport)
+}
+
+func (s *Store) AcquirePreferredTransportWithBusy(model string, exclude, busy []string, preferredID, transport string) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	model = strings.TrimSpace(model)
@@ -515,8 +524,14 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 	for _, id := range exclude {
 		excluded[strings.TrimSpace(id)] = struct{}{}
 	}
+	busySet := make(map[string]struct{}, len(busy))
+	for _, id := range busy {
+		busySet[strings.TrimSpace(id)] = struct{}{}
+	}
 	if preferred := s.items[strings.TrimSpace(preferredID)]; modelAvailability(preferred, model, now).Available {
-		if _, found := excluded[preferred.ID]; !found && transportSupport(preferred, transport) == 1 {
+		_, excludedPreferred := excluded[preferred.ID]
+		_, busyPreferred := busySet[preferred.ID]
+		if !excludedPreferred && !busyPreferred && transportSupport(preferred, transport) == 1 {
 			preferred.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
@@ -534,6 +549,9 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 			if _, found := excluded[item.ID]; found {
 				continue
 			}
+			if _, found := busySet[item.ID]; found {
+				continue
+			}
 			s.index = (pos + 1) % len(s.order)
 			item.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
@@ -542,7 +560,7 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 			return acquireResult(item), nil
 		}
 	}
-	return s.unavailableResult(model, excluded, transport, now), fmt.Errorf("no eligible Codex OAuth account")
+	return s.unavailableResult(model, excluded, busySet, transport, now), fmt.Errorf("no eligible Codex OAuth account")
 }
 
 func acquireResult(item *account) events.AcquireResult {
@@ -679,15 +697,16 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 	item.LastRefreshAt = now
 	item.LastRefreshErrAt = ""
 	item.LastRefreshErrClass = ""
-	statusChanged := false
+	catalogChanged := item.PermanentAuthFailure
+	item.PermanentAuthFailure = false
 	if item.Status == events.StatusAbnormal {
 		item.Status = events.StatusNormal
-		statusChanged = true
+		catalogChanged = true
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.RefreshTokenResult{}, err
 	}
-	if statusChanged {
+	if catalogChanged {
 		s.bumpCatalogLocked()
 	}
 	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, Refreshed: true}, nil
@@ -702,8 +721,20 @@ func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (eve
 	}
 	item.LastRefreshErrAt = time.Now().UTC().Format(time.RFC3339)
 	item.LastRefreshErrClass = strings.TrimSpace(errorClass)
+	catalogChanged := false
+	if permanent {
+		catalogChanged = !item.PermanentAuthFailure
+		item.PermanentAuthFailure = true
+		if item.Status != events.StatusDisabled {
+			catalogChanged = catalogChanged || item.Status != events.StatusAbnormal
+			item.Status = events.StatusAbnormal
+		}
+	}
 	if err := s.saveLocked(); err != nil {
 		return events.RefreshTokenResult{}, err
+	}
+	if catalogChanged {
+		s.bumpCatalogLocked()
 	}
 	return events.RefreshTokenResult{AccountID: item.ID, PermanentFailure: permanent, ErrorClass: errorClass}, nil
 }
@@ -722,7 +753,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 		item.Success++
 		// A model success cannot prove recovery from a credential-wide quota.
 		delete(item.QuotaObservations, model)
-		if item.Status == events.StatusAbnormal {
+		if item.Status == events.StatusAbnormal && !item.PermanentAuthFailure {
 			item.Status = events.StatusNormal
 			statusChanged = true
 		}
@@ -815,7 +846,9 @@ func (s *Store) Health() events.HealthResult {
 		case events.StatusAbnormal:
 			result.Abnormal++
 		default:
-			if !cooling(item, "", now) {
+			if item.PermanentAuthFailure {
+				result.Abnormal++
+			} else if !cooling(item, "", now) {
 				result.Available++
 			}
 		}
@@ -975,6 +1008,7 @@ func toView(item *account, now time.Time) events.AccountView {
 		LastTokenRefreshAt:         item.LastRefreshAt,
 		LastTokenRefreshErrorAt:    item.LastRefreshErrAt,
 		LastTokenRefreshErrorClass: item.LastRefreshErrClass,
+		PermanentAuthFailure:       item.PermanentAuthFailure,
 		ModelDiscoveryRetryAt:      item.ModelDiscoveryRetryAt,
 		ModelDiscoveryErrorClass:   item.ModelDiscoveryErrorClass,
 		UsageRefreshErrorAt:        item.UsageRefreshErrorAt,
@@ -1087,7 +1121,7 @@ func (s *Store) PutModelSnapshot(accountID string, snapshot events.AccountModelS
 	item.ModelDiscoveryFailures = 0
 	item.ModelDiscoveryRetryAt = ""
 	item.ModelDiscoveryErrorClass = ""
-	if item.Status == events.StatusAbnormal {
+	if item.Status == events.StatusAbnormal && !item.PermanentAuthFailure {
 		item.Status = events.StatusNormal
 	}
 	if err := s.saveLocked(); err != nil {
@@ -1164,7 +1198,7 @@ func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandida
 		if item == nil || strings.TrimSpace(item.AccessToken) == "" {
 			continue
 		}
-		if item.Status != events.StatusNormal && item.Status != events.StatusDisabled && (len(requested) == 0 || item.Status != events.StatusAbnormal) {
+		if item.Status != events.StatusNormal && item.Status != events.StatusDisabled && !item.PermanentAuthFailure && (len(requested) == 0 || item.Status != events.StatusAbnormal) {
 			continue
 		}
 		if len(requested) > 0 {
@@ -1200,7 +1234,7 @@ func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageS
 		item.PlanType = clean.PlanType
 	}
 	statusChanged := false
-	if item.Status == events.StatusAbnormal {
+	if item.Status == events.StatusAbnormal && !item.PermanentAuthFailure {
 		item.Status = events.StatusNormal
 		statusChanged = true
 	}
@@ -1265,23 +1299,33 @@ func (s *Store) RecordUsageFailure(accountID, message string) (bool, error) {
 	return true, nil
 }
 
-// CatalogSnapshot builds the discovered union across normal accounts and
-// non-expired snapshots. Temporary admission (quota/model cooldowns) is checked
-// at acquisition and exposed separately in AccountView.ModelAvailability.
+// CatalogSnapshot builds the discovered union across normal accounts and keeps
+// the last known model membership for terminally invalid credentials. The
+// latter is routing metadata only: it lets admission return an actionable
+// reauthentication terminal instead of degrading the exact model to not found.
+// Temporary admission (quota/model cooldowns) remains request scoped.
 func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	byID := make(map[string]*events.CatalogModel)
 	available := 0
+	permanentAuthFailures := 0
 	var latest time.Time
 	for _, id := range s.order {
 		item := s.items[id]
-		if item == nil || item.Status != events.StatusNormal {
+		if item == nil || item.Status == events.StatusDisabled {
 			continue
 		}
-		available++
-		if item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now) {
+		terminalAuth := item.PermanentAuthFailure
+		if item.Status == events.StatusNormal && !terminalAuth {
+			available++
+		} else if terminalAuth {
+			permanentAuthFailures++
+		} else {
+			continue
+		}
+		if item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now) && !terminalAuth {
 			continue
 		}
 		if discoveredAt, err := time.Parse(time.RFC3339, item.ModelSnapshot.DiscoveredAt); err == nil && discoveredAt.After(latest) {
@@ -1306,7 +1350,7 @@ func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 			entry.AccountIDs = appendUnique(entry.AccountIDs, item.ID)
 		}
 	}
-	out := events.CatalogSnapshotResult{Version: s.catalogVersion, AvailableAccounts: available}
+	out := events.CatalogSnapshotResult{Version: s.catalogVersion, AvailableAccounts: available, PermanentAuthFailures: permanentAuthFailures}
 	if !latest.IsZero() {
 		out.UpdatedAt = latest.UTC().Format(time.RFC3339)
 	}
@@ -1324,6 +1368,14 @@ func accountSupportsModel(item *account, model string, now time.Time) bool {
 		return false
 	}
 	if item == nil || item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now) {
+		return false
+	}
+	return accountSnapshotHasModel(item, model)
+}
+
+func accountSnapshotHasModel(item *account, model string) bool {
+	model = strings.TrimSpace(model)
+	if item == nil || item.ModelSnapshot == nil || model == "" {
 		return false
 	}
 	for _, entry := range item.ModelSnapshot.Models {

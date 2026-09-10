@@ -118,7 +118,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
 			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 			if openErr != nil {
-				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket could not be opened")
+				writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket could not be opened")
 				return
 			}
 			sessionID = opened.SessionID
@@ -176,7 +176,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 					sessionID = ""
 					opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 					if openErr != nil {
-						writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket replacement account is unavailable")
+						writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket replacement account is unavailable")
 						return
 					}
 					sessionID = opened.SessionID
@@ -460,6 +460,34 @@ func normalizeCodexWebsocketEvent(payload []byte) []byte {
 }
 
 func writeCodexWebsocketError(conn *websocket.Conn, code, message string) {
-	payload, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]any{"type": code, "code": code, "message": message}})
+	payload := codexWebsocketErrorPayload(code, code, message, nil)
 	_ = conn.WriteMessage(websocket.TextMessage, payload)
+}
+
+func writeCodexWebsocketFailure(conn *websocket.Conn, err error, fallbackCode, fallbackMessage string) {
+	errorType, code, message := fallbackCode, fallbackCode, fallbackMessage
+	var retryable *bool
+	if failure, ok := codexresponses.AsFailure(err); ok && failure != nil {
+		retryable = failure.Retryable
+		if failure.Kind == codexresponses.KindAuthentication {
+			errorType = "authentication_error"
+			code = ErrorCodeUpstreamAuthRequired
+			message = "Codex OAuth credentials require reauthentication"
+			if retryable == nil {
+				value := false
+				retryable = &value
+			}
+		}
+	}
+	payload := codexWebsocketErrorPayload(errorType, code, message, retryable)
+	_ = conn.WriteMessage(websocket.TextMessage, payload)
+}
+
+func codexWebsocketErrorPayload(errorType, code, message string, retryable *bool) []byte {
+	detail := map[string]any{"type": errorType, "code": code, "message": message}
+	if retryable != nil {
+		detail["retryable"] = *retryable
+	}
+	payload, _ := json.Marshal(map[string]any{"type": "error", "error": detail})
+	return payload
 }

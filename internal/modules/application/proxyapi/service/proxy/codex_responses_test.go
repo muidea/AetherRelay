@@ -1027,6 +1027,57 @@ func TestChatCompletionsStreamsCodexToolCallAndDone(t *testing.T) {
 	}
 }
 
+func TestCodexChatToolArgumentsDoneFallbackAndParallelIndexes(t *testing.T) {
+	state := &codexChatStreamState{Model: "gpt-test"}
+	send := func(payload string) [][]byte {
+		out, err := codexResponsesEventToChat([]byte(payload), state)
+		if err != nil {
+			t.Fatalf("event=%s err=%v", payload, err)
+		}
+		return out
+	}
+	send(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`)
+	first := send(`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_a","name":"a"}}`)
+	second := send(`{"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","call_id":"call_b","name":"b"}}`)
+	if !strings.Contains(string(first[0]), `"index":0`) || !strings.Contains(string(second[0]), `"index":1`) {
+		t.Fatalf("parallel chat indexes first=%s second=%s", first[0], second[0])
+	}
+	fallback := send(`{"type":"response.function_call_arguments.done","output_index":3,"arguments":"{\"q\":\"b\"}"}`)
+	if len(fallback) != 1 || !strings.Contains(string(fallback[0]), `"index":1`) || !strings.Contains(string(fallback[0]), `"arguments":"{\"q\":\"b\"}"`) {
+		t.Fatalf("done fallback=%q", fallback)
+	}
+	send(`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\":"}`)
+	if duplicate := send(`{"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"q\":\"a\"}"}`); len(duplicate) != 0 {
+		t.Fatalf("done duplicated prior delta: %q", duplicate)
+	}
+}
+
+func TestCodexChatRejectsEmptyIncomplete(t *testing.T) {
+	state := &codexChatStreamState{Model: "gpt-test"}
+	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.created","response":{"id":"resp_1"}}`), state)
+	if _, err := codexResponsesEventToChat([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","output":[],"usage":{"input_tokens":4,"output_tokens":0}}}`), state); err == nil {
+		t.Fatal("CP-STREAM-014 empty incomplete became a normal chat stop")
+	}
+	withReasoning := &codexChatStreamState{Model: "gpt-test"}
+	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.created","response":{"id":"resp_2"}}`), withReasoning)
+	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.reasoning.delta","delta":"analysis"}`), withReasoning)
+	if _, err := codexResponsesEventToChat([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":4,"output_tokens":0}}}`), withReasoning); err != nil {
+		t.Fatalf("reasoning output evidence was ignored: %v", err)
+	}
+}
+
+func TestCodexChatUsesOutputTextDoneFallbackOnce(t *testing.T) {
+	state := &codexChatStreamState{Model: "gpt-test"}
+	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.created","response":{"id":"resp_1"}}`), state)
+	chunks, err := codexResponsesEventToChat([]byte(`{"type":"response.output_text.done","text":"answer"}`), state)
+	if err != nil || len(chunks) != 1 || !strings.Contains(string(chunks[0]), `"content":"answer"`) {
+		t.Fatalf("done fallback chunks=%q err=%v", chunks, err)
+	}
+	if chunks, err = codexResponsesEventToChat([]byte(`{"type":"response.output_text.done","text":"answer"}`), state); err != nil || len(chunks) != 0 {
+		t.Fatalf("done fallback duplicated chunks=%q err=%v", chunks, err)
+	}
+}
+
 func TestChatCompletionsMapsCodexIncompleteReasons(t *testing.T) {
 	for _, testCase := range []struct {
 		name, reason, finish string

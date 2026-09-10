@@ -865,6 +865,83 @@ func TestResponsesAnthropicBoundsToolSchemaAndArguments(t *testing.T) {
 	}
 }
 
+func TestResponsesAnthropicToolArgumentsDoneFallbackAndParallelIndexes(t *testing.T) {
+	state := &textConversionStreamState{}
+	capability := config.ConversionCapability{Tools: true}
+	send := func(payload string) []map[string]any {
+		out, err := responsesEventToAnthropicWithCapabilityState([]byte(payload), state, capability)
+		if err != nil {
+			t.Fatalf("event=%s err=%v", payload, err)
+		}
+		return out
+	}
+	send(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`)
+	send(`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_a","name":"a"}}`)
+	send(`{"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","call_id":"call_b","name":"b"}}`)
+	fallback := send(`{"type":"response.function_call_arguments.done","output_index":3,"arguments":"{\"q\":\"b\"}"}`)
+	if len(fallback) != 0 {
+		t.Fatalf("interleaved tool block was emitted before serialization: %#v", fallback)
+	}
+	send(`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\":\"a\"}"}`)
+	if duplicate := send(`{"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"q\":\"a\"}"}`); len(duplicate) != 0 {
+		t.Fatalf("done duplicated prior delta: %#v", duplicate)
+	}
+	send(`{"type":"response.output_item.done","output_index":3,"item":{"type":"function_call","call_id":"call_b","name":"b"}}`)
+	send(`{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call_a","name":"a"}}`)
+	terminal := send(`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":2}}}`)
+	if len(terminal) != 9 {
+		t.Fatalf("serialized terminal blocks=%#v", terminal)
+	}
+	want := []struct {
+		typ   string
+		index any
+	}{
+		{"content_block_stop", 0},
+		{"content_block_start", 1}, {"content_block_delta", 1}, {"content_block_stop", 1},
+		{"content_block_start", 2}, {"content_block_delta", 2}, {"content_block_stop", 2},
+		{"message_delta", nil}, {"message_stop", nil},
+	}
+	for i, expected := range want {
+		if terminal[i]["type"] != expected.typ || expected.index != nil && terminal[i]["index"] != expected.index {
+			t.Fatalf("terminal[%d]=%#v want=%#v", i, terminal[i], expected)
+		}
+	}
+	if terminal[2]["delta"].(map[string]any)["partial_json"] != `{"q":"a"}` || terminal[5]["delta"].(map[string]any)["partial_json"] != `{"q":"b"}` {
+		t.Fatalf("serialized arguments=%#v / %#v", terminal[2], terminal[5])
+	}
+}
+
+func TestResponsesAnthropicRejectsEmptyIncomplete(t *testing.T) {
+	state := &textConversionStreamState{}
+	_, _ = responsesEventToAnthropic([]byte(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`), state)
+	if _, err := responsesEventToAnthropic([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","output":[],"usage":{"input_tokens":4,"output_tokens":0}}}`), state); err == nil {
+		t.Fatal("CP-STREAM-014 empty incomplete became a normal Anthropic stop")
+	}
+	withReasoning := &textConversionStreamState{}
+	capability := config.ConversionCapability{Reasoning: true}
+	_, _ = responsesEventToAnthropicWithCapabilityState([]byte(`{"type":"response.created","response":{"id":"resp_2","model":"gpt-test"}}`), withReasoning, capability)
+	_, _ = responsesEventToAnthropicWithCapabilityState([]byte(`{"type":"response.reasoning.delta","delta":"analysis"}`), withReasoning, capability)
+	if _, err := responsesEventToAnthropicWithCapabilityState([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":4,"output_tokens":0}}}`), withReasoning, capability); err != nil {
+		t.Fatalf("reasoning output evidence was ignored: %v", err)
+	}
+}
+
+func TestResponsesAnthropicUsesOutputTextDoneFallbackOnce(t *testing.T) {
+	state := &textConversionStreamState{}
+	_, _ = responsesEventToAnthropic([]byte(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`), state)
+	events, err := responsesEventToAnthropic([]byte(`{"type":"response.output_text.done","text":"answer"}`), state)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("done fallback events=%#v err=%v", events, err)
+	}
+	delta, _ := events[0]["delta"].(map[string]any)
+	if delta["type"] != "text_delta" || delta["text"] != "answer" {
+		t.Fatalf("done fallback delta=%#v", delta)
+	}
+	if events, err = responsesEventToAnthropic([]byte(`{"type":"response.output_text.done","text":"answer"}`), state); err != nil || len(events) != 0 {
+		t.Fatalf("done fallback duplicated events=%#v err=%v", events, err)
+	}
+}
+
 func TestConvertedNonStreamRejectsSSEImmediately(t *testing.T) {
 	for _, tc := range []struct {
 		name string

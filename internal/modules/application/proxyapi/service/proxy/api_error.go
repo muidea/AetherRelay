@@ -13,6 +13,7 @@ const (
 	ErrorCodeModelNotFound         = "model_not_found"
 	ErrorCodeRouteContractInvalid  = "route_contract_invalid"
 	ErrorCodeProviderUnavailable   = "provider_unavailable"
+	ErrorCodeUpstreamAuthRequired  = "upstream_authentication_required"
 	ErrorCodeMultipleProviders     = "multiple_providers"
 	ErrorCodeInvalidRequest        = "invalid_request"
 	ErrorCodeEndpointUnsupported   = "endpoint_unsupported"
@@ -44,6 +45,7 @@ type AnthropicError struct {
 // 可选上下文字段用于客户端与 WorkOrch 诊断,均不泄露 secret。
 type APIError struct {
 	RetryAfterSeconds   int      `json:"-"`
+	Retryable           *bool    `json:"retryable,omitempty"`
 	Code                string   `json:"code"`
 	Message             string   `json:"message"`
 	Type                string   `json:"type,omitempty"` // OpenAI error.type
@@ -90,6 +92,8 @@ func openAIErrorType(code string) string {
 	switch code {
 	case ErrorCodeRequestTooLarge:
 		return "invalid_request_error"
+	case ErrorCodeUpstreamAuthRequired:
+		return "authentication_error"
 	case ErrorCodeProxyInternalError, ErrorCodeUpstreamUnavailable, ErrorCodeProviderUnavailable, ErrorCodeRouteContractInvalid:
 		return "api_error"
 	default:
@@ -103,6 +107,8 @@ func anthropicErrorType(code string) string {
 		ErrorCodeEndpointUnsupported, ErrorCodeConversionUnsupported,
 		ErrorCodeAuthenticationFailed:
 		return "invalid_request_error"
+	case ErrorCodeUpstreamAuthRequired:
+		return "authentication_error"
 	case ErrorCodeProviderUnavailable, ErrorCodeUpstreamUnavailable:
 		return "overloaded_error"
 	default:
@@ -125,7 +131,7 @@ func statusForAPIError(apiErr *APIError) int {
 		return http.StatusBadRequest
 	}
 	switch apiErr.Code {
-	case ErrorCodeProviderUnavailable, ErrorCodeUpstreamUnavailable:
+	case ErrorCodeProviderUnavailable, ErrorCodeUpstreamUnavailable, ErrorCodeUpstreamAuthRequired:
 		return http.StatusServiceUnavailable
 	case ErrorCodeRouteContractInvalid, ErrorCodeProxyInternalError:
 		return http.StatusInternalServerError

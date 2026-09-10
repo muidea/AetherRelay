@@ -16,6 +16,7 @@ import (
 	accevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"github.com/muidea/magicCommon/event"
 )
 
@@ -25,6 +26,7 @@ type codexWebsocketBinding struct {
 	model          string
 	resultRecorded bool
 	turnEvidence   bool
+	outputEvidence bool
 	fingerprint    upevents.CodexFingerprint
 }
 
@@ -34,6 +36,9 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 	for {
 		account, err := s.acquireCodexAccountForTransport(ctx, request.Model, tried, request.SessionHash, accevents.TransportWebsocket)
 		if err != nil {
+			if terminalAdmissionFailure(err) {
+				return codexresponses.WebsocketOpenResult{}, err
+			}
 			if lastFailure != nil {
 				return codexresponses.WebsocketOpenResult{}, lastFailure
 			}
@@ -94,6 +99,7 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 	if found {
 		binding.resultRecorded = false
 		binding.turnEvidence = false
+		binding.outputEvidence = false
 		s.codexWebsockets[sessionID] = binding
 	}
 	s.mu.Unlock()
@@ -129,15 +135,18 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 	}
 	if len(update.Payload) > 0 {
 		evidence := codexWebsocketPayloadHasEvidence(update.Payload)
+		outputEvidence := codexWebsocketPayloadHasOutputEvidence(update.Payload)
 		s.mu.Lock()
 		binding, found := s.codexWebsockets[sessionID]
-		if found && evidence {
-			binding.turnEvidence = true
+		if found {
+			binding.turnEvidence = binding.turnEvidence || evidence
+			binding.outputEvidence = binding.outputEvidence || outputEvidence
 			s.codexWebsockets[sessionID] = binding
 		}
 		turnEvidence := found && binding.turnEvidence
+		turnOutputEvidence := found && binding.outputEvidence
 		s.mu.Unlock()
-		if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence(update.Payload, turnEvidence); terminal {
+		if success, terminal, class := codexWebsocketTurnOutcomeWithOutputEvidence(update.Payload, turnEvidence, turnOutputEvidence); terminal {
 			if update.ErrorClass != "" {
 				failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
 				class = string(failure.Kind)
@@ -146,10 +155,12 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 			} else {
 				s.recordCodexWebsocketTurn(ctx, sessionID, success, class)
 			}
-			if !success && codexWebsocketEmptyCompleted(update.Payload) && !turnEvidence {
+			emptyCompleted := codexWebsocketEmptyCompleted(update.Payload) && !turnEvidence
+			emptyIncomplete := aetherrelaycodex.EmptyIncomplete(update.Payload, 0, turnOutputEvidence)
+			if !success && (emptyCompleted || emptyIncomplete) {
 				result.Payload = nil
 				result.Done = true
-				result.Failure = codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream returned an empty response.completed"))
+				result.Failure = codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream returned an empty terminal response"))
 			}
 		}
 	}
@@ -186,6 +197,10 @@ func (s *Proxy) recordCodexWebsocketTurnResult(ctx context.Context, sessionID st
 }
 
 func codexWebsocketTurnOutcomeWithEvidence(payload []byte, turnEvidence bool) (success, terminal bool, class string) {
+	return codexWebsocketTurnOutcomeWithOutputEvidence(payload, turnEvidence, turnEvidence)
+}
+
+func codexWebsocketTurnOutcomeWithOutputEvidence(payload []byte, turnEvidence, outputEvidence bool) (success, terminal bool, class string) {
 	var event struct {
 		Type     string          `json:"type"`
 		Response json.RawMessage `json:"response"`
@@ -200,12 +215,35 @@ func codexWebsocketTurnOutcomeWithEvidence(payload []byte, turnEvidence bool) (s
 		}
 		return true, true, ""
 	case "response.incomplete":
+		if aetherrelaycodex.EmptyIncomplete(payload, 0, outputEvidence) {
+			return false, true, accevents.ErrorUpstream
+		}
 		return true, true, ""
 	case "response.failed", "response.cancelled", "response.canceled", "error":
 		return false, true, accevents.ErrorUpstream
 	default:
 		return false, false, ""
 	}
+}
+
+func codexWebsocketPayloadHasOutputEvidence(payload []byte) bool {
+	if aetherrelaycodex.MeaningfulOutputEvent(payload) {
+		return true
+	}
+	var event struct {
+		Type string          `json:"type"`
+		Item json.RawMessage `json:"item"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	if event.Type == "response.web_search_call.searching" || event.Type == "response.web_search_call.completed" {
+		return true
+	}
+	if event.Type == "response.output_item.added" || event.Type == "response.output_item.done" {
+		return codexWebsocketItemHasEvidence(event.Item)
+	}
+	return false
 }
 
 func codexWebsocketPayloadHasEvidence(payload []byte) bool {
@@ -245,7 +283,7 @@ func codexWebsocketItemHasEvidence(raw json.RawMessage) bool {
 			return true
 		}
 	}
-	// A completed tool call with no arguments is still a semantic request.
+	// A named tool call with no arguments is still generated output.
 	var typ, status, name string
 	_ = json.Unmarshal(item["type"], &typ)
 	_ = json.Unmarshal(item["status"], &status)
@@ -261,7 +299,7 @@ func codexWebsocketItemHasEvidence(raw json.RawMessage) bool {
 		_ = json.Unmarshal(item["action"], &action)
 		return status == "completed" || action.Query != "" || strings.Join(action.Queries, "") != "" || action.URL != "" || action.Pattern != "" || len(action.Sources) > 0
 	}
-	return status == "completed" && name != "" && strings.Contains(typ, "call")
+	return name != "" && strings.Contains(typ, "call")
 }
 
 func rawJSONSemanticValue(raw json.RawMessage) bool {
@@ -339,6 +377,9 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		}
 		account, err := s.acquireCodexAccount(ctx, request.Model, tried, request.SessionHash)
 		if err != nil {
+			if terminalAdmissionFailure(err) {
+				return codexresponses.Result{}, err
+			}
 			if lastFailure != nil {
 				return codexresponses.Result{}, lastFailure
 			}
@@ -434,6 +475,9 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 	for {
 		account, err := s.acquireCodexAccountForTransport(ctx, request.Model, tried, request.SessionHash, accevents.TransportCompact)
 		if err != nil {
+			if terminalAdmissionFailure(err) {
+				return codexresponses.Result{}, err
+			}
 			if lastFailure != nil {
 				return codexresponses.Result{}, lastFailure
 			}
@@ -516,6 +560,9 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		}
 		account, err := s.acquireCodexAccount(ctx, request.Model, tried, request.SessionHash)
 		if err != nil {
+			if terminalAdmissionFailure(err) {
+				return err
+			}
 			if lastFailure != nil {
 				return lastFailure
 			}
@@ -648,11 +695,27 @@ func (s *Proxy) acquireCodexAccountForTransport(ctx context.Context, model strin
 		return accevents.AcquireResult{}, clientFailure(ctx.Err())
 	}
 	if err != nil || !ok || strings.TrimSpace(account.AccountID) == "" || strings.TrimSpace(account.AccessToken) == "" {
+		if account.UnavailableReason == "credential_permanently_invalid" {
+			retryable := false
+			failure := codexresponses.NewFailure(codexresponses.KindAuthentication, 0, fmt.Errorf("Codex OAuth credentials require reauthentication"))
+			failure.UnavailableReason = account.UnavailableReason
+			failure.Retryable = &retryable
+			return accevents.AcquireResult{}, failure
+		}
 		failure := codexresponses.NewFailure(codexresponses.KindProviderUnavailable, account.RetryAfterSeconds, fmt.Errorf("Codex OAuth account unavailable"))
 		failure.UnavailableReason = account.UnavailableReason
+		if account.UnavailableReason == "accounts_busy" || account.UnavailableReason == "accounts_cooling" {
+			retryable := true
+			failure.Retryable = &retryable
+		}
 		return accevents.AcquireResult{}, failure
 	}
 	return account, nil
+}
+
+func terminalAdmissionFailure(err error) bool {
+	failure, ok := codexresponses.AsFailure(err)
+	return ok && failure != nil && failure.Kind == codexresponses.KindAuthentication
 }
 
 func firstString(values []string) string {
