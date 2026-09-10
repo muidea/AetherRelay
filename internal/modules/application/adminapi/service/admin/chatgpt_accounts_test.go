@@ -334,6 +334,15 @@ func TestChatGPTAccountAdminUsesStableIDsAndDisplaysEmail(t *testing.T) {
 	if updateRecorder.Code != http.StatusOK || runtime.updated.ID != "account-1" || runtime.updated.Status == nil || *runtime.updated.Status != "禁用" || runtime.updated.Proxy == nil || *runtime.updated.Proxy != "" || strings.Contains(updateRecorder.Body.String(), "very-secret") {
 		t.Fatalf("update=%d command=%+v body=%s", updateRecorder.Code, runtime.updated, updateRecorder.Body.String())
 	}
+
+	enable := httptest.NewRequest(http.MethodPatch, "/admin/api/chatgpt/accounts/account-1", strings.NewReader(`{"status":"正常"}`))
+	enable.RemoteAddr = "127.0.0.1:1234"
+	enable.Header.Set("X-AetherRelay-Admin", "1")
+	enableRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(enableRecorder, enable)
+	if enableRecorder.Code != http.StatusOK || runtime.updated.Status == nil || *runtime.updated.Status != "正常" {
+		t.Fatalf("enable=%d command=%+v body=%s", enableRecorder.Code, runtime.updated, enableRecorder.Body.String())
+	}
 }
 
 func TestChatGPTImageTaskRetryGeneration(t *testing.T) {

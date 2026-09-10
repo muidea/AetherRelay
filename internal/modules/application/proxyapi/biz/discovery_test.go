@@ -476,7 +476,7 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 	}
 }
 
-func TestCodexUsageRefreshCountsIneligibleRequestedAccountsAsFailures(t *testing.T) {
+func TestCodexUsageRefreshCountsMissingRequestedAccountsAsFailures(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)
 	t.Cleanup(func() {
@@ -488,7 +488,7 @@ func TestCodexUsageRefreshCountsIneligibleRequestedAccountsAsFailures(t *testing
 		result.Set(codexevents.ListUsageCandidatesResult{}, nil)
 	})
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
-	started, err := proxy.StartCodexUsageRefresh(context.Background(), []string{"disabled-account"})
+	started, err := proxy.StartCodexUsageRefresh(context.Background(), []string{"missing-account"})
 	if err != nil {
 		t.Fatal(err)
 	}

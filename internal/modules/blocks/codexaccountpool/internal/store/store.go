@@ -753,7 +753,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 		if !availabilityNeutral {
 			switch strings.TrimSpace(errorClass) {
 			case events.ErrorInvalidToken:
-				if item.Status != events.StatusAbnormal {
+				if item.Status != events.StatusDisabled && item.Status != events.StatusAbnormal {
 					item.Status = events.StatusAbnormal
 					statusChanged = true
 				}
@@ -1143,11 +1143,12 @@ func normalizeModelDiscoveryErrorClass(value string) string {
 	}
 }
 
-// ListUsageCandidates returns routable accounts for an unscoped refresh. An
-// explicit operator selection may also retry an abnormal account because the
-// usage flow can refresh an invalid credential once and recover it. Disabled
-// remains an operator-owned state and is never bypassed. Credential fields
-// remain restricted to the account-pool/proxy EventHub path.
+// ListUsageCandidates returns accounts whose upstream usage can be observed.
+// Disabled accounts remain eligible because disabling controls routing only.
+// An explicit operator selection may additionally retry an abnormal account
+// because the usage flow can refresh an invalid credential once and recover
+// it. Credential fields remain restricted to the account-pool/proxy EventHub
+// path.
 func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandidatesResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1163,7 +1164,7 @@ func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandida
 		if item == nil || strings.TrimSpace(item.AccessToken) == "" {
 			continue
 		}
-		if item.Status != events.StatusNormal && (len(requested) == 0 || item.Status != events.StatusAbnormal) {
+		if item.Status != events.StatusNormal && item.Status != events.StatusDisabled && (len(requested) == 0 || item.Status != events.StatusAbnormal) {
 			continue
 		}
 		if len(requested) > 0 {

@@ -7,7 +7,7 @@ cd "$repo_dir"
 go test ./internal/modules/application/proxyapi/service/proxy ./internal/modules/application/proxyapi/biz ./internal/modules/blocks/codexaccountpool/biz ./internal/modules/blocks/codexupstream/biz
 go test -race ./internal/modules/application/proxyapi/service/proxy ./internal/modules/application/proxyapi/biz ./internal/modules/blocks/codexaccountpool/biz ./internal/modules/blocks/codexupstream/biz
 go test -race ./internal/modules/blocks/codexaccountpool/internal/store ./internal/modules/application/proxyapi/pkg/codexresponses
-node --test web/admin/models.test.cjs web/admin/usage.test.cjs
+node --test web/admin/accounts.test.cjs web/admin/models.test.cjs web/admin/usage.test.cjs
 go vet ./...
 git diff --check
 

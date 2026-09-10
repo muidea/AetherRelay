@@ -596,12 +596,19 @@ func TestCredentialRefreshHealthDoesNotOverrideVerifiedAccessHealth(t *testing.T
 		t.Fatalf("put disabled usage ok=%v err=%v", ok, err)
 	}
 	view, _ = store.View(id)
-	if view.Status != events.StatusDisabled {
+	if view.Status != events.StatusDisabled || view.UsageSnapshot == nil || view.UsageSnapshot.ObservedAt != now.Format(time.RFC3339) {
 		t.Fatalf("verified usage bypassed disabled state: %+v", view)
+	}
+	if _, err := store.RecordResult(id, "gpt-test", false, events.ErrorInvalidToken, 0, false, "", false); err != nil {
+		t.Fatal(err)
+	}
+	view, _ = store.View(id)
+	if view.Status != events.StatusDisabled {
+		t.Fatalf("in-flight response bypassed disabled state: %+v", view)
 	}
 }
 
-func TestExplicitUsageCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testing.T) {
+func TestUsageCandidatesIncludeDisabledAccounts(t *testing.T) {
 	store := openTestStore(t)
 	_, _, _, err := store.Import([]events.CredentialInput{
 		{AccessToken: "normal-access", RefreshToken: "normal-refresh"},
@@ -622,11 +629,11 @@ func TestExplicitUsageCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testin
 		}
 	}
 
-	if got := store.ListUsageCandidates(nil).Candidates; len(got) != 1 || got[0].AccountID != items[0].ID {
+	if got := store.ListUsageCandidates(nil).Candidates; len(got) != 2 || got[0].AccountID != items[0].ID || got[1].AccountID != items[2].ID {
 		t.Fatalf("unscoped candidates=%#v", got)
 	}
 	ids := []string{items[0].ID, items[1].ID, items[2].ID}
-	if got := store.ListUsageCandidates(ids).Candidates; len(got) != 2 || got[0].AccountID != items[0].ID || got[1].AccountID != items[1].ID {
+	if got := store.ListUsageCandidates(ids).Candidates; len(got) != 3 || got[0].AccountID != items[0].ID || got[1].AccountID != items[1].ID || got[2].AccountID != items[2].ID {
 		t.Fatalf("explicit candidates=%#v", got)
 	}
 }

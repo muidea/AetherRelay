@@ -458,11 +458,11 @@ func (s *Store) refreshCandidatesLocked(tokens []string) []events.AccountView {
 		if acc == nil || !isWebCompatibleSource(acc.SourceType) {
 			continue
 		}
-		// Scheduled scans only revisit routable accounts. An explicit manual
-		// selection may also retry an abnormal account so an operator can
-		// recover it after its credential or network issue has been fixed.
-		// Disabled remains an operator-owned state and is never bypassed.
-		if acc.Status != StatusNormal && acc.Status != StatusLimited && (!hasSelection || acc.Status != StatusAbnormal) {
+		// Disabling an account controls routing admission only. Scheduled quota
+		// reconciliation continues for disabled accounts, while an explicit
+		// selection may additionally retry an abnormal account after its
+		// credential or network issue has been fixed.
+		if acc.Status != StatusNormal && acc.Status != StatusLimited && acc.Status != StatusDisabled && (!hasSelection || acc.Status != StatusAbnormal) {
 			continue
 		}
 		out = append(out, toView(acc, true))
@@ -484,8 +484,9 @@ func isWebCompatibleSource(sourceType string) bool {
 }
 
 // TokenRefreshCandidates selects at most keepaliveLimit opportunistic
-// refreshes, in addition to every JWT that is within refreshSkew. It never
-// selects disabled accounts and uses only owner-local credentials.
+// refreshes, in addition to every JWT that is within refreshSkew. Disabled
+// accounts remain eligible because credential maintenance supports quota
+// observation and does not grant routing admission.
 func (s *Store) TokenRefreshCandidates(now time.Time, refreshSkew, keepaliveAfter, errorBackoff time.Duration, keepaliveLimit int) []TokenRefreshCandidate {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -496,7 +497,7 @@ func (s *Store) TokenRefreshCandidates(now time.Time, refreshSkew, keepaliveAfte
 	keepalive := make([]TokenRefreshCandidate, 0, keepaliveLimit)
 	for _, token := range s.order {
 		acc := s.items[token]
-		if acc == nil || acc.Status == StatusDisabled || acc.Status == StatusAbnormal || trim(acc.RefreshToken) == "" {
+		if acc == nil || acc.Status == StatusAbnormal || trim(acc.RefreshToken) == "" {
 			continue
 		}
 		candidate := TokenRefreshCandidate{AccessToken: token, RefreshToken: acc.RefreshToken, Proxy: acc.Proxy}
@@ -678,7 +679,9 @@ func (s *Store) ApplyPasswordLogin(oldToken, newToken, refreshToken, idToken, em
 		acc.Email = email
 	}
 	acc.SourceType = "password"
-	acc.Status = StatusNormal
+	if acc.Status != StatusDisabled {
+		acc.Status = StatusNormal
+	}
 	acc.ModelSnapshot = nil
 	acc.Extra["last_token_refresh_at"] = time.Now().UTC().Format(time.RFC3339)
 	delete(acc.Extra, "last_token_refresh_error")
@@ -715,8 +718,8 @@ func (s *Store) Disable(token string) (events.AccountView, bool, error) {
 	if !ok {
 		return events.AccountView{}, false, nil
 	}
-	changed := acc.Status != StatusDisabled || acc.Quota != 0
-	acc.Status, acc.Quota = StatusDisabled, 0
+	changed := acc.Status != StatusDisabled
+	acc.Status = StatusDisabled
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, false, err
 	}
@@ -750,15 +753,17 @@ func (s *Store) RecordTokenRefreshFailure(token, class string) error {
 	return s.saveLocked()
 }
 
-// ApplyUpstreamInfo updates only account-owned status projections. Disabled
-// and abnormal accounts remain operator-controlled until explicitly changed.
+// ApplyUpstreamInfo updates account-owned quota projections. A disabled status
+// remains operator-controlled while its observed quota and account metadata
+// continue to refresh; abnormal accounts require an explicit recovery path.
 func (s *Store) ApplyUpstreamInfo(token, email, planType string, quota int, restoreAt string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	acc, ok := s.items[token]
-	if !ok || acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+	if !ok || acc.Status == StatusAbnormal {
 		return false, nil
 	}
+	preserveDisabled := acc.Status == StatusDisabled
 	if email = trim(email); email != "" {
 		acc.Email = email
 	}
@@ -767,10 +772,12 @@ func (s *Store) ApplyUpstreamInfo(token, email, planType string, quota int, rest
 	}
 	previousStatus, previousQuota := acc.Status, acc.Quota
 	acc.Quota = quota
-	if quota > 0 {
-		acc.Status = StatusNormal
-	} else {
-		acc.Status = StatusLimited
+	if !preserveDisabled {
+		if quota > 0 {
+			acc.Status = StatusNormal
+		} else {
+			acc.Status = StatusLimited
+		}
 	}
 	if acc.Extra == nil {
 		acc.Extra = map[string]any{}
@@ -1398,7 +1405,7 @@ func (s *Store) MarkImageResult(token, model string, success bool, errorClass st
 		if acc.Quota > 0 {
 			acc.Quota--
 			changed = true
-			if acc.Quota == 0 {
+			if acc.Quota == 0 && acc.Status != StatusDisabled {
 				acc.Status = StatusLimited
 			}
 		}
@@ -1409,7 +1416,9 @@ func (s *Store) MarkImageResult(token, model string, success bool, errorClass st
 		now := time.Now().UTC()
 		switch strings.ToLower(strings.TrimSpace(errorClass)) {
 		case "invalid_token":
-			acc.Status = StatusAbnormal
+			if acc.Status != StatusDisabled {
+				acc.Status = StatusAbnormal
+			}
 			acc.Quota = 0
 			changed = true
 		case "rate_limit":
@@ -1538,7 +1547,9 @@ func (s *Store) RecordTextResult(accountID, model string, success bool, errorCla
 		acc.Extra["fail"] = extraInt(acc, "fail") + 1
 		switch strings.ToLower(strings.TrimSpace(errorClass)) {
 		case "invalid_token":
-			acc.Status = StatusAbnormal
+			if acc.Status != StatusDisabled {
+				acc.Status = StatusAbnormal
+			}
 			acc.Quota = 0
 			s.bumpCatalogLocked()
 		case "rate_limit":
@@ -1641,7 +1652,9 @@ func (s *Store) RemoveInvalid(token string) bool {
 	if !ok {
 		return false
 	}
-	acc.Status = StatusAbnormal
+	if acc.Status != StatusDisabled {
+		acc.Status = StatusAbnormal
+	}
 	acc.Quota = 0
 	_ = s.saveLocked()
 	s.bumpCatalogLocked()

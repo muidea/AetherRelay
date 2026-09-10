@@ -61,6 +61,44 @@ func TestAccountPoolAcquireAndMark(t *testing.T) {
 	}
 }
 
+func TestDisabledAccountStaysOutOfRoutingWhileObservationsUpdate(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 1, encryptedTestCodec(t))
+	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	quota := 2
+	account, found, err := s.Update("token-a", "plus", StatusNormal, &quota, "")
+	if err != nil || !found {
+		t.Fatalf("prepare account: found=%v err=%v", found, err)
+	}
+	if _, ok := s.AcquireImageAccount(account.ID); !ok {
+		t.Fatal("acquire image before disable")
+	}
+	disabled := StatusDisabled
+	if _, found, err := s.UpdateByID(account.ID, nil, &disabled, nil, nil); err != nil || !found {
+		t.Fatalf("disable account: found=%v err=%v", found, err)
+	}
+	if result, marked := s.MarkImageResult("token-a", "", true, ""); !marked || result.Status != StatusDisabled || result.Quota != 1 {
+		t.Fatalf("in-flight image result=%+v marked=%v", result, marked)
+	}
+	if result, recorded := s.RecordTextResult(account.ID, "", false, "invalid_token"); !recorded || result.Status != StatusDisabled {
+		t.Fatalf("in-flight text result=%+v recorded=%v", result, recorded)
+	}
+	if !s.RemoveInvalid("token-a") {
+		t.Fatal("record invalid credential")
+	}
+	view, ok := s.ViewForAccessToken("token-a")
+	if !ok || view.Status != StatusDisabled {
+		t.Fatalf("disabled view=%+v found=%v", view, ok)
+	}
+	if _, ok := s.AcquireImageToken("", "", nil, "", ""); ok {
+		t.Fatal("disabled account entered image routing")
+	}
+	if _, ok := s.AcquireTextToken(nil, "", ""); ok {
+		t.Fatal("disabled account entered text routing")
+	}
+}
+
 func TestListProjectsLegacyAccountCapabilitiesFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	s := New(path, 1, encryptedTestCodec(t))
@@ -239,8 +277,8 @@ func TestRefreshProjectionRestoresLimitedAccountAndPreservesOperatorStatus(t *te
 	if _, ok, err := s.Update("token-b", "", StatusDisabled, &zero, ""); err != nil || !ok {
 		t.Fatalf("prepare disabled account: ok=%v err=%v", ok, err)
 	}
-	if updated, err := s.ApplyUpstreamInfo("token-b", "", "plus", 4, ""); err != nil || updated {
-		t.Fatalf("disabled account changed: updated=%v err=%v", updated, err)
+	if updated, err := s.ApplyUpstreamInfo("token-b", "", "plus", 4, ""); err != nil || !updated {
+		t.Fatalf("disabled account quota was not refreshed: updated=%v err=%v", updated, err)
 	}
 
 	reloaded := New(path, 1, encryptedTestCodec(t))
@@ -248,7 +286,7 @@ func TestRefreshProjectionRestoresLimitedAccountAndPreservesOperatorStatus(t *te
 	if first == nil || first.Status != StatusNormal || first.Quota != 4 || first.Type != "plus" || first.Email != "account@example.invalid" || first.Extra["restore_at"] != "2027-01-01T00:00:00Z" {
 		t.Fatalf("refreshed account=%+v", first)
 	}
-	if second := reloaded.items["token-b"]; second == nil || second.Status != StatusDisabled {
+	if second := reloaded.items["token-b"]; second == nil || second.Status != StatusDisabled || second.Quota != 4 || second.Type != "plus" {
 		t.Fatalf("disabled account=%+v", second)
 	}
 }
@@ -285,7 +323,7 @@ func TestRefreshCandidatesIncludeAllChatGPTWebCredentialSources(t *testing.T) {
 	}
 }
 
-func TestManualRefreshCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testing.T) {
+func TestQuotaRefreshCandidatesIncludeDisabledAccounts(t *testing.T) {
 	accounts := New(filepath.Join(t.TempDir(), "accounts.json"), 2, encryptedTestCodec(t))
 	if _, _, err := accounts.Add([]string{"token-abnormal", "token-disabled"}, "oauth_import"); err != nil {
 		t.Fatal(err)
@@ -303,10 +341,10 @@ func TestManualRefreshCandidatesCanRetryAbnormalButNotDisabledAccounts(t *testin
 		ids = append(ids, item.ID)
 	}
 	got := accounts.RefreshCandidatesForIDs(ids)
-	if len(got) != 1 || got[0].Status != StatusAbnormal {
+	if len(got) != 2 || got[0].Status != StatusAbnormal || got[1].Status != StatusDisabled {
 		t.Fatalf("manual candidates=%#v", got)
 	}
-	if got := accounts.RefreshCandidates(); len(got) != 0 {
+	if got := accounts.RefreshCandidates(); len(got) != 1 || got[0].Status != StatusDisabled {
 		t.Fatalf("scheduled candidates=%#v", got)
 	}
 }
@@ -383,14 +421,16 @@ func TestTokenRefreshCandidatesPreferExpiringAndBoundKeepalive(t *testing.T) {
 	expiring := testJWT(now.Add(time.Hour), now.Add(-time.Hour))
 	keepaliveOne := testJWT(now.Add(10*24*time.Hour), now.Add(-4*24*time.Hour))
 	keepaliveTwo := testJWT(now.Add(10*24*time.Hour), now.Add(-5*24*time.Hour))
-	if _, _, err := s.Add([]string{expiring, keepaliveOne, keepaliveTwo}, "web"); err != nil {
+	disabledExpiring := testJWT(now.Add(2*time.Hour), now.Add(-2*time.Hour))
+	if _, _, err := s.Add([]string{expiring, keepaliveOne, keepaliveTwo, disabledExpiring}, "web"); err != nil {
 		t.Fatal(err)
 	}
-	for _, token := range []string{expiring, keepaliveOne, keepaliveTwo} {
+	for _, token := range []string{expiring, keepaliveOne, keepaliveTwo, disabledExpiring} {
 		s.items[token].RefreshToken = "refresh-" + token[:8]
 	}
+	s.items[disabledExpiring].Status = StatusDisabled
 	candidates := s.TokenRefreshCandidates(now, 24*time.Hour, 72*time.Hour, 6*time.Hour, 1)
-	if len(candidates) != 2 || candidates[0].AccessToken != expiring || candidates[0].Reason != "expiring" || candidates[1].Reason != "keepalive" {
+	if len(candidates) != 3 || candidates[0].AccessToken != expiring || candidates[0].Reason != "expiring" || candidates[1].AccessToken != disabledExpiring || candidates[1].Reason != "expiring" || candidates[2].Reason != "keepalive" {
 		t.Fatalf("candidates=%+v", candidates)
 	}
 }

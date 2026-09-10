@@ -131,7 +131,7 @@ func TestOAuthFinishStartsAccountInformationRefresh(t *testing.T) {
 	}
 }
 
-func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
+func TestManualRefreshUpdatesDisabledAccountQuotaAndProgress(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)
 	defer hub.Terminate(context.Background())
@@ -142,7 +142,8 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxyURL := "http://account-proxy.invalid:8080"
-	if _, _, err := accounts.UpdateByID(accounts.List()[0].ID, nil, nil, nil, &proxyURL); err != nil {
+	disabled := store.StatusDisabled
+	if _, _, err := accounts.UpdateByID(accounts.List()[0].ID, nil, &disabled, nil, &proxyURL); err != nil {
 		t.Fatal(err)
 	}
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
@@ -181,8 +182,12 @@ func TestManualRefreshUsesChatGPTWebUpstreamOwner(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}
-	if !progress.Done || progress.Total != 1 || progress.Processed != 1 || progress.Refreshed != 1 || progress.TotalQuota != 3 || progress.StatusCounts.Normal != 1 {
+	if !progress.Done || progress.Total != 1 || progress.Processed != 1 || progress.Refreshed != 1 || progress.TotalQuota != 3 || progress.StatusCounts.Disabled != 1 || progress.StatusCounts.Normal != 0 {
 		t.Fatalf("progress=%#v", progress)
+	}
+	items := accounts.List()
+	if len(items) != 1 || items[0].Status != store.StatusDisabled || items[0].Quota != 3 {
+		t.Fatalf("refreshed account=%#v", items)
 	}
 	for _, refreshErr := range progress.Errors {
 		if refreshErr.AccountID == "account-token" {
