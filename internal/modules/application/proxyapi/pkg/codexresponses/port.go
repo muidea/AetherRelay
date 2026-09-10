@@ -4,6 +4,7 @@ package codexresponses
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type Header struct{ Name, Value string }
@@ -28,7 +29,13 @@ type Completion struct {
 	Err    error
 }
 
-type StreamStart struct{ Headers []Header }
+// StreamStart is emitted when the first business SSE data arrives. The
+// duration is measured from starting the upstream Codex stream, rather than
+// from receiving its HTTP headers.
+type StreamStart struct {
+	Headers            []Header
+	FirstEventDuration time.Duration
+}
 
 type WebsocketOpenRequest struct {
 	Model         string

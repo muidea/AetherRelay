@@ -53,6 +53,7 @@ type Round struct {
 	// UpstreamDuration 是本次上游 HTTP 请求（含首包探测）的耗时，仅供
 	// usage 结算使用；完整 metadata 当前仍保留总请求耗时。
 	UpstreamDuration         time.Duration
+	FirstEventDuration       time.Duration
 	UpstreamStatus           int
 	UpstreamContentType      string
 	UpstreamContentLength    int64
@@ -143,6 +144,15 @@ func (r *Round) SetUpstreamDuration(duration time.Duration) {
 	r.UpstreamDuration = duration
 }
 
+// SetFirstEventDuration records the wait from starting an upstream stream to
+// its first business SSE event. Zero means no business event was observed.
+func (r *Round) SetFirstEventDuration(duration time.Duration) {
+	if r == nil || duration < 0 {
+		return
+	}
+	r.FirstEventDuration = duration
+}
+
 func (r *Round) SetUpstreamHeaders(status int, contentType string, contentLength int64, transferEncoding string, headerDuration time.Duration) {
 	if r == nil {
 		return
@@ -195,6 +205,7 @@ type Metadata struct {
 	// Outcome 与 DuckDB/Prometheus 对齐的业务结果枚举。
 	Outcome                  string  `json:"outcome,omitempty"`
 	DurationMS               int64   `json:"duration_ms"`
+	FirstEventDurationMS     int64   `json:"first_event_duration_ms,omitempty"`
 	InputTokens              int     `json:"input_tokens"`
 	OutputTokens             int     `json:"output_tokens"`
 	TotalTokens              int     `json:"total_tokens"`

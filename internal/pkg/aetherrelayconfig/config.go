@@ -327,7 +327,7 @@ func Load(path string) (Config, error) {
 		LogFormat:                "json",
 		RequestTimeout:           5 * time.Minute,
 		StreamIdleTimeout:        5 * time.Minute,
-		StreamFirstEventTimeout:  30 * time.Second,
+		StreamFirstEventTimeout:  90 * time.Second,
 		UpstreamBodyIdleTimeout:  180 * time.Second,
 		AdminAuth: AdminAuthConfig{
 			Enabled:             false,

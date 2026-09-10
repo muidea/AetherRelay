@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`6.0.0`
+> 合同版本：`7.0.0`
 >
 > 状态：`active`
 >
@@ -239,7 +239,7 @@
 
 `CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
-`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
+`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 90 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得提交客户端响应。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
 
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
@@ -329,9 +329,9 @@
 
 `CP-FAIL-018` 结构化 `error.code=model_not_found` 的 HTTP 404 或 Responses failed/error 终态必须单独分类；普通 404、错误消息中的同名文本及参数错误不属于该类别。仅记录账号 × exact model 的 5 分钟冷却，不改变账号状态、quota 或 compact/WS 能力；过期自动恢复准入，显式替换凭据清除旧观察，目录刷新不能提前解除实际失败观察。HTTP Responses/compact 在未输出、无 `previous_response_id`、无非空 turn-state 时允许保持同模型最多尝试 3 个不同账号；禁止模型替换、同账号循环及输出后重放。耗尽保留最后真实上游错误。该窄例外优先于 `CP-COMPACT-005` 的普通 404 规则；WS 只分类和记录，不扩展 `CP-WS-012` 的迁移边界。
 
-`CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。账号冷却只能由账号 owner 按 exact model 与 credential-wide 事实计算。
+`CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。首事件超时只附 5 秒 Retry-After，因其表明单次上游流静默而不是账号凭据失效；账号 owner 仍只按 exact model 与 credential-wide 事实计算冷却。
 
-`CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、事件数、字节数、最后事件时间和耗时；不输出请求正文、凭据或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
+`CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、首事件耗时、总耗时、事件数、字节数和最后事件时间；用量事件与归档 metadata 在首个有效 SSE data 到达时记录 `first_event_duration_ms`，并始终记录总 `duration_ms`。不输出请求正文、凭据或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
 
 `CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码和白名单 request_kind/compaction reason/phase。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
 

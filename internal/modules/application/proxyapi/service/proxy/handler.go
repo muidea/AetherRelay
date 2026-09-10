@@ -619,18 +619,20 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 	}
 	startedAt := time.Now()
 	upstreamDuration := time.Duration(0)
+	firstEventDuration := time.Duration(0)
 	if round != nil {
 		if !round.StartedAt.IsZero() {
 			startedAt = round.StartedAt
 		}
 		upstreamDuration = round.UpstreamDuration
+		firstEventDuration = round.FirstEventDuration
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := h.usageStore.Complete(ctx, usage.CompleteRecord{
 		EventID: eventID, CompletedAt: time.Now().UTC(), HTTPStatus: http.StatusInternalServerError,
 		Outcome: "error", ErrorCode: ErrorCodeProxyInternalError,
-		Duration: time.Since(startedAt), UpstreamDuration: upstreamDuration,
+		Duration: time.Since(startedAt), FirstEventDuration: firstEventDuration, UpstreamDuration: upstreamDuration,
 		UpstreamStatus: func() int {
 			if round != nil {
 				return round.UpstreamStatus
@@ -706,6 +708,7 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		rec.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
 		rec.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		rec.UpstreamDuration = round.UpstreamDuration
+		rec.FirstEventDuration = round.FirstEventDuration
 		rec.UpstreamStatus = round.UpstreamStatus
 		rec.UpstreamContentType = round.UpstreamContentType
 		rec.UpstreamContentLength = round.UpstreamContentLength
@@ -2924,6 +2927,7 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		meta.ConversionDurationMS = round.ConversionDuration.Milliseconds()
 		meta.ConversionDegraded = round.ConversionDegraded
+		meta.FirstEventDurationMS = round.FirstEventDuration.Milliseconds()
 	}
 	if round != nil {
 		if round.HasFile("request.meta.json") {

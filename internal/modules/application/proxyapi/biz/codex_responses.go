@@ -756,10 +756,21 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream update"))
 		}
 		if len(update.Data) > 0 {
-			guard.observe(update.Data)
+			firstBusinessEvent := guard.observe(update.Data)
+			if !clientStarted && !firstBusinessEvent {
+				// Do not commit the client response for upstream keepalives. A
+				// later first-event timeout must still be an HTTP error.
+				if update.Done {
+					if update.ErrorClass != "" {
+						return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
+					}
+					return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream ended before first business event"))
+				}
+				continue
+			}
 			phase = "emit"
 			if !clientStarted && started != nil {
-				if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers)}); err != nil {
+				if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: time.Since(guard.started)}); err != nil {
 					return clientFailure(err)
 				}
 				s.noteCodexTurnState(account.AccountID, startedUpstream.Headers)

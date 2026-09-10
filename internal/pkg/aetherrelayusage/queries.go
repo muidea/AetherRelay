@@ -373,7 +373,7 @@ SELECT
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
-    duration_ms, upstream_duration_ms,
+    duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), coalesce(upstream_content_length, 0), coalesce(upstream_transfer_encoding, ''),
     stream, estimated, state
 FROM usage_events
@@ -393,7 +393,7 @@ LIMIT ?`
 		var e Event
 		var completedAt sql.NullTime
 		var httpStatus sql.NullInt64
-		var durationMS, upstreamMS sql.NullInt64
+		var durationMS, firstEventMS, upstreamMS sql.NullInt64
 		var upstreamStatus sql.NullInt64
 		var ignored, unsupported string
 		var usageDate string
@@ -409,7 +409,7 @@ LIMIT ?`
 			&e.InputTokens, &e.OutputTokens, &e.TotalTokens,
 			&e.CachedInputTokens, &e.CacheCreationInputTokens,
 			&httpStatus, &e.Outcome, &e.ErrorCode,
-			&durationMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &e.UpstreamContentLength, &e.UpstreamTransferEncoding,
+			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &e.UpstreamContentLength, &e.UpstreamTransferEncoding,
 			&e.Stream, &e.Estimated, &e.State,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
@@ -425,6 +425,9 @@ LIMIT ?`
 		}
 		if durationMS.Valid {
 			e.DurationMS = durationMS.Int64
+		}
+		if firstEventMS.Valid {
+			e.FirstEventDurationMS = firstEventMS.Int64
 		}
 		if upstreamMS.Valid {
 			e.UpstreamDurationMS = upstreamMS.Int64

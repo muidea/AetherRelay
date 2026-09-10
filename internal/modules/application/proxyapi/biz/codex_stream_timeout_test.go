@@ -108,7 +108,11 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			err := proxy.StreamCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, nil, func([]byte) error {
+			var firstEvent time.Duration
+			err := proxy.StreamCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, func(info codexresponses.StreamStart) error {
+				firstEvent = info.FirstEventDuration
+				return nil
+			}, func([]byte) error {
 				if tc.name == "cancel" {
 					cancel()
 				}
@@ -120,6 +124,12 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			failure, _ := codexresponses.AsFailure(err)
 			if (tc.want == "" && err != nil) || (tc.want != "" && (failure == nil || failure.Kind != tc.want)) {
 				t.Fatalf("failure=%+v want=%s", failure, tc.want)
+			}
+			if tc.name == "progress" && firstEvent <= 0 {
+				t.Fatalf("first event duration=%s", firstEvent)
+			}
+			if tc.name == "first" && failure.RetryAfterSeconds != firstEventTimeoutRetryAfter {
+				t.Fatalf("retry after=%d", failure.RetryAfterSeconds)
 			}
 			wantCancels := int32(1)
 			if tc.name == "headers" {
@@ -150,6 +160,9 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 					}
 					if r.Success != (tc.want == "") || (!r.Success && r.ErrorClass != wantClass) {
 						t.Fatalf("feedback=%+v", r)
+					}
+					if tc.name == "first" && r.RetryAfterSeconds != firstEventTimeoutRetryAfter {
+						t.Fatalf("first-event feedback=%+v", r)
 					}
 				default:
 					t.Fatal("missing account feedback")

@@ -125,6 +125,7 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.Outcome = rec.Outcome
 	e.ErrorCode = rec.ErrorCode
 	e.DurationMS = rec.Duration.Milliseconds()
+	e.FirstEventDurationMS = rec.FirstEventDuration.Milliseconds()
 	e.UpstreamDurationMS = rec.UpstreamDuration.Milliseconds()
 	e.UpstreamStatus = rec.UpstreamStatus
 	e.UpstreamContentType = rec.UpstreamContentType
@@ -441,6 +442,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			e.Outcome,
 			e.ErrorCode,
 			strconv.FormatInt(e.DurationMS, 10),
+			strconv.FormatInt(e.FirstEventDurationMS, 10),
 			strconv.FormatInt(e.UpstreamDurationMS, 10),
 			strconv.FormatBool(e.Stream),
 			strconv.FormatBool(e.Estimated),

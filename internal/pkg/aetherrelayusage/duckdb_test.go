@@ -73,6 +73,45 @@ func TestMigrationFirstAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrationV1PreservesUsageHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "v1.duckdb")
+	store, err := OpenDuckDB(testCfg(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Start(ctx, StartRecord{EventID: "preserved", StartedAt: time.Now().UTC(), APIKeyID: "key"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(ctx, CompleteRecord{EventID: "preserved", CompletedAt: time.Now().UTC(), HTTPStatus: 200, Outcome: "success"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM schema_migrations`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`, previousSchemaVersion, previousSchemaName, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDuckDB(testCfg(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	var count int
+	if err := migrated.db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'preserved'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("preserved usage count=%d err=%v", count, err)
+	}
+	var version int
+	if err := migrated.db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != currentSchemaVersion {
+		t.Fatalf("schema version=%d err=%v", version, err)
+	}
+}
+
 func TestHistoricalSchemaIsResetToFinalV1(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "historical.duckdb")

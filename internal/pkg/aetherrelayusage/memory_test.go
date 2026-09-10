@@ -26,6 +26,7 @@ func TestMemoryStoreConversionObservability(t *testing.T) {
 		ConversionDegraded:  true,
 		IgnoredFeatures:     []string{"thinking_output"},
 		UnsupportedFeatures: []string{"images"},
+		FirstEventDuration:  275 * time.Millisecond,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func TestMemoryStoreConversionObservability(t *testing.T) {
 		t.Fatalf("events=%+v err=%v", page, err)
 	}
 	event := page.Events[0]
-	if event.ConversionLevel != 3 || !event.ConversionDegraded || strings.Join(event.IgnoredFeatures, ",") != "thinking_output" || strings.Join(event.UnsupportedFeatures, ",") != "images" {
+	if event.ConversionLevel != 3 || !event.ConversionDegraded || event.FirstEventDurationMS != 275 || strings.Join(event.IgnoredFeatures, ",") != "thinking_output" || strings.Join(event.UnsupportedFeatures, ",") != "images" {
 		t.Fatalf("event=%+v", event)
 	}
 	var output bytes.Buffer
@@ -51,5 +52,8 @@ func TestMemoryStoreConversionObservability(t *testing.T) {
 	}
 	if rows[1][columns["ignored_features"]] != "thinking_output" || rows[1][columns["unsupported_features"]] != "images" {
 		t.Fatalf("CSV conversion features=%v", rows[1])
+	}
+	if rows[1][columns["first_event_duration_ms"]] != "275" {
+		t.Fatalf("CSV first event duration=%v", rows[1])
 	}
 }

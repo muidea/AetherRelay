@@ -53,6 +53,7 @@ type CompleteRecord struct {
 	Outcome                  string
 	ErrorCode                string
 	Duration                 time.Duration
+	FirstEventDuration       time.Duration
 	UpstreamDuration         time.Duration
 	UpstreamStatus           int
 	UpstreamContentType      string
@@ -188,6 +189,7 @@ type Event struct {
 	Outcome                  string     `json:"outcome,omitempty"`
 	ErrorCode                string     `json:"error_code,omitempty"`
 	DurationMS               int64      `json:"duration_ms,omitempty"`
+	FirstEventDurationMS     int64      `json:"first_event_duration_ms,omitempty"`
 	UpstreamDurationMS       int64      `json:"upstream_duration_ms,omitempty"`
 	UpstreamStatus           int        `json:"upstream_status,omitempty"`
 	UpstreamContentType      string     `json:"upstream_content_type,omitempty"`

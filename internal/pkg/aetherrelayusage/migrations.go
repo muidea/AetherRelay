@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	currentSchemaVersion = 1
-	currentSchemaName    = "usage_provider_access_v1"
+	currentSchemaVersion  = 2
+	currentSchemaName     = "usage_first_event_duration_v2"
+	previousSchemaVersion = 1
+	previousSchemaName    = "usage_provider_access_v1"
 )
 
 // migrate owns only the usage runtime tables. Historical schemas are not
@@ -39,6 +41,18 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	case err == nil && version == currentSchemaVersion && name == currentSchemaName:
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit schema check: %w", err)
+		}
+		return nil
+	case err == nil && version == previousSchemaVersion && name == previousSchemaName:
+		// This migration is additive so existing operational history survives.
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS first_event_duration_ms BIGINT`); err != nil {
+			return fmt.Errorf("add first event duration column: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`, currentSchemaVersion, currentSchemaName, time.Now().UTC()); err != nil {
+			return fmt.Errorf("record first event duration migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit first event duration migration: %w", err)
 		}
 		return nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
@@ -112,6 +126,7 @@ func createFinalSchema(ctx context.Context, tx *sql.Tx) error {
     outcome                     VARCHAR,
     error_code                  VARCHAR,
     duration_ms                 BIGINT,
+	first_event_duration_ms     BIGINT,
     upstream_duration_ms        BIGINT,
     stream                      BOOLEAN NOT NULL DEFAULT FALSE,
     estimated                   BOOLEAN NOT NULL DEFAULT FALSE,

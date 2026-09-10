@@ -25,6 +25,8 @@ type codexStreamGuard struct {
 	events, bytes      int64
 }
 
+const firstEventTimeoutRetryAfter = 5
+
 func newCodexStreamGuard(parent context.Context, first, idle, maximum time.Duration) (context.Context, *codexStreamGuard) {
 	ctx, cancel := context.WithCancelCause(parent)
 	g := &codexStreamGuard{cancel: cancel, idle: idle, kind: codexresponses.KindFirstEventTimeout, started: time.Now()}
@@ -47,7 +49,11 @@ func newCodexStreamGuard(parent context.Context, first, idle, maximum time.Durat
 }
 
 func (g *codexStreamGuard) fail(kind codexresponses.ErrorKind) {
-	g.cancel(codexresponses.NewFailure(kind, 0, fmt.Errorf("Codex stream %s", kind)))
+	retryAfter := 0
+	if kind == codexresponses.KindFirstEventTimeout {
+		retryAfter = firstEventTimeoutRetryAfter
+	}
+	g.cancel(codexresponses.NewFailure(kind, retryAfter, fmt.Errorf("Codex stream %s", kind)))
 }
 
 func (g *codexStreamGuard) expireSilence() {
@@ -66,17 +72,20 @@ func (g *codexStreamGuard) expireSilence() {
 	g.fail(g.kind)
 }
 
-func (g *codexStreamGuard) observe(data []byte) {
+// observe returns true only for the first business SSE data line. Comments and
+// blank lines are neither client-visible progress nor timeout renewal.
+func (g *codexStreamGuard) observe(data []byte) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
-		return
+		return false
 	}
 	g.bytes += int64(len(data))
 	line := bytes.TrimSpace(data)
 	if !bytes.HasPrefix(line, []byte("data:")) || len(bytes.TrimSpace(line[5:])) == 0 {
-		return
+		return false
 	}
+	first := g.events == 0
 	g.events++
 	g.lastEvent = time.Now()
 	g.kind = codexresponses.KindIdleTimeout
@@ -85,7 +94,7 @@ func (g *codexStreamGuard) observe(data []byte) {
 		if g.silence != nil {
 			g.silence.Stop()
 		}
-		return
+		return first
 	}
 	g.deadline = g.lastEvent.Add(g.idle)
 	if g.silence == nil {
@@ -93,6 +102,7 @@ func (g *codexStreamGuard) observe(data []byte) {
 	} else {
 		g.silence.Reset(g.idle)
 	}
+	return first
 }
 
 func (g *codexStreamGuard) close() {
@@ -119,6 +129,14 @@ func logCodexStreamAttempt(request codexresponses.Request, failure *codexrespons
 	// errors, credentials, or generated tool arguments.
 	slog.Warn("Codex stream stopped", "request_id", request.Diagnostics.RequestID,
 		"account_attempt", request.AccountAttempt, "phase", phase, "error_class", failure.Kind,
-		"duration_ms", time.Since(g.started).Milliseconds(), "event_count", g.events,
+		"first_event_duration_ms", durationMilliseconds(g.started, g.lastEvent),
+		"total_duration_ms", time.Since(g.started).Milliseconds(), "event_count", g.events,
 		"stream_bytes", g.bytes, "last_event_at", g.lastEvent)
+}
+
+func durationMilliseconds(started, ended time.Time) int64 {
+	if ended.IsZero() {
+		return 0
+	}
+	return ended.Sub(started).Milliseconds()
 }

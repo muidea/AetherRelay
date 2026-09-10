@@ -234,6 +234,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 			return nil
 		}
 		copyCodexHeaders(w.Header(), info.Headers)
+		round.SetFirstEventDuration(info.FirstEventDuration)
 		prepareSSEHeaders(w.Header())
 		w.WriteHeader(http.StatusOK)
 		streamStarted = true

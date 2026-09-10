@@ -41,6 +41,7 @@ var csvExportHeader = []string{
 	"outcome",
 	"error_code",
 	"duration_ms",
+	"first_event_duration_ms",
 	"upstream_duration_ms",
 	"stream",
 	"estimated",
@@ -80,7 +81,7 @@ SELECT
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
-    duration_ms, upstream_duration_ms,
+    duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state
 FROM usage_events
 WHERE ` + where + `
@@ -110,7 +111,7 @@ ORDER BY started_at ASC, event_id ASC`
 			stream, estimated                                    bool
 			startedAt                                            time.Time
 			completedAt                                          sql.NullTime
-			httpStatus, durationMS, upstreamMS                   sql.NullInt64
+			httpStatus, durationMS, firstEventMS, upstreamMS     sql.NullInt64
 			conversionLevel, conversionDurationMS                int64
 			conversionDegraded                                   bool
 		)
@@ -126,7 +127,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&inputTok, &outputTok, &totalTok,
 			&cachedIn, &cacheCreate,
 			&httpStatus, &outcome, &errorCode,
-			&durationMS, &upstreamMS,
+			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
 		); err != nil {
 			return ErrStoreUnavailable
@@ -149,6 +150,10 @@ ORDER BY started_at ASC, event_id ASC`
 		upDurS := ""
 		if upstreamMS.Valid {
 			upDurS = strconv.FormatInt(upstreamMS.Int64, 10)
+		}
+		firstEventS := ""
+		if firstEventMS.Valid {
+			firstEventS = strconv.FormatInt(firstEventMS.Int64, 10)
 		}
 		row := []string{
 			eventID,
@@ -180,6 +185,7 @@ ORDER BY started_at ASC, event_id ASC`
 			outcome,
 			errorCode,
 			durS,
+			firstEventS,
 			upDurS,
 			strconv.FormatBool(stream),
 			strconv.FormatBool(estimated),

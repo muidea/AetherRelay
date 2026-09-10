@@ -103,7 +103,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
 | `request_timeout_seconds` | 非流式总超时及通用 HTTP 流式等待响应头超时；Codex HTTP 流使用独立的首事件/空闲限制，不受此总时限截断。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
-| `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `30` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
+| `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `90` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
 | `archive_full_content` | 是否落盘完整请求/响应正文。 |
 | `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
