@@ -2,6 +2,7 @@
 package store
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -84,9 +85,15 @@ type Store struct {
 	items       map[string]*account
 	order       []string
 	index       int
+	persisted   map[string]secureDocumentRevision
 	// catalogVersion increments whenever an account's routing eligibility or
 	// cached model capability changes.
 	catalogVersion uint64
+}
+
+type secureDocumentRevision struct {
+	Digest   [sha256.Size]byte
+	Position int
 }
 
 func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycredential.Codec) (*Store, error) {
@@ -97,7 +104,7 @@ func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycrede
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{documents: documents, credentials: codec, items: map[string]*account{}}
+	s := &Store{documents: documents, credentials: codec, items: map[string]*account{}, persisted: map[string]secureDocumentRevision{}}
 	if err := s.load(); err != nil {
 		_ = documents.Close()
 		return nil, fmt.Errorf("load codex OAuth account state: %w", err)
@@ -106,7 +113,12 @@ func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycrede
 }
 
 func (s *Store) Close() error {
-	if s == nil || s.documents == nil {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.documents == nil {
 		return nil
 	}
 	return s.documents.Close()
@@ -134,6 +146,7 @@ func (s *Store) loadEncrypted() error {
 		if item.ID == "" {
 			item.ID = row.ID
 		}
+		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
 		if item.ID == "" || strings.TrimSpace(item.AccessToken) == "" || strings.TrimSpace(item.RefreshToken) == "" {
 			continue
 		}
@@ -166,7 +179,8 @@ func (s *Store) saveLocked() error {
 }
 
 func (s *Store) saveEncryptedLocked() error {
-	rows := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
+	upserts := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
+	next := make(map[string]secureDocumentRevision, len(s.order))
 	for position, id := range s.order {
 		item := s.items[id]
 		if item == nil {
@@ -176,13 +190,28 @@ func (s *Store) saveEncryptedLocked() error {
 		if err != nil {
 			return err
 		}
+		revision := secureDocumentRevision{Digest: sha256.Sum256(payload), Position: position}
+		next[id] = revision
+		if previous, unchanged := s.persisted[id]; unchanged && previous == revision {
+			continue
+		}
 		sealed, err := s.credentials.Seal(secureDocumentScope, id, payload)
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aetherrelaystate.SecureDocumentRow{ID: id, Position: position, Payload: sealed})
+		upserts = append(upserts, aetherrelaystate.SecureDocumentRow{ID: id, Position: position, Payload: sealed})
 	}
-	return s.documents.ReplaceSecureDocuments(secureDocumentScope, rows)
+	deletes := make([]string, 0)
+	for id := range s.persisted {
+		if _, exists := next[id]; !exists {
+			deletes = append(deletes, id)
+		}
+	}
+	if err := s.documents.ApplySecureDocuments(secureDocumentScope, upserts, deletes); err != nil {
+		return err
+	}
+	s.persisted = next
+	return nil
 }
 
 func (s *Store) List() []events.AccountView {
@@ -360,6 +389,10 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 			s.order = append(s.order, existing.ID)
 			added++
 		} else {
+			if unchangedCodexImport(existing, input) {
+				skipped++
+				continue
+			}
 			updated++
 		}
 		ids = append(ids, existing.ID)
@@ -414,13 +447,34 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		existing.CompactProtocol = nativeCompactProtocol
 		existing.WebsocketSupported = nil
 	}
+	if !changed {
+		return added, updated, skipped, nil, nil
+	}
 	if err := s.saveLocked(); err != nil {
 		return 0, 0, 0, nil, err
 	}
-	if changed {
-		s.bumpCatalogLocked()
-	}
+	s.bumpCatalogLocked()
 	return added, updated, skipped, unique(ids), nil
+}
+
+func unchangedCodexImport(existing *account, input events.CredentialInput) bool {
+	if existing == nil || input.Reauthenticate {
+		return false
+	}
+	fingerprintMode := existing.FingerprintMode
+	if input.FingerprintMode != "" {
+		fingerprintMode = input.FingerprintMode
+	} else if fingerprintMode == "" {
+		fingerprintMode = events.FingerprintModeOff
+	}
+	return existing.AccessToken == input.AccessToken &&
+		existing.RefreshToken == input.RefreshToken &&
+		existing.IDToken == strings.TrimSpace(input.IDToken) &&
+		existing.AccountIDHeader == strings.TrimSpace(input.AccountID) &&
+		existing.Email == strings.TrimSpace(input.Email) &&
+		existing.Expired == strings.TrimSpace(input.Expired) &&
+		existing.Proxy == strings.TrimSpace(input.Proxy) &&
+		existing.FingerprintMode == fingerprintMode
 }
 
 func (s *Store) Delete(ids []string) (int, error) {

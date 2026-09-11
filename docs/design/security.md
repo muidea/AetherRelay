@@ -69,6 +69,8 @@
 
 - Provider 完整目录、ChatGPT Web 账号和 Codex OAuth 账号以 owner-scoped 安全文档保存到 DuckDB；access token 不再作为数据库主键。
 - 安全文档使用 AES-256-GCM 和随机 nonce 加密，并将 scope 与稳定记录 ID 作为附加认证数据，防止密文跨记录替换。
+- 账号池在内存中记录上次成功持久化的明文摘要与顺序；保存时只加密并 UPSERT 真正变化的账号，同时显式删除移除的 ID。额度、冷却或单个账号刷新不得先删除整个 scope 再重写全部密文。Provider 目录语义未变化时同样跳过重新加密。
+- 增量写事务失败时不得推进内存中的已持久化摘要；下一次保存必须重试同一变化。摘要只存在于 owner Store 内存，不写入 DuckDB，也不跨 EventHub 传递。
 - 主密钥 `AETHERRELAY_CREDENTIAL_KEY` 必须是 Base64 编码的 32 字节随机值，只从进程环境或编排 secret 注入。它不得写入 `config.yaml`、DuckDB、日志或版本库。
 - 主密钥缺失时账号池启动失败；尚无 Provider 目录的新实例只读，已有 Provider 密文的实例启动失败。密钥错误时解密明确失败，不得回退为空目录或读取明文。
 

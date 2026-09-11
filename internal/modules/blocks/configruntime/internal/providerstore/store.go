@@ -1,9 +1,11 @@
 package providerstore
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelaycredential"
@@ -28,8 +30,11 @@ type storedProvider struct {
 }
 
 type Store struct {
-	documents *aetherrelaystate.Documents
-	codec     *aetherrelaycredential.Codec
+	mu              sync.Mutex
+	documents       *aetherrelaystate.Documents
+	codec           *aetherrelaycredential.Codec
+	persistedDigest [sha256.Size]byte
+	hasPersisted    bool
 }
 
 // Initialized checks only whether an encrypted Provider catalog exists. It
@@ -60,13 +65,20 @@ func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycrede
 }
 
 func (s *Store) Close() error {
-	if s == nil || s.documents == nil {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.documents == nil {
 		return nil
 	}
 	return s.documents.Close()
 }
 
 func (s *Store) Load() (map[string]config.Provider, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rows, err := s.documents.LoadSecureDocuments(secureDocumentScope)
 	if err != nil {
 		return nil, false, err
@@ -85,6 +97,8 @@ func (s *Store) Load() (map[string]config.Provider, bool, error) {
 	if err := json.Unmarshal(payload, &stored); err != nil {
 		return nil, false, fmt.Errorf("decode provider catalog: %w", err)
 	}
+	s.persistedDigest = sha256.Sum256(payload)
+	s.hasPersisted = true
 	providers := make(map[string]config.Provider, len(stored))
 	for _, value := range stored {
 		provider := config.Provider{Name: value.Name, Protocol: value.Protocol, BaseURL: value.BaseURL, APIKey: value.APIKey, Models: append([]string(nil), value.Models...), Endpoints: append([]string(nil), value.Endpoints...), Disabled: value.Disabled}
@@ -95,6 +109,8 @@ func (s *Store) Load() (map[string]config.Provider, bool, error) {
 }
 
 func (s *Store) Replace(providers map[string]config.Provider) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	names := make([]string, 0, len(providers))
 	for name := range providers {
 		names = append(names, name)
@@ -109,9 +125,18 @@ func (s *Store) Replace(providers map[string]config.Provider) error {
 	if err != nil {
 		return err
 	}
+	digest := sha256.Sum256(payload)
+	if s.hasPersisted && s.persistedDigest == digest {
+		return nil
+	}
 	sealed, err := s.codec.Seal(secureDocumentScope, catalogDocumentID, payload)
 	if err != nil {
 		return err
 	}
-	return s.documents.ReplaceSecureDocuments(secureDocumentScope, []aetherrelaystate.SecureDocumentRow{{ID: catalogDocumentID, Payload: sealed}})
+	if err := s.documents.ReplaceSecureDocuments(secureDocumentScope, []aetherrelaystate.SecureDocumentRow{{ID: catalogDocumentID, Payload: sealed}}); err != nil {
+		return err
+	}
+	s.persistedDigest = digest
+	s.hasPersisted = true
+	return nil
 }

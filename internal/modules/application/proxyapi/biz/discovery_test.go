@@ -23,6 +23,44 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
+func TestStartupRestoresDurableCodexCatalogBeforeReturning(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(4)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+
+	chatGPTAccounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	chatGPTAccounts.Subscribe(accevents.TopicCatalogSnapshot, func(_ event.Event, result event.Result) {
+		result.Set(accevents.CatalogSnapshotResult{}, nil)
+	})
+	chatGPTAccounts.Subscribe(accevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
+		result.Set(accevents.ListDiscoveryCandidatesResult{}, nil)
+	})
+	codexAccounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	codexAccounts.Subscribe(codexevents.TopicCatalogSnapshot, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.CatalogSnapshotResult{
+			Version: 1, AvailableAccounts: 1,
+			Models: []codexevents.CatalogModel{{ID: "gpt-5.6-sol"}},
+		}, nil)
+	})
+	codexAccounts.Subscribe(codexevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ListDiscoveryCandidatesResult{}, nil)
+	})
+
+	proxy := &Proxy{
+		Base:   basebiz.New(proxycommon.UnitID, hub, background),
+		config: config.Config{CodexOAuth: config.CodexOAuthConfig{ProviderEnabled: true}},
+	}
+	proxy.startModelDiscovery(ctx)
+	if candidates := proxy.EffectiveCatalog().Candidates["gpt-5.6-sol"]; len(candidates) != 1 || candidates[0].RouteOwner != "codexoauth" {
+		t.Fatalf("startup catalog candidates=%+v", candidates)
+	}
+}
+
 func TestAutomaticDiscoverySkipsBackedOffAccounts(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)

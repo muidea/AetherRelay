@@ -24,7 +24,7 @@ func TestCodexAccountMutationsStartProxyOwnedDiscovery(t *testing.T) {
 	})
 	accounts := event.NewSimpleObserver(accountcommon.UnitID, hub)
 	accounts.Subscribe(accountevents.TopicImport, func(_ event.Event, result event.Result) {
-		result.Set(accountevents.ImportResult{Added: 1}, nil)
+		result.Set(accountevents.ImportResult{Added: 1, AccountIDs: []string{"import-account"}}, nil)
 	})
 	accounts.Subscribe(accountevents.TopicRefreshByID, func(_ event.Event, result event.Result) {
 		result.Set(accountevents.RefreshByIDResult{Refreshed: 1}, nil)
@@ -58,10 +58,41 @@ func TestCodexAccountMutationsStartProxyOwnedDiscovery(t *testing.T) {
 	if err != nil || !finished.Added || finished.ModelDiscovery == nil || finished.UsageRefresh == nil {
 		t.Fatalf("finished=%+v err=%v", finished, err)
 	}
-	if !reflect.DeepEqual(discovered, [][]string{nil, {"refresh-account"}, {"oauth-account"}}) {
+	if !reflect.DeepEqual(discovered, [][]string{{"import-account"}, {"refresh-account"}, {"oauth-account"}}) {
 		t.Fatalf("discovery account IDs=%v", discovered)
 	}
-	if !reflect.DeepEqual(usageRefreshes, [][]string{nil, {"refresh-account"}, {"oauth-account"}}) {
+	if !reflect.DeepEqual(usageRefreshes, [][]string{{"import-account"}, {"refresh-account"}, {"oauth-account"}}) {
 		t.Fatalf("usage account IDs=%v", usageRefreshes)
+	}
+}
+
+func TestUnchangedCodexImportDoesNotStartFullPoolRefresh(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(2)
+	t.Cleanup(func() {
+		background.Shutdown(nil)
+		hub.Terminate(context.Background())
+	})
+	accounts := event.NewSimpleObserver(accountcommon.UnitID, hub)
+	accounts.Subscribe(accountevents.TopicImport, func(_ event.Event, result event.Result) {
+		result.Set(accountevents.ImportResult{Skipped: 1}, nil)
+	})
+	proxy := event.NewSimpleObserver(proxycommon.UnitID, hub)
+	refreshes := 0
+	proxy.Subscribe(proxyevents.TopicStartCodexDiscovery, func(_ event.Event, result event.Result) {
+		refreshes++
+		result.Set(proxyevents.StartCodexDiscoveryResult{}, nil)
+	})
+	proxy.Subscribe(proxyevents.TopicStartCodexUsageRefresh, func(_ event.Event, result event.Result) {
+		refreshes++
+		result.Set(proxyevents.StartCodexUsageRefreshResult{}, nil)
+	})
+	admin := &Admin{Base: basebiz.New(admincommon.UnitID, hub, background)}
+	imported, err := admin.ImportCodexAccounts(context.Background(), []accountevents.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	if err != nil || imported.Skipped != 1 || imported.ModelDiscovery != nil || imported.UsageRefresh != nil {
+		t.Fatalf("imported=%+v err=%v", imported, err)
+	}
+	if refreshes != 0 {
+		t.Fatalf("unchanged import started %d full-pool refreshes", refreshes)
 	}
 }

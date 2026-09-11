@@ -104,6 +104,8 @@ aetherrelay-account-pool-bundle-v2-complete-{YYYYMMDDTHHMMSSZ}.json
 5. 其余匹配不到的槽位直接创建；同邮箱已有多个候选时禁止猜测邮箱目标，一个 bundle 中的多个账号也不能指向同一个已有槽位。
 6. 不能因为邮箱相同而合并两个已有不同 `account_id` 的账号；邮箱目标存在歧义时，冲突必须交给管理员处理。
 
+目标槽位的凭据、身份字段、代理和指纹模式与导入值完全一致时按 `skipped` 处理，不重写密文，不清空现有模型能力、额度观察或传输能力，也不推进账号池目录版本。Codex 只对实际新增或变化的账号启动模型发现和额度刷新；变化 ID 为空时不得把空选择解释为全池刷新。导出过程保持只读，不改变账号状态或持久化时间。
+
 两个 Store 不具备跨 Store 事务。预检通过后，导入结果分别返回 `chatgpt_web`、`codex_cli` 的 added/updated/skipped/conflicts，并标明统一账号是否完整或部分成功；如果一个 Store 已成功写入而另一个 Store 失败，响应中的 `partial_success` 为 `true`，不会回滚已经成功的槽位。
 
 ## 对外接口

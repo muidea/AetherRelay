@@ -53,9 +53,11 @@ func (s *Proxy) BindCatalogPublisher(publisher CatalogPublisher) {
 }
 
 func (s *Proxy) startModelDiscovery(ctx context.Context) {
-	// Initial empty-but-enabled snapshot so the service can start before the
-	// first successful account-scoped discovery round completes.
-	s.publishCatalog(effectivecatalog.BuildWithCodex(s.config, effectivecatalog.CatalogInput{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}, effectivecatalog.CatalogInput{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}))
+	// Restore the effective catalog synchronously from durable account
+	// snapshots. Publishing an empty account catalog here creates a startup
+	// window where recently working models are incorrectly rejected before the
+	// asynchronous discovery round has had a chance to rebuild the catalog.
+	s.refreshEffectiveCatalog(ctx)
 	// Kick immediate discovery for both account domains, then schedule
 	// periodic full scans and a faster retry watch.
 	_ = s.BackgroundRoutine().AsyncFunction(func() { s.runDiscoveryRound(ctx, false) })

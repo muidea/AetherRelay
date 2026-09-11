@@ -70,10 +70,16 @@ type Store struct {
 	order         []string
 	index         int
 	imageInflight map[string]int
+	persisted     map[string]secureDocumentRevision
 	concurrency   int
 	// catalogVersion increments when discovery-relevant account state changes
 	// (add/delete/status/snapshot). Proxy discovery watches this value.
 	catalogVersion uint64
+}
+
+type secureDocumentRevision struct {
+	Digest   [sha256.Size]byte
+	Position int
 }
 
 // Open creates the account owner's state store and reports every DuckDB
@@ -89,6 +95,7 @@ func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aet
 		items:         map[string]*Account{},
 		aliases:       map[string]string{},
 		imageInflight: map[string]int{},
+		persisted:     map[string]secureDocumentRevision{},
 		concurrency:   concurrency,
 	}
 	s.credentials = codec
@@ -169,6 +176,7 @@ func (s *Store) loadEncrypted() error {
 		if acc.ID == "" {
 			acc.ID = row.ID
 		}
+		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
 		if acc.AccessToken == "" {
 			continue
 		}
@@ -215,7 +223,8 @@ func (s *Store) saveLocked() error {
 }
 
 func (s *Store) saveEncryptedLocked() error {
-	rows := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
+	upserts := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
+	next := make(map[string]secureDocumentRevision, len(s.order))
 	for position, token := range s.order {
 		acc := s.items[token]
 		if acc == nil {
@@ -228,17 +237,37 @@ func (s *Store) saveEncryptedLocked() error {
 		if err != nil {
 			return err
 		}
+		revision := secureDocumentRevision{Digest: sha256.Sum256(payload), Position: position}
+		next[acc.ID] = revision
+		if previous, unchanged := s.persisted[acc.ID]; unchanged && previous == revision {
+			continue
+		}
 		sealed, err := s.credentials.Seal(secureDocumentScope, acc.ID, payload)
 		if err != nil {
 			return err
 		}
-		rows = append(rows, aetherrelaystate.SecureDocumentRow{ID: acc.ID, Position: position, Payload: sealed})
+		upserts = append(upserts, aetherrelaystate.SecureDocumentRow{ID: acc.ID, Position: position, Payload: sealed})
 	}
-	return s.documents.ReplaceSecureDocuments(secureDocumentScope, rows)
+	deletes := make([]string, 0)
+	for id := range s.persisted {
+		if _, exists := next[id]; !exists {
+			deletes = append(deletes, id)
+		}
+	}
+	if err := s.documents.ApplySecureDocuments(secureDocumentScope, upserts, deletes); err != nil {
+		return err
+	}
+	s.persisted = next
+	return nil
 }
 
 func (s *Store) Close() error {
-	if s == nil || s.documents == nil {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.documents == nil {
 		return nil
 	}
 	return s.documents.Close()
@@ -950,6 +979,10 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 			s.order = append(s.order, entry.token)
 			added++
 		} else {
+			if unchangedChatGPTImport(acc, item, entry.token) {
+				skipped++
+				continue
+			}
 			updated++
 		}
 		if acc.AccessToken != entry.token {
@@ -1005,6 +1038,23 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 	// promptly discard the old credential's snapshot.
 	s.bumpCatalogLocked()
 	return added, updated, skipped, nil
+}
+
+func unchangedChatGPTImport(acc *Account, item *events.ExportItem, accessToken string) bool {
+	if acc == nil || item == nil {
+		return false
+	}
+	return acc.AccessToken == accessToken &&
+		acc.RefreshToken == item.RefreshToken &&
+		acc.Email == trim(item.Email) &&
+		acc.Password == item.Password &&
+		acc.Proxy == trim(item.Proxy) &&
+		acc.SourceType == "oauth_import" &&
+		extraString(acc, "id_token") == item.IDToken &&
+		extraString(acc, "account_id") == trim(item.AccountID) &&
+		extraString(acc, "export_type") == trim(item.Type) &&
+		extraString(acc, "expired") == trim(item.Expired) &&
+		extraString(acc, "last_refresh") == trim(item.LastRefresh)
 }
 
 func validateProxy(value string) error {

@@ -303,6 +303,8 @@ docker compose exec aetherrelay curl --fail http://127.0.0.1:8080/healthz
 
 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图、交互归档与加密凭据；删除或重建容器不会清除该目录。`deploy/.env` 中的 `AETHERRELAY_CREDENTIAL_KEY` 是解密 Provider 与账号池凭据的唯一主密钥，必须与 `deploy/config/`、`deploy/data/` 一起安全备份，但不得复制进数据库或配置文件。
 
+历史版本曾在账号额度、冷却和请求结果变化时删除并重写整个账号池密文。由于 AES-GCM 每次使用随机 nonce，即使账号内容未变化也会生成不同 BLOB；高频运行后 DuckDB 可能保留大量已被替换的历史溢出块。新版本改为逐账号增量 UPSERT，可以阻止继续按整池放大，但不会自动缩小已经膨胀的数据库文件。升级后若 `PRAGMA database_size` 显示大量空间集中在 `secure_documents.payload`，应先导出 Provider 和完整账号池 bundle、验证备份及主密钥，再停服重建状态库并导入；不要在服务运行时复制 DuckDB 主文件，也不要把删除主库作为未经验证的清理步骤。用量统计无需保留的环境可在重建时丢弃旧统计；图片、任务和临时会话是否迁移必须按实际保留要求单独确认。
+
 ### 直接运行镜像
 
 不用 Compose 时也必须挂载宿主机配置目录与数据目录：

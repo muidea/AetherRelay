@@ -18,9 +18,10 @@ import (
 // SecureDocumentRow is an encrypted owner-scoped record. Payload must already
 // be an authenticated encryption envelope; Documents never sees plaintext.
 type SecureDocumentRow struct {
-	ID       string
-	Position int
-	Payload  []byte
+	ID        string
+	Position  int
+	Payload   []byte
+	UpdatedAt time.Time
 }
 
 // ImageTaskRow is a task record scoped by its owner and client task ID.
@@ -352,7 +353,7 @@ func (s *Documents) LoadSecureDocuments(scope string) ([]SecureDocumentRow, erro
 	if s == nil || s.shared == nil || strings.TrimSpace(scope) == "" {
 		return nil, fmt.Errorf("secure document scope is required")
 	}
-	rows, err := s.shared.db.Query(`SELECT id, position, payload FROM secure_documents WHERE scope = ? ORDER BY position, id`, scope)
+	rows, err := s.shared.db.Query(`SELECT id, position, payload, updated_at FROM secure_documents WHERE scope = ? ORDER BY position, id`, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +361,7 @@ func (s *Documents) LoadSecureDocuments(scope string) ([]SecureDocumentRow, erro
 	var result []SecureDocumentRow
 	for rows.Next() {
 		var row SecureDocumentRow
-		if err := rows.Scan(&row.ID, &row.Position, &row.Payload); err != nil {
+		if err := rows.Scan(&row.ID, &row.Position, &row.Payload, &row.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, row)
@@ -387,6 +388,61 @@ func (s *Documents) ReplaceSecureDocuments(scope string, values []SecureDocument
 			return fmt.Errorf("secure document id and payload are required")
 		}
 		if _, err := tx.Exec(`INSERT INTO secure_documents(scope, id, position, payload, updated_at) VALUES (?, ?, ?, ?, NOW())`, scope, value.ID, value.Position, value.Payload); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ApplySecureDocuments atomically persists only changed owner records and
+// removes explicitly deleted IDs. High-frequency callers must derive the delta
+// before encryption so unchanged plaintext is not resealed and rewritten.
+func (s *Documents) ApplySecureDocuments(scope string, upserts []SecureDocumentRow, deleteIDs []string) error {
+	if s == nil || s.shared == nil || strings.TrimSpace(scope) == "" {
+		return fmt.Errorf("secure document scope is required")
+	}
+	seen := make(map[string]struct{}, len(upserts)+len(deleteIDs))
+	for _, value := range upserts {
+		if strings.TrimSpace(value.ID) == "" || len(value.Payload) == 0 {
+			return fmt.Errorf("secure document id and payload are required")
+		}
+		if _, exists := seen[value.ID]; exists {
+			return fmt.Errorf("duplicate secure document id %q", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+	}
+	for _, id := range deleteIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return fmt.Errorf("secure document delete id is required")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("secure document id %q cannot be updated and deleted", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(upserts) == 0 && len(deleteIDs) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.shared.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, value := range upserts {
+		if _, err := tx.Exec(`INSERT INTO secure_documents(scope, id, position, payload, updated_at)
+VALUES (?, ?, ?, ?, NOW())
+ON CONFLICT(scope, id) DO UPDATE SET
+position = excluded.position, payload = excluded.payload, updated_at = excluded.updated_at`,
+			scope, value.ID, value.Position, value.Payload); err != nil {
+			return err
+		}
+	}
+	for _, id := range deleteIDs {
+		if _, err := tx.Exec(`DELETE FROM secure_documents WHERE scope = ? AND id = ?`, scope, strings.TrimSpace(id)); err != nil {
 			return err
 		}
 	}

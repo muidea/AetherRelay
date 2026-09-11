@@ -81,3 +81,56 @@ func TestStoreRejectsWrongCredentialKey(t *testing.T) {
 		t.Fatal("wrong credential key was accepted")
 	}
 }
+
+func TestStoreSkipsUnchangedProviderCatalogRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	store, err := Open(path, "256MB", 1, codec(t, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	provider := config.Provider{Name: "openai", Protocol: "openai", APIKey: "secret"}
+	providers := map[string]config.Provider{"openai": provider}
+	if err := store.Replace(providers); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.documents.LoadSecureDocuments(secureDocumentScope)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("before=%#v err=%v", before, err)
+	}
+	if err := store.Replace(providers); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.documents.LoadSecureDocuments(secureDocumentScope)
+	if err != nil || len(after) != 1 {
+		t.Fatalf("after=%#v err=%v", after, err)
+	}
+	if !bytes.Equal(before[0].Payload, after[0].Payload) || !before[0].UpdatedAt.Equal(after[0].UpdatedAt) {
+		t.Fatal("unchanged provider catalog was re-encrypted and rewritten")
+	}
+}
+
+func TestFailedProviderReplaceDoesNotAdvancePersistedDigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	store, err := Open(path, "256MB", 1, codec(t, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := map[string]config.Provider{
+		"openai": {Name: "openai", Protocol: "openai", APIKey: "before"},
+	}
+	if err := store.Replace(providers); err != nil {
+		t.Fatal(err)
+	}
+	before := store.persistedDigest
+	if err := store.documents.Close(); err != nil {
+		t.Fatal(err)
+	}
+	providers["openai"] = config.Provider{Name: "openai", Protocol: "openai", APIKey: "after"}
+	if err := store.Replace(providers); err == nil {
+		t.Fatal("replace unexpectedly succeeded after closing state database")
+	}
+	if store.persistedDigest != before {
+		t.Fatal("failed replace advanced the persisted digest")
+	}
+}

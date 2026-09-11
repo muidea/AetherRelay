@@ -566,6 +566,8 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 模型目录会随 Provider 启停、模型匹配、端点变更和账号池发现结果变化。Provider 切换上游协议或 endpoint 时，网关按 `exact model + upstream endpoint` 重新匹配固定模板；未匹配方向不会进入业务目录。推荐策略：
 
+服务重启时会先从持久化账号快照恢复首个有效目录，再开放数据面路由；不需要等待上游模型重新发现。没有任何有效快照的新账号仍需等待首次发现完成。
+
 - 进程启动时必须获取一次，获取失败时不要盲发模型请求；
 - 使用短时缓存，建议由应用按自身流量设置 30 至 300 秒 TTL；
 - `model_not_found`、`endpoint_unsupported` 或 `provider_unavailable` 时触发一次即时刷新；
@@ -577,7 +579,7 @@ Admin 系统信息中的“开放 API 端点”是实例级路由清单，不代
 
 自定义 Provider 支持整体配置迁移：`POST /admin/api/providers/export` 导出安全配置（默认不包含 API Key），请求体设置 `{"include_api_keys":true}` 才导出完整凭据；`POST /admin/api/providers/import` 导入 `aetherrelay.provider-bundle` v1 文件。文件内部名称经 `trim + strings.ToLower` 规范化后按同名后者覆盖，默认 `merge` 模式再用最终项覆盖目标实例中的同名 Provider；也支持 `skip` 和 `replace`。所有新建或导入的 Provider 都必须包含 API Key；安全导出仅能更新目标实例已有 Provider 并保留其密钥，不能用于新增无密钥 Provider。完整导出需要 Admin 权限、二次确认并使用 `Cache-Control: no-store`。Provider bundle 只包含 Provider 自身的协议、Base URL、模型、端点、路由优先级和启用状态，不包含健康度、模型元数据、转换能力、用量或账号池信息。
 
-账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `aetherrelay.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据；统一账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，集中放置整体导入与导出，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`，要求两个 Store 都可用。导出先按唯一身份精确配对，再对剩余槽位做唯一邮箱配对；同邮箱存在多个账号或工作区时保留全部歧义槽位为独立 `account_ref`，不会覆盖或阻断导出。整体导入会先完成整包预检；同一槽位类型下非空且完全相同的 `account_id` 按文件顺序由后一个覆盖前一个，覆盖完成后若仍发现重复 `account_ref` 或重复槽位凭据则返回 `409`，且不会写入任一 Store。同一邮箱不参与同名覆盖，可安全出现在多个 `account_ref`。只包含一种槽位的 bundle 只要求对应 Store 可用。预检通过后先按槽位 `account_id` 匹配目标账号；未提供 `account_id` 时仅按唯一邮箱回退匹配，不会因为目标摘要来自另一个上游账号而误报冲突。显式提供不同上游 `account_id` 时默认新增为独立工作区；bundle 顶层设置 `"replace": true` 后才按唯一邮箱替换目标槽位，同邮箱存在多个目标时仍拒绝猜测；一个 bundle 中的多个最终生效账号不能指向同一个已有槽位。跨 Store 无法事务回滚，若一侧成功、另一侧失败，响应的 `partial_success` 为 `true`。
+账号池迁移仅提供整体账号池接口：`POST /admin/api/account-pool-bundle/export` 与 `POST /admin/api/account-pool-bundle/import`。整体包使用 `aetherrelay.account-pool-bundle`、`schema_version: 2`，一个 `accounts[]` 元素包含可选的 `chatgpt_web` 与 `codex_cli` 槽位。ChatGPT Web 和 Codex 仍可通过管理页分别导入各自凭据；统一账号列表工具栏提供始终可见的“账号池迁移 ▾”分组入口，集中放置整体导入与导出，但不提供槽位单独导出；整体导出响应包含敏感凭据并设置 `Cache-Control: no-store`，要求两个 Store 都可用。导出先按唯一身份精确配对，再对剩余槽位做唯一邮箱配对；同邮箱存在多个账号或工作区时保留全部歧义槽位为独立 `account_ref`，不会覆盖或阻断导出。整体导入会先完成整包预检；同一槽位类型下非空且完全相同的 `account_id` 按文件顺序由后一个覆盖前一个，覆盖完成后若仍发现重复 `account_ref` 或重复槽位凭据则返回 `409`，且不会写入任一 Store。同一邮箱不参与同名覆盖，可安全出现在多个 `account_ref`。只包含一种槽位的 bundle 只要求对应 Store 可用。预检通过后先按槽位 `account_id` 匹配目标账号；未提供 `account_id` 时仅按唯一邮箱回退匹配，不会因为目标摘要来自另一个上游账号而误报冲突。显式提供不同上游 `account_id` 时默认新增为独立工作区；bundle 顶层设置 `"replace": true` 后才按唯一邮箱替换目标槽位，同邮箱存在多个目标时仍拒绝猜测；一个 bundle 中的多个最终生效账号不能指向同一个已有槽位。目标凭据和导入设置完全一致的槽位计入 `skipped`，不会重写密文或清空运行期能力；Codex 的模型发现与额度刷新仅覆盖本次实际新增或变化的账号。跨 Store 无法事务回滚，若一侧成功、另一侧失败，响应的 `partial_success` 为 `true`。
 
 两类迁移导出均遵循统一下载名 `aetherrelay-{artifact}-bundle-v{schema}-{profile}-{YYYYMMDDTHHMMSSZ}.json`：Provider 分别生成 `aetherrelay-provider-bundle-v1-safe-...` 或 `aetherrelay-provider-bundle-v1-complete-...`，账号池整体迁移生成 `aetherrelay-account-pool-bundle-v2-complete-...`。时间戳来自服务端返回的 `exported_at`，管理页下载名与 HTTP `Content-Disposition` 一致。文件名只用于识别和整理，导入始终按 JSON 内的 `format` 与 `schema_version` 校验，详见[管理面迁移 Bundle 文件命名](design/bundle-file-naming.md)。
 
