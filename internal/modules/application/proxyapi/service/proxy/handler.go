@@ -1358,14 +1358,14 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 		}
 		sessionHash := codexSessionHash(r, rawModel, rawBody)
-		codexBody, _, normalizeErr = ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
+		codexBody, _, features.PromptCacheKeySource, normalizeErr = ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
 		if normalizeErr != nil {
 			h.writeArchivedError(w, round, r, start, plan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, normalizeErr.Error())
 			return
 		}
 		if !rawStream {
 			features.Diagnostics.RequestID = requestIDFromContext(r.Context())
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics})
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, PromptCacheKeySource: features.PromptCacheKeySource})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
@@ -1497,7 +1497,9 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 			}
 			sessionHash := codexSessionHash(r, rawModel, rawBody)
-			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
+			var cacheKeySource codexresponses.PromptCacheKeySource
+			codexBody, _, cacheKeySource, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
+			features.PromptCacheKeySource = cacheKeySource
 			if keyErr != nil {
 				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, keyErr.Error())
 				return
@@ -1525,7 +1527,9 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
 			}
 			sessionHash := codexSessionHash(r, rawModel, rawBody)
-			codexBody, _, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
+			var cacheKeySource codexresponses.PromptCacheKeySource
+			codexBody, _, cacheKeySource, keyErr := ensureCodexPromptCacheKey(codexBody, normalizedBody, codexPromptCacheHash(r, rawModel, rawBody))
+			features.PromptCacheKeySource = cacheKeySource
 			if keyErr != nil {
 				h.writeArchivedError(w, round, r, start, codexPlan.RouteOwner, rawModel, rawStream, http.StatusInternalServerError, keyErr.Error())
 				return

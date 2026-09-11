@@ -176,7 +176,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
 	}
-	for _, marker := range []string{"function codexFingerprintControl(account)", "async function updateCodexFingerprintMode(select)", `JSON.stringify({fingerprint_mode:mode})`, "function validCodexImportFingerprintMode(value)"} {
+	for _, marker := range []string{"function codexFingerprintControl(account)", "function codexFingerprintSummary(account)", `if(mode==="off")return ""`, "async function updateCodexFingerprintMode(select)", `JSON.stringify({fingerprint_mode:mode})`, "function validCodexImportFingerprintMode(value)"} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing Codex fingerprint marker %q", marker)
 		}

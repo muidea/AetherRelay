@@ -215,7 +215,7 @@ go run ./cmd/aetherrelay-usage-import \
   -api-key-id default
 ```
 
-将示例中的 `var/aetherrelay.duckdb` 替换为实际的 `state.database` 完整路径。交互归档位于 `state.dir/interactions/{api_key_id}/{round_id}/`，包含脱敏请求元数据、上游请求/响应摘要、客户端响应与 `metadata.json`。`archive_full_content: false` 可禁止请求与响应正文落盘。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
+将示例中的 `var/aetherrelay.duckdb` 替换为实际的 `state.database` 完整路径。交互归档默认关闭：不创建 `state.dir/interactions/`，也不保存脱敏元数据。受控排障时先显式设置 `archive_interactions: true`；只有再设置 `archive_full_content: true` 才保存请求和响应正文。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
 
 ## 备份与维护
 

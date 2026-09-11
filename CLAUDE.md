@@ -122,7 +122,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 ## 可观测与落盘
 
 - `state.database`（通常为 `state.dir/aetherrelay.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
-- `state.dir/interactions/{api_key_id}/{round_id}/`：request/upstream/response/metadata；每个 API Key 默认保留最近 N 轮；`archive_full_content` 可关正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
+- `state.dir/interactions/{api_key_id}/{round_id}/`：默认不创建。仅 `archive_interactions=true` 时按 API Key 保留最近 N 轮；`archive_full_content=true` 才保存正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
 - Prometheus 指标前缀 `aetherrelay_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
 
 ## 修改时注意

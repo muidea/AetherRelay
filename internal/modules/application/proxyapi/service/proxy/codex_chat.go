@@ -48,13 +48,13 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 	}
 	markConversionDegraded(round, ignored)
 	sessionHash := codexSessionHash(r, model, normalizedBody)
-	normalized, _, err = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
+	normalized, _, cacheKeySource, err := ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 	if err != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, PromptCacheKeySource: cacheKeySource}
 	request.Diagnostics = codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if stream {

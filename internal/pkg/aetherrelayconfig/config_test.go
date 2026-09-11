@@ -93,6 +93,41 @@ func TestExampleConfigLoads(t *testing.T) {
 	if sessions != DefaultCodexWebsocketMaxSessions || messageBytes != DefaultCodexWebsocketMaxMessageBytes || idle != DefaultCodexWebsocketIdleTimeout || lifetime != DefaultCodexWebsocketMaxLifetime {
 		t.Fatalf("example Codex websocket limits=%d,%d,%s,%s", sessions, messageBytes, idle, lifetime)
 	}
+	if cfg.ArchiveInteractions || cfg.ArchiveFullContent {
+		t.Fatal("example config must keep interaction archival disabled")
+	}
+}
+
+func TestInteractionArchiveDefaultsToOffAndCanBeEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  listen_addr: 127.0.0.1:18080\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ArchiveInteractions || cfg.ArchiveFullContent {
+		t.Fatal("omitted interaction archive settings must default to false")
+	}
+	if err := os.WriteFile(path, []byte("server:\n  archive_interactions: true\n  archive_full_content: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ArchiveInteractions || !cfg.ArchiveFullContent {
+		t.Fatal("both interaction archive switches must explicitly enable body archival")
+	}
+	t.Setenv("AETHERRELAY_ARCHIVE_INTERACTIONS", "false")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ArchiveInteractions || !cfg.ArchiveFullContent {
+		t.Fatal("AETHERRELAY_ARCHIVE_INTERACTIONS must override the YAML archive switch")
+	}
 }
 
 func TestLoadCodexWebsocketLimits(t *testing.T) {

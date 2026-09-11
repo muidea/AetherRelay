@@ -67,12 +67,13 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	sessionHash := codexSessionHash(r, model, clientBody)
-	normalized, _, normalizeErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, clientBody))
+	var cacheKeySource codexresponses.PromptCacheKeySource
+	normalized, _, cacheKeySource, normalizeErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, clientBody))
 	if normalizeErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, PromptCacheKeySource: cacheKeySource}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if clientStream {
@@ -209,7 +210,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		h.writeCodexResponsesError(w, r, round, started, provider, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
+	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, PromptCacheKeySource: features.PromptCacheKeySource}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {

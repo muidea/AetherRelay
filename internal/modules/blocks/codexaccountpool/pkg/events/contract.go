@@ -189,6 +189,9 @@ type AcquireResult struct {
 	Proxy             string
 	LeaseID           string
 	FingerprintMode   string
+	// FingerprintSeed is a system-managed secret used only to derive outbound
+	// Codex identity. It must never cross an HTTP management projection.
+	FingerprintSeed string `json:"-"`
 }
 
 type ReleaseCommand struct{ LeaseID string }
@@ -229,6 +232,7 @@ type RefreshTokenResult struct {
 	AccountIDHeader  string
 	Proxy            string
 	FingerprintMode  string
+	FingerprintSeed  string `json:"-"`
 	Refreshed        bool
 	PermanentFailure bool
 	ErrorClass       string

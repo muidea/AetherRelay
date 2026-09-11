@@ -327,14 +327,18 @@ func TestCodexCompactRateLimitRemainsCooldownBearing(t *testing.T) {
 }
 
 func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
-	off := resolveCodexFingerprint("account-1", accevents.FingerprintModeOff, "client-session")
+	seed := "11111111-1111-4111-8111-111111111111"
+	off := resolveCodexFingerprint(seed, accevents.FingerprintModeOff, "client-session")
 	if off != (upevents.CodexFingerprint{}) {
 		t.Fatalf("off fingerprint=%+v", off)
 	}
-	device := resolveCodexFingerprint("account-1", accevents.FingerprintModeDevice, "client-session")
-	session := resolveCodexFingerprint("account-1", accevents.FingerprintModeSession, "client-session")
-	repeated := resolveCodexFingerprint("account-1", accevents.FingerprintModeSession, "client-session")
-	full := resolveCodexFingerprint("account-1", accevents.FingerprintModeFull, "client-session")
+	if invalid := resolveCodexFingerprint("local-account-id", accevents.FingerprintModeSession, "client-session"); invalid != (upevents.CodexFingerprint{}) {
+		t.Fatalf("invalid private seed produced fingerprint=%+v", invalid)
+	}
+	device := resolveCodexFingerprint(seed, accevents.FingerprintModeDevice, "client-session")
+	session := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session")
+	repeated := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session")
+	full := resolveCodexFingerprint(seed, accevents.FingerprintModeFull, "client-session")
 	if device.InstallationID == "" || device.SessionID != "" || session.InstallationID != device.InstallationID || session.SessionID == "" || session.ThreadID == "" {
 		t.Fatalf("device=%+v session=%+v", device, session)
 	}
@@ -343,6 +347,13 @@ func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 	}
 	if full.ThreadID != full.SessionID || full.WindowID != full.ThreadID+":0" {
 		t.Fatalf("full fingerprint=%+v", full)
+	}
+	if session.TurnStartedAtUnixMS <= 0 || repeated.TurnStartedAtUnixMS <= 0 {
+		t.Fatalf("turn timestamps missing: first=%+v repeated=%+v", session, repeated)
+	}
+	otherSeed := resolveCodexFingerprint("22222222-2222-4222-8222-222222222222", accevents.FingerprintModeSession, "client-session")
+	if otherSeed.InstallationID == session.InstallationID || otherSeed.SessionID == session.SessionID || otherSeed.ThreadID == session.ThreadID {
+		t.Fatalf("different private seeds converged: first=%+v other=%+v", session, otherSeed)
 	}
 }
 
@@ -380,7 +391,7 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
 		acquires++
 		if acquires == 1 {
-			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeSession}, nil)
+			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeSession, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
 			return
 		}
 		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeOff}, nil)
@@ -653,7 +664,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080"}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeSession, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
 	})
 	refreshes := 0
 	accounts.Subscribe(accevents.TopicRefreshToken, func(ev event.Event, result event.Result) {
@@ -661,7 +672,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 		if command := ev.Data().(accevents.RefreshTokenCommand); command.AccountID != "account-1" {
 			t.Errorf("refresh command=%+v", command)
 		}
-		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", Refreshed: true}, nil)
+		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeSession, FingerprintSeed: "11111111-1111-4111-8111-111111111111", Refreshed: true}, nil)
 	})
 	recorded := make(chan accevents.RecordResultCommand, 2)
 	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
@@ -671,10 +682,12 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	attempts := 0
+	var firstFingerprint upevents.CodexFingerprint
 	upstream.Subscribe(upevents.TopicComplete, func(ev event.Event, result event.Result) {
 		attempts++
 		command := ev.Data().(upevents.CompleteCommand)
 		if attempts == 1 {
+			firstFingerprint = command.Fingerprint
 			if command.AccessToken != "old-token" || command.Proxy != "http://old-proxy.invalid:8080" {
 				t.Errorf("first upstream command=%+v", command)
 			}
@@ -683,6 +696,9 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 		}
 		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
 			t.Errorf("retry upstream command=%+v", command)
+		}
+		if command.Fingerprint.InstallationID == "" || command.Fingerprint.InstallationID != firstFingerprint.InstallationID || command.Fingerprint.SessionID != firstFingerprint.SessionID || command.Fingerprint.TurnID == firstFingerprint.TurnID {
+			t.Errorf("refresh retry fingerprint drifted or reused turn: first=%+v retry=%+v", firstFingerprint, command.Fingerprint)
 		}
 		result.Set(upevents.CompleteResult{Body: []byte(`{"object":"response","id":"resp_recovered"}`)}, nil)
 	})

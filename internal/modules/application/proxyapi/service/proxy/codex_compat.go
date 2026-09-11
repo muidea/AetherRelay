@@ -41,10 +41,11 @@ type codexNormalizationOptions struct {
 }
 
 type codexRequestFeatures struct {
-	Diagnostics   codexresponses.Diagnostics
-	BetaFeatures  string
-	ResponsesLite bool
-	TurnState     string
+	Diagnostics          codexresponses.Diagnostics
+	BetaFeatures         string
+	ResponsesLite        bool
+	TurnState            string
+	PromptCacheKeySource codexresponses.PromptCacheKeySource
 }
 
 var codexDropCompatibleHeaders = []string{
@@ -1335,20 +1336,20 @@ func codexSessionDigest(r *http.Request, model string, body map[string]any, incl
 	return hex.EncodeToString(digest[:])
 }
 
-func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash string) ([]byte, map[string]any, error) {
+func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash string) ([]byte, map[string]any, codexresponses.PromptCacheKeySource, error) {
 	if body == nil {
 		body = map[string]any{}
 	}
 	if value, ok := body["prompt_cache_key"].(string); ok && strings.TrimSpace(value) != "" {
-		return encoded, body, nil
+		return encoded, body, codexresponses.PromptCacheKeyExplicit, nil
 	}
 	if strings.TrimSpace(sessionHash) == "" {
-		return encoded, body, nil
+		return encoded, body, codexresponses.PromptCacheKeyAbsent, nil
 	}
 	body["prompt_cache_key"] = strings.TrimSpace(sessionHash)
 	updated, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode Codex prompt cache key: %w", err)
+		return nil, nil, codexresponses.PromptCacheKeyAbsent, fmt.Errorf("encode Codex prompt cache key: %w", err)
 	}
-	return updated, body, nil
+	return updated, body, codexresponses.PromptCacheKeyGenerated, nil
 }

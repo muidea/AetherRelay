@@ -44,7 +44,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			}
 			return codexresponses.WebsocketOpenResult{}, err
 		}
-		fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
+		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
 			BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
@@ -396,7 +396,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode}, request)
+				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed}, request)
 				if failure == nil {
 					s.releaseCodexAccount(ctx, account.LeaseID)
 					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
@@ -483,7 +483,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			}
 			return codexresponses.Result{}, err
 		}
-		fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
+		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy,
 			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
@@ -596,7 +596,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode}, request, started, func(line []byte) error {
+				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed}, request, started, func(line []byte) error {
 					emitted = emitted || len(line) > 0
 					if emit == nil {
 						return nil
@@ -751,7 +751,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	defer func() { logCodexAttempt(request, failure) }()
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
-	fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
+	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: s.guardCodexTurnState(request.TurnState, account.AccountID), Fingerprint: fingerprint})).Get()
 	if err != nil {
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream unavailable"))
@@ -790,7 +790,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		failure, _ := codexresponses.AsFailure(resultErr)
 		logCodexStreamAttempt(request, failure, phase, guard)
 	}()
-	fingerprint := resolveCodexFingerprint(account.AccountID, account.FingerprintMode, request.SessionHash)
+	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: s.guardCodexTurnState(request.TurnState, account.AccountID), Fingerprint: fingerprint})).Get()
 	if err != nil {
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream unavailable"))

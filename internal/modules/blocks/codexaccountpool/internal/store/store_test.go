@@ -94,17 +94,42 @@ func TestFingerprintConvergenceIsExplicitOptInAndPersists(t *testing.T) {
 	if err != nil || updated.FingerprintMode != mode {
 		t.Fatalf("updated=%+v err=%v", updated, err)
 	}
+	seed := store.items[item.ID].FingerprintSeed
+	if seed == "" {
+		t.Fatal("enabling fingerprint convergence did not create a private seed")
+	}
 	now := time.Now().UTC()
 	if _, ok, err := store.PutModelSnapshot(item.ID, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
 		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
 	}
 	acquired, err := store.AcquirePreferredTransport("gpt-test", nil, item.ID, events.TransportResponses)
-	if err != nil || acquired.FingerprintMode != mode {
+	if err != nil || acquired.FingerprintMode != mode || acquired.FingerprintSeed != seed {
 		t.Fatalf("acquired=%+v err=%v", acquired, err)
+	}
+	if payload, err := json.Marshal(acquired); err != nil || contains(string(payload), seed) || contains(string(payload), "FingerprintSeed") {
+		t.Fatalf("serialized acquire result leaked private fingerprint seed: %s err=%v", payload, err)
 	}
 	exported := store.ExportByIDs([]string{item.ID})
 	if len(exported) != 1 || exported[0].FingerprintMode != mode {
 		t.Fatalf("exported=%+v", exported)
+	}
+	if payload, err := json.Marshal(exported); err != nil || contains(string(payload), "fingerprint_seed") || contains(string(payload), seed) {
+		t.Fatalf("credential export leaked private fingerprint seed: %s err=%v", payload, err)
+	}
+	restored := openTestStore(t)
+	if added, _, _, err := restored.Import(exported); err != nil || added != 1 {
+		t.Fatalf("restore import added=%d err=%v", added, err)
+	}
+	restoredID := restored.List()[0].ID
+	if restored.items[restoredID].FingerprintSeed == "" || restored.items[restoredID].FingerprintSeed == seed {
+		t.Fatalf("ordinary credential import reused private seed: source=%q restored=%q", seed, restored.items[restoredID].FingerprintSeed)
+	}
+	off := events.FingerprintModeOff
+	if _, err := store.Update(item.ID, nil, nil, &off); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(item.ID, nil, nil, &mode); err != nil || store.items[item.ID].FingerprintSeed != seed {
+		t.Fatalf("temporary mode change rotated seed: seed=%q err=%v", store.items[item.ID].FingerprintSeed, err)
 	}
 	if _, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
 		t.Fatal(err)
@@ -120,13 +145,14 @@ func TestFingerprintConvergenceIsExplicitOptInAndPersists(t *testing.T) {
 
 func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	store := openTestStore(t)
-	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh"}}); err != nil || added != 1 {
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh", FingerprintMode: events.FingerprintModeSession}}); err != nil || added != 1 {
 		t.Fatalf("initial import added=%d err=%v", added, err)
 	}
 	items := store.List()
 	if len(items) != 1 {
 		t.Fatalf("items=%+v", items)
 	}
+	oldSeed := store.items[items[0].ID].FingerprintSeed
 	if _, err := store.RecordTransportCapability(items[0].ID, events.TransportCompact, false); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +174,9 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	if view.CompactSupported != nil || view.WebsocketSupported != nil {
 		t.Fatalf("replacement retained transport capabilities: %+v", view)
 	}
+	if newSeed := store.items[items[0].ID].FingerprintSeed; newSeed == "" || newSeed == oldSeed {
+		t.Fatalf("explicit credential replacement retained private seed: old=%q new=%q", oldSeed, newSeed)
+	}
 }
 
 func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *testing.T) {
@@ -157,6 +186,7 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 		t.Fatalf("initial import added=%d err=%v", added, err)
 	}
 	view := store.List()[0]
+	seed := store.items[view.ID].FingerprintSeed
 	status := events.StatusAbnormal
 	if _, err := store.Update(view.ID, &status, nil, nil); err != nil {
 		t.Fatal(err)
@@ -180,6 +210,9 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	}
 	if items[0].PermanentAuthFailure {
 		t.Fatalf("reauthentication retained permanent auth failure: %+v", items[0])
+	}
+	if store.items[view.ID].FingerprintSeed != seed {
+		t.Fatalf("reauthentication rotated fingerprint seed: old=%q new=%q", seed, store.items[view.ID].FingerprintSeed)
 	}
 	exported := store.ExportByIDs([]string{view.ID})
 	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].Proxy != first.Proxy {

@@ -56,6 +56,67 @@ func TestEncryptedAccountPersistenceDoesNotExposeTokens(t *testing.T) {
 	}
 }
 
+func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	codec := encryptedTestCodec(t)
+	store, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ReadOnlyCredential()
+	input.FingerprintMode = events.FingerprintModeSession
+	if _, _, _, err := store.Import([]events.CredentialInput{input}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.order[0]
+	seed := store.items[id].FingerprintSeed
+	if seed == "" {
+		t.Fatal("enabled account has no private fingerprint seed")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if restored.items[id].FingerprintSeed != seed {
+		t.Fatalf("fingerprint seed changed across restart: before=%q after=%q", seed, restored.items[id].FingerprintSeed)
+	}
+}
+
+func TestEncryptedAccountLoadCreatesSeedForLegacyEnabledMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	codec := encryptedTestCodec(t)
+	store, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.Import([]events.CredentialInput{ReadOnlyCredential()}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.order[0]
+	store.items[id].FingerprintMode = events.FingerprintModeSession
+	store.items[id].FingerprintSeed = ""
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if restored.items[id].FingerprintSeed == "" {
+		t.Fatal("legacy enabled account was not assigned a private fingerprint seed")
+	}
+}
+
 func TestUnchangedAccountSaveDoesNotResealWholeScope(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	store, err := Open(path, "256MB", 1, encryptedTestCodec(t))

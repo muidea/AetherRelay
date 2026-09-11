@@ -98,6 +98,9 @@ func applyCodexFingerprintHeaders(headers headerSetter, fingerprint events.Codex
 	if fingerprint.InstallationID != "" {
 		headers.Set("X-Codex-Installation-Id", fingerprint.InstallationID)
 	}
+	if metadata := encodedCodexFingerprintTurnMetadata(fingerprint); metadata != "" {
+		headers.Set("X-Codex-Turn-Metadata", metadata)
+	}
 	if mode == "device" {
 		return
 	}
@@ -123,14 +126,14 @@ func applyCodexFingerprintBody(body []byte, fingerprint events.CodexFingerprint)
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("decode Codex fingerprint body: %w", err)
 	}
+	// The proxy boundary already strips inbound metadata. Rebuild from an empty
+	// bounded projection here as defense in depth for future internal callers.
 	metadata := map[string]any{}
-	if raw := envelope["client_metadata"]; len(raw) > 0 && string(raw) != "null" {
-		if err := json.Unmarshal(raw, &metadata); err != nil {
-			return nil, fmt.Errorf("decode Codex client_metadata: %w", err)
-		}
-	}
 	if fingerprint.InstallationID != "" {
 		metadata["x-codex-installation-id"] = fingerprint.InstallationID
+	}
+	if turnMetadata := encodedCodexFingerprintTurnMetadata(fingerprint); turnMetadata != "" {
+		metadata["x-codex-turn-metadata"] = turnMetadata
 	}
 	if mode != "device" {
 		metadata["session_id"] = fingerprint.SessionID
@@ -144,6 +147,28 @@ func applyCodexFingerprintBody(body []byte, fingerprint events.CodexFingerprint)
 	}
 	envelope["client_metadata"] = rawMetadata
 	return json.Marshal(envelope)
+}
+
+func encodedCodexFingerprintTurnMetadata(fingerprint events.CodexFingerprint) string {
+	mode := normalizedCodexFingerprintMode(fingerprint.Mode)
+	if mode == "" || strings.TrimSpace(fingerprint.InstallationID) == "" {
+		return ""
+	}
+	metadata := map[string]any{"installation_id": fingerprint.InstallationID}
+	if mode != "device" {
+		metadata["session_id"] = fingerprint.SessionID
+		metadata["thread_id"] = fingerprint.ThreadID
+		metadata["turn_id"] = fingerprint.TurnID
+		metadata["window_id"] = fingerprint.WindowID
+		if fingerprint.TurnStartedAtUnixMS > 0 {
+			metadata["turn_started_at_unix_ms"] = fingerprint.TurnStartedAtUnixMS
+		}
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func normalizedCodexFingerprintMode(value string) string {

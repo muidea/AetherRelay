@@ -9,6 +9,14 @@ import (
 
 type Header struct{ Name, Value string }
 
+type PromptCacheKeySource string
+
+const (
+	PromptCacheKeyAbsent    PromptCacheKeySource = "absent"
+	PromptCacheKeyExplicit  PromptCacheKeySource = "explicit"
+	PromptCacheKeyGenerated PromptCacheKeySource = "generated"
+)
+
 type Request struct {
 	Diagnostics    Diagnostics
 	AccountAttempt int
@@ -18,6 +26,9 @@ type Request struct {
 	BetaFeatures   string
 	ResponsesLite  bool
 	TurnState      string
+	// PromptCacheKeySource is a bounded provenance enum. The key itself remains
+	// only in the request body and is never copied into diagnostics or logs.
+	PromptCacheKeySource PromptCacheKeySource
 }
 
 type Result struct {

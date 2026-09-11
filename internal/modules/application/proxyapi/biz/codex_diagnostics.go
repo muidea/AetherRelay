@@ -13,8 +13,15 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 	if len(model) > 200 {
 		model = "<oversized>"
 	}
+	cacheKeySource := request.PromptCacheKeySource
+	switch cacheKeySource {
+	case codexresponses.PromptCacheKeyExplicit, codexresponses.PromptCacheKeyGenerated, codexresponses.PromptCacheKeyAbsent:
+	default:
+		cacheKeySource = codexresponses.PromptCacheKeyAbsent
+	}
 	attrs := []any{"request_id", request.Diagnostics.RequestID, "inbound_model", model,
 		"upstream_model", model, "account_attempt", request.AccountAttempt,
+		"prompt_cache_key_source", cacheKeySource,
 		"request_kind", request.Diagnostics.RequestKind, "compaction_reason", request.Diagnostics.CompactionReason,
 		"compaction_phase", request.Diagnostics.CompactionPhase}
 	if failure != nil {

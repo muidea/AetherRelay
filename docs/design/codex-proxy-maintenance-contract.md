@@ -137,7 +137,7 @@
 | function/custom/MCP `call_id` | 原样保留，call 与 output 必须一致；禁止改写到 `fc_` 命名空间；只有 `CP-REQ-031` 的初始 bootstrap 例外可降级为 user message | 同左 | `CP-REQ-012` |
 | input item `id` | 按 item 类型规范为 `msg_`/`rs_`/`fc_`/`ctc_`/`ctco_`，最长 64 字符，稳定压缩并处理冲突 | 保留顺序并执行同一规范化 | `CP-REQ-013` |
 | `previous_response_id` | HTTP 无本地状态时拒绝；原生持久 WS 同 session 增量 turn 保留 | reject | `CP-REQ-014` |
-| `prompt_cache_key` | 显式值保留；缺失时按客户端 key+model+session 生成稳定隔离值并写入上游 body | 同左；compact 不改变 input 顺序 | `CP-REQ-015` |
+| `prompt_cache_key` | 显式值保留；缺失时按客户端 key+model+session 生成稳定隔离值并写入上游 body；不得按所选账号或 fingerprint seed 重写 | 同左；compact 不改变 input 顺序 | `CP-REQ-015` |
 | `client_metadata` | 只接受已知 Codex 键；当前 flat 兼容投影包含 installation/window/turn metadata、session/thread/turn/root/parent/subagent 和 Responses Lite 信号；全部先删除，默认不做账号级收敛，显式启用时由统一 fingerprint profile 重建有界身份集合 | 同左 | `CP-REQ-016` |
 | sampling/`max_*` | ChatGPT Codex 不支持时 drop-compatible | drop-compatible | `CP-REQ-017` |
 | `stream_options` | 仅保留已验证的 `reasoning_summary_delivery=sequential_cutoff`；其它键 drop-compatible | 删除 | `CP-REQ-028` |
@@ -216,6 +216,10 @@
 `CP-FP-002` `device` 只收敛账号级 installation ID；`session` 收敛 installation/session，thread 按账号与下游隔离 session 稳定派生；`full` 再把 thread 收敛到账号 session。session/full 的 turn ID 每 turn 更新，header 与 `client_metadata` 使用同一组解析结果。
 
 `CP-FP-003` HTTP、SSE、compact 与 WebSocket 必须调用同一 fingerprint 解析和 body/header 改写核心。failover 每个账号都必须重新解析；从启用收敛的账号切到 `off` 时不能残留上一 attempt 的 ID。
+
+`CP-FP-004` 指纹必须由加密账号文档内系统管理的随机 UUID seed 派生，不得直接使用数据库主键、上游 account ID、邮箱或 token。seed 不进入管理视图、普通凭据导出、日志、指标或错误；重新认证与数据库归档恢复保留，普通导入新账号和显式槽位凭据替换生成新 seed。
+
+`CP-FP-005` 每次上游 attempt 必须只解析一次不可变 fingerprint 快照，并携带 `turn_started_at_unix_ms`。flat header、服务端重建的 `X-Codex-Turn-Metadata`、body `client_metadata` 与嵌入 metadata 必须使用同一快照；后续 WebSocket turn 只更新 turn ID 和开始时间。
 
 ## 7. HTTP、SSE、compact 与 WebSocket
 
@@ -296,6 +300,8 @@
 `CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。无显式信号时可以生成请求域 session，但不能用完整敏感正文作为持久化 key。
 
 `CP-SCHED-003` session key 必须按客户端 API key ID 和 model 命名空间隔离；存储哈希，不保存原值。
+
+`CP-SCHED-010` `prompt_cache_key` 与账号选择及 fingerprint seed 解耦。只允许记录 `explicit/generated/absent` 来源枚举，禁止把缓存键原值或哈希写入诊断、日志、指标或归档。
 
 `CP-SCHED-004` 粘性账号不健康、不支持模型、额度耗尽或没有并发槽时可以解除绑定并重新选择；已产生输出的 turn 除外。
 
@@ -458,7 +464,7 @@
 | 请求兼容层 | CP-REQ-001..035 | implemented | `proxy/codex_compat.go`, `proxy/codex_web_search.go`, `proxy/codex_tool_search.go`, `proxy/responses_anthropic.go`, `proxy/codex_websocket_replay.go`, `aetherrelaycodex/tool_schema.go` | `codex_responses_test.go`, `codex_web_search_test.go`, `codex_tool_search_test.go`, `aetherrelaycodex/tool_schema_test.go`, `codex_normalization_golden.json` |
 | 版本化身份/header | CP-CLIENT-002..004, CP-HDR-* | implemented | `aetherrelaycodexidentity/identity.go`, `codexupstream/biz/identity.go`, `codexupstream/biz/codex_identity.go`, `codexaccountpool/internal/oauth/client.go` | `codexupstream/biz/biz_test.go`, `codexaccountpool/internal/oauth/client_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/codex_compact.go`, `codexaccountpool/internal/store/store.go` | `codex_responses_test.go`, `proxyapi/biz/codex_responses_test.go`, `store_test.go`, `biz_test.go` |
-| 指纹收敛 | CP-FP-001..003 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `codex_responses_test.go`, `biz_test.go` |
+| 指纹收敛 | CP-FP-001..005 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `encrypted_store_test.go`, `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 永久鉴权失败终态 | CP-FAIL-020 | implemented | `codexaccountpool/internal/store/store.go`, `codexaccountpool/internal/store/model_availability.go`, `proxyapi/biz/codex_responses.go`, `proxy/codex_responses.go`, `proxy/codex_websocket.go` | `codexaccountpool/internal/store/store_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/biz/codex_responses_test.go`, `proxy/codex_health_test.go`, `proxy/codex_websocket_test.go` |

@@ -21,41 +21,48 @@ type codexTurnStateOrigin struct {
 	expiresAt time.Time
 }
 
-func resolveCodexFingerprint(accountID, mode, sessionHash string) upevents.CodexFingerprint {
-	accountID = strings.TrimSpace(accountID)
+func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash string) upevents.CodexFingerprint {
+	fingerprintSeed = strings.TrimSpace(fingerprintSeed)
 	mode = strings.ToLower(strings.TrimSpace(mode))
-	if accountID == "" || mode == "" || mode == accevents.FingerprintModeOff {
+	if fingerprintSeed == "" || mode == "" || mode == accevents.FingerprintModeOff {
 		return upevents.CodexFingerprint{}
 	}
+	parsedSeed, err := uuid.Parse(fingerprintSeed)
+	if err != nil || parsedSeed == uuid.Nil {
+		return upevents.CodexFingerprint{}
+	}
+	fingerprintSeed = parsedSeed.String()
 	if mode != accevents.FingerprintModeDevice && mode != accevents.FingerprintModeSession && mode != accevents.FingerprintModeFull {
 		return upevents.CodexFingerprint{}
 	}
 	fingerprint := upevents.CodexFingerprint{
 		Mode:           mode,
-		InstallationID: stableCodexUUID("aetherrelay:codex-installation:v1\x00" + accountID),
+		InstallationID: stableCodexUUID("aetherrelay:codex-installation:v2\x00" + fingerprintSeed),
 	}
 	if mode == accevents.FingerprintModeDevice {
 		return fingerprint
 	}
-	fingerprint.SessionID = stableCodexUUID("aetherrelay:codex-session:v1\x00" + accountID)
+	fingerprint.SessionID = stableCodexUUID("aetherrelay:codex-session:v2\x00" + fingerprintSeed)
 	if mode == accevents.FingerprintModeFull {
 		fingerprint.ThreadID = fingerprint.SessionID
 	} else if strings.TrimSpace(sessionHash) == "" {
 		fingerprint.ThreadID = fingerprint.SessionID
 	} else {
-		fingerprint.ThreadID = stableCodexUUID("aetherrelay:codex-thread:v1\x00" + accountID + "\x00" + strings.TrimSpace(sessionHash))
+		fingerprint.ThreadID = stableCodexUUID("aetherrelay:codex-thread:v2\x00" + fingerprintSeed + "\x00" + strings.TrimSpace(sessionHash))
 	}
 	if fingerprint.ThreadID == "" {
 		fingerprint.ThreadID = fingerprint.SessionID
 	}
 	fingerprint.WindowID = fingerprint.ThreadID + ":0"
 	fingerprint.TurnID = newCodexTurnID()
+	fingerprint.TurnStartedAtUnixMS = time.Now().UnixMilli()
 	return fingerprint
 }
 
 func codexFingerprintForTurn(fingerprint upevents.CodexFingerprint) upevents.CodexFingerprint {
 	if fingerprint.Mode == accevents.FingerprintModeSession || fingerprint.Mode == accevents.FingerprintModeFull {
 		fingerprint.TurnID = newCodexTurnID()
+		fingerprint.TurnStartedAtUnixMS = time.Now().UnixMilli()
 	}
 	return fingerprint
 }

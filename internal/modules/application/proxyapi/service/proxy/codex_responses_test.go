@@ -683,14 +683,18 @@ func TestNormalizeCodexRequestRejectsNonStringInstructions(t *testing.T) {
 
 func TestEnsureCodexPromptCacheKeyUsesStableSessionHash(t *testing.T) {
 	body := map[string]any{"model": "gpt-test"}
-	encoded, updated, err := ensureCodexPromptCacheKey([]byte(`{"model":"gpt-test"}`), body, "session-hash")
-	if err != nil || updated["prompt_cache_key"] != "session-hash" || !bytes.Contains(encoded, []byte(`"prompt_cache_key":"session-hash"`)) {
-		t.Fatalf("prompt_cache_key=%#v body=%s err=%v", updated["prompt_cache_key"], encoded, err)
+	encoded, updated, source, err := ensureCodexPromptCacheKey([]byte(`{"model":"gpt-test"}`), body, "session-hash")
+	if err != nil || source != codexresponses.PromptCacheKeyGenerated || updated["prompt_cache_key"] != "session-hash" || !bytes.Contains(encoded, []byte(`"prompt_cache_key":"session-hash"`)) {
+		t.Fatalf("prompt_cache_key=%#v source=%q body=%s err=%v", updated["prompt_cache_key"], source, encoded, err)
 	}
 	clientEncoded := []byte(`{"model":"gpt-test","prompt_cache_key":"client-key"}`)
-	encoded, updated, err = ensureCodexPromptCacheKey(clientEncoded, map[string]any{"prompt_cache_key": "client-key"}, "session-hash")
-	if err != nil || updated["prompt_cache_key"] != "client-key" || !bytes.Contains(encoded, []byte(`"prompt_cache_key":"client-key"`)) {
-		t.Fatalf("explicit prompt_cache_key was not preserved: body=%s err=%v", encoded, err)
+	encoded, updated, source, err = ensureCodexPromptCacheKey(clientEncoded, map[string]any{"prompt_cache_key": "client-key"}, "session-hash")
+	if err != nil || source != codexresponses.PromptCacheKeyExplicit || updated["prompt_cache_key"] != "client-key" || !bytes.Contains(encoded, []byte(`"prompt_cache_key":"client-key"`)) {
+		t.Fatalf("explicit prompt_cache_key was not preserved: source=%q body=%s err=%v", source, encoded, err)
+	}
+	_, _, source, err = ensureCodexPromptCacheKey(clientEncoded, map[string]any{}, "")
+	if err != nil || source != codexresponses.PromptCacheKeyAbsent {
+		t.Fatalf("absent prompt_cache_key source=%q err=%v", source, err)
 	}
 }
 

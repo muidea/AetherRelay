@@ -27,7 +27,7 @@
 - `/v1/responses/compact` 的客户端形态仍保留，但 OAuth 上游统一改写为 streaming `/backend-api/codex/responses`：强制 `stream=true`、`store=false`，并在 input 末尾放置唯一 `compaction_trigger`。只有响应中确实出现 `compaction`/`compaction_summary` item 才学习为支持；旧 unary compact 端点的能力缓存会自动失效。
 - compact 的 400/404/405/409/413/422/501 request fault 停止 fallback；其它非 credential 临时失败可以继续切号，但只累计失败观测，不写普通 Responses 冷却、账号异常或额度事实。401/402/结构化 403/429 保留原账号反馈，HTML endpoint 403 仍按端点故障处理。
 - `X-Codex-Beta-Features` 是会话 profile：客户端未声明时默认 `remote_compaction_v2`，显式非空集合保持原样，原生压缩请求则强制包含 v2。`X-Codex-Turn-State` 作为有界 opaque 值转发和回传，只记录其哈希对应的铸造账号；已知跨账号回放在 failover 出站前剥离。
-- 账号指纹收敛默认关闭。管理员可逐账号显式选择 `device`、`session` 或 `full`；HTTP、SSE、compact 与 WebSocket 共用同一类型化 profile，header 与 `client_metadata` 使用同一组 ID，切换到 `off` 账号时不会继承上一 attempt 的身份。
+- 账号指纹收敛默认关闭。管理员可逐账号显式选择 `device`、`session` 或 `full`；启用时使用加密账号文档内的系统随机 seed，而不是本地账号 ID。HTTP、SSE、compact 与 WebSocket 共用同一请求尝试快照，header 与 `client_metadata` 使用相同的 installation/session/thread/turn/window 和 turn 开始时间；切换到 `off` 账号时不会继承上一 attempt 的身份。客户端显式或按客户端会话生成的 `prompt_cache_key` 不随账号指纹改写。
 - WebSocket 支持规范入口 `GET /v1/responses`；第二个及后续 turn 在客户端尚未收到业务帧且 429 已同步写入旧账号冷却时，可以关闭旧 session、重新选择账号并发送去掉 `previous_response_id` 的完整 transcript。只有 transcript 在消息上限内、顺序完整且 function/custom/MCP tool output 全部能匹配 call 时才允许重放，单 turn 最多迁移两次；任一业务帧写出后禁止迁移。`GET /v1/responses/ws` 仅见于参考实现的 SDK 测试，不作为生产兼容入口。Realtime、网页会话或插件能力不在本合同范围。
 
 ## 账号韧性

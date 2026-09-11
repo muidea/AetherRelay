@@ -434,7 +434,7 @@
 - [x] **D-08.18** `metadata.json` 只引用实际成功写入的文件路径。
 - [x] **D-08.19** `metadata.json` 记录最终错误信息。
 - [x] **D-08.20** `archive_full_content=false` 时不写请求和响应完整正文。
-- [x] **D-08.21** `archive_full_content=false` 时仍写元数据文件。
+- [x] **D-08.21** `archive_interactions=false` 时不创建交互目录，也不写元数据文件。
 - [x] **D-08.22** active round 不参与 retention 删除。
 - [x] **D-08.23** metadata 写入失败仍释放 active round。
 - [x] **D-08.24** 中途 abort 仍释放 active round。

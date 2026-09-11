@@ -79,6 +79,9 @@ type account struct {
 	CompactProtocol      string                       `json:"compact_protocol,omitempty"`
 	WebsocketSupported   *bool                        `json:"websocket_supported,omitempty"`
 	FingerprintMode      string                       `json:"fingerprint_mode,omitempty"`
+	// FingerprintSeed is encrypted with the rest of the account document. It is
+	// deliberately absent from management views and credential exports.
+	FingerprintSeed string `json:"fingerprint_seed,omitempty"`
 }
 
 type Store struct {
@@ -159,6 +162,9 @@ func (s *Store) loadEncrypted() error {
 		mode, valid := normalizeFingerprintMode(item.FingerprintMode)
 		if !valid || item.FingerprintMode != mode {
 			item.FingerprintMode = mode
+			migrated = true
+		}
+		if reconcileFingerprintSeed(&item) {
 			migrated = true
 		}
 		// compact_supported learned against the retired unary endpoint is not
@@ -386,6 +392,8 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 	for i, input := range normalized {
 		existing := resolved[i]
 		reauthenticated := input.Reauthenticate && existing != nil
+		rotateFingerprintSeed := existing != nil && !reauthenticated && strings.TrimSpace(input.TargetID) != "" &&
+			existing.AccessToken != input.AccessToken && existing.RefreshToken != input.RefreshToken
 		if existing == nil {
 			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeOff}
 			s.items[existing.ID] = existing
@@ -420,6 +428,10 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		} else if existing.FingerprintMode == "" {
 			existing.FingerprintMode = events.FingerprintModeOff
 		}
+		if rotateFingerprintSeed {
+			existing.FingerprintSeed = ""
+		}
+		reconcileFingerprintSeed(existing)
 		if existing.Status == "" || (reauthenticated && existing.Status == events.StatusAbnormal) {
 			existing.Status = events.StatusNormal
 		}
@@ -550,6 +562,7 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (event
 	}
 	if fingerprintMode != nil {
 		item.FingerprintMode = normalizedMode
+		reconcileFingerprintSeed(item)
 	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, err
@@ -631,6 +644,7 @@ func acquireResult(item *account) events.AcquireResult {
 		AccountIDHeader: item.AccountIDHeader,
 		Proxy:           item.Proxy,
 		FingerprintMode: mode,
+		FingerprintSeed: item.FingerprintSeed,
 	}
 }
 
@@ -766,7 +780,7 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 	if catalogChanged {
 		s.bumpCatalogLocked()
 	}
-	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, Refreshed: true}, nil
+	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, FingerprintSeed: item.FingerprintSeed, Refreshed: true}, nil
 }
 
 func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (events.RefreshTokenResult, error) {
@@ -1695,6 +1709,44 @@ func normalizeFingerprintMode(value string) (string, bool) {
 	default:
 		return events.FingerprintModeOff, false
 	}
+}
+
+func fingerprintModeRequiresSeed(mode string) bool {
+	return mode == events.FingerprintModeDevice || mode == events.FingerprintModeSession || mode == events.FingerprintModeFull
+}
+
+func normalizeFingerprintSeed(value string) (string, bool) {
+	parsed, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil || parsed == uuid.Nil {
+		return "", false
+	}
+	return parsed.String(), true
+}
+
+// reconcileFingerprintSeed owns the private seed lifecycle. Enabled accounts
+// receive a random stable seed; off accounts keep an existing valid seed so a
+// temporary mode change does not unexpectedly create a new device identity.
+func reconcileFingerprintSeed(item *account) bool {
+	if item == nil {
+		return false
+	}
+	seed, valid := normalizeFingerprintSeed(item.FingerprintSeed)
+	if valid {
+		if item.FingerprintSeed == seed {
+			return false
+		}
+		item.FingerprintSeed = seed
+		return true
+	}
+	if fingerprintModeRequiresSeed(item.FingerprintMode) {
+		item.FingerprintSeed = uuid.NewString()
+		return true
+	}
+	if item.FingerprintSeed != "" {
+		item.FingerprintSeed = ""
+		return true
+	}
+	return false
 }
 
 func unique(values []string) []string {

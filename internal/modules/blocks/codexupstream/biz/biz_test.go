@@ -666,14 +666,17 @@ func TestResponseHeadersProjectsCodexUsageAllowlist(t *testing.T) {
 }
 
 func TestCodexFingerprintRewritesHeadersAndBodyTogether(t *testing.T) {
-	fingerprint := events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0"}
+	fingerprint := events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0", TurnStartedAtUnixMS: 123456789}
 	headers := http.Header{}
 	applyCodexSessionHeaders(headers, "isolated-session")
 	applyCodexFingerprintHeaders(headers, fingerprint)
 	if headers.Get("X-Codex-Installation-Id") != "install-id" || headers.Get("Session-Id") != "session-id" || headers.Get("Thread-Id") != "thread-id" || headers.Get("X-Client-Request-Id") != "thread-id" {
 		t.Fatalf("fingerprint headers=%v", headers)
 	}
-	body, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test","input":[]}`), fingerprint)
+	if metadata := headers.Get("X-Codex-Turn-Metadata"); !strings.Contains(metadata, `"turn_started_at_unix_ms":123456789`) || !strings.Contains(metadata, `"turn_id":"turn-id"`) {
+		t.Fatalf("fingerprint turn metadata=%q", metadata)
+	}
+	body, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test","input":[],"prompt_cache_key":"client-cache","client_metadata":{"session_id":"client-secret","arbitrary":"must-not-pass"}}`), fingerprint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,6 +685,13 @@ func TestCodexFingerprintRewritesHeadersAndBodyTogether(t *testing.T) {
 	}
 	if json.Unmarshal(body, &envelope) != nil || envelope.ClientMetadata["x-codex-installation-id"] != "install-id" || envelope.ClientMetadata["session_id"] != "session-id" || envelope.ClientMetadata["turn_id"] != "turn-id" {
 		t.Fatalf("fingerprint body=%s metadata=%+v", body, envelope.ClientMetadata)
+	}
+	if _, exists := envelope.ClientMetadata["arbitrary"]; exists || !strings.Contains(string(body), `"prompt_cache_key":"client-cache"`) {
+		t.Fatalf("fingerprint projection leaked metadata or changed cache key: %s", body)
+	}
+	embedded, _ := envelope.ClientMetadata["x-codex-turn-metadata"].(string)
+	if !strings.Contains(embedded, `"turn_started_at_unix_ms":123456789`) {
+		t.Fatalf("embedded turn metadata=%q", embedded)
 	}
 	offBody, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test"}`), events.CodexFingerprint{})
 	if err != nil || strings.Contains(string(offBody), "client_metadata") {

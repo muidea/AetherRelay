@@ -27,11 +27,18 @@ function harness(){
     renderUnifiedAccounts:()=>{},
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0],context);
-  for(const name of ['unifiedCredentialKey','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled']){
+  for(const name of ['normalizedCodexFingerprintMode','codexFingerprintSummary','unifiedCredentialKey','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled']){
     vm.runInContext(functionSource(name),context);
   }
   return {context,requests,messages};
 }
+
+test('unified account summary hides inactive fingerprint mode',()=>{
+  const {context:c}=harness();
+  assert.equal(c.codexFingerprintSummary({fingerprint_mode:'off'}),'');
+  assert.equal(c.codexFingerprintSummary({}),'');
+  assert.match(c.codexFingerprintSummary({fingerprint_mode:'session'}),/>指纹 会话</);
+});
 
 test('unified account slots render independent credential switches',()=>{
   const {context:c}=harness();

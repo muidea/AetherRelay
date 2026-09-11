@@ -137,7 +137,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		var cacheErr error
-		normalized, normalizedBody, cacheErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
+		normalized, normalizedBody, _, cacheErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 		if cacheErr != nil {
 			writeCodexWebsocketError(conn, "invalid_request", cacheErr.Error())
 			return

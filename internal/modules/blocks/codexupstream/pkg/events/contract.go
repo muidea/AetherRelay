@@ -24,12 +24,13 @@ type Header struct {
 // Empty/off means that the proxy keeps its ordinary per-client session
 // isolation and does not converge any account-level identifiers.
 type CodexFingerprint struct {
-	Mode           string
-	InstallationID string
-	SessionID      string
-	ThreadID       string
-	TurnID         string
-	WindowID       string
+	Mode                string
+	InstallationID      string
+	SessionID           string
+	ThreadID            string
+	TurnID              string
+	WindowID            string
+	TurnStartedAtUnixMS int64
 }
 
 type ErrorClass string

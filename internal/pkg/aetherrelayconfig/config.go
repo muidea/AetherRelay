@@ -51,7 +51,12 @@ type Config struct {
 	MaxStreamBytes int64
 	// MaxSSELineBytes 限制单条 SSE 行(到 \n)最大字节;<=0 时使用默认值。
 	MaxSSELineBytes int64
-	// ArchiveFullContent 为 false 时仅写元数据,不落盘完整请求/响应正文。
+	// ArchiveInteractions controls whether any per-request interaction archive is
+	// created. It is deliberately opt-in because even sanitized metadata has a
+	// retention and privacy cost.
+	ArchiveInteractions bool
+	// ArchiveFullContent only applies when ArchiveInteractions is true. When
+	// false, the enabled archive records metadata but not request/response bodies.
 	ArchiveFullContent bool
 	// State is the single persistent workspace authority. The fields below are
 	// runtime projections and are never independently configured.
@@ -327,7 +332,8 @@ func Load(path string) (Config, error) {
 		MaxUpstreamResponseBytes: DefaultMaxUpstreamResponseBytes,
 		MaxStreamBytes:           DefaultMaxStreamBytes,
 		MaxSSELineBytes:          DefaultMaxSSELineBytes,
-		ArchiveFullContent:       true,
+		ArchiveInteractions:      false,
+		ArchiveFullContent:       false,
 		InteractionDir:           "interactions",
 		InteractionRetention:     500,
 		VerboseLogging:           true,
@@ -547,6 +553,12 @@ func setTopLevel(cfg *Config, key, value string) error {
 			return fmt.Errorf("max_sse_line_bytes: %w", err)
 		}
 		cfg.MaxSSELineBytes = n
+	case "archive_interactions":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("archive_interactions: %w", err)
+		}
+		cfg.ArchiveInteractions = b
 	case "archive_full_content":
 		b, err := parseStrictBool(value)
 		if err != nil {
@@ -1120,6 +1132,13 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("AETHERRELAY_MAX_SSE_LINE_BYTES: %w", err)
 		}
 		cfg.MaxSSELineBytes = n
+	}
+	if value := os.Getenv("AETHERRELAY_ARCHIVE_INTERACTIONS"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AETHERRELAY_ARCHIVE_INTERACTIONS: %w", err)
+		}
+		cfg.ArchiveInteractions = b
 	}
 	if value := os.Getenv("AETHERRELAY_ARCHIVE_FULL_CONTENT"); value != "" {
 		b, err := parseStrictBool(value)

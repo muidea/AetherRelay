@@ -88,9 +88,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if err != nil {
 		return nil, cd.NewError(cd.IllegalParam, err.Error())
 	}
-	recorder, err := archive.NewRecorderOptions(bootstrap.Config.InteractionDir, archive.RecorderOptions{
-		MaxRounds: bootstrap.Config.InteractionRetention, FullContent: bootstrap.Config.ArchiveFullContent, ScopeByAPIKey: true,
-	})
+	recorder, err := newInteractionRecorder(bootstrap.Config)
 	if err != nil {
 		return nil, cd.NewError(cd.Unexpected, "init interaction archive: "+err.Error())
 	}
@@ -119,6 +117,18 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.SubscribeFunc(proxyevents.TopicActivateClientKeyIndex, biz.handleActivateClientKeyIndex)
 	biz.SubscribeFunc(proxyevents.TopicWaitClientRequests, biz.handleWaitClientRequests)
 	return biz, nil
+}
+
+// newInteractionRecorder keeps interaction archival opt-in. Returning nil is
+// intentional: request handling continues without creating an interactions
+// directory or retaining any per-request metadata.
+func newInteractionRecorder(cfg config.Config) (*archive.Recorder, error) {
+	if !cfg.ArchiveInteractions {
+		return nil, nil
+	}
+	return archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{
+		MaxRounds: cfg.InteractionRetention, FullContent: cfg.ArchiveFullContent, ScopeByAPIKey: true,
+	})
 }
 
 func (s *Proxy) Run(ctx context.Context) *cd.Error {

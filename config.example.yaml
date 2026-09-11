@@ -8,8 +8,11 @@ server:
   # 流式累计输出与单条 SSE 行上限。
   max_stream_bytes: 67108864
   max_sse_line_bytes: 1048576
-  # 是否落盘完整请求/响应正文;false 时仅保留 metadata 等元数据。
-  archive_full_content: true
+  # 默认不写 interactions 归档（包括脱敏元数据）。仅在受控排障期间显式开启。
+  archive_interactions: false
+  # 仅当 archive_interactions=true 时生效：是否额外落盘完整请求/响应正文。
+  # 正文可能包含敏感数据；排障结束后应恢复为 false。
+  archive_full_content: false
   verbose_logging: true
   log_format: text
   request_timeout_seconds: 300

@@ -105,7 +105,8 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
 | `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `90` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
-| `archive_full_content` | 是否落盘完整请求/响应正文。 |
+| `archive_interactions` / `AETHERRELAY_ARCHIVE_INTERACTIONS` | 是否创建 `interactions` 归档，默认 `false`。关闭时不创建交互目录，也不写脱敏元数据。 |
+| `archive_full_content` / `AETHERRELAY_ARCHIVE_FULL_CONTENT` | 仅在 `archive_interactions=true` 时生效：是否落盘完整请求/响应正文，默认 `false`。 |
 | `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
 | `trusted_proxy_cidrs` / `AETHERRELAY_TRUSTED_PROXY_CIDRS` | 允许提供 `X-Forwarded-Proto` 的直接反向代理 IP/CIDR；未命中时忽略转发协议头。 |
@@ -153,7 +154,7 @@ Usage runtime 当前使用重新基线化的最终 schema v2（版本名 `usage_
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 
-工作区固定包含 `interactions/`、`images/`、`image_thumbnails/` 与 DuckDB 文件。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录固定为 `interactions/{api_key_id}/{round_id}/`。图片任务与图片资产同样以客户端 API Key ID 作用域隔离：磁盘目录为 `images/{安全作用域}/{日期路径}` 和 `image_thumbnails/{安全作用域}/{日期路径}.png`，数据库索引与标签主键为 `(api_key_id, path)`；Admin 图片任务/图片库缺省使用 `builtin-local`，显式作用域仍需是已存在的 Key。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
+工作区固定包含图片目录与 DuckDB 文件；只有 `archive_interactions=true` 时才会创建 `interactions/`。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录为 `interactions/{api_key_id}/{round_id}/`。图片任务与图片资产同样以客户端 API Key ID 作用域隔离：磁盘目录为 `images/{安全作用域}/{日期路径}` 和 `image_thumbnails/{安全作用域}/{日期路径}.png`，数据库索引与标签主键为 `(api_key_id, path)`；Admin 图片任务/图片库缺省使用 `builtin-local`，显式作用域仍需是已存在的 Key。整个目录应由运行用户以私有权限持有，且不得提交到版本库。
 
 ## ChatGPT Web 本地数据
 
@@ -226,8 +227,9 @@ codex_oauth:
 - `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
 - `usage_refresh_interval_minute: 0` 关闭自动用量刷新；正数表示账号用量快照的目标新鲜度。调度器每分钟最多领取 100 个到期账号，沿用有界并发；重复的手工或定时请求复用当前任务。刷新失败保留上一份快照并按账号指数退避，永久鉴权失败不会参加自动刷新。该配置不改变路由资格，修改后必须重启。
 - WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。第二个及后续 turn 若在任何业务帧输出前收到 429，代理只在完整 transcript 不超过消息上限且 function/custom/MCP call-output 重新校验通过时关闭旧 session、切换账号并重放，单 turn 最多迁移两次；已有增量输出时绝不重放。
-- Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。
+- Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。启用模式使用加密账号文档内的系统随机 seed 派生身份；seed 不进入管理投影或普通凭据导出，重新认证和数据库归档恢复会保留，作为新账号导入或显式替换槽位凭据时重新生成。
 - `device` 只统一 installation ID；`session` 再统一账号 session，并按下游隔离 session 稳定派生 thread；`full` 将 thread 也统一到账号 session。启用模式会同时改写上游 header 与 `client_metadata`；默认 `off` 仍使用 AetherRelay 原有的客户端隔离 session，不做账号级收敛。
+- `prompt_cache_key` 与账号指纹解耦：客户端显式值保持不变，缺失时按客户端 API Key ID、模型和客户端会话生成稳定隔离值。账号切换、指纹模式切换或 seed 更新不会主动改变该缓存分片；运行日志只记录 `explicit/generated/absent` 来源枚举，不记录缓存键。
 
 ## 本地管理页
 
