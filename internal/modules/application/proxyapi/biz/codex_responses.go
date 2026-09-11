@@ -907,7 +907,11 @@ func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, he
 	if len(snapshot.Windows) == 0 {
 		return
 	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMergeUsageSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot})).Get()
+	nextRefreshAt := ""
+	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
+		nextRefreshAt = nextCodexUsageRefreshAt(accountID, now, interval)
+	}
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMergeUsageSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot, Source: "response_header", NextRefreshAt: nextRefreshAt})).Get()
 }
 
 func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {

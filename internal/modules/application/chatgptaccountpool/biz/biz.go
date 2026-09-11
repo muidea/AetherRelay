@@ -3,6 +3,7 @@ package biz
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -162,9 +163,17 @@ func (s *Account) handleRefresh(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid account refresh command"))
 		return
 	}
-	progressID := uuid.NewString()
-	s.putProgress(events.RefreshProgress{ProgressID: progressID, Errors: []events.RefreshError{}})
+	progressID, existing := s.beginManualRefresh()
+	if existing {
+		result.Set(events.RefreshResult{ProgressID: progressID}, nil)
+		return
+	}
+	if progressID == "" {
+		result.Set(nil, cd.NewError(cd.Unexpected, "account refresh already running"))
+		return
+	}
 	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runManualRefresh(progressID, cmd.AccessTokens) }); err != nil {
+		s.finishManualRefresh(progressID)
 		s.finishProgress(progressID, err.Error())
 		result.Set(nil, cd.NewError(cd.Unexpected, "account refresh task unavailable"))
 		return
@@ -198,13 +207,41 @@ func (s *Account) startManualRefreshByID(ids []string) (events.RefreshResult, er
 		return events.RefreshResult{}, context.Canceled
 	}
 	selectedIDs := append([]string(nil), ids...)
-	progressID := uuid.NewString()
-	s.putProgress(events.RefreshProgress{ProgressID: progressID, Errors: []events.RefreshError{}})
+	progressID, existing := s.beginManualRefresh()
+	if existing {
+		return events.RefreshResult{ProgressID: progressID}, nil
+	}
+	if progressID == "" {
+		return events.RefreshResult{}, fmt.Errorf("account refresh already running")
+	}
 	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runManualRefreshByID(progressID, selectedIDs) }); err != nil {
+		s.finishManualRefresh(progressID)
 		s.finishProgress(progressID, err.Error())
 		return events.RefreshResult{}, err
 	}
 	return events.RefreshResult{ProgressID: progressID}, nil
+}
+
+func (s *Account) beginManualRefresh() (string, bool) {
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	s.pruneProgressLocked(time.Now())
+	for id, progress := range s.progress {
+		if !progress.Done {
+			return id, true
+		}
+	}
+	if !s.refreshing.CompareAndSwap(false, true) {
+		return "", false
+	}
+	id := uuid.NewString()
+	s.progress[id] = events.RefreshProgress{ProgressID: id, Errors: []events.RefreshError{}}
+	s.progressAt[id] = time.Now()
+	return id, false
+}
+
+func (s *Account) finishManualRefresh(string) {
+	s.refreshing.Store(false)
 }
 
 func (s *Account) handleRefreshProgress(ev event.Event, result event.Result) {
@@ -323,7 +360,7 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 
 func (s *Account) Run(ctx context.Context) *cd.Error {
 	if s.store != nil && s.refreshEvery > 0 {
-		s.Timer(ctx, s.refreshEvery, 0, s.refreshAccounts)
+		s.Timer(ctx, min(s.refreshEvery, accountRefreshTick), 0, s.refreshAccounts)
 	}
 	return nil
 }
@@ -457,10 +494,18 @@ func (s *Account) handleAcquireImage(ev event.Event, result event.Result) {
 	}
 	acc, found := s.store.AcquireImageToken(cmd.PlanType, cmd.SourceType, cmd.Exclude, cmd.Model, cmd.Capability)
 	if !found {
+		s.requestScheduledAccountRefresh()
 		result.Set(nil, cd.NewError(cd.Unexpected, "no available image quota"))
 		return
 	}
 	result.Set(events.AcquireImageTokenResult{AccessToken: acc.AccessToken, Account: acc}, nil)
+}
+
+func (s *Account) requestScheduledAccountRefresh() {
+	if s.refreshEvery <= 0 || s.stopping.Load() || s.refreshing.Load() {
+		return
+	}
+	_ = s.BackgroundRoutine().AsyncFunction(s.refreshAccounts)
 }
 
 func (s *Account) handleAcquireImageAccount(ev event.Event, result event.Result) {

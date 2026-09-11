@@ -65,6 +65,11 @@ type AccountView struct {
 	LastTokenRefreshAt         string `json:"last_token_refresh_at,omitempty"`
 	LastTokenRefreshErrorAt    string `json:"last_token_refresh_error_at,omitempty"`
 	LastTokenRefreshErrorClass string `json:"last_token_refresh_error_class,omitempty"`
+	LastAccountRefreshAt       string `json:"last_account_refresh_at,omitempty"`
+	NextAccountRefreshAt       string `json:"next_account_refresh_at,omitempty"`
+	AccountRefreshSource       string `json:"account_refresh_source,omitempty"`
+	AccountRefreshErrorAt      string `json:"account_refresh_error_at,omitempty"`
+	AccountRefreshError        string `json:"account_refresh_error,omitempty"`
 	// Model discovery health is a bounded operational projection. It never
 	// contains raw upstream responses, proxy diagnostics, or credentials.
 	ModelDiscoveryRetryAt    string `json:"model_discovery_retry_at,omitempty"`

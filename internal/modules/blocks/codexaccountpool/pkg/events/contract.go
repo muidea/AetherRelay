@@ -1,6 +1,8 @@
 // Package events defines the Codex OAuth account-pool owner's typed EventHub contract.
 package events
 
+import "time"
+
 const (
 	TopicList                      = "aetherrelay.codex.accountpool.command.list"
 	TopicImport                    = "aetherrelay.codex.accountpool.command.import"
@@ -88,6 +90,8 @@ type AccountView struct {
 	UsageSnapshot            *AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
 	UsageRefreshErrorAt      string                `json:"usage_refresh_error_at,omitempty"`
 	UsageRefreshError        string                `json:"usage_refresh_error,omitempty"`
+	NextUsageRefreshAt       string                `json:"next_usage_refresh_at,omitempty"`
+	UsageRefreshSource       string                `json:"usage_refresh_source,omitempty"`
 	CompactSupported         *bool                 `json:"compact_supported,omitempty"`
 	WebsocketSupported       *bool                 `json:"websocket_supported,omitempty"`
 	FingerprintMode          string                `json:"fingerprint_mode"`
@@ -333,26 +337,37 @@ type UsageCandidate struct {
 	Proxy           string
 }
 
-type ListUsageCandidatesCommand struct{ AccountIDs []string }
+type ListUsageCandidatesCommand struct {
+	AccountIDs []string
+	DueOnly    bool
+	Limit      int
+	Now        time.Time
+}
 type ListUsageCandidatesResult struct {
 	Candidates []UsageCandidate
 }
 
 type PutUsageSnapshotCommand struct {
-	AccountID string
-	Snapshot  AccountUsageSnapshot
+	AccountID     string
+	Snapshot      AccountUsageSnapshot
+	Source        string
+	NextRefreshAt string
 }
 type PutUsageSnapshotResult struct{ OK bool }
 
 type MergeUsageSnapshotCommand struct {
-	AccountID string
-	Snapshot  AccountUsageSnapshot
+	AccountID     string
+	Snapshot      AccountUsageSnapshot
+	Source        string
+	NextRefreshAt string
 }
 type MergeUsageSnapshotResult struct{ OK bool }
 
 type RecordUsageFailureCommand struct {
-	AccountID string
-	Error     string
+	AccountID     string
+	Error         string
+	Source        string
+	ScheduleRetry bool
 }
 type RecordUsageFailureResult struct{ OK bool }
 

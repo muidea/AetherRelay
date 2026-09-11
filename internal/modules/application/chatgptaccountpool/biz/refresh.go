@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"aetherrelay/internal/modules/application/chatgptaccountpool/internal/oauth"
@@ -18,6 +19,9 @@ import (
 const (
 	refreshProgressTTL        = time.Hour
 	accountInfoRefreshTimeout = 45 * time.Second
+	accountRefreshConcurrency = 5
+	accountRefreshBatchSize   = 25
+	accountRefreshTick        = 15 * time.Second
 )
 
 func (s *Account) putProgress(progress events.RefreshProgress) {
@@ -128,12 +132,8 @@ func (s *Account) refreshAccounts() {
 	if s.stopping.Load() {
 		return
 	}
-	for _, account := range s.store.RefreshCandidates() {
-		if s.stopping.Load() {
-			return
-		}
-		s.refreshAccount(account)
-	}
+	candidates := s.store.ClaimDueRefreshCandidates(time.Now().UTC(), s.refreshEvery, accountRefreshBatchSize)
+	s.refreshCandidates(candidates, "scheduled", "", nil)
 }
 
 func (s *Account) runManualRefresh(progressID string, tokens []string) {
@@ -141,11 +141,7 @@ func (s *Account) runManualRefresh(progressID string, tokens []string) {
 		s.finishProgress(progressID, "account pool is shutting down")
 		return
 	}
-	if !s.refreshing.CompareAndSwap(false, true) {
-		s.finishProgress(progressID, "account refresh already running")
-		return
-	}
-	defer s.refreshing.Store(false)
+	defer s.finishManualRefresh(progressID)
 
 	// Match the scheduled refresh path: renew eligible OAuth access tokens
 	// before requesting ChatGPT Web account information. A manual refresh is
@@ -162,28 +158,10 @@ func (s *Account) runManualRefresh(progressID string, tokens []string) {
 		s.finishProgress(progressID, "no refreshable accounts found")
 		return
 	}
-	for _, account := range candidates {
-		if s.stopping.Load() {
-			s.finishProgress(progressID, "account pool is shutting down")
-			return
-		}
-		err := s.refreshAccount(account)
-		if oauthFailure, found := oauthFailures[account.ID]; found {
-			if err != nil {
-				err = fmt.Errorf("account information refresh failed; OAuth credential renewal failed (%s): %w", oauthFailure, err)
-			} else {
-				err = fmt.Errorf("account information refreshed, but OAuth credential renewal failed (%s)", oauthFailure)
-			}
-		}
-		if s.stopping.Load() {
-			s.finishProgress(progressID, "account pool is shutting down")
-			return
-		}
-		if err != nil {
-			s.updateProgress(progressID, account, err.Error(), false)
-			continue
-		}
-		s.updateProgress(progressID, account, "", true)
+	s.refreshCandidates(candidates, "manual", progressID, oauthFailures)
+	if s.stopping.Load() {
+		s.finishProgress(progressID, "account pool is shutting down")
+		return
 	}
 	s.finishProgress(progressID, "")
 }
@@ -193,11 +171,7 @@ func (s *Account) runManualRefreshByID(progressID string, ids []string) {
 		s.finishProgress(progressID, "account pool is shutting down")
 		return
 	}
-	if !s.refreshing.CompareAndSwap(false, true) {
-		s.finishProgress(progressID, "account refresh already running")
-		return
-	}
-	defer s.refreshing.Store(false)
+	defer s.finishManualRefresh(progressID)
 	selectedIDs := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		if id = strings.TrimSpace(id); id != "" {
@@ -215,33 +189,49 @@ func (s *Account) runManualRefreshByID(progressID string, ids []string) {
 		s.finishProgress(progressID, "no refreshable accounts found")
 		return
 	}
-	for _, account := range candidates {
-		if s.stopping.Load() {
-			s.finishProgress(progressID, "account pool is shutting down")
-			return
-		}
-		err := s.refreshAccount(account)
-		if oauthFailure, found := oauthFailures[account.ID]; found {
-			if err != nil {
-				err = fmt.Errorf("account information refresh failed; OAuth credential renewal failed (%s): %w", oauthFailure, err)
-			} else {
-				err = fmt.Errorf("account information refreshed, but OAuth credential renewal failed (%s)", oauthFailure)
-			}
-		}
-		if s.stopping.Load() {
-			s.finishProgress(progressID, "account pool is shutting down")
-			return
-		}
-		if err != nil {
-			s.updateProgress(progressID, account, err.Error(), false)
-			continue
-		}
-		s.updateProgress(progressID, account, "", true)
+	s.refreshCandidates(candidates, "manual", progressID, oauthFailures)
+	if s.stopping.Load() {
+		s.finishProgress(progressID, "account pool is shutting down")
+		return
 	}
 	s.finishProgress(progressID, "")
 }
 
-func (s *Account) refreshAccount(account events.AccountView) error {
+func (s *Account) refreshCandidates(candidates []events.AccountView, source, progressID string, oauthFailures map[string]string) {
+	sem := make(chan struct{}, accountRefreshConcurrency)
+	var wg sync.WaitGroup
+	for _, account := range candidates {
+		if s.stopping.Load() {
+			break
+		}
+		account := account
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			err := s.refreshAccount(account, source)
+			if oauthFailure, found := oauthFailures[account.ID]; found {
+				if err != nil {
+					err = fmt.Errorf("account information refresh failed; OAuth credential renewal failed (%s): %w", oauthFailure, err)
+				} else {
+					err = fmt.Errorf("account information refreshed, but OAuth credential renewal failed (%s)", oauthFailure)
+				}
+			}
+			if progressID == "" {
+				return
+			}
+			if err != nil {
+				s.updateProgress(progressID, account, err.Error(), false)
+			} else {
+				s.updateProgress(progressID, account, "", true)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (s *Account) refreshAccount(account events.AccountView, source string) error {
 	if s.stopping.Load() {
 		return context.Canceled
 	}
@@ -257,6 +247,7 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 			return err
 		}
 		_ = s.store.RecordRefreshError(account.AccessToken, err.Error())
+		_ = s.store.RecordAccountRefreshOutcome(account.AccessToken, source, s.refreshEvery, false, err.Error())
 		return err
 	}
 	info, ok := value.(upevents.GetUserInfoResult)
@@ -266,6 +257,7 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 			return context.Canceled
 		}
 		_ = s.store.RecordRefreshError(account.AccessToken, err)
+		_ = s.store.RecordAccountRefreshOutcome(account.AccessToken, source, s.refreshEvery, false, err)
 		return fmt.Errorf("%s", err)
 	}
 	if s.stopping.Load() {
@@ -276,9 +268,10 @@ func (s *Account) refreshAccount(account events.AccountView) error {
 			return err
 		}
 		_ = s.store.RecordRefreshError(account.AccessToken, err.Error())
+		_ = s.store.RecordAccountRefreshOutcome(account.AccessToken, source, s.refreshEvery, false, err.Error())
 		return err
 	}
-	return nil
+	return s.store.RecordAccountRefreshOutcome(account.AccessToken, source, s.refreshEvery, true, "")
 }
 
 // refreshOAuthTokens renews due OAuth credentials and returns failures keyed

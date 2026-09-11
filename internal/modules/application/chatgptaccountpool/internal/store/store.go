@@ -32,11 +32,13 @@ const (
 	// gateway's legacy transient cooldown. A 429 is intentionally treated as
 	// the same short, persisted recovery window here: ChatGPT Web does not
 	// expose a reliable retry-after value on every text transport.
-	textRateLimitCooldown  = time.Minute
-	textTransientCooldown  = time.Minute
-	imageRateLimitCooldown = time.Minute
-	imageTransientCooldown = time.Minute
-	secureDocumentScope    = "chatgpt_web_accounts"
+	textRateLimitCooldown    = time.Minute
+	textTransientCooldown    = time.Minute
+	imageRateLimitCooldown   = time.Minute
+	imageTransientCooldown   = time.Minute
+	secureDocumentScope      = "chatgpt_web_accounts"
+	accountRefreshLease      = time.Minute
+	accountRefreshMaxBackoff = 30 * time.Minute
 )
 
 type Account struct {
@@ -428,6 +430,137 @@ func jwtTimestamp(claims map[string]any, key string) string {
 // read: callers must never retain or persist the returned access token.
 func (s *Store) RefreshCandidates() []events.AccountView {
 	return s.refreshCandidates(nil)
+}
+
+// ClaimDueRefreshCandidates returns a bounded, priority-ordered slice and
+// persists a short lease before releasing the owner lock. A process restart
+// therefore cannot immediately stampede every account whose previous refresh
+// was in flight.
+func (s *Store) ClaimDueRefreshCandidates(now time.Time, interval time.Duration, limit int) []events.AccountView {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if interval <= 0 || limit <= 0 {
+		return nil
+	}
+	type dueAccount struct {
+		token    string
+		priority int
+		lastUsed time.Time
+	}
+	due := make([]dueAccount, 0, limit)
+	for _, token := range s.order {
+		acc := s.items[token]
+		if acc == nil || !isWebCompatibleSource(acc.SourceType) || acc.Status == StatusAbnormal {
+			continue
+		}
+		restore, restoreKnown := extraTime(acc, "restore_at")
+		restoreDue := restoreKnown && acc.Quota <= 0 && !restore.After(now)
+		if next, ok := extraTime(acc, "next_account_refresh_at"); ok && next.After(now) && !restoreDue {
+			continue
+		}
+		priority := 1
+		active := acc.Status == StatusNormal || acc.Status == StatusLimited
+		if active {
+			priority = 5
+		}
+		if _, refreshed := extraTime(acc, "last_account_refresh_at"); !refreshed {
+			priority++
+		}
+		if restoreDue {
+			priority += 2
+		}
+		lastUsed, _ := parseTime(acc.LastUsedAt)
+		due = append(due, dueAccount{token: token, priority: priority, lastUsed: lastUsed})
+	}
+	sort.SliceStable(due, func(i, j int) bool {
+		if due[i].priority != due[j].priority {
+			return due[i].priority > due[j].priority
+		}
+		return due[i].lastUsed.After(due[j].lastUsed)
+	})
+	if len(due) > limit {
+		due = due[:limit]
+	}
+	out := make([]events.AccountView, 0, len(due))
+	for _, item := range due {
+		acc := s.items[item.token]
+		if acc.Extra == nil {
+			acc.Extra = map[string]any{}
+		}
+		acc.Extra["next_account_refresh_at"] = now.Add(accountInfoLeaseDuration() + accountRefreshLease).Format(time.RFC3339)
+		acc.Extra["account_refresh_source"] = "scheduled"
+		out = append(out, toView(acc, true))
+	}
+	_ = s.saveLocked()
+	return out
+}
+
+func accountInfoLeaseDuration() time.Duration { return 45 * time.Second }
+
+// RecordAccountRefreshOutcome advances the persisted per-account schedule.
+// Failures back off independently, while idle and disabled accounts consume a
+// smaller share of a large pool's refresh budget.
+func (s *Store) RecordAccountRefreshOutcome(token, source string, interval time.Duration, success bool, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token = s.resolveTokenLocked(trim(token))
+	acc := s.items[token]
+	if acc == nil {
+		return nil
+	}
+	if acc.Extra == nil {
+		acc.Extra = map[string]any{}
+	}
+	now := time.Now().UTC()
+	acc.Extra["account_refresh_source"] = trim(source)
+	if success {
+		acc.Extra["last_account_refresh_at"] = now.Format(time.RFC3339)
+		acc.Extra["account_refresh_failures"] = 0
+		delete(acc.Extra, "account_refresh_error")
+		delete(acc.Extra, "account_refresh_error_at")
+		if interval > 0 {
+			next := nextAccountRefreshAt(acc, now, interval)
+			acc.Extra["next_account_refresh_at"] = next.Format(time.RFC3339)
+		} else {
+			delete(acc.Extra, "next_account_refresh_at")
+		}
+	} else {
+		failures := extraInt(acc, "account_refresh_failures") + 1
+		acc.Extra["account_refresh_failures"] = failures
+		acc.Extra["account_refresh_error"] = bounded(trim(message), 512)
+		acc.Extra["account_refresh_error_at"] = now.Format(time.RFC3339)
+		if interval > 0 {
+			backoff := time.Minute << min(failures-1, 5)
+			if backoff > accountRefreshMaxBackoff {
+				backoff = accountRefreshMaxBackoff
+			}
+			acc.Extra["next_account_refresh_at"] = now.Add(backoff).Format(time.RFC3339)
+		} else {
+			delete(acc.Extra, "next_account_refresh_at")
+		}
+	}
+	return s.saveLocked()
+}
+
+func nextAccountRefreshAt(acc *Account, now time.Time, interval time.Duration) time.Time {
+	if interval <= 0 {
+		interval = 15 * time.Minute
+	}
+	if acc.Status == StatusDisabled && interval < time.Hour {
+		interval = time.Hour
+	}
+	if lastUsed, ok := parseTime(acc.LastUsedAt); !ok || now.Sub(lastUsed) > 24*time.Hour {
+		interval = min(interval*4, 6*time.Hour)
+	}
+	if restore, ok := extraTime(acc, "restore_at"); ok && acc.Quota <= 0 && restore.After(now) && restore.Before(now.Add(interval)) {
+		digest := sha256.Sum256([]byte(acc.ID))
+		return restore.Add(time.Duration(digest[1]%31) * time.Second)
+	}
+	// Stable jitter spreads the same account across restarts without requiring
+	// a persisted random seed.
+	digest := sha256.Sum256([]byte(acc.ID))
+	jitter := time.Duration(digest[0]%11) * interval / 100
+	return now.Add(interval + jitter)
 }
 
 // RefreshCandidatesFor returns the subset selected by the caller. It keeps
@@ -1749,6 +1882,11 @@ func toView(acc *Account, withToken bool) events.AccountView {
 		LastTokenRefreshAt:         extraString(acc, "last_token_refresh_at"),
 		LastTokenRefreshErrorAt:    extraString(acc, "last_token_refresh_error_at"),
 		LastTokenRefreshErrorClass: extraString(acc, "last_token_refresh_error_class"),
+		LastAccountRefreshAt:       extraString(acc, "last_account_refresh_at"),
+		NextAccountRefreshAt:       extraString(acc, "next_account_refresh_at"),
+		AccountRefreshSource:       extraString(acc, "account_refresh_source"),
+		AccountRefreshErrorAt:      extraString(acc, "account_refresh_error_at"),
+		AccountRefreshError:        extraString(acc, "account_refresh_error"),
 		ModelDiscoveryRetryAt:      extraString(acc, "model_discovery_retry_at"),
 		ModelDiscoveryErrorClass:   extraString(acc, "model_discovery_error_class"),
 		TextCooldowns:              activeTextCooldowns(acc, time.Now().UTC()),

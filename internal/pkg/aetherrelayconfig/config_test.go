@@ -170,10 +170,12 @@ chatgpt_web:
 }
 
 func TestLoadAllowsCodexOAuthAsOnlyProvider(t *testing.T) {
+	t.Setenv("AETHERRELAY_CODEX_OAUTH_USAGE_REFRESH_INTERVAL_MINUTE", "10")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 codex_oauth:
   refresh_account_interval_minute: 15
+  usage_refresh_interval_minute: 5
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +183,7 @@ codex_oauth:
 	if err != nil {
 		t.Fatalf("Load codex-oauth-only config: %v", err)
 	}
-	if cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || len(cfg.Providers) != 0 {
+	if cfg.CodexOAuth.RefreshAccountIntervalMinute != 15 || cfg.CodexOAuth.UsageRefreshIntervalMinute != 10 || len(cfg.Providers) != 0 {
 		t.Fatalf("config=%+v", cfg)
 	}
 }

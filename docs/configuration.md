@@ -161,7 +161,7 @@ Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。�
 chatgpt_web:
   provider_enabled: true
   priority: 10
-  refresh_account_interval_minute: 0
+  refresh_account_interval_minute: 15
   temporary_chat:
     enabled: true
     retention_days: 30
@@ -176,7 +176,8 @@ chatgpt_web:
 - `priority` 是内建 Provider 的候选优先级（`-1000` 到 `1000`，默认 `10`），可通过 Provider 管理页热更新；ChatGPT Web 不作为回退候选。
 - 账号、任务、图片索引和标签保存于 `state.database`；不得写入 YAML、环境变量、日志或版本库。
 - 旧的 `usage_store`、`chatgpt_web.data_dir`、`interaction_dir` 及相应环境变量均不再支持；所有本地路径和 DuckDB 资源参数只能在 `state` 中声明。
-- `refresh_account_interval_minute: 0` 关闭周期刷新；正数为刷新间隔（分钟）。它不触发密码重登。
+- `refresh_account_interval_minute: 0` 关闭自动刷新；正数表示账号信息的目标新鲜度。调度器每 15 秒只领取到期账号，每批最多 25 个、并发最多 5 个；最近使用和恢复时间已到的账号优先，禁用或长期未使用账号降低频率。任务按账号持久化下一次刷新时间，失败按 1、2、4、8、16 分钟退避（最高 30 分钟），不会形成相互重叠的全池扫描。它不触发密码重登。
+- 图片路由暂时找不到可用额度时会触发一次非阻塞的到期账号刷新；客户端可在稍后重试。成功图片调用仍立即扣减本地观察额度，上游账号刷新负责校准。
 - `temporary_chat` 控制 Admin「临时对话」：
   - `enabled` 默认 `true`；显式 `false` 只关闭临时对话。
   - `retention_days` 必须为正；过期且无活跃流的会话会被清理。管理员删除不进入回收站。
@@ -198,7 +199,8 @@ codex_oauth:
   stream_max_duration_seconds: 0
   provider_enabled: true
   priority: 90
-  refresh_account_interval_minute: 0
+  refresh_account_interval_minute: 30
+  usage_refresh_interval_minute: 10
   websocket_max_sessions: 128
   websocket_max_message_bytes: 1048576
   websocket_idle_timeout_seconds: 300
@@ -222,6 +224,7 @@ codex_oauth:
 - compact 单独区分账号可用性反馈：400/404/405/409/413/422/501 request fault 立即停止切号；其它非 credential 临时失败仍可换账号，但只累计失败数，不改变普通 Responses 的账号状态、模型冷却或额度观察。401/402/结构化 403/429 仍保留冷却，HTML endpoint 403 仍按端点故障处理。
 - `refresh_account_interval_minute: 0` 关闭临期刷新；正数只刷新有可解析到期时间且将在 5 分钟内失效的正常账号。没有到期元数据的导入凭据仍可在实际 `401` 时刷新，不会被定时任务反复触碰。
 - `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
+- `usage_refresh_interval_minute: 0` 关闭自动用量刷新；正数表示账号用量快照的目标新鲜度。调度器每分钟最多领取 100 个到期账号，沿用有界并发；重复的手工或定时请求复用当前任务。刷新失败保留上一份快照并按账号指数退避，永久鉴权失败不会参加自动刷新。该配置不改变路由资格，修改后必须重启。
 - WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。第二个及后续 turn 若在任何业务帧输出前收到 429，代理只在完整 transcript 不超过消息上限且 function/custom/MCP call-output 重新校验通过时关闭旧 session、切换账号并重放，单 turn 最多迁移两次；已有增量输出时绝不重放。
 - Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。
 - `device` 只统一 installation ID；`session` 再统一账号 session，并按下游隔离 session 稳定派生 thread；`full` 将 thread 也统一到账号 session。启用模式会同时改写上游 header 与 `client_metadata`；默认 `off` 仍使用 AetherRelay 原有的客户端隔离 session，不做账号级收敛。

@@ -726,3 +726,68 @@ func TestImageCooldownIsModelScopedAndClearsOnSuccess(t *testing.T) {
 		t.Fatalf("success must clear image cooldown: %+v", items)
 	}
 }
+
+func TestClaimDueRefreshCandidatesIsBoundedAndRestoreAware(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
+	now := time.Now().UTC()
+	for _, token := range []string{"active", "restore-due", "disabled"} {
+		if _, _, err := s.Add([]string{token}, "web"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := s.items["active"]
+	active.Extra = map[string]any{}
+	active.LastUsedAt = now.Add(-time.Minute).Format(time.RFC3339)
+	active.Extra["next_account_refresh_at"] = now.Add(time.Hour).Format(time.RFC3339)
+	restore := s.items["restore-due"]
+	restore.Extra = map[string]any{}
+	restore.Quota = 0
+	restore.Status = StatusLimited
+	restore.Extra["restore_at"] = now.Add(-time.Minute).Format(time.RFC3339)
+	restore.Extra["next_account_refresh_at"] = now.Add(time.Hour).Format(time.RFC3339)
+	s.items["disabled"].Status = StatusDisabled
+	claimed := s.ClaimDueRefreshCandidates(now, 15*time.Minute, 1)
+	if len(claimed) != 1 || claimed[0].ID != restore.ID {
+		t.Fatalf("claimed=%+v, want restore-due account", claimed)
+	}
+	if next, ok := extraTime(restore, "next_account_refresh_at"); !ok || !next.After(now) {
+		t.Fatalf("claim lease was not persisted: %+v", restore.Extra)
+	}
+}
+
+func TestAccountRefreshOutcomePersistsScheduleAndBackoff(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "accounts.json"), 3, encryptedTestCodec(t))
+	if _, _, err := s.Add([]string{"account"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordAccountRefreshOutcome("account", "manual", 15*time.Minute, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	view := toView(s.items["account"], false)
+	if view.LastAccountRefreshAt == "" || view.NextAccountRefreshAt == "" || view.AccountRefreshSource != "manual" {
+		t.Fatalf("success schedule=%+v", view)
+	}
+	if err := s.RecordAccountRefreshOutcome("account", "scheduled", 15*time.Minute, false, "timeout"); err != nil {
+		t.Fatal(err)
+	}
+	view = toView(s.items["account"], false)
+	if view.AccountRefreshError != "timeout" || view.AccountRefreshErrorAt == "" || view.NextAccountRefreshAt == "" {
+		t.Fatalf("failure schedule=%+v", view)
+	}
+	for range 5 {
+		if err := s.RecordAccountRefreshOutcome("account", "scheduled", 15*time.Minute, false, "timeout"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retryAt, retryKnown := extraTime(s.items["account"], "next_account_refresh_at")
+	remaining := time.Until(retryAt)
+	if !retryKnown || remaining < 29*time.Minute || remaining > 31*time.Minute {
+		t.Fatalf("maximum failure backoff=%s known=%v", remaining, retryKnown)
+	}
+	if err := s.RecordAccountRefreshOutcome("account", "manual", 0, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := toView(s.items["account"], false).NextAccountRefreshAt; got != "" {
+		t.Fatalf("disabled automatic refresh retained next time %q", got)
+	}
+}

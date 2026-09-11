@@ -209,13 +209,15 @@ type CodexDiscoveryProgressCommand struct{ ProgressID string }
 type CodexDiscoveryProgressResult struct{ Progress CodexDiscoveryProgress }
 
 // StartCodexUsageRefreshCommand refreshes an account-scoped, upstream-observed
-// usage projection. Empty AccountIDs means every normal Codex OAuth account.
+// usage projection. Empty AccountIDs means every eligible Codex OAuth account,
+// including credentials disabled only for routing.
 // It is intentionally separate from model discovery because usage windows do
 // not determine whether an account supports a model.
 type StartCodexUsageRefreshCommand struct{ AccountIDs []string }
 
 type CodexUsageProgress struct {
 	ProgressID  string `json:"progress_id"`
+	Trigger     string `json:"trigger,omitempty"`
 	Total       int    `json:"total"`
 	Processed   int    `json:"processed"`
 	Succeeded   int    `json:"succeeded"`
@@ -223,6 +225,7 @@ type CodexUsageProgress struct {
 	Done        bool   `json:"done"`
 	StartedAt   string `json:"started_at"`
 	CompletedAt string `json:"completed_at,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
 	LastError   string `json:"last_error,omitempty"`
 }
 

@@ -549,6 +549,24 @@ func TestCodexUsageRefreshCountsMissingRequestedAccountsAsFailures(t *testing.T)
 	}
 }
 
+func TestCodexUsageRefreshReusesActiveJob(t *testing.T) {
+	active := proxyevents.CodexUsageProgress{ProgressID: "usage-active", Trigger: "scheduled", StartedAt: time.Now().UTC().Format(time.RFC3339)}
+	proxy := &Proxy{
+		codexUsageJobs:     map[string]proxyevents.CodexUsageProgress{active.ProgressID: active},
+		codexUsageActiveID: active.ProgressID,
+	}
+	started, err := proxy.StartCodexUsageRefresh(context.Background(), []string{"account-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.ProgressID != active.ProgressID || started.Trigger != active.Trigger {
+		t.Fatalf("start=%+v, want active job %+v", started, active)
+	}
+	if len(proxy.codexUsageJobs) != 1 {
+		t.Fatalf("duplicate progress was created: %+v", proxy.codexUsageJobs)
+	}
+}
+
 func TestCodexUsageRefreshRetriesOnceAfterCredentialRefresh(t *testing.T) {
 	hub := event.NewHub(8)
 	background := task.NewBackgroundRoutine(8)

@@ -88,8 +88,9 @@ chatgpt_web:
   provider_enabled: true
   # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 10。
   priority: 10
-  # 0 关闭定期刷新；手工刷新仍由后续 Admin API 发起。
-  refresh_account_interval_minute: 0
+  # 账号级到期调度的目标新鲜度；0 关闭自动刷新。调度器小批量、有限并发执行，
+  # 不会在每个周期重新提交一次全池任务。
+  refresh_account_interval_minute: 15
   # Admin 临时文本多轮对话（服务端 DuckDB 持久化；浏览器不落会话正文）
   temporary_chat:
     enabled: true
@@ -111,7 +112,9 @@ codex_oauth:
   # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 90。
   priority: 90
   # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
-  refresh_account_interval_minute: 0
+  refresh_account_interval_minute: 30
+  # 账号级上游用量刷新目标周期；0 关闭。Responses 响应头仍会被动更新用量。
+  usage_refresh_interval_minute: 10
   # Responses WebSocket 资源边界；修改后只影响新连接。
   websocket_max_sessions: 128
   websocket_max_message_bytes: 1048576

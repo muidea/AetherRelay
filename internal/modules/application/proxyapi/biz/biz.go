@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"aetherrelay/internal/modules/application/proxyapi/internal/searchhistory"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
@@ -68,6 +69,7 @@ type Proxy struct {
 	discoveryJobsMu    sync.RWMutex
 	codexDiscoveryJobs map[string]proxyevents.CodexDiscoveryProgress
 	codexUsageJobs     map[string]proxyevents.CodexUsageProgress
+	codexUsageActiveID string
 	codexWebsockets    map[string]codexWebsocketBinding
 	codexTurnStates    map[string]codexTurnStateOrigin
 }
@@ -121,6 +123,9 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func (s *Proxy) Run(ctx context.Context) *cd.Error {
 	s.startModelDiscovery(ctx)
+	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
+		s.Timer(ctx, min(interval, time.Minute), 0, s.startScheduledCodexUsageRefresh)
+	}
 	return nil
 }
 

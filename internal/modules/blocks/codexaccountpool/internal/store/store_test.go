@@ -793,6 +793,76 @@ func TestAcquireAllowsExpiredExhaustedUsageSnapshot(t *testing.T) {
 	}
 }
 
+func TestScheduledUsageCandidatesAreDueBoundedAndPrioritized(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{
+		{AccessToken: "fresh-access", RefreshToken: "fresh-refresh"},
+		{AccessToken: "missing-access", RefreshToken: "missing-refresh"},
+		{AccessToken: "future-access", RefreshToken: "future-refresh"},
+		{AccessToken: "permanent-access", RefreshToken: "permanent-refresh"},
+		{AccessToken: "disabled-access", RefreshToken: "disabled-refresh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := store.List()
+	if len(items) != 5 {
+		t.Fatalf("items=%+v", items)
+	}
+	now := time.Now().UTC()
+	store.items[items[0].ID].UsageSnapshot = &events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}
+	store.items[items[2].ID].NextUsageRefreshAt = now.Add(time.Hour).Format(time.RFC3339)
+	store.items[items[3].ID].PermanentAuthFailure = true
+	store.items[items[4].ID].Status = events.StatusDisabled
+
+	got := store.ListUsageCandidatesForSchedule(nil, true, 1, now).Candidates
+	if len(got) != 1 || got[0].AccountID != items[1].ID {
+		t.Fatalf("scheduled candidates=%+v, want missing snapshot first", got)
+	}
+	manual := store.ListUsageCandidates(nil).Candidates
+	if len(manual) != 5 {
+		t.Fatalf("manual candidates=%+v, want all explicitly refreshable accounts", manual)
+	}
+}
+
+func TestUsageRefreshSchedulePersistsSuccessAndFailureBackoff(t *testing.T) {
+	store := openTestStore(t)
+	_, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := store.List()[0].ID
+	now := time.Now().UTC()
+	next := now.Add(10 * time.Minute).Format(time.RFC3339)
+	snapshot := events.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(15 * time.Minute).Format(time.RFC3339)}
+	if ok, err := store.PutUsageSnapshotWithSchedule(id, snapshot, "scheduled", next); err != nil || !ok {
+		t.Fatalf("put usage ok=%v err=%v", ok, err)
+	}
+	view, _ := store.View(id)
+	if view.NextUsageRefreshAt != next || view.UsageRefreshSource != "scheduled" || view.UsageRefreshError != "" {
+		t.Fatalf("success schedule=%+v", view)
+	}
+	if ok, err := store.RecordUsageFailureWithSchedule(id, "timeout", "scheduled", true); err != nil || !ok {
+		t.Fatalf("record failure ok=%v err=%v", ok, err)
+	}
+	view, _ = store.View(id)
+	retryAt, retryKnown := parseExpiry(view.NextUsageRefreshAt)
+	if view.UsageRefreshError != "timeout" || view.UsageRefreshSource != "scheduled" || !retryKnown || retryAt.Before(time.Now().UTC()) || retryAt.After(time.Now().UTC().Add(2*time.Minute)) {
+		t.Fatalf("failure schedule=%+v", view)
+	}
+	for range 5 {
+		if ok, err := store.RecordUsageFailureWithSchedule(id, "timeout", "scheduled", true); err != nil || !ok {
+			t.Fatalf("record repeated failure ok=%v err=%v", ok, err)
+		}
+	}
+	view, _ = store.View(id)
+	retryAt, retryKnown = parseExpiry(view.NextUsageRefreshAt)
+	remaining := time.Until(retryAt)
+	if !retryKnown || remaining < 29*time.Minute || remaining > 31*time.Minute {
+		t.Fatalf("maximum failure backoff=%s known=%v", remaining, retryKnown)
+	}
+}
+
 func contains(value, needle string) bool {
 	for index := 0; index+len(needle) <= len(value); index++ {
 		if value[index:index+len(needle)] == needle {

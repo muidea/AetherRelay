@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,24 +17,47 @@ import (
 	"github.com/muidea/magicCommon/event"
 )
 
-const codexUsageSnapshotTTL = 15 * time.Minute
+const (
+	codexUsageSnapshotTTL        = 15 * time.Minute
+	codexScheduledUsageBatchSize = 100
+)
 
 // StartCodexUsageRefresh begins an explicit refresh of the redacted Codex
 // usage-window cache. It deliberately does not schedule a high-frequency
 // background poll: the upstream observation is operator-facing and independent
 // from request routing.
 func (s *Proxy) StartCodexUsageRefresh(ctx context.Context, accountIDs []string) (proxyevents.CodexUsageProgress, error) {
+	return s.startCodexUsageRefresh(ctx, accountIDs, false, "manual")
+}
+
+func (s *Proxy) startScheduledCodexUsageRefresh() {
+	_, _ = s.startCodexUsageRefresh(context.Background(), nil, true, "scheduled")
+}
+
+func (s *Proxy) startCodexUsageRefresh(ctx context.Context, accountIDs []string, dueOnly bool, trigger string) (proxyevents.CodexUsageProgress, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	progress := proxyevents.CodexUsageProgress{
 		ProgressID: uuid.NewString(),
+		Trigger:    trigger,
 		StartedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
-	s.putCodexUsageProgress(progress)
+	s.discoveryJobsMu.Lock()
+	s.pruneCodexProgressLocked(time.Now().UTC())
+	if active := s.codexUsageJobs[s.codexUsageActiveID]; s.codexUsageActiveID != "" && !active.Done {
+		s.discoveryJobsMu.Unlock()
+		return active, nil
+	}
+	if s.codexUsageJobs == nil {
+		s.codexUsageJobs = map[string]proxyevents.CodexUsageProgress{}
+	}
+	s.codexUsageJobs[progress.ProgressID] = progress
+	s.codexUsageActiveID = progress.ProgressID
+	s.discoveryJobsMu.Unlock()
 	requested := uniqueCodexAccountIDs(accountIDs)
 	if err := s.BackgroundRoutine().AsyncFunction(func() {
-		s.runCodexUsageRefreshJob(context.WithoutCancel(ctx), progress.ProgressID, requested)
+		s.runCodexUsageRefreshJob(context.WithoutCancel(ctx), progress.ProgressID, requested, dueOnly)
 	}); err != nil {
 		s.finishCodexUsageProgress(progress.ProgressID, err.Error())
 		return proxyevents.CodexUsageProgress{}, fmt.Errorf("Codex usage refresh task unavailable")
@@ -53,13 +77,17 @@ func (s *Proxy) CodexUsageRefreshProgress(progressID string) (proxyevents.CodexU
 	return progress, found
 }
 
-func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, accountIDs []string) {
+func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, accountIDs []string, dueOnly bool) {
 	// A manual refresh waits behind another manual refresh to prevent a click
 	// storm from issuing duplicate account-scoped upstream requests.
 	s.codexUsageMu.Lock()
 	defer s.codexUsageMu.Unlock()
 
-	candidates, err := s.listCodexUsageCandidates(ctx, accountIDs)
+	limit := 0
+	if dueOnly {
+		limit = codexScheduledUsageBatchSize
+	}
+	candidates, err := s.listCodexUsageCandidates(ctx, accountIDs, dueOnly, limit)
 	if err != nil {
 		s.finishCodexUsageProgress(progressID, err.Error())
 		return
@@ -72,6 +100,10 @@ func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, 
 
 	sem := make(chan struct{}, discoveryConcurrency)
 	var wg sync.WaitGroup
+	source := "manual"
+	if dueOnly {
+		source = "scheduled"
+	}
 	for _, candidate := range candidates.Candidates {
 		candidate := candidate
 		wg.Add(1)
@@ -79,7 +111,7 @@ func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, 
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			err := s.refreshOneCodexUsage(ctx, candidate)
+			err := s.refreshOneCodexUsage(ctx, candidate, source)
 			s.advanceCodexUsageProgress(progressID, err)
 		}()
 	}
@@ -88,26 +120,26 @@ func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, 
 	s.finishCodexUsageProgress(progressID, "")
 }
 
-func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.UsageCandidate) error {
+func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.UsageCandidate, source string) error {
 	usage, err := s.getCodexUsage(ctx, candidate)
 	if err != nil {
-		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "upstream")
+		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "upstream", source)
 	}
 	if usage.ErrorClass == codexupevents.ErrorInvalidToken {
 		refreshed, refreshErr := s.refreshCodexUsageCredential(ctx, candidate.AccountID)
 		if refreshErr != nil || !refreshed.Refreshed || strings.TrimSpace(refreshed.AccessToken) == "" {
-			return s.recordCodexUsageFailure(ctx, candidate.AccountID, "invalid_token")
+			return s.recordCodexUsageFailure(ctx, candidate.AccountID, "invalid_token", source)
 		}
 		candidate.AccessToken = refreshed.AccessToken
 		candidate.AccountIDHeader = refreshed.AccountIDHeader
 		candidate.Proxy = refreshed.Proxy
 		usage, err = s.getCodexUsage(ctx, candidate)
 		if err != nil {
-			return s.recordCodexUsageFailure(ctx, candidate.AccountID, "upstream")
+			return s.recordCodexUsageFailure(ctx, candidate.AccountID, "upstream", source)
 		}
 	}
 	if usage.ErrorClass != "" {
-		return s.recordCodexUsageFailure(ctx, candidate.AccountID, string(usage.ErrorClass))
+		return s.recordCodexUsageFailure(ctx, candidate.AccountID, string(usage.ErrorClass), source)
 	}
 	now := time.Now().UTC()
 	snapshot := codexevents.AccountUsageSnapshot{
@@ -129,11 +161,24 @@ func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.
 			LimitReached:     window.LimitReached,
 		})
 	}
-	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutUsageSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutUsageSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot})).Get()
+	nextRefreshAt := ""
+	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
+		nextRefreshAt = nextCodexUsageRefreshAt(candidate.AccountID, now, interval)
+	}
+	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutUsageSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutUsageSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot, Source: source, NextRefreshAt: nextRefreshAt})).Get()
 	if putErr != nil {
-		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "storage")
+		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "storage", source)
 	}
 	return nil
+}
+
+func nextCodexUsageRefreshAt(accountID string, now time.Time, interval time.Duration) string {
+	if interval <= 0 {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(strings.TrimSpace(accountID)))
+	jitter := time.Duration(digest[0]%11) * interval / 100
+	return now.Add(interval + jitter).UTC().Format(time.RFC3339)
 }
 
 func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCandidate) (codexupevents.GetUsageResult, error) {
@@ -168,11 +213,13 @@ func (s *Proxy) refreshCodexUsageCredential(ctx context.Context, accountID strin
 	return result, nil
 }
 
-func (s *Proxy) recordCodexUsageFailure(ctx context.Context, accountID, class string) error {
+func (s *Proxy) recordCodexUsageFailure(ctx context.Context, accountID, class, source string) error {
 	class = boundedCodexUsageError(class)
 	_, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRecordUsageFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordUsageFailureCommand{
-		AccountID: accountID,
-		Error:     class,
+		AccountID:     accountID,
+		Error:         class,
+		Source:        source,
+		ScheduleRetry: s.config.CodexOAuth.UsageRefreshIntervalMinute > 0,
 	})).Get()
 	if err != nil {
 		return fmt.Errorf("record Codex usage failure")
@@ -180,8 +227,8 @@ func (s *Proxy) recordCodexUsageFailure(ctx context.Context, accountID, class st
 	return fmt.Errorf("Codex usage refresh failed: %s", class)
 }
 
-func (s *Proxy) listCodexUsageCandidates(ctx context.Context, accountIDs []string) (codexevents.ListUsageCandidatesResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicListUsageCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListUsageCandidatesCommand{AccountIDs: accountIDs})).Get()
+func (s *Proxy) listCodexUsageCandidates(ctx context.Context, accountIDs []string, dueOnly bool, limit int) (codexevents.ListUsageCandidatesResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicListUsageCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListUsageCandidatesCommand{AccountIDs: accountIDs, DueOnly: dueOnly, Limit: limit, Now: time.Now().UTC()})).Get()
 	if err != nil {
 		return codexevents.ListUsageCandidatesResult{}, fmt.Errorf("list Codex usage candidates failed")
 	}
@@ -262,8 +309,15 @@ func (s *Proxy) finishCodexUsageProgress(progressID, failure string) {
 			}
 		}
 		progress.Done = true
-		progress.CompletedAt = time.Now().UTC().Format(time.RFC3339)
+		completed := time.Now().UTC()
+		progress.CompletedAt = completed.Format(time.RFC3339)
+		if started, err := time.Parse(time.RFC3339, progress.StartedAt); err == nil {
+			progress.DurationMS = completed.Sub(started).Milliseconds()
+		}
 		s.codexUsageJobs[progressID] = progress
+		if s.codexUsageActiveID == progressID {
+			s.codexUsageActiveID = ""
+		}
 	}
 	s.discoveryJobsMu.Unlock()
 }

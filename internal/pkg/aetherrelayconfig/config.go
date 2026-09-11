@@ -170,10 +170,14 @@ type CodexOAuthConfig struct {
 	Priority                     int
 	priorityConfigured           bool
 	RefreshAccountIntervalMinute int
-	WebsocketMaxSessions         int
-	WebsocketMaxMessageBytes     int64
-	WebsocketIdleTimeout         time.Duration
-	WebsocketMaxLifetime         time.Duration
+	// UsageRefreshIntervalMinute controls account-scoped upstream usage
+	// observations independently from OAuth credential renewal. Zero disables
+	// scheduled usage refresh while manual and response-header updates remain.
+	UsageRefreshIntervalMinute int
+	WebsocketMaxSessions       int
+	WebsocketMaxMessageBytes   int64
+	WebsocketIdleTimeout       time.Duration
+	WebsocketMaxLifetime       time.Duration
 }
 
 func (c CodexOAuthConfig) EffectiveWebsocketLimits() (int, int64, time.Duration, time.Duration) {
@@ -736,6 +740,12 @@ func setCodexOAuth(cfg *Config, key, value string) error {
 			return fmt.Errorf("codex_oauth.refresh_account_interval_minute: %w", err)
 		}
 		cfg.CodexOAuth.RefreshAccountIntervalMinute = n
+	case "usage_refresh_interval_minute":
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.usage_refresh_interval_minute: %w", err)
+		}
+		cfg.CodexOAuth.UsageRefreshIntervalMinute = n
 	case "websocket_max_sessions":
 		n, err := parseStrictPositiveInt(value)
 		if err != nil {
@@ -1169,6 +1179,13 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("AETHERRELAY_CODEX_OAUTH_REFRESH_ACCOUNT_INTERVAL_MINUTE: %w", err)
 		}
 		cfg.CodexOAuth.RefreshAccountIntervalMinute = n
+	}
+	if value := os.Getenv("AETHERRELAY_CODEX_OAUTH_USAGE_REFRESH_INTERVAL_MINUTE"); value != "" {
+		n, err := parseStrictNonNegativeInt(value)
+		if err != nil {
+			return fmt.Errorf("AETHERRELAY_CODEX_OAUTH_USAGE_REFRESH_INTERVAL_MINUTE: %w", err)
+		}
+		cfg.CodexOAuth.UsageRefreshIntervalMinute = n
 	}
 	if value := os.Getenv("AETHERRELAY_VERBOSE_LOGGING"); value != "" {
 		b, err := parseStrictBool(value)
@@ -2388,6 +2405,9 @@ func validateCodexOAuth(codex CodexOAuthConfig) error {
 	}
 	if codex.RefreshAccountIntervalMinute < 0 {
 		return fmt.Errorf("codex_oauth.refresh_account_interval_minute must be >= 0")
+	}
+	if codex.UsageRefreshIntervalMinute < 0 {
+		return fmt.Errorf("codex_oauth.usage_refresh_interval_minute must be >= 0")
 	}
 	if codex.WebsocketMaxSessions < 0 || codex.WebsocketMaxMessageBytes < 0 || codex.WebsocketIdleTimeout < 0 || codex.WebsocketMaxLifetime < 0 {
 		return fmt.Errorf("codex_oauth websocket resource limits must be omitted or > 0")

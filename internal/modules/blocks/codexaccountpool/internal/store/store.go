@@ -69,13 +69,16 @@ type account struct {
 	ModelDiscoveryErrorClass string                       `json:"model_discovery_error_class,omitempty"`
 	// UsageSnapshot keeps only the allowlisted upstream usage projection. It
 	// deliberately excludes raw upstream JSON and all request credentials.
-	UsageSnapshot       *events.AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
-	UsageRefreshErrorAt string                       `json:"usage_refresh_error_at,omitempty"`
-	UsageRefreshError   string                       `json:"usage_refresh_error,omitempty"`
-	CompactSupported    *bool                        `json:"compact_supported,omitempty"`
-	CompactProtocol     string                       `json:"compact_protocol,omitempty"`
-	WebsocketSupported  *bool                        `json:"websocket_supported,omitempty"`
-	FingerprintMode     string                       `json:"fingerprint_mode,omitempty"`
+	UsageSnapshot        *events.AccountUsageSnapshot `json:"usage_snapshot,omitempty"`
+	UsageRefreshErrorAt  string                       `json:"usage_refresh_error_at,omitempty"`
+	UsageRefreshError    string                       `json:"usage_refresh_error,omitempty"`
+	NextUsageRefreshAt   string                       `json:"next_usage_refresh_at,omitempty"`
+	UsageRefreshSource   string                       `json:"usage_refresh_source,omitempty"`
+	UsageRefreshFailures int                          `json:"usage_refresh_failures,omitempty"`
+	CompactSupported     *bool                        `json:"compact_supported,omitempty"`
+	CompactProtocol      string                       `json:"compact_protocol,omitempty"`
+	WebsocketSupported   *bool                        `json:"websocket_supported,omitempty"`
+	FingerprintMode      string                       `json:"fingerprint_mode,omitempty"`
 }
 
 type Store struct {
@@ -1067,6 +1070,8 @@ func toView(item *account, now time.Time) events.AccountView {
 		ModelDiscoveryErrorClass:   item.ModelDiscoveryErrorClass,
 		UsageRefreshErrorAt:        item.UsageRefreshErrorAt,
 		UsageRefreshError:          item.UsageRefreshError,
+		NextUsageRefreshAt:         item.NextUsageRefreshAt,
+		UsageRefreshSource:         item.UsageRefreshSource,
 		CompactSupported:           item.CompactSupported,
 		WebsocketSupported:         item.WebsocketSupported,
 		FingerprintMode:            item.FingerprintMode,
@@ -1238,15 +1243,27 @@ func normalizeModelDiscoveryErrorClass(value string) string {
 // it. Credential fields remain restricted to the account-pool/proxy EventHub
 // path.
 func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandidatesResult {
+	return s.ListUsageCandidatesForSchedule(accountIDs, false, 0, time.Time{})
+}
+
+func (s *Store) ListUsageCandidatesForSchedule(accountIDs []string, dueOnly bool, limit int, now time.Time) events.ListUsageCandidatesResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	requested := make(map[string]struct{}, len(accountIDs))
 	for _, accountID := range accountIDs {
 		if accountID = strings.TrimSpace(accountID); accountID != "" {
 			requested[accountID] = struct{}{}
 		}
 	}
-	result := events.ListUsageCandidatesResult{}
+	type scheduledCandidate struct {
+		candidate events.UsageCandidate
+		priority  int
+		lastUsed  time.Time
+	}
+	selected := make([]scheduledCandidate, 0, len(s.order))
 	for _, id := range s.order {
 		item := s.items[id]
 		if item == nil || strings.TrimSpace(item.AccessToken) == "" {
@@ -1260,12 +1277,48 @@ func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandida
 				continue
 			}
 		}
-		result.Candidates = append(result.Candidates, events.UsageCandidate{
+		if dueOnly {
+			if item.PermanentAuthFailure {
+				continue
+			}
+			if next, ok := parseExpiry(item.NextUsageRefreshAt); ok && next.After(now) {
+				continue
+			}
+		}
+		candidate := scheduledCandidate{candidate: events.UsageCandidate{
 			AccountID:       item.ID,
 			AccessToken:     item.AccessToken,
 			AccountIDHeader: item.AccountIDHeader,
 			Proxy:           item.Proxy,
+		}}
+		if dueOnly {
+			candidate.priority = 1
+			if item.Status == events.StatusNormal {
+				candidate.priority = 4
+			}
+			if item.UsageSnapshot == nil {
+				candidate.priority += 2
+			} else if expires, ok := parseExpiry(item.UsageSnapshot.ExpiresAt); !ok || !expires.After(now) {
+				candidate.priority++
+			}
+			candidate.lastUsed, _ = parseExpiry(item.LastUsedAt)
+		}
+		selected = append(selected, candidate)
+	}
+	if dueOnly {
+		sort.SliceStable(selected, func(i, j int) bool {
+			if selected[i].priority != selected[j].priority {
+				return selected[i].priority > selected[j].priority
+			}
+			return selected[i].lastUsed.After(selected[j].lastUsed)
 		})
+	}
+	if limit > 0 && len(selected) > limit {
+		selected = selected[:limit]
+	}
+	result := events.ListUsageCandidatesResult{Candidates: make([]events.UsageCandidate, 0, len(selected))}
+	for _, item := range selected {
+		result.Candidates = append(result.Candidates, item.candidate)
 	}
 	return result
 }
@@ -1274,6 +1327,10 @@ func (s *Store) ListUsageCandidates(accountIDs []string) events.ListUsageCandida
 // observation clears only its previous refresh error; it does not manipulate
 // routing cooldowns, which remain driven by real request outcomes.
 func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageSnapshot) (bool, error) {
+	return s.PutUsageSnapshotWithSchedule(accountID, snapshot, "upstream", "")
+}
+
+func (s *Store) PutUsageSnapshotWithSchedule(accountID string, snapshot events.AccountUsageSnapshot, source, nextRefreshAt string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(accountID)]
@@ -1284,6 +1341,9 @@ func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageS
 	item.UsageSnapshot = &clean
 	item.UsageRefreshErrorAt = ""
 	item.UsageRefreshError = ""
+	item.UsageRefreshFailures = 0
+	item.NextUsageRefreshAt = normalizeFutureTime(nextRefreshAt)
+	item.UsageRefreshSource = strings.TrimSpace(source)
 	if clean.PlanType != "" {
 		item.PlanType = clean.PlanType
 	}
@@ -1302,6 +1362,10 @@ func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageS
 }
 
 func (s *Store) MergeUsageSnapshot(accountID string, snapshot events.AccountUsageSnapshot) (bool, error) {
+	return s.MergeUsageSnapshotWithSchedule(accountID, snapshot, "response_header", "")
+}
+
+func (s *Store) MergeUsageSnapshotWithSchedule(accountID string, snapshot events.AccountUsageSnapshot, source, nextRefreshAt string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(accountID)]
@@ -1330,6 +1394,11 @@ func (s *Store) MergeUsageSnapshot(accountID string, snapshot events.AccountUsag
 		clean = normalizeUsageSnapshot(existing)
 	}
 	item.UsageSnapshot = &clean
+	item.UsageRefreshErrorAt = ""
+	item.UsageRefreshError = ""
+	item.UsageRefreshFailures = 0
+	item.NextUsageRefreshAt = normalizeFutureTime(nextRefreshAt)
+	item.UsageRefreshSource = strings.TrimSpace(source)
 	if err := s.saveLocked(); err != nil {
 		return false, err
 	}
@@ -1339,6 +1408,10 @@ func (s *Store) MergeUsageSnapshot(accountID string, snapshot events.AccountUsag
 // RecordUsageFailure preserves the last successful usage snapshot. The
 // bounded error is only operational context for the Admin view.
 func (s *Store) RecordUsageFailure(accountID, message string) (bool, error) {
+	return s.RecordUsageFailureWithSchedule(accountID, message, "manual", false)
+}
+
+func (s *Store) RecordUsageFailureWithSchedule(accountID, message, source string, scheduleRetry bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(accountID)]
@@ -1347,10 +1420,29 @@ func (s *Store) RecordUsageFailure(accountID, message string) (bool, error) {
 	}
 	item.UsageRefreshErrorAt = time.Now().UTC().Format(time.RFC3339)
 	item.UsageRefreshError = bounded(message, 160)
+	item.UsageRefreshFailures++
+	if scheduleRetry {
+		backoff := time.Minute << min(item.UsageRefreshFailures-1, 5)
+		if backoff > 30*time.Minute {
+			backoff = 30 * time.Minute
+		}
+		item.NextUsageRefreshAt = time.Now().UTC().Add(backoff).Format(time.RFC3339)
+	} else {
+		item.NextUsageRefreshAt = ""
+	}
+	item.UsageRefreshSource = strings.TrimSpace(source)
 	if err := s.saveLocked(); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func normalizeFutureTime(value string) string {
+	parsed, ok := parseExpiry(value)
+	if !ok {
+		return ""
+	}
+	return parsed.UTC().Format(time.RFC3339)
 }
 
 // CatalogSnapshot builds the discovered union across normal accounts and keeps

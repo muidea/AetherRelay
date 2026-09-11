@@ -451,7 +451,7 @@ func (s *Account) handleListUsageCandidates(ev event.Event, result event.Result)
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage candidate command"))
 		return
 	}
-	result.Set(s.store.ListUsageCandidates(command.AccountIDs), nil)
+	result.Set(s.store.ListUsageCandidatesForSchedule(command.AccountIDs, command.DueOnly, command.Limit, command.Now), nil)
 }
 
 func (s *Account) handlePutUsageSnapshot(ev event.Event, result event.Result) {
@@ -463,7 +463,7 @@ func (s *Account) handlePutUsageSnapshot(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage snapshot command"))
 		return
 	}
-	updated, err := s.store.PutUsageSnapshot(command.AccountID, command.Snapshot)
+	updated, err := s.store.PutUsageSnapshotWithSchedule(command.AccountID, command.Snapshot, command.Source, command.NextRefreshAt)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -480,7 +480,7 @@ func (s *Account) handleMergeUsageSnapshot(ev event.Event, result event.Result) 
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid merge usage snapshot command"))
 		return
 	}
-	updated, err := s.store.MergeUsageSnapshot(command.AccountID, command.Snapshot)
+	updated, err := s.store.MergeUsageSnapshotWithSchedule(command.AccountID, command.Snapshot, command.Source, command.NextRefreshAt)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -497,7 +497,7 @@ func (s *Account) handleRecordUsageFailure(ev event.Event, result event.Result) 
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage failure command"))
 		return
 	}
-	updated, err := s.store.RecordUsageFailure(command.AccountID, command.Error)
+	updated, err := s.store.RecordUsageFailureWithSchedule(command.AccountID, command.Error, command.Source, command.ScheduleRetry)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
