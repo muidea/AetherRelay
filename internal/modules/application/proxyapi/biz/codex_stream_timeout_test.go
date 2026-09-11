@@ -25,19 +25,22 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 	// CP-STREAM-003/013, CP-FAIL-019: real EventHub calls exercise context
 	// propagation, output-before-retry, lease release and account feedback.
 	for _, tc := range []struct {
-		name    string
-		want    codexresponses.ErrorKind
-		neutral bool
+		name                string
+		want                codexresponses.ErrorKind
+		noFeedback          bool
+		availabilityNeutral bool
 	}{
-		{"progress", "", false},
-		{"cleanup_delay", codexresponses.KindNetwork, false},
-		{"first", codexresponses.KindFirstEventTimeout, false},
-		{"headers", codexresponses.KindFirstEventTimeout, false},
-		{"parent_deadline", codexresponses.KindClientCanceled, true},
-		{"idle", codexresponses.KindIdleTimeout, false},
-		{"lifetime", codexresponses.KindStreamLifetime, true},
-		{"cancel", codexresponses.KindClientCanceled, true},
-		{"write", codexresponses.KindClientWrite, true},
+		{name: "progress"},
+		{name: "cleanup_delay", want: codexresponses.KindNetwork, availabilityNeutral: true},
+		{name: "network_before_output", want: codexresponses.KindNetwork},
+		{name: "rate_limit_after_output", want: codexresponses.KindRateLimit},
+		{name: "first", want: codexresponses.KindFirstEventTimeout},
+		{name: "headers", want: codexresponses.KindFirstEventTimeout},
+		{name: "parent_deadline", want: codexresponses.KindClientCanceled, noFeedback: true},
+		{name: "idle", want: codexresponses.KindIdleTimeout, availabilityNeutral: true},
+		{name: "lifetime", want: codexresponses.KindStreamLifetime, noFeedback: true},
+		{name: "cancel", want: codexresponses.KindClientCanceled, noFeedback: true},
+		{name: "write", want: codexresponses.KindClientWrite, noFeedback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hub := event.NewHub(24)
@@ -60,6 +63,10 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			})
 			up := event.NewSimpleObserver(upcommon.UnitID, hub)
 			up.Subscribe(upevents.TopicStart, func(ev event.Event, result event.Result) {
+				if tc.name == "network_before_output" {
+					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorNetwork}, nil)
+					return
+				}
 				if tc.name == "headers" {
 					<-ev.Context().Done()
 					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorNetwork}, nil)
@@ -69,8 +76,12 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			})
 			up.Subscribe(upevents.TopicPull, func(ev event.Event, result event.Result) {
 				n := pulls.Add(1)
-				if tc.name == "cleanup_delay" && n > 1 {
-					result.Set(upevents.PullResult{Done: true, ErrorClass: upevents.ErrorNetwork}, nil)
+				if (tc.name == "cleanup_delay" || tc.name == "rate_limit_after_output") && n > 1 {
+					class := upevents.ErrorNetwork
+					if tc.name == "rate_limit_after_output" {
+						class = upevents.ErrorRateLimit
+					}
+					result.Set(upevents.PullResult{Done: true, ErrorClass: class}, nil)
 					return
 				}
 				if tc.name == "first" || (tc.name == "idle" && n > 1) {
@@ -132,20 +143,20 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 				t.Fatalf("retry after=%d", failure.RetryAfterSeconds)
 			}
 			wantCancels := int32(1)
-			if tc.name == "headers" {
+			if tc.name == "headers" || tc.name == "network_before_output" {
 				wantCancels = 0
 			}
 			if released.Load() != 1 || canceled.Load() != wantCancels {
 				t.Fatalf("release=%d cancel=%d", released.Load(), canceled.Load())
 			}
 			wantAcquires := int32(1)
-			if tc.name == "first" || tc.name == "headers" {
+			if tc.name == "first" || tc.name == "headers" || tc.name == "network_before_output" {
 				wantAcquires = 2
 			}
 			if acquired.Load() != wantAcquires {
 				t.Fatalf("unexpected replay: acquired=%d", acquired.Load())
 			}
-			if tc.neutral {
+			if tc.noFeedback {
 				select {
 				case r := <-recorded:
 					t.Fatalf("local failure affected account: %+v", r)
@@ -155,11 +166,16 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 				select {
 				case r := <-recorded:
 					wantClass := accevents.ErrorTimeout
-					if tc.name == "cleanup_delay" {
+					if tc.name == "cleanup_delay" || tc.name == "network_before_output" {
 						wantClass = accevents.ErrorNetwork
+					} else if tc.name == "rate_limit_after_output" {
+						wantClass = accevents.ErrorRateLimit
 					}
 					if r.Success != (tc.want == "") || (!r.Success && r.ErrorClass != wantClass) {
 						t.Fatalf("feedback=%+v", r)
+					}
+					if r.AvailabilityNeutral != tc.availabilityNeutral {
+						t.Fatalf("availability feedback=%+v", r)
 					}
 					if tc.name == "first" && r.RetryAfterSeconds != firstEventTimeoutRetryAfter {
 						t.Fatalf("first-event feedback=%+v", r)

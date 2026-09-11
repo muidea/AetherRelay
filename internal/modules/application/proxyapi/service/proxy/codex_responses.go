@@ -265,7 +265,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 			h.writeCodexResponsesError(w, r, round, started, provider, model, true, err)
 			return
 		}
-		failure := streamFailFromCodexError(err)
+		failure := streamFailFromCodexAfterOutput(err)
 		if !terminalObserved {
 			terminal := codexResponsesFailureSSE(failure)
 			archive.Write(terminal)
@@ -476,6 +476,19 @@ func streamFailFromCodexError(err error) *streamFail {
 		return newStreamFailWithCode(streamKindUpstreamFailed, string(codexresponses.KindUpstream), "Codex upstream failed", err, true)
 	}
 	return streamFailFromCodex(failure)
+}
+
+func streamFailFromCodexAfterOutput(err error) *streamFail {
+	failure := streamFailFromCodexError(err)
+	codexFailure, ok := codexresponses.AsFailure(err)
+	if failure == nil || !ok || codexFailure == nil {
+		return failure
+	}
+	switch codexFailure.Kind {
+	case codexresponses.KindNetwork, codexresponses.KindTimeout, codexresponses.KindUpstream, codexresponses.KindEndpoint:
+		failure.Kind = streamKindUpstreamTrunc
+	}
+	return failure
 }
 
 func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {

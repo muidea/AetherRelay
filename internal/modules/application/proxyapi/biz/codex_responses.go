@@ -590,7 +590,11 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		lastFailure = failure
 		if emitted {
 			s.releaseCodexAccount(ctx, account.LeaseID)
-			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+			if postOutputCodexFailureIsAvailabilityNeutral(failure) {
+				s.recordCodexAvailabilityNeutralResult(ctx, account.AccountID, request.Model, failure)
+			} else {
+				s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+			}
 			return err
 		}
 		if failure.Kind == codexresponses.KindInvalidToken {
@@ -614,7 +618,11 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 				}
 				if emitted {
 					s.releaseCodexAccount(ctx, account.LeaseID)
-					s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+					if postOutputCodexFailureIsAvailabilityNeutral(failure) {
+						s.recordCodexAvailabilityNeutralResult(ctx, account.AccountID, request.Model, failure)
+					} else {
+						s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
+					}
 					return err
 				}
 			}
@@ -650,6 +658,21 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 			continue
 		}
 		return err
+	}
+}
+
+// Once a stream has delivered business output, transient transport failures no
+// longer say anything useful about the credential or the model. Keep the
+// failure observation, but do not remove the account from subsequent routing.
+func postOutputCodexFailureIsAvailabilityNeutral(failure *codexresponses.Failure) bool {
+	if failure == nil {
+		return false
+	}
+	switch failure.Kind {
+	case codexresponses.KindNetwork, codexresponses.KindTimeout, codexresponses.KindIdleTimeout, codexresponses.KindUpstream, codexresponses.KindEndpoint:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -958,8 +981,12 @@ func (s *Proxy) recordCodexAvailabilityNeutralResult(ctx context.Context, id, mo
 	if strings.TrimSpace(id) == "" || failure == nil {
 		return
 	}
+	class := string(failure.Kind)
+	if failure.Kind == codexresponses.KindFirstEventTimeout || failure.Kind == codexresponses.KindIdleTimeout {
+		class = accevents.ErrorTimeout
+	}
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
-		AccountID: id, Model: model, Success: false, ErrorClass: string(failure.Kind),
+		AccountID: id, Model: model, Success: false, ErrorClass: class,
 		RetryAfterSeconds: failure.RetryAfterSeconds, AvailabilityNeutral: true,
 	})).Get()
 }

@@ -207,7 +207,8 @@ type RecordResultCommand struct {
 	QuotaResetAt      string
 	// AvailabilityNeutral records an observed request failure without changing
 	// credential state, quota state, or the model cooldown used by normal
-	// Responses routing. It is used for compact-only endpoint failures.
+	// Responses routing. It is used for compact-only endpoint failures and
+	// transient transport failures after a stream has delivered business output.
 	AvailabilityNeutral bool
 }
 type RecordResultResult struct{ Account AccountView }

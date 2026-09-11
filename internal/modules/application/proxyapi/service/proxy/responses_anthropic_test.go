@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
 	metrics "aetherrelay/internal/pkg/aetherrelaymetrics"
@@ -1150,6 +1151,7 @@ func TestConversionStreamFailureClassification(t *testing.T) {
 		{err: fmt.Errorf("upstream SSE idle timeout after 1s"), kind: streamKindIdleTimeout},
 		{err: fmt.Errorf("conversion SSE exceeds 10 bytes"), kind: streamKindLimitExceeded},
 		{err: fmt.Errorf("conversion SSE ended without terminal event"), kind: streamKindUpstreamTrunc},
+		{err: codexresponses.NewFailure(codexresponses.KindNetwork, 0, fmt.Errorf("connection reset")), kind: streamKindUpstreamTrunc},
 		{err: fmt.Errorf("malformed event"), kind: streamKindProtocol},
 	}
 	for _, tc := range tests {

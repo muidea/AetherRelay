@@ -255,6 +255,8 @@
 
 `CP-STREAM-016` Codex HTTP/2 transport 必须为长流启用主动 PING：连接读空闲 10 秒时发 PING，5 秒未收到确认则关闭连接并进入既有 network/failover 分类。HTTPS 代理 CONNECT 的 TLS leg 仍只协商 HTTP/1.1；PING 只作用于代理隧道后的上游 HTTP/2 连接。
 
+`CP-STREAM-017` Codex HTTP 流在已经交付首个业务事件后发生 network、timeout、upstream 或 endpoint transport failure 时，必须记录为 `upstream_truncated` 并保留原始错误码，但账号反馈必须标记 availability-neutral，不得冷却账号或影响后续路由。输出前的同类失败仍按既有规则冷却并尝试切号；明确的认证、额度、限流和模型错误即使发生在输出后也必须更新对应账号事实。输出后的 idle timeout 保留独立 `idle_timeout` outcome，但同样不得冷却账号。Responses、Responses→Chat 和 Responses→Anthropic 必须一致。
+
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
 `CP-COMPACT-002` 客户端要求流式 compact 时，AetherRelay 必须把 unary JSON 合成为最小合法事件序列：每个 output item 一个 `response.output_item.done`，最后是 `response.completed`。
@@ -440,6 +442,7 @@
 | Codex 流独立超时与取消回收 | CP-STREAM-013 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/biz.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `codexupstream/biz/stream_cancel_test.go`, `aetherrelayconfig/codex_stream_timeout_test.go` |
 | 准入等待提示与健康隔离 | CP-FAIL-019 | implemented | `codexaccountpool/internal/store/model_availability.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/handler.go`, `aetherrelaymetrics/registry.go` | `codexaccountpool/biz/admission_retry_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/service/proxy/codex_health_test.go`, `aetherrelaymetrics/admission_health_test.go` |
 | 流停止诊断及原因保真 | CP-OBS-008 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_stream_timeout_test.go`（含清理延迟超过总时限仍保留原网络故障） |
+| 输出后断流不冷却账号 | CP-STREAM-017 | implemented | `proxyapi/biz/codex_responses.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/responses_anthropic.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `proxyapi/service/proxy/codex_responses_test.go`, `proxyapi/service/proxy/responses_anthropic_test.go` |
 
 以上为离线回归证据；真实上游与部署后的长流恢复按 CP-DOD-006 单独验证。
 

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
@@ -414,6 +415,9 @@ func (h *Handler) handleConvertedSSE(w http.ResponseWriter, r *http.Request, res
 func conversionStreamFailure(err error) *streamFail {
 	if err == nil {
 		return nil
+	}
+	if _, ok := codexresponses.AsFailure(err); ok {
+		return streamFailFromCodexAfterOutput(err)
 	}
 	message := "converted SSE: " + err.Error()
 	lower := strings.ToLower(err.Error())

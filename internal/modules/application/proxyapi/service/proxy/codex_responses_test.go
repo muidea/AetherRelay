@@ -72,6 +72,26 @@ func TestCodexEndpointFailurePreservesUpstreamStatus(t *testing.T) {
 	}
 }
 
+func TestCodexPostOutputTransportFailureIsTruncated(t *testing.T) {
+	for _, kind := range []codexresponses.ErrorKind{
+		codexresponses.KindNetwork,
+		codexresponses.KindTimeout,
+		codexresponses.KindUpstream,
+		codexresponses.KindEndpoint,
+	} {
+		failure := codexresponses.NewFailure(kind, 0, fmt.Errorf("transport ended"))
+		streamFailure := streamFailFromCodexAfterOutput(failure)
+		if streamFailure == nil || streamFailure.Kind != streamKindUpstreamTrunc || streamFailure.ErrorCode != string(kind) || !streamFailure.CountUpstream {
+			t.Fatalf("kind=%s stream failure=%+v", kind, streamFailure)
+		}
+	}
+
+	idle := codexresponses.NewFailure(codexresponses.KindIdleTimeout, 0, fmt.Errorf("stream idle"))
+	if got := streamFailFromCodexAfterOutput(idle); got == nil || got.Kind != streamKindIdleTimeout {
+		t.Fatalf("idle failure=%+v", got)
+	}
+}
+
 type codexResponsesExecutorStub struct {
 	complete     func(context.Context, codexresponses.Request) (codexresponses.Result, error)
 	stream       func(context.Context, codexresponses.Request, func(codexresponses.StreamStart) error, func([]byte) error) error
@@ -873,7 +893,8 @@ func TestCodexResponsesStreamFailureBeforeFirstEventReturnsHTTPError(t *testing.
 }
 
 func TestCodexResponsesStreamFailureAfterOutputGetsTerminal(t *testing.T) {
-	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+	store := usage.NewMemoryStore()
+	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
 		if err := started(codexresponses.StreamStart{}); err != nil {
 			return err
 		}
@@ -888,6 +909,10 @@ func TestCodexResponsesStreamFailureAfterOutputGetsTerminal(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"delta":"partial"`) || !strings.Contains(response.Body.String(), "event: response.failed") {
 		t.Fatalf("CP-STREAM-009 status=%d body=%s", response.Code, response.Body.String())
+	}
+	events := usageEvents(t, store)
+	if len(events) != 1 || events[0].Outcome != string(streamKindUpstreamTrunc) || events[0].ErrorCode != string(codexresponses.KindNetwork) {
+		t.Fatalf("CP-STREAM-017 events=%+v", events)
 	}
 }
 
