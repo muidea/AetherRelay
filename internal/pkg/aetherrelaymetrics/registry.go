@@ -56,6 +56,10 @@ type errorKey struct {
 	Provider, StatusCode string
 }
 
+type admissionKey struct {
+	Provider, Model, Reason string
+}
+
 type conversionKey struct {
 	Provider, Model, ClientProtocol, UpstreamProtocol, Mode string
 	Level, UpstreamStatus                                   int
@@ -102,6 +106,7 @@ type Registry struct {
 
 	upstreamErrors   map[errorKey]uint64
 	upstreamAttempts map[string]uint64 // provider -> total attempts
+	admissionDenials map[admissionKey]uint64
 	providerHealth   map[string]providerHealth
 	healthSamples    map[string][]healthSample
 
@@ -151,6 +156,7 @@ func NewRegistry() *Registry {
 		cachedTokenSumHits:        map[tokenKey]uint64{},
 		upstreamErrors:            map[errorKey]uint64{},
 		upstreamAttempts:          map[string]uint64{},
+		admissionDenials:          map[admissionKey]uint64{},
 		providerHealth:            map[string]providerHealth{},
 		healthSamples:             map[string][]healthSample{},
 		conversionCount:           map[conversionKey]uint64{},
@@ -164,6 +170,26 @@ func NewRegistry() *Registry {
 		usageWriteErr:             map[string]uint64{},
 		usageHealthy:              true,
 		knownModels:               map[string]map[string]struct{}{},
+	}
+}
+
+// RecordAdmissionDenial records only bounded, safe local admission reasons.
+func (r *Registry) RecordAdmissionDenial(provider, model, reason string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	model = r.normalizeModelLabel(provider, model)
+	r.admissionDenials[admissionKey{Provider: provider, Model: model, Reason: boundAdmissionReason(reason)}]++
+}
+
+func boundAdmissionReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "accounts_busy", "accounts_cooling", "no_eligible_account", "accounts_excluded", "credential_permanently_invalid", "circuit_open", "provider_disabled", "catalog_unavailable":
+		return strings.TrimSpace(reason)
+	default:
+		return "other"
 	}
 }
 

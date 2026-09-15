@@ -373,6 +373,7 @@ SELECT
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
+    coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), coalesce(upstream_content_length, 0), coalesce(upstream_transfer_encoding, ''),
     stream, estimated, state
@@ -393,7 +394,8 @@ LIMIT ?`
 		var e Event
 		var completedAt sql.NullTime
 		var httpStatus sql.NullInt64
-		var durationMS, firstEventMS, upstreamMS sql.NullInt64
+		var durationMS, firstEventMS, upstreamMS, retryAfter sql.NullInt64
+		var retryable sql.NullBool
 		var upstreamStatus sql.NullInt64
 		var ignored, unsupported string
 		var usageDate string
@@ -409,6 +411,7 @@ LIMIT ?`
 			&e.InputTokens, &e.OutputTokens, &e.TotalTokens,
 			&e.CachedInputTokens, &e.CacheCreationInputTokens,
 			&httpStatus, &e.Outcome, &e.ErrorCode,
+			&e.FailureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &e.UpstreamContentLength, &e.UpstreamTransferEncoding,
 			&e.Stream, &e.Estimated, &e.State,
 		); err != nil {
@@ -422,6 +425,13 @@ LIMIT ?`
 		}
 		if httpStatus.Valid {
 			e.HTTPStatus = int(httpStatus.Int64)
+		}
+		if retryable.Valid {
+			value := retryable.Bool
+			e.Retryable = &value
+		}
+		if retryAfter.Valid {
+			e.RetryAfterSeconds = int(retryAfter.Int64)
 		}
 		if durationMS.Valid {
 			e.DurationMS = durationMS.Int64

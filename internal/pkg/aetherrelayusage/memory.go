@@ -88,6 +88,9 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	if rec.HTTPStatus < 100 || rec.HTTPStatus > 599 || strings.TrimSpace(rec.Outcome) == "" {
 		return fmt.Errorf("completed usage event requires http_status and outcome")
 	}
+	if rec.RetryAfterSeconds < 0 {
+		return fmt.Errorf("retry_after_seconds must not be negative")
+	}
 	total := rec.InputTokens + rec.OutputTokens
 	completedAt := rec.CompletedAt.UTC()
 	if completedAt.IsZero() {
@@ -124,6 +127,9 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.HTTPStatus = rec.HTTPStatus
 	e.Outcome = rec.Outcome
 	e.ErrorCode = rec.ErrorCode
+	e.FailureClass = rec.FailureClass
+	e.Retryable = cloneBoolPointer(rec.Retryable)
+	e.RetryAfterSeconds = rec.RetryAfterSeconds
 	e.DurationMS = rec.Duration.Milliseconds()
 	e.FirstEventDurationMS = rec.FirstEventDuration.Milliseconds()
 	e.UpstreamDurationMS = rec.UpstreamDuration.Milliseconds()
@@ -136,6 +142,14 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.State = StateCompleted
 	s.healthy.Store(1)
 	return nil
+}
+
+func cloneBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (s *MemoryStore) RecoverInterrupted(_ context.Context, at time.Time) (int64, error) {
@@ -412,6 +426,14 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 		if e.HTTPStatus != 0 {
 			httpS = strconv.Itoa(e.HTTPStatus)
 		}
+		retryable := ""
+		if e.Retryable != nil {
+			retryable = strconv.FormatBool(*e.Retryable)
+		}
+		retryAfter := ""
+		if e.RetryAfterSeconds > 0 {
+			retryAfter = strconv.Itoa(e.RetryAfterSeconds)
+		}
 		row := []string{
 			e.EventID,
 			strconv.FormatInt(e.RoundID, 10),
@@ -441,6 +463,9 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			httpS,
 			e.Outcome,
 			e.ErrorCode,
+			e.FailureClass,
+			retryable,
+			retryAfter,
 			strconv.FormatInt(e.DurationMS, 10),
 			strconv.FormatInt(e.FirstEventDurationMS, 10),
 			strconv.FormatInt(e.UpstreamDurationMS, 10),

@@ -47,11 +47,14 @@ type terminalResult struct {
 // Kind 驱动 metrics outcome；ErrorCode 可独立于 Kind（例如 outcome=upstream_failed
 // 而 ErrorCode=invalid_token）。ErrorCode 为空时回退为 string(Kind)。
 type streamFail struct {
-	Kind          streamKind
-	ErrorCode     string // usage ErrorCode；空则回退 Kind
-	Message       string // 完整可读消息，写入 metadata / 日志
-	Err           error
-	CountUpstream bool // 是否计入 provider upstream error rate
+	Kind              streamKind
+	ErrorCode         string // usage ErrorCode；空则回退 Kind
+	FailureClass      string // 安全、有界的失败分类
+	Retryable         *bool
+	RetryAfterSeconds int
+	Message           string // 完整可读消息，写入 metadata / 日志
+	Err               error
+	CountUpstream     bool // 是否计入 provider upstream error rate
 }
 
 func (e *streamFail) Error() string {

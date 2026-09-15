@@ -29,6 +29,7 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 		cacheCreationTokens:     copyTokenKeys(r.cacheCreationTokens),
 		cacheHitRate:            computeCacheHitRateLocked(r),
 		upstreamErrors:          copyErrorKeys(r.upstreamErrors),
+		admissionDenials:        maps.Clone(r.admissionDenials),
 		conversionCount:         maps.Clone(r.conversionCount),
 		conversionDurationSum:   maps.Clone(r.conversionDurationSum),
 		conversionDurationCount: maps.Clone(r.conversionDurationCount),
@@ -82,6 +83,8 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 	writeCounter(w, "aetherrelay_upstream_errors_total",
 		"Total upstream error responses, by provider and HTTP status code.",
 		snapshot.upstreamErrors, errorKeyLabels)
+	writeCounter(w, "aetherrelay_provider_admission_denials_total",
+		"Total local provider admission denials by bounded reason.", snapshot.admissionDenials, admissionKeyLabels)
 
 	writeCounter(w, "aetherrelay_conversion_requests_total",
 		"Total protocol conversion requests by bounded conversion contract labels.", snapshot.conversionCount, conversionKeyLabels)
@@ -163,6 +166,7 @@ type prometheusSnapshot struct {
 	cacheCreationTokens     map[tokenKey]uint64
 	cacheHitRate            map[tokenKey]float64
 	upstreamErrors          map[errorKey]uint64
+	admissionDenials        map[admissionKey]uint64
 	conversionCount         map[conversionKey]uint64
 	conversionDurationSum   map[conversionKey]float64
 	conversionDurationCount map[conversionKey]uint64
@@ -252,6 +256,10 @@ func tokenKeyLabels(k tokenKey) string {
 
 func errorKeyLabels(k errorKey) string {
 	return formatLabels("provider", k.Provider, "status_code", k.StatusCode)
+}
+
+func admissionKeyLabels(k admissionKey) string {
+	return formatLabels("provider", k.Provider, "model", k.Model, "reason", k.Reason)
 }
 
 func conversionKeyLabels(k conversionKey) string {

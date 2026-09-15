@@ -15,6 +15,7 @@ func TestRegistryNilSafe(t *testing.T) {
 	r.RecordRequest("openai", "gpt-4", "chat_completions", 200, 100*time.Millisecond, "success")
 	r.RecordTokens("openai", "gpt-4", 10, 5, 0, 0)
 	r.RecordUpstreamError("openai", 502)
+	r.RecordAdmissionDenial("codexoauth", "gpt-5.6-sol", "accounts_cooling")
 	if _, err := r.StatsJSON(); err != nil {
 		t.Fatalf("nil registry StatsJSON: %v", err)
 	}
@@ -31,6 +32,8 @@ func TestRegistryCounters(t *testing.T) {
 	r.RecordTokens("openai", "gpt-4", 100, 50, 30, 5)
 	r.RecordTokens("openai", "gpt-4", 200, 100, 0, 0)
 	r.RecordUpstreamError("openai", 502)
+	r.RecordAdmissionDenial("codexoauth", "gpt-5.6-sol", "accounts_cooling")
+	r.RecordAdmissionDenial("codexoauth", "gpt-5.6-sol", "untrusted-arbitrary-text")
 
 	var buf strings.Builder
 	if err := r.WritePrometheus(&buf); err != nil {
@@ -46,6 +49,8 @@ func TestRegistryCounters(t *testing.T) {
 	mustContain(t, out, `aetherrelay_cache_creation_input_tokens_total{provider="openai",model="gpt-4"} 5`)
 	mustContain(t, out, `aetherrelay_cache_hit_rate{provider="openai",model="gpt-4"} 0.1`)
 	mustContain(t, out, `aetherrelay_upstream_errors_total{provider="openai",status_code="502"} 1`)
+	mustContain(t, out, `aetherrelay_provider_admission_denials_total{provider="codexoauth",model="gpt-5.6-sol",reason="accounts_cooling"} 1`)
+	mustContain(t, out, `aetherrelay_provider_admission_denials_total{provider="codexoauth",model="gpt-5.6-sol",reason="other"} 1`)
 	mustContain(t, out, "# TYPE aetherrelay_requests_total counter")
 	mustContain(t, out, "# EOF")
 }

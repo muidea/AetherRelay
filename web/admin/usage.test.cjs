@@ -46,7 +46,7 @@ test('cache rate distinguishes no input, missing data, misses and hits', () => {
 test('dashboard, chart, key table and events render server cache statistics', async () => {
   const {context: c, elements} = harness();
   const usage = {input_tokens: 1000, output_tokens: 20, total_tokens: 1020, cached_input_tokens: 100, cache_creation_input_tokens: 30, cache_hit_rate: 0.1};
-  const event = {...usage, api_key_id: 'key-a', event_id: 'event-a', provider: 'codexoauth', model: 'gpt-5.6-sol', operation: 'responses', conversion_mode: 'codex_oauth_responses', conversion_duration_ms: 17, first_event_duration_ms: 82, duration_ms: 108, upstream_duration_ms: 7, http_status: 503, outcome: 'provider_unavailable'};
+  const event = {...usage, api_key_id: 'key-a', event_id: 'event-a', provider: 'codexoauth', model: 'gpt-5.6-sol', operation: 'responses', conversion_mode: 'codex_oauth_responses', conversion_duration_ms: 17, first_event_duration_ms: 82, duration_ms: 108, upstream_duration_ms: 7, http_status: 503, outcome: 'provider_unavailable', failure_class: 'accounts_cooling', retryable: true, retry_after_seconds: 5};
   c.request = async url => url.includes('/dashboard?')
     ? {summary: usage, daily: [{...usage, date: '2026-09-01'}], by_api_key: [event]}
     : {events: [event]};
@@ -73,6 +73,9 @@ test('dashboard, chart, key table and events render server cache statistics', as
   assert.match(elements.usageEventDetail.innerHTML, /首事件耗时（秒）<\/dt><dd>0.082/);
   assert.match(elements.usageEventDetail.innerHTML, /总耗时（秒）<\/dt><dd>0.108/);
   assert.match(elements.usageEventDetail.innerHTML, /上游响应头耗时（秒）<\/dt><dd>0.007/);
+  assert.match(elements.usageEventDetail.innerHTML, /失败分类<\/dt><dd>accounts_cooling/);
+  assert.match(elements.usageEventDetail.innerHTML, /可重试<\/dt><dd>是/);
+  assert.match(elements.usageEventDetail.innerHTML, /建议等待（秒）<\/dt><dd>5/);
   c.renderCharts([]);
   assert.doesNotMatch(elements.chartCacheRate.innerHTML, /NaN|Infinity/);
   c.renderCharts([{date: '<unsafe>', input_tokens: 0, cache_hit_rate: 0}]);
@@ -90,6 +93,7 @@ test('usage tables reserve stable widths and clip long cells', () => {
 test('upstream column distinguishes admission rejection from missing response', () => {
   const {context: c} = harness();
   assert.equal(c.usageUpstreamMeta({outcome: 'provider_unavailable'}).label, '未发起');
+  assert.equal(c.usageUpstreamMeta({outcome: 'provider_unavailable', failure_class: 'accounts_cooling', retry_after_seconds: 5}).title, '请求在路由或账号池准入阶段结束，未发起上游 HTTP 请求 · accounts_cooling · 建议等待 5 秒');
   assert.equal(c.usageUpstreamMeta({outcome: 'upstream_failed'}).label, '无响应');
   assert.equal(c.usageUpstreamMeta({upstream_status: 429, upstream_content_type: 'application/json'}).label, '429 · application/json');
 });

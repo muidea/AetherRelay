@@ -28,6 +28,12 @@ type PlanLevelReporter interface {
 	RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int)
 }
 
+// AdmissionReporter exposes bounded local provider-admission denials without
+// adding arbitrary error text to metric labels.
+type AdmissionReporter interface {
+	RecordAdmissionDenial(provider, model, reason string)
+}
+
 // ConversionReporter exposes bounded conversion-specific observations without
 // adding request bodies or arbitrary error text to metric labels.
 type ConversionReporter interface {

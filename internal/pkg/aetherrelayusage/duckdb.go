@@ -217,6 +217,9 @@ func (s *DuckDBStore) Complete(ctx context.Context, rec CompleteRecord) error {
 	if rec.HTTPStatus < 100 || rec.HTTPStatus > 599 || strings.TrimSpace(rec.Outcome) == "" {
 		return fmt.Errorf("completed usage event requires http_status and outcome")
 	}
+	if rec.RetryAfterSeconds < 0 {
+		return fmt.Errorf("retry_after_seconds must not be negative")
+	}
 	total := rec.InputTokens + rec.OutputTokens
 	unsupported, err := json.Marshal(rec.UnsupportedFeatures)
 	if err != nil {
@@ -256,6 +259,9 @@ SET
     http_status = ?,
     outcome = ?,
     error_code = ?,
+    failure_class = ?,
+    retryable = ?,
+    retry_after_seconds = ?,
     duration_ms = ?,
     first_event_duration_ms = ?,
     upstream_duration_ms = ?,
@@ -287,6 +293,9 @@ WHERE event_id = ?
 		rec.HTTPStatus,
 		nullString(rec.Outcome),
 		nullString(rec.ErrorCode),
+		nullString(rec.FailureClass),
+		nullBool(rec.Retryable),
+		nullRetryAfter(rec.RetryAfterSeconds),
 		rec.Duration.Milliseconds(),
 		rec.FirstEventDuration.Milliseconds(),
 		rec.UpstreamDuration.Milliseconds(),
@@ -413,6 +422,20 @@ func nullPositiveInt64(v int64) any {
 
 func nullInt(v int) any {
 	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+func nullBool(v *bool) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func nullRetryAfter(v int) any {
+	if v <= 0 {
 		return nil
 	}
 	return v

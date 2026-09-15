@@ -94,6 +94,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - Admin「使用统计」支持按时间（今日 / 7 天 / 30 天 / 自定义）、API Key、Provider、Model、Outcome 与估算标记筛选查看。
 - ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 工具调用统一归 `api_key_id=builtin-local`。临时会话和搜索历史仍按管理员 owner 隔离，二者不是同一个维度。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
+- Provider 准入阶段返回 503 时，明细、CSV 与汇总日志保留安全的 `failure_class`、`retryable` 和 `retry_after_seconds`，并通过 Event ID 关联；Prometheus 按有界原因累计本地准入拒绝。
 - 旧 `usage.csv` 只能一次性显式导入（`cmd/aetherrelay-usage-import`）；`usage_file` 配置已删除。
 
 ## Admin 管理页
@@ -168,7 +169,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ## 可观测性
 
-- **Prometheus 指标**（前缀 `aetherrelay_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
+- **Prometheus 指标**（前缀 `aetherrelay_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`provider_admission_denials_total`、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
 - **SLO webhook**：配置阈值（缓存命中率、上游错误率、p99 延迟）与巡检周期后，状态变化时异步 POST `entered` / `resolved` 事件，带 `instance_id`、递增 `seq`、`generation` 与稳定 `event_id`；消费方按 `event_id` 幂等。有界队列 + 单 worker，429 优先遵循 `Retry-After`。
 - **交互归档**：默认关闭，不创建目录、不保存脱敏元数据。仅在受控排障期间显式设置 `archive_interactions: true` 才按客户端 API Key 作用域保存元数据；再设置 `archive_full_content: true` 才保存请求和响应正文。每个 API Key 默认保留最近 N 轮（`interaction_retention`），目录名使用 API Key ID，不包含原始密钥。
 - **Provider live probe**：`go run ./cmd/aetherrelay-probe -config config.yaml -provider <owner> -endpoint chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `endpoint_drift` / `environment_undetermined`；不在服务启动时运行。

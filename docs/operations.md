@@ -114,6 +114,7 @@ Codex 模型不可用排查（`CP-FAIL-018` / `CP-CAP-010`）：
 | 原生代理 `/v1/responses` → codexoauth | `codexoauth` | 客户端 Key ID | 上游 Response `usage`（缺失时本地估算） |
 
 - 使用统计会记录 `upstream_protocol=codexoauth`、`upstream_endpoint=codex_oauth_responses`、`conversion_mode=codex_oauth_responses`，包括 interaction archive 关闭时的兜底结算。
+- 本地准入失败会在使用明细与 CSV 中保留安全的 `failure_class`、`retryable` 和 `retry_after_seconds`；汇总日志同时记录 Usage Event ID，管理员可直接区分账号冷却、并发占满及其它无可用账号原因。以上字段不包含账号身份或凭据。
 - 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。导入、刷新凭据和完成 OAuth 都会提交一次立即同步；管理员也可在账号页对选中账号或全部账号执行“同步模型”，并轮询其进度。管理 API 与 Web 表格返回稳定本地 ID、邮箱、状态、结果计数、模型缓存、模型冷却、额度观察与最近刷新状态，不返回 token、account ID 或代理。
 - 401 触发单飞 refresh 后只重试一次；普通 429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。若上游明确返回 `usage_limit_reached`，账号表会记录凭据级“额度耗尽”及上游提供的恢复时间，并冷却该凭据全部模型；这只是运行期观察，不能当作官方剩余额度。
 - `/v1/responses` 的非流式请求在内部要求上游 SSE，并在 `response.completed` 或合法的 `response.incomplete` 终态返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。请求中的 `reasoning.effort` 按模型元数据枚举校验，允许值以 `/v1/models` 的 `capabilities.reasoning.efforts` 为准，不支持时返回 400。`POST /v1/responses/input_tokens` 复用同一模型与权限目录但只做本地非计费预估，不获取账号或访问上游。Responses WebSocket 使用同一路径的 GET upgrade，`/v1/responses/compact` 提供 unary JSON 及最小 SSE 投影；Realtime、网页会话和插件仍不属于 Codex OAuth 能力。
@@ -165,6 +166,7 @@ Prometheus 指标均以 `aetherrelay_` 为前缀：
 - `aetherrelay_request_duration_seconds_{sum,count}`：请求耗时。
 - `aetherrelay_input_tokens_total`、`aetherrelay_output_tokens_total`、缓存 Token 与命中率：Provider/模型维度 Token 数据。
 - `aetherrelay_client_requests_total{api_key_id}` 与 `aetherrelay_client_*_tokens_total{api_key_id}`：客户端 Key 维度累计数据。
+- `aetherrelay_provider_admission_denials_total{provider,model,reason}`：未发起上游请求的本地准入拒绝数；`reason` 为有界分类，包括账号冷却、并发占满、无合格账号和熔断等。
 - `aetherrelay_usage_store_*`：DuckDB 写入、查询、恢复、checkpoint 与健康状态。
 
 `/stats` 返回进程统计、延迟分位数、缓存、上游错误与 all-time `usage` 视图。DuckDB 是用量最终 authority；Prometheus 与 `/stats` 的 Key 累计镜像在启动时由 DuckDB 初始化，并在成功结算请求后更新。

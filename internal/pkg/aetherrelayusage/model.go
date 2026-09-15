@@ -52,6 +52,9 @@ type CompleteRecord struct {
 	HTTPStatus               int
 	Outcome                  string
 	ErrorCode                string
+	FailureClass             string
+	Retryable                *bool
+	RetryAfterSeconds        int
 	Duration                 time.Duration
 	FirstEventDuration       time.Duration
 	UpstreamDuration         time.Duration
@@ -189,6 +192,9 @@ type Event struct {
 	HTTPStatus               int        `json:"http_status,omitempty"`
 	Outcome                  string     `json:"outcome,omitempty"`
 	ErrorCode                string     `json:"error_code,omitempty"`
+	FailureClass             string     `json:"failure_class,omitempty"`
+	Retryable                *bool      `json:"retryable,omitempty"`
+	RetryAfterSeconds        int        `json:"retry_after_seconds,omitempty"`
 	DurationMS               int64      `json:"duration_ms,omitempty"`
 	FirstEventDurationMS     int64      `json:"first_event_duration_ms,omitempty"`
 	UpstreamDurationMS       int64      `json:"upstream_duration_ms,omitempty"`

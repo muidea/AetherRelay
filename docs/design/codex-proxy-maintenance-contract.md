@@ -351,7 +351,7 @@
 
 `CP-FAIL-020` OAuth refresh 的永久失败必须由账号 owner 持久化为 `credential_permanently_invalid`，立即停止该凭据参与路由，直到显式重新认证或 refresh 成功清除。它不阻止账号用量、额度的独立后台刷新，也不能等同于管理员手动 disabled。最后已知模型 membership 可在过期后继续保留为只读终态路由元数据，使重启、目录刷新和热重载后仍能返回可操作错误，但不得据此向失效凭据发送推理请求。若 exact model 的全部可调度凭据均处于该终态，HTTP 返回 503、`type=authentication_error`、`code=upstream_authentication_required`、`retryable=false`；WebSocket 返回同 code/type/retryable；Anthropic envelope 返回 `authentication_error` 并在 message 中携带稳定 code。并发槽占满返回 `accounts_busy`，冷却返回 `accounts_cooling` 和可计算的 Retry-After，其余本地准入失败保持 `provider_unavailable`。管理投影只显示布尔终态和安全错误类别，不暴露 token 或原始 OAuth 响应。
 
-`CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、首事件耗时、总耗时、事件数、字节数和最后事件时间；用量事件与归档 metadata 在首个有效 SSE data 到达时记录 `first_event_duration_ms`，并始终记录总 `duration_ms`。不输出请求正文、凭据或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
+`CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、首事件耗时、总耗时、事件数、字节数和最后事件时间；用量事件与归档 metadata 在首个有效 SSE data 到达时记录 `first_event_duration_ms`，并始终记录总 `duration_ms`。本地准入失败还必须在用量明细、CSV 和结构化汇总日志中保留安全的 `failure_class`、`retryable`、`retry_after_seconds`，汇总日志携带同一 Usage Event ID，且 Prometheus 以有界原因枚举统计准入拒绝。不输出请求正文、凭据、账号身份或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
 
 `CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码和白名单 request_kind/compaction reason/phase。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
 

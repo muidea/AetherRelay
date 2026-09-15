@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -436,15 +435,13 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		errorType = codexFailure.UpstreamType
 		param = codexFailure.UpstreamParam
 	}
-	if codexFailure != nil && codexFailure.RetryAfterSeconds > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(codexFailure.RetryAfterSeconds))
-	}
-	reason := ""
+	reason, retryAfter := "", 0
 	if codexFailure != nil {
 		reason = codexFailure.UnavailableReason
 		retryable = codexFailure.Retryable
+		retryAfter = codexFailure.RetryAfterSeconds
 	}
-	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, Retryable: retryable, FailureClass: reason, Model: model, ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID}, failure)
+	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, Retryable: retryable, RetryAfterSeconds: retryAfter, FailureClass: reason, Model: model, ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID}, failure)
 }
 
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {
@@ -519,5 +516,9 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 	default:
 		kind = streamKindError
 	}
-	return newStreamFailWithCode(kind, string(failure.Kind), failure.Error(), failure, countUpstream)
+	result := newStreamFailWithCode(kind, string(failure.Kind), failure.Error(), failure, countUpstream)
+	result.FailureClass = failure.UnavailableReason
+	result.Retryable = failure.Retryable
+	result.RetryAfterSeconds = failure.RetryAfterSeconds
+	return result
 }

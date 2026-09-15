@@ -68,12 +68,17 @@ func TestCodexAdmissionAndLocalFailuresDoNotOpenProviderCircuit(t *testing.T) {
 			if kind == codexresponses.KindProviderUnavailable {
 				f.RetryAfterSeconds = 17
 				f.UnavailableReason = "accounts_cooling"
+				retryable := true
+				f.Retryable = &retryable
 			}
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest("POST", "/v1/responses", nil)
 			h.writeCodexResponsesError(w, r, nil, time.Now(), "codexoauth", "gpt-test", true, f)
 			if kind == codexresponses.KindProviderUnavailable && (w.Code != 503 || w.Header().Get("Retry-After") != "17") {
 				t.Fatalf("HTTP=%d header=%v", w.Code, w.Header())
+			}
+			if kind == codexresponses.KindProviderUnavailable && (!strings.Contains(w.Body.String(), `"failure_class":"accounts_cooling"`) || !strings.Contains(w.Body.String(), `"retryable":true`)) {
+				t.Fatalf("admission error body=%s", w.Body.String())
 			}
 			if kind == codexresponses.KindStreamLifetime && w.Code != 504 {
 				t.Fatalf("lifetime HTTP=%d", w.Code)
@@ -87,9 +92,47 @@ func TestCodexAdmissionAndLocalFailuresDoNotOpenProviderCircuit(t *testing.T) {
 	if model, _ := registry.ProviderModelHealth("codexoauth", "gpt-test"); model.Failures != 1 {
 		t.Fatalf("model health=%+v", model)
 	}
+	var exposition strings.Builder
+	registry.WritePrometheus(&exposition)
+	if !strings.Contains(exposition.String(), `aetherrelay_provider_admission_denials_total{provider="codexoauth",model="gpt-test",reason="accounts_cooling"} 4`) {
+		t.Fatalf("missing admission denial metric:\n%s", exposition.String())
+	}
 	registry.RecordRequestPlan("codexoauth", "gpt-test", "responses", 200, time.Second, "success", "", "", "", "")
 	if got := registry.ProviderHealthSnapshot()["codexoauth"]; got.ConsecutiveFailures != 0 {
 		t.Fatalf("recovery=%+v", got)
+	}
+}
+
+func TestCodexAdmissionFailureDetailsReachUsageEvent(t *testing.T) {
+	store := usage.NewMemoryStore()
+	const eventID = "event-cooling"
+	if err := store.Start(t.Context(), usage.StartRecord{
+		EventID: eventID, StartedAt: time.Now().UTC(), APIKeyID: "work-office",
+		Operation: "responses", Route: "responses", ClientEndpoint: "/v1/responses", ClientProtocol: ClientProtocolOpenAI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	retryable := true
+	failure := codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, nil)
+	failure.UnavailableReason = "accounts_cooling"
+	failure.Retryable = &retryable
+	failure.RetryAfterSeconds = 5
+	h := &Handler{usageStore: store}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req = req.WithContext(withUsageEventID(req.Context(), eventID))
+	h.recordAndPrintFail(nil, req, "codexoauth", "gpt-5.6-sol", true, http.StatusServiceUnavailable, 50*time.Millisecond, tokenUsage{}, streamFailFromCodex(failure))
+
+	page, err := store.Events(t.Context(), usage.EventFilter{UsageFilter: usage.UsageFilter{AllTime: true}, PageSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("usage events=%d", len(page.Events))
+	}
+	event := page.Events[0]
+	if event.EventID != eventID || event.HTTPStatus != http.StatusServiceUnavailable || event.Outcome != "provider_unavailable" || event.ErrorCode != ErrorCodeProviderUnavailable || event.FailureClass != "accounts_cooling" || event.Retryable == nil || !*event.Retryable || event.RetryAfterSeconds != 5 {
+		t.Fatalf("usage event=%+v", event)
 	}
 }
 

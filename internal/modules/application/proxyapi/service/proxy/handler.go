@@ -772,7 +772,7 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 }
 
 // completeUsage 结算已 Start 的 event;失败只记日志/降级,不改变已写出的 HTTP 响应。
-func (h *Handler) completeUsage(r *http.Request, requestID string, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, outcome, errorCode string, round *archive.Round) bool {
+func (h *Handler) completeUsage(r *http.Request, requestID string, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, outcome, errorCode, failureClass string, retryable *bool, retryAfterSeconds int, round *archive.Round) bool {
 	if h.usageStore == nil || requestID == "" {
 		return false
 	}
@@ -795,6 +795,9 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		HTTPStatus:               status,
 		Outcome:                  outcome,
 		ErrorCode:                errorCode,
+		FailureClass:             failureClass,
+		Retryable:                retryable,
+		RetryAfterSeconds:        retryAfterSeconds,
 		Duration:                 duration,
 		Stream:                   stream,
 		Estimated:                tok.Estimated,
@@ -1253,6 +1256,17 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	failure := streamFailFromMessage(msg)
 	if len(failures) > 0 && failures[0] != nil {
 		failure = failures[0]
+	}
+	if failure != nil {
+		if failure.FailureClass == "" {
+			failure.FailureClass = apiErr.FailureClass
+		}
+		if failure.Retryable == nil {
+			failure.Retryable = apiErr.Retryable
+		}
+		if failure.RetryAfterSeconds == 0 {
+			failure.RetryAfterSeconds = apiErr.RetryAfterSeconds
+		}
 	}
 	h.recordAndPrintFail(round, r, provider, model, stream, status, duration, usage, failure)
 	h.writeArchiveMetadata(round, provider, model, stream, status, duration, usage, "response.json", msg, "", outcomeFromStreamFail(failure, status))
@@ -2948,12 +2962,24 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 	if r != nil {
 		eventID = usageEventIDFromContext(r.Context())
 	}
-	usageCompleted := h.completeUsage(r, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, round)
+	failureClass, retryAfterSeconds := "", 0
+	var retryable *bool
+	if fail != nil {
+		failureClass = fail.FailureClass
+		retryable = fail.Retryable
+		retryAfterSeconds = fail.RetryAfterSeconds
+	}
+	usageCompleted := h.completeUsage(r, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, failureClass, retryable, retryAfterSeconds, round)
 	if usageCompleted && h.metricsRegistry != nil && r != nil {
 		h.metricsRegistry.RecordClientUsage(clientauth.ClientIdentityFromContext(r.Context()).KeyID, tok.PromptTokens, tok.CompletionTokens)
 	}
 
 	if h.metricsRegistry != nil {
+		if failureClass != "" {
+			if reporter, ok := h.metricsRegistry.(metricsport.AdmissionReporter); ok {
+				reporter.RecordAdmissionDenial(provider, model, failureClass)
+			}
+		}
 		route := RouteLabel(r)
 		if levelReporter, ok := h.metricsRegistry.(metricsport.PlanLevelReporter); ok {
 			levelReporter.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome,
@@ -2976,7 +3002,7 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 			}
 		}
 	}
-	h.printSummary(round, provider, model, stream, status, duration, tok, errMessage)
+	h.printSummary(round, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, failureClass, retryable, retryAfterSeconds, errMessage)
 }
 
 func (h *Handler) settleConversionClientCanceled(round *archive.Round, r *http.Request, provider, model string, stream bool, start time.Time) {
@@ -3092,7 +3118,7 @@ func responseFileName(contentType string, stream bool) string {
 	}
 }
 
-func (h *Handler) printSummary(round *archive.Round, provider, model string, stream bool, status int, duration time.Duration, usage tokenUsage, errMessage string) {
+func (h *Handler) printSummary(round *archive.Round, eventID, provider, model string, stream bool, status int, duration time.Duration, usage tokenUsage, outcome, errorCode, failureClass string, retryable *bool, retryAfterSeconds int, errMessage string) {
 	level := slog.LevelInfo
 	label := "ok"
 	clientCanceled := isClientCanceledStreamIssue(errMessage)
@@ -3112,6 +3138,7 @@ func (h *Handler) printSummary(round *archive.Round, provider, model string, str
 	roundID := roundIDValue(round)
 	attrs := []any{
 		slog.String("label", label),
+		slog.String("event_id", eventID),
 		slog.String("provider", provider),
 		slog.String("model", model),
 		slog.Int("round", roundID),
@@ -3125,6 +3152,21 @@ func (h *Handler) printSummary(round *archive.Round, provider, model string, str
 		slog.Int("cache_creation_input_tokens", usage.CacheCreationInputTokens),
 		slog.Float64("cache_hit_rate", usage.CacheHitRate()),
 		slog.Bool("estimated", usage.Estimated),
+	}
+	if outcome != "" {
+		attrs = append(attrs, slog.String("outcome", outcome))
+	}
+	if errorCode != "" {
+		attrs = append(attrs, slog.String("error_code", errorCode))
+	}
+	if failureClass != "" {
+		attrs = append(attrs, slog.String("failure_class", failureClass))
+	}
+	if retryable != nil {
+		attrs = append(attrs, slog.Bool("retryable", *retryable))
+	}
+	if retryAfterSeconds > 0 {
+		attrs = append(attrs, slog.Int("retry_after_seconds", retryAfterSeconds))
 	}
 	if errMessage != "" {
 		key := "error"

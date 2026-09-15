@@ -40,6 +40,9 @@ var csvExportHeader = []string{
 	"http_status",
 	"outcome",
 	"error_code",
+	"failure_class",
+	"retryable",
+	"retry_after_seconds",
 	"duration_ms",
 	"first_event_duration_ms",
 	"upstream_duration_ms",
@@ -81,6 +84,7 @@ SELECT
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
+    coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state
 FROM usage_events
@@ -104,7 +108,7 @@ ORDER BY started_at ASC, event_id ASC`
 			clientEndpoint, clientProtocol                       string
 			upstreamProtocol, upstreamEndpoint, conversionMode   string
 			ignoredFeatures, unsupportedFeatures                 string
-			outcome, errorCode, state, usageDate                 string
+			outcome, errorCode, failureClass, state, usageDate   string
 			roundID                                              int64
 			inputTok, outputTok, totalTok                        int64
 			cachedIn, cacheCreate                                int64
@@ -112,6 +116,8 @@ ORDER BY started_at ASC, event_id ASC`
 			startedAt                                            time.Time
 			completedAt                                          sql.NullTime
 			httpStatus, durationMS, firstEventMS, upstreamMS     sql.NullInt64
+			retryAfter                                           sql.NullInt64
+			retryable                                            sql.NullBool
 			conversionLevel, conversionDurationMS                int64
 			conversionDegraded                                   bool
 		)
@@ -127,6 +133,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&inputTok, &outputTok, &totalTok,
 			&cachedIn, &cacheCreate,
 			&httpStatus, &outcome, &errorCode,
+			&failureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
 		); err != nil {
@@ -154,6 +161,14 @@ ORDER BY started_at ASC, event_id ASC`
 		firstEventS := ""
 		if firstEventMS.Valid {
 			firstEventS = strconv.FormatInt(firstEventMS.Int64, 10)
+		}
+		retryableS := ""
+		if retryable.Valid {
+			retryableS = strconv.FormatBool(retryable.Bool)
+		}
+		retryAfterS := ""
+		if retryAfter.Valid {
+			retryAfterS = strconv.FormatInt(retryAfter.Int64, 10)
 		}
 		row := []string{
 			eventID,
@@ -184,6 +199,9 @@ ORDER BY started_at ASC, event_id ASC`
 			httpS,
 			outcome,
 			errorCode,
+			failureClass,
+			retryableS,
+			retryAfterS,
 			durS,
 			firstEventS,
 			upDurS,

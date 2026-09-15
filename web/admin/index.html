@@ -2676,7 +2676,11 @@ function usageUpstreamMeta(event){
     const contentType=String(event?.upstream_content_type||"").trim();
     return {label:`${status}${contentType?' · '+contentType:''}`,title:[`HTTP ${status}`,contentType,event?.upstream_transfer_encoding||""].filter(Boolean).join(" · ")};
   }
-  if(event?.outcome==="provider_unavailable"||event?.error_code==="provider_unavailable")return {label:t("未发起"),title:t("请求在路由或账号池准入阶段结束，未发起上游 HTTP 请求")};
+  if(event?.outcome==="provider_unavailable"||event?.error_code==="provider_unavailable"){
+    const reason=String(event?.failure_class||"").trim(),retry=Number(event?.retry_after_seconds);
+    const details=[t("请求在路由或账号池准入阶段结束，未发起上游 HTTP 请求"),reason,Number.isInteger(retry)&&retry>0?`${t("建议等待")} ${retry} ${t("秒")}`:""];
+    return {label:t("未发起"),title:details.filter(Boolean).join(" · ")};
+  }
   if(["upstream_failed","upstream_truncated","idle_timeout","protocol_error"].includes(event?.outcome))return {label:t("无响应"),title:t("上游处理未返回 HTTP 状态")};
   return {label:"—",title:t("无记录 HTTP 状态")};
 }
@@ -2695,7 +2699,7 @@ async function loadEvents(reset=false){
     document.querySelectorAll("[data-event]").forEach(el=>el.onclick=()=>showUsageEvent(state.events[Number(el.dataset.event)]));
   }catch(e){$("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
 }
-function showUsageEvent(event){const labels={event_id:"Event ID",started_at:"开始时间",completed_at:"结束时间",api_key_id:"API Key ID",provider:"Provider",model:"Model",operation:"Operation",route:"Route",client_endpoint:"客户端端点",client_protocol:"客户端协议",upstream_protocol:"上游协议",upstream_endpoint:"上游端点",conversion_mode:"转换模式",conversion_level:"转换等级",conversion_duration_ms:"转换耗时（秒）",conversion_degraded:"转换降级",ignored_features:"降级省略能力",unsupported_features:"拒绝能力",upstream_status:"上游 HTTP 状态",upstream_content_type:"上游 Content-Type",upstream_content_length:"上游 Content-Length",upstream_transfer_encoding:"上游 Transfer-Encoding",input_tokens:"输入 Token",output_tokens:"输出 Token",total_tokens:"总 Token",cached_input_tokens:"缓存读取 Token",cache_hit_rate:"缓存使用率",cache_creation_input_tokens:"缓存创建 Token",http_status:"HTTP 状态",outcome:"Outcome",error_code:"错误代码",first_event_duration_ms:"首事件耗时（秒）",duration_ms:"总耗时（秒）",upstream_duration_ms:"上游响应头耗时（秒）",stream:"流式",estimated:"估算"},durationKeys=new Set(["conversion_duration_ms","first_event_duration_ms","duration_ms","upstream_duration_ms"]);$("usageEventDetail").innerHTML=Object.entries(labels).map(([key,label])=>{const value=key==="cache_hit_rate"?usageCacheRate(event):durationKeys.has(key)?usageDurationSeconds(event?.[key]):event?.[key]??"—";return `<dt>${t(label)}</dt><dd>${esc(value)}</dd>`}).join("");$("usageEventDialog").showModal()}
+function showUsageEvent(event){const labels={event_id:"Event ID",started_at:"开始时间",completed_at:"结束时间",api_key_id:"API Key ID",provider:"Provider",model:"Model",operation:"Operation",route:"Route",client_endpoint:"客户端端点",client_protocol:"客户端协议",upstream_protocol:"上游协议",upstream_endpoint:"上游端点",conversion_mode:"转换模式",conversion_level:"转换等级",conversion_duration_ms:"转换耗时（秒）",conversion_degraded:"转换降级",ignored_features:"降级省略能力",unsupported_features:"拒绝能力",upstream_status:"上游 HTTP 状态",upstream_content_type:"上游 Content-Type",upstream_content_length:"上游 Content-Length",upstream_transfer_encoding:"上游 Transfer-Encoding",input_tokens:"输入 Token",output_tokens:"输出 Token",total_tokens:"总 Token",cached_input_tokens:"缓存读取 Token",cache_hit_rate:"缓存使用率",cache_creation_input_tokens:"缓存创建 Token",http_status:"HTTP 状态",outcome:"Outcome",error_code:"错误代码",failure_class:"失败分类",retryable:"可重试",retry_after_seconds:"建议等待（秒）",first_event_duration_ms:"首事件耗时（秒）",duration_ms:"总耗时（秒）",upstream_duration_ms:"上游响应头耗时（秒）",stream:"流式",estimated:"估算"},durationKeys=new Set(["conversion_duration_ms","first_event_duration_ms","duration_ms","upstream_duration_ms"]);$("usageEventDetail").innerHTML=Object.entries(labels).map(([key,label])=>{const raw=event?.[key],value=key==="cache_hit_rate"?usageCacheRate(event):durationKeys.has(key)?usageDurationSeconds(raw):key==="retryable"&&raw!=null?t(raw?"是":"否"):raw??"—";return `<dt>${t(label)}</dt><dd>${esc(value)}</dd>`}).join("");$("usageEventDialog").showModal()}
 
 // events
 $("addButton").onclick=()=>openDialog(-1);

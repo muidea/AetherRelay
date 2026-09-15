@@ -73,7 +73,61 @@ func TestMigrationFirstAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestPreviousSchemaIsResetToFinalV2(t *testing.T) {
+func TestMigrationV2PreservesUsageWhileAddingFailureDetails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "v2.duckdb")
+	cfg := testCfg(path)
+	store, err := OpenDuckDB(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO usage_events (
+event_id, started_at, usage_date, api_key_id, state
+) VALUES ('historic-v2', now(), current_date, 'historic-key', 'started')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`DROP INDEX idx_usage_events_started_at`,
+		`DROP INDEX idx_usage_events_key_time`,
+		`DROP INDEX idx_usage_events_date_key`,
+		`DROP INDEX idx_usage_events_provider_model`,
+		`ALTER TABLE usage_events DROP COLUMN failure_class`,
+		`ALTER TABLE usage_events DROP COLUMN retryable`,
+		`ALTER TABLE usage_events DROP COLUMN retry_after_seconds`,
+		`CREATE INDEX idx_usage_events_started_at ON usage_events(started_at)`,
+		`CREATE INDEX idx_usage_events_key_time ON usage_events(api_key_id, started_at)`,
+		`CREATE INDEX idx_usage_events_date_key ON usage_events(usage_date, api_key_id)`,
+		`CREATE INDEX idx_usage_events_provider_model ON usage_events(provider, model)`,
+	} {
+		if _, err := store.db.Exec(statement); err != nil {
+			t.Fatalf("construct v2 schema with %q: %v", statement, err)
+		}
+	}
+	if _, err := store.db.Exec(`DELETE FROM schema_migrations`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`, previousSchemaVersion, previousSchemaName, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := OpenDuckDB(cfg)
+	if err != nil {
+		t.Fatalf("upgrade v2: %v", err)
+	}
+	defer upgraded.Close()
+	var count int
+	if err := upgraded.db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'historic-v2'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("historic usage count=%d err=%v", count, err)
+	}
+	if _, err := upgraded.db.Exec(`UPDATE usage_events SET failure_class='accounts_cooling', retryable=true, retry_after_seconds=5 WHERE event_id='historic-v2'`); err != nil {
+		t.Fatalf("new failure columns are not writable: %v", err)
+	}
+}
+
+func TestPreviousSchemaIsResetToFinalV3(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "v1.duckdb")
 
@@ -264,6 +318,9 @@ func TestCompleteOnlyUpdatesStarted(t *testing.T) {
 		ConversionDegraded:  true,
 		IgnoredFeatures:     []string{"reasoning_output"},
 		UnsupportedFeatures: []string{"images"},
+		FailureClass:        "accounts_cooling",
+		Retryable:           boolPointer(true),
+		RetryAfterSeconds:   5,
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -284,10 +341,12 @@ func TestCompleteOnlyUpdatesStarted(t *testing.T) {
 		t.Fatalf("events=%+v err=%v", page, err)
 	}
 	event := page.Events[0]
-	if !event.ConversionDegraded || event.ConversionLevel != 3 || strings.Join(event.IgnoredFeatures, ",") != "reasoning_output" || strings.Join(event.UnsupportedFeatures, ",") != "images" {
+	if !event.ConversionDegraded || event.ConversionLevel != 3 || strings.Join(event.IgnoredFeatures, ",") != "reasoning_output" || strings.Join(event.UnsupportedFeatures, ",") != "images" || event.FailureClass != "accounts_cooling" || event.Retryable == nil || !*event.Retryable || event.RetryAfterSeconds != 5 {
 		t.Fatalf("conversion observability=%+v", event)
 	}
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestCompleteStoresUnknownUpstreamContentLengthAsNull(t *testing.T) {
 	s := openTestStore(t)

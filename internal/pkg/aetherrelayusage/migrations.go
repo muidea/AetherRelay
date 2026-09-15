@@ -9,12 +9,14 @@ import (
 )
 
 const (
-	currentSchemaVersion = 2
-	currentSchemaName    = "usage_first_event_duration_v2"
+	currentSchemaVersion  = 3
+	currentSchemaName     = "usage_failure_details_v3"
+	previousSchemaVersion = 2
+	previousSchemaName    = "usage_first_event_duration_v2"
 )
 
-// migrate owns only the usage runtime tables. Only the exact current schema is
-// reused; every other generation is replaced atomically.
+// migrate owns only the usage runtime tables. The immediately preceding schema
+// is upgraded in place; older or unknown generations are replaced atomically.
 func migrate(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -39,8 +41,31 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if _, err := tx.ExecContext(ctx, `ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS deleting_at TIMESTAMPTZ`); err != nil {
 			return fmt.Errorf("initialize deletion state: %w", err)
 		}
+		if err := ensureUsageFailureColumns(ctx, tx); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit schema check: %w", err)
+		}
+		return nil
+	case err == nil && version == previousSchemaVersion && name == previousSchemaName:
+		if err := ensureUsageFailureColumns(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE client_api_key_metadata ADD COLUMN IF NOT EXISTS deleting_at TIMESTAMPTZ`); err != nil {
+			return fmt.Errorf("initialize deletion state: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM schema_migrations`); err != nil {
+			return fmt.Errorf("replace schema version: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`,
+			currentSchemaVersion, currentSchemaName, time.Now().UTC(),
+		); err != nil {
+			return fmt.Errorf("record schema migration: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit schema migration: %w", err)
 		}
 		return nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
@@ -70,6 +95,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit final schema initialization: %w", err)
+	}
+	return nil
+}
+
+func ensureUsageFailureColumns(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range []string{
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS failure_class VARCHAR`,
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS retryable BOOLEAN`,
+		`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS retry_after_seconds INTEGER`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("add usage failure details: %w", err)
+		}
 	}
 	return nil
 }
@@ -113,6 +151,9 @@ func createFinalSchema(ctx context.Context, tx *sql.Tx) error {
     http_status                 INTEGER,
     outcome                     VARCHAR,
     error_code                  VARCHAR,
+    failure_class               VARCHAR,
+    retryable                   BOOLEAN,
+    retry_after_seconds         INTEGER,
     duration_ms                 BIGINT,
     first_event_duration_ms     BIGINT,
     upstream_duration_ms        BIGINT,

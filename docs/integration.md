@@ -543,7 +543,7 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 | `model_not_found` / `endpoint_unsupported` | 当前目录或端点不匹配 | 立即刷新 `/v1/models` 后重新选择 |
 | `conversion_unsupported` | 请求语义超出转换合同 | 移除字段、改用明确的 native 合同或更换模型；不要原样重试 |
 | `route_contract_invalid` | 服务端路由合同错误 | 停止重试并告警运维 |
-| `provider_unavailable` | 当前无健康候选 | 有界指数退避，并刷新模型目录 |
+| `provider_unavailable` | 当前无健康候选 | 优先遵循 `Retry-After`；`failure_class=accounts_cooling` 时等待后重试，`accounts_busy` 时短暂随机退避；仅在无恢复提示且目录可能变化时刷新模型目录 |
 | `upstream_unavailable` | 上游连接、超时或协议失败 | 有界指数退避；保证业务操作幂等 |
 | 429 | 上游或网关限流 | 尊重 `Retry-After`，否则有界指数退避 |
 | 5xx | 临时服务故障 | 仅对幂等或可去重请求做有界重试 |
@@ -570,7 +570,7 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 
 - 进程启动时必须获取一次，获取失败时不要盲发模型请求；
 - 使用短时缓存，建议由应用按自身流量设置 30 至 300 秒 TTL；
-- `model_not_found`、`endpoint_unsupported` 或 `provider_unavailable` 时触发一次即时刷新；
+- `model_not_found`、`endpoint_unsupported` 时触发一次即时刷新；`provider_unavailable` 仅在没有 `Retry-After` 且 `failure_class` 不表示账号冷却或并发占满时刷新，避免形成目录刷新风暴；
 - 保留上一个成功目录作为短暂降级缓存，但不得永久使用；
 - 刷新使用 singleflight 或同类机制，避免并发错误造成刷新风暴；
 - 模型 capacity 字段缺失时不自行填入其他模型的窗口值。
