@@ -617,6 +617,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		round.SetAPIKeyID(identity.KeyID)
 		round.SetIgnoredFeatures(codexIgnoredHeaderNames(r))
 		defer round.Abort()
+		// 在分发前包装,使本轮所有响应写出都被快照。
+		// 兜底 defer 注册在 round.Abort() 之后:defer 后进先出,因此它先于 Abort
+		// 执行,response.meta.json 的写入始终落在 round 生命周期内。
+		w = &archiveResponseWriter{ResponseWriter: w, round: round}
+		defer h.archiveClientResponse(round)
 	}
 	r = r.WithContext(withArchiveRound(r.Context(), round))
 	eventID := newRequestID()
@@ -3013,6 +3018,8 @@ func (h *Handler) settleConversionClientCanceled(round *archive.Round, r *http.R
 }
 
 func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model string, stream bool, status int, duration time.Duration, usage tokenUsage, responsePath, message, fullResponsePath, outcome string) {
+	// 响应已定型,先把客户端响应 header 落盘,再由本函数写 metadata 引用它。
+	h.archiveClientResponse(round)
 	stableHash, fingerprint, drift, driftCount := h.driftInfo(round)
 	fullContent := round == nil || round.FullContent()
 	if outcome == "" {
@@ -3068,6 +3075,9 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 	if round != nil {
 		if round.HasFile("request.meta.json") {
 			meta.RequestMetaPath = "request.meta.json"
+		}
+		if round.HasFile("response.meta.json") {
+			meta.ResponseMetaPath = "response.meta.json"
 		}
 		if round.HasFile("request.json") {
 			meta.RequestPath = "request.json"

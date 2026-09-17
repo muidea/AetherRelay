@@ -42,15 +42,16 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
-	RoundID       int       `json:"round_id"`
-	At            time.Time `json:"at"`
-	Provider      string    `json:"provider"`
-	Protocol      string    `json:"protocol"`
-	Status        int       `json:"status"`
-	DurationMS    int64     `json:"duration_ms"`
-	ContentType   string    `json:"content_type,omitempty"`
-	ContentLength int64     `json:"content_length"`
-	Error         string    `json:"error,omitempty"`
+	RoundID       int                 `json:"round_id"`
+	At            time.Time           `json:"at"`
+	Provider      string              `json:"provider"`
+	Protocol      string              `json:"protocol"`
+	Status        int                 `json:"status"`
+	DurationMS    int64               `json:"duration_ms"`
+	ContentType   string              `json:"content_type,omitempty"`
+	ContentLength int64               `json:"content_length"`
+	Headers       map[string][]string `json:"headers,omitempty"`
+	Error         string              `json:"error,omitempty"`
 }
 
 func (h *Handler) debugfRound(round *archive.Round, r *http.Request, format string, args ...any) {
@@ -188,6 +189,9 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 		info.Status = resp.StatusCode
 		info.ContentType = resp.Header.Get("Content-Type")
 		info.ContentLength = resp.ContentLength
+		// 完整上游响应 header：x-ratelimit-* / retry-after / server 等对排查限流
+		// 与上游行为关键，且无法从 Content-Type / Content-Length 还原。
+		info.Headers = sanitizeHeaders(resp.Header)
 	}
 	if err != nil {
 		info.Error = err.Error()
@@ -195,7 +199,7 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 	if writeErr := round.WriteJSON("upstream_response.json", info); writeErr != nil {
 		log.Printf("archive upstream response metadata: %v", writeErr)
 	}
-	h.debugfRound(round, r, "round=%06d upstream response provider=%s protocol=%s status=%d duration=%s content_type=%q content_length=%d error=%q",
+	h.debugfRound(round, r, "round=%06d upstream response provider=%s protocol=%s status=%d duration=%s content_type=%q content_length=%d error=%q headers=%s",
 		round.ID,
 		providerName,
 		provider.Protocol,
@@ -204,6 +208,7 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 		info.ContentType,
 		info.ContentLength,
 		info.Error,
+		headerSummary(info.Headers),
 	)
 	h.logUpstreamAlert(round, providerName, provider.Protocol, info.Status, duration, info.Error)
 }
@@ -253,14 +258,31 @@ func sanitizeHeaders(headers http.Header) map[string][]string {
 	return sanitized
 }
 
+// isSensitiveHeader 判断某个 header 是否必须在归档前脱敏。
+//
+// 名单保持显式可预测：刻意不用 "-token" / "-key" 这类模糊后缀匹配，否则会误伤
+// x-ratelimit-remaining-tokens 等排查限流时最需要看到的诊断头。
+// 除请求方向的凭据外，也覆盖响应方向的质询头：上游可能把 Bearer / Digest
+// nonce 回显在 WWW-Authenticate 一类头里。
 func isSensitiveHeader(key string) bool {
-	key = strings.ToLower(key)
-	return key == "authorization" ||
-		key == "proxy-authorization" ||
-		key == "x-api-key" ||
-		key == "api-key" ||
-		key == "cookie" ||
-		key == "set-cookie"
+	switch strings.ToLower(key) {
+	case "authorization",
+		"proxy-authorization",
+		"proxy-authenticate",
+		"www-authenticate",
+		"authentication-info",
+		"x-api-key",
+		"api-key",
+		"x-auth-token",
+		"x-access-token",
+		"x-goog-api-key",
+		"x-amz-security-token",
+		"cookie",
+		"set-cookie":
+		return true
+	default:
+		return false
+	}
 }
 
 // toAttrs 把 []any 中的元素逐个识别为 slog.Attr,返回同质 Attr 切片。

@@ -60,6 +60,52 @@ type Round struct {
 	UpstreamTransferEncoding string
 	recorder                 *Recorder
 	written                  map[string]struct{} // basename -> present
+	// clientResponse 是返回给客户端的响应状态与 header 快照。由 HTTP 层在
+	// 响应定型时写入，仅在第一次生效；加锁是因为流式响应可能由独立
+	// goroutine 与请求主流程并发触碰 ResponseWriter。
+	clientResponseMu sync.Mutex
+	clientResponse   *ClientResponse
+}
+
+// ClientResponse 是返回给客户端的响应状态与 header 快照。
+// Headers 由调用方完成脱敏，archive 包不感知敏感字段策略。
+type ClientResponse struct {
+	// At 是响应首次定型的时刻（不是落盘时刻），用于和上下游耗时对齐。
+	At      time.Time
+	Status  int
+	Headers map[string][]string
+	// Hijacked 表示该响应通过协议升级交出了连接（WebSocket）。此时 Status
+	// 101 是推断值：升级方直接向底层连接写握手响应行，其 header 不经过
+	// ResponseWriter，Headers 只含升级前调用方已设置的部分。
+	Hijacked bool
+}
+
+// SetClientResponse 记录返回给客户端的响应状态与 header。
+// 只有第一次调用生效：HTTP 响应头在首次写出时即定型，之后的修改不会再发给
+// 客户端，因此后续调用被忽略。
+func (r *Round) SetClientResponse(status int, headers map[string][]string, hijacked bool) {
+	if r == nil {
+		return
+	}
+	r.clientResponseMu.Lock()
+	defer r.clientResponseMu.Unlock()
+	if r.clientResponse != nil {
+		return
+	}
+	r.clientResponse = &ClientResponse{At: time.Now(), Status: status, Headers: headers, Hijacked: hijacked}
+}
+
+// ClientResponse 返回已捕获的客户端响应快照；响应尚未定型时 ok 为 false。
+func (r *Round) ClientResponse() (ClientResponse, bool) {
+	if r == nil {
+		return ClientResponse{}, false
+	}
+	r.clientResponseMu.Lock()
+	defer r.clientResponseMu.Unlock()
+	if r.clientResponse == nil {
+		return ClientResponse{}, false
+	}
+	return *r.clientResponse, true
 }
 
 func (r *Round) markWritten(name string) {
@@ -215,6 +261,7 @@ type Metadata struct {
 	Estimated                bool    `json:"estimated"`
 	RequestPath              string  `json:"request_path,omitempty"`
 	RequestMetaPath          string  `json:"request_meta_path,omitempty"`
+	ResponseMetaPath         string  `json:"response_meta_path,omitempty"`
 	UpstreamRequestPath      string  `json:"upstream_request_path,omitempty"`
 	UpstreamResponsePath     string  `json:"upstream_response_path,omitempty"`
 	ResponsePath             string  `json:"response_path,omitempty"`
@@ -582,6 +629,7 @@ func (r *Recorder) recoverIncompleteLocked() error {
 		}{
 			{"request.json", &meta.RequestPath},
 			{"request.meta.json", &meta.RequestMetaPath},
+			{"response.meta.json", &meta.ResponseMetaPath},
 			{"upstream_request.json", &meta.UpstreamRequestPath},
 			{"upstream_response.json", &meta.UpstreamResponsePath},
 			{"response.sse", &meta.ResponsePath},

@@ -360,3 +360,83 @@ func TestAbortReleasesActiveWithoutMetadata(t *testing.T) {
 	assertDirMissing(t, root, "000002")
 	assertDirExists(t, root, "000003")
 }
+
+func TestRoundClientResponseKeepsFirstSnapshot(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := NewRecorder(root, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := recorder.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := round.ClientResponse(); ok {
+		t.Fatal("expected no snapshot before the response is written")
+	}
+	round.SetClientResponse(200, map[string][]string{"Content-Type": {"application/json"}}, false)
+	// 响应头在首次写出时定型,之后的写出不会再影响客户端,快照必须保持不变。
+	round.SetClientResponse(503, map[string][]string{"Content-Type": {"text/plain"}}, true)
+
+	snapshot, ok := round.ClientResponse()
+	if !ok {
+		t.Fatal("expected a captured snapshot")
+	}
+	if snapshot.Status != 200 || snapshot.Hijacked || snapshot.At.IsZero() {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+	if got := snapshot.Headers["Content-Type"]; len(got) != 1 || got[0] != "application/json" {
+		t.Fatalf("unexpected headers: %+v", snapshot.Headers)
+	}
+}
+
+func TestClientResponseSnapshotSurvivesDisabledFullContent(t *testing.T) {
+	// header 属元数据层:关闭完整正文时仍必须落盘,与 request.meta.json 一致。
+	root := t.TempDir()
+	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, FullContent: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := recorder.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	round.SetClientResponse(200, map[string][]string{"Content-Type": {"application/json"}}, false)
+	if err := round.WriteJSON("response.meta.json", map[string]any{"status": 200}); err != nil {
+		t.Fatal(err)
+	}
+	if !round.HasFile("response.meta.json") {
+		t.Fatal("expected response.meta.json to be recorded")
+	}
+	if _, err := os.Stat(filepath.Join(round.Dir, "response.meta.json")); err != nil {
+		t.Fatalf("expected response.meta.json on disk: %v", err)
+	}
+	// 正文仍受 archive_full_content 控制。
+	if err := round.WriteResponse("response.sse", []byte("data: {}\n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(round.Dir, "response.sse")); !os.IsNotExist(err) {
+		t.Fatalf("expected response body to be skipped, stat err = %v", err)
+	}
+}
+
+func TestRecorderRecoversResponseMetaPath(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "workorch", "000007")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "response.meta.json"), []byte(`{"status":200}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"response_meta_path": "response.meta.json"`) {
+		t.Fatalf("unexpected recovered metadata: %s", data)
+	}
+}
