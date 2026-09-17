@@ -9,8 +9,8 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-// Phase 0 技术门禁:验证固定版本 driver 能 open/migrate/insert/update/query/close。
-func TestDuckDBSmokeOpenMigrateCRUD(t *testing.T) {
+// Phase 0 技术门禁:验证固定版本 driver 能 open/create/insert/update/query/close。
+func TestDuckDBSmokeOpenCreateCRUD(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "smoke.duckdb")
 
@@ -42,15 +42,6 @@ func TestDuckDBSmokeOpenMigrateCRUD(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 	if _, err := tx.Exec(`
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version     INTEGER PRIMARY KEY,
-    name        VARCHAR NOT NULL,
-    applied_at  TIMESTAMPTZ NOT NULL
-)`); err != nil {
-		_ = tx.Rollback()
-		t.Fatalf("create migrations: %v", err)
-	}
-	if _, err := tx.Exec(`
 CREATE TABLE IF NOT EXISTS usage_events (
     event_id     VARCHAR PRIMARY KEY,
     started_at   TIMESTAMPTZ NOT NULL,
@@ -65,15 +56,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
 		_ = tx.Rollback()
 		t.Fatalf("create usage_events: %v", err)
 	}
-	if _, err := tx.Exec(
-		`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`,
-		1, "init", time.Now().UTC(),
-	); err != nil {
-		_ = tx.Rollback()
-		t.Fatalf("insert migration: %v", err)
-	}
 	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit migrate: %v", err)
+		t.Fatalf("commit schema creation: %v", err)
 	}
 
 	started := time.Now().UTC()

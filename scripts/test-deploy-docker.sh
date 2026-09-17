@@ -80,19 +80,18 @@ state:
 
 chatgpt_web:
   provider_enabled: true
-  # Responses WebSocket 资源边界；修改后只影响新连接。
-  websocket_max_sessions: 17
-  websocket_max_message_bytes: 1234
-  websocket_idle_timeout_seconds: 45
-  websocket_max_lifetime_seconds: 67
   temporary_chat:
     enabled: true
 
 codex_oauth:
   provider_enabled: true
   websocket_max_sessions: 99
+  websocket_max_message_bytes: 1234
+  websocket_idle_timeout_seconds: 45
+  websocket_max_lifetime_seconds: 67
 EOF
 chmod 0644 "$config"
+config_before="$(sha256sum "$config" | cut -d' ' -f1)"
 PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" \
   --dir "$TMP/deploy" \
   --skip-admin \
@@ -107,44 +106,15 @@ if [[ -e "$TMP/env-was-executed" ]]; then
   echo "deployment script executed content from .env" >&2
   exit 1
 fi
-
-chatgpt_web_block="$(sed -n '/^chatgpt_web:/,/^codex_oauth:/p' "$config")"
-if grep -Eq '^  websocket_' <<<"$chatgpt_web_block"; then
-  echo "legacy WebSocket settings remain under chatgpt_web" >&2
+config_after="$(sha256sum "$config" | cut -d' ' -f1)"
+if [[ "$config_after" != "$config_before" ]]; then
+  echo "repeated deployment changed the existing final config" >&2
   exit 1
 fi
 grep -Fq '  websocket_max_sessions: 99' "$config"
 grep -Fq '  websocket_max_message_bytes: 1234' "$config"
 grep -Fq '  websocket_idle_timeout_seconds: 45' "$config"
 grep -Fq '  websocket_max_lifetime_seconds: 67' "$config"
-for key in websocket_max_sessions websocket_max_message_bytes websocket_idle_timeout_seconds websocket_max_lifetime_seconds; do
-  if [[ "$(grep -c "^  $key:" "$config")" != 1 ]]; then
-    echo "migrated setting is missing or duplicated: $key" >&2
-    exit 1
-  fi
-done
-shopt -s nullglob
-migration_backups=("$config".bak.websocket-section.*)
-shopt -u nullglob
-if [[ "${#migration_backups[@]}" != 1 ]]; then
-  echo "legacy config migration did not create exactly one backup" >&2
-  exit 1
-fi
-grep -Fq '  websocket_max_sessions: 17' "${migration_backups[0]}"
-
-# 已迁移配置再次部署必须保持幂等，不能持续生成备份。
-PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" \
-  --dir "$TMP/deploy" \
-  --skip-admin \
-  --listen 0.0.0.0:9090 \
-  >"$TMP/output-migrated-repeat" 2>"$TMP/error-migrated-repeat"
-shopt -s nullglob
-migration_backups=("$config".bak.websocket-section.*)
-shopt -u nullglob
-if [[ "${#migration_backups[@]}" != 1 ]]; then
-  echo "repeated deployment created another legacy config backup" >&2
-  exit 1
-fi
 
 if grep -Fq 'aetherrelay-state' "$compose"; then
   echo "deploy compose still contains a named state volume" >&2

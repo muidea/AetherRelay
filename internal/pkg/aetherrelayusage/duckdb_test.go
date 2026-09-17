@@ -40,9 +40,9 @@ func openTestStore(t *testing.T) *DuckDBStore {
 	return s
 }
 
-func TestMigrationFirstAndIdempotent(t *testing.T) {
+func TestSchemaInitializationIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "mig.duckdb")
+	path := filepath.Join(dir, "schema.duckdb")
 	cfg := testCfg(path)
 
 	s1, err := OpenDuckDB(cfg)
@@ -58,130 +58,53 @@ func TestMigrationFirstAndIdempotent(t *testing.T) {
 		t.Fatalf("open2 (idempotent): %v", err)
 	}
 	defer s2.Close()
-
-	var version int
-	var name string
-	var count int
-	if err := s2.db.QueryRow(`SELECT version, name FROM schema_migrations`).Scan(&version, &name); err != nil {
-		t.Fatalf("read schema version: %v", err)
-	}
-	if version != currentSchemaVersion || name != currentSchemaName {
-		t.Fatalf("schema = %d/%q", version, name)
-	}
-	if err := s2.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("schema version rows = %d, err=%v", count, err)
+	if _, err := s2.db.Exec(`INSERT INTO usage_events (
+event_id, started_at, usage_date, api_key_id, failure_class, retryable, retry_after_seconds, state
+) VALUES ('final-event', now(), current_date, 'final-key', 'accounts_cooling', true, 5, 'started')`); err != nil {
+		t.Fatalf("final schema is not writable: %v", err)
 	}
 }
 
-func TestMigrationV2PreservesUsageWhileAddingFailureDetails(t *testing.T) {
+func TestSchemaInitializationRejectsIncompleteDatabaseWithoutReset(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "v2.duckdb")
-	cfg := testCfg(path)
-	store, err := OpenDuckDB(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO usage_events (
-event_id, started_at, usage_date, api_key_id, state
-) VALUES ('historic-v2', now(), current_date, 'historic-key', 'started')`); err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`DROP INDEX idx_usage_events_started_at`,
-		`DROP INDEX idx_usage_events_key_time`,
-		`DROP INDEX idx_usage_events_date_key`,
-		`DROP INDEX idx_usage_events_provider_model`,
-		`ALTER TABLE usage_events DROP COLUMN failure_class`,
-		`ALTER TABLE usage_events DROP COLUMN retryable`,
-		`ALTER TABLE usage_events DROP COLUMN retry_after_seconds`,
-		`CREATE INDEX idx_usage_events_started_at ON usage_events(started_at)`,
-		`CREATE INDEX idx_usage_events_key_time ON usage_events(api_key_id, started_at)`,
-		`CREATE INDEX idx_usage_events_date_key ON usage_events(usage_date, api_key_id)`,
-		`CREATE INDEX idx_usage_events_provider_model ON usage_events(provider, model)`,
-	} {
-		if _, err := store.db.Exec(statement); err != nil {
-			t.Fatalf("construct v2 schema with %q: %v", statement, err)
-		}
-	}
-	if _, err := store.db.Exec(`DELETE FROM schema_migrations`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`, previousSchemaVersion, previousSchemaName, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	upgraded, err := OpenDuckDB(cfg)
-	if err != nil {
-		t.Fatalf("upgrade v2: %v", err)
-	}
-	defer upgraded.Close()
-	var count int
-	if err := upgraded.db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'historic-v2'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("historic usage count=%d err=%v", count, err)
-	}
-	if _, err := upgraded.db.Exec(`UPDATE usage_events SET failure_class='accounts_cooling', retryable=true, retry_after_seconds=5 WHERE event_id='historic-v2'`); err != nil {
-		t.Fatalf("new failure columns are not writable: %v", err)
-	}
-}
-
-func TestPreviousSchemaIsResetToFinalV3(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "v1.duckdb")
-
+	path := filepath.Join(dir, "incomplete.duckdb")
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
-		t.Fatalf("open raw: %v", err)
-	}
-	if _, err := db.Exec(`
-CREATE TABLE schema_migrations (
-    version INTEGER PRIMARY KEY,
-    name VARCHAR NOT NULL,
-    applied_at TIMESTAMPTZ NOT NULL
-)`); err != nil {
-		t.Fatalf("create mig: %v", err)
+		t.Fatal(err)
 	}
 	if _, err := db.Exec(`CREATE TABLE usage_events (
-event_id VARCHAR PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL, usage_date DATE NOT NULL,
-api_key_id VARCHAR NOT NULL, state VARCHAR NOT NULL
+event_id VARCHAR PRIMARY KEY,
+started_at TIMESTAMPTZ NOT NULL,
+usage_date DATE NOT NULL,
+api_key_id VARCHAR NOT NULL,
+provider VARCHAR,
+model VARCHAR
 )`); err != nil {
-		t.Fatalf("create v1 usage_events: %v", err)
+		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO usage_events VALUES ('old-event', now(), current_date, 'old-key', 'started')`); err != nil {
-		t.Fatalf("insert v1 event: %v", err)
+	if _, err := db.Exec(`INSERT INTO usage_events VALUES ('historic-event', now(), current_date, 'historic-key', NULL, NULL)`); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := db.Exec(
-		`INSERT INTO schema_migrations(version, name, applied_at) VALUES (1, 'usage_provider_access_v1', ?)`,
-		time.Now().UTC(),
-	); err != nil {
-		t.Fatalf("insert v1 version: %v", err)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
-	_ = db.Close()
 
-	store, err := OpenDuckDB(testCfg(path))
+	if _, err := OpenDuckDB(testCfg(path)); err == nil || !strings.Contains(err.Error(), "does not match the final schema") {
+		t.Fatalf("incomplete schema error=%v", err)
+	}
+
+	db, err = sql.Open("duckdb", path)
 	if err != nil {
-		t.Fatalf("reset v1 schema: %v", err)
-	}
-	defer store.Close()
-	var version int
-	var name string
-	if err := store.db.QueryRow(`SELECT version, name FROM schema_migrations`).Scan(&version, &name); err != nil {
 		t.Fatal(err)
 	}
-	if version != currentSchemaVersion || name != currentSchemaName {
-		t.Fatalf("schema = %d/%q", version, name)
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'historic-event'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("incompatible database was modified: count=%d err=%v", count, err)
 	}
-	var oldEvents int
-	if err := store.db.QueryRow(`SELECT count(*) FROM usage_events WHERE event_id = 'old-event'`).Scan(&oldEvents); err != nil {
-		t.Fatal(err)
-	}
-	if oldEvents != 0 {
-		t.Fatalf("v1 events retained = %d", oldEvents)
-	}
-	if err := store.Start(context.Background(), StartRecord{EventID: "new-event", StartedAt: time.Now().UTC(), APIKeyID: "new-key"}); err != nil {
-		t.Fatalf("final schema is not writable: %v", err)
+	if err := db.QueryRow(`SELECT count(*) FROM information_schema.tables
+WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_provider_access')`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("incompatible usage database gained final tables: count=%d err=%v", count, err)
 	}
 }
 

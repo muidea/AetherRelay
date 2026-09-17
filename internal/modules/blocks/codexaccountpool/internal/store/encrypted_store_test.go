@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
@@ -87,7 +88,7 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	}
 }
 
-func TestEncryptedAccountLoadCreatesSeedForLegacyEnabledMode(t *testing.T) {
+func TestEncryptedAccountLoadRejectsMissingFinalFingerprintSeed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	codec := encryptedTestCodec(t)
 	store, err := Open(path, "256MB", 1, codec)
@@ -107,13 +108,8 @@ func TestEncryptedAccountLoadCreatesSeedForLegacyEnabledMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restored, err := Open(path, "256MB", 1, codec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restored.Close()
-	if restored.items[id].FingerprintSeed == "" {
-		t.Fatal("legacy enabled account was not assigned a private fingerprint seed")
+	if _, err := Open(path, "256MB", 1, codec); err == nil || !strings.Contains(err.Error(), "missing its fingerprint seed") {
+		t.Fatalf("missing final fingerprint seed error=%v", err)
 	}
 }
 
@@ -252,7 +248,7 @@ func TestRepeatedCompleteImportPreservesUnchangedAccountState(t *testing.T) {
 	}
 }
 
-func TestEncryptedAccountLoadMigratesFingerprintDefaultAndCompactProtocol(t *testing.T) {
+func TestEncryptedAccountLoadRejectsNonFinalCompactProtocol(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	codec := encryptedTestCodec(t)
 	store, err := Open(path, "256MB", 1, codec)
@@ -263,10 +259,9 @@ func TestEncryptedAccountLoadMigratesFingerprintDefaultAndCompactProtocol(t *tes
 		t.Fatal(err)
 	}
 	item := store.items[store.order[0]]
-	legacySupported := false
-	item.CompactSupported = &legacySupported
+	supported := false
+	item.CompactSupported = &supported
 	item.CompactProtocol = ""
-	item.FingerprintMode = "legacy-default"
 	if err := store.saveLocked(); err != nil {
 		t.Fatal(err)
 	}
@@ -274,18 +269,8 @@ func TestEncryptedAccountLoadMigratesFingerprintDefaultAndCompactProtocol(t *tes
 		t.Fatal(err)
 	}
 
-	restored, err := Open(path, "256MB", 1, codec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restored.Close()
-	view := restored.List()[0]
-	if view.FingerprintMode != events.FingerprintModeOff || view.CompactSupported != nil {
-		t.Fatalf("migrated view=%+v", view)
-	}
-	loaded := restored.items[restored.order[0]]
-	if loaded.CompactProtocol != nativeCompactProtocol {
-		t.Fatalf("compact protocol=%q", loaded.CompactProtocol)
+	if _, err := Open(path, "256MB", 1, codec); err == nil || !strings.Contains(err.Error(), "does not use the final compact protocol") {
+		t.Fatalf("non-final compact protocol error=%v", err)
 	}
 }
 

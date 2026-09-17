@@ -175,12 +175,9 @@ func (s *Store) loadEncrypted() error {
 			return fmt.Errorf("decode account %q: %w", row.ID, err)
 		}
 		acc := mapToAccount(item)
-		if acc.ID == "" {
-			acc.ID = row.ID
-		}
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
-		if acc.AccessToken == "" {
-			continue
+		if acc.ID == "" || acc.ID != row.ID || acc.AccessToken == "" || !validStatus(acc.Status) || acc.SourceType == "" || acc.CreatedAt == "" {
+			return fmt.Errorf("account %q is not encoded with the final document schema", row.ID)
 		}
 		s.items[acc.AccessToken] = acc
 		s.order = append(s.order, acc.AccessToken)
@@ -191,8 +188,8 @@ func (s *Store) loadEncrypted() error {
 func mapToAccount(m map[string]any) *Account {
 	acc := &Account{
 		ID:           asString(m["id"]),
-		AccessToken:  firstString(m, "access_token", "accessToken"),
-		RefreshToken: firstString(m, "refresh_token", "refreshToken"),
+		AccessToken:  asString(m["access_token"]),
+		RefreshToken: asString(m["refresh_token"]),
 		Email:        asString(m["email"]),
 		Password:     asString(m["password"]),
 		Type:         asString(m["type"]),
@@ -204,15 +201,6 @@ func mapToAccount(m map[string]any) *Account {
 		Extra:        cloneMap(m),
 	}
 	acc.ModelSnapshot = snapshotFromExtra(acc.Extra)
-	if acc.Status == "" {
-		acc.Status = StatusNormal
-	}
-	if acc.SourceType == "" {
-		acc.SourceType = "web"
-	}
-	if acc.ID == "" && acc.AccessToken != "" {
-		acc.ID = shortID(acc.AccessToken)
-	}
 	acc.Quota = asInt(m["quota"])
 	return acc
 }
@@ -233,7 +221,7 @@ func (s *Store) saveEncryptedLocked() error {
 			continue
 		}
 		if strings.TrimSpace(acc.ID) == "" {
-			acc.ID = shortID(acc.AccessToken)
+			return fmt.Errorf("account document id is required")
 		}
 		payload, err := json.Marshal(accountToMap(acc))
 		if err != nil {
@@ -2374,15 +2362,6 @@ func asString(v any) string {
 	default:
 		return ""
 	}
-}
-
-func firstString(m map[string]any, keys ...string) string {
-	for _, k := range keys {
-		if s := asString(m[k]); s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 func cloneMap(source map[string]any) map[string]any {

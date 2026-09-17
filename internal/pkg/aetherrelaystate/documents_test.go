@@ -3,10 +3,59 @@ package aetherrelaystate
 import (
 	"bytes"
 	"crypto/rand"
+	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestOpenRejectsIncompleteSchemaWithoutResettingData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "incomplete.duckdb")
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE chatgpt_images (
+path VARCHAR PRIMARY KEY,
+size BIGINT NOT NULL,
+width INTEGER NOT NULL,
+height INTEGER NOT NULL,
+created_at VARCHAR NOT NULL,
+payload JSON NOT NULL,
+updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO chatgpt_images(path, size, width, height, created_at, payload)
+VALUES ('historic.png', 1, 1, 1, '2026-09-15T00:00:00Z', '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path, "128MB", 1); err == nil || !strings.Contains(err.Error(), "does not match the final schema") {
+		t.Fatalf("incomplete schema error=%v", err)
+	}
+
+	db, err = sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM chatgpt_images WHERE path='historic.png'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("incompatible state database was modified: count=%d err=%v", count, err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM information_schema.tables WHERE table_name IN (
+'secure_documents', 'chatgpt_image_tasks', 'chatgpt_images', 'chatgpt_image_tags',
+'chatgpt_temporary_conversations', 'chatgpt_temporary_messages',
+'chatgpt_temporary_message_images', 'chatgpt_temporary_message_attachments',
+'chatgpt_web_search_history')`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("incompatible state database gained final tables: count=%d err=%v", count, err)
+	}
+}
 
 func TestDocumentsPersistAcrossOwners(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")

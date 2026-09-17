@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	events "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
@@ -52,6 +53,29 @@ func TestEncryptedAccountPersistenceDoesNotExposeTokens(t *testing.T) {
 	defer store.Close()
 	if len(store.List()) != 1 {
 		t.Fatalf("restored accounts=%+v", store.List())
+	}
+}
+
+func TestEncryptedAccountLoadRejectsNonFinalDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	codec := encryptedTestCodec(t)
+	store, err := Open(path, "256MB", 1, 3, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Add([]string{"access"}, "web"); err != nil {
+		t.Fatal(err)
+	}
+	store.items["access"].SourceType = ""
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path, "256MB", 1, 3, codec); err == nil || !strings.Contains(err.Error(), "final document schema") {
+		t.Fatalf("non-final account document error=%v", err)
 	}
 }
 

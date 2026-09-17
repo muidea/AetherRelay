@@ -46,137 +46,6 @@ fi
 die() { echo "error: $*" >&2; exit 1; }
 warn() { echo "warning: $*" >&2; }
 
-# 2026-08 的短暂错误模板曾把 Codex Responses WebSocket 边界放在
-# chatgpt_web 下。严格配置解析会拒绝这些未知键；重复部署又必须保留用户配置，
-# 因此只迁移这四个已知字段，并在同目录留下原权限备份。codex_oauth 中已存在的
-# 正确字段优先，迁移可重复执行且不会持续生成备份。
-migrate_legacy_websocket_config() {
-  local config_file="$1" migrated_file backup_file
-
-  migrated_file="$(mktemp "${config_file}.migrate.XXXXXX")" \
-    || die "无法为配置迁移创建临时文件: $config_file"
-  if ! cp -p "$config_file" "$migrated_file"; then
-    rm -f "$migrated_file"
-    die "无法保留配置文件权限: $config_file"
-  fi
-  if ! awk '
-    BEGIN {
-      wanted["websocket_max_sessions"] = 1
-      wanted["websocket_max_message_bytes"] = 1
-      wanted["websocket_idle_timeout_seconds"] = 1
-      wanted["websocket_max_lifetime_seconds"] = 1
-      ordered[1] = "websocket_max_sessions"
-      ordered[2] = "websocket_max_message_bytes"
-      ordered[3] = "websocket_idle_timeout_seconds"
-      ordered[4] = "websocket_max_lifetime_seconds"
-    }
-
-    function direct_key(line, key) {
-      if (line !~ /^  [^[:space:]#][^:]*:/) {
-        return ""
-      }
-      key = line
-      sub(/^  /, "", key)
-      sub(/:.*/, "", key)
-      return key
-    }
-
-    function emit_legacy_values(   i, key, missing) {
-      for (i = 1; i <= 4; i++) {
-        key = ordered[i]
-        if ((key in legacy) && !(key in destination)) {
-          missing = 1
-        }
-      }
-      if (!missing) {
-        return
-      }
-      print "  # Responses WebSocket 资源边界；修改后只影响新连接。"
-      for (i = 1; i <= 4; i++) {
-        key = ordered[i]
-        if ((key in legacy) && !(key in destination)) {
-          print legacy[key]
-        }
-      }
-    }
-
-    {
-      lines[NR] = $0
-      if ($0 ~ /^[A-Za-z0-9_][A-Za-z0-9_-]*:[[:space:]]*(#.*)?$/) {
-        section = $0
-        sub(/:.*/, "", section)
-        if (section == "codex_oauth") {
-          codex_start = NR
-        }
-      }
-
-      key = direct_key($0)
-      if (section == "chatgpt_web" && (key in wanted)) {
-        legacy[key] = $0
-        remove[NR] = 1
-        legacy_count++
-        if (NR > 1 && lines[NR - 1] == "  # Responses WebSocket 资源边界；修改后只影响新连接。") {
-          remove[NR - 1] = 1
-        }
-      }
-      if (section == "codex_oauth") {
-        if (NR != codex_start && $0 ~ /^[[:space:]]+[^[:space:]#]/) {
-          codex_last_content = NR
-        }
-        if (key in wanted) {
-          destination[key] = 1
-        }
-      }
-    }
-
-    END {
-      if (!legacy_count) {
-        for (i = 1; i <= NR; i++) {
-          print lines[i]
-        }
-        exit
-      }
-
-      insert_after = codex_last_content ? codex_last_content : codex_start
-      for (i = 1; i <= NR; i++) {
-        if (!remove[i]) {
-          print lines[i]
-        }
-        if (codex_start && i == insert_after) {
-          emit_legacy_values()
-        }
-      }
-      if (!codex_start) {
-        if (NR > 0 && lines[NR] != "") {
-          print ""
-        }
-        print "codex_oauth:"
-        emit_legacy_values()
-      }
-    }
-  ' "$config_file" >"$migrated_file"; then
-    rm -f "$migrated_file"
-    die "迁移旧版 WebSocket 配置失败: $config_file"
-  fi
-
-  if cmp -s "$config_file" "$migrated_file"; then
-    rm -f "$migrated_file"
-    return
-  fi
-
-  backup_file="$(mktemp "${config_file}.bak.websocket-section.XXXXXX")" \
-    || die "无法为旧配置创建备份: $config_file"
-  if ! cp -p "$config_file" "$backup_file"; then
-    rm -f "$migrated_file" "$backup_file"
-    die "备份旧配置失败: $config_file"
-  fi
-  if ! mv "$migrated_file" "$config_file"; then
-    rm -f "$migrated_file"
-    die "替换迁移后的配置失败；原配置备份位于: $backup_file"
-  fi
-  warn "已将 chatgpt_web.websocket_* 迁移至 codex_oauth；原配置备份: $backup_file"
-}
-
 usage() {
   cat <<EOF
 usage: $0 [options]
@@ -297,7 +166,7 @@ if [[ -z "${AETHERRELAY_CREDENTIAL_KEY:-}" ]]; then
   echo "    -> 已生成 DuckDB 凭据加密主密钥"
 fi
 
-# 1. 生成 config.yaml（已有则保留，仅迁移已知的失效模板字段）
+# 1. 生成 config.yaml（已有最终配置则原样保留）
 if [[ -f "$CONFIG_FILE" ]]; then
   warn "检测到已有 $CONFIG_FILE，保留用户配置"
   warn "若未配置 Admin 登录，可运行: ${COMPOSE[*]} exec aetherrelay admin set-credentials --username ops-admin --config /etc/aetherrelay/config.yaml"
@@ -329,7 +198,6 @@ else
   mv "$generated_config" "$CONFIG_FILE"
   echo "    -> 已生成 $CONFIG_FILE"
 fi
-migrate_legacy_websocket_config "$CONFIG_FILE"
 
 # 2. Admin 密码哈希：优先 --admin-password-hash，其次交互式生成。
 # stdout 在容器内写入仅当前用户可读的临时文件，stderr 的密码提示则直接显示

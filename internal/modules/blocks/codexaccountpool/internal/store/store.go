@@ -139,7 +139,6 @@ func (s *Store) loadEncrypted() error {
 	if err != nil {
 		return err
 	}
-	migrated := false
 	for _, row := range rows {
 		payload, err := s.credentials.Open(secureDocumentScope, row.ID, row.Payload)
 		if err != nil {
@@ -149,38 +148,47 @@ func (s *Store) loadEncrypted() error {
 		if err := json.Unmarshal(payload, &item); err != nil {
 			return fmt.Errorf("decode account %q: %w", row.ID, err)
 		}
-		if item.ID == "" {
-			item.ID = row.ID
-		}
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
-		if item.ID == "" || strings.TrimSpace(item.AccessToken) == "" || strings.TrimSpace(item.RefreshToken) == "" {
-			continue
-		}
-		if item.Status == "" {
-			item.Status = events.StatusNormal
-		}
-		mode, valid := normalizeFingerprintMode(item.FingerprintMode)
-		if !valid || item.FingerprintMode != mode {
-			item.FingerprintMode = mode
-			migrated = true
-		}
-		if reconcileFingerprintSeed(&item) {
-			migrated = true
-		}
-		// compact_supported learned against the retired unary endpoint is not
-		// valid for native remote compaction v2.
-		if item.CompactProtocol != nativeCompactProtocol {
-			item.CompactSupported = nil
-			item.CompactProtocol = nativeCompactProtocol
-			migrated = true
+		if err := validatePersistedAccount(row.ID, &item); err != nil {
+			return err
 		}
 		s.items[item.ID] = &item
 		s.order = append(s.order, item.ID)
 	}
-	if migrated {
-		return s.saveEncryptedLocked()
+	return nil
+}
+
+func validatePersistedAccount(documentID string, item *account) error {
+	if item == nil || strings.TrimSpace(item.ID) == "" || item.ID != documentID {
+		return fmt.Errorf("account %q does not match the final document identity", documentID)
+	}
+	if strings.TrimSpace(item.AccessToken) == "" || strings.TrimSpace(item.RefreshToken) == "" || !validPersistedStatus(item.Status) || item.CreatedAt == "" {
+		return fmt.Errorf("account %q is missing required final fields", documentID)
+	}
+	mode, valid := normalizeFingerprintMode(item.FingerprintMode)
+	if !valid || item.FingerprintMode != mode {
+		return fmt.Errorf("account %q has invalid fingerprint mode", documentID)
+	}
+	if item.FingerprintSeed != "" {
+		if _, valid := normalizeFingerprintSeed(item.FingerprintSeed); !valid {
+			return fmt.Errorf("account %q has invalid fingerprint seed", documentID)
+		}
+	} else if fingerprintModeRequiresSeed(item.FingerprintMode) {
+		return fmt.Errorf("account %q is missing its fingerprint seed", documentID)
+	}
+	if item.CompactProtocol != nativeCompactProtocol {
+		return fmt.Errorf("account %q does not use the final compact protocol", documentID)
 	}
 	return nil
+}
+
+func validPersistedStatus(status string) bool {
+	switch status {
+	case events.StatusNormal, events.StatusAbnormal, events.StatusDisabled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) saveLocked() error {

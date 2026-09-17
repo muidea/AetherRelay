@@ -195,37 +195,38 @@ func openDatabase(path, memoryLimit string, threads int) (*sql.DB, error) {
 			return nil, fmt.Errorf("configure state threads: %w", err)
 		}
 	}
-	if err := migrate(db); err != nil {
+	if err := initializeSchema(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
-func migrate(db *sql.DB) error {
-	// The image store schema is intentionally reset when the final scoped
-	// columns are absent. Historical image rows are not part of the current
-	// contract and must never be interpreted as globally readable assets.
-	if rows, err := db.Query(`PRAGMA table_info('chatgpt_images')`); err == nil {
-		hasScope := false
-		for rows.Next() {
-			var cid int
-			var name, typ string
-			var notNull, dflt, pk any
-			if scanErr := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); scanErr == nil && name == "api_key_id" {
-				hasScope = true
-			}
-		}
-		_ = rows.Close()
-		if !hasScope {
-			if _, err := db.Exec(`DROP TABLE IF EXISTS chatgpt_image_tags; DROP TABLE IF EXISTS chatgpt_images`); err != nil {
-				return fmt.Errorf("reset unscoped image schema: %w", err)
-			}
+// initializeSchema creates and validates the final shared-state schema.
+// Historical schemas are not altered or reset.
+func initializeSchema(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin state schema initialization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingTables int
+	if err := tx.QueryRow(`SELECT count(*) FROM information_schema.tables
+WHERE table_name IN (
+'secure_documents', 'chatgpt_image_tasks', 'chatgpt_images', 'chatgpt_image_tags',
+'chatgpt_temporary_conversations', 'chatgpt_temporary_messages',
+'chatgpt_temporary_message_images', 'chatgpt_temporary_message_attachments',
+'chatgpt_web_search_history'
+)`).Scan(&existingTables); err != nil {
+		return fmt.Errorf("inspect state schema: %w", err)
+	}
+	if existingTables > 0 {
+		if err := verifySchema(tx); err != nil {
+			return err
 		}
 	}
 	statements := []string{
-		`DROP TABLE IF EXISTS chatgpt_accounts`,
-		`DROP TABLE IF EXISTS codex_oauth_accounts`,
 		`CREATE TABLE IF NOT EXISTS secure_documents (
             scope VARCHAR NOT NULL,
             id VARCHAR NOT NULL,
@@ -264,6 +265,7 @@ func migrate(db *sql.DB) error {
             conversation_id VARCHAR NOT NULL,
             title VARCHAR NOT NULL,
             account_id VARCHAR NOT NULL,
+			provider VARCHAR NOT NULL,
             model VARCHAR NOT NULL,
 			actual_model VARCHAR NOT NULL DEFAULT '',
             thinking_effort VARCHAR NOT NULL DEFAULT '',
@@ -284,6 +286,7 @@ func migrate(db *sql.DB) error {
             role VARCHAR NOT NULL,
             content VARCHAR NOT NULL,
 			image_metadata JSON NOT NULL DEFAULT '[]',
+			attachment_metadata JSON NOT NULL DEFAULT '[]',
             upstream_message_id VARCHAR NOT NULL DEFAULT '',
 			actual_model VARCHAR NOT NULL DEFAULT '',
             status VARCHAR NOT NULL,
@@ -335,16 +338,50 @@ func migrate(db *sql.DB) error {
             ON chatgpt_temporary_message_attachments(owner_id, conversation_id, message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_chatgpt_web_search_history_owner_created
             ON chatgpt_web_search_history(owner_id, created_at DESC)`,
-		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
-		`ALTER TABLE chatgpt_temporary_conversations ADD COLUMN IF NOT EXISTS provider VARCHAR DEFAULT 'chatgptweb'`,
-		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS actual_model VARCHAR DEFAULT ''`,
-		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS image_metadata JSON DEFAULT '[]'`,
-		`ALTER TABLE chatgpt_temporary_messages ADD COLUMN IF NOT EXISTS attachment_metadata JSON DEFAULT '[]'`,
 	}
 	for _, statement := range statements {
-		if _, err := db.Exec(statement); err != nil {
-			return fmt.Errorf("migrate state schema: %w", err)
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("initialize state schema: %w", err)
 		}
+	}
+	if err := verifySchema(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit state schema initialization: %w", err)
+	}
+	return nil
+}
+
+type schemaQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func verifySchema(db schemaQuerier) error {
+	probes := []string{
+		`SELECT scope, id, position, payload, updated_at FROM secure_documents LIMIT 0`,
+		`SELECT owner_id, task_id, payload, updated_at FROM chatgpt_image_tasks LIMIT 0`,
+		`SELECT api_key_id, path, size, width, height, created_at, payload, updated_at FROM chatgpt_images LIMIT 0`,
+		`SELECT api_key_id, path, tags, updated_at FROM chatgpt_image_tags LIMIT 0`,
+		`SELECT owner_id, conversation_id, title, account_id, provider, model, actual_model,
+thinking_effort, system_prompt, upstream_conversation_id, parent_message_id, status,
+created_at, updated_at, expires_at FROM chatgpt_temporary_conversations LIMIT 0`,
+		`SELECT owner_id, conversation_id, sequence, message_id, role, content, image_metadata,
+attachment_metadata, upstream_message_id, actual_model, status, error_class, error_message,
+created_at, completed_at FROM chatgpt_temporary_messages LIMIT 0`,
+		`SELECT owner_id, conversation_id, message_id, image_id, content_type, bytes
+FROM chatgpt_temporary_message_images LIMIT 0`,
+		`SELECT owner_id, conversation_id, message_id, attachment_id, file_name, content_type, bytes
+FROM chatgpt_temporary_message_attachments LIMIT 0`,
+		`SELECT owner_id, search_id, model, actual_model, query, output_text, provider, sources,
+created_at, expires_at FROM chatgpt_web_search_history LIMIT 0`,
+	}
+	for _, probe := range probes {
+		rows, err := db.Query(probe)
+		if err != nil {
+			return fmt.Errorf("state database does not match the final schema: %w", err)
+		}
+		_ = rows.Close()
 	}
 	return nil
 }

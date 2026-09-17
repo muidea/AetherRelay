@@ -80,7 +80,7 @@ func OpenDuckDB(cfg config.UsageStoreConfig) (*DuckDBStore, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := migrate(ctx, db); err != nil {
+	if err := initializeSchema(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
