@@ -158,15 +158,7 @@ ON client_api_key_provider_access(provider_id);
 
 ### 4.2 Schema 基线策略
 
-当前项目明确不要求保留历史统计数据兼容性。Usage runtime 只复用完全匹配的当前 schema：
-
-- `currentSchemaVersion` 当前为 `2`。
-- `currentSchemaName` 当前为 `usage_first_event_duration_v2`。
-- schema 版本或名称不匹配时原子重建 usage runtime 自己拥有的表，不执行增量迁移。
-- reset 顺序先删除 `client_api_key_provider_access`，再删除 `usage_events`、`client_api_key_metadata` 和 migration 记录。
-- Provider、账号池、图片、任务、搜索历史、临时对话和交互文件不属于本 schema，不得删除。
-
-该动作会清除旧 usage 和旧客户端 Key。发布说明必须要求管理员提前备份，并在升级后重新创建客户端 Key 和访问策略；Provider 和账号池使用现有导出、导入流程恢复。
+Usage runtime 只保留当前最终 schema。启动时幂等创建 owner 自己的三张表及索引，再校验运行期读取和写入的全部列。代码不识别 schema 版本，不执行增量迁移、补列、重命名或旧表重置；结构不匹配时启动失败且不修改已有数据。全新部署直接创建最终结构。
 
 ### 4.3 Go 领域模型
 
@@ -636,7 +628,7 @@ ProviderAccess 创建、更新、启停、轮换和删除的最终一致顺序�
 ### 8.1 后端
 
 - [x] 新增 `internal/pkg/aetherrelayclientaccess` 及单元测试。
-- [x] 调整 `internal/pkg/aetherrelayusage/migrations.go` 最终 schema、名称和 reset 顺序。
+- [x] 在 `internal/pkg/aetherrelayusage/schema.go` 固化最终 schema 初始化与结构校验。
 - [x] 扩展 `usage.ClientAPIKeyRecord`、`usage.Store`。
 - [x] 完成 DuckDB Store 的批量读取、创建、替换策略、引用查询和删除事务。
 - [x] 完成 MemoryStore 语义对齐。
@@ -669,7 +661,7 @@ ProviderAccess 创建、更新、启停、轮换和删除的最终一致顺序�
 - [x] 更新 `docs/design/proxy-core.md`：目录与候选链按 Key scope 过滤。
 - [x] 更新 `docs/integration.md`：`/v1/models` 是 Key 作用域目录，业务不得缓存跨 Key 复用。
 - [x] 更新 `docs/features.md`：客户端 Key Provider 权限管理。
-- [x] 更新 `docs/configuration.md`：schema reset 和升级数据清理说明。
+- [x] 更新 `docs/configuration.md`：最终 schema 与不兼容数据库启动失败说明。
 - [x] 更新 `docs/operations.md`：Provider 删除冲突、模型不可见和 503 排障路径。
 - [x] 更新 `docs/deployment.md`：升级后重新创建 Key 的发布步骤。
 
@@ -678,8 +670,8 @@ ProviderAccess 创建、更新、启停、轮换和删除的最终一致顺序�
 ### 9.1 领域与存储测试
 
 - Policy mode、规范化、去重、排序、clone、deny-all 零值。
-- fresh schema 包含 mode、关联表、索引和新 schema name。
-- 旧 schema name 触发仅 usage owner 表重建。
+- fresh schema 包含 mode、关联表、索引和全部最终字段。
+- 不完整 schema 启动失败且原数据不被重置或改写。
 - 创建 Key 与关联原子成功/失败回滚。
 - 替换策略不残留旧关联。
 - Key 删除同步删除关联和 usage。

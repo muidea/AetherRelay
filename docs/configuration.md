@@ -105,8 +105,8 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
 | `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `90` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
-| `archive_interactions` / `AETHERRELAY_ARCHIVE_INTERACTIONS` | 是否创建 `interactions` 归档，默认 `false`。关闭时不创建交互目录，也不写脱敏元数据。 |
-| `archive_full_content` / `AETHERRELAY_ARCHIVE_FULL_CONTENT` | 仅在 `archive_interactions=true` 时生效：是否落盘完整请求/响应正文，默认 `false`。 |
+| `archive_interactions` / `AETHERRELAY_ARCHIVE_INTERACTIONS` | 是否创建 `interactions` 归档，默认 `false`。关闭时不创建交互目录，也不写脱敏元数据。开启后记录每轮对话四个方向（客户端请求、上游请求、上游响应、客户端响应）的完整 HTTP header，以及路由、耗时与用量摘要。 |
+| `archive_full_content` / `AETHERRELAY_ARCHIVE_FULL_CONTENT` | 仅在 `archive_interactions=true` 时生效：是否落盘完整请求/响应正文，默认 `false`。header 与其它元数据不受此开关影响。 |
 | `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
 | `trusted_proxy_cidrs` / `AETHERRELAY_TRUSTED_PROXY_CIDRS` | 允许提供 `X-Forwarded-Proto` 的直接反向代理 IP/CIDR；未命中时忽略转发协议头。 |
@@ -146,11 +146,11 @@ state:
   interaction_retention: 500 # 每个客户端 API Key 独立保留最近 500 轮
 ```
 
-`state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、不可迁移或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
+`state.dir` 是单实例唯一的持久化工作区，相对路径按 `config.yaml` 所在目录解析。`state.database` 必须是该目录下的本地 DuckDB 文件；它是用量、ChatGPT 账号、图片任务、图片索引和标签的唯一结构化状态 authority。多个实例不得共享同一个工作区。数据库不可打开、结构不符合当前最终 schema 或资源参数不一致时，启用对应能力的模块会在启动期失败，不会降级为空状态运行。
 
 `state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。`builtin-local` 只作为服务端工具调用的稳定 `api_key_id` 元数据，不与管理员登录用户名/临时会话 owner 混用。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
 
-Usage runtime 当前使用重新基线化的最终 schema v2（版本名 `usage_first_event_duration_v2`），不再执行历史增量 migration。首次遇到版本或名称不匹配的 usage schema 时会原子重建 `usage_events`、`client_api_key_metadata`、`client_api_key_provider_access` 和 usage 的 `schema_migrations` 记录，因此旧用量和旧客户端 API Key 会被清除；Provider、账号池、任务、图片、搜索历史和临时会话等其他 owner 的表不受影响。完成该次重建后，后续启动会复用最终 v2 并保留新产生的数据。Provider 和账号池可通过现有导出、导入流程恢复；升级前如需回查旧统计数据，应先备份整个 `state.database`。
+Usage runtime 只保留当前最终 schema，启动时幂等创建 `usage_events`、`client_api_key_metadata` 和 `client_api_key_provider_access`，随后校验运行期使用的全部列。代码不包含旧版本识别、增量补列、旧表重置或历史数据升级逻辑；已有数据库结构不匹配时启动失败并保留原数据，由管理员换用当前版本创建的数据库。
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 

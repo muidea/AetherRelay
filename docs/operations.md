@@ -118,7 +118,7 @@ Codex 模型不可用排查（`CP-FAIL-018` / `CP-CAP-010`）：
 - 每个账号的代理同时用于 OAuth refresh、Codex `/models` 枚举与 Codex Responses 请求。模型快照按账号缓存 6 小时，失败有独立退避；只有发现并仍在有效期内的账号可调度其模型。导入、刷新凭据和完成 OAuth 都会提交一次立即同步；管理员也可在账号页对选中账号或全部账号执行“同步模型”，并轮询其进度。管理 API 与 Web 表格返回稳定本地 ID、邮箱、状态、结果计数、模型缓存、模型冷却、额度观察与最近刷新状态，不返回 token、account ID 或代理。
 - 401 触发单飞 refresh 后只重试一次；普通 429 会记录模型级冷却并切换尚未尝试的账号；上游已开始 SSE 输出后不切换账号，避免重复或拼接两个不同响应。若上游明确返回 `usage_limit_reached`，账号表会记录凭据级“额度耗尽”及上游提供的恢复时间，并冷却该凭据全部模型；这只是运行期观察，不能当作官方剩余额度。
 - `/v1/responses` 的非流式请求在内部要求上游 SSE，并在 `response.completed` 或合法的 `response.incomplete` 终态返回原始 Response 对象；上游若返回原生 JSON Response 也会接受。请求中的 `reasoning.effort` 按模型元数据枚举校验，允许值以 `/v1/models` 的 `capabilities.reasoning.efforts` 为准，不支持时返回 400。`POST /v1/responses/input_tokens` 复用同一模型与权限目录但只做本地非计费预估，不获取账号或访问上游。Responses WebSocket 使用同一路径的 GET upgrade，`/v1/responses/compact` 提供 unary JSON 及最小 SSE 投影；Realtime、网页会话和插件仍不属于 Codex OAuth 能力。
-- `/v1/responses/compact` 的上游实际走原生 remote compaction v2 `/responses`。若某账号返回 2xx 但没有 compaction item，该账号会被标记为 native compact 不支持；升级后旧 unary 端点留下的支持/不支持缓存会自动清空并重新学习。
+- `/v1/responses/compact` 的上游实际走原生 remote compaction v2 `/responses`。若某账号返回 2xx 但没有 compaction item，该账号会被标记为 native compact 不支持；持久化账号文档必须已经使用当前 `remote_compaction_v2` 标记，否则启动失败，不在加载阶段自动改写。
 - compact 的普通 request/capability fault 不继续切号；结构化 `model_not_found` 是上述模型级冷却及有限切号的窄例外。其它非 credential 临时失败不会污染普通 Responses 的账号状态、模型冷却或额度观察；credential/429 事实仍保留。WebSocket 后续 turn 只在任何业务帧输出前、完整历史和工具调用可在消息上限内安全重放时迁移账号，最多两次；输出后禁止重放。
 - 指纹收敛是逐账号显式 opt-in，默认 `off`。只有确有共享账号身份收敛需求时才选择 `device/session/full`；排查额度或设备识别异常时先恢复 `off` 做对照。Turn-State 仅保存哈希来源，不应把其 opaque 原值加入日志或工单。
 - 账号定时刷新间隔是启动期设置，修改后需重启；账号池本身始终装配。
@@ -208,16 +208,11 @@ Prometheus 指标均以 `aetherrelay_` 为前缀：
 - 所有缓存统计遵循当前时间和维度筛选，未限定 Outcome 时也包含失败请求已记录的用量；默认同时包含精确与估算数据，可切换为“仅精确”。未报告缓存的历史记录按已有的 0 值统计，不推测是否命中。
 - 输入 Token 为 0 时接口比例返回 `0`，页面显示 `—`（无分母）；有输入但无缓存时显示 `0%`。字段由已有 DuckDB 明细聚合，无需数据库迁移或回填。
 
-旧 `usage.csv` 只可显式一次性导入：
+CSV 仅用于导出当前用量，不提供旧 CSV 导入。交互归档默认关闭：不创建 `state.dir/interactions/`，也不保存脱敏元数据。受控排障时先显式设置 `archive_interactions: true`；只有再设置 `archive_full_content: true` 才保存请求和响应正文。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
 
-```bash
-go run ./cmd/aetherrelay-usage-import \
-  -source usage.csv \
-  -database var/aetherrelay.duckdb \
-  -api-key-id default
-```
+开启归档后，每个 round 目录 `state.dir/interactions/{api_key_id}/{round_id}/` 包含：`metadata.json`（路由、耗时、用量与结算结果）、`request.meta.json` 与 `upstream_request.json`（客户端请求与上游请求的完整 header）、`upstream_response.json`（上游响应的完整 header 与状态）、`response.meta.json`（网关实际返回给客户端的响应状态与 header）；只有 `archive_full_content: true` 时才另有 `request.json` 与 `response.{json,sse,txt,bin}` 正文。四个方向的 header 走同一脱敏名单，`Authorization` / `X-API-Key` / `Cookie` / `Set-Cookie` / `WWW-Authenticate` 等以 `<redacted>` 落盘——归档里的 `Set-Cookie` 是脱敏值，线上仍原样转发给客户端。
 
-将示例中的 `var/aetherrelay.duckdb` 替换为实际的 `state.database` 完整路径。交互归档默认关闭：不创建 `state.dir/interactions/`，也不保存脱敏元数据。受控排障时先显式设置 `archive_interactions: true`；只有再设置 `archive_full_content: true` 才保存请求和响应正文。归档中的敏感 Header 会脱敏，原始客户端/Provider Key 不会写入。
+`response.meta.json` 的 `status` 是 HTTP 层实际定型的值，与 `metadata.json` 的业务结算状态可能不同（例如响应已写出 200 后客户端取消，metadata 记 499）；`at` 是响应首次定型的时刻，不是落盘时刻。Codex Responses WebSocket 的协议升级只记录 101 与升级前网关已设置的 header，`hijacked: true` 标明握手响应行由升级方直接写到底层连接、不经过网关的 ResponseWriter。
 
 ## 备份与维护
 

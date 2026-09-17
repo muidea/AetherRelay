@@ -24,7 +24,7 @@
 - `codexoauth` 是只读内建 Provider，上游 Responses、模型发现和用量端点由实现固定，不参与管理型 Provider 的 protocol/base URL/endpoints 切换；如需切换上游接入端点，必须使用独立的管理型直连 Provider。
 - 非流式请求在内部要求上游 SSE；优先返回 `response.completed` 的原始 Response 对象，也可从完整 `output_item.done` 重建标准文本和 function-call output。上游若返回原生 JSON Response 也接受。
 - 流式响应透传标准 Responses 事件。若工具调用已收到完整 `function_call_arguments.done` 和 `response.output_item.done`，随后 clean EOF 可作为成功结束；代理不会伪造缺失的 `response.completed` data。
-- `/v1/responses/compact` 的客户端形态仍保留，但 OAuth 上游统一改写为 streaming `/backend-api/codex/responses`：强制 `stream=true`、`store=false`，并在 input 末尾放置唯一 `compaction_trigger`。只有响应中确实出现 `compaction`/`compaction_summary` item 才学习为支持；旧 unary compact 端点的能力缓存会自动失效。
+- `/v1/responses/compact` 的客户端形态仍保留，但 OAuth 上游统一改写为 streaming `/backend-api/codex/responses`：强制 `stream=true`、`store=false`，并在 input 末尾放置唯一 `compaction_trigger`。只有响应中确实出现 `compaction`/`compaction_summary` item 才学习为支持；账号文档只接受当前 `remote_compaction_v2` 标记，不在加载阶段升级旧缓存。
 - compact 的 400/404/405/409/413/422/501 request fault 停止 fallback；其它非 credential 临时失败可以继续切号，但只累计失败观测，不写普通 Responses 冷却、账号异常或额度事实。401/402/结构化 403/429 保留原账号反馈，HTML endpoint 403 仍按端点故障处理。
 - `X-Codex-Beta-Features` 是会话 profile：客户端未声明时默认 `remote_compaction_v2`，显式非空集合保持原样，原生压缩请求则强制包含 v2。`X-Codex-Turn-State` 作为有界 opaque 值转发和回传，只记录其哈希对应的铸造账号；已知跨账号回放在 failover 出站前剥离。
 - 账号指纹收敛默认关闭。管理员可逐账号显式选择 `device`、`session` 或 `full`；启用时使用加密账号文档内的系统随机 seed，而不是本地账号 ID。HTTP、SSE、compact 与 WebSocket 共用同一请求尝试快照，header 与 `client_metadata` 使用相同的 installation/session/thread/turn/window 和 turn 开始时间；切换到 `off` 账号时不会继承上一 attempt 的身份。客户端显式或按客户端会话生成的 `prompt_cache_key` 不随账号指纹改写。

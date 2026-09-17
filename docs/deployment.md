@@ -228,7 +228,7 @@ location ^~ /images/ {
 - **凭据加密**：脚本首次运行自动生成 `AETHERRELAY_CREDENTIAL_KEY`；Provider 与两类账号池凭据均以该密钥加密写入 DuckDB。重复运行保留原密钥，禁止随意重置。
 - **Provider 配置**：默认配置不内置 Provider，因此脚本不询问任何固定厂商 Key。部署完成后从管理台添加任意 Provider，或在账号池页面导入 ChatGPT Web / Codex OAuth 凭据。
 - **配置版本一致性**：无论从仓库执行还是通过 `bash <(curl ...)` 单文件执行，脚本都先显式拉取 `--image` 指定的镜像，再以 `--pull=never` 从该镜像读取 `/usr/share/aetherrelay/config.example.yaml`；后续直接使用本地镜像启动，避免缓存模板与新程序错配。
-- **旧配置收口**：重复部署仍保留用户配置，但会识别曾由错误模板写入 `chatgpt_web` 的 `websocket_max_sessions`、`websocket_max_message_bytes`、`websocket_idle_timeout_seconds` 与 `websocket_max_lifetime_seconds`，保留原值迁移至 `codex_oauth`。目标节点已有同名配置时以目标值为准；发生迁移前会在同目录生成 `config.yaml.bak.websocket-section.*`，后续重跑保持幂等。
+- **配置保持**：重复部署保留现有最终配置，不识别、迁移或改写历史配置结构。四项 Responses WebSocket 边界必须直接配置在 `codex_oauth` 下。
 - **就绪判定**：容器在等待窗口内未通过 `/healthz` 时脚本返回非零并停止，不会继续打印“部署完成”；已生成的配置、`.env` 与数据目录会保留，按错误提示查看日志后可直接重跑。
 - 容器内 `listen_addr` 恒为 `0.0.0.0:8080`，暴露面由宿主机端口绑定（`--listen`）控制；默认仅 `127.0.0.1:8080`。
 - `.env` 生成后为 `chmod 600`，包含凭据主密钥与 Admin 哈希，务必保持私有、不入版本库。

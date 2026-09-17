@@ -95,7 +95,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 工具调用统一归 `api_key_id=builtin-local`。临时会话和搜索历史仍按管理员 owner 隔离，二者不是同一个维度。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
 - Provider 准入阶段返回 503 时，明细、CSV 与汇总日志保留安全的 `failure_class`、`retryable` 和 `retry_after_seconds`，并通过 Event ID 关联；Prometheus 按有界原因累计本地准入拒绝。
-- 旧 `usage.csv` 只能一次性显式导入（`cmd/aetherrelay-usage-import`）；`usage_file` 配置已删除。
+- CSV 仅用于导出当前用量；不提供旧 `usage.csv` 导入或启动期数据升级。
 
 ## Admin 管理页
 
@@ -171,7 +171,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 - **Prometheus 指标**（前缀 `aetherrelay_`）：`requests_total`、`request_duration_seconds`、token 统计与缓存命中、客户端 Key 维度累计、`provider_admission_denials_total`、`usage_store_*` 与 `slo_webhook_*` 等。`/stats` 返回进程统计、延迟分位数与 all-time usage 视图；`/stats/stream` 提供 SSE 流式快照。
 - **SLO webhook**：配置阈值（缓存命中率、上游错误率、p99 延迟）与巡检周期后，状态变化时异步 POST `entered` / `resolved` 事件，带 `instance_id`、递增 `seq`、`generation` 与稳定 `event_id`；消费方按 `event_id` 幂等。有界队列 + 单 worker，429 优先遵循 `Retry-After`。
-- **交互归档**：默认关闭，不创建目录、不保存脱敏元数据。仅在受控排障期间显式设置 `archive_interactions: true` 才按客户端 API Key 作用域保存元数据；再设置 `archive_full_content: true` 才保存请求和响应正文。每个 API Key 默认保留最近 N 轮（`interaction_retention`），目录名使用 API Key ID，不包含原始密钥。
+- **交互归档**：默认关闭，不创建目录、不保存脱敏元数据。仅在受控排障期间显式设置 `archive_interactions: true` 才按客户端 API Key 作用域保存元数据，其中包含每轮对话四个方向（客户端请求、上游请求、上游响应、客户端响应）的完整 HTTP header；再设置 `archive_full_content: true` 才保存请求和响应正文。每个 API Key 默认保留最近 N 轮（`interaction_retention`），目录名使用 API Key ID，不包含原始密钥。
 - **Provider live probe**：`go run ./cmd/aetherrelay-probe -config config.yaml -provider <owner> -endpoint chat_completions -model <exact-model-id>`，结论为 `success` / `credential_issue` / `endpoint_drift` / `environment_undetermined`；不在服务启动时运行。
 
 ## 安全与隐私边界
@@ -179,7 +179,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - 默认仅监听 `127.0.0.1:8080`；非 loopback 监听时仍需网络层另行保护。
 - Admin / `/metrics` / `/stats` 默认 loopback-only；远程访问分别由 `admin_auth_enabled`（账号密码 + 会话 + CSRF，任意来源均需登录，无 loopback 旁路）与 `metrics_remote_access` + `metrics_allowed_cidrs` 控制。
 - Provider Key 只显示"已配置"，不回显明文；原始客户端 Key 不进日志 / DuckDB / 归档 / Web / 上游。
-- 日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等 Header。
+- 日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` / `Set-Cookie` / `WWW-Authenticate` 等 Header；请求与响应两个方向使用同一名单。
 - 会话为进程内内存 Cookie（`HttpOnly` + `SameSite=Strict`，可选 `Secure`）；认证配置热更新后全部会话立即失效。
 
 ## 限制与不支持项

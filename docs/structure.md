@@ -22,18 +22,16 @@ cmd/aetherrelay（显式 side-effect import）
 cmd/
   aetherrelay/               版本注入、framework 组件显式加载和进程退出码
   aetherrelay-probe/         独立 probe 入口
-  aetherrelay-usage-import/  独立历史导入入口
 
 internal/services/
   aetherrelay/                主 gateway 的配置、信号处理、framework lifecycle shell 与 listener 等待
   probe/                  Provider live probe 进程服务
-  usageimport/            CSV → DuckDB 一次性导入进程服务
 
 internal/modules/
   base/biz/               Module/Block 的共享 EventHub、observer 与 BackgroundRoutine 基座
   blocks/configruntime/   Provider 配置 Block；biz/ 拥有启动快照与热更新后的当前配置
     pkg/events/                 Config Block 自有的启动快照与配置激活合同
-  blocks/usageruntime/    DuckDB 用量 Block；biz/ 管理 migration、checkpoint 与关闭
+  blocks/usageruntime/    DuckDB 用量 Block；biz/ 管理最终 schema 初始化、checkpoint 与关闭
     pkg/events/                 Usage Block 的逐命令 typed 合同
   blocks/metricsruntime/  metrics/SLO Block；biz/ 管理 Registry 与 SLO 生命周期
     pkg/events/                 Metrics Block 的记录与查询 typed 合同及 EventHub-backed Port

@@ -263,7 +263,7 @@
 
 `CP-COMPACT-003` compact 等待期间可以发送 SSE comment heartbeat；heartbeat 提交 HTTP 200 后，上游失败必须用 `response.failed` 终止，不能混写 JSON。
 
-`CP-COMPACT-004` HTTP 2xx 只有在 `response.output_item.done/added`、终态 `response.output[]` 或 JSON fallback 中观察到 `compaction`/`compaction_summary` item 才算支持；无该 item 必须标记账号 native-v2 compact 不支持，不能把普通空 Response 伪装成成功。旧 unary endpoint 学到的 capability cache 必须失效。
+`CP-COMPACT-004` HTTP 2xx 只有在 `response.output_item.done/added`、终态 `response.output[]` 或 JSON fallback 中观察到 `compaction`/`compaction_summary` item 才算支持；无该 item 必须标记账号 native-v2 compact 不支持，不能把普通空 Response 伪装成成功。持久化账号文档必须使用当前 `remote_compaction_v2` 标记，加载阶段不得升级旧 capability cache。
 
 `CP-COMPACT-005` compact 的 400/404/405/409/413/422/501 request/capability fault 必须停止切号并原样保留安全状态；其它非 credential 临时失败可以在账号间回退，但账号结果必须标记 availability-neutral，只累计失败观测，不改变状态、普通 Responses 冷却或额度事实。401/402/结构化 403/429 仍按 credential/cooldown 处理；未结构化 endpoint 403 继续服从 `CP-FAIL-015`。
 

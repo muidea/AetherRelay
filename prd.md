@@ -610,7 +610,7 @@
 
 - **G-USAGE.01** 客户端 API Key 用于调用方识别与用量归属；唯一持久化 authority 为 DuckDB `client_api_key_metadata`。
 - **G-USAGE.02** 每个数据请求必须携带已启用 Key；缺失/未知/禁用/格式错误/冲突 Key 返回 401 且不计 usage。
-- **G-USAGE.03** DuckDB `usage_events` 是唯一在线用量持久化 authority；CSV 仅导出与一次性导入。
+- **G-USAGE.03** DuckDB `usage_events` 是唯一在线用量持久化 authority；CSV 仅用于导出。
 - **G-USAGE.04** 调用在访问上游前持久化 `started`，所有退出路径尝试 `completed`。
 - **G-USAGE.05** Web 管理端提供使用统计页签（Dashboard/趋势/Key 汇总/明细分页/CSV 导出），loopback-only。
 
@@ -618,7 +618,7 @@
 
 - 不建设账号/账单/额度系统。
 - 不支持多实例共享同一 DuckDB 文件。
-- 不在启动时自动导入旧 `usage.csv`。
+- 不提供旧 `usage.csv` 导入或启动期数据升级。
 - 客户端 Key 不从 `config.yaml` 读取；Admin 创建、启停、轮换和撤销均直接写入 DuckDB。
 - 客户端 Key 明文只在创建或轮换成功响应中返回一次；数据库只保存 SHA-256 摘要。
 
@@ -626,8 +626,8 @@
 
 - [x] **D-USAGE.01** 配置拒绝 `inbound_api_key` / `usage_file` / `AETHERRELAY_INBOUND_API_KEY` / `AETHERRELAY_USAGE_FILE`。
 - [x] **D-USAGE.02** `clientauth` 解析 OpenAI Bearer 与 Anthropic X-API-Key；原始 Key 不落盘。
-- [x] **D-USAGE.03** `internal/usage` DuckDB Store：migration、Start/Complete、RecoverInterrupted、Dashboard、Events、ExportCSV。
+- [x] **D-USAGE.03** `internal/usage` DuckDB Store：最终 schema 初始化与校验、Start/Complete、RecoverInterrupted、Dashboard、Events、ExportCSV。
 - [x] **D-USAGE.04** 代理路径接线 Start/Complete；401 不计 usage；Start 失败 503。
 - [x] **D-USAGE.05** `/admin/api/usage/*` 与 Web `#/usage` 页签可用。
-- [x] **D-USAGE.06** `cmd/aetherrelay-usage-import` 提供旧 CSV 一次性导入。
+- [x] **D-USAGE.06** 删除旧 CSV 导入入口及历史数据迁移逻辑。
 - [x] **D-USAGE.07** `go test ./...` / `go vet` / `gofmt` 门禁通过。

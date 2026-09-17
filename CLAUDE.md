@@ -36,11 +36,9 @@ go run ./cmd/aetherrelay-probe -config config.yaml \
 ```
 cmd/aetherrelay          主服务入口：参数/信号 → internal/services/aetherrelay Runtime
 cmd/aetherrelay-probe    运维探针入口：调用 internal/services/probe
-cmd/aetherrelay-usage-import  历史 CSV 导入入口：调用 internal/services/usageimport
 
 internal/services/aetherrelay  主 gateway process service：驱动 magicCommon application 生命周期并等待 HTTP listener
 internal/services/probe    Provider live probe process service
-internal/services/usageimport  CSV → DuckDB 一次性导入 process service
 
 internal/modules/blocks/configruntime  配置 Block：启动快照与 Provider 热更新的当前配置 owner
 internal/modules/blocks/usageruntime  DuckDB 用量 Block
@@ -57,7 +55,6 @@ internal/pkg/aetherrelaymetrics      Registry、Prometheus 投影、SLO 巡检�
 internal/pkg/aetherrelaymetricsport  Metrics Block 的 EventHub-backed 读写端口
 
 web/admin             嵌入二进制的管理页（Provider、客户端 Key、使用统计、ChatGPT Web 账号/图片任务/图片库；go:embed，无 Node 构建链）
-cmd/aetherrelay-usage-import  旧 usage.csv 一次性导入 DuckDB
 ```
 
 装配入口在 `internal/services/aetherrelay/runtime.go`：通过 magicCommon `framework/application` + `framework/service.DefaultService` 管理 Initiator / Block / Module 生命周期。`cmd/aetherrelay/main.go` 显式 side-effect import 所需 Initiator、Block、Application Module；不得由业务包间接注册。Config、Usage、Metrics 和 Proxy 各自的 `pkg/events` 拥有 EventHub topic 与 typed DTO；Config Block 提供启动快照与配置激活；`routeregistry` Initiator 提供 magicEngine RouteRegistry 与 listener；Proxy、Admin Module 经 EventHub 获取 Usage 与 Metrics 端口，并经 `initiator.GetEntity` 注入 RouteRegistry 后注册路由。`cmd/` 不放业务装配。
@@ -104,7 +101,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 ## 请求处理路径（proxy）
 
-`proxyapi/service/proxy.Handler.ServeHTTP`：路径白名单 → `clientauth` 身份解析（缺失、未知、禁用、格式错误或冲突 Key 均为 401，且不记账）→ `UsageStore.Start`（失败 503，不访问上游）→ 读限大体 → 解析 model → `ResolveTransportPlan` → native 或 conversion → `doUpstream*` → 缓冲或 SSE 流式 → `UsageStore.Complete` / metrics / archive。
+`proxyapi/service/proxy.Handler.ServeHTTP`：路径白名单 → `clientauth` 身份解析（缺失、未知、禁用、格式错误或冲突 Key 均为 401，且不记账）→ `UsageStore.Start`（失败 503，不访问上游）→ 读限大体 → 解析 model → `ResolveTransportPlan` → native 或 conversion → `doUpstream*` → 缓冲或 SSE 流式 → `UsageStore.Complete` / metrics / archive。归档启用时 `ServeHTTP` 用 `archiveResponseWriter` 包装出站 `ResponseWriter`，在响应定型时快照状态与 header 写入 `response.meta.json`；该包装器必须透传 `Flush` / `Hijack` / `Unwrap`，否则 SSE 与 WebSocket 会静默退化。
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
@@ -117,12 +114,12 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 - Admin 默认位于 `/admin` 且 loopback-only；启用 `admin_auth_enabled` 后可用 `admin_base_path` 设定入口，并以 HTTPS 登录方式远程访问。Provider API Key 只显示“已配置”，不回显明文。
 - `/metrics`、`/stats` 默认 loopback；`metrics_remote_access` 可放开。
 - 体/流/SSE 行大小与 stream idle timeout 有硬上限（见 config 默认值与 env）。
-- 日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` 等。
+- 日志与归档脱敏 `Authorization` / `X-API-Key` / `Cookie` / `Set-Cookie` / `WWW-Authenticate` 等；请求与响应两个方向使用同一名单。
 
 ## 可观测与落盘
 
 - `state.database`（通常为 `state.dir/aetherrelay.duckdb`）：单进程 DuckDB 唯一结构化状态 authority；多实例不得共享工作区。CSV 仅导出/一次性导入。
-- `state.dir/interactions/{api_key_id}/{round_id}/`：默认不创建。仅 `archive_interactions=true` 时按 API Key 保留最近 N 轮；`archive_full_content=true` 才保存正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
+- `state.dir/interactions/{api_key_id}/{round_id}/`：默认不创建。仅 `archive_interactions=true` 时按 API Key 保留最近 N 轮，记录每轮的脱敏元数据（含客户端请求 / 上游请求 / 上游响应 / 客户端响应四个方向的完整 HTTP header）；header 属元数据层，`archive_full_content=true` 才额外保存正文。图片与缩略图分别位于 `state.dir/images/`、`state.dir/image_thumbnails/`。
 - Prometheus 指标前缀 `aetherrelay_`；SLO 可选 webhook（状态变化、幂等 `event_id`、listener 禁止重入 `CheckNow`）。
 
 ## 修改时注意
