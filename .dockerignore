@@ -1,6 +1,8 @@
 .git
 .github
+.claude
 AetherRelay
+.credential-key
 bin
 dist
 var
@@ -15,3 +17,8 @@ chatgpt-web-data
 CLAUDE.md
 prd.md
 docs
+# 镜像只构建 Linux：darwin / windows 的 DuckDB 预编译静态库（约 313MB）既不参与
+# 编译，也不该进入构建上下文与 gha 层缓存。release.yml 从 git checkout 直接构建，
+# 不受这里影响。
+vendor/github.com/duckdb/duckdb-go-bindings/lib/darwin-*
+vendor/github.com/duckdb/duckdb-go-bindings/lib/windows-*

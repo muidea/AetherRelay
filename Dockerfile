@@ -7,6 +7,11 @@ ARG GO_VERSION=1.26.7
 FROM golang:${GO_VERSION}-bookworm AS build
 
 WORKDIR /src
+
+# 依赖层单独成层：vendor 有数百 MB（DuckDB 预编译静态库），与业务源码分开后，
+# 只有 go.mod / go.sum / vendor 变化时才会重新传输并重建这一层。
+COPY go.mod go.sum ./
+COPY vendor/ vendor/
 COPY . .
 
 ARG VERSION=dev
