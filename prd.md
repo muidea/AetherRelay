@@ -454,6 +454,7 @@
 - [x] **D-08.36** 完整正文关闭时 metadata 不引用未写入的正文文件。
 - [x] **D-08.37** Codex OAuth HTTP/SSE/WebSocket 握手通过 typed EventHub 观测记录脱敏的上游请求与响应 header、状态和耗时。
 - [ ] **D-08.38** ChatGPT Web 多阶段上游交互按 stage/attempt 记录全部脱敏 HTTP 请求与响应；单文件模型不得覆盖上传、准备、conversation、轮询或下载阶段。
+- [x] **D-08.39** `archive_unredacted_headers=true` 时四个方向的归档 header 全部按原值落盘（含明文凭据）；该开关不放宽日志、指标、错误响应或管理视图，且在归档关闭时不产生任何文件。
 
 ### D-09 Metrics 与 Stats
 

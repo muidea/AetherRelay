@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`8.1.0`
+> 合同版本：`8.2.0`
 >
 > 状态：`active`
 >
@@ -9,6 +9,8 @@
 > 参考基线：AetherRelay `1644980`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`8.2.0` 新增交互归档的 header 保真开关（`CP-OBS-009`）：默认仍按同一名单脱敏，显式开启 `server.archive_unredacted_headers` 后，客户端请求、上游请求、上游响应、客户端响应四类信息全部按原值落盘，供受控排障使用。开关不放宽日志、指标、错误响应、管理视图与凭据导出的脱敏，且 Codex 上游 attempt 的默认脱敏仍发生在 `codexupstream` Block 边界，只有入站命令显式携带时才放开。
 
 `8.1.0` 新增会话级 Turn-State 记忆与回填（`CP-HDR-022`）：客户端未提供 `X-Codex-Turn-State` 时，代理按「铸造账号 + 下游会话」回填该会话最近一次观测到的值，无任何观测时回填内置默认值；被 `CP-HDR-020` 剥离的值保持为空，不替换为默认值，跨账号剥离与 failover 边界不变。记录只在进程内存持有 opaque 原值（`CP-HDR-020` 的"不记录原值"在此限定为不落盘），溯源表继续只存哈希；回填策略由 `codex_oauth.turn_state_fallback` 与 `codex_oauth.default_turn_state` 控制；内置默认值允许为空，此时该值只能来自本地配置，未配置则该 attempt 不发送这个 header。归档新增 `turn_state_fallback` 三态布尔，诊断日志新增 `turn_state_source` 有界枚举。
 
@@ -207,7 +209,7 @@
 
 `CP-HDR-017` header 名大小写只在已验证为上游协议组成部分时保留；内部比较必须大小写不敏感，输出必须由 transport profile 决定。
 
-`CP-HDR-018` token、完整 account ID、原始 turn metadata 和 session 原值不得写入日志、归档、指标或错误响应。
+`CP-HDR-018` token、完整 account ID、原始 turn metadata 和 session 原值不得写入日志、指标、错误响应或管理视图。交互归档默认执行同一脱敏；只有显式开启 `CP-OBS-009` 的 header 保真开关后，归档才按原值落盘，且该开关不得放宽其它任何出口。
 
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
 
@@ -215,7 +217,7 @@
 
 `CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位为身份元组：账号、归一化 fingerprint mode、账号 fingerprint session 与客户端声明会话的摘要；`off/device` 下上游 `Session-Id` 与该声明一致，`session/full` 下上游会把该账号的全部下游会话收敛成同一个账号级 `Session-Id`，此时按声明会话记录更细，禁止把一个会话的状态回填给另一个。声明会话按优先级取显式会话 header、`client_metadata` 的 `session_id`/`thread_id`、显式 `prompt_cache_key`；三者都没有时**没有记录单位**，既不记录也不回放。调度用的 session 摘要会在信号缺失时代入共享的合成值，该合成值绝不能成为 turn state 记录单位，否则互不相关的无状态请求会共用一个桶。回填顺序为「该记录单位的最近观测值 → 内置或配置的默认值」；默认值为空时该 attempt 不发送这个 header，来源记为 `absent`。只记录真实观测值，默认值本身不写入记录。回填仅发生在客户端未提供时；客户端提供了但被 `CP-HDR-020` 判定为已知跨账号铸造而剥离的值必须保持为空，不得用记录值或默认值替换。回填值出站前必须重新通过 `CP-HDR-020` 的来源守卫。回填只作用于单次上游 attempt，`CP-FAIL-018` 的"无非空 turn-state"只按客户端原值判定，不看回填结果。failover 后的 attempt 属于另一个记录单位，只能回填该账号自己的记录或默认值，不得沿用上一账号的记录。HTTP、SSE、compact、WebSocket 握手以及 `/v1/chat/completions`、`/v1/messages` 适配入口共用同一实现：适配入口必须先按 `CP-HDR-012` 边界解析客户端 turn state 并传递，不得用回填值替换客户端已提供的值。WS 后续 turn 走帧不带 header，不受本规则影响。
 
-`CP-HDR-023` `CP-HDR-022` 的记录是 `CP-HDR-020`「不记录原值」的受控例外，且该要求在此限定为不落盘：为完成回填，记录必须在进程内存中持有 opaque 原值，但该值不得进入日志、归档、指标、错误响应、管理视图或任何导出。记录随新观测更新，进程生命周期内保留（不设 TTL），受条数上限与总字节预算双重约束，超限时按最旧观测批量淘汰；配置热更新不得清空记录，Block Teardown 必须清零。内置默认值属于"非本账号铸造的值"，本规则把它作为受控例外允许出站：`codex_oauth.turn_state_fallback` 关闭时不得回填但仍必须记录，`codex_oauth.default_turn_state` 只提供值、不改变本规则的任何边界。诊断与归档只记录 `client/session/default/absent` 有界来源枚举与是否发生回填的布尔，不记录值。来源枚举对每个 attempt 都有效。归档布尔是三态：产生上游结果或交付首个业务事件时必须显式写入 `true`/`false`，因此"没有回填"与"没有产生结果"（输出前失败）在归档中必须可区分，不能都表示为字段缺失；输出前失败时以同一 `request_id` 的运行日志为准。
+`CP-HDR-023` `CP-HDR-022` 的记录是 `CP-HDR-020`「不记录原值」的受控例外，且该要求在此限定为不落盘：为完成回填，记录必须在进程内存中持有 opaque 原值，但该值不得进入日志、归档、指标、错误响应、管理视图或任何导出。记录随新观测更新，进程生命周期内保留（不设 TTL），受条数上限与总字节预算双重约束，超限时按最旧观测批量淘汰；配置热更新不得清空记录，Block Teardown 必须清零。内置默认值属于"非本账号铸造的值"，本规则把它作为受控例外允许出站：`codex_oauth.turn_state_fallback` 关闭时不得回填但仍必须记录，`codex_oauth.default_turn_state` 只提供值、不改变本规则的任何边界。诊断只记录 `client/session/default/absent` 有界来源枚举与是否发生回填的布尔，不记录值；归档默认同样只记录该布尔，只有显式开启 `CP-OBS-009` 后才按原值写入该 header。来源枚举对每个 attempt 都有效。归档布尔是三态：产生上游结果或交付首个业务事件时必须显式写入 `true`/`false`，因此"没有回填"与"没有产生结果"（输出前失败）在归档中必须可区分，不能都表示为字段缺失；输出前失败时以同一 `request_id` 的运行日志为准。
 
 `CP-FP-001` 账号 `fingerprint_mode` 取值只能为 `off/device/session/full`。缺失、空值、非法存量值均按 `off`；只有管理员显式设置后三种值才启用收敛。
 
@@ -403,6 +405,8 @@
 
 `CP-OBS-003` 指标和日志只记录有界错误类别，不记录上游正文、token、代理凭据、原始 session 或完整 account ID。
 
+`CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
+
 `CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率仍为累计读取 / 累计输入；缺失写入沿用零值，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态，以及事件结算与 dashboard 汇总。
 
 ## 12. 运行时与组件边界
@@ -425,7 +429,7 @@
 
 `CP-DOD-002` 对同一 corpus 比较 AetherRelay、目标 Codex 直连以及参考实现的上游请求和下游事件；差异必须被合同允许。
 
-`CP-DOD-003` 每个端点必须测试认证、Provider access、body limit、模型不存在、客户端取消、归档脱敏和用量完成。
+`CP-DOD-003` 每个端点必须测试认证、Provider access、body limit、模型不存在、客户端取消、归档脱敏和用量完成；`CP-OBS-009` 的两种取值都要覆盖四类信息的落盘内容，并断言日志投影在开关开启时仍为脱敏结果。
 
 `CP-DOD-004` 每个可重试错误必须测试“输出前允许”和“输出后禁止”两个边界。
 
@@ -438,6 +442,12 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`8.2.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 归档 header 保真开关 | CP-OBS-009, CP-HDR-018 | implemented | `proxyapi/service/proxy/debug.go`, `proxyapi/service/proxy/archive_response.go`, `proxyapi/biz/biz.go`, `codexupstream/biz/biz.go`, `codexupstream/pkg/events/contract.go`, `aetherrelayconfig/config.go` | `proxyapi/service/proxy/archive_fidelity_test.go`, `codexupstream/biz/biz_test.go`, `aetherrelayconfig/config_test.go` |
 
 `8.1.0` 新增实施追踪：
 
