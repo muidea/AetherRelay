@@ -67,6 +67,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 				continue
 			}
 			failure := failureFromUpstream(opened.ErrorClass, opened.RetryAfterSeconds, opened.RateLimit, opened.HTTPStatus, opened.SafeError)
+			failure.Attempt = toCodexHTTPAttempt(opened.Attempt)
 			lastFailure = failure
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			s.recordCodexResult(ctx, account.AccountID, request.Model, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
@@ -89,7 +90,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		s.mu.Unlock()
 		s.noteCodexTurnState(account.AccountID, opened.Headers)
 		s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
-		return codexresponses.WebsocketOpenResult{SessionID: opened.SessionID}, nil
+		return codexresponses.WebsocketOpenResult{SessionID: opened.SessionID, Attempt: toCodexHTTPAttempt(opened.Attempt)}, nil
 	}
 }
 
@@ -506,9 +507,10 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, true)
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
-			return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
+			return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers), Attempt: toCodexHTTPAttempt(completed.Attempt)}, nil
 		}
 		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
+		failure.Attempt = toCodexHTTPAttempt(completed.Attempt)
 		logCodexAttempt(request, failure)
 		lastFailure = failure
 		if completed.NativeCompactionUnsupported {
@@ -784,11 +786,13 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex upstream result"))
 	}
 	if completed.ErrorClass != "" {
-		return codexresponses.Result{}, failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
+		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
+		failure.Attempt = toCodexHTTPAttempt(completed.Attempt)
+		return codexresponses.Result{}, failure
 	}
 	s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
 	s.noteCodexTurnState(account.AccountID, completed.Headers)
-	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers)}, nil
+	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers), Attempt: toCodexHTTPAttempt(completed.Attempt)}, nil
 }
 
 func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) (resultErr error) {
@@ -823,8 +827,16 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	if startedUpstream.ErrorClass != "" {
-		return failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus, startedUpstream.SafeError)
+		failure := failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus, startedUpstream.SafeError)
+		failure.Attempt = toCodexHTTPAttempt(startedUpstream.Attempt)
+		return failure
 	}
+	attempt := toCodexHTTPAttempt(startedUpstream.Attempt)
+	defer func() {
+		if failure, ok := codexresponses.AsFailure(resultErr); ok && failure.Attempt.Request.URL == "" {
+			failure.Attempt = attempt
+		}
+	}()
 	s.mergeCodexUsageHeaders(ctx, account.AccountID, startedUpstream.Headers)
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
@@ -865,7 +877,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			phase = "emit"
 			if !clientStarted {
 				if started != nil {
-					if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: guard.firstEventDuration()}); err != nil {
+					if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: guard.firstEventDuration(), Attempt: attempt}); err != nil {
 						return clientFailure(err)
 					}
 				}
@@ -998,6 +1010,21 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 	}
 	return result
 }
+
+func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt {
+	return codexresponses.HTTPAttempt{
+		Request: codexresponses.HTTPRequestObservation{
+			At: attempt.Request.At, Method: attempt.Request.Method, URL: attempt.Request.URL,
+			BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
+		},
+		Response: codexresponses.HTTPResponseObservation{
+			Observed: attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
+			ContentLength: attempt.Response.ContentLength, DurationMS: attempt.Response.DurationMS,
+			Headers: toCodexHeaders(attempt.Response.Headers),
+		},
+	}
+}
+
 func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int, safeErrors ...upevents.SafeError) *codexresponses.Failure {
 	var failure *codexresponses.Failure
 	switch class {

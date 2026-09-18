@@ -9,6 +9,31 @@ import (
 
 type Header struct{ Name, Value string }
 
+// HTTPAttempt is a credential-safe observation produced by codexupstream for
+// interaction archival. Sensitive header values are already redacted at the
+// owning Block boundary and are sanitized again by the HTTP adapter.
+type HTTPAttempt struct {
+	Request  HTTPRequestObservation
+	Response HTTPResponseObservation
+}
+
+type HTTPRequestObservation struct {
+	At        time.Time
+	Method    string
+	URL       string
+	BodyBytes int
+	Headers   []Header
+}
+
+type HTTPResponseObservation struct {
+	Observed      bool
+	At            time.Time
+	Status        int
+	ContentLength int64
+	DurationMS    int64
+	Headers       []Header
+}
+
 type PromptCacheKeySource string
 
 const (
@@ -34,6 +59,7 @@ type Request struct {
 type Result struct {
 	Body    []byte
 	Headers []Header
+	Attempt HTTPAttempt
 }
 type Completion struct {
 	Result Result
@@ -46,6 +72,7 @@ type Completion struct {
 type StreamStart struct {
 	Headers            []Header
 	FirstEventDuration time.Duration
+	Attempt            HTTPAttempt
 }
 
 type WebsocketOpenRequest struct {
@@ -55,7 +82,10 @@ type WebsocketOpenRequest struct {
 	ResponsesLite bool
 	TurnState     string
 }
-type WebsocketOpenResult struct{ SessionID string }
+type WebsocketOpenResult struct {
+	SessionID string
+	Attempt   HTTPAttempt
+}
 
 // WebsocketUpdate keeps upstream failure classification typed across the local
 // proxyapi port. Payload may be present with Failure when the upstream emitted
@@ -99,6 +129,7 @@ type Failure struct {
 	UpstreamCode      string
 	UpstreamParam     string
 	UpstreamMessage   string
+	Attempt           HTTPAttempt
 	Err               error
 }
 

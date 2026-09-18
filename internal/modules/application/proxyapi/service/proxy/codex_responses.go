@@ -84,6 +84,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, clientStream, compactErr)
 		return
 	}
+	h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, response.Attempt, nil)
 	copyCodexHeaders(w.Header(), response.Headers)
 	responseBody := response.Body
 	responseFile := "response.json"
@@ -134,6 +135,13 @@ func (h *Handler) handleCodexCompactStream(w http.ResponseWriter, r *http.Reques
 		case <-r.Context().Done():
 			return
 		}
+	}
+	if compactErr != nil {
+		if failure, ok := codexresponses.AsFailure(compactErr); ok {
+			h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, failure.Attempt, compactErr)
+		}
+	} else {
+		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, response.Attempt, nil)
 	}
 	var responseBody []byte
 	if compactErr != nil {
@@ -233,6 +241,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		if streamStarted {
 			return nil
 		}
+		h.archiveCodexUpstreamAttempt(round, r, provider, info.Attempt, nil)
 		copyCodexHeaders(w.Header(), info.Headers)
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		prepareSSEHeaders(w.Header())
@@ -367,6 +376,7 @@ func codexResponsesFailureSSE(failure *streamFail) []byte {
 }
 
 func (h *Handler) writeCodexOAuthCompleteSuccess(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, requestBody map[string]any, response codexresponses.Result) {
+	h.archiveCodexUpstreamAttempt(round, r, provider, response.Attempt, nil)
 	copyCodexHeaders(w.Header(), response.Headers)
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "application/json")
@@ -388,6 +398,9 @@ func (h *Handler) writeCodexOAuthCompleteSuccess(w http.ResponseWriter, r *http.
 func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, stream bool, err error) {
 	failure := streamFailFromCodexError(err)
 	codexFailure, _ := codexresponses.AsFailure(err)
+	if codexFailure != nil {
+		h.archiveCodexUpstreamAttempt(round, r, provider, codexFailure.Attempt, err)
+	}
 	status := http.StatusBadGateway
 	code := ErrorCodeUpstreamUnavailable
 	switch failure.ErrorCode {

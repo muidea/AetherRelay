@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	aetherrelayarchive "aetherrelay/internal/pkg/aetherrelayarchive"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
 	aetherrelaymetrics "aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelayusage"
@@ -173,6 +175,83 @@ func newCodexResponsesHandler(t *testing.T, store usage.Store, executor codexres
 	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(executor)
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
 	return handler
+}
+
+func newArchivedCodexResponsesHandler(t *testing.T, executor codexresponses.Executor) (*Handler, string) {
+	t.Helper()
+	root := t.TempDir()
+	cfg := mustHandlerConfig(config.Config{InteractionDir: filepath.Join(root, "interactions"), CodexOAuth: config.CodexOAuthConfig{}})
+	recorder, err := aetherrelayarchive.NewRecorderOptions(cfg.InteractionDir, aetherrelayarchive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, nil).WithCodexResponsesExecutor(executor)
+	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
+	return handler, cfg.InteractionDir
+}
+
+func TestCodexOAuthArchivesUpstreamAttempt(t *testing.T) {
+	attempt := codexArchiveTestAttempt()
+	handler, interactionDir := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_2","usage":{"input_tokens":7,"output_tokens":4}}`), Attempt: attempt}, nil
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello"}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertCodexUpstreamAttemptArchived(t, interactionDir)
+}
+
+func TestCodexOAuthStreamArchivesUpstreamAttempt(t *testing.T) {
+	attempt := codexArchiveTestAttempt()
+	handler, interactionDir := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		if err := started(codexresponses.StreamStart{Attempt: attempt}); err != nil {
+			return err
+		}
+		return emit([]byte("data: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_stream\",\"usage\":{\"input_tokens\":7,\"output_tokens\":4}}}\n\n"))
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello","stream":true}`))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	assertCodexUpstreamAttemptArchived(t, interactionDir)
+}
+
+func codexArchiveTestAttempt() codexresponses.HTTPAttempt {
+	return codexresponses.HTTPAttempt{
+		Request: codexresponses.HTTPRequestObservation{
+			At: time.Now(), Method: http.MethodPost, URL: "https://chatgpt.com/backend-api/codex/responses", BodyBytes: 128,
+			Headers: []codexresponses.Header{{Name: "Authorization", Value: "<redacted>"}, {Name: "X-Codex-Beta-Features", Value: "remote_compaction_v2"}},
+		},
+		Response: codexresponses.HTTPResponseObservation{
+			Observed: true, At: time.Now(), Status: http.StatusOK, ContentLength: -1, DurationMS: 42,
+			Headers: []codexresponses.Header{{Name: "Content-Type", Value: "text/event-stream"}, {Name: "X-Codex-Turn-State", Value: "<redacted>"}, {Name: "X-RateLimit-Remaining-Requests", Value: "7"}},
+		},
+	}
+}
+
+func assertCodexUpstreamAttemptArchived(t *testing.T, interactionDir string) {
+	t.Helper()
+	dir := filepath.Join(interactionDir, "test-client", "000001")
+	for _, name := range []string{"upstream_request.json", "upstream_response.json", "response.meta.json", "metadata.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("expected %s: %v", name, err)
+		}
+	}
+	assertFileContains(t, filepath.Join(dir, "upstream_request.json"), `"Authorization": [
+      "<redacted>"`)
+	assertFileContains(t, filepath.Join(dir, "upstream_response.json"), `"X-Ratelimit-Remaining-Requests": [
+      "7"`)
+	assertFileContains(t, filepath.Join(dir, "upstream_response.json"), `"X-Codex-Turn-State": [
+      "<redacted>"`)
+	assertFileContains(t, filepath.Join(dir, "metadata.json"), `"upstream_request_path": "upstream_request.json"`)
+	assertFileContains(t, filepath.Join(dir, "metadata.json"), `"upstream_response_path": "upstream_response.json"`)
 }
 
 func TestCodexOAuthResponsesNormalizesRequestAndSettlesUsage(t *testing.T) {

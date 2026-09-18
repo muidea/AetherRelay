@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 )
@@ -213,6 +214,60 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 	h.logUpstreamAlert(round, providerName, provider.Protocol, info.Status, duration, info.Error)
 }
 
+// archiveCodexUpstreamAttempt persists the credential-safe HTTP observation
+// emitted by the codexupstream Block. The Block owns the transport and performs
+// first-pass redaction; the adapter sanitizes again before writing or logging.
+func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Request, providerName string, attempt codexresponses.HTTPAttempt, attemptErr error) {
+	if round == nil || strings.TrimSpace(attempt.Request.URL) == "" {
+		return
+	}
+	requestAt := attempt.Request.At
+	if requestAt.IsZero() {
+		requestAt = time.Now()
+	}
+	requestHeaders := sanitizeHeaders(codexHeadersToHTTP(attempt.Request.Headers))
+	requestInfo := upstreamDebugInfo{
+		RoundID: round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
+		Method: attempt.Request.Method, URL: attempt.Request.URL, BodyBytes: attempt.Request.BodyBytes, Headers: requestHeaders,
+	}
+	if err := round.WriteJSON("upstream_request.json", requestInfo); err != nil {
+		log.Printf("archive Codex upstream request metadata: %v", err)
+	}
+	h.debugfRound(round, r, "round=%06d Codex upstream request provider=%s method=%s url=%s body_bytes=%d headers=%s",
+		round.ID, providerName, requestInfo.Method, requestInfo.URL, requestInfo.BodyBytes, headerSummary(requestHeaders))
+
+	responseAt := attempt.Response.At
+	if responseAt.IsZero() {
+		responseAt = time.Now()
+	}
+	responseHeaders := sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))
+	responseInfo := upstreamResponseDebugInfo{
+		RoundID: round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
+		Status: attempt.Response.Status, DurationMS: attempt.Response.DurationMS,
+		ContentType: http.Header(responseHeaders).Get("Content-Type"), ContentLength: attempt.Response.ContentLength,
+		Headers: responseHeaders,
+	}
+	if attemptErr != nil {
+		responseInfo.Error = attemptErr.Error()
+	}
+	if err := round.WriteJSON("upstream_response.json", responseInfo); err != nil {
+		log.Printf("archive Codex upstream response metadata: %v", err)
+	}
+	h.debugfRound(round, r, "round=%06d Codex upstream response provider=%s status=%d duration=%dms content_type=%q content_length=%d error=%q headers=%s",
+		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, headerSummary(responseHeaders))
+}
+
+func codexHeadersToHTTP(headers []codexresponses.Header) http.Header {
+	result := make(http.Header, len(headers))
+	for _, header := range headers {
+		name := strings.TrimSpace(header.Name)
+		if name != "" {
+			result.Add(name, header.Value)
+		}
+	}
+	return result
+}
+
 func (h *Handler) logUpstreamAlert(round *archive.Round, providerName, protocol string, status int, duration time.Duration, errMessage string) {
 	if !h.cfg.VerboseLogging {
 		return
@@ -278,7 +333,16 @@ func isSensitiveHeader(key string) bool {
 		"x-goog-api-key",
 		"x-amz-security-token",
 		"cookie",
-		"set-cookie":
+		"set-cookie",
+		"chatgpt-account-id",
+		"session-id",
+		"session_id",
+		"thread-id",
+		"x-client-request-id",
+		"x-codex-installation-id",
+		"x-codex-turn-metadata",
+		"x-codex-turn-state",
+		"x-codex-window-id":
 		return true
 	default:
 		return false

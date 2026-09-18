@@ -450,6 +450,8 @@
 - [x] **D-08.34** JSON 日志不包含 ANSI 颜色转义。
 - [x] **D-08.35** text 日志只对 level token 应用颜色。
 - [x] **D-08.36** 完整正文关闭时 metadata 不引用未写入的正文文件。
+- [x] **D-08.37** Codex OAuth HTTP/SSE/WebSocket 握手通过 typed EventHub 观测记录脱敏的上游请求与响应 header、状态和耗时。
+- [ ] **D-08.38** ChatGPT Web 多阶段上游交互按 stage/attempt 记录全部脱敏 HTTP 请求与响应；单文件模型不得覆盖上传、准备、conversation、轮询或下载阶段。
 
 ### D-09 Metrics 与 Stats
 

@@ -46,6 +46,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 			h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, false, execErr)
 			return
 		}
+		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, result.Attempt, nil)
 		converted, usage, degradedResponse, convertErr := convertOpenAIResponsesToAnthropicWithCapability(result.Body, model, capability)
 		if convertErr != nil {
 			h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
@@ -71,6 +72,7 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	var archive bytes.Buffer
 	streamStarted := false
 	startStream := func(info codexresponses.StreamStart) error {
+		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, info.Attempt, nil)
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		return nil
 	}

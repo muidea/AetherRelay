@@ -308,7 +308,9 @@ func TestIsSensitiveHeaderCoversBothDirections(t *testing.T) {
 		"Authorization", "authorization", "proxy-authorization", "Proxy-Authenticate",
 		"WWW-Authenticate", "Authentication-Info", "X-API-Key", "x-api-key", "Api-Key",
 		"X-Auth-Token", "X-Access-Token", "X-Goog-Api-Key", "X-Amz-Security-Token",
-		"Cookie", "Set-Cookie",
+		"Cookie", "Set-Cookie", "ChatGPT-Account-ID", "Session-Id", "Session_Id", "Thread-Id",
+		"X-Client-Request-Id", "X-Codex-Installation-Id", "X-Codex-Turn-Metadata",
+		"X-Codex-Turn-State", "X-Codex-Window-Id",
 	}
 	// 这些是排查限流与上游行为时最需要看到的头,任何模糊后缀规则都会误伤它们。
 	readable := []string{

@@ -118,9 +118,13 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
 			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 			if openErr != nil {
+				if failure, ok := codexresponses.AsFailure(openErr); ok {
+					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
+				}
 				writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket could not be opened")
 				return
 			}
+			h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 			sessionID = opened.SessionID
 		}
 		if requestModel != model {
@@ -176,9 +180,13 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 					sessionID = ""
 					opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 					if openErr != nil {
+						if failure, ok := codexresponses.AsFailure(openErr); ok {
+							h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
+						}
 						writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket replacement account is unavailable")
 						return
 					}
+					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 					sessionID = opened.SessionID
 					attemptPayload = retryPayload
 					migrationAttempts++

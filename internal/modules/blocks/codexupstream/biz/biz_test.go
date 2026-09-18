@@ -602,6 +602,8 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 			t.Fatalf("Codex account headers=%v", r.Header)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Set-Cookie", "upstream-secret")
+		w.Header().Set("X-Debug-Trace", "trace-1")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -609,11 +611,30 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	previousURL := responsesURL
 	responsesURL = server.URL
 	t.Cleanup(func() { responsesURL = previousURL })
-	response, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), codexRequestProfile{})
+	response, attempt, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), codexRequestProfile{})
 	if err != nil || class != "" || response == nil {
 		t.Fatalf("perform response=%v class=%q err=%v", response, class, err)
 	}
 	_ = response.Body.Close()
+	requestHeaders := eventHeaderMap(attempt.Request.Headers)
+	responseHeaders := eventHeaderMap(attempt.Response.Headers)
+	if requestHeaders.Get("Authorization") != "<redacted>" || requestHeaders.Get("ChatGPT-Account-ID") != "<redacted>" {
+		t.Fatalf("credential headers were not redacted: %v", requestHeaders)
+	}
+	if requestHeaders.Get("User-Agent") != currentIdentity.UserAgent || attempt.Request.Method != http.MethodPost || attempt.Request.URL != server.URL || attempt.Request.BodyBytes == 0 {
+		t.Fatalf("request observation=%+v headers=%v", attempt.Request, requestHeaders)
+	}
+	if !attempt.Response.Observed || attempt.Response.Status != http.StatusOK || responseHeaders.Get("Set-Cookie") != "<redacted>" || responseHeaders.Get("X-Debug-Trace") != "trace-1" {
+		t.Fatalf("response observation=%+v headers=%v", attempt.Response, responseHeaders)
+	}
+}
+
+func eventHeaderMap(headers []events.Header) http.Header {
+	result := http.Header{}
+	for _, header := range headers {
+		result.Add(header.Name, header.Value)
+	}
+	return result
 }
 
 func TestPerformUsesAllowlistedCodexFeatureHeaders(t *testing.T) {
@@ -628,7 +649,7 @@ func TestPerformUsesAllowlistedCodexFeatureHeaders(t *testing.T) {
 	previous := responsesURL
 	responsesURL = server.URL
 	defer func() { responsesURL = previous }()
-	response, class, _, err := perform(context.Background(), "access", "account", "", []byte(`{"model":"gpt-test"}`), codexRequestProfile{sessionHash: "session", responsesLite: true})
+	response, _, class, _, err := perform(context.Background(), "access", "account", "", []byte(`{"model":"gpt-test"}`), codexRequestProfile{sessionHash: "session", responsesLite: true})
 	if err != nil || class != "" {
 		t.Fatalf("perform class=%q err=%v", class, err)
 	}

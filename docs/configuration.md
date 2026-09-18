@@ -105,7 +105,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
 | `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个有效事件等待超时，默认 `90` 秒；用于防止上游只返回响应头或空注释后长期无数据。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
-| `archive_interactions` / `AETHERRELAY_ARCHIVE_INTERACTIONS` | 是否创建 `interactions` 归档，默认 `false`。关闭时不创建交互目录，也不写脱敏元数据。开启后记录每轮对话四个方向（客户端请求、上游请求、上游响应、客户端响应）的完整 HTTP header，以及路由、耗时与用量摘要。 |
+| `archive_interactions` / `AETHERRELAY_ARCHIVE_INTERACTIONS` | 是否创建 `interactions` 归档，默认 `false`。关闭时不创建交互目录，也不写脱敏元数据。开启后，管理型 Provider 与 Codex OAuth 记录客户端请求、最终上游 attempt、客户端响应的脱敏 HTTP header，以及路由、耗时与用量摘要；客户端响应是应用提交快照，不包含服务端自动生成的线级 header。ChatGPT Web 多阶段上游 attempt 归档为后续待办。 |
 | `archive_full_content` / `AETHERRELAY_ARCHIVE_FULL_CONTENT` | 仅在 `archive_interactions=true` 时生效：是否落盘完整请求/响应正文，默认 `false`。header 与其它元数据不受此开关影响。 |
 | `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |

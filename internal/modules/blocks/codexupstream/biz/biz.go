@@ -118,28 +118,28 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		return
 	}
 	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
-	response, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
+	response, attempt, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
-		result.Set(events.CompactResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
+		result.Set(events.CompactResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, observation, retryAfter, safeError := readErrorObservation(response)
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	payload, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	payload, supported, err := nativeCompactResponse(payload)
 	if err != nil || !supported {
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), ErrorClass: events.ErrorProtocol, NativeCompactionUnsupported: true}, nil)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: events.ErrorProtocol, NativeCompactionUnsupported: true}, nil)
 		return
 	}
-	result.Set(events.CompactResult{Body: payload, Headers: compactResponseHeaders(response.Header)}, nil)
+	result.Set(events.CompactResult{Body: payload, Headers: compactResponseHeaders(response.Header), Attempt: attempt}, nil)
 }
 
 func (s *Upstream) Run(context.Context) *cd.Error { return nil }
@@ -195,7 +195,10 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
 		headers.Set("ChatGPT-Account-ID", accountID)
 	}
+	requestAt := time.Now()
+	attempt := events.HTTPAttempt{Request: events.HTTPRequestObservation{At: requestAt, Method: http.MethodGet, URL: responsesWebsocketURL, Headers: safeFHTTPHeaders(headers)}}
 	conn, response, err := dialer.DialContext(ev.Context(), responsesWebsocketURL, headers)
+	attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 	if err != nil {
 		status := 0
 		var responseBody []byte
@@ -204,6 +207,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		var safeError events.SafeError
 		var responseHeader []events.Header
 		if response != nil {
+			attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt)
 			status = response.StatusCode
 			responseHeader = responseHeaders(response.Header)
 			responseBody, observation, retryAfter, safeError = readErrorObservationParts(response.Header, response.Body)
@@ -215,11 +219,12 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		if status > 0 {
 			class = errorClassWithBody(status, responseBody, observation)
 		}
-		result.Set(events.WSOpenResult{Headers: responseHeader, HTTPStatus: status, ErrorClass: class, RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.WSOpenResult{Headers: responseHeader, Attempt: attempt, HTTPStatus: status, ErrorClass: class, RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	var responseHeader []events.Header
 	if response != nil {
+		attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt)
 		responseHeader = responseHeaders(response.Header)
 		if response.Body != nil {
 			_ = response.Body.Close()
@@ -248,7 +253,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket reader unavailable"))
 		return
 	}
-	result.Set(events.WSOpenResult{SessionID: sessionID, Headers: responseHeader}, nil)
+	result.Set(events.WSOpenResult{SessionID: sessionID, Headers: responseHeader, Attempt: attempt}, nil)
 }
 
 func newWebsocketDialer(rawProxy string) (*wsclient.Dialer, error) {
@@ -431,23 +436,23 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		return
 	}
 	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
+	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
-		result.Set(events.CompleteResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
+		result.Set(events.CompleteResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, observation, retryAfter, safeError := readErrorObservation(response)
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	result.Set(events.CompleteResult{Body: completed, Headers: responseHeaders(response.Header)}, nil)
+	result.Set(events.CompleteResult{Body: completed, Headers: responseHeaders(response.Header), Attempt: attempt}, nil)
 }
 
 func (s *Upstream) handleStart(ev event.Event, result event.Result) {
@@ -465,15 +470,15 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
-	response, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
+	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
-		result.Set(events.StartResult{ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
+		result.Set(events.StartResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, observation, retryAfter, safeError := readErrorObservation(response)
 		_ = response.Body.Close()
-		result.Set(events.StartResult{Headers: responseHeaders(response.Header), HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.StartResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	streamID := uuid.NewString()
@@ -491,7 +496,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex stream task unavailable"))
 		return
 	}
-	result.Set(events.StartResult{StreamID: streamID, Headers: responseHeaders(response.Header)}, nil)
+	result.Set(events.StartResult{StreamID: streamID, Headers: responseHeaders(response.Header), Attempt: attempt}, nil)
 }
 
 func (s *Upstream) handlePull(ev event.Event, result event.Result) {
@@ -662,22 +667,23 @@ func (s *Upstream) removeStream(id string) bool {
 	return true
 }
 
-func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, profile codexRequestProfile) (*http.Response, events.ErrorClass, int, error) {
+func perform(ctx context.Context, accessToken, accountID, proxy string, body []byte, profile codexRequestProfile) (*http.Response, events.HTTPAttempt, events.ErrorClass, int, error) {
 	return performURL(ctx, responsesURL, "text/event-stream", accessToken, accountID, proxy, body, profile)
 }
 
-func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, profile codexRequestProfile) (*http.Response, events.ErrorClass, int, error) {
+func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, proxy string, body []byte, profile codexRequestProfile) (*http.Response, events.HTTPAttempt, events.ErrorClass, int, error) {
+	var attempt events.HTTPAttempt
 	client, err := newHTTPClient(proxy)
 	if err != nil {
-		return nil, events.ErrorProtocol, 0, err
+		return nil, attempt, events.ErrorProtocol, 0, err
 	}
 	body, err = applyCodexFingerprintBody(body, profile.fingerprint)
 	if err != nil {
-		return nil, events.ErrorProtocol, 0, err
+		return nil, attempt, events.ErrorProtocol, 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, events.ErrorProtocol, 0, err
+		return nil, attempt, events.ErrorProtocol, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
 	req.Header.Set("Content-Type", "application/json")
@@ -690,11 +696,60 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
+	requestAt := time.Now()
+	attempt.Request = events.HTTPRequestObservation{
+		At: requestAt, Method: req.Method, URL: req.URL.String(), BodyBytes: len(body), Headers: safeHTTPHeaders(req.Header),
+	}
 	response, err := client.Do(req)
 	if err != nil {
-		return nil, classifyTransport(err), 0, err
+		attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
+		return nil, attempt, classifyTransport(err), 0, err
 	}
-	return response, "", retryAfterSeconds(response.Header), nil
+	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt)
+	return response, attempt, "", retryAfterSeconds(response.Header), nil
+}
+
+func observedHTTPResponse[H ~map[string][]string](status int, contentLength int64, headers H, requestAt time.Time) events.HTTPResponseObservation {
+	return events.HTTPResponseObservation{
+		Observed: true, At: time.Now(), Status: status, ContentLength: contentLength,
+		DurationMS: time.Since(requestAt).Milliseconds(), Headers: safeHeaders(headers),
+	}
+}
+
+func safeHTTPHeaders(headers http.Header) []events.Header { return safeHeaders(headers) }
+
+func safeFHTTPHeaders(headers fhttp.Header) []events.Header { return safeHeaders(headers) }
+
+func safeHeaders[H ~map[string][]string](headers H) []events.Header {
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]events.Header, 0, len(keys))
+	for _, key := range keys {
+		values := headers[key]
+		if codexArchiveSensitiveHeader(key) {
+			out = append(out, events.Header{Name: http.CanonicalHeaderKey(key), Value: "<redacted>"})
+			continue
+		}
+		for _, value := range values {
+			out = append(out, events.Header{Name: http.CanonicalHeaderKey(key), Value: value})
+		}
+	}
+	return out
+}
+
+func codexArchiveSensitiveHeader(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "authorization", "proxy-authorization", "proxy-authenticate", "www-authenticate", "authentication-info",
+		"x-api-key", "api-key", "x-auth-token", "x-access-token", "x-goog-api-key", "x-amz-security-token",
+		"cookie", "set-cookie", "chatgpt-account-id", "session-id", "session_id", "thread-id",
+		"x-client-request-id", "x-codex-installation-id", "x-codex-turn-metadata", "x-codex-turn-state", "x-codex-window-id":
+		return true
+	default:
+		return false
+	}
 }
 
 func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]events.ModelDescriptor, events.ErrorClass, error) {

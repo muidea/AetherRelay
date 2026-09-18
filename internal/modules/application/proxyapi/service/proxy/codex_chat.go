@@ -66,6 +66,7 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, false, execErr)
 		return
 	}
+	h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, result.Attempt, nil)
 	converted, usage, convertErr := convertCodexResponsesToChat(result.Body, model)
 	if convertErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
@@ -365,6 +366,7 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 		return nil
 	}
 	err := h.codexResponses.StreamCodexResponses(r.Context(), request, func(info codexresponses.StreamStart) error {
+		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, info.Attempt, nil)
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		return nil
 	}, emit)

@@ -9,8 +9,9 @@ server:
   max_stream_bytes: 67108864
   max_sse_line_bytes: 1048576
   # 默认不写 interactions 归档（包括脱敏元数据）。仅在受控排障期间显式开启。
-  # 开启后按客户端 API Key 记录每轮对话的脱敏元数据：客户端请求、上游请求、
-  # 上游响应、客户端响应四个方向的完整 HTTP header，以及路由、耗时与用量摘要。
+  # 开启后按客户端 API Key 记录每轮对话的脱敏元数据。管理型 Provider 与
+  # Codex OAuth 记录客户端请求、最终上游 attempt、客户端响应的 HTTP header，
+  # 以及路由、耗时与用量摘要；ChatGPT Web 多阶段上游归档为后续待办。
   # header 属元数据层，不受 archive_full_content 控制。
   archive_interactions: false
   # 仅当 archive_interactions=true 时生效：是否额外落盘完整请求/响应正文。

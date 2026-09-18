@@ -1,6 +1,8 @@
 // Package events defines the native Codex Responses upstream Block contract.
 package events
 
+import "time"
+
 const (
 	TopicComplete   = "aetherrelay.codex.upstream.command.complete"
 	TopicCompact    = "aetherrelay.codex.upstream.command.compact"
@@ -18,6 +20,32 @@ const (
 type Header struct {
 	Name  string
 	Value string
+}
+
+// HTTPAttempt is the archive-safe projection of one Codex upstream handshake.
+// Header values are redacted by the codexupstream owner before they cross the
+// EventHub boundary; credentials and account/session identity never leave the
+// Block in clear text.
+type HTTPAttempt struct {
+	Request  HTTPRequestObservation
+	Response HTTPResponseObservation
+}
+
+type HTTPRequestObservation struct {
+	At        time.Time
+	Method    string
+	URL       string
+	BodyBytes int
+	Headers   []Header
+}
+
+type HTTPResponseObservation struct {
+	Observed      bool
+	At            time.Time
+	Status        int
+	ContentLength int64
+	DurationMS    int64
+	Headers       []Header
 }
 
 // CodexFingerprint is the fully resolved, non-secret outbound identity set.
@@ -83,6 +111,7 @@ type CompleteCommand struct {
 type CompleteResult struct {
 	Body              []byte
 	Headers           []Header
+	Attempt           HTTPAttempt
 	HTTPStatus        int
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
@@ -106,6 +135,7 @@ type CompactCommand struct {
 type CompactResult struct {
 	Body                        []byte
 	Headers                     []Header
+	Attempt                     HTTPAttempt
 	HTTPStatus                  int
 	ErrorClass                  ErrorClass
 	RetryAfterSeconds           int
@@ -129,6 +159,7 @@ type StartCommand struct {
 type StartResult struct {
 	StreamID          string
 	Headers           []Header
+	Attempt           HTTPAttempt
 	HTTPStatus        int
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
@@ -166,6 +197,7 @@ type WSOpenCommand struct {
 type WSOpenResult struct {
 	SessionID         string
 	Headers           []Header
+	Attempt           HTTPAttempt
 	HTTPStatus        int
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
