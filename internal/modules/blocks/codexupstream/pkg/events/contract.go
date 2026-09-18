@@ -1,7 +1,10 @@
 // Package events defines the native Codex Responses upstream Block contract.
 package events
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	TopicComplete   = "aetherrelay.codex.upstream.command.complete"
@@ -93,6 +96,19 @@ type SafeError struct {
 	Message string
 }
 
+// TurnMetadata is the CP-HDR-011 client projection: the turn level values the
+// client owns plus its bounded scalar attributes. Session identity is
+// deliberately absent — the Block always resolves that from the attempt's own
+// identity, so a client value can never override it.
+type TurnMetadata struct {
+	TurnID          string
+	RootTurnID      string
+	TurnStartedAtMS int64
+	// Attributes is a bounded JSON object of scalar values, already validated by
+	// the inbound adapter (whitelisted keys, scalar types, size limits).
+	Attributes json.RawMessage
+}
+
 // ClientIdentity is the bounded downstream identity of CP-HDR-003/004. The
 // receiver normalizes both fields and falls back to the versioned profile
 // whenever one is empty, oversized, or contains control characters.
@@ -121,7 +137,10 @@ type CompleteCommand struct {
 	// the inference path. Empty or invalid fields fall back to the versioned
 	// profile, and credential/account-domain calls never carry it.
 	ClientIdentity ClientIdentity
-	Fingerprint    CodexFingerprint
+	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
+	// part of it.
+	TurnMetadata TurnMetadata
+	Fingerprint  CodexFingerprint
 }
 type CompleteResult struct {
 	Body              []byte
@@ -151,7 +170,10 @@ type CompactCommand struct {
 	// the inference path. Empty or invalid fields fall back to the versioned
 	// profile, and credential/account-domain calls never carry it.
 	ClientIdentity ClientIdentity
-	Fingerprint    CodexFingerprint
+	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
+	// part of it.
+	TurnMetadata TurnMetadata
+	Fingerprint  CodexFingerprint
 }
 
 type CompactResult struct {
@@ -183,7 +205,10 @@ type StartCommand struct {
 	// the inference path. Empty or invalid fields fall back to the versioned
 	// profile, and credential/account-domain calls never carry it.
 	ClientIdentity ClientIdentity
-	Fingerprint    CodexFingerprint
+	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
+	// part of it.
+	TurnMetadata TurnMetadata
+	Fingerprint  CodexFingerprint
 }
 type StartResult struct {
 	StreamID          string
@@ -228,7 +253,10 @@ type WSOpenCommand struct {
 	// the inference path. Empty or invalid fields fall back to the versioned
 	// profile, and credential/account-domain calls never carry it.
 	ClientIdentity ClientIdentity
-	Fingerprint    CodexFingerprint
+	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
+	// part of it.
+	TurnMetadata TurnMetadata
+	Fingerprint  CodexFingerprint
 }
 type WSOpenResult struct {
 	SessionID         string

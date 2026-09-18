@@ -29,6 +29,8 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataProjection(codexTurnMetadataSource(r.Header, responsesBody))
+	ignored = append(ignored, turnMetadataIgnored...)
 	markConversionDegraded(round, append(degraded, ignored...))
 	// CP-HDR-022: the adapter entry is a Codex entry too, so an inbound turn
 	// state must reach the executor instead of being replaced by the fallback.
@@ -45,7 +47,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	}
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
 	userAgent, originator := codexClientIdentity(r.Header)
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
 	request.Diagnostics = codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {

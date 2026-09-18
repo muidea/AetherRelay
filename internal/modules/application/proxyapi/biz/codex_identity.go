@@ -96,6 +96,17 @@ func newCodexTurnID() string {
 	return value.String()
 }
 
+// toUpstreamTurnMetadata maps the inbound CP-HDR-011 projection onto the Block
+// contract. Identity fields are intentionally absent on both sides.
+func toUpstreamTurnMetadata(metadata codexresponses.TurnMetadata) upevents.TurnMetadata {
+	return upevents.TurnMetadata{
+		TurnID:          metadata.TurnID,
+		RootTurnID:      metadata.RootTurnID,
+		TurnStartedAtMS: metadata.TurnStartedAtMS,
+		Attributes:      metadata.Attributes,
+	}
+}
+
 func codexTurnStateKey(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {

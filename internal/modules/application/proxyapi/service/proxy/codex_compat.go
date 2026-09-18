@@ -29,6 +29,9 @@ const (
 	codexTurnStateLimit            = 16 << 10
 	codexClientUserAgentLimit      = 256
 	codexClientOriginatorLimit     = 64
+	codexTurnMetadataLimit         = 8 << 10
+	codexTurnMetadataMaxAttributes = 16
+	codexTurnMetadataValueLimit    = 256
 	codexBetaFeatureTokenLimit     = 32
 	codexBetaFeatureValueLimit     = 4096
 )
@@ -120,6 +123,141 @@ func rawCodexResponsesLite(raw []byte) bool {
 		return false
 	}
 	return codexMetadataTrue(envelope.ClientMetadata["ws_request_header_x_openai_internal_codex_responses_lite"])
+}
+
+// codexTurnMetadataIdentityKeys are the session identity fields of CP-HDR-007..010.
+// The proxy always owns them, so a client value is dropped at field level.
+var codexTurnMetadataIdentityKeys = map[string]struct{}{
+	"installation_id": {}, "session_id": {}, "thread_id": {}, "window_id": {},
+}
+
+// codexTurnMetadataAttributes are the client-declared turn attributes that travel
+// upstream verbatim (CP-HDR-011). Scalar values only.
+var codexTurnMetadataAttributes = map[string]struct{}{
+	"window_number": {}, "context_window_id": {}, "request_kind": {}, "thread_source": {},
+	"sandbox": {}, "sandbox_mode": {}, "agent_name": {}, "auto_review_enabled": {},
+	"node_repl_auto_review_required": {}, "node_repl_disabled": {},
+}
+
+// codexTurnMetadataSource reads the client's turn metadata. The flat header wins;
+// the copy embedded in body client_metadata is the fallback (CP-HDR-011), which is
+// also the order the CP-OBS-006 diagnostics use.
+func codexTurnMetadataSource(headers http.Header, raw []byte) string {
+	if headers != nil {
+		if value := strings.TrimSpace(headers.Get("X-Codex-Turn-Metadata")); value != "" {
+			return value
+		}
+	}
+	var source struct {
+		ClientMetadata map[string]json.RawMessage `json:"client_metadata"`
+	}
+	if json.Unmarshal(raw, &source) != nil {
+		return ""
+	}
+	var value string
+	_ = json.Unmarshal(source.ClientMetadata["x-codex-turn-metadata"], &value)
+	return strings.TrimSpace(value)
+}
+
+// codexTurnMetadataProjection implements CP-HDR-011 on the inbound side. It splits
+// the client's turn metadata into the turn level values and bounded attributes
+// that may travel upstream; session identity is never carried. Unknown, malformed
+// or oversized entries are reported as ignored features rather than failing the
+// request.
+func codexTurnMetadataProjection(raw string) (codexresponses.TurnMetadata, []string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return codexresponses.TurnMetadata{}, nil
+	}
+	if len(raw) > codexTurnMetadataLimit {
+		return codexresponses.TurnMetadata{}, []string{"turn_metadata"}
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &envelope) != nil || envelope == nil {
+		return codexresponses.TurnMetadata{}, []string{"turn_metadata"}
+	}
+	keys := make([]string, 0, len(envelope))
+	for key := range envelope {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	projection := codexresponses.TurnMetadata{}
+	attributes := map[string]json.RawMessage{}
+	ignored := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := envelope[key]
+		if _, identity := codexTurnMetadataIdentityKeys[key]; identity {
+			ignored = append(ignored, "turn_metadata."+key)
+			continue
+		}
+		switch key {
+		case "turn_id", "root_turn_id":
+			text, ok := boundedTurnMetadataString(value)
+			if !ok {
+				ignored = append(ignored, "turn_metadata."+key)
+				continue
+			}
+			if key == "turn_id" {
+				projection.TurnID = text
+			} else {
+				projection.RootTurnID = text
+			}
+		case "turn_started_at_unix_ms":
+			var number int64
+			if json.Unmarshal(value, &number) != nil || number <= 0 {
+				ignored = append(ignored, "turn_metadata."+key)
+				continue
+			}
+			projection.TurnStartedAtMS = number
+		default:
+			if _, allowed := codexTurnMetadataAttributes[key]; !allowed || len(attributes) >= codexTurnMetadataMaxAttributes || !boundedTurnMetadataScalar(value) {
+				ignored = append(ignored, "turn_metadata."+key)
+				continue
+			}
+			attributes[key] = value
+		}
+	}
+	if len(attributes) > 0 {
+		if encoded, err := json.Marshal(attributes); err == nil {
+			projection.Attributes = encoded
+		}
+	}
+	return projection, ignored
+}
+
+func boundedTurnMetadataString(raw json.RawMessage) (string, bool) {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" || len(text) > codexTurnMetadataValueLimit {
+		return "", false
+	}
+	if strings.ContainsFunc(text, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "", false
+	}
+	return text, true
+}
+
+// boundedTurnMetadataScalar accepts only the scalar JSON shapes an upstream turn
+// attribute can legitimately carry; objects, arrays and null are refused.
+func boundedTurnMetadataScalar(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || len(trimmed) > codexTurnMetadataValueLimit {
+		return false
+	}
+	switch trimmed[0] {
+	case '"':
+		_, ok := boundedTurnMetadataString(raw)
+		return ok
+	case 't', 'f':
+		var value bool
+		return json.Unmarshal(raw, &value) == nil
+	default:
+		var number json.Number
+		return json.Unmarshal(raw, &number) == nil
+	}
 }
 
 // codexTurnStateFromHeaders applies the CP-HDR-012 boundary to an inbound turn

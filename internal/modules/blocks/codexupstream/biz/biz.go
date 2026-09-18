@@ -117,7 +117,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact body"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	response, attempt, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompactResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -184,7 +184,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		result.Set(events.WSOpenResult{ErrorClass: events.ErrorProtocol}, nil)
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	headers := fhttp.Header{}
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(cmd.AccessToken))
 	headers.Set("User-Agent", profile.requestUserAgent())
@@ -192,6 +192,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
 	applyCodexFeatureHeaders(headers, profile.betaFeatures, profile.responsesLite)
 	applyCodexRequestIdentity(headers, profile)
+	applyCodexTurnMetadata(headers, profile)
 	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
 		headers.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -282,7 +283,7 @@ func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket send command"))
 		return
 	}
-	payload, fingerprintErr := applyCodexFingerprintBody(cmd.Payload, cmd.Fingerprint)
+	payload, fingerprintErr := applyCodexRequestBody(cmd.Payload, codexRequestProfile{fingerprint: cmd.Fingerprint})
 	if fingerprintErr != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket fingerprint body"))
 		return
@@ -435,7 +436,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompleteResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -469,7 +470,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.StartResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -677,7 +678,7 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	if err != nil {
 		return nil, attempt, events.ErrorProtocol, 0, err
 	}
-	body, err = applyCodexFingerprintBody(body, profile.fingerprint)
+	body, err = applyCodexRequestBody(body, profile)
 	if err != nil {
 		return nil, attempt, events.ErrorProtocol, 0, err
 	}
@@ -692,6 +693,7 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	req.Header.Set("User-Agent", profile.requestUserAgent())
 	req.Header.Set("Originator", profile.requestOriginator())
 	applyCodexRequestIdentity(req.Header, profile)
+	applyCodexTurnMetadata(req.Header, profile)
 	applyCodexFeatureHeaders(req.Header, profile.betaFeatures, profile.responsesLite)
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)

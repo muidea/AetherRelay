@@ -767,6 +767,65 @@ func TestPerformUsesAllowlistedCodexFeatureHeaders(t *testing.T) {
 	_ = response.Body.Close()
 }
 
+// CP-HDR-011: 三个载体（身份 header、X-Codex-Turn-Metadata、body client_metadata）
+// 必须自洽——身份取代理值，turn 级与属性取客户端值。
+func TestCodexTurnMetadataCarriersStayConsistent(t *testing.T) {
+	projection := events.TurnMetadata{
+		TurnID: "client-turn", RootTurnID: "client-root-turn", TurnStartedAtMS: 1789711880466,
+		Attributes: []byte(`{"request_kind":"turn","sandbox_mode":"read-only","window_number":3}`),
+	}
+	profile := codexRequestProfile{sessionHash: "session-hash", turnMetadata: projection}
+
+	headers := http.Header{}
+	applyCodexRequestIdentity(headers, profile)
+	applyCodexTurnMetadata(headers, profile)
+
+	session := headers.Get("Session-Id")
+	if session != "session-hash" || headers.Get("Thread-Id") != "session-hash" || headers.Get("X-Codex-Window-Id") != "session-hash:0" {
+		t.Fatalf("CP-HDR-007..010 session headers=%v", headers)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(headers.Get("X-Codex-Turn-Metadata")), &metadata); err != nil {
+		t.Fatalf("CP-HDR-011 metadata=%q err=%v", headers.Get("X-Codex-Turn-Metadata"), err)
+	}
+	if metadata["session_id"] != session || metadata["thread_id"] != session || metadata["window_id"] != session+":0" {
+		t.Fatalf("CP-HDR-011 metadata identity disagrees with headers: %v", metadata)
+	}
+	if metadata["turn_id"] != "client-turn" || metadata["root_turn_id"] != "client-root-turn" || metadata["turn_started_at_unix_ms"] != float64(1789711880466) {
+		t.Fatalf("CP-HDR-011 turn level=%v", metadata)
+	}
+	for key, want := range map[string]any{"request_kind": "turn", "sandbox_mode": "read-only", "window_number": float64(3)} {
+		if metadata[key] != want {
+			t.Fatalf("CP-HDR-011 attribute %s=%v want %v", key, metadata[key], want)
+		}
+	}
+	// 客户端身份即使出现在投影里也不会被采用（身份键在入站侧已被剥离，这里验证
+	// 载体自身不会回灌）。
+	if _, found := metadata["installation_id"]; found {
+		t.Fatalf("CP-FP-002 off mode claimed an installation id: %v", metadata)
+	}
+
+	body, err := applyCodexRequestBody([]byte(`{"model":"gpt-test","client_metadata":{"session_id":"client-leak"}}`), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		ClientMetadata map[string]any `json:"client_metadata"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		t.Fatalf("CP-HDR-011 body=%s", body)
+	}
+	if envelope.ClientMetadata["session_id"] != session || envelope.ClientMetadata["thread_id"] != session || envelope.ClientMetadata["turn_id"] != "client-turn" {
+		t.Fatalf("CP-HDR-011 body identity=%+v", envelope.ClientMetadata)
+	}
+	if strings.Contains(string(body), "client-leak") {
+		t.Fatalf("CP-HDR-011 client identity leaked into body: %s", body)
+	}
+	if envelope.ClientMetadata["sandbox_mode"] != "read-only" {
+		t.Fatalf("CP-HDR-011 body attribute=%+v", envelope.ClientMetadata)
+	}
+}
+
 func TestCodexJSONDocumentsRepairIsBounded(t *testing.T) {
 	documents, repaired := splitCodexJSONDocuments([]byte(`{"type":"response.in_progress"}{"type":"response.done"}`))
 	if !repaired || len(documents) != 2 {
@@ -800,15 +859,15 @@ func TestResponseHeadersProjectsCodexUsageAllowlist(t *testing.T) {
 func TestCodexFingerprintRewritesHeadersAndBodyTogether(t *testing.T) {
 	fingerprint := events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0", TurnStartedAtUnixMS: 123456789}
 	headers := http.Header{}
-	applyCodexSessionHeaders(headers, "isolated-session")
-	applyCodexFingerprintHeaders(headers, fingerprint)
+	applyCodexRequestIdentity(headers, codexRequestProfile{sessionHash: "isolated-session", fingerprint: fingerprint})
+	applyCodexTurnMetadata(headers, codexRequestProfile{sessionHash: "isolated-session", fingerprint: fingerprint})
 	if headers.Get("X-Codex-Installation-Id") != "install-id" || headers.Get("Session-Id") != "session-id" || headers.Get("Thread-Id") != "thread-id" || headers.Get("X-Client-Request-Id") != "thread-id" {
 		t.Fatalf("fingerprint headers=%v", headers)
 	}
 	if metadata := headers.Get("X-Codex-Turn-Metadata"); !strings.Contains(metadata, `"turn_started_at_unix_ms":123456789`) || !strings.Contains(metadata, `"turn_id":"turn-id"`) {
 		t.Fatalf("fingerprint turn metadata=%q", metadata)
 	}
-	body, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test","input":[],"prompt_cache_key":"client-cache","client_metadata":{"session_id":"client-secret","arbitrary":"must-not-pass"}}`), fingerprint)
+	body, err := applyCodexRequestBody([]byte(`{"model":"gpt-test","input":[],"prompt_cache_key":"client-cache","client_metadata":{"session_id":"client-secret","arbitrary":"must-not-pass"}}`), codexRequestProfile{fingerprint: fingerprint})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -825,7 +884,26 @@ func TestCodexFingerprintRewritesHeadersAndBodyTogether(t *testing.T) {
 	if !strings.Contains(embedded, `"turn_started_at_unix_ms":123456789`) {
 		t.Fatalf("embedded turn metadata=%q", embedded)
 	}
-	offBody, err := applyCodexFingerprintBody([]byte(`{"model":"gpt-test"}`), events.CodexFingerprint{})
+	// CP-HDR-011: without fingerprint convergence the body still carries the
+	// attempt's own session identity, and an attempt with no identity at all
+	// stays untouched rather than emitting an empty envelope.
+	sessionBody, err := applyCodexRequestBody([]byte(`{"model":"gpt-test"}`), codexRequestProfile{sessionHash: "session-hash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionEnvelope struct {
+		ClientMetadata map[string]any `json:"client_metadata"`
+	}
+	if json.Unmarshal(sessionBody, &sessionEnvelope) != nil {
+		t.Fatalf("CP-HDR-011 session body=%s", sessionBody)
+	}
+	if sessionEnvelope.ClientMetadata["session_id"] != "session-hash" || sessionEnvelope.ClientMetadata["thread_id"] != "session-hash" || sessionEnvelope.ClientMetadata["x-codex-window-id"] != "session-hash:0" {
+		t.Fatalf("CP-HDR-011 session identity=%+v", sessionEnvelope.ClientMetadata)
+	}
+	if _, found := sessionEnvelope.ClientMetadata["installation_id"]; found {
+		t.Fatalf("CP-FP-002 off mode must not claim an installation id: %+v", sessionEnvelope.ClientMetadata)
+	}
+	offBody, err := applyCodexRequestBody([]byte(`{"model":"gpt-test"}`), codexRequestProfile{})
 	if err != nil || strings.Contains(string(offBody), "client_metadata") {
 		t.Fatalf("off body=%s err=%v", offBody, err)
 	}

@@ -57,6 +57,9 @@ type codexRequestProfile struct {
 	// clientIdentity is CP-HDR-003/004: the downstream client's bounded identity.
 	// Any empty or rejected field falls back to the versioned profile.
 	clientIdentity events.ClientIdentity
+	// turnMetadata is the CP-HDR-011 client projection: turn level values and
+	// attributes only. Session identity is never taken from it.
+	turnMetadata events.TurnMetadata
 }
 
 func resolvedCodexBetaFeatures(value string) string {
@@ -117,6 +120,99 @@ func normalizedCodexTurnState(value string) string {
 	return value
 }
 
+// applyCodexTurnMetadata rebuilds X-Codex-Turn-Metadata for one attempt
+// (CP-HDR-011). The identity fields are read back from the headers this attempt
+// actually sends, so header, metadata and body can never disagree; the turn level
+// fields and attributes come from the client projection, with the fingerprint
+// snapshot as the turn level fallback.
+func applyCodexTurnMetadata(headers headerSetter, profile codexRequestProfile) {
+	getter, ok := headers.(headerGetter)
+	if !ok {
+		return
+	}
+	metadata := map[string]any{}
+	if installation := strings.TrimSpace(getter.Get("X-Codex-Installation-Id")); installation != "" {
+		metadata["installation_id"] = installation
+	}
+	if session := strings.TrimSpace(getter.Get("Session-Id")); session != "" {
+		metadata["session_id"] = session
+	}
+	if thread := strings.TrimSpace(getter.Get("Thread-Id")); thread != "" {
+		metadata["thread_id"] = thread
+	}
+	if window := strings.TrimSpace(getter.Get("X-Codex-Window-Id")); window != "" {
+		metadata["window_id"] = window
+	}
+	turnID := strings.TrimSpace(profile.turnMetadata.TurnID)
+	if turnID == "" {
+		turnID = strings.TrimSpace(profile.fingerprint.TurnID)
+	}
+	if turnID != "" {
+		metadata["turn_id"] = turnID
+	}
+	rootTurnID := strings.TrimSpace(profile.turnMetadata.RootTurnID)
+	if rootTurnID != "" {
+		metadata["root_turn_id"] = rootTurnID
+	} else if turnID != "" {
+		metadata["root_turn_id"] = turnID
+	}
+	startedAt := profile.turnMetadata.TurnStartedAtMS
+	if startedAt <= 0 {
+		startedAt = profile.fingerprint.TurnStartedAtUnixMS
+	}
+	if startedAt > 0 {
+		metadata["turn_started_at_unix_ms"] = startedAt
+	}
+	for key, value := range decodeTurnMetadataAttributes(profile.turnMetadata.Attributes) {
+		metadata[key] = value
+	}
+	if len(metadata) == 0 {
+		return
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return
+	}
+	headers.Set("X-Codex-Turn-Metadata", string(encoded))
+}
+
+// decodeTurnMetadataAttributes keeps the bounded attribute object the inbound
+// adapter already validated. It stays a best-effort decode: anything unreadable is
+// simply not forwarded.
+func decodeTurnMetadataAttributes(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var attributes map[string]any
+	if json.Unmarshal(raw, &attributes) != nil {
+		return nil
+	}
+	return attributes
+}
+
+// sessionIdentity resolves the attempt's own session identity. It is the single
+// source for the header, metadata and body carriers.
+func (p codexRequestProfile) sessionIdentity() (session, thread, window string) {
+	session = strings.TrimSpace(p.sessionHash)
+	thread = session
+	window = ""
+	if session != "" {
+		window = session + ":0"
+	}
+	if mode := normalizedCodexFingerprintMode(p.fingerprint.Mode); mode != "" && mode != "device" && strings.TrimSpace(p.fingerprint.SessionID) != "" {
+		session = strings.TrimSpace(p.fingerprint.SessionID)
+		thread = strings.TrimSpace(p.fingerprint.ThreadID)
+		window = strings.TrimSpace(p.fingerprint.WindowID)
+	}
+	if thread == "" {
+		thread = session
+	}
+	if window == "" && thread != "" {
+		window = thread + ":0"
+	}
+	return session, thread, window
+}
+
 func applyCodexSessionHeaders(headers headerSetter, sessionHash string) {
 	sessionHash = strings.TrimSpace(sessionHash)
 	if headers == nil || sessionHash == "" {
@@ -136,9 +232,6 @@ func applyCodexFingerprintHeaders(headers headerSetter, fingerprint events.Codex
 	if fingerprint.InstallationID != "" {
 		headers.Set("X-Codex-Installation-Id", fingerprint.InstallationID)
 	}
-	if metadata := encodedCodexFingerprintTurnMetadata(fingerprint); metadata != "" {
-		headers.Set("X-Codex-Turn-Metadata", metadata)
-	}
 	if mode == "device" {
 		return
 	}
@@ -155,29 +248,61 @@ func applyCodexFingerprintHeaders(headers headerSetter, fingerprint events.Codex
 	}
 }
 
-func applyCodexFingerprintBody(body []byte, fingerprint events.CodexFingerprint) ([]byte, error) {
-	mode := normalizedCodexFingerprintMode(fingerprint.Mode)
-	if mode == "" {
-		return body, nil
-	}
+// applyCodexRequestBody implements the body half of CP-HDR-011: the upstream
+// client_metadata always carries the attempt's own identity plus the client's
+// bounded turn projection, regardless of fingerprint convergence.
+func applyCodexRequestBody(body []byte, profile codexRequestProfile) ([]byte, error) {
+	fingerprint := profile.fingerprint
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("decode Codex fingerprint body: %w", err)
 	}
-	// The proxy boundary already strips inbound metadata. Rebuild from an empty
+	// The proxy boundary already projects inbound metadata. Rebuild from an empty
 	// bounded projection here as defense in depth for future internal callers.
 	metadata := map[string]any{}
+	session, thread, window := profile.sessionIdentity()
 	if fingerprint.InstallationID != "" {
 		metadata["x-codex-installation-id"] = fingerprint.InstallationID
+		metadata["installation_id"] = fingerprint.InstallationID
 	}
-	if turnMetadata := encodedCodexFingerprintTurnMetadata(fingerprint); turnMetadata != "" {
+	if session != "" {
+		metadata["session_id"] = session
+	}
+	if thread != "" {
+		metadata["thread_id"] = thread
+	}
+	if window != "" {
+		metadata["x-codex-window-id"] = window
+		metadata["window_id"] = window
+	}
+	turnID := strings.TrimSpace(profile.turnMetadata.TurnID)
+	if turnID == "" {
+		turnID = strings.TrimSpace(fingerprint.TurnID)
+	}
+	if rootTurnID := strings.TrimSpace(profile.turnMetadata.RootTurnID); rootTurnID != "" {
+		metadata["root_turn_id"] = rootTurnID
+	} else if turnID != "" {
+		metadata["root_turn_id"] = turnID
+	}
+	if turnID != "" {
+		metadata["turn_id"] = turnID
+	}
+	startedAt := profile.turnMetadata.TurnStartedAtMS
+	if startedAt <= 0 {
+		startedAt = fingerprint.TurnStartedAtUnixMS
+	}
+	if startedAt > 0 {
+		metadata["turn_started_at_unix_ms"] = startedAt
+	}
+	for key, value := range decodeTurnMetadataAttributes(profile.turnMetadata.Attributes) {
+		metadata[key] = value
+	}
+	if len(metadata) == 0 {
+		// Nothing to declare: never emit an empty client_metadata envelope.
+		return body, nil
+	}
+	if turnMetadata := encodedCodexTurnMetadata(metadata); turnMetadata != "" {
 		metadata["x-codex-turn-metadata"] = turnMetadata
-	}
-	if mode != "device" {
-		metadata["session_id"] = fingerprint.SessionID
-		metadata["thread_id"] = fingerprint.ThreadID
-		metadata["turn_id"] = fingerprint.TurnID
-		metadata["x-codex-window-id"] = fingerprint.WindowID
 	}
 	rawMetadata, err := json.Marshal(metadata)
 	if err != nil {
@@ -187,21 +312,7 @@ func applyCodexFingerprintBody(body []byte, fingerprint events.CodexFingerprint)
 	return json.Marshal(envelope)
 }
 
-func encodedCodexFingerprintTurnMetadata(fingerprint events.CodexFingerprint) string {
-	mode := normalizedCodexFingerprintMode(fingerprint.Mode)
-	if mode == "" || strings.TrimSpace(fingerprint.InstallationID) == "" {
-		return ""
-	}
-	metadata := map[string]any{"installation_id": fingerprint.InstallationID}
-	if mode != "device" {
-		metadata["session_id"] = fingerprint.SessionID
-		metadata["thread_id"] = fingerprint.ThreadID
-		metadata["turn_id"] = fingerprint.TurnID
-		metadata["window_id"] = fingerprint.WindowID
-		if fingerprint.TurnStartedAtUnixMS > 0 {
-			metadata["turn_started_at_unix_ms"] = fingerprint.TurnStartedAtUnixMS
-		}
-	}
+func encodedCodexTurnMetadata(metadata map[string]any) string {
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return ""

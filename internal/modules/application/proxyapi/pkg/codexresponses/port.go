@@ -3,6 +3,7 @@ package codexresponses
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -76,6 +77,15 @@ func TurnStateFallback(source TurnStateSource) bool {
 	return source == TurnStateSourceSession || source == TurnStateSourceDefault
 }
 
+// TurnMetadata is the CP-HDR-011 client projection passed to the executor; see
+// the codexupstream events contract for the field ownership rules.
+type TurnMetadata struct {
+	TurnID          string
+	RootTurnID      string
+	TurnStartedAtMS int64
+	Attributes      json.RawMessage
+}
+
 type Request struct {
 	Diagnostics    Diagnostics
 	AccountAttempt int
@@ -101,6 +111,8 @@ type Request struct {
 	// profile; they never influence credentials or account selection.
 	ClientUserAgent  string
 	ClientOriginator string
+	// TurnMetadata carries the bounded client projection; identity stays proxy-owned.
+	TurnMetadata TurnMetadata
 }
 
 type Result struct {
@@ -138,6 +150,8 @@ type WebsocketOpenRequest struct {
 	// CP-HDR-003/004; see Request.ClientUserAgent.
 	ClientUserAgent  string
 	ClientOriginator string
+	// TurnMetadata carries the bounded client projection; identity stays proxy-owned.
+	TurnMetadata TurnMetadata
 }
 type WebsocketOpenResult struct {
 	SessionID       string
