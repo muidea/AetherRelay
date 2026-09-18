@@ -221,7 +221,8 @@
 
 - **身份字段**（`installation_id`、`session_id`、`thread_id`、`window_id`）取本次 attempt 的代理身份：指纹收敛启用时来自账号 seed 快照（`CP-FP-002`/`CP-FP-005`），关闭时等于本次请求实际发送的 `Session-Id` / `Thread-Id` / `X-Codex-Window-Id`。三个载体（身份 header、`X-Codex-Turn-Metadata`、body `client_metadata`）必须字节一致，客户端原值只在字段级被忽略，不得回灌。
 - **turn 级字段**（`turn_id`、`root_turn_id`、`turn_started_at_unix_ms`）客户端声明则采用客户端值，未声明时回落指纹快照值或本次 attempt 生成值；它们不属于会话身份，因此不违反 `CP-HDR-007..010`，且在 failover 重试中保持同一 turn 标识。
-- **属性字段**（`window_number`、`context_window_id`、`request_kind`、`thread_source`、`sandbox`、`sandbox_mode`、`agent_name`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled`）原样透传，仅接受标量值。
+- **属性字段**（`window_number`、`context_window_id`、`request_kind`、`thread_source`、`sandbox`、`sandbox_mode`、`agent_name`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled`）原样透传，仅接受标量值，并且**只出现在 `X-Codex-Turn-Metadata` 与内嵌 `x-codex-turn-metadata` 的 JSON 中**。
+- body `client_metadata` 的**顶层投影值必须是字符串**，键集合不得超出 `CP-REQ-016` 的已知 Codex 键（`session_id`、`thread_id`、`turn_id`、`root_turn_id`、`x-codex-installation-id`、`x-codex-window-id`、`x-codex-turn-metadata` 等）：属性、数字与布尔值不得平铺到顶层，带类型信息只进内嵌 JSON。依据：现场验证 `gpt-5.6-sol` 在 `client_metadata.auto_review_enabled` 上返回 `invalid_type`（预期字符串、实际布尔）。
 - 解析来源优先 `X-Codex-Turn-Metadata` 头，缺失时回落到 body `client_metadata` 内嵌的同名 JSON（与 `CP-OBS-006` 的诊断解析同一顺序）。整体受有界上限约束：字段数、单值长度与总字节都必须设限，越界按未知键处理。
 - 白名单之外的键不转上游，并记入有界 ignored-features（字段名，不记值）；不得因为未知键拒绝整个请求，也不能让未知键改变字段归属。
 - `client_metadata` 的未知键继续按 `CP-REQ-016` fail closed；两个载体的策略差异必须在实现与验收中显式覆盖。
