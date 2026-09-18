@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`8.2.0`
+> 合同版本：`9.1.0`
 >
 > 状态：`active`
 >
@@ -9,6 +9,10 @@
 > 参考基线：AetherRelay `1644980`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`9.1.0` 在调度顺序中新增「额度证据」排序（`CP-SCHED-011`）：同为可用候选时，拥有新鲜用量快照且没有未到期 limit-reached 窗口的账号优先于额度未知或快照已过期的账号。它只改排序、不改准入，`CP-CAP-005` 的"缺失或过期快照不得阻止尝试"与 `CP-SCHED-004` 的粘性优先级都保持不变。
+
+`9.0.0` 把出站默认身份改为复用下游客户端身份：`User-Agent` 与 `Originator` 在客户端提供合法值时原样转发，缺失、超长或含控制字符时回落版本化 profile。这是 `CP-VER-001` 的"改变默认身份"，因此为 MAJOR。OAuth 授权码交换、refresh、模型发现与用量查询等凭据/账号域请求不接收客户端值，继续使用同一份 profile authority；profile 仍是所有路径的兜底身份。验收必须覆盖：合法客户端身份原样转发、非法值回落 profile、客户端身份不影响 `Authorization` / `ChatGPT-Account-ID` 与其它 header 策略。
 
 `8.2.0` 新增交互归档的 header 保真开关（`CP-OBS-009`）：默认仍按同一名单脱敏，显式开启 `server.archive_unredacted_headers` 后，客户端请求、上游请求、上游响应、客户端响应四类信息全部按原值落盘，供受控排障使用。开关不放宽日志、指标、错误响应、管理视图与凭据导出的脱敏，且 Codex 上游 attempt 的默认脱敏仍发生在 `codexupstream` Block 边界，只有入站命令显式携带时才放开。
 
@@ -86,7 +90,7 @@
 
 `CP-CLIENT-003` 默认 profile 跟随项目验证过的最新 Codex CLI。升级 profile 必须通过 HTTP、compact、WebSocket、工具续链和模型发现测试。
 
-`CP-CLIENT-004` 不可信的下游身份不得直接透传给 ChatGPT 上游。只有本文 header allowlist 中标记为 `forward` 的字段可以进入上游。
+`CP-CLIENT-004` 不可信的下游身份不得直接透传给 ChatGPT 上游。只有本文 header allowlist 中标记为 `forward` 的字段，以及 `CP-HDR-003`/`CP-HDR-004` 明确列出的有界身份字段，可以进入上游。身份字段的透传只改变上游看到的客户端自述，不得影响账号选择、凭据、`Authorization`、`ChatGPT-Account-ID` 或任何其它策略。
 
 ## 4. 入站端点合同
 
@@ -190,8 +194,8 @@
 | --- | --- | --- |
 | `Authorization` | generate：只来自选中账号 | `CP-HDR-001` |
 | `ChatGPT-Account-ID` | generate：只来自选中账号 | `CP-HDR-002` |
-| `User-Agent` | generate：来自版本 profile | `CP-HDR-003` |
-| `Originator` | generate：来自当前版本 profile，当前为 `codex_exec` | `CP-HDR-004` |
+| `User-Agent` | client：客户端提供合法值时原样复用，否则回落版本 profile | `CP-HDR-003` |
+| `Originator` | client：客户端提供合法值时原样复用，否则回落版本 profile（当前 `codex_exec`） | `CP-HDR-004` |
 | `Accept` | generate：HTTP Responses 与 compact upstream 均为 SSE；compact downstream 再投影 JSON/SSE | `CP-HDR-005` |
 | `OpenAI-Beta` | generate/merge allowlist：WebSocket beta | `CP-HDR-006` |
 | `Session-Id` / `session_id` | normalize：由 session owner 生成 | `CP-HDR-007` |
@@ -213,7 +217,7 @@
 
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
 
-`CP-HDR-021` Codex OAuth 授权码交换和 refresh token 请求必须与 inference transport 读取同一个版本化身份 authority，生成相同的 `User-Agent` 与 `Originator`；OAuth credential endpoint 不发送 inference-only `Version` header。任何 profile 升级必须同时覆盖 credential 与 inference 测试。
+`CP-HDR-021` Codex OAuth 授权码交换、refresh token、模型发现与用量查询属于凭据/账号域请求，必须共用同一份版本化身份 authority，不得接收任何客户端提供的身份值；inference transport 在客户端提供合法身份时按 `CP-HDR-003`/`CP-HDR-004` 复用，否则使用同一份 profile。OAuth credential endpoint 不发送 inference-only `Version` header。任何 profile 升级必须同时覆盖 credential 与 inference 测试。
 
 `CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位为身份元组：账号、归一化 fingerprint mode、账号 fingerprint session 与客户端声明会话的摘要；`off/device` 下上游 `Session-Id` 与该声明一致，`session/full` 下上游会把该账号的全部下游会话收敛成同一个账号级 `Session-Id`，此时按声明会话记录更细，禁止把一个会话的状态回填给另一个。声明会话按优先级取显式会话 header、`client_metadata` 的 `session_id`/`thread_id`、显式 `prompt_cache_key`；三者都没有时**没有记录单位**，既不记录也不回放。调度用的 session 摘要会在信号缺失时代入共享的合成值，该合成值绝不能成为 turn state 记录单位，否则互不相关的无状态请求会共用一个桶。回填顺序为「该记录单位的最近观测值 → 内置或配置的默认值」；默认值为空时该 attempt 不发送这个 header，来源记为 `absent`。只记录真实观测值，默认值本身不写入记录。回填仅发生在客户端未提供时；客户端提供了但被 `CP-HDR-020` 判定为已知跨账号铸造而剥离的值必须保持为空，不得用记录值或默认值替换。回填值出站前必须重新通过 `CP-HDR-020` 的来源守卫。回填只作用于单次上游 attempt，`CP-FAIL-018` 的"无非空 turn-state"只按客户端原值判定，不看回填结果。failover 后的 attempt 属于另一个记录单位，只能回填该账号自己的记录或默认值，不得沿用上一账号的记录。HTTP、SSE、compact、WebSocket 握手以及 `/v1/chat/completions`、`/v1/messages` 适配入口共用同一实现：适配入口必须先按 `CP-HDR-012` 边界解析客户端 turn state 并传递，不得用回填值替换客户端已提供的值。WS 后续 turn 走帧不带 header，不受本规则影响。
 
@@ -305,7 +309,9 @@
 
 `5.0.1` 固化 `CP-SCHED-009`：首次选择、PreferredID/session 粘性及任何重试切号，必须在账号 owner 锁内用与 `CP-CAP-010` 管理投影相同的模型可用性判定重新检查。只 trim 首尾空白，模型 ID 大小写敏感、精确匹配；不得用目录并集、静态 profile、相似名称或别名替代账号自身的有效快照。模型缺失/未知、快照过期、账号不可用、模型或账号冷却、有效额度耗尽均不得选中；并发及 transport 约束只可进一步收紧。无候选立即失败，不放宽模型条件。验收覆盖三个 transport 的不支持/过期/冷却/粘性候选跳过、切号前状态变化和全部候选不可用。
 
-`CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → LRU/round-robin。
+`CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → 额度证据 → LRU/round-robin。
+
+`CP-SCHED-011` 账号候选在 session 粘性与 `priority` 之后、最终轮转之前，必须先按「额度证据」排序：拥有新鲜用量快照、且不存在未到期 limit-reached 窗口的账号，优先于额度未知或快照已过期的账号。该规则只改变同优先级候选之间的排序，不改变准入结论——`CP-CAP-005` 仍然保证缺失或过期快照可以参与尝试，因此当全部候选都缺少新鲜额度证据时，选择结果与引入本规则前一致（继续按轮转）；粘性账号（`CP-SCHED-004`）仍然优先于本规则。依据：部署轮次 `work-office/000001` 观测到某 `free` 账号在其 30 天窗口已 100% 时仍被选中，随后该轮响应头才首次暴露耗尽事实，代价是一次长耗时请求；`interactions_old`/`interactions_new` 中没有更早的可归属观测，说明缺口位于「快照过期 + 尚未轮询」窗口。验收覆盖：新鲜有余量优先于未知/过期、全部未知时保持原有轮转、粘性账号仍然命中、未到期 limit-reached 快照仍被硬性排除。
 
 `CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。无显式信号时可以生成请求域 session，但不能用完整敏感正文作为持久化 key。
 
@@ -442,6 +448,18 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`9.1.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 额度证据优先排序 | CP-SCHED-011 | implemented | `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/quota_evidence_test.go` |
+
+`9.0.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 推理路径复用客户端身份 | CP-HDR-003, CP-HDR-004, CP-CLIENT-004, CP-HDR-021 | implemented | `codexupstream/biz/codex_identity.go`, `codexupstream/biz/biz.go`, `codexupstream/pkg/events/contract.go`, `proxyapi/service/proxy/codex_compat.go`, `proxyapi/pkg/codexresponses/port.go` | `codexupstream/biz/biz_test.go`, `proxyapi/service/proxy/codex_turn_state_scope_test.go` |
 
 `8.2.0` 新增实施追踪：
 
