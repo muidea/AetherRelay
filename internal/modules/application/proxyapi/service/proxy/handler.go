@@ -1384,7 +1384,8 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		}
 		if !rawStream {
 			features.Diagnostics.RequestID = requestIDFromContext(r.Context())
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource})
+			userAgent, originator := codexClientIdentity(r.Header)
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)

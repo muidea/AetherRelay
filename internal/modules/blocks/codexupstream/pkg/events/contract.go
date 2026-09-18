@@ -93,6 +93,14 @@ type SafeError struct {
 	Message string
 }
 
+// ClientIdentity is the bounded downstream identity of CP-HDR-003/004. The
+// receiver normalizes both fields and falls back to the versioned profile
+// whenever one is empty, oversized, or contains control characters.
+type ClientIdentity struct {
+	UserAgent  string
+	Originator string
+}
+
 // CompleteCommand and StartCommand deliberately carry bounded source-wire JSON
 // as bytes. This preserves native Responses objects without map/any EventHub
 // envelopes or a lossy proxy-side protocol translation.
@@ -109,7 +117,11 @@ type CompleteCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	Fingerprint              CodexFingerprint
+	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
+	// the inference path. Empty or invalid fields fall back to the versioned
+	// profile, and credential/account-domain calls never carry it.
+	ClientIdentity ClientIdentity
+	Fingerprint    CodexFingerprint
 }
 type CompleteResult struct {
 	Body              []byte
@@ -135,7 +147,11 @@ type CompactCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	Fingerprint              CodexFingerprint
+	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
+	// the inference path. Empty or invalid fields fall back to the versioned
+	// profile, and credential/account-domain calls never carry it.
+	ClientIdentity ClientIdentity
+	Fingerprint    CodexFingerprint
 }
 
 type CompactResult struct {
@@ -163,7 +179,11 @@ type StartCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	Fingerprint              CodexFingerprint
+	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
+	// the inference path. Empty or invalid fields fall back to the versioned
+	// profile, and credential/account-domain calls never carry it.
+	ClientIdentity ClientIdentity
+	Fingerprint    CodexFingerprint
 }
 type StartResult struct {
 	StreamID          string
@@ -204,7 +224,11 @@ type WSOpenCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	Fingerprint              CodexFingerprint
+	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
+	// the inference path. Empty or invalid fields fall back to the versioned
+	// profile, and credential/account-domain calls never carry it.
+	ClientIdentity ClientIdentity
+	Fingerprint    CodexFingerprint
 }
 type WSOpenResult struct {
 	SessionID         string

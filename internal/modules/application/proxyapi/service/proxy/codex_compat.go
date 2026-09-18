@@ -27,6 +27,8 @@ const (
 	codexDefaultBetaFeatures       = codexRemoteCompactionV2Feature
 	codexTurnStateHeader           = "X-Codex-Turn-State"
 	codexTurnStateLimit            = 16 << 10
+	codexClientUserAgentLimit      = 256
+	codexClientOriginatorLimit     = 64
 	codexBetaFeatureTokenLimit     = 32
 	codexBetaFeatureValueLimit     = 4096
 )
@@ -129,6 +131,26 @@ func codexTurnStateFromHeaders(headers http.Header) (string, error) {
 		return "", fmt.Errorf("X-Codex-Turn-State is invalid")
 	}
 	return turnState, nil
+}
+
+// codexClientIdentity implements CP-HDR-003/004 on the inference path: the
+// downstream client's own identity is reused verbatim. Missing or malformed
+// values stay empty so the upstream Block falls back to the versioned profile,
+// and the pair never influences credentials or account selection.
+func codexClientIdentity(headers http.Header) (userAgent, originator string) {
+	return boundedCodexIdentityValue(headers.Get("User-Agent"), codexClientUserAgentLimit),
+		boundedCodexIdentityValue(headers.Get("Originator"), codexClientOriginatorLimit)
+}
+
+func boundedCodexIdentityValue(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > limit {
+		return ""
+	}
+	if strings.ContainsFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return ""
+	}
+	return value
 }
 
 func codexFeaturesFromHeaders(headers http.Header) (codexRequestFeatures, error) {

@@ -57,6 +57,62 @@ func TestCodexTurnStateAdaptersKeepClientValue(t *testing.T) {
 	}
 }
 
+// CP-HDR-003/004: the inference path carries the downstream client's bounded
+// identity all the way to the executor, on the native and adapter entrypoints.
+func TestCodexClientIdentityReachesExecutor(t *testing.T) {
+	const clientAgent = "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
+	for name, testCase := range map[string]struct {
+		path         string
+		body         string
+		userAgent    string
+		originator   string
+		wantAgent    string
+		wantOriginat string
+	}{
+		"native responses": {
+			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
+			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui",
+		},
+		"absent identity": {
+			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
+			wantAgent: "", wantOriginat: "",
+		},
+		"oversized identity": {
+			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
+			userAgent: strings.Repeat("x", codexClientUserAgentLimit+1), originator: strings.Repeat("y", codexClientOriginatorLimit+1),
+			wantAgent: "", wantOriginat: "",
+		},
+		"chat adapter": {
+			path: "/v1/chat/completions", body: `{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`,
+			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var received codexresponses.Request
+			handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+				received = request
+				return codexresponses.Result{Body: []byte(`{"id":"resp_identity","model":"gpt-5.2-codex","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":2}}`)}, nil
+			}})
+			request := httptest.NewRequest(http.MethodPost, testCase.path, bytes.NewBufferString(testCase.body))
+			request.Header.Set("Authorization", "Bearer test-client-key")
+			if testCase.userAgent != "" {
+				request.Header.Set("User-Agent", testCase.userAgent)
+			}
+			if testCase.originator != "" {
+				request.Header.Set("Originator", testCase.originator)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if received.ClientUserAgent != testCase.wantAgent || received.ClientOriginator != testCase.wantOriginat {
+				t.Fatalf("CP-HDR-003/004 user-agent=%q originator=%q", received.ClientUserAgent, received.ClientOriginator)
+			}
+		})
+	}
+}
+
 // CP-HDR-012/CP-HDR-022: an oversized adapter turn state is rejected before an
 // account is selected, exactly like on the native entrypoint.
 func TestCodexTurnStateAdaptersRejectInvalidValue(t *testing.T) {

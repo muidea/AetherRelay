@@ -682,6 +682,64 @@ func TestPerformKeepsCredentialHeadersWhenArchiveIsUnredacted(t *testing.T) {
 	}
 }
 
+// CP-HDR-003/004: the inference path reuses the downstream client's bounded
+// identity and falls back to the versioned profile for anything rejected.
+func TestPerformReusesClientIdentity(t *testing.T) {
+	const clientAgent = "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
+	seen := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	previousURL := responsesURL
+	responsesURL = server.URL
+	t.Cleanup(func() { responsesURL = previousURL })
+
+	for name, testCase := range map[string]struct {
+		identity     events.ClientIdentity
+		wantAgent    string
+		wantOriginat string
+	}{
+		"client identity": {
+			identity:     events.ClientIdentity{UserAgent: clientAgent, Originator: "codex-tui"},
+			wantAgent:    clientAgent,
+			wantOriginat: "codex-tui",
+		},
+		"absent": {
+			identity:     events.ClientIdentity{},
+			wantAgent:    currentIdentity.UserAgent,
+			wantOriginat: currentIdentity.Originator,
+		},
+		"oversized": {
+			identity:     events.ClientIdentity{UserAgent: strings.Repeat("x", maxClientUserAgentBytes+1), Originator: strings.Repeat("y", maxClientOriginatorBytes+1)},
+			wantAgent:    currentIdentity.UserAgent,
+			wantOriginat: currentIdentity.Originator,
+		},
+		"control characters": {
+			identity:     events.ClientIdentity{UserAgent: "codex-tui\r\nX-Injected: 1", Originator: "codex\ttui"},
+			wantAgent:    currentIdentity.UserAgent,
+			wantOriginat: currentIdentity.Originator,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response, _, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-test"}`), codexRequestProfile{clientIdentity: testCase.identity})
+			if err != nil || class != "" {
+				t.Fatalf("perform class=%q err=%v", class, err)
+			}
+			_ = response.Body.Close()
+			headers := <-seen
+			if headers.Get("User-Agent") != testCase.wantAgent || headers.Get("Originator") != testCase.wantOriginat {
+				t.Fatalf("CP-HDR-003/004 user-agent=%q originator=%q", headers.Get("User-Agent"), headers.Get("Originator"))
+			}
+			if headers.Get("Authorization") != "Bearer access-token" || headers.Get("ChatGPT-Account-ID") != "chatgpt-account-id" {
+				t.Fatalf("CP-CLIENT-004 identity leaked into credentials: %v", headers)
+			}
+		})
+	}
+}
+
 func eventHeaderMap(headers []events.Header) http.Header {
 	result := http.Header{}
 	for _, header := range headers {

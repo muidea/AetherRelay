@@ -72,7 +72,8 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, clientBody), PromptCacheKeySource: cacheKeySource}
+	userAgent, originator := codexClientIdentity(r.Header)
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, clientBody), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if clientStream {
@@ -220,7 +221,8 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		h.writeCodexResponsesError(w, r, round, started, provider, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: features.PromptCacheKeySource}
+	userAgent, originator := codexClientIdentity(r.Header)
+	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: features.PromptCacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {

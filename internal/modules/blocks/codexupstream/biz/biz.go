@@ -117,7 +117,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact body"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
 	response, attempt, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompactResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -184,12 +184,12 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		result.Set(events.WSOpenResult{ErrorClass: events.ErrorProtocol}, nil)
 		return
 	}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
 	headers := fhttp.Header{}
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(cmd.AccessToken))
-	headers.Set("User-Agent", currentIdentity.UserAgent)
-	headers.Set("Originator", currentIdentity.Originator)
+	headers.Set("User-Agent", profile.requestUserAgent())
+	headers.Set("Originator", profile.requestOriginator())
 	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
 	applyCodexFeatureHeaders(headers, profile.betaFeatures, profile.responsesLite)
 	applyCodexRequestIdentity(headers, profile)
 	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
@@ -435,7 +435,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompleteResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -469,7 +469,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.StartResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -689,8 +689,8 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Connection", "Keep-Alive")
-	req.Header.Set("User-Agent", currentIdentity.UserAgent)
-	req.Header.Set("Originator", currentIdentity.Originator)
+	req.Header.Set("User-Agent", profile.requestUserAgent())
+	req.Header.Set("Originator", profile.requestOriginator())
 	applyCodexRequestIdentity(req.Header, profile)
 	applyCodexFeatureHeaders(req.Header, profile.betaFeatures, profile.responsesLite)
 	if accountID = strings.TrimSpace(accountID); accountID != "" {

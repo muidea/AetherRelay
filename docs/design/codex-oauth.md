@@ -12,7 +12,7 @@
 
 - 进程始终注入只读内建 Provider `codexoauth`；`codexaccountpool` 是单一凭据与模型快照 owner（安全文档 scope `codex_oauth_accounts`）。
 - 模型按账号从 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现，快照 6 小时有效；该路径不作为 AetherRelay 入站端点。失败按账号独立指数退避（30 秒 ~ 5 分钟），仅持有有效快照的账号可被调度；可路由模型是全部健康账号快照的并集，不提供 allowlist 筛选项。
-- 每账号代理同时用于授权码换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致；管理读模型从不返回代理值。credential 与 inference transport 读取同一个版本化 Codex identity profile，OAuth token 请求生成相同的 `User-Agent` / `Originator`，但不发送 inference-only `Version`。
+- 每账号代理同时用于授权码换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致；管理读模型从不返回代理值。credential 与 inference transport 共用同一份版本化 Codex identity profile 作为兜底身份：授权码交换、refresh、模型发现与用量读取始终使用 profile 的 `User-Agent` / `Originator`（不发送 inference-only `Version`）；只有推理路径在客户端提供了合法值时按 `CP-HDR-003`/`CP-HDR-004` 原样复用该值，缺失、超长或含控制字符则回落 profile。客户端身份只影响上游看到的自述，不参与账号选择、凭据或任何 header 策略。
 - OAuth 新增与重新认证使用同一 owner 合同但语义分流：账号行发起时 session 绑定稳定本地 ID并复用既有代理；通用入口按精确上游 `account_id`（缺失时仅按唯一邮箱）收敛轮换凭据。不同 `account_id` 的同邮箱 workspace 不合并，目标身份冲突明确失败。
 - 导入凭据、刷新凭据或完成 OAuth 后立即提交一次模型同步和用量刷新；管理页的「刷新凭据」表示强制续期 OAuth 凭据，成功后自动同步模型与上游用量。「同步模型」和「刷新用量」仍可独立执行并轮询有界进度任务（当前进程保留 30 分钟，持久化快照才是重启后权威）。进程启动必须先用持久化账号快照同步构建首个有效目录，再开放 HTTP 路由；上游重新发现继续异步执行，不能在此期间用空目录覆盖仍有效的持久化模型。
 - 自动触发的模型同步与用量刷新由管理页静默轮询，避免一次账号操作重复显示两条完成通知；只有用户手工启动的同步任务显示进度，成功完成信息自动隐藏，轮询错误保持可见。
@@ -42,6 +42,7 @@
 
 ## 演进记录
 
+- 2026-09-18：合同 `9.0.0` 把推理路径的出站默认身份改为复用下游客户端身份（`User-Agent` / `Originator`，非法值回落 profile，凭据与账号域请求不接收客户端值）。
 - 2026-09-18：合同 `8.1.0` 新增 `CP-HDR-022`/`CP-HDR-023` 会话级 Turn-State 记录与缺失回填，含 `codex_oauth.turn_state_fallback` / `default_turn_state` 两个热更新配置与 `turn_state_source` 有界诊断。
 - 2026-08-21：对齐近期 CLIProxyAPI/sub2api 的 input-token preflight、nested cache hint、GPT-5.6 双上下文、compact availability-neutral、OAuth identity 与后续 WebSocket turn 安全迁移。
 - 2026-08-17：对齐 sub2api 的 native remote compaction v2、会话 beta、Turn-State 来源守卫和显式 opt-in 指纹收敛。

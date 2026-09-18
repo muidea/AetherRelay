@@ -11,7 +11,39 @@ import (
 const (
 	defaultCodexBetaFeatures = "remote_compaction_v2"
 	maxCodexTurnStateBytes   = 16 << 10
+	maxClientUserAgentBytes  = 256
+	maxClientOriginatorBytes = 64
 )
+
+// codexClientIdentityValue applies the CP-HDR-003/004 boundary at the Block
+// boundary: an empty result means "use the versioned profile". Oversized or
+// control-character values are rejected rather than forwarded.
+func codexClientIdentityValue(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > limit {
+		return ""
+	}
+	if strings.ContainsFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return ""
+	}
+	return value
+}
+
+// requestUserAgent and requestOriginator resolve the identity sent upstream:
+// the client's own value when it passed the boundary, else the versioned profile.
+func (p codexRequestProfile) requestUserAgent() string {
+	if value := codexClientIdentityValue(p.clientIdentity.UserAgent, maxClientUserAgentBytes); value != "" {
+		return value
+	}
+	return currentIdentity.UserAgent
+}
+
+func (p codexRequestProfile) requestOriginator() string {
+	if value := codexClientIdentityValue(p.clientIdentity.Originator, maxClientOriginatorBytes); value != "" {
+		return value
+	}
+	return currentIdentity.Originator
+}
 
 type codexRequestProfile struct {
 	sessionHash   string
@@ -22,6 +54,9 @@ type codexRequestProfile struct {
 	// archiveUnredacted is CP-OBS-009: it decides whether the archived attempt
 	// observation keeps credential headers verbatim. The zero value redacts.
 	archiveUnredacted bool
+	// clientIdentity is CP-HDR-003/004: the downstream client's bounded identity.
+	// Any empty or rejected field falls back to the versioned profile.
+	clientIdentity events.ClientIdentity
 }
 
 func resolvedCodexBetaFeatures(value string) string {

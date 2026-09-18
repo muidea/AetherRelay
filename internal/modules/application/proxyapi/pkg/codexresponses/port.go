@@ -96,6 +96,11 @@ type Request struct {
 	// identity and model. It is empty when the client declared no conversation
 	// identity, and an empty scope never records or replays a turn state.
 	SessionScope string
+	// ClientUserAgent and ClientOriginator are the bounded downstream identity of
+	// CP-HDR-003/004. Empty values make the executor fall back to its versioned
+	// profile; they never influence credentials or account selection.
+	ClientUserAgent  string
+	ClientOriginator string
 }
 
 type Result struct {
@@ -129,6 +134,10 @@ type WebsocketOpenRequest struct {
 	TurnState     string
 	// SessionScope is the CP-HDR-022 record unit; see Request.SessionScope.
 	SessionScope string
+	// ClientUserAgent and ClientOriginator are the bounded downstream identity of
+	// CP-HDR-003/004; see Request.ClientUserAgent.
+	ClientUserAgent  string
+	ClientOriginator string
 }
 type WebsocketOpenResult struct {
 	SessionID       string
