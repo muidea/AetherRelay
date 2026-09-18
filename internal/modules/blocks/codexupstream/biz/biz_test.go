@@ -821,8 +821,18 @@ func TestCodexTurnMetadataCarriersStayConsistent(t *testing.T) {
 	if strings.Contains(string(body), "client-leak") {
 		t.Fatalf("CP-HDR-011 client identity leaked into body: %s", body)
 	}
-	if envelope.ClientMetadata["sandbox_mode"] != "read-only" {
-		t.Fatalf("CP-HDR-011 body attribute=%+v", envelope.ClientMetadata)
+	// 属性只进内嵌 JSON：顶层只允许已知的字符串键（上游以 invalid_type 拒绝其它类型）。
+	embedded, _ := envelope.ClientMetadata["x-codex-turn-metadata"].(string)
+	if !strings.Contains(embedded, `"sandbox_mode":"read-only"`) || !strings.Contains(embedded, `"window_number":3`) {
+		t.Fatalf("CP-HDR-011 embedded metadata=%s", embedded)
+	}
+	for key, value := range envelope.ClientMetadata {
+		if _, isString := value.(string); !isString {
+			t.Fatalf("CP-HDR-011 flat client_metadata value %s is not a string: %v", key, value)
+		}
+	}
+	if _, flattened := envelope.ClientMetadata["sandbox_mode"]; flattened {
+		t.Fatalf("CP-HDR-011 attribute was flattened into client_metadata: %+v", envelope.ClientMetadata)
 	}
 }
 

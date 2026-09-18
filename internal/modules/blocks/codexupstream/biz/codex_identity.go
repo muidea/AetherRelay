@@ -143,29 +143,7 @@ func applyCodexTurnMetadata(headers headerSetter, profile codexRequestProfile) {
 	if window := strings.TrimSpace(getter.Get("X-Codex-Window-Id")); window != "" {
 		metadata["window_id"] = window
 	}
-	turnID := strings.TrimSpace(profile.turnMetadata.TurnID)
-	if turnID == "" {
-		turnID = strings.TrimSpace(profile.fingerprint.TurnID)
-	}
-	if turnID != "" {
-		metadata["turn_id"] = turnID
-	}
-	rootTurnID := strings.TrimSpace(profile.turnMetadata.RootTurnID)
-	if rootTurnID != "" {
-		metadata["root_turn_id"] = rootTurnID
-	} else if turnID != "" {
-		metadata["root_turn_id"] = turnID
-	}
-	startedAt := profile.turnMetadata.TurnStartedAtMS
-	if startedAt <= 0 {
-		startedAt = profile.fingerprint.TurnStartedAtUnixMS
-	}
-	if startedAt > 0 {
-		metadata["turn_started_at_unix_ms"] = startedAt
-	}
-	for key, value := range decodeTurnMetadataAttributes(profile.turnMetadata.Attributes) {
-		metadata[key] = value
-	}
+	applyCodexTurnFields(metadata, profile)
 	if len(metadata) == 0 {
 		return
 	}
@@ -257,13 +235,14 @@ func applyCodexRequestBody(body []byte, profile codexRequestProfile) ([]byte, er
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("decode Codex fingerprint body: %w", err)
 	}
-	// The proxy boundary already projects inbound metadata. Rebuild from an empty
-	// bounded projection here as defense in depth for future internal callers.
+	// CP-HDR-011: the flat projection only carries the known Codex keys, and every
+	// value is a string — the upstream rejects anything else with invalid_type
+	// (live: client_metadata.auto_review_enabled expected a string). Typed values,
+	// including all client attributes, live inside the embedded turn metadata JSON.
 	metadata := map[string]any{}
 	session, thread, window := profile.sessionIdentity()
 	if fingerprint.InstallationID != "" {
 		metadata["x-codex-installation-id"] = fingerprint.InstallationID
-		metadata["installation_id"] = fingerprint.InstallationID
 	}
 	if session != "" {
 		metadata["session_id"] = session
@@ -273,36 +252,37 @@ func applyCodexRequestBody(body []byte, profile codexRequestProfile) ([]byte, er
 	}
 	if window != "" {
 		metadata["x-codex-window-id"] = window
-		metadata["window_id"] = window
 	}
 	turnID := strings.TrimSpace(profile.turnMetadata.TurnID)
 	if turnID == "" {
 		turnID = strings.TrimSpace(fingerprint.TurnID)
 	}
-	if rootTurnID := strings.TrimSpace(profile.turnMetadata.RootTurnID); rootTurnID != "" {
-		metadata["root_turn_id"] = rootTurnID
-	} else if turnID != "" {
-		metadata["root_turn_id"] = turnID
+	rootTurnID := strings.TrimSpace(profile.turnMetadata.RootTurnID)
+	if rootTurnID == "" {
+		rootTurnID = turnID
 	}
 	if turnID != "" {
 		metadata["turn_id"] = turnID
 	}
-	startedAt := profile.turnMetadata.TurnStartedAtMS
-	if startedAt <= 0 {
-		startedAt = fingerprint.TurnStartedAtUnixMS
+	if rootTurnID != "" {
+		metadata["root_turn_id"] = rootTurnID
 	}
-	if startedAt > 0 {
-		metadata["turn_started_at_unix_ms"] = startedAt
+	embedded := map[string]any{}
+	for key, value := range metadata {
+		embedded[key] = value
 	}
-	for key, value := range decodeTurnMetadataAttributes(profile.turnMetadata.Attributes) {
-		metadata[key] = value
+	applyCodexTurnFields(embedded, profile)
+	if profile.responsesLite {
+		metadata["ws_request_header_x_openai_internal_codex_responses_lite"] = "true"
+	}
+	if len(embedded) > 0 {
+		if nested := encodedCodexTurnMetadata(embedded); nested != "" {
+			metadata["x-codex-turn-metadata"] = nested
+		}
 	}
 	if len(metadata) == 0 {
 		// Nothing to declare: never emit an empty client_metadata envelope.
 		return body, nil
-	}
-	if turnMetadata := encodedCodexTurnMetadata(metadata); turnMetadata != "" {
-		metadata["x-codex-turn-metadata"] = turnMetadata
 	}
 	rawMetadata, err := json.Marshal(metadata)
 	if err != nil {
@@ -310,6 +290,35 @@ func applyCodexRequestBody(body []byte, profile codexRequestProfile) ([]byte, er
 	}
 	envelope["client_metadata"] = rawMetadata
 	return json.Marshal(envelope)
+}
+
+// applyCodexTurnFields fills the non-identity part of a turn metadata object: the
+// turn level values (client first, fingerprint fallback) and the client's bounded
+// scalar attributes. Shared by the flat header and the embedded body copy so both
+// carriers describe the same turn.
+func applyCodexTurnFields(metadata map[string]any, profile codexRequestProfile) {
+	turnID := strings.TrimSpace(profile.turnMetadata.TurnID)
+	if turnID == "" {
+		turnID = strings.TrimSpace(profile.fingerprint.TurnID)
+	}
+	if turnID != "" {
+		metadata["turn_id"] = turnID
+	}
+	if rootTurnID := strings.TrimSpace(profile.turnMetadata.RootTurnID); rootTurnID != "" {
+		metadata["root_turn_id"] = rootTurnID
+	} else if turnID != "" {
+		metadata["root_turn_id"] = turnID
+	}
+	startedAt := profile.turnMetadata.TurnStartedAtMS
+	if startedAt <= 0 {
+		startedAt = profile.fingerprint.TurnStartedAtUnixMS
+	}
+	if startedAt > 0 {
+		metadata["turn_started_at_unix_ms"] = startedAt
+	}
+	for key, value := range decodeTurnMetadataAttributes(profile.turnMetadata.Attributes) {
+		metadata[key] = value
+	}
 }
 
 func encodedCodexTurnMetadata(metadata map[string]any) string {
