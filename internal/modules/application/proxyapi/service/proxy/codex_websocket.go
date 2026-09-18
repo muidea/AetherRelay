@@ -115,7 +115,12 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				return
 			}
 			sessionHash := codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})
-			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState}
+			// CP-HDR-022: the record unit comes from the declared conversation,
+			// which only exists on the raw create payload (normalization strips
+			// client_metadata before the upstream request).
+			var scopeBody map[string]any
+			_ = decodeCodexJSON(raw, &scopeBody)
+			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, scopeBody)}
 			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 			if openErr != nil {
 				if failure, ok := codexresponses.AsFailure(openErr); ok {
@@ -125,6 +130,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				return
 			}
 			h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
+			round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 			sessionID = opened.SessionID
 		}
 		if requestModel != model {
@@ -187,6 +193,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 						return
 					}
 					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
+					round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 					sessionID = opened.SessionID
 					attemptPayload = retryPayload
 					migrationAttempts++

@@ -47,6 +47,13 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		return
 	}
 	markConversionDegraded(round, ignored)
+	// CP-HDR-022: the adapter entry is a Codex entry too, so an inbound turn
+	// state must reach the executor instead of being replaced by the fallback.
+	turnState, err := codexTurnStateFromHeaders(r.Header)
+	if err != nil {
+		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
+		return
+	}
 	sessionHash := codexSessionHash(r, model, normalizedBody)
 	normalized, _, cacheKeySource, err := ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 	if err != nil {
@@ -54,7 +61,7 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		return
 	}
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, PromptCacheKeySource: cacheKeySource}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource}
 	request.Diagnostics = codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if stream {
@@ -67,6 +74,7 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		return
 	}
 	h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, result.Attempt, nil)
+	round.SetTurnStateFallback(codexresponses.TurnStateFallback(result.TurnStateSource))
 	converted, usage, convertErr := convertCodexResponsesToChat(result.Body, model)
 	if convertErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
@@ -367,6 +375,7 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 	}
 	err := h.codexResponses.StreamCodexResponses(r.Context(), request, func(info codexresponses.StreamStart) error {
 		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, info.Attempt, nil)
+		round.SetTurnStateFallback(codexresponses.TurnStateFallback(info.TurnStateSource))
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		return nil
 	}, emit)

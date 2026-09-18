@@ -601,6 +601,11 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 		if r.Header.Get("ChatGPT-Account-ID") != "chatgpt-account-id" || r.Header.Get("Accept") != "text/event-stream" {
 			t.Fatalf("Codex account headers=%v", r.Header)
 		}
+		// CP-HDR-023: the proxy may fill the turn state, and it still reaches the
+		// upstream unchanged.
+		if r.Header.Get("X-Codex-Turn-State") != "opaque-turn-state" {
+			t.Fatalf("Codex turn state=%q", r.Header.Get("X-Codex-Turn-State"))
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Set-Cookie", "upstream-secret")
 		w.Header().Set("X-Debug-Trace", "trace-1")
@@ -611,7 +616,7 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	previousURL := responsesURL
 	responsesURL = server.URL
 	t.Cleanup(func() { responsesURL = previousURL })
-	response, attempt, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), codexRequestProfile{})
+	response, attempt, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-5.2-codex","stream":true}`), codexRequestProfile{turnState: "opaque-turn-state"})
 	if err != nil || class != "" || response == nil {
 		t.Fatalf("perform response=%v class=%q err=%v", response, class, err)
 	}
@@ -620,6 +625,10 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	responseHeaders := eventHeaderMap(attempt.Response.Headers)
 	if requestHeaders.Get("Authorization") != "<redacted>" || requestHeaders.Get("ChatGPT-Account-ID") != "<redacted>" {
 		t.Fatalf("credential headers were not redacted: %v", requestHeaders)
+	}
+	// CP-HDR-023: the archived attempt keeps only the header's presence.
+	if requestHeaders.Get("X-Codex-Turn-State") != "<redacted>" {
+		t.Fatalf("turn state was archived: %v", requestHeaders)
 	}
 	if requestHeaders.Get("User-Agent") != currentIdentity.UserAgent || attempt.Request.Method != http.MethodPost || attempt.Request.URL != server.URL || attempt.Request.BodyBytes == 0 {
 		t.Fatalf("request observation=%+v headers=%v", attempt.Request, requestHeaders)

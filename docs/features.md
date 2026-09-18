@@ -163,7 +163,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - 模型按账号从 ChatGPT 上游 `/backend-api/codex/models` 自动发现并缓存 6 小时，该路径不作为 AetherRelay 入站端点；失败指数退避；可路由模型是全部健康账号模型快照的并集，不提供 allowlist。
 - 上游 `401` 触发单飞 refresh 后仅重试一次尚未写出的请求；普通 `429` 记录模型级冷却并切换未尝试账号；上游已开始 SSE/WS 业务输出后不切换账号；明确 `usage_limit_reached` 记录凭据级额度耗尽与上游恢复时间，并冷却该凭据的全部模型（运行期观察，非官方额度）。WebSocket 第二个及后续 turn 只有在尚未输出、完整 transcript 可在消息上限内重建且工具 call/output 覆盖完整时，才会关闭旧 session 并最多迁移两次。
 - 非流式 `/v1/responses` 在内部要求上游 SSE，并仅从 `response.completed` 事件返回原始 Response 对象。
-- WebSocket 支持规范入口 `GET /v1/responses`；compact 对客户端支持 unary JSON 和最小 SSE 投影，但上游使用原生 streaming `/responses` + `compaction_trigger`，不再调用已下线的 unary compact 端点。compact 的 request fault 停止切号，非 credential 临时故障不会污染普通 Responses 冷却；401/402/结构化 403/429 仍保留账号反馈。所有 OAuth 请求携带会话级 beta profile；Turn-State 有界回传并防止已知跨账号 echo。不提供 `/backend-api/codex/*` 入站别名。Realtime、网页会话和插件不属于该能力；`/v1/search` 与临时对话不经过 Codex 账号域。
+- WebSocket 支持规范入口 `GET /v1/responses`；compact 对客户端支持 unary JSON 和最小 SSE 投影，但上游使用原生 streaming `/responses` + `compaction_trigger`，不再调用已下线的 unary compact 端点。compact 的 request fault 停止切号，非 credential 临时故障不会污染普通 Responses 冷却；401/402/结构化 403/429 仍保留账号反馈。所有 OAuth 请求携带会话级 beta profile；Turn-State 按「账号 + 客户端声明的会话」记录并只在客户端缺失时回填（无观测时使用配置的默认值，默认值为空则不发送），客户端完全没有声明会话时不记录也不回放，客户端提供但被判定为其它账号铸造的值保持为空，防止已知跨账号 echo 与无状态请求串线。不提供 `/backend-api/codex/*` 入站别名。Realtime、网页会话和插件不属于该能力；`/v1/search` 与临时对话不经过 Codex 账号域。
 - 账号凭据、代理与到期时间只写 `state.database`；管理 API 直接显示邮箱，但不返回 token、账号 ID 或代理。账号代理同时用于 OAuth 换令牌、refresh、模型发现、用量读取与 Responses 请求，保证出口 IP 一致。
 - 管理页不提供 Codex 槽位单独导出；选中的统一账号通过整体账号池导出接口获取完整凭据包，该接口显式返回 `Cache-Control: no-store`，页面不预览且仅用短生命周期 Blob 触发下载。
 

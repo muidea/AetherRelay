@@ -120,15 +120,26 @@ func rawCodexResponsesLite(raw []byte) bool {
 	return codexMetadataTrue(envelope.ClientMetadata["ws_request_header_x_openai_internal_codex_responses_lite"])
 }
 
+// codexTurnStateFromHeaders applies the CP-HDR-012 boundary to an inbound turn
+// state. Every entrypoint that can reach Codex OAuth parses it here, so a client
+// supplied value is never dropped and then replaced by the CP-HDR-022 fallback.
+func codexTurnStateFromHeaders(headers http.Header) (string, error) {
+	turnState := strings.TrimSpace(headers.Get(codexTurnStateHeader))
+	if len(turnState) > codexTurnStateLimit || strings.ContainsFunc(turnState, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "", fmt.Errorf("X-Codex-Turn-State is invalid")
+	}
+	return turnState, nil
+}
+
 func codexFeaturesFromHeaders(headers http.Header) (codexRequestFeatures, error) {
 	features := codexRequestFeatures{BetaFeatures: codexDefaultBetaFeatures}
 	if headers == nil {
 		return features, nil
 	}
 	features.ResponsesLite = strings.EqualFold(strings.TrimSpace(headers.Get("X-OpenAI-Internal-Codex-Responses-Lite")), "true")
-	turnState := strings.TrimSpace(headers.Get(codexTurnStateHeader))
-	if len(turnState) > codexTurnStateLimit || strings.ContainsFunc(turnState, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		return codexRequestFeatures{}, fmt.Errorf("X-Codex-Turn-State is invalid")
+	turnState, err := codexTurnStateFromHeaders(headers)
+	if err != nil {
+		return codexRequestFeatures{}, err
 	}
 	features.TurnState = turnState
 	tokens := make([]string, 0, 4)
@@ -1311,6 +1322,29 @@ func codexSessionDigest(r *http.Request, model string, body map[string]any, incl
 	if r == nil {
 		return ""
 	}
+	signal := codexSessionSignal(r, body, includeRoutingOnly)
+	if signal == "" {
+		signal = "default"
+	}
+	identity := clientauth.ClientIdentityFromContext(r.Context())
+	digest := sha256.Sum256([]byte("aetherrelay:codex-session:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + signal))
+	return hex.EncodeToString(digest[:])
+}
+
+// codexSessionSignal implements the CP-SCHED-002 signal priority and reports an
+// empty signal when the client declared no conversation identity at all.
+func codexSessionSignal(r *http.Request, body map[string]any, includeRoutingOnly bool) string {
+	signal := codexSessionHeaderSignal(r, includeRoutingOnly)
+	if signal == "" {
+		signal = codexPromptCacheSignal(body)
+	}
+	return signal
+}
+
+func codexSessionHeaderSignal(r *http.Request, includeRoutingOnly bool) string {
+	if r == nil {
+		return ""
+	}
 	signal := ""
 	if includeRoutingOnly && r.URL != nil && strings.TrimRight(r.URL.Path, "/") == "/v1/messages" {
 		signal = strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id"))
@@ -1323,17 +1357,57 @@ func codexSessionDigest(r *http.Request, model string, body map[string]any, incl
 			break
 		}
 	}
+	return signal
+}
+
+// codexTurnStateScopeDigest implements the CP-HDR-022 record unit: the digest of
+// an explicitly declared downstream conversation, namespaced by client identity
+// and model exactly like the scheduling session. The scheduling digest replaces a
+// missing signal with a shared synthetic one, which must never become a turn
+// state bucket, so a client without any declared conversation identity gets no
+// record unit at all instead. The declared conversation outranks the client cache
+// key, which may be shared across conversations of the same credential.
+func codexTurnStateScopeDigest(r *http.Request, model string, body map[string]any) string {
+	if r == nil {
+		return ""
+	}
+	signal := codexSessionHeaderSignal(r, true)
 	if signal == "" {
-		if value, _ := body["prompt_cache_key"].(string); strings.TrimSpace(value) != "" {
-			signal = strings.TrimSpace(value)
-		}
+		signal = codexConversationIdentity(body)
 	}
 	if signal == "" {
-		signal = "default"
+		signal = codexPromptCacheSignal(body)
+	}
+	if signal == "" {
+		return ""
 	}
 	identity := clientauth.ClientIdentityFromContext(r.Context())
-	digest := sha256.Sum256([]byte("aetherrelay:codex-session:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + signal))
+	digest := sha256.Sum256([]byte("aetherrelay:codex-turn-state:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + signal))
 	return hex.EncodeToString(digest[:])
+}
+
+func codexPromptCacheSignal(body map[string]any) string {
+	if value, _ := body["prompt_cache_key"].(string); strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+// codexConversationIdentity reads the Codex client's declared conversation
+// identity. CP-REQ-016 rebuilds client_metadata for the upstream request, so it
+// only exists on the raw inbound body.
+func codexConversationIdentity(body map[string]any) string {
+	metadata, ok := body["client_metadata"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	for _, key := range []string{"session_id", "thread_id"} {
+		if value, ok := metadata[key].(string); ok && strings.TrimSpace(value) != "" {
+			parts = append(parts, strings.TrimSpace(value))
+		}
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash string) ([]byte, map[string]any, codexresponses.PromptCacheKeySource, error) {

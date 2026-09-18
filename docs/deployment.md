@@ -60,6 +60,7 @@ ${EDITOR:-vi} config.yaml
 - 每个 enabled Provider 仍必须显式声明 `protocol`、`base_url`、`endpoints` 与 `models`，但这些字段由管理页提交到运行期 Provider 存储。
 - `model_metadata` 只登记可选模型元数据，模型 ID exact 且严格区分大小写；它不发布模型或创建路由。Provider 的精确 `models` 与账号池发现结果决定实际模型，通配 pattern 只参与候选匹配。
 - `state.dir` 是单实例唯一的持久化工作区（DuckDB 用量、账号池、图片元数据与交互归档都在其中），多实例不得共享。
+- 少量运行期状态只存在于进程内存、不落盘：模型发现/用量刷新任务进度、Codex WebSocket 会话与路由粘性，以及 `CP-HDR-022` 的会话级 Turn-State 回填记录。它们重启即清空；多实例前置负载均衡时同一客户端可能落到不同实例，从而缺失这条记忆。
 - 客户端 API Key 不在配置文件中声明，由 Admin 创建并保存到 DuckDB；创建时必须绑定指定 Provider 或选择全部 Provider。数据库没有 Key 时服务仍可启动，但所有数据端点返回 401，Admin 仍可用于创建第一个 Key。
 
 ```yaml

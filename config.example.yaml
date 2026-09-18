@@ -127,6 +127,13 @@ codex_oauth:
   websocket_max_message_bytes: 1048576
   websocket_idle_timeout_seconds: 300
   websocket_max_lifetime_seconds: 1800
+  # 会话级 Turn-State 记忆：客户端未提供 X-Codex-Turn-State 时，按客户端声明的会话回填该
+  # 会话最近一次观测到的值。省略时为 true；false 只停止回填，仍然继续记录，可热更新。
+  turn_state_fallback: true
+  # 该会话没有任何观测记录时的兜底值。仓库不内置该值，需要兜底时在此填写上游下发的
+  # opaque 值（或用 AETHERRELAY_CODEX_OAUTH_DEFAULT_TURN_STATE 注入）；未填写时该请求
+  # 不发送这个 header。它只用于上游请求头，不会写入日志、归档、指标或管理视图，可热更新。
+  default_turn_state: ""
 
 # 直连 Provider 通过管理台创建；定义与 API Key 使用 AETHERRELAY_CREDENTIAL_KEY
 # 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth

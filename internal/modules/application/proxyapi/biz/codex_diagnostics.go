@@ -19,9 +19,15 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 	default:
 		cacheKeySource = codexresponses.PromptCacheKeyAbsent
 	}
+	// CP-HDR-023: the opaque turn state stays in the outbound header; only its
+	// bounded provenance reaches the log.
+	turnStateSource := request.TurnStateSource
+	if !codexresponses.ValidTurnStateSource(turnStateSource) {
+		turnStateSource = codexresponses.TurnStateSourceAbsent
+	}
 	attrs := []any{"request_id", request.Diagnostics.RequestID, "inbound_model", model,
 		"upstream_model", model, "account_attempt", request.AccountAttempt,
-		"prompt_cache_key_source", cacheKeySource,
+		"prompt_cache_key_source", cacheKeySource, "turn_state_source", turnStateSource,
 		"request_kind", request.Diagnostics.RequestKind, "compaction_reason", request.Diagnostics.CompactionReason,
 		"compaction_phase", request.Diagnostics.CompactionPhase}
 	if failure != nil {

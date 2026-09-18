@@ -72,7 +72,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, PromptCacheKeySource: cacheKeySource}
+	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, clientBody), PromptCacheKeySource: cacheKeySource}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if clientStream {
@@ -85,6 +85,8 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, response.Attempt, nil)
+	// CP-HDR-023: archive the bounded provenance, never the turn state value.
+	round.SetTurnStateFallback(codexresponses.TurnStateFallback(response.TurnStateSource))
 	copyCodexHeaders(w.Header(), response.Headers)
 	responseBody := response.Body
 	responseFile := "response.json"
@@ -142,6 +144,7 @@ func (h *Handler) handleCodexCompactStream(w http.ResponseWriter, r *http.Reques
 		}
 	} else {
 		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, response.Attempt, nil)
+		round.SetTurnStateFallback(codexresponses.TurnStateFallback(response.TurnStateSource))
 	}
 	var responseBody []byte
 	if compactErr != nil {
@@ -217,7 +220,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		h.writeCodexResponsesError(w, r, round, started, provider, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
-	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, PromptCacheKeySource: features.PromptCacheKeySource}
+	request := codexresponses.Request{Model: model, Body: bytes.Clone(raw), SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: features.PromptCacheKeySource}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {
@@ -242,6 +245,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 			return nil
 		}
 		h.archiveCodexUpstreamAttempt(round, r, provider, info.Attempt, nil)
+		round.SetTurnStateFallback(codexresponses.TurnStateFallback(info.TurnStateSource))
 		copyCodexHeaders(w.Header(), info.Headers)
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		prepareSSEHeaders(w.Header())
@@ -377,6 +381,7 @@ func codexResponsesFailureSSE(failure *streamFail) []byte {
 
 func (h *Handler) writeCodexOAuthCompleteSuccess(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, requestBody map[string]any, response codexresponses.Result) {
 	h.archiveCodexUpstreamAttempt(round, r, provider, response.Attempt, nil)
+	round.SetTurnStateFallback(codexresponses.TurnStateFallback(response.TurnStateSource))
 	copyCodexHeaders(w.Header(), response.Headers)
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "application/json")

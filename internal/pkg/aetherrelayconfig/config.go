@@ -26,6 +26,15 @@ const (
 	DefaultCodexWebsocketIdleTimeout           = 5 * time.Minute
 	DefaultCodexWebsocketMaxLifetime           = 30 * time.Minute
 
+	// DefaultCodexTurnState 是客户端未提供 X-Codex-Turn-State 且该会话没有任何观测记录时的
+	// 内置兜底值。仓库刻意不内置该值：留空时只能由本地配置 codex_oauth.default_turn_state
+	// 或同环境变量提供，两者都没有时该 attempt 不发送这个 header。它属于上游铸造的 opaque
+	// token，即使由本地配置提供，也不得出现在日志、归档、指标、错误响应或管理视图。
+	DefaultCodexTurnState = ""
+	// MaxCodexTurnStateBytes 与上游 header 边界一致；超过该长度或含控制字符的值不是有效
+	// turn state，配置期拒绝、运行期丢弃。
+	MaxCodexTurnStateBytes = 16 << 10
+
 	// Admin 登录安全默认值与边界。
 	DefaultAdminBasePath                 = "/admin"
 	DefaultAdminLanguage                 = "zh-CN"
@@ -183,6 +192,35 @@ type CodexOAuthConfig struct {
 	WebsocketMaxMessageBytes   int64
 	WebsocketIdleTimeout       time.Duration
 	WebsocketMaxLifetime       time.Duration
+	// TurnStateFallback enables CP-HDR-022 session-scoped X-Codex-Turn-State
+	// fill-in. An omitted value enables it; disabling it stops the outbound
+	// fill-in while the session record keeps being maintained.
+	TurnStateFallback           bool
+	turnStateFallbackConfigured bool
+	// DefaultTurnState overrides the built-in fallback used when neither the
+	// client nor the session record provides a value. An empty value keeps
+	// DefaultCodexTurnState.
+	DefaultTurnState string
+}
+
+func (c CodexOAuthConfig) EffectiveTurnStateFallback() bool {
+	if c.turnStateFallbackConfigured {
+		return c.TurnStateFallback
+	}
+	return true
+}
+
+func (c CodexOAuthConfig) EffectiveDefaultTurnState() string {
+	if value := strings.TrimSpace(c.DefaultTurnState); value != "" {
+		return value
+	}
+	return DefaultCodexTurnState
+}
+
+// ValidCodexTurnState 复用出站 header 的同一边界：有界长度且不含控制字符。
+func ValidCodexTurnState(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) <= MaxCodexTurnStateBytes && !strings.ContainsFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
 func (c CodexOAuthConfig) EffectiveWebsocketLimits() (int, int64, time.Duration, time.Duration) {
@@ -782,6 +820,15 @@ func setCodexOAuth(cfg *Config, key, value string) error {
 			return fmt.Errorf("codex_oauth.websocket_max_lifetime_seconds: %w", err)
 		}
 		cfg.CodexOAuth.WebsocketMaxLifetime = time.Duration(n) * time.Second
+	case "turn_state_fallback":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.turn_state_fallback: %w", err)
+		}
+		cfg.CodexOAuth.TurnStateFallback = b
+		cfg.CodexOAuth.turnStateFallbackConfigured = true
+	case "default_turn_state":
+		cfg.CodexOAuth.DefaultTurnState = strings.TrimSpace(value)
 	default:
 		return fmt.Errorf("codex_oauth: unknown key %q", key)
 	}
@@ -1205,6 +1252,17 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("AETHERRELAY_CODEX_OAUTH_USAGE_REFRESH_INTERVAL_MINUTE: %w", err)
 		}
 		cfg.CodexOAuth.UsageRefreshIntervalMinute = n
+	}
+	if value := os.Getenv("AETHERRELAY_CODEX_OAUTH_TURN_STATE_FALLBACK"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AETHERRELAY_CODEX_OAUTH_TURN_STATE_FALLBACK: %w", err)
+		}
+		cfg.CodexOAuth.TurnStateFallback = b
+		cfg.CodexOAuth.turnStateFallbackConfigured = true
+	}
+	if value := os.Getenv("AETHERRELAY_CODEX_OAUTH_DEFAULT_TURN_STATE"); value != "" {
+		cfg.CodexOAuth.DefaultTurnState = strings.TrimSpace(value)
 	}
 	if value := os.Getenv("AETHERRELAY_VERBOSE_LOGGING"); value != "" {
 		b, err := parseStrictBool(value)
@@ -2430,6 +2488,11 @@ func validateCodexOAuth(codex CodexOAuthConfig) error {
 	}
 	if codex.WebsocketMaxSessions < 0 || codex.WebsocketMaxMessageBytes < 0 || codex.WebsocketIdleTimeout < 0 || codex.WebsocketMaxLifetime < 0 {
 		return fmt.Errorf("codex_oauth websocket resource limits must be omitted or > 0")
+	}
+	// CP-HDR-023: the fallback reaches the upstream as an opaque header, so it
+	// must satisfy the same boundary as an inbound turn state.
+	if codex.DefaultTurnState != "" && !ValidCodexTurnState(codex.DefaultTurnState) {
+		return fmt.Errorf("codex_oauth.default_turn_state must be at most %d bytes without control characters", MaxCodexTurnStateBytes)
 	}
 	return nil
 }

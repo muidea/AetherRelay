@@ -42,6 +42,40 @@ const (
 	PromptCacheKeyGenerated PromptCacheKeySource = "generated"
 )
 
+// TurnStateSource is the bounded provenance enum for X-Codex-Turn-State
+// (CP-HDR-023). The opaque value itself stays in the outbound header only and
+// never enters diagnostics, archives or logs.
+type TurnStateSource string
+
+const (
+	// TurnStateSourceAbsent means no turn state was sent for this attempt.
+	TurnStateSourceAbsent TurnStateSource = "absent"
+	// TurnStateSourceClient means the client supplied the value.
+	TurnStateSourceClient TurnStateSource = "client"
+	// TurnStateSourceSession means CP-HDR-022 filled the value from the record of
+	// the same account-scoped downstream session.
+	TurnStateSourceSession TurnStateSource = "session"
+	// TurnStateSourceDefault means CP-HDR-022 filled the built-in or configured
+	// fallback because the session had no observation.
+	TurnStateSourceDefault TurnStateSource = "default"
+)
+
+// ValidTurnStateSource reports whether value is one of the bounded enum members.
+func ValidTurnStateSource(value TurnStateSource) bool {
+	switch value {
+	case TurnStateSourceAbsent, TurnStateSourceClient, TurnStateSourceSession, TurnStateSourceDefault:
+		return true
+	default:
+		return false
+	}
+}
+
+// TurnStateFallback reports whether the value was filled by the proxy rather
+// than supplied by the client. It drives the archived fallback flag.
+func TurnStateFallback(source TurnStateSource) bool {
+	return source == TurnStateSourceSession || source == TurnStateSourceDefault
+}
+
 type Request struct {
 	Diagnostics    Diagnostics
 	AccountAttempt int
@@ -54,12 +88,23 @@ type Request struct {
 	// PromptCacheKeySource is a bounded provenance enum. The key itself remains
 	// only in the request body and is never copied into diagnostics or logs.
 	PromptCacheKeySource PromptCacheKeySource
+	// TurnStateSource is set per attempt by the executor (CP-HDR-022) so the
+	// diagnostic log can distinguish a supplied value from a filled one.
+	TurnStateSource TurnStateSource
+	// SessionScope is the CP-HDR-022 turn state record unit: the digest of an
+	// explicitly declared downstream conversation, already namespaced by client
+	// identity and model. It is empty when the client declared no conversation
+	// identity, and an empty scope never records or replays a turn state.
+	SessionScope string
 }
 
 type Result struct {
 	Body    []byte
 	Headers []Header
 	Attempt HTTPAttempt
+	// TurnStateSource is the provenance of the turn state sent for the attempt
+	// that produced this result.
+	TurnStateSource TurnStateSource
 }
 type Completion struct {
 	Result Result
@@ -73,6 +118,7 @@ type StreamStart struct {
 	Headers            []Header
 	FirstEventDuration time.Duration
 	Attempt            HTTPAttempt
+	TurnStateSource    TurnStateSource
 }
 
 type WebsocketOpenRequest struct {
@@ -81,10 +127,13 @@ type WebsocketOpenRequest struct {
 	BetaFeatures  string
 	ResponsesLite bool
 	TurnState     string
+	// SessionScope is the CP-HDR-022 record unit; see Request.SessionScope.
+	SessionScope string
 }
 type WebsocketOpenResult struct {
-	SessionID string
-	Attempt   HTTPAttempt
+	SessionID       string
+	Attempt         HTTPAttempt
+	TurnStateSource TurnStateSource
 }
 
 // WebsocketUpdate keeps upstream failure classification typed across the local

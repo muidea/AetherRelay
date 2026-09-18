@@ -254,6 +254,54 @@ func assertCodexUpstreamAttemptArchived(t *testing.T, interactionDir string) {
 	assertFileContains(t, filepath.Join(dir, "metadata.json"), `"upstream_response_path": "upstream_response.json"`)
 }
 
+// CP-HDR-023: the archive explains whether the proxy filled the turn state,
+// while the opaque value itself stays out of every archived file.
+func TestCodexOAuthArchiveRecordsTurnStateFallback(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		source   codexresponses.TurnStateSource
+		expected bool
+	}{
+		"session record": {source: codexresponses.TurnStateSourceSession, expected: true},
+		"builtin default": {
+			source:   codexresponses.TurnStateSourceDefault,
+			expected: true,
+		},
+		"client supplied": {source: codexresponses.TurnStateSourceClient, expected: false},
+		"absent":          {source: codexresponses.TurnStateSourceAbsent, expected: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			attempt := codexArchiveTestAttempt()
+			handler, interactionDir := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+				return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_3","usage":{"input_tokens":7,"output_tokens":4}}`), Attempt: attempt, TurnStateSource: testCase.source}, nil
+			}})
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello"}`))
+			request.Header.Set("Authorization", "Bearer test-client-key")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			metadataPath := filepath.Join(interactionDir, "test-client", "000001", "metadata.json")
+			metadata, err := os.ReadFile(metadataPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			contains := strings.Contains(string(metadata), `"turn_state_fallback": true`)
+			if contains != testCase.expected {
+				t.Fatalf("CP-HDR-023 source=%q fallback recorded=%v metadata=%s", testCase.source, contains, metadata)
+			}
+			// CP-HDR-023: the value itself never reaches metadata; only the
+			// boolean above describes the attempt. The upstream-request direction
+			// is covered by the codexupstream redaction test.
+			for _, header := range []string{"X-Codex-Turn-State", "X-Codex-Turn-State-Value"} {
+				if strings.Contains(string(metadata), header) {
+					t.Fatalf("CP-HDR-023 metadata exposed %s: %s", header, metadata)
+				}
+			}
+		})
+	}
+}
+
 func TestCodexOAuthResponsesNormalizesRequestAndSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	var received codexresponses.Request

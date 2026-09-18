@@ -72,6 +72,10 @@ type Proxy struct {
 	codexUsageActiveID string
 	codexWebsockets    map[string]codexWebsocketBinding
 	codexTurnStates    map[string]codexTurnStateOrigin
+	// CP-HDR-022 session records. codexSessionTurnStateBytes mirrors the stored
+	// value bytes so both resource budgets are enforced without rescanning.
+	codexSessionTurnStates     map[codexTurnStateScope]codexSessionTurnState
+	codexSessionTurnStateBytes int
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Proxy, *cd.Error) {
@@ -144,6 +148,8 @@ func (s *Proxy) Teardown(context.Context) {
 	websockets := s.codexWebsockets
 	s.codexWebsockets = nil
 	s.codexTurnStates = nil
+	s.codexSessionTurnStates = nil
+	s.codexSessionTurnStateBytes = 0
 	s.mu.Unlock()
 	for sessionID, binding := range websockets {
 		_, _ = s.SendEvent(event.NewEvent(upevents.TopicWSClose, s.ID(), upcommon.UnitID, nil, upevents.WSCloseCommand{SessionID: sessionID})).Get()

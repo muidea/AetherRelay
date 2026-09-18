@@ -255,6 +255,48 @@ func TestRecorderMetadataOmitsPathsWhenFullContentDisabled(t *testing.T) {
 	}
 }
 
+// CP-HDR-023: the round carries only the bounded fallback flag, and the record
+// unit stays nil-safe for callers without an archive round.
+func TestRoundTracksCodexTurnStateFallback(t *testing.T) {
+	var missing *Round
+	missing.SetTurnStateFallback(true)
+
+	round := &Round{}
+	if round.TurnStateFallbackRecorded() {
+		t.Fatal("turn state fallback should start unrecorded")
+	}
+	round.SetTurnStateFallback(true)
+	if !round.TurnStateFallbackRecorded() || !*round.TurnStateFallback {
+		t.Fatal("turn state fallback was not recorded")
+	}
+	round.SetTurnStateFallback(false)
+	if !round.TurnStateFallbackRecorded() || *round.TurnStateFallback {
+		t.Fatal("an explicit false must stay distinguishable from unrecorded")
+	}
+
+	encoded, err := marshalJSON(Metadata{TurnStateFallback: new(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"turn_state_fallback": true`) {
+		t.Fatalf("metadata=%s", encoded)
+	}
+	explicitFalse, err := marshalJSON(Metadata{TurnStateFallback: new(false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(explicitFalse), `"turn_state_fallback": false`) {
+		t.Fatalf("metadata=%s", explicitFalse)
+	}
+	omitted, err := marshalJSON(Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(omitted), "turn_state_fallback") {
+		t.Fatalf("metadata=%s", omitted)
+	}
+}
+
 func TestRoundTracksWrittenFiles(t *testing.T) {
 	root := t.TempDir()
 	rec, err := NewRecorder(root, 10)

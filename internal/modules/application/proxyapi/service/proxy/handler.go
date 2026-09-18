@@ -1384,7 +1384,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		}
 		if !rawStream {
 			features.Diagnostics.RequestID = requestIDFromContext(r.Context())
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, PromptCacheKeySource: features.PromptCacheKeySource})
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
@@ -3066,6 +3066,10 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.UpstreamEndpoint = round.UpstreamEndpoint
 		meta.ConversionMode = round.ConversionMode
 		meta.ConversionLevel = round.ConversionLevel
+		if round.TurnStateFallbackRecorded() {
+			value := *round.TurnStateFallback
+			meta.TurnStateFallback = &value
+		}
 		meta.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
 		meta.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		meta.ConversionDurationMS = round.ConversionDuration.Milliseconds()

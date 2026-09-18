@@ -27,6 +27,7 @@
 - `/v1/responses/compact` 的客户端形态仍保留，但 OAuth 上游统一改写为 streaming `/backend-api/codex/responses`：强制 `stream=true`、`store=false`，并在 input 末尾放置唯一 `compaction_trigger`。只有响应中确实出现 `compaction`/`compaction_summary` item 才学习为支持；账号文档只接受当前 `remote_compaction_v2` 标记，不在加载阶段升级旧缓存。
 - compact 的 400/404/405/409/413/422/501 request fault 停止 fallback；其它非 credential 临时失败可以继续切号，但只累计失败观测，不写普通 Responses 冷却、账号异常或额度事实。401/402/结构化 403/429 保留原账号反馈，HTML endpoint 403 仍按端点故障处理。
 - `X-Codex-Beta-Features` 是会话 profile：客户端未声明时默认 `remote_compaction_v2`，显式非空集合保持原样，原生压缩请求则强制包含 v2。`X-Codex-Turn-State` 作为有界 opaque 值转发和回传，只记录其哈希对应的铸造账号；已知跨账号回放在 failover 出站前剥离。
+- `X-Codex-Turn-State` 另有会话级记忆（`CP-HDR-022`/`CP-HDR-023`）：按「铸造账号 + 客户端声明的会话」在进程内保存最近观测值，客户端未提供该 header 时回填该值，没有任何观测时使用 `codex_oauth.default_turn_state`，该值也为空时不发送。声明会话按显式会话 header、`client_metadata.session_id`/`thread_id`、显式 `prompt_cache_key` 依次取值；完全没有声明时不记录也不回放，调度用的合成 session 不得充当记录单位。客户端提供但被判定为其它账号铸造而剥离时保持为空，失败换号后也不沿用上一账号的记录；`/v1/chat/completions` 与 `/v1/messages` 适配入口同样解析并传递客户端值。记录不落盘、不设过期、受条数上限与字节预算约束，`codex_oauth.turn_state_fallback: false` 可只停回填。诊断以 `turn_state_source`（`client/session/default/absent`）与归档 `turn_state_fallback` 三态布尔表达来源，原值不进入日志、归档、指标或管理视图。
 - 账号指纹收敛默认关闭。管理员可逐账号显式选择 `device`、`session` 或 `full`；启用时使用加密账号文档内的系统随机 seed，而不是本地账号 ID。HTTP、SSE、compact 与 WebSocket 共用同一请求尝试快照，header 与 `client_metadata` 使用相同的 installation/session/thread/turn/window 和 turn 开始时间；切换到 `off` 账号时不会继承上一 attempt 的身份。客户端显式或按客户端会话生成的 `prompt_cache_key` 不随账号指纹改写。
 - WebSocket 支持规范入口 `GET /v1/responses`；第二个及后续 turn 在客户端尚未收到业务帧且 429 已同步写入旧账号冷却时，可以关闭旧 session、重新选择账号并发送去掉 `previous_response_id` 的完整 transcript。只有 transcript 在消息上限内、顺序完整且 function/custom/MCP tool output 全部能匹配 call 时才允许重放，单 turn 最多迁移两次；任一业务帧写出后禁止迁移。`GET /v1/responses/ws` 仅见于参考实现的 SDK 测试，不作为生产兼容入口。Realtime、网页会话或插件能力不在本合同范围。
 
@@ -41,6 +42,7 @@
 
 ## 演进记录
 
+- 2026-09-18：合同 `8.1.0` 新增 `CP-HDR-022`/`CP-HDR-023` 会话级 Turn-State 记录与缺失回填，含 `codex_oauth.turn_state_fallback` / `default_turn_state` 两个热更新配置与 `turn_state_source` 有界诊断。
 - 2026-08-21：对齐近期 CLIProxyAPI/sub2api 的 input-token preflight、nested cache hint、GPT-5.6 双上下文、compact availability-neutral、OAuth identity 与后续 WebSocket turn 安全迁移。
 - 2026-08-17：对齐 sub2api 的 native remote compaction v2、会话 beta、Turn-State 来源守卫和显式 opt-in 指纹收敛。
 - 2026-07-30：Codex OAuth 账号池收口设计 → 归档 `docs/archive/codex-oauth-account-pool-design-2026-07-30.md`

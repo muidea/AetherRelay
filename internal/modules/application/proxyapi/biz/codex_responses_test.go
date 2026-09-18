@@ -360,7 +360,7 @@ func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 func TestCodexTurnStateGuardDropsKnownCrossAccountEcho(t *testing.T) {
 	proxy := &Proxy{}
 	headers := []upevents.Header{{Name: "X-Codex-Turn-State", Value: "opaque-state"}}
-	proxy.noteCodexTurnState("account-a", headers)
+	proxy.noteCodexTurnState("account-a", upevents.CodexFingerprint{}, "session-a", headers)
 	if got := proxy.guardCodexTurnState("opaque-state", "account-a"); got != "opaque-state" {
 		t.Fatalf("same-account state=%q", got)
 	}
@@ -375,7 +375,7 @@ func TestCodexTurnStateGuardDropsKnownCrossAccountEcho(t *testing.T) {
 func TestCodexTurnStateProvenanceRemainsBounded(t *testing.T) {
 	proxy := &Proxy{codexTurnStates: map[string]codexTurnStateOrigin{}}
 	for index := 0; index <= codexTurnStateMaxEntries; index++ {
-		proxy.noteCodexTurnState("account-a", []upevents.Header{{Name: "X-Codex-Turn-State", Value: fmt.Sprintf("state-%d", index)}})
+		proxy.noteCodexTurnState("account-a", upevents.CodexFingerprint{}, "session-a", []upevents.Header{{Name: "X-Codex-Turn-State", Value: fmt.Sprintf("state-%d", index)}})
 	}
 	if len(proxy.codexTurnStates) > codexTurnStateMaxEntries {
 		t.Fatalf("turn-state provenance entries=%d", len(proxy.codexTurnStates))
@@ -410,7 +410,7 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 		result.Set(upevents.CompleteResult{Body: []byte(`{"id":"resp-b"}`)}, nil)
 	})
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexTurnStates: map[string]codexTurnStateOrigin{}}
-	proxy.noteCodexTurnState("account-a", []upevents.Header{{Name: "X-Codex-Turn-State", Value: "state-a"}})
+	proxy.noteCodexTurnState("account-a", upevents.CodexFingerprint{}, "client-session", []upevents.Header{{Name: "X-Codex-Turn-State", Value: "state-a"}})
 	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), SessionHash: "client-session", TurnState: "state-a"})
 	if err != nil || string(completed.Body) != `{"id":"resp-b"}` {
 		t.Fatalf("completed=%s err=%v", completed.Body, err)

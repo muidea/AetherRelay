@@ -44,6 +44,11 @@ type Round struct {
 	ConversionLevel    int
 	ConversionDuration time.Duration
 	ConversionDegraded bool
+	// TurnStateFallback 记录本次 Codex 上游 attempt 的 X-Codex-Turn-State 是否由
+	// 代理回填（CP-HDR-022）。它只表达"是否回填"，不含该 header 的值。nil 表示本
+	// round 未产生上游结果（例如输出前失败），因此调用方在产生结果或交付首个业务
+	// 事件时必须显式写入 true/false，使"未回填"和"未产生结果"可区分。
+	TurnStateFallback *bool
 	// IgnoredFeatures records explicitly compatibility-degraded request fields.
 	// It is populated by a bounded protocol adapter and never contains payload
 	// values, so metadata can explain a degraded request without retaining
@@ -231,23 +236,26 @@ type Metadata struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	// Operation / ClientEndpoint / Upstream* / ConversionMode 记录 TransportPlan 权威字段。
-	Operation              string   `json:"operation,omitempty"`
-	ClientEndpoint         string   `json:"client_endpoint,omitempty"`
-	ClientProtocol         string   `json:"client_protocol,omitempty"`
-	UpstreamProtocol       string   `json:"upstream_protocol,omitempty"`
-	UpstreamEndpoint       string   `json:"upstream_endpoint,omitempty"`
-	ConversionMode         string   `json:"conversion_mode,omitempty"`
-	ConversionLevel        int      `json:"conversion_level,omitempty"`
-	IgnoredFeatures        []string `json:"ignored_features,omitempty"`
-	UnsupportedFeatures    []string `json:"unsupported_features,omitempty"`
-	ConversionDurationMS   int64    `json:"conversion_duration_ms,omitempty"`
-	ConversionDegraded     bool     `json:"conversion_degraded,omitempty"`
-	StablePrefixHash       string   `json:"stable_prefix_hash,omitempty"`
-	RequestFingerprint     string   `json:"request_fingerprint,omitempty"`
-	StablePrefixDrift      bool     `json:"stable_prefix_drift,omitempty"`
-	StablePrefixDriftCount int      `json:"stable_prefix_drift_count,omitempty"`
-	Stream                 bool     `json:"stream"`
-	HTTPStatus             int      `json:"http_status"`
+	Operation            string   `json:"operation,omitempty"`
+	ClientEndpoint       string   `json:"client_endpoint,omitempty"`
+	ClientProtocol       string   `json:"client_protocol,omitempty"`
+	UpstreamProtocol     string   `json:"upstream_protocol,omitempty"`
+	UpstreamEndpoint     string   `json:"upstream_endpoint,omitempty"`
+	ConversionMode       string   `json:"conversion_mode,omitempty"`
+	ConversionLevel      int      `json:"conversion_level,omitempty"`
+	IgnoredFeatures      []string `json:"ignored_features,omitempty"`
+	UnsupportedFeatures  []string `json:"unsupported_features,omitempty"`
+	ConversionDurationMS int64    `json:"conversion_duration_ms,omitempty"`
+	ConversionDegraded   bool     `json:"conversion_degraded,omitempty"`
+	// TurnStateFallback 为 nil 时省略：只有产生了上游结果的 round 才会留下明确的
+	// true/false（CP-HDR-023）。
+	TurnStateFallback      *bool  `json:"turn_state_fallback,omitempty"`
+	StablePrefixHash       string `json:"stable_prefix_hash,omitempty"`
+	RequestFingerprint     string `json:"request_fingerprint,omitempty"`
+	StablePrefixDrift      bool   `json:"stable_prefix_drift,omitempty"`
+	StablePrefixDriftCount int    `json:"stable_prefix_drift_count,omitempty"`
+	Stream                 bool   `json:"stream"`
+	HTTPStatus             int    `json:"http_status"`
 	// Outcome 与 DuckDB/Prometheus 对齐的业务结果枚举。
 	Outcome                  string  `json:"outcome,omitempty"`
 	DurationMS               int64   `json:"duration_ms"`
@@ -290,6 +298,24 @@ func (r *Round) SetConversionDegraded(degraded bool) {
 		return
 	}
 	r.ConversionDegraded = degraded
+}
+
+// SetTurnStateFallback records whether CP-HDR-022 filled X-Codex-Turn-State for
+// this round. Callers invoke it only once an attempt produced a result or a first
+// business event, so a round without it never produced a result. The header value
+// itself is never archived.
+func (r *Round) SetTurnStateFallback(fallback bool) {
+	if r == nil {
+		return
+	}
+	value := fallback
+	r.TurnStateFallback = &value
+}
+
+// TurnStateFallbackRecorded reports whether this round observed the CP-HDR-022
+// provenance at all.
+func (r *Round) TurnStateFallbackRecorded() bool {
+	return r != nil && r.TurnStateFallback != nil
 }
 
 func NewRecorder(root string, maxRounds ...int) (*Recorder, error) {
