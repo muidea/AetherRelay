@@ -1,6 +1,7 @@
 package biz
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -149,7 +150,7 @@ func applyCodexTurnMetadata(headers headerSetter, profile codexRequestProfile) {
 	if len(metadata) == 0 {
 		return
 	}
-	encoded, err := json.Marshal(metadata)
+	encoded, err := encodeCodexJSON(metadata)
 	if err != nil {
 		return
 	}
@@ -164,7 +165,9 @@ func decodeTurnMetadataAttributes(raw json.RawMessage) map[string]any {
 		return nil
 	}
 	var attributes map[string]any
-	if json.Unmarshal(raw, &attributes) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&attributes) != nil {
 		return nil
 	}
 	return attributes
@@ -295,12 +298,12 @@ func applyCodexRequestBody(body []byte, profile codexRequestProfile) ([]byte, er
 		// Nothing to declare: never emit an empty client_metadata envelope.
 		return body, nil
 	}
-	rawMetadata, err := json.Marshal(metadata)
+	rawMetadata, err := encodeCodexJSON(metadata)
 	if err != nil {
 		return nil, err
 	}
 	envelope["client_metadata"] = rawMetadata
-	return json.Marshal(envelope)
+	return encodeCodexJSON(envelope)
 }
 
 // applyCodexTurnFields fills the non-identity part of a turn metadata object: the
@@ -333,11 +336,25 @@ func applyCodexTurnFields(metadata map[string]any, profile codexRequestProfile) 
 }
 
 func encodedCodexTurnMetadata(metadata map[string]any) string {
-	encoded, err := json.Marshal(metadata)
+	encoded, err := encodeCodexJSON(metadata)
 	if err != nil {
 		return ""
 	}
 	return string(encoded)
+}
+
+// encodeCodexJSON is the final upstream encoder for normalized Codex bodies and
+// embedded metadata. Go's json.Marshal escapes HTML-sensitive characters even
+// though they are ordinary JSON string content; the native client leaves them
+// verbatim, so every reconstruction at this boundary must disable that escape.
+func encodeCodexJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
 }
 
 func normalizedCodexFingerprintMode(value string) string {

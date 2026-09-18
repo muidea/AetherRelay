@@ -130,6 +130,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			if openErr != nil {
 				if failure, ok := codexresponses.AsFailure(openErr); ok {
 					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
+					recordCodexTurnStateFallback(round, failure.TurnStateSource, failure.Attempt.Response.Observed)
 				}
 				writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket could not be opened")
 				return
@@ -193,6 +194,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 					if openErr != nil {
 						if failure, ok := codexresponses.AsFailure(openErr); ok {
 							h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
+							recordCodexTurnStateFallback(round, failure.TurnStateSource, failure.Attempt.Response.Observed)
 						}
 						writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket replacement account is unavailable")
 						return

@@ -337,6 +337,37 @@ func TestCompleteCodexResponsesSendsFilledTurnState(t *testing.T) {
 	}
 }
 
+func TestCompleteCodexResponsesFailureReportsTurnStateSource(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeOff}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicComplete, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CompleteResult{
+			ErrorClass: upevents.ErrorInvalidRequest,
+			HTTPStatus: 400,
+			Attempt: upevents.HTTPAttempt{Response: upevents.HTTPResponseObservation{
+				Observed: true,
+				Status:   400,
+			}},
+		}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexTurnStates: map[string]codexTurnStateOrigin{}}
+	_, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{
+		Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), TurnState: "state-from-client",
+	})
+	failure, ok := codexresponses.AsFailure(err)
+	if !ok || failure.TurnStateSource != codexresponses.TurnStateSourceClient || !failure.Attempt.Response.Observed {
+		t.Fatalf("CP-HDR-023 failure=%+v err=%v", failure, err)
+	}
+}
+
 // CP-HDR-022: a request that declares no conversation has no record unit, so an
 // unrelated stateless request can never inherit its observed state.
 func TestCodexTurnStateStatelessRequestsNeverShareARecord(t *testing.T) {

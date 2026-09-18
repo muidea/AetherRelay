@@ -2,6 +2,7 @@ package biz
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -833,6 +834,37 @@ func TestCodexTurnMetadataCarriersStayConsistent(t *testing.T) {
 	}
 	if _, flattened := envelope.ClientMetadata["sandbox_mode"]; flattened {
 		t.Fatalf("CP-HDR-011 attribute was flattened into client_metadata: %+v", envelope.ClientMetadata)
+	}
+}
+
+func TestCodexTurnMetadataPreservesProtocolJSONValues(t *testing.T) {
+	projection := events.TurnMetadata{
+		Attributes: []byte(`{"context_window_id":9007199254740993,"agent_name":"<root>&"}`),
+	}
+	profile := codexRequestProfile{sessionHash: "session-hash", turnMetadata: projection}
+	headers := http.Header{}
+	applyCodexTurnMetadata(headers, profile)
+	headerMetadata := headers.Get("X-Codex-Turn-Metadata")
+	if !strings.Contains(headerMetadata, `"context_window_id":9007199254740993`) || !strings.Contains(headerMetadata, `"agent_name":"<root>&"`) {
+		t.Fatalf("CP-HDR-011 header metadata changed protocol values: %s", headerMetadata)
+	}
+
+	body, err := applyCodexRequestBody([]byte(`{"model":"gpt-test","input":"<tag>&"}`), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(body, []byte(`\u003c`)) || bytes.Contains(body, []byte(`\u003e`)) || bytes.Contains(body, []byte(`\u0026`)) || !bytes.Contains(body, []byte(`"input":"<tag>&"`)) {
+		t.Fatalf("CP-HDR-011 request body was HTML-escaped: %s", body)
+	}
+	var envelope struct {
+		ClientMetadata map[string]any `json:"client_metadata"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	embedded, _ := envelope.ClientMetadata["x-codex-turn-metadata"].(string)
+	if !strings.Contains(embedded, `"context_window_id":9007199254740993`) || !strings.Contains(embedded, `"agent_name":"<root>&"`) {
+		t.Fatalf("CP-HDR-011 embedded metadata changed protocol values: %s", embedded)
 	}
 }
 

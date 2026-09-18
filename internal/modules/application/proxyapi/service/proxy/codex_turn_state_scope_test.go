@@ -151,6 +151,14 @@ func TestCodexTurnStateScopeDigestFollowsDeclaredConversation(t *testing.T) {
 	if thread := codexTurnStateScopeDigest(request, "gpt-5.2-codex", session("conversation-a", "thread-b")); thread == first {
 		t.Fatalf("CP-HDR-022 threads collided: %q", thread)
 	}
+	// The field name is part of the identity: a session-only declaration must
+	// not collide with a thread-only declaration that happens to use the same
+	// opaque value.
+	sessionOnly := codexTurnStateScopeDigest(request, "gpt-5.2-codex", session("shared-value", ""))
+	threadOnly := codexTurnStateScopeDigest(request, "gpt-5.2-codex", session("", "shared-value"))
+	if sessionOnly == "" || threadOnly == "" || sessionOnly == threadOnly {
+		t.Fatalf("CP-HDR-022 session/thread identities collided: %q %q", sessionOnly, threadOnly)
+	}
 	// Another model is not the same unit either.
 	if other := codexTurnStateScopeDigest(request, "gpt-5.5", session("conversation-a", "thread-a")); other == first {
 		t.Fatalf("CP-HDR-022 models collided: %q", other)

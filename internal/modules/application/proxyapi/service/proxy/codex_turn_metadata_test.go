@@ -93,8 +93,14 @@ func TestCodexTurnMetadataWindowNumberResolution(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("X-Codex-Window-Id", "01a080cb-abf8-7900-97a7-7af78ed32b94:37")
 	projection, _ := codexTurnMetadataProjection(headers, `{"window_number":12}`)
-	if projection.WindowNumber != 37 {
+	if projection.WindowNumber != 37 || !strings.Contains(string(projection.Attributes), `"window_number":37`) {
 		t.Fatalf("CP-HDR-010 header wins: %+v", projection)
+	}
+	// 显式 :0 也是有效 header 声明，不能被属性的非零值当成“未声明”覆盖。
+	headers.Set("X-Codex-Window-Id", "01a080cb-abf8-7900-97a7-7af78ed32b94:0")
+	projection, _ = codexTurnMetadataProjection(headers, `{"window_number":12}`)
+	if projection.WindowNumber != 0 || !strings.Contains(string(projection.Attributes), `"window_number":0`) {
+		t.Fatalf("CP-HDR-010 explicit zero lost precedence: %+v", projection)
 	}
 	// 头部缺失时用同一份元数据里的 window_number。
 	projection, _ = codexTurnMetadataProjection(nil, `{"window_number":12}`)
@@ -116,9 +122,9 @@ func TestCodexTurnMetadataWindowNumberResolution(t *testing.T) {
 	// 无声明、越界与负数都不猜测，落回 0。
 	for _, value := range []string{"", "01a080cb-abf8-7900-97a7-7af78ed32b94", "01a080cb-abf8-7900-97a7-7af78ed32b94:", "01a080cb-abf8-7900-97a7-7af78ed32b94:-1"} {
 		headers.Set("X-Codex-Window-Id", value)
-		projection, _ = codexTurnMetadataProjection(headers, `{"window_number":-2}`)
-		if projection.WindowNumber != 0 {
-			t.Fatalf("CP-HDR-010 unexpected window number for %q: %+v", value, projection)
+		projection, ignored = codexTurnMetadataProjection(headers, `{"window_number":-2}`)
+		if projection.WindowNumber != 0 || strings.Contains(string(projection.Attributes), "window_number") || !strings.Contains(strings.Join(ignored, ","), "turn_metadata.window_number") {
+			t.Fatalf("CP-HDR-010 unexpected window number for %q: %+v ignored=%v", value, projection, ignored)
 		}
 	}
 }

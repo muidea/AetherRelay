@@ -144,6 +144,7 @@ func (h *Handler) handleCodexCompactStream(w http.ResponseWriter, r *http.Reques
 	if compactErr != nil {
 		if failure, ok := codexresponses.AsFailure(compactErr); ok {
 			h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, failure.Attempt, compactErr)
+			recordCodexTurnStateFallback(round, failure.TurnStateSource, failure.Attempt.Response.Observed)
 		}
 	} else {
 		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, response.Attempt, nil)
@@ -224,7 +225,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	userAgent, originator := codexClientIdentity(r.Header)
-	turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, raw)
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataFromBody(r.Header, body)
 	if round != nil && len(turnMetadataIgnored) > 0 {
 		round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 	}
@@ -413,6 +414,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	codexFailure, _ := codexresponses.AsFailure(err)
 	if codexFailure != nil {
 		h.archiveCodexUpstreamAttempt(round, r, provider, codexFailure.Attempt, err)
+		recordCodexTurnStateFallback(round, codexFailure.TurnStateSource, codexFailure.Attempt.Response.Observed)
 	}
 	status := http.StatusBadGateway
 	code := ErrorCodeUpstreamUnavailable
@@ -468,6 +470,16 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		retryAfter = codexFailure.RetryAfterSeconds
 	}
 	h.writeArchivedAPIError(w, round, r, started, provider, model, stream, status, APIError{Code: code, Message: message, Type: errorType, Param: param, Retryable: retryable, RetryAfterSeconds: retryAfter, FailureClass: reason, Model: model, ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path), UpstreamProtocol: effectivecatalog.CodexOAuthProviderID}, failure)
+}
+
+// recordCodexTurnStateFallback writes the explicit archive boolean only after an
+// upstream HTTP response was observed. A transport failure before any response
+// intentionally leaves the field absent, preserving CP-HDR-023's third state.
+func recordCodexTurnStateFallback(round *archivepkg.Round, source codexresponses.TurnStateSource, responseObserved bool) {
+	if round == nil || !responseObserved || !codexresponses.ValidTurnStateSource(source) {
+		return
+	}
+	round.SetTurnStateFallback(codexresponses.TurnStateFallback(source))
 }
 
 func copyCodexHeaders(target http.Header, headers []codexresponses.Header) {

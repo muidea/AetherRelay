@@ -213,7 +213,11 @@ type Failure struct {
 	UpstreamParam     string
 	UpstreamMessage   string
 	Attempt           HTTPAttempt
-	Err               error
+	// TurnStateSource is the provenance for the failed upstream attempt. It lets
+	// the archive retain its explicit true/false fallback state when an HTTP
+	// response was observed, without exposing the opaque header value.
+	TurnStateSource TurnStateSource
+	Err             error
 }
 
 func (e *Failure) Error() string {

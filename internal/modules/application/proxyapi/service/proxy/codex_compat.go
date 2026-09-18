@@ -168,8 +168,10 @@ func codexTurnMetadataProjection(headers http.Header, raw string) (codexresponse
 	// CP-HDR-010: the window number rides on its own header, so it survives a
 	// missing or unparsable metadata JSON.
 	projection := codexresponses.TurnMetadata{}
+	headerWindowNumber := false
 	if number, ok := aetherrelaycodex.ParseWindowID(headers.Get("X-Codex-Window-Id")); ok {
 		projection.WindowNumber = number
+		headerWindowNumber = true
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -222,21 +224,28 @@ func codexTurnMetadataProjection(headers http.Header, raw string) (codexresponse
 			attributes[key] = value
 		}
 	}
+	// CP-HDR-010: the window_number attribute is the fallback source for the same
+	// number when the dedicated header is missing. Keep a separate presence bit:
+	// an explicit ":0" is a valid declaration and must still beat the attribute.
+	// When both carriers exist, canonicalize the attribute to the selected number
+	// so the rebuilt window_id and metadata cannot contradict each other.
+	if value, found := attributes["window_number"]; found {
+		var number int64
+		if json.Unmarshal(value, &number) != nil || number < 0 || number > aetherrelaycodex.CodexWindowNumberMax {
+			delete(attributes, "window_number")
+			ignored = append(ignored, "turn_metadata.window_number")
+		} else if headerWindowNumber {
+			attributes["window_number"] = json.RawMessage(strconv.FormatInt(projection.WindowNumber, 10))
+		} else {
+			projection.WindowNumber = number
+		}
+	}
 	if len(attributes) > 0 {
 		if encoded, err := json.Marshal(attributes); err == nil {
 			projection.Attributes = encoded
 		}
 	}
-	// CP-HDR-010: the window_number attribute is the fallback source for the same
-	// number when the dedicated header is missing.
-	if projection.WindowNumber == 0 {
-		if value, found := attributes["window_number"]; found {
-			var number int64
-			if json.Unmarshal(value, &number) == nil && number > 0 && number <= aetherrelaycodex.CodexWindowNumberMax {
-				projection.WindowNumber = number
-			}
-		}
-	}
+	sort.Strings(ignored)
 	return projection, ignored
 }
 
@@ -245,6 +254,22 @@ func codexTurnMetadataProjection(headers http.Header, raw string) (codexresponse
 // rather than to the metadata JSON.
 func codexTurnMetadataFrom(headers http.Header, raw []byte) (codexresponses.TurnMetadata, []string) {
 	return codexTurnMetadataProjection(headers, codexTurnMetadataSource(headers, raw))
+}
+
+// codexTurnMetadataFromBody is used after request normalization has rebuilt and
+// removed client_metadata. The decoded body is the pre-normalization client
+// document, so it preserves the body fallback required by CP-HDR-011.
+func codexTurnMetadataFromBody(headers http.Header, body map[string]any) (codexresponses.TurnMetadata, []string) {
+	raw := ""
+	if headers != nil {
+		raw = strings.TrimSpace(headers.Get("X-Codex-Turn-Metadata"))
+	}
+	if raw == "" {
+		if metadata, ok := body["client_metadata"].(map[string]any); ok {
+			raw, _ = metadata["x-codex-turn-metadata"].(string)
+		}
+	}
+	return codexTurnMetadataProjection(headers, raw)
 }
 
 func boundedTurnMetadataString(raw json.RawMessage) (string, bool) {
@@ -1599,13 +1624,20 @@ func codexConversationIdentity(body map[string]any) string {
 	if !ok {
 		return ""
 	}
-	parts := make([]string, 0, 2)
-	for _, key := range []string{"session_id", "thread_id"} {
-		if value, ok := metadata[key].(string); ok && strings.TrimSpace(value) != "" {
-			parts = append(parts, strings.TrimSpace(value))
-		}
+	sessionID, _ := metadata["session_id"].(string)
+	threadID, _ := metadata["thread_id"].(string)
+	sessionID = strings.TrimSpace(sessionID)
+	threadID = strings.TrimSpace(threadID)
+	if sessionID == "" && threadID == "" {
+		return ""
 	}
-	return strings.Join(parts, "\x00")
+	// Fixed fields retain which namespace supplied a value. In particular,
+	// session_id="abc" and thread_id="abc" are not the same conversation tuple.
+	encoded, _ := json.Marshal(struct {
+		SessionID string `json:"session_id"`
+		ThreadID  string `json:"thread_id"`
+	}{SessionID: sessionID, ThreadID: threadID})
+	return string(encoded)
 }
 
 func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash string) ([]byte, map[string]any, codexresponses.PromptCacheKeySource, error) {

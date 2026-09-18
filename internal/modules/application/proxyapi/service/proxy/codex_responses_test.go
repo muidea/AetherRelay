@@ -286,9 +286,14 @@ func TestCodexOAuthArchiveRecordsTurnStateFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			contains := strings.Contains(string(metadata), `"turn_state_fallback": true`)
-			if contains != testCase.expected {
-				t.Fatalf("CP-HDR-023 source=%q fallback recorded=%v metadata=%s", testCase.source, contains, metadata)
+			var archived struct {
+				TurnStateFallback *bool `json:"turn_state_fallback"`
+			}
+			if err := json.Unmarshal(metadata, &archived); err != nil {
+				t.Fatal(err)
+			}
+			if archived.TurnStateFallback == nil || *archived.TurnStateFallback != testCase.expected {
+				t.Fatalf("CP-HDR-023 source=%q fallback=%v want %v metadata=%s", testCase.source, archived.TurnStateFallback, testCase.expected, metadata)
 			}
 			// CP-HDR-023: the value itself never reaches metadata; only the
 			// boolean above describes the attempt. The upstream-request direction
@@ -297,6 +302,47 @@ func TestCodexOAuthArchiveRecordsTurnStateFallback(t *testing.T) {
 				if strings.Contains(string(metadata), header) {
 					t.Fatalf("CP-HDR-023 metadata exposed %s: %s", header, metadata)
 				}
+			}
+		})
+	}
+}
+
+func TestCodexOAuthArchiveRecordsTurnStateFallbackOnObservedFailure(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		source   codexresponses.TurnStateSource
+		expected bool
+	}{
+		"proxy fallback":  {source: codexresponses.TurnStateSourceDefault, expected: true},
+		"client supplied": {source: codexresponses.TurnStateSourceClient, expected: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			failure := codexresponses.NewFailure(codexresponses.KindRateLimit, 0, fmt.Errorf("rate limited"))
+			failure.HTTPStatus = http.StatusTooManyRequests
+			failure.Attempt = codexArchiveTestAttempt()
+			failure.Attempt.Response.Status = http.StatusTooManyRequests
+			failure.TurnStateSource = testCase.source
+			handler, interactionDir := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+				return codexresponses.Result{}, failure
+			}})
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello"}`))
+			request.Header.Set("Authorization", "Bearer test-client-key")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusTooManyRequests {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			metadata, err := os.ReadFile(filepath.Join(interactionDir, "test-client", "000001", "metadata.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var archived struct {
+				TurnStateFallback *bool `json:"turn_state_fallback"`
+			}
+			if err := json.Unmarshal(metadata, &archived); err != nil {
+				t.Fatal(err)
+			}
+			if archived.TurnStateFallback == nil || *archived.TurnStateFallback != testCase.expected {
+				t.Fatalf("CP-HDR-023 source=%q fallback=%v want %v metadata=%s", testCase.source, archived.TurnStateFallback, testCase.expected, metadata)
 			}
 		})
 	}
@@ -334,6 +380,28 @@ func TestCodexOAuthResponsesNormalizesRequestAndSettlesUsage(t *testing.T) {
 	event := events[0]
 	if event.Outcome != "success" || event.Provider != effectivecatalog.CodexOAuthProviderID || event.UpstreamProtocol != effectivecatalog.CodexOAuthProviderID || event.UpstreamEndpoint != "codex_oauth_responses" || event.ConversionMode != TransportModeCodexOAuthResponses {
 		t.Fatalf("Codex usage metadata=%+v", event)
+	}
+}
+
+func TestCodexOAuthStreamKeepsBodyTurnMetadata(t *testing.T) {
+	var received codexresponses.Request
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{stream: func(_ context.Context, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+		received = request
+		if err := started(codexresponses.StreamStart{}); err != nil {
+			return err
+		}
+		return emit([]byte("data: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"id\":\"resp_body_metadata\"}}\n\n"))
+	}})
+	body := `{"model":"gpt-5.2-codex","input":"hello","stream":true,"client_metadata":{"x-codex-turn-metadata":"{\"turn_id\":\"body-turn\",\"request_kind\":\"turn\"}"}}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(body))
+	request.Header.Set("Authorization", "Bearer test-client-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if received.TurnMetadata.TurnID != "body-turn" || !strings.Contains(string(received.TurnMetadata.Attributes), `"request_kind":"turn"`) {
+		t.Fatalf("CP-HDR-011 body metadata lost after normalization: %+v", received.TurnMetadata)
 	}
 }
 
