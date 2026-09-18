@@ -618,24 +618,33 @@ func (s *Store) AcquirePreferredTransportWithBusy(model string, exclude, busy []
 		}
 	}
 	for _, tier := range []int{1, 0} {
-		for offset := 0; offset < len(s.order); offset++ {
-			pos := (s.index + offset) % len(s.order)
-			item := s.items[s.order[pos]]
-			if !modelAvailability(item, model, now).Available || transportSupport(item, transport) != tier {
-				continue
+		// CP-SCHED-011: among otherwise equal candidates, prefer one whose fresh
+		// usage snapshot still shows headroom. The second pass keeps the previous
+		// behaviour, so a candidate without fresh quota evidence stays selectable
+		// (CP-CAP-005) and a pool with no fresh evidence rotates exactly as before.
+		for _, requireHeadroom := range []bool{true, false} {
+			for offset := 0; offset < len(s.order); offset++ {
+				pos := (s.index + offset) % len(s.order)
+				item := s.items[s.order[pos]]
+				if !modelAvailability(item, model, now).Available || transportSupport(item, transport) != tier {
+					continue
+				}
+				if requireHeadroom && !freshQuotaHeadroom(item, now) {
+					continue
+				}
+				if _, found := excluded[item.ID]; found {
+					continue
+				}
+				if _, found := busySet[item.ID]; found {
+					continue
+				}
+				s.index = (pos + 1) % len(s.order)
+				item.LastUsedAt = now.Format(time.RFC3339)
+				if err := s.saveLocked(); err != nil {
+					return events.AcquireResult{}, err
+				}
+				return acquireResult(item), nil
 			}
-			if _, found := excluded[item.ID]; found {
-				continue
-			}
-			if _, found := busySet[item.ID]; found {
-				continue
-			}
-			s.index = (pos + 1) % len(s.order)
-			item.LastUsedAt = now.Format(time.RFC3339)
-			if err := s.saveLocked(); err != nil {
-				return events.AcquireResult{}, err
-			}
-			return acquireResult(item), nil
 		}
 	}
 	return s.unavailableResult(model, excluded, busySet, transport, now), fmt.Errorf("no eligible Codex OAuth account")
@@ -1029,15 +1038,8 @@ func cooling(item *account, model string, now time.Time) bool {
 // Unknown or expired snapshots remain routable; request failures still create
 // the authoritative model- or credential-scoped cooldown in RecordResult.
 func usageLimitCooling(item *account, now time.Time) bool {
-	if item == nil || item.UsageSnapshot == nil {
-		return false
-	}
-	snapshot := normalizeUsageSnapshot(*item.UsageSnapshot)
-	if snapshot.ExpiresAt == "" {
-		return false
-	}
-	expiresAt, err := time.Parse(time.RFC3339, snapshot.ExpiresAt)
-	if err != nil || !expiresAt.After(now) {
+	snapshot, fresh := freshUsageSnapshot(item, now)
+	if !fresh {
 		return false
 	}
 	for _, window := range snapshot.Windows {
@@ -1046,6 +1048,41 @@ func usageLimitCooling(item *account, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// freshUsageSnapshot is the single definition of "we have current quota
+// knowledge": CP-CAP-005, CP-SCHED-011 and the usage refresh scheduler must agree
+// on it, otherwise admission, ordering and polling would drift apart.
+func freshUsageSnapshot(item *account, now time.Time) (events.AccountUsageSnapshot, bool) {
+	if item == nil || item.UsageSnapshot == nil {
+		return events.AccountUsageSnapshot{}, false
+	}
+	snapshot := normalizeUsageSnapshot(*item.UsageSnapshot)
+	if snapshot.ExpiresAt == "" {
+		return events.AccountUsageSnapshot{}, false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, snapshot.ExpiresAt)
+	if err != nil || !expiresAt.After(now) {
+		return events.AccountUsageSnapshot{}, false
+	}
+	return snapshot, true
+}
+
+// freshQuotaHeadroom reports whether a fresh usage snapshot exists and no window
+// is currently limit-reached. CP-SCHED-011 uses it only to rank otherwise equal
+// candidates: CP-CAP-005 still admits accounts whose quota knowledge is missing
+// or expired.
+func freshQuotaHeadroom(item *account, now time.Time) bool {
+	snapshot, fresh := freshUsageSnapshot(item, now)
+	if !fresh {
+		return false
+	}
+	for _, window := range snapshot.Windows {
+		if window.LimitReached && (window.ResetAt == "" || resetAfter(window.ResetAt, now)) {
+			return false
+		}
+	}
+	return true
 }
 
 func resetAfter(value string, now time.Time) bool {
@@ -1320,7 +1357,7 @@ func (s *Store) ListUsageCandidatesForSchedule(accountIDs []string, dueOnly bool
 			}
 			if item.UsageSnapshot == nil {
 				candidate.priority += 2
-			} else if expires, ok := parseExpiry(item.UsageSnapshot.ExpiresAt); !ok || !expires.After(now) {
+			} else if _, fresh := freshUsageSnapshot(item, now); !fresh {
 				candidate.priority++
 			}
 			candidate.lastUsed, _ = parseExpiry(item.LastUsedAt)
