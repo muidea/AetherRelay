@@ -1559,9 +1559,68 @@ func codexSessionDigest(r *http.Request, model string, body map[string]any, incl
 func codexSessionSignal(r *http.Request, body map[string]any, includeRoutingOnly bool) string {
 	signal := codexSessionHeaderSignal(r, includeRoutingOnly)
 	if signal == "" {
+		signal = codexLogicalConversationSignal(body)
+	}
+	if signal == "" {
 		signal = codexPromptCacheSignal(body)
 	}
 	return signal
+}
+
+// codexLogicalConversationSignal keeps the conversation and thread dimensions
+// separate. A thread is only a conversation fallback when the client supplied no
+// session identity at all; otherwise changing threads must not change Session.
+func codexLogicalConversationSignal(body map[string]any) string {
+	metadata, ok := body["client_metadata"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if sessionID, _ := metadata["session_id"].(string); strings.TrimSpace(sessionID) != "" {
+		return "session_id\x00" + strings.TrimSpace(sessionID)
+	}
+	if threadID, _ := metadata["thread_id"].(string); strings.TrimSpace(threadID) != "" {
+		return "thread_id\x00" + strings.TrimSpace(threadID)
+	}
+	return ""
+}
+
+// codexLogicalThreadHash freezes an explicitly distinct client thread in the
+// account-independent semantic envelope. A missing thread, or a native client
+// that repeats its Session-Id as Thread-Id/X-Client-Request-Id, is represented
+// by an empty value so scoped projection can make Thread equal Session.
+func codexLogicalThreadHash(r *http.Request, model string, body map[string]any) string {
+	if r == nil {
+		return ""
+	}
+	thread := firstCodexHeader(r, "Thread-Id", "X-Client-Request-Id")
+	conversation := firstCodexHeader(r, "Session-Id", "session_id", "conversation_id", "X-Session-Affinity", "X-Session-Id", "X-OpenCode-Session", "X-Conversation-ID")
+	if metadata, ok := body["client_metadata"].(map[string]any); ok {
+		if thread == "" {
+			thread, _ = metadata["thread_id"].(string)
+			thread = strings.TrimSpace(thread)
+		}
+		if conversation == "" {
+			conversation, _ = metadata["session_id"].(string)
+			conversation = strings.TrimSpace(conversation)
+		}
+	}
+	if thread == "" || thread == conversation {
+		return ""
+	}
+	identity := clientauth.ClientIdentityFromContext(r.Context())
+	return aetherrelaycodex.StableUUID("aetherrelay:codex-logical-thread:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + thread)
+}
+
+func firstCodexHeader(r *http.Request, names ...string) string {
+	if r == nil {
+		return ""
+	}
+	for _, name := range names {
+		if value := strings.TrimSpace(r.Header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func codexSessionHeaderSignal(r *http.Request, includeRoutingOnly bool) string {

@@ -93,11 +93,11 @@ func (h *Handler) updateCodexAccount(w http.ResponseWriter, r *http.Request, rel
 	if body.FingerprintMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*body.FingerprintMode))
 		switch mode {
-		case "", codexevents.FingerprintModeOff:
-			mode = codexevents.FingerprintModeOff
-		case codexevents.FingerprintModeDevice, codexevents.FingerprintModeSession, codexevents.FingerprintModeFull:
+		case "", codexevents.FingerprintModeScoped:
+			mode = codexevents.FingerprintModeScoped
+		case codexevents.FingerprintModeOff:
 		default:
-			writeError(w, http.StatusBadRequest, "fingerprint_mode must be off, device, session, or full")
+			writeError(w, http.StatusBadRequest, "fingerprint_mode must be off or scoped")
 			return
 		}
 		body.FingerprintMode = &mode

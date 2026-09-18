@@ -328,32 +328,33 @@ func TestCodexCompactRateLimitRemainsCooldownBearing(t *testing.T) {
 
 func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 	seed := "11111111-1111-4111-8111-111111111111"
-	off := resolveCodexFingerprint(seed, accevents.FingerprintModeOff, "client-session", 0)
+	metadata := codexresponses.TurnMetadata{TurnID: "turn-a", TurnStartedAtMS: 123456789, WindowNumber: 37}
+	off := resolveCodexFingerprint(seed, accevents.FingerprintModeOff, "client-session", "", metadata)
 	if off != (upevents.CodexFingerprint{}) {
 		t.Fatalf("off fingerprint=%+v", off)
 	}
-	if invalid := resolveCodexFingerprint("local-account-id", accevents.FingerprintModeSession, "client-session", 0); invalid != (upevents.CodexFingerprint{}) {
+	if invalid := resolveCodexFingerprint("local-account-id", accevents.FingerprintModeScoped, "client-session", "", metadata); invalid != (upevents.CodexFingerprint{}) {
 		t.Fatalf("invalid private seed produced fingerprint=%+v", invalid)
 	}
-	device := resolveCodexFingerprint(seed, accevents.FingerprintModeDevice, "client-session", 0)
-	session := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session", 0)
-	repeated := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session", 0)
-	full := resolveCodexFingerprint(seed, accevents.FingerprintModeFull, "client-session", 37)
-	if device.InstallationID == "" || device.SessionID != "" || session.InstallationID != device.InstallationID || session.SessionID == "" || session.ThreadID == "" {
-		t.Fatalf("device=%+v session=%+v", device, session)
+	scoped := resolveCodexFingerprint(seed, accevents.FingerprintModeScoped, "client-session", "", metadata)
+	repeated := resolveCodexFingerprint(seed, accevents.FingerprintModeScoped, "client-session", "", metadata)
+	threaded := resolveCodexFingerprint(seed, accevents.FingerprintModeScoped, "client-session", "logical-thread", metadata)
+	otherConversation := resolveCodexFingerprint(seed, accevents.FingerprintModeScoped, "other-session", "", metadata)
+	if scoped.InstallationID == "" || scoped.SessionID == "" || scoped.ThreadID != scoped.SessionID || scoped.WindowID != scoped.ThreadID+":37" {
+		t.Fatalf("scoped fingerprint=%+v", scoped)
 	}
-	if repeated.SessionID != session.SessionID || repeated.ThreadID != session.ThreadID || repeated.TurnID == session.TurnID {
-		t.Fatalf("session IDs did not converge per contract: first=%+v repeated=%+v", session, repeated)
+	if repeated != scoped {
+		t.Fatalf("frozen scoped snapshot changed: first=%+v repeated=%+v", scoped, repeated)
 	}
-	if full.ThreadID != full.SessionID || full.WindowID != full.ThreadID+":37" {
-		t.Fatalf("full fingerprint=%+v", full)
+	if threaded.SessionID != scoped.SessionID || threaded.ThreadID == scoped.ThreadID {
+		t.Fatalf("logical thread projection=%+v base=%+v", threaded, scoped)
 	}
-	if session.TurnStartedAtUnixMS <= 0 || repeated.TurnStartedAtUnixMS <= 0 {
-		t.Fatalf("turn timestamps missing: first=%+v repeated=%+v", session, repeated)
+	if otherConversation.SessionID == scoped.SessionID || otherConversation.ThreadID == scoped.ThreadID {
+		t.Fatalf("distinct conversations collided: first=%+v other=%+v", scoped, otherConversation)
 	}
-	otherSeed := resolveCodexFingerprint("22222222-2222-4222-8222-222222222222", accevents.FingerprintModeSession, "client-session", 0)
-	if otherSeed.InstallationID == session.InstallationID || otherSeed.SessionID == session.SessionID || otherSeed.ThreadID == session.ThreadID {
-		t.Fatalf("different private seeds converged: first=%+v other=%+v", session, otherSeed)
+	otherSeed := resolveCodexFingerprint("22222222-2222-4222-8222-222222222222", accevents.FingerprintModeScoped, "client-session", "", metadata)
+	if otherSeed.InstallationID == scoped.InstallationID || otherSeed.SessionID == scoped.SessionID || otherSeed.ThreadID == scoped.ThreadID {
+		t.Fatalf("different private seeds converged: first=%+v other=%+v", scoped, otherSeed)
 	}
 }
 
@@ -391,10 +392,10 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
 		acquires++
 		if acquires == 1 {
-			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeSession, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
+			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
 			return
 		}
-		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeOff}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222"}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
 	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
@@ -416,11 +417,11 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 		t.Fatalf("completed=%s err=%v", completed.Body, err)
 	}
 	first, second := <-commands, <-commands
-	if first.Fingerprint.Mode != accevents.FingerprintModeSession || first.Fingerprint.InstallationID == "" || first.TurnState != "state-a" {
+	if first.Fingerprint.Mode != accevents.FingerprintModeScoped || first.Fingerprint.InstallationID == "" || first.TurnState != "state-a" {
 		t.Fatalf("first attempt=%+v", first)
 	}
-	if second.Fingerprint != (upevents.CodexFingerprint{}) || second.TurnState != "" {
-		t.Fatalf("off failover retained prior identity: %+v", second)
+	if second.Fingerprint.Mode != accevents.FingerprintModeScoped || second.Fingerprint.InstallationID == first.Fingerprint.InstallationID || second.Fingerprint.SessionID == first.Fingerprint.SessionID || second.Fingerprint.TurnID != first.Fingerprint.TurnID || second.Fingerprint.TurnStartedAtUnixMS != first.Fingerprint.TurnStartedAtUnixMS || second.TurnState != "" {
+		t.Fatalf("failover did not preserve semantics and replace account projection: first=%+v second=%+v", first, second)
 	}
 }
 
@@ -664,7 +665,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeSession, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
 	})
 	refreshes := 0
 	accounts.Subscribe(accevents.TopicRefreshToken, func(ev event.Event, result event.Result) {
@@ -672,7 +673,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 		if command := ev.Data().(accevents.RefreshTokenCommand); command.AccountID != "account-1" {
 			t.Errorf("refresh command=%+v", command)
 		}
-		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeSession, FingerprintSeed: "11111111-1111-4111-8111-111111111111", Refreshed: true}, nil)
+		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", Refreshed: true}, nil)
 	})
 	recorded := make(chan accevents.RecordResultCommand, 2)
 	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
@@ -697,14 +698,14 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
 			t.Errorf("retry upstream command=%+v", command)
 		}
-		if command.Fingerprint.InstallationID == "" || command.Fingerprint.InstallationID != firstFingerprint.InstallationID || command.Fingerprint.SessionID != firstFingerprint.SessionID || command.Fingerprint.TurnID == firstFingerprint.TurnID {
-			t.Errorf("refresh retry fingerprint drifted or reused turn: first=%+v retry=%+v", firstFingerprint, command.Fingerprint)
+		if command.Fingerprint.InstallationID == "" || command.Fingerprint.InstallationID != firstFingerprint.InstallationID || command.Fingerprint.SessionID != firstFingerprint.SessionID || command.Fingerprint.TurnID == "" || command.Fingerprint.TurnID != firstFingerprint.TurnID || command.Fingerprint.TurnStartedAtUnixMS != firstFingerprint.TurnStartedAtUnixMS {
+			t.Errorf("refresh retry changed frozen semantic envelope: first=%+v retry=%+v", firstFingerprint, command.Fingerprint)
 		}
 		result.Set(upevents.CompleteResult{Body: []byte(`{"object":"response","id":"resp_recovered"}`)}, nil)
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-5.2-codex", Body: []byte(`{"model":"gpt-5.2-codex"}`)})
+	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-5.2-codex", Body: []byte(`{"model":"gpt-5.2-codex"}`), SessionHash: "logical-conversation"})
 	if err != nil || string(completed.Body) != `{"object":"response","id":"resp_recovered"}` || attempts != 2 || refreshes != 1 {
 		t.Fatalf("completed=%+v err=%v attempts=%d refreshes=%d", completed, err, attempts, refreshes)
 	}

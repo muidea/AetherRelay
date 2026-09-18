@@ -41,12 +41,10 @@ const (
 )
 
 const (
-	// Fingerprint convergence is deliberately opt-in. Missing and invalid
-	// persisted values are normalized to off by the account owner.
-	FingerprintModeOff     = "off"
-	FingerprintModeDevice  = "device"
-	FingerprintModeSession = "session"
-	FingerprintModeFull    = "full"
+	// Scoped convergence is the default. Off is an explicit operational escape
+	// hatch; no legacy convergence modes remain in the public contract.
+	FingerprintModeOff    = "off"
+	FingerprintModeScoped = "scoped"
 )
 
 const (

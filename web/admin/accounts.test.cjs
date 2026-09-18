@@ -33,11 +33,11 @@ function harness(){
   return {context,requests,messages};
 }
 
-test('unified account summary hides inactive fingerprint mode',()=>{
+test('unified account summary uses scoped as the default fingerprint mode',()=>{
   const {context:c}=harness();
   assert.equal(c.codexFingerprintSummary({fingerprint_mode:'off'}),'');
-  assert.equal(c.codexFingerprintSummary({}),'');
-  assert.match(c.codexFingerprintSummary({fingerprint_mode:'session'}),/>指纹 会话</);
+  assert.match(c.codexFingerprintSummary({}),/>指纹 作用域（默认）</);
+  assert.match(c.codexFingerprintSummary({fingerprint_mode:'scoped'}),/>指纹 作用域（默认）</);
 });
 
 test('unified account slots render independent credential switches',()=>{

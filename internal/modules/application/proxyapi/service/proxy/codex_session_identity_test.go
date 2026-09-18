@@ -47,6 +47,37 @@ func TestCodexSessionIdentityIsStableUUID(t *testing.T) {
 	}
 }
 
+func TestCodexLogicalThreadHashOnlyCapturesDistinctThread(t *testing.T) {
+	request := codexIdentityRequest("key-a", "gpt-5.6-sol", map[string]string{"Session-Id": "conversation-a", "Thread-Id": "conversation-a"})
+	if got := codexLogicalThreadHash(request, "gpt-5.6-sol", nil); got != "" {
+		t.Fatalf("equal client session/thread produced a distinct logical thread: %q", got)
+	}
+	request.Header.Set("Thread-Id", "thread-a")
+	first := codexLogicalThreadHash(request, "gpt-5.6-sol", nil)
+	if _, err := uuid.Parse(first); err != nil {
+		t.Fatalf("distinct logical thread hash=%q err=%v", first, err)
+	}
+	if repeated := codexLogicalThreadHash(request, "gpt-5.6-sol", nil); repeated != first {
+		t.Fatalf("logical thread hash changed: %q vs %q", first, repeated)
+	}
+	request.Header.Set("Thread-Id", "thread-b")
+	if other := codexLogicalThreadHash(request, "gpt-5.6-sol", nil); other == first {
+		t.Fatalf("distinct client threads collided: %q", first)
+	}
+}
+
+func TestCodexBodyIdentitySeparatesConversationFromThread(t *testing.T) {
+	request := codexIdentityRequest("key-a", "gpt-5.6-sol", nil)
+	firstBody := map[string]any{"client_metadata": map[string]any{"session_id": "conversation-a", "thread_id": "thread-a"}}
+	secondBody := map[string]any{"client_metadata": map[string]any{"session_id": "conversation-a", "thread_id": "thread-b"}}
+	if first, second := codexSessionHash(request, "gpt-5.6-sol", firstBody), codexSessionHash(request, "gpt-5.6-sol", secondBody); first != second {
+		t.Fatalf("same logical conversation produced different sessions: %q vs %q", first, second)
+	}
+	if first, second := codexLogicalThreadHash(request, "gpt-5.6-sol", firstBody), codexLogicalThreadHash(request, "gpt-5.6-sol", secondBody); first == "" || second == "" || first == second {
+		t.Fatalf("distinct logical threads were not separated: %q vs %q", first, second)
+	}
+}
+
 // CP-REQ-016: body 归一化不得改变客户端的字符串字节——转义 <, >, & 会让每个
 // 请求体膨胀 5 字节/处，Rust 客户端本身不发送这种形式。
 func TestCodexNormalizedBodyKeepsClientBytesVerbatim(t *testing.T) {

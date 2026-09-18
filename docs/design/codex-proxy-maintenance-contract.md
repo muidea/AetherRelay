@@ -1,14 +1,20 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`10.1.0`
+> 合同版本：`11.0.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-18
+> 生效日期：2026-09-19
 >
-> 参考基线：AetherRelay `1644980`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+> 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`11.0.0` 实施身份收敛终态：运行时与管理面只接受 `off/scoped`，默认值改为 `scoped`，原 `device/session/full` 不再保留兼容入口；加密存量中的缺失、未知或已删除模式在加载时直接收口为 `scoped`。`scoped` 使用账号级 Installation、账号与 LogicalConversation 共同派生的 Session、以及账号/会话/LogicalThread 共同派生的 Thread。请求进入执行器时冻结 LogicalTurn 与开始时间，failover 只重算账号物理投影并保持正文、cache identity、Window Number、turn 属性和 JSON 类型/精度不变。默认身份及配置枚举发生不兼容变化，因此按 MAJOR 发布。
+
+`10.1.2` 明确身份收敛的目标模式与信息守恒边界，作为 `11.0.0` 实施前的设计基线。
+
+`10.1.1` 固化 Installation、Client Session、代理 `sessionHash`、Upstream Session/Thread/Window、Turn 与 Turn-State scope 的分层语义，并把 [Codex 身份与会话语义基准](codex-identity-semantics.md) 纳入规范性说明。现场证据确认 `X-Client-Request-Id` 在当前 CLI 中是跨请求稳定的 Thread 同值载体，而非 request-per-call ID；同一 CLI 替换同一 Key ID 槽位的 Key 明文不会改变 Installation 或 Client Session；非零 Window 后缀在新版出站 header 与 metadata 中保持一致。本次只澄清既有行为和维护门槛，不改变协议，按 PATCH 发布。
 
 `10.1.0` 为 `CP-HDR-022` 增加**强制默认开关** `codex_oauth.turn_state_force_default`（默认关闭）：启用后本次 attempt 的 `X-Codex-Turn-State` **只**取有效 `codex_oauth.default_turn_state`，客户端提供的值与会话记录都不再出站，来源记为新增的 `forced`；默认值本身仍不写入会话记录，上游观测照旧记录，因此关闭开关后原有回填链路立即恢复。该开关用于把请求固定到一个已知良好的状态（例如某会话被上游拒绝、或不想让旧状态继续流通时）。默认关闭，不改变现有配置的任何可观察行为，因此为 MINOR；启用时若有效默认值为空，启动校验必须失败，避免开关静默失效。
 
@@ -85,6 +91,8 @@
 `CP-VER-004` 未实现规则必须标记 `planned`，不得在 `/v1/models`、管理 API 或功能文档中宣称支持。
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
+
+`CP-VER-006` [Codex 身份与会话语义基准](codex-identity-semantics.md) 是 `CP-HDR-007..024`、`CP-FP-001..008`、`CP-SCHED-002..003` 与 `CP-HDR-022..023` 的规范性说明。凡修改 Installation、Session、Thread、`X-Client-Request-Id`、Window、Turn、`sessionHash`、fingerprint 或 Turn-State scope 的语义、来源、格式、优先级和用途，必须在同一提交中更新本文版本/规则、该语义基准、自动化测试与实施追踪表。现场证据变化但外部行为不变时按 PATCH；遗漏同步视为合同未完成。
 
 版本记录：`4.0.2` 同步 Codex CLI `0.153.2` flat `client_metadata` 投影并保持未知键 fail closed。`4.0.1` 收口可信 manifest 与有效目录交集、delegation 历史配对和过期 quota reset。`4.0.0` 将默认出站身份更新为本机实测 Codex CLI `0.153.4` 的当前 UA，加入 GPT-6 Astra 的本地可信 manifest profile、multi-agent `agent_message`、历史 delegation、automation heartbeat、credential-wide 单调 quota cooldown 与共享正文的有界 WebSocket replay，并修正旧客户端 reasoning level 全部过滤后的空数组语义。`3.8.0` 固化 Codex delegation/scheduled automation 初始 bootstrap 的窄范围兼容、JWT access-token `exp` 的刷新调度提示，以及旧客户端 reasoning level 全部被过滤时的字段省略语义。`3.7.0` 固化 WebSocket 握手 quota/error 语义、非流式 terminal 统一分类、旧客户端 reasoning manifest 过滤、大整数无损规范化、Claude Code 路由专用会话信号和 HTTPS 代理 HTTP/1.1 ALPN。`3.6.0` 新增本地 Responses input-token preflight、默认/最大上下文双容量、nested cache breakpoint 清洗、compact availability-neutral 反馈、OAuth 统一身份，以及后续 WebSocket turn 的有界安全迁移。`3.5.0` 将 compact 上游切换为原生 remote compaction v2，固化会话级 beta、Turn-State 来源保护，以及默认关闭、显式 opt-in 的账号级指纹收敛。`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。
 
@@ -207,15 +215,15 @@
 | `Accept` | generate：HTTP Responses 与 compact upstream 均为 SSE；compact downstream 再投影 JSON/SSE | `CP-HDR-005` |
 | `OpenAI-Beta` | generate/merge allowlist：WebSocket beta | `CP-HDR-006` |
 | `Session-Id` / `session_id` | normalize：由 session owner 生成，确定性 UUID 形态 | `CP-HDR-007` |
-| `Thread-Id` | normalize：与 session 一致 | `CP-HDR-008` |
-| `X-Client-Request-Id` | normalize：每次请求或 profile 指定 | `CP-HDR-009` |
+| `Thread-Id` | normalize：`off` 时等于 session；`scoped` 时按账号、LogicalConversation 与可选 LogicalThread 派生 | `CP-HDR-008` |
+| `X-Client-Request-Id` | normalize：取本次 attempt 的 `Thread-Id`；当前 CLI 中跨同一 thread 的多个 HTTP 请求稳定 | `CP-HDR-009` |
 | `X-Codex-Window-Id` | normalize：会话段由代理生成，号段取客户端声明 | `CP-HDR-010` |
 | `X-Codex-Turn-Metadata` | normalize：身份取自代理、turn 级与属性取自客户端（见 `CP-HDR-011`） | `CP-HDR-011` |
 | `X-Codex-Turn-State` | opaque forward/relay；客户端缺失时按会话记录回填；已知跨账号回放必须剥离 | `CP-HDR-012` |
 | `X-Codex-Beta-Features` | session profile；缺失时 OAuth 默认 `remote_compaction_v2`，显式非空集合保持，原生 v2 强制补 v2 | `CP-HDR-013` |
 | `Version` | drop-compatible；身份只由 profile 生成 | `CP-HDR-014` |
 | `X-OpenAI-Internal-Codex-Responses-Lite` | normalize；仅精确 true 时生成，且不开放内部图片桥接 | `CP-HDR-015` |
-| `X-Codex-Installation-Id` | 仅在账号显式启用 fingerprint convergence 时由账号级 profile 生成 | `CP-HDR-019` |
+| `X-Codex-Installation-Id` | 默认 `scoped` 时由账号级 profile 生成；仅显式 `off` 时不发送 | `CP-HDR-019` |
 
 `CP-HDR-016` 下游 `Authorization`、Cookie、任意 forwarded header、任意 account ID 和自定义代理 header 绝不能进入上游。
 
@@ -239,19 +247,27 @@
 
 `CP-HDR-021` Codex OAuth 授权码交换、refresh token、模型发现与用量查询属于凭据/账号域请求，必须共用同一份版本化身份 authority，不得接收任何客户端提供的身份值；inference transport 在客户端提供合法身份时按 `CP-HDR-003`/`CP-HDR-004` 复用，否则使用同一份 profile。OAuth credential endpoint 不发送 inference-only `Version` header。任何 profile 升级必须同时覆盖 credential 与 inference 测试。
 
-`CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位为身份元组：账号、归一化 fingerprint mode、账号 fingerprint session 与客户端声明会话的摘要；`off/device` 下上游 `Session-Id` 与该声明一致，`session/full` 下上游会把该账号的全部下游会话收敛成同一个账号级 `Session-Id`，此时按声明会话记录更细，禁止把一个会话的状态回填给另一个。声明会话按优先级取显式会话 header、`client_metadata` 的 `session_id`/`thread_id`、显式 `prompt_cache_key`；三者都没有时**没有记录单位**，既不记录也不回放。调度用的 session 摘要会在信号缺失时代入共享的合成值，该合成值绝不能成为 turn state 记录单位，否则互不相关的无状态请求会共用一个桶。回填顺序为「该记录单位的最近观测值 → 内置或配置的默认值」；默认值为空时该 attempt 不发送这个 header，来源记为 `absent`。只记录真实观测值，默认值本身不写入记录。回填仅发生在客户端未提供时；客户端提供了但被 `CP-HDR-020` 判定为已知跨账号铸造而剥离的值必须保持为空，不得用记录值或默认值替换。回填值出站前必须重新通过 `CP-HDR-020` 的来源守卫。回填只作用于单次上游 attempt，`CP-FAIL-018` 的"无非空 turn-state"只按客户端原值判定，不看回填结果。failover 后的 attempt 属于另一个记录单位，只能回填该账号自己的记录或默认值，不得沿用上一账号的记录。HTTP、SSE、compact、WebSocket 握手以及 `/v1/chat/completions`、`/v1/messages` 适配入口共用同一实现：适配入口必须先按 `CP-HDR-012` 边界解析客户端 turn state 并传递，不得用回填值替换客户端已提供的值。WS 后续 turn 走帧不带 header，不受本规则影响。`codex_oauth.turn_state_force_default` 是独立的运维开关：启用后该 attempt 的取值**只**来自有效 `codex_oauth.default_turn_state`，客户端提供的值、会话记录与 `turn_state_fallback` 都不再参与（force 优先于 fallback，两个开关的优先级必须写进实现与验收）；有效默认值为空时该 attempt 不发送该 header（来源 `absent`），但该组合必须在启动校验中失败而不是静默通过。强制值不写入会话记录，上游观测照旧记录，因此关闭开关后原回填链路不被污染。
+`CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位包含账号、规范化 fingerprint mode、账号 fingerprint session 与客户端声明会话摘要；`off/scoped` 都必须保留声明会话维度，禁止跨会话回填。声明会话依次取显式会话 header、`client_metadata.session_id/thread_id` 固定元组、显式 `prompt_cache_key`；全部缺失时不记录也不回放，调度使用的合成 `default` 不得成为 bucket。回填顺序为该记录单位最近观测值、配置默认值、缺失；客户端已提供但被来源守卫剥离的值不得由回填替换。failover 后只可使用新账号记录或默认值，不得沿用上一账号状态。HTTP、SSE、compact、WebSocket 握手及两个适配入口共用该实现；WS 后续 turn 不受本规则影响。`turn_state_force_default` 启用时只使用有效默认值且优先于 fallback，强制值不污染会话记录。
 
 `CP-HDR-023` `CP-HDR-022` 的记录是 `CP-HDR-020`「不记录原值」的受控例外，且该要求在此限定为不落盘：为完成回填，记录必须在进程内存中持有 opaque 原值，但该值不得进入日志、归档、指标、错误响应、管理视图或任何导出。记录随新观测更新，进程生命周期内保留（不设 TTL），受条数上限与总字节预算双重约束，超限时按最旧观测批量淘汰；配置热更新不得清空记录，Block Teardown 必须清零。内置默认值属于"非本账号铸造的值"，本规则把它作为受控例外允许出站：`codex_oauth.turn_state_fallback` 关闭时不得回填但仍必须记录，`codex_oauth.default_turn_state` 只提供值、不改变本规则的任何边界。诊断只记录 `client/session/default/stripped/forced/absent` 有界来源枚举与是否发生回填的布尔，不记录值；`stripped` 表示"存在一个值（客户端提供的或会话记录回放的）但被 `CP-HDR-020` 剥离"，`forced` 表示该值来自强制默认开关，两者都必须与"客户端没有声明"的 `absent` 可区分；归档默认同样只记录该布尔，只有显式开启 `CP-OBS-009` 后才按原值写入该 header。来源枚举对每个 attempt 都有效。归档布尔是三态：产生上游结果或交付首个业务事件时必须显式写入 `true`/`false`，因此"没有回填"与"没有产生结果"（输出前失败）在归档中必须可区分，不能都表示为字段缺失；输出前失败时以同一 `request_id` 的运行日志为准。该布尔的判定是「出站的值不是客户端提供的」，因此 `session`、`default` 与 `forced` 都记 `true`，具体来源由日志的来源枚举区分。
 
-`CP-FP-001` 账号 `fingerprint_mode` 取值只能为 `off/device/session/full`。缺失、空值、非法存量值均按 `off`；只有管理员显式设置后三种值才启用收敛。
+`CP-HDR-024` 身份术语必须按 [Codex 身份与会话语义基准](codex-identity-semantics.md) 分层使用：Installation 是安装/设备层身份，Client Session 是 CLI 会话，`sessionHash` 是 Key ID + 模型 + 客户端会话信号派生的代理 UUID，Upstream Session/Thread/Window 是 attempt 级出站身份，Turn 是可跨多个 HTTP/tool 请求的逻辑交互，Turn-State scope 是账号与客户端声明会话共同决定的独立记录单位。API Key 明文不得进入身份派生；同一 Key ID 槽位替换明文不构成新命名空间。`X-Client-Request-Id` 取 attempt 的 `Thread-Id`，不得误用为 AetherRelay 单请求诊断 ID。实现、测试、日志分析和文档不得用无所有权前缀的“Session”替代这些不同层级。
 
-`CP-FP-002` `device` 只收敛账号级 installation ID；`session` 收敛 installation/session，thread 按账号与下游隔离 session 稳定派生；`full` 再把 thread 收敛到账号 session。session/full 的 turn ID 每 turn 更新，header 与 `client_metadata` 使用同一组解析结果。
+`CP-FP-001` 账号 `fingerprint_mode` 只允许 `off/scoped`，缺失和空值默认 `scoped`。管理 API 与导入对其它显式值直接拒绝；加密存量中的缺失、未知或已删除值加载时直接重写为 `scoped`。
+
+`CP-FP-002` `scoped` 收敛账号级 Installation；Session 按账号 seed 与 LogicalConversation 派生；Thread 按账号 seed、LogicalConversation 与显式不同的 LogicalThread 派生，没有独立 LogicalThread 时等于 scoped Session。每个逻辑 turn 只生成一次 fallback Turn ID/开始时间，header 与 `client_metadata` 使用同一组解析结果。
 
 `CP-FP-003` HTTP、SSE、compact 与 WebSocket 必须调用同一 fingerprint 解析和 body/header 改写核心。failover 每个账号都必须重新解析；从启用收敛的账号切到 `off` 时不能残留上一 attempt 的 ID。
 
 `CP-FP-004` 指纹必须由加密账号文档内系统管理的随机 UUID seed 派生，不得直接使用数据库主键、上游 account ID、邮箱或 token。seed 不进入管理视图、普通凭据导出、日志、指标或错误；重新认证与数据库归档恢复保留，普通导入新账号和显式槽位凭据替换生成新 seed。
 
-`CP-FP-005` 每次上游 attempt 必须只解析一次不可变 fingerprint 快照。flat header、服务端重建的 `X-Codex-Turn-Metadata`、body `client_metadata` 与嵌入 metadata 必须使用同一快照；身份字段按 `CP-HDR-011` 取快照值，turn 级字段在客户端声明时取客户端值，未声明时才回落快照的 turn ID 与 `turn_started_at_unix_ms`；后续 WebSocket turn 只更新 turn ID 和开始时间。
+`CP-FP-005` 账号选择前必须冻结不可变语义胶囊；每次上游 attempt 只解析一次账号 fingerprint 快照。flat header、服务端重建的 `X-Codex-Turn-Metadata`、body `client_metadata` 与嵌入 metadata 必须使用同一快照；身份字段按 `CP-HDR-011` 取快照值，turn 级字段在客户端声明时取客户端值，未声明时使用请求级冻结的 Turn ID 与 `turn_started_at_unix_ms`；后续 WebSocket turn 才更新 Turn ID 和开始时间。
+
+`CP-FP-006` 正式生产收敛模式为 `scoped`：Installation 按账号 seed 稳定派生，Session 按「账号 seed + LogicalConversation」稳定派生，Thread 按「账号 seed + LogicalConversation + LogicalThread」稳定派生；客户端没有独立 Thread 时 Thread 等于该 scoped Session。对同一账号，不同 LogicalConversation 必须映射到不同的 Session/Thread 身份元组，收敛只能改变表示和所有权，不得合并下游会话。
+
+`CP-FP-007` 正式模式只包含 `off/scoped`，默认 `scoped`，`off` 仅作为显式排障和回退开关。`device/session/full` 已从运行时、管理 API、导入校验和管理页删除，不得重新引入隐式兼容分支。
+
+`CP-FP-008` 账号选择前必须冻结与账号无关的语义信息：LogicalConversation、LogicalThread、LogicalTurn、Window Number、显式或生成的 prompt cache identity、规范化正文、输入/工具顺序、beta/features、诊断和合法 turn 属性。failover 只能替换 Authorization、上游账号、账号 Installation、scoped Session/Thread、Window 前缀与该账号的 Turn-State；不得重新解释或丢弃冻结信息。字段缺失、显式空值和显式数字 `0` 必须保持可区分，支持的 JSON 数字、字符串和布尔值必须保持类型与精度，未知字段必须显式进入有界 ignored-features 而非静默消失。
 
 ## 7. HTTP、SSE、compact 与 WebSocket
 
@@ -333,7 +349,7 @@
 
 `CP-SCHED-011` 账号候选在 session 粘性与 `priority` 之后、最终轮转之前，必须先按「额度证据」排序：拥有新鲜用量快照、且不存在未到期 limit-reached 窗口的账号，优先于额度未知或快照已过期的账号。该规则只改变同优先级候选之间的排序，不改变准入结论——`CP-CAP-005` 仍然保证缺失或过期快照可以参与尝试，因此当全部候选都缺少新鲜额度证据时，选择结果与引入本规则前一致（继续按轮转）；粘性账号（`CP-SCHED-004`）仍然优先于本规则。依据：部署轮次 `work-office/000001` 观测到某 `free` 账号在其 30 天窗口已 100% 时仍被选中，随后该轮响应头才首次暴露耗尽事实，代价是一次长耗时请求；`interactions_old`/`interactions_new` 中没有更早的可归属观测，说明缺口位于「快照过期 + 尚未轮询」窗口。验收覆盖：新鲜有余量优先于未知/过期、全部未知时保持原有轮转、粘性账号仍然命中、未到期 limit-reached 快照仍被硬性排除。
 
-`CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。无显式信号时可以生成请求域 session，但不能用完整敏感正文作为持久化 key。
+`CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`client_metadata.session_id`（仅缺失时以 `thread_id` 作为会话兜底）、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。显式不同的 `Thread-Id` / `X-Client-Request-Id` / `client_metadata.thread_id` 另行冻结为 LogicalThread，不改变账号亲和使用的 LogicalConversation。无显式信号时可以生成请求域 session，但不能用完整敏感正文作为持久化 key。
 
 `CP-SCHED-003` session key 必须按客户端 API key ID 和 model 命名空间隔离；存储哈希，不保存原值。
 
@@ -469,6 +485,19 @@
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 
+`11.0.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| scoped 单射身份投影与 failover 语义胶囊 | CP-FP-006, CP-FP-008 | implemented | `proxyapi/service/proxy/codex_compat.go`, `proxyapi/biz/codex_identity.go`, `proxyapi/biz/codex_responses.go` | `codex_session_identity_test.go`, `codex_responses_test.go`, `codexupstream/biz/biz_test.go` |
+| 正式模式收敛为 off/scoped，默认 scoped，删除旧模式 | CP-FP-001..002, CP-FP-007 | implemented | `codexaccountpool/internal/store/store.go`, `admin/codex_accounts.go`, `admin/account_pool_bundle.go`, `web/admin/index.html` | `store_test.go`, `encrypted_store_test.go`, `codex_accounts_test.go`, `account_pool_bundle_test.go`, `web/admin/accounts.test.cjs` |
+
+`10.1.1` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| Installation、Session、Thread、Window、Turn 与 Turn-State scope 分层语义 | CP-VER-006, CP-HDR-007..010, CP-HDR-022..024, CP-FP-001..005 | implemented | `proxyapi/service/proxy/codex_compat.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go`, `pkg/aetherrelaycodex/identity.go`, `docs/design/codex-identity-semantics.md` | `proxyapi/service/proxy/codex_session_identity_test.go`, `proxyapi/service/proxy/codex_turn_metadata_test.go`, `proxyapi/service/proxy/codex_turn_state_scope_test.go`, `proxyapi/biz/codex_turn_state_test.go`, `codexupstream/biz/biz_test.go` |
+
 `9.2.0` 新增实施追踪：
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
@@ -601,7 +630,7 @@
 | OAuth identity header | sub2api `bb6c3b4f6`、`a34123959`：credential 请求复用 Codex UA/originator，并避免 inference-only version | credential 与 inference 共用不可变 profile authority |
 | HTTP upgrade wrapper | magicEngine `v1.5.1` / `4d359d0`：response writer 透传 Hijacker、标记 101、支持 Unwrap，并让 Flush 正确提交状态 | AetherRelay 依赖正式 tag，vendor 只由 module 刷新，不保留本地补丁 |
 | Turn-State | sub2api `8219dcfc`：响应 relay、来源登记及 failover 跨账号 echo guard | opaque 有界透传；只保存状态哈希到账号来源的短期映射 |
-| 指纹收敛 | sub2api `fce41e31`：默认 off、显式 opt-in、普通/透传路径共享解析结果 | AetherRelay 账号配置同样默认 off；HTTP/SSE/compact/WS 共享类型化 fingerprint profile |
+| 指纹收敛 | sub2api `fce41e31`：默认 off、显式 opt-in、普通/透传路径共享解析结果 | AetherRelay `11.0.0` 默认 scoped；HTTP/SSE/compact/WS 共享类型化 fingerprint profile 与请求级语义胶囊 |
 | 会话级 Turn-State 回填 | AetherRelay 现场部署需求：客户端在部分请求中丢失上游响应 header 的 `X-Codex-Turn-State` 后，同一会话的后续 turn 无法恢复该 opaque 值 | 按 `CP-HDR-022` 以「铸造账号 + 下游会话」在内存记录最近观测值并在缺失时回填；参考实现（sub2api `8219dcfc`）只做 relay 与来源登记，无此能力，故本规则不引用外部证据 |
 | Turn-State 强制默认开关 | AetherRelay 运维需求：需要把出站状态固定到一个已知良好的值（会话被上游拒绝、或旧状态不应继续流通时），而回填只覆盖"客户端未提供"的情形 | `10.1.0` 的 `codex_oauth.turn_state_force_default` 让有效默认值覆盖客户端与会话记录；参考实现无对应能力，规则由本合同独立定义 |
 | 出站身份形态与窗口号 | AetherRelay 现场归档 `work-office` 60 轮 header 差分核对：客户端 `Session-Id`/`Thread-Id` 是 36 字符 UUID，代理铸造值是 64 位十六进制；`X-Codex-Window-Id` 客户端 `…:37` 对上游 `…:0`，而同一份元数据的 `window_number=37` 原样透传；同批核对还量出 body 因 HTML 转义膨胀（每处 `<`/`>`/`&` +5 字节，最大一轮 +4852） | 按 `CP-HDR-007..010` 改为确定性 UUID 形态并保留客户端窗口号，按 `CP-REQ-036` 关闭转义；`client_metadata` 顶层字符串化与 `invalid_type` 修复已由现场 48 轮无失败验证 |

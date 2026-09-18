@@ -65,7 +65,7 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := ReadOnlyCredential()
-	input.FingerprintMode = events.FingerprintModeSession
+	input.FingerprintMode = events.FingerprintModeScoped
 	if _, _, _, err := store.Import([]events.CredentialInput{input}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	}
 }
 
-func TestEncryptedAccountLoadRejectsMissingFinalFingerprintSeed(t *testing.T) {
+func TestEncryptedAccountLoadMigratesRemovedFingerprintModeToScoped(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	codec := encryptedTestCodec(t)
 	store, err := Open(path, "256MB", 1, codec)
@@ -99,7 +99,7 @@ func TestEncryptedAccountLoadRejectsMissingFinalFingerprintSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := store.order[0]
-	store.items[id].FingerprintMode = events.FingerprintModeSession
+	store.items[id].FingerprintMode = "full"
 	store.items[id].FingerprintSeed = ""
 	if err := store.saveLocked(); err != nil {
 		t.Fatal(err)
@@ -108,8 +108,13 @@ func TestEncryptedAccountLoadRejectsMissingFinalFingerprintSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Open(path, "256MB", 1, codec); err == nil || !strings.Contains(err.Error(), "missing its fingerprint seed") {
-		t.Fatalf("missing final fingerprint seed error=%v", err)
+	restored, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatalf("migrate removed fingerprint mode: %v", err)
+	}
+	defer restored.Close()
+	if restored.items[id].FingerprintMode != events.FingerprintModeScoped || restored.items[id].FingerprintSeed == "" {
+		t.Fatalf("removed fingerprint mode was not migrated: %+v", restored.items[id])
 	}
 }
 
@@ -214,7 +219,7 @@ func TestRepeatedCompleteImportPreservesUnchangedAccountState(t *testing.T) {
 	input := events.CredentialInput{
 		CredentialType: "codex_cli", AccountID: "account", Email: "user@example.invalid",
 		AccessToken: "access", RefreshToken: "refresh", IDToken: "id-token",
-		Proxy: "http://127.0.0.1:8080", FingerprintMode: events.FingerprintModeSession,
+		Proxy: "http://127.0.0.1:8080", FingerprintMode: events.FingerprintModeScoped,
 	}
 	if added, updated, skipped, err := store.Import([]events.CredentialInput{input}); err != nil || added != 1 || updated != 0 || skipped != 0 {
 		t.Fatalf("first import added=%d updated=%d skipped=%d err=%v", added, updated, skipped, err)

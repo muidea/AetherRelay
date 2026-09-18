@@ -57,9 +57,8 @@ func mustCodexTurnStateScope(t *testing.T, accountID string, fingerprint upevent
 	return scope
 }
 
-// CP-HDR-022: off/device keep the upstream Session-Id granularity, while
-// session/full stay per downstream session because the upstream collapses those
-// sessions onto one account level Session-Id.
+// CP-HDR-022: off and scoped both retain the explicitly declared downstream
+// conversation in the record unit, so account projection never merges state.
 func TestCodexTurnStateScopeGranularityMatrix(t *testing.T) {
 	cases := []struct {
 		mode        string
@@ -68,10 +67,8 @@ func TestCodexTurnStateScopeGranularityMatrix(t *testing.T) {
 		wantSession string
 	}{
 		{mode: "", wantMode: ""},
-		{mode: "device", wantMode: "device"},
-		{mode: "session", sessionID: "account-session", wantMode: "session", wantSession: "account-session"},
-		{mode: "full", sessionID: "account-session", wantMode: "full", wantSession: "account-session"},
-		{mode: "SESSION", sessionID: "account-session", wantMode: "session", wantSession: "account-session"},
+		{mode: "scoped", sessionID: "account-session", wantMode: "scoped", wantSession: "account-session"},
+		{mode: "SCOPED", sessionID: "account-session", wantMode: "scoped", wantSession: "account-session"},
 	}
 	for _, testCase := range cases {
 		fingerprint := upevents.CodexFingerprint{Mode: testCase.mode, SessionID: testCase.sessionID}
@@ -83,9 +80,9 @@ func TestCodexTurnStateScopeGranularityMatrix(t *testing.T) {
 			t.Fatalf("CP-HDR-022 mode=%q scope=%+v", testCase.mode, scope)
 		}
 	}
-	// Keeping downstream sessions apart is what stops session/full convergence
-	// from merging two clients into one record.
-	converged := upevents.CodexFingerprint{Mode: "session", SessionID: "account-session"}
+	// Keeping downstream sessions apart stops scoped account projection from
+	// merging two clients into one record.
+	converged := upevents.CodexFingerprint{Mode: "scoped", SessionID: "account-session"}
 	first, _ := codexTurnStateScopeFor("account-a", converged, "session-a")
 	second, _ := codexTurnStateScopeFor("account-a", converged, "session-b")
 	if first == second {
@@ -138,10 +135,10 @@ func TestCodexTurnStateSessionReplayFillsMissingHeader(t *testing.T) {
 func TestCodexTurnStateStrippedValueIsNeverReplaced(t *testing.T) {
 	proxy := codexTurnStateProxy(t, "  default_turn_state: state-default\n")
 	proxy.noteCodexTurnState("account-a", upevents.CodexFingerprint{}, "session-a", codexTurnStateHeader("state-a"))
-	device := upevents.CodexFingerprint{Mode: "device", InstallationID: "installation"}
-	proxy.noteCodexSessionTurnState(mustCodexTurnStateScope(t, "account-b", device, "session-a"), "state-b")
+	scoped := upevents.CodexFingerprint{Mode: "scoped", InstallationID: "installation", SessionID: "account-session"}
+	proxy.noteCodexSessionTurnState(mustCodexTurnStateScope(t, "account-b", scoped, "session-a"), "state-b")
 
-	state, source := proxy.resolveCodexSessionTurnState("account-b", device, "session-a", "state-a")
+	state, source := proxy.resolveCodexSessionTurnState("account-b", scoped, "session-a", "state-a")
 	if state != "" || source != codexresponses.TurnStateSourceStripped {
 		t.Fatalf("CP-HDR-020 stripped value was replaced: state=%q source=%q", state, source)
 	}
@@ -394,11 +391,11 @@ func TestCodexTurnStateStatelessRequestsNeverShareARecord(t *testing.T) {
 // 强制值不写记录、上游观测照旧记录，因此关闭开关即可恢复原链路。
 func TestCodexTurnStateForceDefaultWinsOverClientAndRecord(t *testing.T) {
 	proxy := codexTurnStateProxy(t, "  turn_state_force_default: true\n  default_turn_state: state-forced\n")
-	device := upevents.CodexFingerprint{Mode: "device", InstallationID: "installation"}
-	scope := mustCodexTurnStateScope(t, "account-a", device, "session-a")
+	scoped := upevents.CodexFingerprint{Mode: "scoped", InstallationID: "installation", SessionID: "account-session"}
+	scope := mustCodexTurnStateScope(t, "account-a", scoped, "session-a")
 	proxy.noteCodexSessionTurnState(scope, "state-record")
 
-	state, source := proxy.resolveCodexSessionTurnState("account-a", device, "session-a", "state-from-client")
+	state, source := proxy.resolveCodexSessionTurnState("account-a", scoped, "session-a", "state-from-client")
 	if state != "state-forced" || source != codexresponses.TurnStateSourceForced {
 		t.Fatalf("CP-HDR-022 forced state=%q source=%q", state, source)
 	}
@@ -411,9 +408,9 @@ func TestCodexTurnStateForceDefaultWinsOverClientAndRecord(t *testing.T) {
 	}
 
 	// 上游观测仍然记录：关闭开关后立即恢复按记录回填。
-	proxy.noteCodexTurnState("account-a", device, "session-a", codexTurnStateHeader("state-observed"))
+	proxy.noteCodexTurnState("account-a", scoped, "session-a", codexTurnStateHeader("state-observed"))
 	proxy.config.CodexOAuth.TurnStateForceDefault = false
-	if state, source := proxy.resolveCodexSessionTurnState("account-a", device, "session-a", ""); state != "state-observed" || source != codexresponses.TurnStateSourceSession {
+	if state, source := proxy.resolveCodexSessionTurnState("account-a", scoped, "session-a", ""); state != "state-observed" || source != codexresponses.TurnStateSourceSession {
 		t.Fatalf("CP-HDR-022 after disabling force state=%q source=%q", state, source)
 	}
 }

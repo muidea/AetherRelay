@@ -431,7 +431,7 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			slot.Proxy = strings.TrimSpace(slot.Proxy)
 			slot.FingerprintMode = strings.ToLower(strings.TrimSpace(slot.FingerprintMode))
 			switch slot.FingerprintMode {
-			case "", codexevents.FingerprintModeOff, codexevents.FingerprintModeDevice, codexevents.FingerprintModeSession, codexevents.FingerprintModeFull:
+			case "", codexevents.FingerprintModeOff, codexevents.FingerprintModeScoped:
 			default:
 				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli.fingerprint_mode is invalid", i)
 			}

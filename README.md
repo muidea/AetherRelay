@@ -95,7 +95,7 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml # �
 | 配置、客户端 Key、Provider 管理 | [配置参考](docs/configuration.md) |
 | 运行、监控、归档、探针、备份与发布 | [运维与发布](docs/operations.md) |
 | 目录职责与 magicCommon 生命周期 | [代码结构](docs/structure.md) |
-| 最终设计（按功能结构） | [设计索引](docs/design/index.md) · [核心代理与路由](docs/design/proxy-core.md) · [安全与认证](docs/design/security.md) · [ChatGPT Web 能力](docs/design/chatgpt-web.md) · [Codex OAuth 账号池](docs/design/codex-oauth.md) |
+| 最终设计（按功能结构） | [设计索引](docs/design/index.md) · [核心代理与路由](docs/design/proxy-core.md) · [安全与认证](docs/design/security.md) · [ChatGPT Web 能力](docs/design/chatgpt-web.md) · [Codex OAuth 账号池](docs/design/codex-oauth.md) · [Codex 身份与会话语义](docs/design/codex-identity-semantics.md) |
 
 带日期的计划、审计和现场记录是历史材料，不是运行时合同；当前行为以本 README、配置参考、运维说明、代码结构以及自动化测试为准。已完成的中间过程与失效文档归档在 [`docs/archive/`](docs/archive/)。
 

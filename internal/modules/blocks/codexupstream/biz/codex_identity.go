@@ -185,7 +185,7 @@ func (p codexRequestProfile) sessionIdentity() (session, thread, window string) 
 	session = strings.TrimSpace(p.sessionHash)
 	thread = session
 	window = aetherrelaycodex.WindowID(session, number)
-	if mode := normalizedCodexFingerprintMode(p.fingerprint.Mode); mode != "" && mode != "device" && strings.TrimSpace(p.fingerprint.SessionID) != "" {
+	if mode := normalizedCodexFingerprintMode(p.fingerprint.Mode); mode != "" && strings.TrimSpace(p.fingerprint.SessionID) != "" {
 		session = strings.TrimSpace(p.fingerprint.SessionID)
 		thread = strings.TrimSpace(p.fingerprint.ThreadID)
 		window = strings.TrimSpace(p.fingerprint.WindowID)
@@ -223,9 +223,6 @@ func applyCodexFingerprintHeaders(headers headerSetter, fingerprint events.Codex
 	}
 	if fingerprint.InstallationID != "" {
 		headers.Set("X-Codex-Installation-Id", fingerprint.InstallationID)
-	}
-	if mode == "device" {
-		return
 	}
 	if fingerprint.SessionID != "" {
 		headers.Set("Session-Id", fingerprint.SessionID)
@@ -359,12 +356,8 @@ func encodeCodexJSON(value any) ([]byte, error) {
 
 func normalizedCodexFingerprintMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "device":
-		return "device"
-	case "session":
-		return "session"
-	case "full":
-		return "full"
+	case "scoped":
+		return "scoped"
 	default:
 		return ""
 	}

@@ -234,8 +234,8 @@ codex_oauth:
 
 - `turn_state_force_default`（默认 `false`）是运维强制开关（`AETHERRELAY_CODEX_OAUTH_TURN_STATE_FORCE_DEFAULT`）：启用后该请求的 `X-Codex-Turn-State` **只**取有效 `default_turn_state`，客户端提供的值与会话记录都不再参与，且 **force 优先于 `turn_state_fallback`**（两者同时配置时以 force 为准）。用于把请求固定到一个已知良好的状态，例如某会话的上游状态被拒绝、或不希望旧状态继续流通时。强制值不写入会话记录、客户端值也不会被记录，上游观测照旧记录，所以关闭开关后原有回填链路立即恢复、不需要重启。启用时必须配置非空 `default_turn_state`（或用环境变量注入），否则启动校验失败，避免开关静默失效。日志里该来源记为 `forced`，归档的 `turn_state_fallback` 按"该值由代理提供"记 `true`。可热更新。
 - WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。第二个及后续 turn 若在任何业务帧输出前收到 429，代理只在完整 transcript 不超过消息上限且 function/custom/MCP call-output 重新校验通过时关闭旧 session、切换账号并重放，单 turn 最多迁移两次；已有增量输出时绝不重放。
-- Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。启用模式使用加密账号文档内的系统随机 seed 派生身份；seed 不进入管理投影或普通凭据导出，重新认证和数据库归档恢复会保留，作为新账号导入或显式替换槽位凭据时重新生成。
-- `device` 只统一 installation ID；`session` 再统一账号 session，并按下游隔离 session 稳定派生 thread；`full` 将 thread 也统一到账号 session。启用模式会同时改写上游 header 与 `client_metadata`；默认 `off` 仍使用 AetherRelay 原有的客户端隔离 session，不做账号级收敛。
+- Codex 账号管理列表和导入结构只支持 `fingerprint_mode=off/scoped`，默认 `scoped`；导入或 PATCH 的其它显式值直接拒绝，加密存量中的缺失、未知或旧模式在加载时直接改写为 `scoped`。该设置属于账号状态而非 YAML 全局开关，因此 `config.example.yaml` 不新增对应键，并随整体账号池 bundle 持久化。
+- `scoped` 使用加密账号文档内的系统随机 seed 派生账号级 Installation，并按 LogicalConversation/LogicalThread 单射派生 Session/Thread；同时改写上游 header 与 `client_metadata`。seed 不进入管理投影或普通凭据导出，重新认证和数据库归档恢复会保留，作为新账号导入或显式替换槽位凭据时重新生成。`off` 使用 AetherRelay 客户端隔离 session，不发送账号 Installation。
 - `prompt_cache_key` 与账号指纹解耦：客户端显式值保持不变，缺失时按客户端 API Key ID、模型和客户端会话生成稳定隔离值。账号切换、指纹模式切换或 seed 更新不会主动改变该缓存分片；运行日志只记录 `explicit/generated/absent` 来源枚举，不记录缓存键。
 
 ## 本地管理页

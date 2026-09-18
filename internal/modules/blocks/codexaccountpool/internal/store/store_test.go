@@ -80,16 +80,16 @@ func TestExportByIDsReturnsOnlySelectedCredentials(t *testing.T) {
 	}
 }
 
-func TestFingerprintConvergenceIsExplicitOptInAndPersists(t *testing.T) {
+func TestScopedFingerprintConvergenceIsDefaultAndPersists(t *testing.T) {
 	store := openTestStore(t)
 	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil || added != 1 {
 		t.Fatalf("import added=%d err=%v", added, err)
 	}
 	item := store.List()[0]
-	if item.FingerprintMode != events.FingerprintModeOff {
+	if item.FingerprintMode != events.FingerprintModeScoped {
 		t.Fatalf("default fingerprint mode=%q", item.FingerprintMode)
 	}
-	mode := events.FingerprintModeSession
+	mode := events.FingerprintModeScoped
 	updated, err := store.Update(item.ID, nil, nil, &mode)
 	if err != nil || updated.FingerprintMode != mode {
 		t.Fatalf("updated=%+v err=%v", updated, err)
@@ -145,7 +145,7 @@ func TestFingerprintConvergenceIsExplicitOptInAndPersists(t *testing.T) {
 
 func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	store := openTestStore(t)
-	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh", FingerprintMode: events.FingerprintModeSession}}); err != nil || added != 1 {
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh", FingerprintMode: events.FingerprintModeScoped}}); err != nil || added != 1 {
 		t.Fatalf("initial import added=%d err=%v", added, err)
 	}
 	items := store.List()
@@ -181,7 +181,7 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 
 func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *testing.T) {
 	store := openTestStore(t)
-	first := events.CredentialInput{AccessToken: "old-access", RefreshToken: "old-refresh", AccountID: "acct-stable", Email: "operator@example.invalid", Proxy: "http://127.0.0.1:8080", FingerprintMode: events.FingerprintModeSession}
+	first := events.CredentialInput{AccessToken: "old-access", RefreshToken: "old-refresh", AccountID: "acct-stable", Email: "operator@example.invalid", Proxy: "http://127.0.0.1:8080", FingerprintMode: events.FingerprintModeScoped}
 	if added, _, _, err := store.Import([]events.CredentialInput{first}); err != nil || added != 1 {
 		t.Fatalf("initial import added=%d err=%v", added, err)
 	}
@@ -205,7 +205,7 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	if len(items) != 1 || items[0].ID != view.ID || items[0].Status != events.StatusNormal || items[0].Email != "renamed@example.invalid" {
 		t.Fatalf("reauthenticated items=%+v", items)
 	}
-	if items[0].LastTokenRefreshErrorClass != "" || len(items[0].Cooldowns) != 0 || len(items[0].QuotaObservations) != 0 || items[0].FingerprintMode != events.FingerprintModeSession {
+	if items[0].LastTokenRefreshErrorClass != "" || len(items[0].Cooldowns) != 0 || len(items[0].QuotaObservations) != 0 || items[0].FingerprintMode != events.FingerprintModeScoped {
 		t.Fatalf("reauthentication metadata=%+v", items[0])
 	}
 	if items[0].PermanentAuthFailure {

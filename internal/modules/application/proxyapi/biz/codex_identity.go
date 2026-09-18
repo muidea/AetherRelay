@@ -31,7 +31,7 @@ type codexTurnStateOrigin struct {
 	expiresAt time.Time
 }
 
-func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash string, windowNumber int64) upevents.CodexFingerprint {
+func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash, logicalThreadHash string, metadata codexresponses.TurnMetadata) upevents.CodexFingerprint {
 	fingerprintSeed = strings.TrimSpace(fingerprintSeed)
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if fingerprintSeed == "" || mode == "" || mode == accevents.FingerprintModeOff {
@@ -42,41 +42,51 @@ func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash string, windowNu
 		return upevents.CodexFingerprint{}
 	}
 	fingerprintSeed = parsedSeed.String()
-	if mode != accevents.FingerprintModeDevice && mode != accevents.FingerprintModeSession && mode != accevents.FingerprintModeFull {
+	if mode != accevents.FingerprintModeScoped {
 		return upevents.CodexFingerprint{}
 	}
 	fingerprint := upevents.CodexFingerprint{
 		Mode:           mode,
 		InstallationID: stableCodexUUID("aetherrelay:codex-installation:v2\x00" + fingerprintSeed),
 	}
-	if mode == accevents.FingerprintModeDevice {
-		return fingerprint
+	conversation := strings.TrimSpace(sessionHash)
+	if conversation == "" {
+		return upevents.CodexFingerprint{}
 	}
-	fingerprint.SessionID = stableCodexUUID("aetherrelay:codex-session:v2\x00" + fingerprintSeed)
-	if mode == accevents.FingerprintModeFull {
-		fingerprint.ThreadID = fingerprint.SessionID
-	} else if strings.TrimSpace(sessionHash) == "" {
-		fingerprint.ThreadID = fingerprint.SessionID
+	fingerprint.SessionID = stableCodexUUID("aetherrelay:codex-scoped-session:v1\x00" + fingerprintSeed + "\x00" + conversation)
+	if logicalThread := strings.TrimSpace(logicalThreadHash); logicalThread != "" {
+		fingerprint.ThreadID = stableCodexUUID("aetherrelay:codex-scoped-thread:v1\x00" + fingerprintSeed + "\x00" + conversation + "\x00" + logicalThread)
 	} else {
-		fingerprint.ThreadID = stableCodexUUID("aetherrelay:codex-thread:v2\x00" + fingerprintSeed + "\x00" + strings.TrimSpace(sessionHash))
-	}
-	if fingerprint.ThreadID == "" {
 		fingerprint.ThreadID = fingerprint.SessionID
 	}
 	// CP-HDR-010: the session part is proxy owned (account seed under fingerprint
 	// convergence), the window number stays the client's.
-	fingerprint.WindowID = aetherrelaycodex.WindowID(fingerprint.ThreadID, windowNumber)
-	fingerprint.TurnID = newCodexTurnID()
-	fingerprint.TurnStartedAtUnixMS = time.Now().UnixMilli()
+	fingerprint.WindowID = aetherrelaycodex.WindowID(fingerprint.ThreadID, metadata.WindowNumber)
+	fingerprint.TurnID = strings.TrimSpace(metadata.TurnID)
+	fingerprint.TurnStartedAtUnixMS = metadata.TurnStartedAtMS
 	return fingerprint
 }
 
 func codexFingerprintForTurn(fingerprint upevents.CodexFingerprint) upevents.CodexFingerprint {
-	if fingerprint.Mode == accevents.FingerprintModeSession || fingerprint.Mode == accevents.FingerprintModeFull {
+	if fingerprint.Mode == accevents.FingerprintModeScoped {
 		fingerprint.TurnID = newCodexTurnID()
 		fingerprint.TurnStartedAtUnixMS = time.Now().UnixMilli()
 	}
 	return fingerprint
+}
+
+// freezeCodexTurnMetadata completes the account-independent turn envelope once.
+// Every failover attempt then receives the same fallback turn identity and time.
+func freezeCodexTurnMetadata(metadata *codexresponses.TurnMetadata) {
+	if metadata == nil {
+		return
+	}
+	if strings.TrimSpace(metadata.TurnID) == "" {
+		metadata.TurnID = newCodexTurnID()
+	}
+	if metadata.TurnStartedAtMS <= 0 {
+		metadata.TurnStartedAtMS = time.Now().UnixMilli()
+	}
 }
 
 func stableCodexUUID(seed string) string {
@@ -139,10 +149,8 @@ func (s *Proxy) guardCodexTurnState(value, accountID string) string {
 // unit instead of sharing one with unrelated requests. The tuple keeps the
 // fingerprint inputs rather than the derived outbound Session-Id, which makes the
 // key exact under every fingerprint mode without mirroring the header rewrite
-// owned by codexupstream: off/device degenerate to the upstream Session-Id, while
-// session/full stay per downstream session because the upstream collapses those
-// sessions onto one account level Session-Id (and still separates them by
-// Thread-Id).
+// owned by codexupstream. Both off and scoped retain the declared downstream
+// conversation dimension even though scoped replaces its wire representation.
 type codexTurnStateScope struct {
 	accountID    string
 	mode         string

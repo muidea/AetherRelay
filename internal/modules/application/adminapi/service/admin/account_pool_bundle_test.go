@@ -63,7 +63,7 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	codex := &codexAccountRuntimeStub{
 		accounts: []codexevents.AccountView{{ID: "codex-1", Email: "user@example.com"}},
-		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeSession}},
+		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeScoped}},
 	}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/export", strings.NewReader(`{}`))
@@ -87,7 +87,7 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	if payload.Accounts[0].Slots.ChatGPT.IdentityKey == "" || payload.Accounts[0].Slots.Codex.IdentityKey == "" {
 		t.Fatalf("export did not retain fallback identity keys: %+v", payload.Accounts[0].Slots)
 	}
-	if payload.Accounts[0].Slots.Codex.FingerprintMode != codexevents.FingerprintModeSession {
+	if payload.Accounts[0].Slots.Codex.FingerprintMode != codexevents.FingerprintModeScoped {
 		t.Fatalf("export lost fingerprint mode: %+v", payload.Accounts[0].Slots.Codex)
 	}
 	exportedAt, err := time.Parse(time.RFC3339, payload.ExportedAt)
@@ -189,7 +189,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SESSION "}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SCOPED "}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -198,7 +198,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeSession {
+	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeScoped {
 		t.Fatalf("web imports=%+v codex imports=%+v", web.addedAccounts, codex.imported)
 	}
 }
@@ -261,7 +261,7 @@ func TestAccountPoolBundleImportValidatesFingerprintModeBeforeWriting(t *testing
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":"automatic"}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":"device"}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -298,7 +298,7 @@ func TestAccountPoolBundleImportLastSameAccountIDWins(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct-web-a","slots":{"chatgpt_web":{"account_id":"same-web","access_token":"superseded-web-without-refresh"}}},{"account_ref":"acct-web-b","slots":{"chatgpt_web":{"account_id":"same-web","access_token":"web-b","refresh_token":"web-refresh-b"}}},{"account_ref":"acct-codex-a","slots":{"codex_cli":{"account_id":"same-codex","access_token":"superseded-codex","fingerprint_mode":"automatic"}}},{"account_ref":"acct-codex-b","slots":{"codex_cli":{"account_id":"same-codex","access_token":"codex-b","refresh_token":"codex-refresh-b","fingerprint_mode":"session"}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct-web-a","slots":{"chatgpt_web":{"account_id":"same-web","access_token":"superseded-web-without-refresh"}}},{"account_ref":"acct-web-b","slots":{"chatgpt_web":{"account_id":"same-web","access_token":"web-b","refresh_token":"web-refresh-b"}}},{"account_ref":"acct-codex-a","slots":{"codex_cli":{"account_id":"same-codex","access_token":"superseded-codex","fingerprint_mode":"automatic"}}},{"account_ref":"acct-codex-b","slots":{"codex_cli":{"account_id":"same-codex","access_token":"codex-b","refresh_token":"codex-refresh-b","fingerprint_mode":"scoped"}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -310,7 +310,7 @@ func TestAccountPoolBundleImportLastSameAccountIDWins(t *testing.T) {
 	if len(web.addedAccounts) != 1 || web.addedAccounts[0].AccessToken != "web-b" || web.addedAccounts[0].RefreshToken != "web-refresh-b" {
 		t.Fatalf("ChatGPT same-name winner=%+v", web.addedAccounts)
 	}
-	if len(codex.imported) != 1 || codex.imported[0].AccessToken != "codex-b" || codex.imported[0].RefreshToken != "codex-refresh-b" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeSession {
+	if len(codex.imported) != 1 || codex.imported[0].AccessToken != "codex-b" || codex.imported[0].RefreshToken != "codex-refresh-b" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeScoped {
 		t.Fatalf("Codex same-name winner=%+v", codex.imported)
 	}
 }

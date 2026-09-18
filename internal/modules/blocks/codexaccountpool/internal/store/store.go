@@ -139,6 +139,7 @@ func (s *Store) loadEncrypted() error {
 	if err != nil {
 		return err
 	}
+	migrated := false
 	for _, row := range rows {
 		payload, err := s.credentials.Open(secureDocumentScope, row.ID, row.Payload)
 		if err != nil {
@@ -148,12 +149,24 @@ func (s *Store) loadEncrypted() error {
 		if err := json.Unmarshal(payload, &item); err != nil {
 			return fmt.Errorf("decode account %q: %w", row.ID, err)
 		}
+		// The scoped-only schema intentionally removes device/session/full. Empty,
+		// unknown, and removed values are rewritten to the new default in place.
+		if mode, valid := normalizeFingerprintMode(item.FingerprintMode); !valid || item.FingerprintMode != mode {
+			item.FingerprintMode = events.FingerprintModeScoped
+			migrated = true
+		}
+		if reconcileFingerprintSeed(&item) {
+			migrated = true
+		}
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
 		if err := validatePersistedAccount(row.ID, &item); err != nil {
 			return err
 		}
 		s.items[item.ID] = &item
 		s.order = append(s.order, item.ID)
+	}
+	if migrated {
+		return s.saveLocked()
 	}
 	return nil
 }
@@ -403,7 +416,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		rotateFingerprintSeed := existing != nil && !reauthenticated && strings.TrimSpace(input.TargetID) != "" &&
 			existing.AccessToken != input.AccessToken && existing.RefreshToken != input.RefreshToken
 		if existing == nil {
-			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeOff}
+			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeScoped}
 			s.items[existing.ID] = existing
 			s.order = append(s.order, existing.ID)
 			added++
@@ -434,7 +447,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		if strings.TrimSpace(input.FingerprintMode) != "" {
 			existing.FingerprintMode = input.FingerprintMode
 		} else if existing.FingerprintMode == "" {
-			existing.FingerprintMode = events.FingerprintModeOff
+			existing.FingerprintMode = events.FingerprintModeScoped
 		}
 		if rotateFingerprintSeed {
 			existing.FingerprintSeed = ""
@@ -488,7 +501,7 @@ func unchangedCodexImport(existing *account, input events.CredentialInput) bool 
 	if input.FingerprintMode != "" {
 		fingerprintMode = input.FingerprintMode
 	} else if fingerprintMode == "" {
-		fingerprintMode = events.FingerprintModeOff
+		fingerprintMode = events.FingerprintModeScoped
 	}
 	return existing.AccessToken == input.AccessToken &&
 		existing.RefreshToken == input.RefreshToken &&
@@ -1743,21 +1756,17 @@ func validateProxy(value string) error {
 
 func normalizeFingerprintMode(value string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", events.FingerprintModeOff:
+	case "", events.FingerprintModeScoped:
+		return events.FingerprintModeScoped, true
+	case events.FingerprintModeOff:
 		return events.FingerprintModeOff, true
-	case events.FingerprintModeDevice:
-		return events.FingerprintModeDevice, true
-	case events.FingerprintModeSession:
-		return events.FingerprintModeSession, true
-	case events.FingerprintModeFull:
-		return events.FingerprintModeFull, true
 	default:
 		return events.FingerprintModeOff, false
 	}
 }
 
 func fingerprintModeRequiresSeed(mode string) bool {
-	return mode == events.FingerprintModeDevice || mode == events.FingerprintModeSession || mode == events.FingerprintModeFull
+	return mode == events.FingerprintModeScoped
 }
 
 func normalizeFingerprintSeed(value string) (string, bool) {

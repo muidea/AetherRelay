@@ -103,9 +103,12 @@ type Request struct {
 	Model          string
 	Body           []byte
 	SessionHash    string
-	BetaFeatures   string
-	ResponsesLite  bool
-	TurnState      string
+	// LogicalThreadHash is the account-independent digest of an explicitly
+	// distinct downstream thread. Empty means the thread is the conversation.
+	LogicalThreadHash string
+	BetaFeatures      string
+	ResponsesLite     bool
+	TurnState         string
 	// PromptCacheKeySource is a bounded provenance enum. The key itself remains
 	// only in the request body and is never copied into diagnostics or logs.
 	PromptCacheKeySource PromptCacheKeySource
@@ -150,11 +153,13 @@ type StreamStart struct {
 }
 
 type WebsocketOpenRequest struct {
-	Model         string
-	SessionHash   string
-	BetaFeatures  string
-	ResponsesLite bool
-	TurnState     string
+	Model       string
+	SessionHash string
+	// LogicalThreadHash has the same semantics as Request.LogicalThreadHash.
+	LogicalThreadHash string
+	BetaFeatures      string
+	ResponsesLite     bool
+	TurnState         string
 	// SessionScope is the CP-HDR-022 record unit; see Request.SessionScope.
 	SessionScope string
 	// ClientUserAgent and ClientOriginator are the bounded downstream identity of

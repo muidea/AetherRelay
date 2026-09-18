@@ -125,7 +125,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			if round != nil && len(turnMetadataIgnored) > 0 {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 			}
-			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, scopeBody), ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
+			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, scopeBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, scopeBody), ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
 			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
 			if openErr != nil {
 				if failure, ok := codexresponses.AsFailure(openErr); ok {

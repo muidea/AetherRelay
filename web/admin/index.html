@@ -719,7 +719,7 @@ Object.assign(enUS,{"等待手工刷新":"Awaiting manual refresh","刷新失败
 Object.assign(enUS,{"总耗时 {duration}":"Total duration {duration}"});
 Object.assign(enUS,{"可一次选择最多 20 个 JSON 文件；系统会合并预检后一次导入。选择集总计最大 1 MiB、最多 1000 个账号；每个文件可为 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象。":"Choose up to 20 JSON files at once. They are merged, validated, and imported in one request. The complete selection is limited to 1 MiB and 1,000 accounts; each file may be a ChatGPT Web export array or a single credential object.","可一次选择最多 20 个 JSON 文件；无法读取、解析或缺少必要凭据的文件会整份忽略，其余文件合并为一次导入。选择集总计最大 1 MiB、最多 1000 个有效账号；每个文件可为 Codex OAuth 导出的 JSON 数组或单条 JSON 对象。":"Choose up to 20 JSON files at once. Files that cannot be read or parsed, or that lack required credentials, are ignored as a whole; the remaining files are merged into one import request. The complete selection is limited to 1 MiB and 1,000 valid accounts; each file may be a Codex OAuth export array or a single credential object.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, {accounts:[...]}, or one access token per line; Codex OAuth exports cannot be imported here.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, or {accounts:[...]}; ChatGPT Web exports cannot be imported here.","账号必须是单条对象或非空对象数组":"An account must be a single object or a non-empty object array.","tokens 必须是字符串数组":"tokens must be an array of strings.","账号必须是单条对象或非空数组":"An account must be a single object or a non-empty array.","账号 JSON 仅支持 token 字符串或含 access_token 的对象":"Account JSON accepts only token strings or objects containing access_token.","一次最多选择 20 个 JSON 文件":"Choose at most 20 JSON files at once.","选择的 JSON 文件合计不能超过 1 MiB":"The selected JSON files must not exceed 1 MiB in total.","导入请求不能超过 1 MiB":"The import request must not exceed 1 MiB.","单次最多导入 1000 个账号":"Import at most 1,000 accounts at once.","没有可导入的有效 Codex 凭据文件":"No valid Codex credential files are available for import."});
 Object.assign(enUS,{"Provider 权限":"Provider access","有效 Provider":"Effective providers","可用模型":"Available models","编辑权限":"Edit access","Provider 访问范围":"Provider access scope","指定 Provider":"Selected providers","仅允许勾选的上游":"Allow only selected upstreams","全部 Provider":"All providers","未来新增 Provider 也自动授权":"Automatically allow future providers","搜索 Provider":"Search providers","编辑 Provider 权限":"Edit provider access","客户端 Key":"Client key","有效模型":"Effective models","搜索模型 / Provider / 端点":"Search model, provider, or endpoint","支持端点":"Supported endpoints","上下文 / 最大输出":"Context / max output","正在加载有效模型…":"Loading effective models…","暂无可用模型":"No available models","当前不会发布模型":"Currently publishes no models","请至少选择一个 Provider":"Select at least one provider","Provider 权限已保存":"Provider access saved"});
-Object.assign(enUS,{"指纹收敛":"Fingerprint convergence","默认关闭；仅显式选择后才收敛上游可见的 Codex 身份":"Off by default; converges upstream-visible Codex identity only after explicit selection.","关闭（默认）":"Off (default)","设备":"Device","会话":"Session","完全":"Full","指纹":"Fingerprint","已关闭 Codex 指纹收敛":"Codex fingerprint convergence disabled","Codex 指纹收敛已设为 {mode}":"Codex fingerprint convergence set to {mode}","fingerprint_mode 必须是 off/device/session/full":"fingerprint_mode must be off/device/session/full"});
+Object.assign(enUS,{"指纹收敛":"Fingerprint convergence","默认按下游会话隔离收敛；可显式关闭":"Scoped by downstream conversation by default; may be explicitly disabled.","作用域（默认）":"Scoped (default)","关闭":"Off","指纹":"Fingerprint","已关闭 Codex 指纹收敛":"Codex fingerprint convergence disabled","Codex 指纹收敛已设为 {mode}":"Codex fingerprint convergence set to {mode}","fingerprint_mode 必须是 off/scoped":"fingerprint_mode must be off/scoped"});
 const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeysLoadVersion:0,clientKeyModels:[],clientKeyModelsID:"",clientKeyModelsVersion:0,clientKeyModelsAbort:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{loading:false,updating:new Set()},
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0,targetId:""},exportIDs:[],
@@ -1088,18 +1088,18 @@ function codexStatusTag(status){
   return `<span class="tag ${map[value]||"tag-default"}">${esc(labels[value]||status||"—")}</span>`;
 }
 function normalizedCodexFingerprintMode(value){
-  const mode=String(value||"off").trim().toLowerCase();
-  return ["off","device","session","full"].includes(mode)?mode:"off";
+  const mode=String(value||"scoped").trim().toLowerCase();
+  return ["off","scoped"].includes(mode)?mode:"scoped";
 }
 function codexFingerprintControl(account){
   const mode=normalizedCodexFingerprintMode(account?.fingerprint_mode),id=String(account?.id||"");
-  const options=[["off","关闭（默认）"],["device","设备"],["session","会话"],["full","完全"]];
-  return `<div style="margin-top:5px"><label class="subtle" title="${esc(t("默认关闭；仅显式选择后才收敛上游可见的 Codex 身份"))}">${esc(t("指纹收敛"))} <select class="control" style="display:inline-block;width:auto;min-width:92px;padding:2px 5px" data-codex-fingerprint="${esc(id)}" ${state.codex.busy?"disabled":""}>${options.map(([value,label])=>`<option value="${value}" ${value===mode?"selected":""}>${esc(t(label))}</option>`).join("")}</select></label></div>`;
+  const options=[["scoped","作用域（默认）"],["off","关闭"]];
+  return `<div style="margin-top:5px"><label class="subtle" title="${esc(t("默认按下游会话隔离收敛；可显式关闭"))}">${esc(t("指纹收敛"))} <select class="control" style="display:inline-block;width:auto;min-width:92px;padding:2px 5px" data-codex-fingerprint="${esc(id)}" ${state.codex.busy?"disabled":""}>${options.map(([value,label])=>`<option value="${value}" ${value===mode?"selected":""}>${esc(t(label))}</option>`).join("")}</select></label></div>`;
 }
 function codexFingerprintSummary(account){
   const mode=normalizedCodexFingerprintMode(account?.fingerprint_mode);
   if(mode==="off")return "";
-  const labels={device:"设备",session:"会话",full:"完全"};
+  const labels={scoped:"作用域（默认）"};
   return `<span>${esc(t("指纹"))} ${esc(t(labels[mode]||mode))}</span>`;
 }
 function codexAccountIdentity(account){
@@ -1555,7 +1555,7 @@ function validCodexImportProxy(value){
 }
 function validCodexImportFingerprintMode(value){
   value=String(value||"").trim().toLowerCase();
-  return !value||["off","device","session","full"].includes(value);
+  return !value||["off","scoped"].includes(value);
 }
 function collectCodexAccountImportFiles(files){
   const accounts=[],ignored=[];
@@ -1565,7 +1565,7 @@ function collectCodexAccountImportFiles(files){
       if(items.some(item=>typeof item.access_token!=="string"||!item.access_token.trim()||typeof item.refresh_token!=="string"||!item.refresh_token.trim()))throw new Error("缺少 access_token 或 refresh_token");
       if(items.some(item=>item.credential_type&&String(item.credential_type).trim().toLowerCase()!=="codex_cli"))throw new Error("credential_type 不是 codex_cli");
       if(items.some(item=>!validCodexImportProxy(item.proxy)))throw new Error("proxy 必须是有效的 http/https URL");
-      if(items.some(item=>!validCodexImportFingerprintMode(item.fingerprint_mode)))throw new Error(t("fingerprint_mode 必须是 off/device/session/full"));
+      if(items.some(item=>!validCodexImportFingerprintMode(item.fingerprint_mode)))throw new Error(t("fingerprint_mode 必须是 off/scoped"));
       accounts.push(...items);
     }catch(error){ignored.push({name:file.name,error:error.message||"凭据文件无效"})}
     requireAccountImportItemLimit(accounts.length);
@@ -1600,7 +1600,7 @@ async function submitAccountBundleImport(event){
     const payload=JSON.parse(await file.text());
     if(!payload||payload.format!=="aetherrelay.account-pool-bundle"||Number(payload.schema_version)!==2)throw new Error("只支持 aetherrelay.account-pool-bundle v2");
     if(!Array.isArray(payload.accounts)||!payload.accounts.length||payload.accounts.length>accountImportMaxItems)throw new Error("整体账号池 accounts 数量无效");
-    if(payload.accounts.some(item=>!validCodexImportFingerprintMode(item?.slots?.codex_cli?.fingerprint_mode)))throw new Error(t("fingerprint_mode 必须是 off/device/session/full"));
+    if(payload.accounts.some(item=>!validCodexImportFingerprintMode(item?.slots?.codex_cli?.fingerprint_mode)))throw new Error(t("fingerprint_mode 必须是 off/scoped"));
     payload.replace=$(`accountBundleImportReplace`).checked;
     const result=await request(apiURL("/api/account-pool-bundle/import"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify(payload)});
     invalidateFeatureCatalog();
@@ -1627,7 +1627,7 @@ async function submitCodexImport(event){
     const collected=files.length?collectCodexAccountImportFiles(files):{accounts:parseAccountObjectArray(pasted),ignored:[]};
     const {accounts,ignored}=collected;
     if(!accounts.length)throw new Error(t("没有可导入的有效 Codex 凭据文件"));
-    if(accounts.some(item=>!validCodexImportFingerprintMode(item.fingerprint_mode)))throw new Error(t("fingerprint_mode 必须是 off/device/session/full"));
+    if(accounts.some(item=>!validCodexImportFingerprintMode(item.fingerprint_mode)))throw new Error(t("fingerprint_mode 必须是 off/scoped"));
     requireAccountImportItemLimit(accounts.length);
     const result=await request(apiURL("/api/codex/accounts"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:accountImportRequestBody({accounts})});
     invalidateFeatureCatalog();

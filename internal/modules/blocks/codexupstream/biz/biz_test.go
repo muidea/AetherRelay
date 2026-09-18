@@ -46,7 +46,7 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 		hub.Terminate(context.Background())
 	})
 	openResult := event.NewResult(events.TopicWSOpen, "test", "upstream")
-	upstream.handleWSOpen(event.NewEventWithContext(events.TopicWSOpen, "test", "upstream", nil, context.Background(), events.WSOpenCommand{AccessToken: "secret-token", AccountIDHeader: "account-header", MaxMessageBytes: 1024, SessionHash: "session-hash", TurnState: "opaque-state", Fingerprint: events.CodexFingerprint{Mode: "device", InstallationID: "install-id"}}), openResult)
+	upstream.handleWSOpen(event.NewEventWithContext(events.TopicWSOpen, "test", "upstream", nil, context.Background(), events.WSOpenCommand{AccessToken: "secret-token", AccountIDHeader: "account-header", MaxMessageBytes: 1024, SessionHash: "session-hash", TurnState: "opaque-state", Fingerprint: events.CodexFingerprint{Mode: "scoped", InstallationID: "install-id", SessionID: "session-id", ThreadID: "session-id", WindowID: "session-id:0"}}), openResult)
 	value, cdErr := openResult.Get()
 	if cdErr != nil {
 		t.Fatal(cdErr)
@@ -62,12 +62,12 @@ func TestWebsocketSessionUsesVersionedIdentityAndBackgroundReader(t *testing.T) 
 	if gotHeaders.Get("Authorization") != "Bearer secret-token" || gotHeaders.Get("ChatGPT-Account-ID") != "account-header" || gotHeaders.Get("OpenAI-Beta") != currentIdentity.WebsocketBeta || gotHeaders.Get("User-Agent") != currentIdentity.UserAgent || gotHeaders.Get("Originator") != currentIdentity.Originator {
 		t.Fatalf("CP-HDR/CP-WS-002 headers=%v", gotHeaders)
 	}
-	assertCodexSessionHeaders(t, gotHeaders, "session-hash")
+	assertCodexSessionHeaders(t, gotHeaders, "session-id")
 	if gotHeaders.Get("X-Codex-Installation-Id") != "install-id" || gotHeaders.Get("X-Codex-Turn-State") != "opaque-state" || gotHeaders.Get("X-Codex-Beta-Features") != defaultCodexBetaFeatures {
 		t.Fatalf("Codex websocket profile headers=%v", gotHeaders)
 	}
 	sendResult := event.NewResult(events.TopicWSSend, "test", "upstream")
-	upstream.handleWSSend(event.NewEvent(events.TopicWSSend, "test", "upstream", nil, events.WSSendCommand{SessionID: opened.SessionID, Payload: []byte(`{"type":"response.create"}`), Fingerprint: events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0"}}), sendResult)
+	upstream.handleWSSend(event.NewEvent(events.TopicWSSend, "test", "upstream", nil, events.WSSendCommand{SessionID: opened.SessionID, Payload: []byte(`{"type":"response.create"}`), Fingerprint: events.CodexFingerprint{Mode: "scoped", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0"}}), sendResult)
 	if _, err := sendResult.Get(); err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +899,7 @@ func TestResponseHeadersProjectsCodexUsageAllowlist(t *testing.T) {
 }
 
 func TestCodexFingerprintRewritesHeadersAndBodyTogether(t *testing.T) {
-	fingerprint := events.CodexFingerprint{Mode: "session", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0", TurnStartedAtUnixMS: 123456789}
+	fingerprint := events.CodexFingerprint{Mode: "scoped", InstallationID: "install-id", SessionID: "session-id", ThreadID: "thread-id", TurnID: "turn-id", WindowID: "thread-id:0", TurnStartedAtUnixMS: 123456789}
 	headers := http.Header{}
 	applyCodexRequestIdentity(headers, codexRequestProfile{sessionHash: "isolated-session", fingerprint: fingerprint})
 	applyCodexTurnMetadata(headers, codexRequestProfile{sessionHash: "isolated-session", fingerprint: fingerprint})
@@ -962,7 +962,7 @@ func TestHandleCompactUsesNativeV2ResponsesAndFixedIdentity(t *testing.T) {
 		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator {
 			t.Fatalf("CP-HDR identity=%v", r.Header)
 		}
-		assertCodexSessionHeaders(t, r.Header, "compact-session-hash")
+		assertCodexSessionHeaders(t, r.Header, "compact-session")
 		if r.Header.Get("X-Codex-Beta-Features") != defaultCodexBetaFeatures || r.Header.Get("X-Codex-Turn-State") != "compact-state" || r.Header.Get("X-Codex-Installation-Id") != "compact-install" {
 			t.Fatalf("CP-COMPACT profile headers=%v", r.Header)
 		}
@@ -989,7 +989,7 @@ func TestHandleCompactUsesNativeV2ResponsesAndFixedIdentity(t *testing.T) {
 	result := event.NewResult(events.TopicCompact, "test", "test")
 	upstream.handleCompact(event.NewEventWithContext(events.TopicCompact, "test", "test", nil, context.Background(), events.CompactCommand{
 		AccessToken: "access-token", AccountIDHeader: "account-header", Body: []byte(`{"model":"gpt-5.4","input":[]}`), MaxResponseBytes: 1024, SessionHash: "compact-session-hash",
-		TurnState: "compact-state", Fingerprint: events.CodexFingerprint{Mode: "device", InstallationID: "compact-install"},
+		TurnState: "compact-state", Fingerprint: events.CodexFingerprint{Mode: "scoped", InstallationID: "compact-install", SessionID: "compact-session", ThreadID: "compact-session", WindowID: "compact-session:0"},
 	}), result)
 	value, resultErr := result.Get()
 	completed, ok := value.(events.CompactResult)
