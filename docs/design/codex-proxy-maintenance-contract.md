@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`9.1.0`
+> 合同版本：`9.2.0`
 >
 > 状态：`active`
 >
@@ -9,6 +9,8 @@
 > 参考基线：AetherRelay `1644980`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`9.2.0` 让 `X-Codex-Turn-Metadata` 与 body `client_metadata` 不再整段丢弃（`CP-HDR-011`/`CP-REQ-016`）：身份字段仍由代理生成并保证三个载体一致，turn 级字段客户端优先、代理兜底，其余客户端的 turn 属性原样透传；未知键忽略并记入 ignored-features。目的是在不推翻 `CP-HDR-007..010` 身份隔离的前提下，把客户端真实声明的字段交给上游。
 
 `9.1.0` 在调度顺序中新增「额度证据」排序（`CP-SCHED-011`）：同为可用候选时，拥有新鲜用量快照且没有未到期 limit-reached 窗口的账号优先于额度未知或快照已过期的账号。它只改排序、不改准入，`CP-CAP-005` 的"缺失或过期快照不得阻止尝试"与 `CP-SCHED-004` 的粘性优先级都保持不变。
 
@@ -202,7 +204,7 @@
 | `Thread-Id` | normalize：与 session 一致 | `CP-HDR-008` |
 | `X-Client-Request-Id` | normalize：每次请求或 profile 指定 | `CP-HDR-009` |
 | `X-Codex-Window-Id` | normalize：绑定 session/window | `CP-HDR-010` |
-| `X-Codex-Turn-Metadata` | drop-compatible；无独立 turn metadata owner | `CP-HDR-011` |
+| `X-Codex-Turn-Metadata` | normalize：身份取自代理、turn 级与属性取自客户端（见 `CP-HDR-011`） | `CP-HDR-011` |
 | `X-Codex-Turn-State` | opaque forward/relay；客户端缺失时按会话记录回填；已知跨账号回放必须剥离 | `CP-HDR-012` |
 | `X-Codex-Beta-Features` | session profile；缺失时 OAuth 默认 `remote_compaction_v2`，显式非空集合保持，原生 v2 强制补 v2 | `CP-HDR-013` |
 | `Version` | drop-compatible；身份只由 profile 生成 | `CP-HDR-014` |
@@ -214,6 +216,16 @@
 `CP-HDR-017` header 名大小写只在已验证为上游协议组成部分时保留；内部比较必须大小写不敏感，输出必须由 transport profile 决定。
 
 `CP-HDR-018` token、完整 account ID、原始 turn metadata 和 session 原值不得写入日志、指标、错误响应或管理视图。交互归档默认执行同一脱敏；只有显式开启 `CP-OBS-009` 的 header 保真开关后，归档才按原值落盘，且该开关不得放宽其它任何出口。
+
+`CP-HDR-011` `X-Codex-Turn-Metadata` 与 body `client_metadata` 必须按同一套字段归属重建，不得整段丢弃，也不得让任一侧直接覆盖会话身份：
+
+- **身份字段**（`installation_id`、`session_id`、`thread_id`、`window_id`）取本次 attempt 的代理身份：指纹收敛启用时来自账号 seed 快照（`CP-FP-002`/`CP-FP-005`），关闭时等于本次请求实际发送的 `Session-Id` / `Thread-Id` / `X-Codex-Window-Id`。三个载体（身份 header、`X-Codex-Turn-Metadata`、body `client_metadata`）必须字节一致，客户端原值只在字段级被忽略，不得回灌。
+- **turn 级字段**（`turn_id`、`root_turn_id`、`turn_started_at_unix_ms`）客户端声明则采用客户端值，未声明时回落指纹快照值或本次 attempt 生成值；它们不属于会话身份，因此不违反 `CP-HDR-007..010`，且在 failover 重试中保持同一 turn 标识。
+- **属性字段**（`window_number`、`context_window_id`、`request_kind`、`thread_source`、`sandbox`、`sandbox_mode`、`agent_name`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled`）原样透传，仅接受标量值。
+- 解析来源优先 `X-Codex-Turn-Metadata` 头，缺失时回落到 body `client_metadata` 内嵌的同名 JSON（与 `CP-OBS-006` 的诊断解析同一顺序）。整体受有界上限约束：字段数、单值长度与总字节都必须设限，越界按未知键处理。
+- 白名单之外的键不转上游，并记入有界 ignored-features（字段名，不记值）；不得因为未知键拒绝整个请求，也不能让未知键改变字段归属。
+- `client_metadata` 的未知键继续按 `CP-REQ-016` fail closed；两个载体的策略差异必须在实现与验收中显式覆盖。
+- 覆盖范围是 HTTP Responses/SSE、compact 与 WebSocket 握手的 header 与 HTTP body；WebSocket 后续 turn 的 `response.create` payload 仍只按指纹规则重写 `client_metadata`，不纳入本次分层重建（其命令未携带会话身份与投影，需要时另行立项）。
 
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
 
@@ -231,7 +243,7 @@
 
 `CP-FP-004` 指纹必须由加密账号文档内系统管理的随机 UUID seed 派生，不得直接使用数据库主键、上游 account ID、邮箱或 token。seed 不进入管理视图、普通凭据导出、日志、指标或错误；重新认证与数据库归档恢复保留，普通导入新账号和显式槽位凭据替换生成新 seed。
 
-`CP-FP-005` 每次上游 attempt 必须只解析一次不可变 fingerprint 快照，并携带 `turn_started_at_unix_ms`。flat header、服务端重建的 `X-Codex-Turn-Metadata`、body `client_metadata` 与嵌入 metadata 必须使用同一快照；后续 WebSocket turn 只更新 turn ID 和开始时间。
+`CP-FP-005` 每次上游 attempt 必须只解析一次不可变 fingerprint 快照。flat header、服务端重建的 `X-Codex-Turn-Metadata`、body `client_metadata` 与嵌入 metadata 必须使用同一快照；身份字段按 `CP-HDR-011` 取快照值，turn 级字段在客户端声明时取客户端值，未声明时才回落快照的 turn ID 与 `turn_started_at_unix_ms`；后续 WebSocket turn 只更新 turn ID 和开始时间。
 
 ## 7. HTTP、SSE、compact 与 WebSocket
 
@@ -448,6 +460,12 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`9.2.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| Turn-Metadata 与 client_metadata 分层透传 | CP-HDR-011, CP-REQ-016, CP-FP-005 | implemented | `proxyapi/service/proxy/codex_compat.go`, `codexupstream/biz/codex_identity.go`, `codexupstream/biz/biz.go` | `proxyapi/service/proxy/codex_turn_metadata_test.go`, `codexupstream/biz/biz_test.go` |
 
 `9.1.0` 新增实施追踪：
 
