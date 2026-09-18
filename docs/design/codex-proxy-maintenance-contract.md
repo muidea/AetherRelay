@@ -1,14 +1,16 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`8.0.0`
+> 合同版本：`8.1.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-10
+> 生效日期：2026-09-18
 >
 > 参考基线：AetherRelay `1644980`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`8.1.0` 新增会话级 Turn-State 记忆与回填（`CP-HDR-022`）：客户端未提供 `X-Codex-Turn-State` 时，代理按「铸造账号 + 下游会话」回填该会话最近一次观测到的值，无任何观测时回填内置默认值；被 `CP-HDR-020` 剥离的值保持为空，不替换为默认值，跨账号剥离与 failover 边界不变。记录只在进程内存持有 opaque 原值（`CP-HDR-020` 的"不记录原值"在此限定为不落盘），溯源表继续只存哈希；回填策略由 `codex_oauth.turn_state_fallback` 与 `codex_oauth.default_turn_state` 控制；内置默认值允许为空，此时该值只能来自本地配置，未配置则该 attempt 不发送这个 header。归档新增 `turn_state_fallback` 三态布尔，诊断日志新增 `turn_state_source` 有界枚举。
 
 `8.0.0` 收口 Codex 长流与工具兼容故障：永久 refresh token 失败成为持久化终态，并与并发占满、冷却分别返回；零输出且 `output_tokens=0` 的 `response.incomplete` 视为上游静默失败；Responses→Chat/Anthropic 在缺少 arguments delta 时使用 `response.function_call_arguments.done` 的完整参数补齐；工具 Schema 在账号选择前统一修复 object 形状、清理方言字段、剔除上游不支持的 Unicode property regex，并对大型纯 const union 做等价 enum 规范化；Codex HTTP/2 长流启用主动 PING。所有规则同时覆盖 HTTP、SSE、WebSocket 和 adapter 的适用入口。
 
@@ -195,7 +197,7 @@
 | `X-Client-Request-Id` | normalize：每次请求或 profile 指定 | `CP-HDR-009` |
 | `X-Codex-Window-Id` | normalize：绑定 session/window | `CP-HDR-010` |
 | `X-Codex-Turn-Metadata` | drop-compatible；无独立 turn metadata owner | `CP-HDR-011` |
-| `X-Codex-Turn-State` | opaque forward/relay；已知跨账号回放必须剥离 | `CP-HDR-012` |
+| `X-Codex-Turn-State` | opaque forward/relay；客户端缺失时按会话记录回填；已知跨账号回放必须剥离 | `CP-HDR-012` |
 | `X-Codex-Beta-Features` | session profile；缺失时 OAuth 默认 `remote_compaction_v2`，显式非空集合保持，原生 v2 强制补 v2 | `CP-HDR-013` |
 | `Version` | drop-compatible；身份只由 profile 生成 | `CP-HDR-014` |
 | `X-OpenAI-Internal-Codex-Responses-Lite` | normalize；仅精确 true 时生成，且不开放内部图片桥接 | `CP-HDR-015` |
@@ -210,6 +212,10 @@
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
 
 `CP-HDR-021` Codex OAuth 授权码交换和 refresh token 请求必须与 inference transport 读取同一个版本化身份 authority，生成相同的 `User-Agent` 与 `Originator`；OAuth credential endpoint 不发送 inference-only `Version` header。任何 profile 升级必须同时覆盖 credential 与 inference 测试。
+
+`CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位为身份元组：账号、归一化 fingerprint mode、账号 fingerprint session 与客户端声明会话的摘要；`off/device` 下上游 `Session-Id` 与该声明一致，`session/full` 下上游会把该账号的全部下游会话收敛成同一个账号级 `Session-Id`，此时按声明会话记录更细，禁止把一个会话的状态回填给另一个。声明会话按优先级取显式会话 header、`client_metadata` 的 `session_id`/`thread_id`、显式 `prompt_cache_key`；三者都没有时**没有记录单位**，既不记录也不回放。调度用的 session 摘要会在信号缺失时代入共享的合成值，该合成值绝不能成为 turn state 记录单位，否则互不相关的无状态请求会共用一个桶。回填顺序为「该记录单位的最近观测值 → 内置或配置的默认值」；默认值为空时该 attempt 不发送这个 header，来源记为 `absent`。只记录真实观测值，默认值本身不写入记录。回填仅发生在客户端未提供时；客户端提供了但被 `CP-HDR-020` 判定为已知跨账号铸造而剥离的值必须保持为空，不得用记录值或默认值替换。回填值出站前必须重新通过 `CP-HDR-020` 的来源守卫。回填只作用于单次上游 attempt，`CP-FAIL-018` 的"无非空 turn-state"只按客户端原值判定，不看回填结果。failover 后的 attempt 属于另一个记录单位，只能回填该账号自己的记录或默认值，不得沿用上一账号的记录。HTTP、SSE、compact、WebSocket 握手以及 `/v1/chat/completions`、`/v1/messages` 适配入口共用同一实现：适配入口必须先按 `CP-HDR-012` 边界解析客户端 turn state 并传递，不得用回填值替换客户端已提供的值。WS 后续 turn 走帧不带 header，不受本规则影响。
+
+`CP-HDR-023` `CP-HDR-022` 的记录是 `CP-HDR-020`「不记录原值」的受控例外，且该要求在此限定为不落盘：为完成回填，记录必须在进程内存中持有 opaque 原值，但该值不得进入日志、归档、指标、错误响应、管理视图或任何导出。记录随新观测更新，进程生命周期内保留（不设 TTL），受条数上限与总字节预算双重约束，超限时按最旧观测批量淘汰；配置热更新不得清空记录，Block Teardown 必须清零。内置默认值属于"非本账号铸造的值"，本规则把它作为受控例外允许出站：`codex_oauth.turn_state_fallback` 关闭时不得回填但仍必须记录，`codex_oauth.default_turn_state` 只提供值、不改变本规则的任何边界。诊断与归档只记录 `client/session/default/absent` 有界来源枚举与是否发生回填的布尔，不记录值。来源枚举对每个 attempt 都有效。归档布尔是三态：产生上游结果或交付首个业务事件时必须显式写入 `true`/`false`，因此"没有回填"与"没有产生结果"（输出前失败）在归档中必须可区分，不能都表示为字段缺失；输出前失败时以同一 `request_id` 的运行日志为准。
 
 `CP-FP-001` 账号 `fingerprint_mode` 取值只能为 `off/device/session/full`。缺失、空值、非法存量值均按 `off`；只有管理员显式设置后三种值才启用收敛。
 
@@ -433,6 +439,12 @@
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 
+`8.1.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 会话级 Turn-State 记录与回填 | CP-HDR-022, CP-HDR-023 | implemented | `proxyapi/biz/codex_identity.go`, `proxyapi/biz/codex_responses.go`, `proxyapi/service/proxy/codex_compat.go`, `proxyapi/pkg/codexresponses/port.go`, `aetherrelayconfig/config.go`, `aetherrelayarchive/recorder.go` | `proxyapi/biz/codex_turn_state_test.go`, `proxyapi/service/proxy/codex_turn_state_scope_test.go`, `aetherrelayconfig/codex_turn_state_test.go`, `proxyapi/service/proxy/codex_responses_test.go`, `aetherrelayarchive/recorder_test.go`, `codexupstream/biz/biz_test.go` |
+
 `6.0.0` 现场证据：2026-09-08 部署 `a8a19ee` 的脱敏 round 565 在约 96 秒后 network 失败；566/567 账号准入失败后触发 Provider 熔断；574 在约 300 秒持续工具参数输出后被总时限终止。归档只用事件类别和计数作为证据，不复制真实正文。
 
 验收：持续输出超过缩短的旧总时限仍成功；首事件等待、空闲、显式最大时长、客户端取消分类正确；注释不续期；输出后不重放；reader/body/lease 回收；账号准入返回冷却时间；连续准入拒绝不污染模型或 Provider 健康；半开真实成功关闭熔断。实现状态：implemented。
@@ -493,6 +505,7 @@
 - `/v1/responses/input_tokens` 是 authenticated、model/access-aware 的本地预估，不获取账号或访问上游。
 - Codex HTTP/SSE、compact、adapter 与 WebSocket 均为上游 body 补齐稳定 `prompt_cache_key`；显式客户端值保持不变。
 - Chat Completions 与 Anthropic Messages 已通过独立适配器转入 Codex Responses；支持范围以 `CP-EP-007..008` 测试和 fail-closed 字段校验为准。
+- `CP-HDR-022` 的会话记录是进程内存状态：多实例部署不共享、重启即清空。它不改变账号选择、会话粘性或 `CP-FAIL-018` 的重试边界，也不把回填值暴露给归档、日志或管理视图。
 
 ## 16. 兼容证据记录
 
@@ -532,6 +545,7 @@
 | HTTP upgrade wrapper | magicEngine `v1.5.1` / `4d359d0`：response writer 透传 Hijacker、标记 101、支持 Unwrap，并让 Flush 正确提交状态 | AetherRelay 依赖正式 tag，vendor 只由 module 刷新，不保留本地补丁 |
 | Turn-State | sub2api `8219dcfc`：响应 relay、来源登记及 failover 跨账号 echo guard | opaque 有界透传；只保存状态哈希到账号来源的短期映射 |
 | 指纹收敛 | sub2api `fce41e31`：默认 off、显式 opt-in、普通/透传路径共享解析结果 | AetherRelay 账号配置同样默认 off；HTTP/SSE/compact/WS 共享类型化 fingerprint profile |
+| 会话级 Turn-State 回填 | AetherRelay 现场部署需求：客户端在部分请求中丢失上游响应 header 的 `X-Codex-Turn-State` 后，同一会话的后续 turn 无法恢复该 opaque 值 | 按 `CP-HDR-022` 以「铸造账号 + 下游会话」在内存记录最近观测值并在缺失时回填；参考实现（sub2api `8219dcfc`）只做 relay 与来源登记，无此能力，故本规则不引用外部证据 |
 
 - `CP-WS-002` profile 来源：CLIProxyAPI `f43aad76` 的 `internal/runtime/executor/codex_websockets_connection.go`，验证 beta 值 `responses_websockets=2026-02-06`；测试只使用脱敏本地 WebSocket server。
 - 最新配置判定来源：OpenAI Docs `https://developers.openai.com/codex/config-reference/`，其中 `model_providers.<id>.base_url` 定义为模型 Provider API base URL，`chatgpt_base_url` 定义为 ChatGPT login flow base URL override。

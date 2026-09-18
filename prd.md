@@ -377,6 +377,8 @@
 - [x] **D-06.31** 归档 header 对 Authorization、X-API-Key 和 Cookie 脱敏。
 - [x] **D-06.32** webhook 错误日志不输出 URL 中的 secret path 或 query。
 - [x] **D-06.33** probe 摘要检测到凭据特征时隐藏完整上游正文。
+- [x] **D-06.34** Codex 上游 `X-Codex-Turn-State` 按「铸造账号 + 下游会话」在进程内记录最近观测值；客户端未提供该 header 时回填该值，没有任何观测时回填内置或配置的默认值，客户端提供但被判定为其它账号铸造而剥离时保持为空。
+- [x] **D-06.35** Turn-State 回填值只出现在上游 header 与进程内存记录中，不进入日志、归档、指标、错误响应或管理视图；归档只记录是否回填的布尔，运行日志只记录 `client/session/default/absent` 来源枚举。
 
 ### D-07 用量 CSV
 
