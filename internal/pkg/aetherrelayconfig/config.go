@@ -206,6 +206,11 @@ type CodexOAuthConfig struct {
 	// client nor the session record provides a value. An empty value keeps
 	// DefaultCodexTurnState.
 	DefaultTurnState string
+	// TurnStateForceDefault is the CP-HDR-022 operator switch: when enabled the
+	// configured default is the only X-Codex-Turn-State that may leave the proxy,
+	// so neither the client value nor the session record participates. Omitting it
+	// keeps the switch off.
+	TurnStateForceDefault bool
 }
 
 func (c CodexOAuthConfig) EffectiveTurnStateFallback() bool {
@@ -213,6 +218,13 @@ func (c CodexOAuthConfig) EffectiveTurnStateFallback() bool {
 		return c.TurnStateFallback
 	}
 	return true
+}
+
+// EffectiveTurnStateForceDefault reports the force switch. It wins over
+// EffectiveTurnStateFallback: forcing has no effect when there is no default to
+// force, and that combination is rejected at validation time.
+func (c CodexOAuthConfig) EffectiveTurnStateForceDefault() bool {
+	return c.TurnStateForceDefault
 }
 
 func (c CodexOAuthConfig) EffectiveDefaultTurnState() string {
@@ -839,6 +851,12 @@ func setCodexOAuth(cfg *Config, key, value string) error {
 		}
 		cfg.CodexOAuth.TurnStateFallback = b
 		cfg.CodexOAuth.turnStateFallbackConfigured = true
+	case "turn_state_force_default":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("codex_oauth.turn_state_force_default: %w", err)
+		}
+		cfg.CodexOAuth.TurnStateForceDefault = b
 	case "default_turn_state":
 		cfg.CodexOAuth.DefaultTurnState = strings.TrimSpace(value)
 	default:
@@ -1282,6 +1300,13 @@ func applyEnv(cfg *Config) error {
 	}
 	if value := os.Getenv("AETHERRELAY_CODEX_OAUTH_DEFAULT_TURN_STATE"); value != "" {
 		cfg.CodexOAuth.DefaultTurnState = strings.TrimSpace(value)
+	}
+	if value := os.Getenv("AETHERRELAY_CODEX_OAUTH_TURN_STATE_FORCE_DEFAULT"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AETHERRELAY_CODEX_OAUTH_TURN_STATE_FORCE_DEFAULT: %w", err)
+		}
+		cfg.CodexOAuth.TurnStateForceDefault = b
 	}
 	if value := os.Getenv("AETHERRELAY_VERBOSE_LOGGING"); value != "" {
 		b, err := parseStrictBool(value)
@@ -2512,6 +2537,11 @@ func validateCodexOAuth(codex CodexOAuthConfig) error {
 	// must satisfy the same boundary as an inbound turn state.
 	if codex.DefaultTurnState != "" && !ValidCodexTurnState(codex.DefaultTurnState) {
 		return fmt.Errorf("codex_oauth.default_turn_state must be at most %d bytes without control characters", MaxCodexTurnStateBytes)
+	}
+	// CP-HDR-022: the force switch only has a subject when a default exists.
+	// Failing the load beats a switch that silently does nothing.
+	if codex.EffectiveTurnStateForceDefault() && codex.EffectiveDefaultTurnState() == "" {
+		return fmt.Errorf("codex_oauth.turn_state_force_default requires a non-empty codex_oauth.default_turn_state")
 	}
 	return nil
 }

@@ -139,6 +139,10 @@ codex_oauth:
   # opaque 值（或用 AETHERRELAY_CODEX_OAUTH_DEFAULT_TURN_STATE 注入）；未填写时该请求
   # 不发送这个 header。它只用于上游请求头，不会写入日志、归档、指标或管理视图，可热更新。
   default_turn_state: ""
+  # 运维强制开关：启用后 X-Codex-Turn-State 只取上面的 default_turn_state —— 客户端提供的
+  # 值、会话记录都不再参与，force 优先于 turn_state_fallback。省略时为 false；打开时必须
+  # 配置非空 default_turn_state，否则启动失败。用于把请求固定到一个已知良好的状态。
+  turn_state_force_default: false
 
 # 直连 Provider 通过管理台创建；定义与 API Key 使用 AETHERRELAY_CREDENTIAL_KEY
 # 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth

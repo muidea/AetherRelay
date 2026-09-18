@@ -358,3 +358,44 @@ func TestCodexTurnStateStatelessRequestsNeverShareARecord(t *testing.T) {
 		t.Fatalf("CP-HDR-022 stateless replay state=%q source=%q", state, source)
 	}
 }
+
+// CP-HDR-022 强制开关：启用后只有有效默认值出站，客户端值与会话记录都不参与；
+// 强制值不写记录、上游观测照旧记录，因此关闭开关即可恢复原链路。
+func TestCodexTurnStateForceDefaultWinsOverClientAndRecord(t *testing.T) {
+	proxy := codexTurnStateProxy(t, "  turn_state_force_default: true\n  default_turn_state: state-forced\n")
+	device := upevents.CodexFingerprint{Mode: "device", InstallationID: "installation"}
+	scope := mustCodexTurnStateScope(t, "account-a", device, "session-a")
+	proxy.noteCodexSessionTurnState(scope, "state-record")
+
+	state, source := proxy.resolveCodexSessionTurnState("account-a", device, "session-a", "state-from-client")
+	if state != "state-forced" || source != codexresponses.TurnStateSourceForced {
+		t.Fatalf("CP-HDR-022 forced state=%q source=%q", state, source)
+	}
+	if !codexresponses.ValidTurnStateSource(source) || !codexresponses.TurnStateFallback(source) {
+		t.Fatalf("CP-HDR-022 forced source must be valid and proxy supplied: %q", source)
+	}
+	// 强制值与被忽略的客户端值都不能污染会话记录。
+	if recorded := proxy.sessionCodexTurnState(scope); recorded != "state-record" {
+		t.Fatalf("CP-HDR-022 forced value polluted the session record: %q", recorded)
+	}
+
+	// 上游观测仍然记录：关闭开关后立即恢复按记录回填。
+	proxy.noteCodexTurnState("account-a", device, "session-a", codexTurnStateHeader("state-observed"))
+	proxy.config.CodexOAuth.TurnStateForceDefault = false
+	if state, source := proxy.resolveCodexSessionTurnState("account-a", device, "session-a", ""); state != "state-observed" || source != codexresponses.TurnStateSourceSession {
+		t.Fatalf("CP-HDR-022 after disabling force state=%q source=%q", state, source)
+	}
+}
+
+// CP-HDR-022：force 优先于 turn_state_fallback: false，两个开关同时存在时以 force 为准。
+func TestCodexTurnStateForceDefaultBeatsDisabledFallback(t *testing.T) {
+	proxy := codexTurnStateProxy(t, "  turn_state_fallback: false\n  turn_state_force_default: true\n  default_turn_state: state-forced\n")
+	if state, source := proxy.resolveCodexSessionTurnState("account-a", upevents.CodexFingerprint{}, "session-a", ""); state != "state-forced" || source != codexresponses.TurnStateSourceForced {
+		t.Fatalf("CP-HDR-022 force with fallback disabled state=%q source=%q", state, source)
+	}
+	// 开关关闭、fallback 也关闭时保持既有语义：不回填、不替换客户端值。
+	proxy.config.CodexOAuth.TurnStateForceDefault = false
+	if state, source := proxy.resolveCodexSessionTurnState("account-a", upevents.CodexFingerprint{}, "session-a", ""); state != "" || source != codexresponses.TurnStateSourceAbsent {
+		t.Fatalf("CP-HDR-022 fallback disabled state=%q source=%q", state, source)
+	}
+}

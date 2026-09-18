@@ -63,12 +63,15 @@ const (
 	// the session record replayed one — but CP-HDR-020 removed it because it was
 	// minted by another account. Nothing is sent, and no fallback replaces it.
 	TurnStateSourceStripped TurnStateSource = "stripped"
+	// TurnStateSourceForced means the operator switch sent the configured default
+	// in place of whatever the client or the session record carried.
+	TurnStateSourceForced TurnStateSource = "forced"
 )
 
 // ValidTurnStateSource reports whether value is one of the bounded enum members.
 func ValidTurnStateSource(value TurnStateSource) bool {
 	switch value {
-	case TurnStateSourceAbsent, TurnStateSourceClient, TurnStateSourceSession, TurnStateSourceDefault, TurnStateSourceStripped:
+	case TurnStateSourceAbsent, TurnStateSourceClient, TurnStateSourceSession, TurnStateSourceDefault, TurnStateSourceStripped, TurnStateSourceForced:
 		return true
 	default:
 		return false
@@ -78,7 +81,7 @@ func ValidTurnStateSource(value TurnStateSource) bool {
 // TurnStateFallback reports whether the value was filled by the proxy rather
 // than supplied by the client. It drives the archived fallback flag.
 func TurnStateFallback(source TurnStateSource) bool {
-	return source == TurnStateSourceSession || source == TurnStateSourceDefault
+	return source == TurnStateSourceSession || source == TurnStateSourceDefault || source == TurnStateSourceForced
 }
 
 // TurnMetadata is the CP-HDR-011 client projection passed to the executor; see

@@ -209,6 +209,7 @@ codex_oauth:
   websocket_max_lifetime_seconds: 1800
   turn_state_fallback: true
   default_turn_state: ""
+  turn_state_force_default: false
 ```
 
 - Codex HTTP SSE（含复用执行链的 Chat/Messages 流）使用 `server.stream_first_event_timeout_seconds` 限制从发起上游请求到首个可交付业务事件的等待，`server.stream_idle_timeout_seconds` 限制后续 SSE data 空闲；两者为 `0` 时关闭对应限制，空行/注释不续期。持续工具参数输出不会因 `request_timeout_seconds` 到期中断。`codex_oauth.stream_max_duration_seconds` 为可选单次上游流总时限，默认 `0` 关闭；到期属于本地策略失败，不冷却账号、不触发 Provider 熔断，也不切号重放。此项只用于 HTTP 流；compact/unary 与 WS 保留各自超时合同。
@@ -230,6 +231,8 @@ codex_oauth:
 - `refresh_account_interval_minute` 决定定时刷新周期，修改后必须重启 AetherRelay；账号池本身始终启用。
 - `usage_refresh_interval_minute: 0` 关闭自动用量刷新；正数表示账号用量快照的目标新鲜度。调度器每分钟最多领取 100 个到期账号，沿用有界并发；重复的手工或定时请求复用当前任务。刷新失败保留上一份快照并按账号指数退避，永久鉴权失败不会参加自动刷新。该配置不改变路由资格，修改后必须重启。
 - `turn_state_fallback`（省略时为 `true`）与 `default_turn_state`（仓库不内置该值，未配置时该请求不发送该 header）控制 Codex 上游 `X-Codex-Turn-State` 的会话级回填：客户端未提供该 header 时，按「账号 + 客户端声明的会话」回填该会话最近一次观测到的值；没有任何观测时使用默认值，默认值也为空则不发送。声明会话取自显式会话 header、`client_metadata` 的 `session_id`/`thread_id` 或显式 `prompt_cache_key`；客户端完全没有声明会话时不记录也不回放，因此互不相关的无状态请求不会共用一个记录。客户端提供但被判定为其它账号铸造而剥离时保持为空，不使用默认值替换。记录只在进程内存中保留、重启即清空、多实例不共享，原值不进入日志、归档、指标、错误响应或管理视图；归档中的 `turn_state_fallback` 是显式 `true`/`false`，只有输出前失败才没有该字段。`turn_state_fallback: false` 只停止回填，仍继续记录。`default_turn_state` 必须是长度不超过 16 KiB 且不含控制字符的 opaque 值；两项均可热更新，且配置更新不会清空已有记录。
+
+- `turn_state_force_default`（默认 `false`）是运维强制开关（`AETHERRELAY_CODEX_OAUTH_TURN_STATE_FORCE_DEFAULT`）：启用后该请求的 `X-Codex-Turn-State` **只**取有效 `default_turn_state`，客户端提供的值与会话记录都不再参与，且 **force 优先于 `turn_state_fallback`**（两者同时配置时以 force 为准）。用于把请求固定到一个已知良好的状态，例如某会话的上游状态被拒绝、或不希望旧状态继续流通时。强制值不写入会话记录、客户端值也不会被记录，上游观测照旧记录，所以关闭开关后原有回填链路立即恢复、不需要重启。启用时必须配置非空 `default_turn_state`（或用环境变量注入），否则启动校验失败，避免开关静默失效。日志里该来源记为 `forced`，归档的 `turn_state_fallback` 按"该值由代理提供"记 `true`。可热更新。
 - WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。第二个及后续 turn 若在任何业务帧输出前收到 429，代理只在完整 transcript 不超过消息上限且 function/custom/MCP call-output 重新校验通过时关闭旧 session、切换账号并重放，单 turn 最多迁移两次；已有增量输出时绝不重放。
 - Codex 账号管理列表和导入结构支持 `fingerprint_mode`：`off`（默认）、`device`、`session`、`full`。缺失、空值和非法存量值按 `off` 迁移；导入或 PATCH 的非法显式值直接拒绝。该设置是账号状态而非 YAML 全局开关，并随整体账号池 bundle 持久化。启用模式使用加密账号文档内的系统随机 seed 派生身份；seed 不进入管理投影或普通凭据导出，重新认证和数据库归档恢复会保留，作为新账号导入或显式替换槽位凭据时重新生成。
 - `device` 只统一 installation ID；`session` 再统一账号 session，并按下游隔离 session 稳定派生 thread；`full` 将 thread 也统一到账号 session。启用模式会同时改写上游 header 与 `client_metadata`；默认 `off` 仍使用 AetherRelay 原有的客户端隔离 session，不做账号级收敛。

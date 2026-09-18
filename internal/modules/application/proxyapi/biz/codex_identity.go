@@ -181,6 +181,16 @@ func codexTurnStateScopeFor(accountID string, fingerprint upevents.CodexFingerpr
 // reports TurnStateSourceStripped so diagnostics can tell it apart from a client
 // that declared nothing at all.
 func (s *Proxy) resolveCodexSessionTurnState(accountID string, fingerprint upevents.CodexFingerprint, sessionScope, provided string) (string, codexresponses.TurnStateSource) {
+	// CP-HDR-022 force switch: the operator wants a known good state on the wire,
+	// so the configured default replaces both the client value and the session
+	// record. The forced value is not remembered and the upstream observation is
+	// still recorded, so turning the switch off restores the ordinary chain.
+	if s.config.CodexOAuth.EffectiveTurnStateForceDefault() {
+		if forced := s.config.CodexOAuth.EffectiveDefaultTurnState(); forced != "" {
+			return forced, codexresponses.TurnStateSourceForced
+		}
+		return "", codexresponses.TurnStateSourceAbsent
+	}
 	provided = strings.TrimSpace(provided)
 	if provided != "" {
 		guarded := s.guardCodexTurnState(provided, accountID)

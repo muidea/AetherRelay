@@ -100,3 +100,55 @@ func TestCodexTurnStateEnvironmentOverrides(t *testing.T) {
 		t.Fatal("CP-HDR-023 invalid environment switch was accepted")
 	}
 }
+
+// CP-HDR-022: 强制默认开关默认关闭；打开但没有有效默认值必须在加载期失败，
+// 而不是静默失效。
+func TestCodexTurnStateForceDefaultSwitch(t *testing.T) {
+	if loadCodexTurnStateConfig(t, "").CodexOAuth.EffectiveTurnStateForceDefault() {
+		t.Fatal("CP-HDR-022 force switch must default to off")
+	}
+	cfg := loadCodexTurnStateConfig(t, "  turn_state_force_default: true\n  default_turn_state: state-configured\n")
+	if !cfg.CodexOAuth.EffectiveTurnStateForceDefault() {
+		t.Fatal("CP-HDR-022 force switch was not loaded")
+	}
+	// 两个开关各自保留原值：force 优先由解析层实现，不在配置层改语义。
+	both := loadCodexTurnStateConfig(t, "  turn_state_force_default: true\n  turn_state_fallback: false\n  default_turn_state: state-configured\n")
+	if !both.CodexOAuth.EffectiveTurnStateForceDefault() || both.CodexOAuth.EffectiveTurnStateFallback() {
+		t.Fatalf("CP-HDR-022 switches=%+v", both.CodexOAuth)
+	}
+	for name, section := range map[string]string{
+		"missing default": "  turn_state_force_default: true\n",
+		"empty default":   "  turn_state_force_default: true\n  default_turn_state: \"\"\n",
+		"bad switch":      "  turn_state_force_default: maybe\n",
+	} {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		body := "server:\n  listen_addr: 127.0.0.1:18080\ncodex_oauth:\n" + section
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("CP-HDR-022 %s was accepted", name)
+		}
+	}
+}
+
+// CP-HDR-022: 开关与默认值都能从环境注入，环境值同样参与加载期校验。
+func TestCodexTurnStateForceDefaultEnvironment(t *testing.T) {
+	t.Setenv("AETHERRELAY_CODEX_OAUTH_TURN_STATE_FORCE_DEFAULT", "true")
+	t.Setenv("AETHERRELAY_CODEX_OAUTH_DEFAULT_TURN_STATE", "state-from-env")
+	cfg := loadCodexTurnStateConfig(t, "")
+	if !cfg.CodexOAuth.EffectiveTurnStateForceDefault() {
+		t.Fatal("CP-HDR-022 environment must enable the force switch")
+	}
+	if cfg.CodexOAuth.EffectiveDefaultTurnState() != "state-from-env" {
+		t.Fatalf("CP-HDR-022 environment default=%q", cfg.CodexOAuth.EffectiveDefaultTurnState())
+	}
+	t.Setenv("AETHERRELAY_CODEX_OAUTH_TURN_STATE_FORCE_DEFAULT", "not-a-bool")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  listen_addr: 127.0.0.1:18080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("CP-HDR-022 invalid environment switch was accepted")
+	}
+}
