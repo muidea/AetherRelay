@@ -96,7 +96,7 @@ func buildCodexWebsocketRetryPayload(payload []byte, turn codexWebsocketTurnRepl
 	if err := validateCodexInput(body["input"], false); err != nil {
 		return nil, false, nil
 	}
-	retry, err := json.Marshal(body)
+	retry, err := encodeCodexJSON(body)
 	if err != nil {
 		return nil, false, err
 	}

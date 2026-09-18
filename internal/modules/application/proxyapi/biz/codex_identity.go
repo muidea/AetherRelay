@@ -10,6 +10,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	accevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	aetherrelaycodex "aetherrelay/internal/pkg/aetherrelaycodex"
 	aetherrelayconfig "aetherrelay/internal/pkg/aetherrelayconfig"
 	"github.com/google/uuid"
 )
@@ -30,7 +31,7 @@ type codexTurnStateOrigin struct {
 	expiresAt time.Time
 }
 
-func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash string) upevents.CodexFingerprint {
+func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash string, windowNumber int64) upevents.CodexFingerprint {
 	fingerprintSeed = strings.TrimSpace(fingerprintSeed)
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if fingerprintSeed == "" || mode == "" || mode == accevents.FingerprintModeOff {
@@ -62,7 +63,9 @@ func resolveCodexFingerprint(fingerprintSeed, mode, sessionHash string) upevents
 	if fingerprint.ThreadID == "" {
 		fingerprint.ThreadID = fingerprint.SessionID
 	}
-	fingerprint.WindowID = fingerprint.ThreadID + ":0"
+	// CP-HDR-010: the session part is proxy owned (account seed under fingerprint
+	// convergence), the window number stays the client's.
+	fingerprint.WindowID = aetherrelaycodex.WindowID(fingerprint.ThreadID, windowNumber)
 	fingerprint.TurnID = newCodexTurnID()
 	fingerprint.TurnStartedAtUnixMS = time.Now().UnixMilli()
 	return fingerprint
@@ -77,15 +80,7 @@ func codexFingerprintForTurn(fingerprint upevents.CodexFingerprint) upevents.Cod
 }
 
 func stableCodexUUID(seed string) string {
-	if strings.TrimSpace(seed) == "" {
-		return ""
-	}
-	digest := sha256.Sum256([]byte(seed))
-	var value uuid.UUID
-	copy(value[:], digest[:16])
-	value[6] = value[6]&0x0f | 0x40
-	value[8] = value[8]&0x3f | 0x80
-	return value.String()
+	return aetherrelaycodex.StableUUID(seed)
 }
 
 func newCodexTurnID() string {
@@ -97,12 +92,15 @@ func newCodexTurnID() string {
 }
 
 // toUpstreamTurnMetadata maps the inbound CP-HDR-011 projection onto the Block
-// contract. Identity fields are intentionally absent on both sides.
+// contract. Session identity fields are intentionally absent on both sides; the
+// window number travels because CP-HDR-010 keeps the client declared window while
+// the session part stays proxy owned.
 func toUpstreamTurnMetadata(metadata codexresponses.TurnMetadata) upevents.TurnMetadata {
 	return upevents.TurnMetadata{
 		TurnID:          metadata.TurnID,
 		RootTurnID:      metadata.RootTurnID,
 		TurnStartedAtMS: metadata.TurnStartedAtMS,
+		WindowNumber:    metadata.WindowNumber,
 		Attributes:      metadata.Attributes,
 	}
 }
@@ -179,13 +177,15 @@ func codexTurnStateScopeFor(accountID string, fingerprint upevents.CodexFingerpr
 // bounded provenance. A client supplied value wins and is remembered; a value
 // that CP-HDR-020 stripped is never replaced, because CP-HDR-022 fills only what
 // the client omitted. Otherwise the session record is replayed, and a session
-// without any observation falls back to the configured default.
+// without any observation falls back to the configured default. A withheld value
+// reports TurnStateSourceStripped so diagnostics can tell it apart from a client
+// that declared nothing at all.
 func (s *Proxy) resolveCodexSessionTurnState(accountID string, fingerprint upevents.CodexFingerprint, sessionScope, provided string) (string, codexresponses.TurnStateSource) {
 	provided = strings.TrimSpace(provided)
 	if provided != "" {
 		guarded := s.guardCodexTurnState(provided, accountID)
 		if guarded == "" {
-			return "", codexresponses.TurnStateSourceAbsent
+			return "", codexresponses.TurnStateSourceStripped
 		}
 		if scope, ok := codexTurnStateScopeFor(accountID, fingerprint, sessionScope); ok {
 			s.noteCodexSessionTurnState(scope, guarded)
@@ -202,7 +202,7 @@ func (s *Proxy) resolveCodexSessionTurnState(accountID string, fingerprint upeve
 			if guarded := s.guardCodexTurnState(state, accountID); guarded != "" {
 				return guarded, codexresponses.TurnStateSourceSession
 			}
-			return "", codexresponses.TurnStateSourceAbsent
+			return "", codexresponses.TurnStateSourceStripped
 		}
 	}
 	// An empty effective default means "no built-in value and none configured":

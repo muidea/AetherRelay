@@ -164,24 +164,29 @@ func codexTurnMetadataSource(headers http.Header, raw []byte) string {
 // that may travel upstream; session identity is never carried. Unknown, malformed
 // or oversized entries are reported as ignored features rather than failing the
 // request.
-func codexTurnMetadataProjection(raw string) (codexresponses.TurnMetadata, []string) {
+func codexTurnMetadataProjection(headers http.Header, raw string) (codexresponses.TurnMetadata, []string) {
+	// CP-HDR-010: the window number rides on its own header, so it survives a
+	// missing or unparsable metadata JSON.
+	projection := codexresponses.TurnMetadata{}
+	if number, ok := aetherrelaycodex.ParseWindowID(headers.Get("X-Codex-Window-Id")); ok {
+		projection.WindowNumber = number
+	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return codexresponses.TurnMetadata{}, nil
+		return projection, nil
 	}
 	if len(raw) > codexTurnMetadataLimit {
-		return codexresponses.TurnMetadata{}, []string{"turn_metadata"}
+		return projection, []string{"turn_metadata"}
 	}
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal([]byte(raw), &envelope) != nil || envelope == nil {
-		return codexresponses.TurnMetadata{}, []string{"turn_metadata"}
+		return projection, []string{"turn_metadata"}
 	}
 	keys := make([]string, 0, len(envelope))
 	for key := range envelope {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	projection := codexresponses.TurnMetadata{}
 	attributes := map[string]json.RawMessage{}
 	ignored := make([]string, 0, len(keys))
 	for _, key := range keys {
@@ -222,7 +227,24 @@ func codexTurnMetadataProjection(raw string) (codexresponses.TurnMetadata, []str
 			projection.Attributes = encoded
 		}
 	}
+	// CP-HDR-010: the window_number attribute is the fallback source for the same
+	// number when the dedicated header is missing.
+	if projection.WindowNumber == 0 {
+		if value, found := attributes["window_number"]; found {
+			var number int64
+			if json.Unmarshal(value, &number) == nil && number > 0 && number <= aetherrelaycodex.CodexWindowNumberMax {
+				projection.WindowNumber = number
+			}
+		}
+	}
 	return projection, ignored
+}
+
+// codexTurnMetadataFrom is the inbound entry point: it resolves the metadata
+// source and projects it, keeping the CP-HDR-010 window number tied to the header
+// rather than to the metadata JSON.
+func codexTurnMetadataFrom(headers http.Header, raw []byte) (codexresponses.TurnMetadata, []string) {
+	return codexTurnMetadataProjection(headers, codexTurnMetadataSource(headers, raw))
 }
 
 func boundedTurnMetadataString(raw json.RawMessage) (string, bool) {
@@ -468,7 +490,7 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 			body["service_tier"] = "priority"
 		}
 	}
-	encoded, err := json.Marshal(body)
+	encoded, err := encodeCodexJSON(body)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
 	}
@@ -488,6 +510,20 @@ func decodeCodexJSON(raw []byte, target any) error {
 		return fmt.Errorf("multiple JSON values are not supported")
 	}
 	return nil
+}
+
+// encodeCodexJSON re-encodes a normalized Codex body. json.Marshal would escape
+// <, > and & as <, > and & — the Rust client never sends that form,
+// and it inflates every body by five bytes per occurrence — so HTML escaping stays
+// off and the client's bytes survive the normalization.
+func encodeCodexJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buffer.Bytes(), "\n"), nil
 }
 
 // normalizeCodexCallOutputBootstrap implements CP-REQ-031 before the ordinary
@@ -1487,8 +1523,10 @@ func codexSessionDigest(r *http.Request, model string, body map[string]any, incl
 		signal = "default"
 	}
 	identity := clientauth.ClientIdentityFromContext(r.Context())
-	digest := sha256.Sum256([]byte("aetherrelay:codex-session:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + signal))
-	return hex.EncodeToString(digest[:])
+	// CP-HDR-007..010: the outbound session identity is a deterministic UUID — the
+	// same value shape a native Codex client sends — while the namespace (client
+	// API key + model + conversation signal) keeps sessions isolated.
+	return aetherrelaycodex.StableUUID("aetherrelay:codex-session:v3\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + signal)
 }
 
 // codexSessionSignal implements the CP-SCHED-002 signal priority and reports an
@@ -1581,7 +1619,7 @@ func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash 
 		return encoded, body, codexresponses.PromptCacheKeyAbsent, nil
 	}
 	body["prompt_cache_key"] = strings.TrimSpace(sessionHash)
-	updated, err := json.Marshal(body)
+	updated, err := encodeCodexJSON(body)
 	if err != nil {
 		return nil, nil, codexresponses.PromptCacheKeyAbsent, fmt.Errorf("encode Codex prompt cache key: %w", err)
 	}

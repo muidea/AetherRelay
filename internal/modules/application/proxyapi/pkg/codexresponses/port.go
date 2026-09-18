@@ -59,12 +59,16 @@ const (
 	// TurnStateSourceDefault means CP-HDR-022 filled the built-in or configured
 	// fallback because the session had no observation.
 	TurnStateSourceDefault TurnStateSource = "default"
+	// TurnStateSourceStripped means a value existed — the client supplied one, or
+	// the session record replayed one — but CP-HDR-020 removed it because it was
+	// minted by another account. Nothing is sent, and no fallback replaces it.
+	TurnStateSourceStripped TurnStateSource = "stripped"
 )
 
 // ValidTurnStateSource reports whether value is one of the bounded enum members.
 func ValidTurnStateSource(value TurnStateSource) bool {
 	switch value {
-	case TurnStateSourceAbsent, TurnStateSourceClient, TurnStateSourceSession, TurnStateSourceDefault:
+	case TurnStateSourceAbsent, TurnStateSourceClient, TurnStateSourceSession, TurnStateSourceDefault, TurnStateSourceStripped:
 		return true
 	default:
 		return false
@@ -83,7 +87,11 @@ type TurnMetadata struct {
 	TurnID          string
 	RootTurnID      string
 	TurnStartedAtMS int64
-	Attributes      json.RawMessage
+	// WindowNumber is the client declared window index (CP-HDR-010/CP-HDR-011).
+	// The proxy owns the session part of the window identity, the number is the
+	// client's when it declared one and 0 otherwise.
+	WindowNumber int64
+	Attributes   json.RawMessage
 }
 
 type Request struct {

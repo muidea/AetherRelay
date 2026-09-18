@@ -104,6 +104,10 @@ type TurnMetadata struct {
 	TurnID          string
 	RootTurnID      string
 	TurnStartedAtMS int64
+	// WindowNumber is the client declared window index (CP-HDR-010/CP-HDR-011).
+	// The proxy owns the session part of the window identity, the number is the
+	// client's when it declared one and 0 otherwise.
+	WindowNumber int64
 	// Attributes is a bounded JSON object of scalar values, already validated by
 	// the inbound adapter (whitelisted keys, scalar types, size limits).
 	Attributes json.RawMessage

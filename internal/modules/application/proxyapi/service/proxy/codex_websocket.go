@@ -121,7 +121,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			var scopeBody map[string]any
 			_ = decodeCodexJSON(raw, &scopeBody)
 			userAgent, originator := codexClientIdentity(r.Header)
-			turnMetadata, turnMetadataIgnored := codexTurnMetadataProjection(codexTurnMetadataSource(r.Header, raw))
+			turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, raw)
 			if round != nil && len(turnMetadataIgnored) > 0 {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 			}
@@ -294,7 +294,7 @@ func normalizeCodexWebsocketCreate(raw []byte, currentModel string, headers http
 	}
 	delete(body, "stream")
 	body["type"] = "response.create"
-	normalized, err := json.Marshal(body)
+	normalized, err := encodeCodexJSON(body)
 	return normalized, model, features, err
 }
 

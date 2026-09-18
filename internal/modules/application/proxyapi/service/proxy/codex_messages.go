@@ -29,7 +29,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
-	turnMetadata, turnMetadataIgnored := codexTurnMetadataProjection(codexTurnMetadataSource(r.Header, responsesBody))
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, responsesBody)
 	ignored = append(ignored, turnMetadataIgnored...)
 	markConversionDegraded(round, append(degraded, ignored...))
 	// CP-HDR-022: the adapter entry is a Codex entry too, so an inbound turn

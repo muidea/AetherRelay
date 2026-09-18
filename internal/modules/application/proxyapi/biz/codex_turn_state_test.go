@@ -142,7 +142,7 @@ func TestCodexTurnStateStrippedValueIsNeverReplaced(t *testing.T) {
 	proxy.noteCodexSessionTurnState(mustCodexTurnStateScope(t, "account-b", device, "session-a"), "state-b")
 
 	state, source := proxy.resolveCodexSessionTurnState("account-b", device, "session-a", "state-a")
-	if state != "" || source != codexresponses.TurnStateSourceAbsent {
+	if state != "" || source != codexresponses.TurnStateSourceStripped {
 		t.Fatalf("CP-HDR-020 stripped value was replaced: state=%q source=%q", state, source)
 	}
 	// A request without a declared conversation has no record unit, but an

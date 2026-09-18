@@ -57,7 +57,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusBadRequest, normalizeErr.Error())
 		return
 	}
-	turnMetadata, turnMetadataIgnored := codexTurnMetadataProjection(codexTurnMetadataSource(r.Header, raw))
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, raw)
 	ignored = append(ignored, turnMetadataIgnored...)
 	if round != nil {
 		round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, ignored...)))
@@ -224,7 +224,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	userAgent, originator := codexClientIdentity(r.Header)
-	turnMetadata, turnMetadataIgnored := codexTurnMetadataProjection(codexTurnMetadataSource(r.Header, raw))
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, raw)
 	if round != nil && len(turnMetadataIgnored) > 0 {
 		round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 	}

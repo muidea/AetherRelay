@@ -46,7 +46,7 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
-	turnMetadata, turnMetadataIgnored := codexTurnMetadataProjection(codexTurnMetadataSource(r.Header, raw))
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, raw)
 	ignored = append(ignored, turnMetadataIgnored...)
 	markConversionDegraded(round, ignored)
 	// CP-HDR-022: the adapter entry is a Codex entry too, so an inbound turn

@@ -27,7 +27,7 @@ func TestCodexTurnMetadataProjectionSplitsOwnership(t *testing.T) {
 		"node_repl_disabled": true,
 		"unknown_future_key": "must-not-pass"
 	}`
-	projection, ignored := codexTurnMetadataProjection(raw)
+	projection, ignored := codexTurnMetadataProjection(nil, raw)
 	if projection.TurnID != "client-turn" || projection.RootTurnID != "client-root-turn" || projection.TurnStartedAtMS != 1789711880466 {
 		t.Fatalf("CP-HDR-011 turn level=%+v", projection)
 	}
@@ -50,7 +50,7 @@ func TestCodexTurnMetadataProjectionSplitsOwnership(t *testing.T) {
 		}
 	}
 	// 非标量属性被拒绝，但请求本身不受影响。
-	scalarOnly, scalarIgnored := codexTurnMetadataProjection(`{"sandbox":{"nested":true},"request_kind":"turn"}`)
+	scalarOnly, scalarIgnored := codexTurnMetadataProjection(nil, `{"sandbox":{"nested":true},"request_kind":"turn"}`)
 	if strings.Contains(string(scalarOnly.Attributes), "nested") || !strings.Contains(strings.Join(scalarIgnored, ","), "turn_metadata.sandbox") {
 		t.Fatalf("CP-HDR-011 non-scalar attribute=%s ignored=%v", scalarOnly.Attributes, scalarIgnored)
 	}
@@ -71,19 +71,54 @@ func TestCodexTurnMetadataSourcePrefersHeader(t *testing.T) {
 
 // CP-HDR-011: 越界或非法输入不转上游，也不产生错误；无输入时投影为空。
 func TestCodexTurnMetadataProjectionStaysBounded(t *testing.T) {
-	if projection, ignored := codexTurnMetadataProjection(""); projection.TurnID != "" || len(ignored) != 0 {
+	if projection, ignored := codexTurnMetadataProjection(nil, ""); projection.TurnID != "" || len(ignored) != 0 {
 		t.Fatalf("CP-HDR-011 empty projection=%+v ignored=%v", projection, ignored)
 	}
-	if _, ignored := codexTurnMetadataProjection("not json"); len(ignored) == 0 {
+	if _, ignored := codexTurnMetadataProjection(nil, "not json"); len(ignored) == 0 {
 		t.Fatal("CP-HDR-011 malformed metadata was not reported")
 	}
-	if _, ignored := codexTurnMetadataProjection(strings.Repeat("x", codexTurnMetadataLimit+1)); len(ignored) == 0 {
+	if _, ignored := codexTurnMetadataProjection(nil, strings.Repeat("x", codexTurnMetadataLimit+1)); len(ignored) == 0 {
 		t.Fatal("CP-HDR-011 oversized metadata was not reported")
 	}
 	// 超长单值与超量属性只丢字段。
 	oversized := `{"agent_name":"` + strings.Repeat("y", codexTurnMetadataValueLimit+1) + `","request_kind":"turn"}`
-	projection, ignored := codexTurnMetadataProjection(oversized)
+	projection, ignored := codexTurnMetadataProjection(nil, oversized)
 	if strings.Contains(string(projection.Attributes), "yyy") || !strings.Contains(strings.Join(ignored, ","), "turn_metadata.agent_name") {
 		t.Fatalf("CP-HDR-011 oversized value=%s ignored=%v", projection.Attributes, ignored)
+	}
+}
+
+// CP-HDR-010: 窗口号取客户端声明，header 优先、属性兜底；不可解析时不猜。
+func TestCodexTurnMetadataWindowNumberResolution(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("X-Codex-Window-Id", "01a080cb-abf8-7900-97a7-7af78ed32b94:37")
+	projection, _ := codexTurnMetadataProjection(headers, `{"window_number":12}`)
+	if projection.WindowNumber != 37 {
+		t.Fatalf("CP-HDR-010 header wins: %+v", projection)
+	}
+	// 头部缺失时用同一份元数据里的 window_number。
+	projection, _ = codexTurnMetadataProjection(nil, `{"window_number":12}`)
+	if projection.WindowNumber != 12 {
+		t.Fatalf("CP-HDR-010 attribute fallback: %+v", projection)
+	}
+	// 头部存在但号段不可用时仍回落到属性。
+	headers.Set("X-Codex-Window-Id", "01a080cb-abf8-7900-97a7-7af78ed32b94:next")
+	projection, _ = codexTurnMetadataProjection(headers, `{"window_number":12}`)
+	if projection.WindowNumber != 12 {
+		t.Fatalf("CP-HDR-010 unusable header: %+v", projection)
+	}
+	// 元数据整体不可解析时，header 仍然是有效来源。
+	headers.Set("X-Codex-Window-Id", "01a080cb-abf8-7900-97a7-7af78ed32b94:37")
+	projection, ignored := codexTurnMetadataProjection(headers, "not json")
+	if projection.WindowNumber != 37 || len(ignored) == 0 {
+		t.Fatalf("CP-HDR-010 header without metadata=%+v ignored=%v", projection, ignored)
+	}
+	// 无声明、越界与负数都不猜测，落回 0。
+	for _, value := range []string{"", "01a080cb-abf8-7900-97a7-7af78ed32b94", "01a080cb-abf8-7900-97a7-7af78ed32b94:", "01a080cb-abf8-7900-97a7-7af78ed32b94:-1"} {
+		headers.Set("X-Codex-Window-Id", value)
+		projection, _ = codexTurnMetadataProjection(headers, `{"window_number":-2}`)
+		if projection.WindowNumber != 0 {
+			t.Fatalf("CP-HDR-010 unexpected window number for %q: %+v", value, projection)
+		}
 	}
 }

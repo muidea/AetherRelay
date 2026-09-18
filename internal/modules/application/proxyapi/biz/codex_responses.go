@@ -44,7 +44,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			}
 			return codexresponses.WebsocketOpenResult{}, err
 		}
-		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
+		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.TurnMetadata.WindowNumber)
 		turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
@@ -486,7 +486,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			}
 			return codexresponses.Result{}, err
 		}
-		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
+		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.TurnMetadata.WindowNumber)
 		turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 		request.TurnStateSource = turnStateSource
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
@@ -781,7 +781,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	defer func() { logCodexAttempt(request, failure) }()
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
-	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
+	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.TurnMetadata.WindowNumber)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 	request.TurnStateSource = turnStateSource
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: upevents.ClientIdentity{UserAgent: request.ClientUserAgent, Originator: request.ClientOriginator}, TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
@@ -824,7 +824,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		failure, _ := codexresponses.AsFailure(resultErr)
 		logCodexStreamAttempt(request, failure, phase, guard)
 	}()
-	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash)
+	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.TurnMetadata.WindowNumber)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 	request.TurnStateSource = turnStateSource
 	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: upevents.ClientIdentity{UserAgent: request.ClientUserAgent, Originator: request.ClientOriginator}, TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()

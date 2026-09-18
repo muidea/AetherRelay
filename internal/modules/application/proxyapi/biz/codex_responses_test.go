@@ -328,30 +328,30 @@ func TestCodexCompactRateLimitRemainsCooldownBearing(t *testing.T) {
 
 func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 	seed := "11111111-1111-4111-8111-111111111111"
-	off := resolveCodexFingerprint(seed, accevents.FingerprintModeOff, "client-session")
+	off := resolveCodexFingerprint(seed, accevents.FingerprintModeOff, "client-session", 0)
 	if off != (upevents.CodexFingerprint{}) {
 		t.Fatalf("off fingerprint=%+v", off)
 	}
-	if invalid := resolveCodexFingerprint("local-account-id", accevents.FingerprintModeSession, "client-session"); invalid != (upevents.CodexFingerprint{}) {
+	if invalid := resolveCodexFingerprint("local-account-id", accevents.FingerprintModeSession, "client-session", 0); invalid != (upevents.CodexFingerprint{}) {
 		t.Fatalf("invalid private seed produced fingerprint=%+v", invalid)
 	}
-	device := resolveCodexFingerprint(seed, accevents.FingerprintModeDevice, "client-session")
-	session := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session")
-	repeated := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session")
-	full := resolveCodexFingerprint(seed, accevents.FingerprintModeFull, "client-session")
+	device := resolveCodexFingerprint(seed, accevents.FingerprintModeDevice, "client-session", 0)
+	session := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session", 0)
+	repeated := resolveCodexFingerprint(seed, accevents.FingerprintModeSession, "client-session", 0)
+	full := resolveCodexFingerprint(seed, accevents.FingerprintModeFull, "client-session", 37)
 	if device.InstallationID == "" || device.SessionID != "" || session.InstallationID != device.InstallationID || session.SessionID == "" || session.ThreadID == "" {
 		t.Fatalf("device=%+v session=%+v", device, session)
 	}
 	if repeated.SessionID != session.SessionID || repeated.ThreadID != session.ThreadID || repeated.TurnID == session.TurnID {
 		t.Fatalf("session IDs did not converge per contract: first=%+v repeated=%+v", session, repeated)
 	}
-	if full.ThreadID != full.SessionID || full.WindowID != full.ThreadID+":0" {
+	if full.ThreadID != full.SessionID || full.WindowID != full.ThreadID+":37" {
 		t.Fatalf("full fingerprint=%+v", full)
 	}
 	if session.TurnStartedAtUnixMS <= 0 || repeated.TurnStartedAtUnixMS <= 0 {
 		t.Fatalf("turn timestamps missing: first=%+v repeated=%+v", session, repeated)
 	}
-	otherSeed := resolveCodexFingerprint("22222222-2222-4222-8222-222222222222", accevents.FingerprintModeSession, "client-session")
+	otherSeed := resolveCodexFingerprint("22222222-2222-4222-8222-222222222222", accevents.FingerprintModeSession, "client-session", 0)
 	if otherSeed.InstallationID == session.InstallationID || otherSeed.SessionID == session.SessionID || otherSeed.ThreadID == session.ThreadID {
 		t.Fatalf("different private seeds converged: first=%+v other=%+v", session, otherSeed)
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	aetherrelaycodex "aetherrelay/internal/pkg/aetherrelaycodex"
 )
 
 const (
@@ -105,7 +106,8 @@ func applyCodexRequestIdentity(headers headerSetter, profile codexRequestProfile
 	if headers == nil {
 		return
 	}
-	applyCodexSessionHeaders(headers, profile.sessionHash)
+	session, thread, window := profile.sessionIdentity()
+	applyCodexSessionHeaders(headers, session, thread, window)
 	applyCodexFingerprintHeaders(headers, profile.fingerprint)
 	if turnState := normalizedCodexTurnState(profile.turnState); turnState != "" {
 		headers.Set("X-Codex-Turn-State", turnState)
@@ -169,14 +171,17 @@ func decodeTurnMetadataAttributes(raw json.RawMessage) map[string]any {
 }
 
 // sessionIdentity resolves the attempt's own session identity. It is the single
-// source for the header, metadata and body carriers.
+// source for the header, metadata and body carriers. CP-HDR-010 keeps the session
+// part proxy owned while the window number stays whatever the client declared, so
+// window_id and the window_number attribute never contradict each other.
 func (p codexRequestProfile) sessionIdentity() (session, thread, window string) {
+	number := p.turnMetadata.WindowNumber
+	if number < 0 || number > aetherrelaycodex.CodexWindowNumberMax {
+		number = 0
+	}
 	session = strings.TrimSpace(p.sessionHash)
 	thread = session
-	window = ""
-	if session != "" {
-		window = session + ":0"
-	}
+	window = aetherrelaycodex.WindowID(session, number)
 	if mode := normalizedCodexFingerprintMode(p.fingerprint.Mode); mode != "" && mode != "device" && strings.TrimSpace(p.fingerprint.SessionID) != "" {
 		session = strings.TrimSpace(p.fingerprint.SessionID)
 		thread = strings.TrimSpace(p.fingerprint.ThreadID)
@@ -186,20 +191,26 @@ func (p codexRequestProfile) sessionIdentity() (session, thread, window string) 
 		thread = session
 	}
 	if window == "" && thread != "" {
-		window = thread + ":0"
+		window = aetherrelaycodex.WindowID(thread, number)
 	}
 	return session, thread, window
 }
 
-func applyCodexSessionHeaders(headers headerSetter, sessionHash string) {
-	sessionHash = strings.TrimSpace(sessionHash)
-	if headers == nil || sessionHash == "" {
+func applyCodexSessionHeaders(headers headerSetter, session, thread, window string) {
+	session = strings.TrimSpace(session)
+	if headers == nil || session == "" {
 		return
 	}
-	headers.Set("Session-Id", sessionHash)
-	headers.Set("Thread-Id", sessionHash)
-	headers.Set("X-Client-Request-Id", sessionHash)
-	headers.Set("X-Codex-Window-Id", sessionHash+":0")
+	thread = strings.TrimSpace(thread)
+	if thread == "" {
+		thread = session
+	}
+	headers.Set("Session-Id", session)
+	headers.Set("Thread-Id", thread)
+	headers.Set("X-Client-Request-Id", thread)
+	if window = strings.TrimSpace(window); window != "" {
+		headers.Set("X-Codex-Window-Id", window)
+	}
 }
 
 func applyCodexFingerprintHeaders(headers headerSetter, fingerprint events.CodexFingerprint) {

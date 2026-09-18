@@ -997,6 +997,54 @@ func assertCodexSessionHeaders(t *testing.T, headers http.Header, sessionHash st
 	}
 }
 
+// CP-HDR-010: 客户端声明的窗口号必须同时出现在 header、X-Codex-Turn-Metadata 与
+// body client_metadata；会话段仍是代理身份，与同一份元数据里的 window_number 不再矛盾。
+func TestCodexWindowNumberTravelsToCarriers(t *testing.T) {
+	projection := events.TurnMetadata{
+		TurnID: "client-turn", RootTurnID: "client-turn", TurnStartedAtMS: 1789711880466,
+		WindowNumber: 37,
+		Attributes:   []byte(`{"window_number":37,"request_kind":"turn"}`),
+	}
+	profile := codexRequestProfile{sessionHash: "session-hash", turnMetadata: projection}
+
+	headers := http.Header{}
+	applyCodexRequestIdentity(headers, profile)
+	applyCodexTurnMetadata(headers, profile)
+	if headers.Get("X-Codex-Window-Id") != "session-hash:37" {
+		t.Fatalf("CP-HDR-010 header window id=%q", headers.Get("X-Codex-Window-Id"))
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(headers.Get("X-Codex-Turn-Metadata")), &metadata); err != nil {
+		t.Fatalf("CP-HDR-010 metadata=%q err=%v", headers.Get("X-Codex-Turn-Metadata"), err)
+	}
+	if metadata["window_id"] != "session-hash:37" || metadata["window_number"] != float64(37) {
+		t.Fatalf("CP-HDR-010 metadata disagrees with the window number: %v", metadata)
+	}
+
+	body, err := applyCodexRequestBody([]byte(`{"model":"gpt-test","client_metadata":{"session_id":"client-leak"}}`), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		ClientMetadata map[string]any `json:"client_metadata"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("CP-HDR-010 body=%s", body)
+	}
+	// body 的扁平投影沿用 CLI 的命名（x-codex-window-id），内嵌 JSON 与它一致。
+	embedded, _ := envelope.ClientMetadata["x-codex-turn-metadata"].(string)
+	if envelope.ClientMetadata["x-codex-window-id"] != "session-hash:37" || !strings.Contains(embedded, `"x-codex-window-id":"session-hash:37"`) {
+		t.Fatalf("CP-HDR-010 body carriers=%v embedded=%s", envelope.ClientMetadata, embedded)
+	}
+
+	// 未声明窗口号时保持 0，不猜测。
+	plainHeaders := http.Header{}
+	applyCodexRequestIdentity(plainHeaders, codexRequestProfile{sessionHash: "session-hash"})
+	if plainHeaders.Get("X-Codex-Window-Id") != "session-hash:0" {
+		t.Fatalf("CP-HDR-010 undeclared window id=%q", plainHeaders.Get("X-Codex-Window-Id"))
+	}
+}
+
 func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != currentIdentity.ClientVersion {
