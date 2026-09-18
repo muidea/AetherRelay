@@ -90,7 +90,7 @@ func (h *Handler) archiveAndLogClientRequest(round *archive.Round, r *http.Reque
 		UserAgent:     r.UserAgent(),
 		ContentLength: r.ContentLength,
 		BodyBytes:     bodyBytes,
-		Headers:       sanitizeHeaders(r.Header),
+		Headers:       h.archiveHeaders(r.Header),
 	}
 	if round.HasFile("request.json") {
 		info.BodyPath = "request.json"
@@ -107,7 +107,7 @@ func (h *Handler) archiveAndLogClientRequest(round *archive.Round, r *http.Reque
 		info.Host,
 		info.UserAgent,
 		bodyBytes,
-		headerSummary(info.Headers),
+		headerSummary(sanitizeHeaders(r.Header)),
 	)
 }
 
@@ -159,7 +159,7 @@ func (h *Handler) archiveAndLogUpstreamRequest(round *archive.Round, r *http.Req
 		Method:    req.Method,
 		URL:       req.URL.String(),
 		BodyBytes: bodyBytes,
-		Headers:   sanitizeHeaders(req.Header),
+		Headers:   h.archiveHeaders(req.Header),
 	}
 	if err := round.WriteJSON("upstream_request.json", info); err != nil {
 		log.Printf("archive upstream request metadata: %v", err)
@@ -171,7 +171,7 @@ func (h *Handler) archiveAndLogUpstreamRequest(round *archive.Round, r *http.Req
 		req.Method,
 		req.URL.String(),
 		bodyBytes,
-		headerSummary(info.Headers),
+		headerSummary(sanitizeHeaders(req.Header)),
 	)
 }
 
@@ -186,13 +186,15 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 		Protocol:   provider.Protocol,
 		DurationMS: duration.Milliseconds(),
 	}
+	var logHeaders map[string][]string
 	if resp != nil {
 		info.Status = resp.StatusCode
 		info.ContentType = resp.Header.Get("Content-Type")
 		info.ContentLength = resp.ContentLength
 		// 完整上游响应 header：x-ratelimit-* / retry-after / server 等对排查限流
 		// 与上游行为关键，且无法从 Content-Type / Content-Length 还原。
-		info.Headers = sanitizeHeaders(resp.Header)
+		info.Headers = h.archiveHeaders(resp.Header)
+		logHeaders = sanitizeHeaders(resp.Header)
 	}
 	if err != nil {
 		info.Error = err.Error()
@@ -209,7 +211,7 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 		info.ContentType,
 		info.ContentLength,
 		info.Error,
-		headerSummary(info.Headers),
+		headerSummary(logHeaders),
 	)
 	h.logUpstreamAlert(round, providerName, provider.Protocol, info.Status, duration, info.Error)
 }
@@ -225,7 +227,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	if requestAt.IsZero() {
 		requestAt = time.Now()
 	}
-	requestHeaders := sanitizeHeaders(codexHeadersToHTTP(attempt.Request.Headers))
+	requestHeaders := h.archiveHeaders(codexHeadersToHTTP(attempt.Request.Headers))
 	requestInfo := upstreamDebugInfo{
 		RoundID: round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
 		Method: attempt.Request.Method, URL: attempt.Request.URL, BodyBytes: attempt.Request.BodyBytes, Headers: requestHeaders,
@@ -234,13 +236,13 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		log.Printf("archive Codex upstream request metadata: %v", err)
 	}
 	h.debugfRound(round, r, "round=%06d Codex upstream request provider=%s method=%s url=%s body_bytes=%d headers=%s",
-		round.ID, providerName, requestInfo.Method, requestInfo.URL, requestInfo.BodyBytes, headerSummary(requestHeaders))
+		round.ID, providerName, requestInfo.Method, requestInfo.URL, requestInfo.BodyBytes, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Request.Headers))))
 
 	responseAt := attempt.Response.At
 	if responseAt.IsZero() {
 		responseAt = time.Now()
 	}
-	responseHeaders := sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))
+	responseHeaders := h.archiveHeaders(codexHeadersToHTTP(attempt.Response.Headers))
 	responseInfo := upstreamResponseDebugInfo{
 		RoundID: round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
 		Status: attempt.Response.Status, DurationMS: attempt.Response.DurationMS,
@@ -254,7 +256,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		log.Printf("archive Codex upstream response metadata: %v", err)
 	}
 	h.debugfRound(round, r, "round=%06d Codex upstream response provider=%s status=%d duration=%dms content_type=%q content_length=%d error=%q headers=%s",
-		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, headerSummary(responseHeaders))
+		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))))
 }
 
 func codexHeadersToHTTP(headers []codexresponses.Header) http.Header {
@@ -296,6 +298,40 @@ func (h *Handler) logUpstreamAlert(round *archive.Round, providerName, protocol 
 		slog.String("message", message),
 	}
 	slog.LogAttrs(context.Background(), level, "upstream alert", toAttrs(attrs)...)
+}
+
+// archiveHeaders 生成写入归档文件的 header 投影（CP-OBS-009）。默认与日志使用
+// 同一脱敏名单；只有受控排障显式开启 archive_unredacted_headers 且归档本身已启用
+// 时，四类信息才保留原值。日志始终走 sanitizeHeaders，不随该开关放宽。
+func (h *Handler) archiveHeaders(headers http.Header) map[string][]string {
+	return archiveHeaderProjection(headers, h.archiveUnredactedHeaders())
+}
+
+// archiveUnredactedHeaders 报告 CP-OBS-009 的保真开关。它只在交互归档启用时生效。
+func (h *Handler) archiveUnredactedHeaders() bool {
+	cfg := config.Config{}
+	if h != nil {
+		cfg = h.currentConfig()
+	}
+	return cfg.ArchiveInteractions && cfg.ArchiveUnredactedHeaders
+}
+
+func archiveHeaderProjection(headers http.Header, unredacted bool) map[string][]string {
+	if unredacted {
+		return rawHeaders(headers)
+	}
+	return sanitizeHeaders(headers)
+}
+
+// rawHeaders 复制全部 header 原值，仅用于显式开启保真的归档写入。
+func rawHeaders(headers http.Header) map[string][]string {
+	raw := make(map[string][]string, len(headers))
+	for key, values := range headers {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		raw[http.CanonicalHeaderKey(key)] = copied
+	}
+	return raw
 }
 
 func sanitizeHeaders(headers http.Header) map[string][]string {

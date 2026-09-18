@@ -106,7 +106,10 @@ type CompleteCommand struct {
 	BetaFeatures     string
 	ResponsesLite    bool
 	TurnState        string
-	Fingerprint      CodexFingerprint
+	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
+	// attempt observation, and its zero value keeps the credential redaction.
+	ArchiveUnredactedHeaders bool
+	Fingerprint              CodexFingerprint
 }
 type CompleteResult struct {
 	Body              []byte
@@ -129,7 +132,10 @@ type CompactCommand struct {
 	BetaFeatures     string
 	ResponsesLite    bool
 	TurnState        string
-	Fingerprint      CodexFingerprint
+	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
+	// attempt observation, and its zero value keeps the credential redaction.
+	ArchiveUnredactedHeaders bool
+	Fingerprint              CodexFingerprint
 }
 
 type CompactResult struct {
@@ -154,7 +160,10 @@ type StartCommand struct {
 	BetaFeatures    string
 	ResponsesLite   bool
 	TurnState       string
-	Fingerprint     CodexFingerprint
+	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
+	// attempt observation, and its zero value keeps the credential redaction.
+	ArchiveUnredactedHeaders bool
+	Fingerprint              CodexFingerprint
 }
 type StartResult struct {
 	StreamID          string
@@ -192,7 +201,10 @@ type WSOpenCommand struct {
 	BetaFeatures    string
 	ResponsesLite   bool
 	TurnState       string
-	Fingerprint     CodexFingerprint
+	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
+	// attempt observation, and its zero value keeps the credential redaction.
+	ArchiveUnredactedHeaders bool
+	Fingerprint              CodexFingerprint
 }
 type WSOpenResult struct {
 	SessionID         string

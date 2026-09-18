@@ -64,6 +64,11 @@ type Config struct {
 	// created. It is deliberately opt-in because even sanitized metadata has a
 	// retention and privacy cost.
 	ArchiveInteractions bool
+	// ArchiveUnredactedHeaders only applies when ArchiveInteractions is true. When
+	// enabled (CP-OBS-009), the four archived directions keep every header value
+	// verbatim, including credentials and account identity. Logs, metrics, error
+	// responses and management views are never affected. Controlled debugging only.
+	ArchiveUnredactedHeaders bool
 	// ArchiveFullContent only applies when ArchiveInteractions is true. When
 	// false, the enabled archive records metadata but not request/response bodies.
 	ArchiveFullContent bool
@@ -372,6 +377,7 @@ func Load(path string) (Config, error) {
 		MaxSSELineBytes:          DefaultMaxSSELineBytes,
 		ArchiveInteractions:      false,
 		ArchiveFullContent:       false,
+		ArchiveUnredactedHeaders: false,
 		InteractionDir:           "interactions",
 		InteractionRetention:     500,
 		VerboseLogging:           true,
@@ -603,6 +609,12 @@ func setTopLevel(cfg *Config, key, value string) error {
 			return fmt.Errorf("archive_full_content: %w", err)
 		}
 		cfg.ArchiveFullContent = b
+	case "archive_unredacted_headers":
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("archive_unredacted_headers: %w", err)
+		}
+		cfg.ArchiveUnredactedHeaders = b
 	case "request_timeout_seconds":
 		n, err := parseStrictPositiveInt(value)
 		if err != nil {
@@ -1186,6 +1198,13 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("AETHERRELAY_ARCHIVE_INTERACTIONS: %w", err)
 		}
 		cfg.ArchiveInteractions = b
+	}
+	if value := os.Getenv("AETHERRELAY_ARCHIVE_UNREDACTED_HEADERS"); value != "" {
+		b, err := parseStrictBool(value)
+		if err != nil {
+			return fmt.Errorf("AETHERRELAY_ARCHIVE_UNREDACTED_HEADERS: %w", err)
+		}
+		cfg.ArchiveUnredactedHeaders = b
 	}
 	if value := os.Getenv("AETHERRELAY_ARCHIVE_FULL_CONTENT"); value != "" {
 		b, err := parseStrictBool(value)

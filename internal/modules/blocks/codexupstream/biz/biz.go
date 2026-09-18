@@ -117,7 +117,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact body"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
 	response, attempt, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompactResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -189,14 +189,14 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	headers.Set("User-Agent", currentIdentity.UserAgent)
 	headers.Set("Originator", currentIdentity.Originator)
 	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
 	applyCodexFeatureHeaders(headers, profile.betaFeatures, profile.responsesLite)
 	applyCodexRequestIdentity(headers, profile)
 	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
 		headers.Set("ChatGPT-Account-ID", accountID)
 	}
 	requestAt := time.Now()
-	attempt := events.HTTPAttempt{Request: events.HTTPRequestObservation{At: requestAt, Method: http.MethodGet, URL: responsesWebsocketURL, Headers: safeFHTTPHeaders(headers)}}
+	attempt := events.HTTPAttempt{Request: events.HTTPRequestObservation{At: requestAt, Method: http.MethodGet, URL: responsesWebsocketURL, Headers: safeFHTTPHeaders(headers, profile.archiveUnredacted)}}
 	conn, response, err := dialer.DialContext(ev.Context(), responsesWebsocketURL, headers)
 	attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 	if err != nil {
@@ -207,7 +207,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		var safeError events.SafeError
 		var responseHeader []events.Header
 		if response != nil {
-			attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt)
+			attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt, profile.archiveUnredacted)
 			status = response.StatusCode
 			responseHeader = responseHeaders(response.Header)
 			responseBody, observation, retryAfter, safeError = readErrorObservationParts(response.Header, response.Body)
@@ -224,7 +224,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	}
 	var responseHeader []events.Header
 	if response != nil {
-		attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt)
+		attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt, profile.archiveUnredacted)
 		responseHeader = responseHeaders(response.Header)
 		if response.Body != nil {
 			_ = response.Body.Close()
@@ -435,7 +435,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompleteResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -469,7 +469,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.StartResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -698,29 +698,36 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	}
 	requestAt := time.Now()
 	attempt.Request = events.HTTPRequestObservation{
-		At: requestAt, Method: req.Method, URL: req.URL.String(), BodyBytes: len(body), Headers: safeHTTPHeaders(req.Header),
+		At: requestAt, Method: req.Method, URL: req.URL.String(), BodyBytes: len(body), Headers: safeHTTPHeaders(req.Header, profile.archiveUnredacted),
 	}
 	response, err := client.Do(req)
 	if err != nil {
 		attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 		return nil, attempt, classifyTransport(err), 0, err
 	}
-	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt)
+	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt, profile.archiveUnredacted)
 	return response, attempt, "", retryAfterSeconds(response.Header), nil
 }
 
-func observedHTTPResponse[H ~map[string][]string](status int, contentLength int64, headers H, requestAt time.Time) events.HTTPResponseObservation {
+func observedHTTPResponse[H ~map[string][]string](status int, contentLength int64, headers H, requestAt time.Time, unredacted bool) events.HTTPResponseObservation {
 	return events.HTTPResponseObservation{
 		Observed: true, At: time.Now(), Status: status, ContentLength: contentLength,
-		DurationMS: time.Since(requestAt).Milliseconds(), Headers: safeHeaders(headers),
+		DurationMS: time.Since(requestAt).Milliseconds(), Headers: safeHeaders(headers, unredacted),
 	}
 }
 
-func safeHTTPHeaders(headers http.Header) []events.Header { return safeHeaders(headers) }
+func safeHTTPHeaders(headers http.Header, unredacted bool) []events.Header {
+	return safeHeaders(headers, unredacted)
+}
 
-func safeFHTTPHeaders(headers fhttp.Header) []events.Header { return safeHeaders(headers) }
+func safeFHTTPHeaders(headers fhttp.Header, unredacted bool) []events.Header {
+	return safeHeaders(headers, unredacted)
+}
 
-func safeHeaders[H ~map[string][]string](headers H) []events.Header {
+// safeHeaders implements CP-OBS-009 at the owning Block boundary: credentials are
+// redacted unless the inbound command explicitly asked for the archive fidelity
+// switch, so redaction stays unreachable for every other caller.
+func safeHeaders[H ~map[string][]string](headers H, unredacted bool) []events.Header {
 	keys := make([]string, 0, len(headers))
 	for key := range headers {
 		keys = append(keys, key)
@@ -729,7 +736,7 @@ func safeHeaders[H ~map[string][]string](headers H) []events.Header {
 	out := make([]events.Header, 0, len(keys))
 	for _, key := range keys {
 		values := headers[key]
-		if codexArchiveSensitiveHeader(key) {
+		if !unredacted && codexArchiveSensitiveHeader(key) {
 			out = append(out, events.Header{Name: http.CanonicalHeaderKey(key), Value: "<redacted>"})
 			continue
 		}

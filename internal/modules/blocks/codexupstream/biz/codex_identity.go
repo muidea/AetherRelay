@@ -19,6 +19,9 @@ type codexRequestProfile struct {
 	responsesLite bool
 	turnState     string
 	fingerprint   events.CodexFingerprint
+	// archiveUnredacted is CP-OBS-009: it decides whether the archived attempt
+	// observation keeps credential headers verbatim. The zero value redacts.
+	archiveUnredacted bool
 }
 
 func resolvedCodexBetaFeatures(value string) string {

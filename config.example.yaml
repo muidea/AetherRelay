@@ -17,6 +17,11 @@ server:
   # 仅当 archive_interactions=true 时生效：是否额外落盘完整请求/响应正文。
   # 正文可能包含敏感数据；排障结束后应恢复为 false。
   archive_full_content: false
+  # 仅当 archive_interactions=true 时生效：归档 header 是否保真（CP-OBS-009）。
+  # true 时客户端请求/上游请求/上游响应/客户端响应四个方向的全部 header 按原值落盘，
+  # 包含明文凭据、账号身份与会话/turn 原值，仅用于受控排障；日志、指标、错误响应与
+  # 管理视图始终脱敏。归档文件应视同凭据保管，排障结束后恢复为 false。
+  archive_unredacted_headers: false
   verbose_logging: true
   log_format: text
   request_timeout_seconds: 300

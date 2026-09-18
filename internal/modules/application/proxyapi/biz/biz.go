@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -130,9 +131,21 @@ func newInteractionRecorder(cfg config.Config) (*archive.Recorder, error) {
 	if !cfg.ArchiveInteractions {
 		return nil, nil
 	}
+	if cfg.ArchiveUnredactedHeaders {
+		// CP-OBS-009: the operator opted into verbatim credential headers on disk.
+		slog.Warn("interaction archive keeps credential headers verbatim; archived files contain live tokens and account identity",
+			"setting", "archive_unredacted_headers", "scope", "archive only; logs, metrics and management views stay redacted")
+	}
 	return archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{
 		MaxRounds: cfg.InteractionRetention, FullContent: cfg.ArchiveFullContent, ScopeByAPIKey: true,
 	})
+}
+
+// archiveUnredactedHeaders reports the CP-OBS-009 fidelity switch. It only takes
+// effect while interaction archival is enabled, so a stray flag on a deployment
+// without archives never reaches the upstream Block.
+func (s *Proxy) archiveUnredactedHeaders() bool {
+	return s.config.ArchiveInteractions && s.config.ArchiveUnredactedHeaders
 }
 
 func (s *Proxy) Run(ctx context.Context) *cd.Error {

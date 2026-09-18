@@ -620,7 +620,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 在分发前包装,使本轮所有响应写出都被快照。
 		// 兜底 defer 注册在 round.Abort() 之后:defer 后进先出,因此它先于 Abort
 		// 执行,response.meta.json 的写入始终落在 round 生命周期内。
-		w = &archiveResponseWriter{ResponseWriter: w, round: round}
+		w = &archiveResponseWriter{ResponseWriter: w, round: round, unredactedHeaders: h.archiveUnredactedHeaders()}
 		defer h.archiveClientResponse(round)
 	}
 	r = r.WithContext(withArchiveRound(r.Context(), round))

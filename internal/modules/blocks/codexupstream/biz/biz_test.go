@@ -638,6 +638,50 @@ func TestPerformUsesFixedCodexHeaders(t *testing.T) {
 	}
 }
 
+// CP-OBS-009: the archived attempt keeps credentials verbatim only when the
+// inbound command explicitly asked for the archive fidelity switch; every other
+// caller keeps the redacted projection.
+func TestPerformKeepsCredentialHeadersWhenArchiveIsUnredacted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Codex-Turn-State", "response-turn-state")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	previousURL := responsesURL
+	responsesURL = server.URL
+	t.Cleanup(func() { responsesURL = previousURL })
+
+	for name, testCase := range map[string]struct {
+		unredacted bool
+		want       string
+	}{
+		"archive fidelity": {unredacted: true, want: "Bearer access-token"},
+		"default":          {unredacted: false, want: "<redacted>"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			profile := codexRequestProfile{turnState: "opaque-turn-state", archiveUnredacted: testCase.unredacted}
+			response, attempt, class, _, err := perform(context.Background(), "access-token", "chatgpt-account-id", "", []byte(`{"model":"gpt-test"}`), profile)
+			if err != nil || class != "" {
+				t.Fatalf("perform class=%q err=%v", class, err)
+			}
+			_ = response.Body.Close()
+			requestHeaders := eventHeaderMap(attempt.Request.Headers)
+			if requestHeaders.Get("Authorization") != testCase.want {
+				t.Fatalf("CP-OBS-009 request authorization=%q", requestHeaders.Get("Authorization"))
+			}
+			turnState := "response-turn-state"
+			if !testCase.unredacted {
+				turnState = "<redacted>"
+			}
+			responseHeaders := eventHeaderMap(attempt.Response.Headers)
+			if responseHeaders.Get("X-Codex-Turn-State") != turnState {
+				t.Fatalf("CP-OBS-009 response turn state=%q", responseHeaders.Get("X-Codex-Turn-State"))
+			}
+		})
+	}
+}
+
 func eventHeaderMap(headers []events.Header) http.Header {
 	result := http.Header{}
 	for _, header := range headers {

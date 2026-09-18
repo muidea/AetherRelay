@@ -36,6 +36,9 @@ type clientResponseDebugInfo struct {
 type archiveResponseWriter struct {
 	http.ResponseWriter
 	round *archive.Round
+	// unredactedHeaders 是 CP-OBS-009 的请求级快照:客户端响应 header 与其余三类
+	// 信息共用同一保真开关。
+	unredactedHeaders bool
 }
 
 func (w *archiveResponseWriter) WriteHeader(status int) {
@@ -90,7 +93,7 @@ func (w *archiveResponseWriter) capture(status int, hijacked bool) {
 	if _, captured := w.round.ClientResponse(); captured {
 		return
 	}
-	w.round.SetClientResponse(status, sanitizeHeaders(w.Header()), hijacked)
+	w.round.SetClientResponse(status, archiveHeaderProjection(w.Header(), w.unredactedHeaders), hijacked)
 }
 
 // archiveClientResponse 把客户端响应 header 落到 response.meta.json。
