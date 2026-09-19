@@ -713,6 +713,11 @@ func TestPerformReusesClientIdentity(t *testing.T) {
 			wantAgent:    currentIdentity.UserAgent,
 			wantOriginat: currentIdentity.Originator,
 		},
+		"partial pair": {
+			identity:     events.ClientIdentity{UserAgent: clientAgent},
+			wantAgent:    currentIdentity.UserAgent,
+			wantOriginat: currentIdentity.Originator,
+		},
 		"oversized": {
 			identity:     events.ClientIdentity{UserAgent: strings.Repeat("x", maxClientUserAgentBytes+1), Originator: strings.Repeat("y", maxClientOriginatorBytes+1)},
 			wantAgent:    currentIdentity.UserAgent,

@@ -14,6 +14,11 @@ const RequestIDHeader = "X-Request-ID"
 // requestIDKey 是 context 中 request id 的私有 key,避免与外部包冲突。
 type requestIDKey struct{}
 
+// requestScopeIDKey is a server-generated per-request nonce. Unlike the public
+// X-Request-ID it cannot be chosen or reused by a client, so stateless callers
+// cannot accidentally share a Codex conversation/cache namespace.
+type requestScopeIDKey struct{}
+
 // usageEventKey 与可由客户端透传的 RequestID 分离。用量事件主键必须由
 // 服务端生成，避免重复的 X-Request-ID 造成用量写入冲突。
 type usageEventKey struct{}
@@ -45,6 +50,21 @@ func requestIDFromContext(ctx context.Context) string {
 		return id
 	}
 	return ""
+}
+
+func withRequestScopeID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestScopeIDKey{}, id)
+}
+
+func requestScopeIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(requestScopeIDKey{}).(string)
+	return id
 }
 
 func withUsageEventID(ctx context.Context, id string) context.Context {
@@ -83,5 +103,7 @@ func attachRequestID(w http.ResponseWriter, r *http.Request, id string) *http.Re
 	if r == nil || id == "" {
 		return r
 	}
-	return r.WithContext(withRequestID(r.Context(), id))
+	ctx := withRequestID(r.Context(), id)
+	ctx = withRequestScopeID(ctx, newRequestID())
+	return r.WithContext(ctx)
 }

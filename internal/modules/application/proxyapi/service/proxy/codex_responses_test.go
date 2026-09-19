@@ -943,8 +943,8 @@ func TestClaudeCodeSessionIDIsRoutingOnly(t *testing.T) {
 	if codexSessionHash(requestA, "gpt-test", body) == codexSessionHash(requestB, "gpt-test", body) {
 		t.Fatal("Claude Code session id did not affect routing affinity")
 	}
-	if codexPromptCacheHash(requestA, "gpt-test", body) != codexPromptCacheHash(requestB, "gpt-test", body) {
-		t.Fatal("Claude Code session id leaked into prompt cache identity")
+	if codexPromptCacheHash(requestA, "gpt-test", body) == codexPromptCacheHash(requestB, "gpt-test", body) {
+		t.Fatal("stateless Claude Code requests shared prompt cache identity")
 	}
 }
 

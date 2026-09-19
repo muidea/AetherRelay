@@ -42,6 +42,35 @@ type ObservedProfile struct {
 	Version    string `json:"version"`
 }
 
+// ObservationReason is a bounded diagnostic classification. It never contains
+// the raw client headers.
+type ObservationReason string
+
+const (
+	ObservationVerified           ObservationReason = "verified"
+	ObservationAbsent             ObservationReason = "absent"
+	ObservationMissingUserAgent   ObservationReason = "missing_user_agent"
+	ObservationMissingOriginator  ObservationReason = "missing_originator"
+	ObservationInvalidLength      ObservationReason = "invalid_length"
+	ObservationInvalidControl     ObservationReason = "invalid_control_character"
+	ObservationInvalidFormat      ObservationReason = "invalid_format"
+	ObservationUnsupportedFamily  ObservationReason = "unsupported_family"
+	ObservationFamilyMismatch     ObservationReason = "family_mismatch"
+	ObservationVersionMismatch    ObservationReason = "version_mismatch"
+	ObservationUnsupportedVersion ObservationReason = "unsupported_version"
+)
+
+func ValidObservationReason(reason ObservationReason) bool {
+	switch reason {
+	case ObservationVerified, ObservationAbsent, ObservationMissingUserAgent, ObservationMissingOriginator,
+		ObservationInvalidLength, ObservationInvalidControl, ObservationInvalidFormat, ObservationUnsupportedFamily,
+		ObservationFamilyMismatch, ObservationVersionMismatch, ObservationUnsupportedVersion:
+		return true
+	default:
+		return false
+	}
+}
+
 type observedVersion struct{ major, minor, patch int }
 
 // ParseObserved accepts only bounded, internally consistent client profiles
@@ -49,10 +78,29 @@ type observedVersion struct{ major, minor, patch int }
 // contract. Unknown clients can still use the proxy but cannot mutate an
 // account-scoped identity profile.
 func ParseObserved(userAgent, originator string) (ObservedProfile, bool) {
+	profile, reason := ClassifyObserved(userAgent, originator)
+	return profile, reason == ObservationVerified
+}
+
+// ClassifyObserved validates one atomic User-Agent/Originator pair and returns
+// only a bounded reason when it cannot become an account-scoped profile.
+func ClassifyObserved(userAgent, originator string) (ObservedProfile, ObservationReason) {
 	userAgent = strings.TrimSpace(userAgent)
 	originator = strings.TrimSpace(originator)
-	if userAgent == "" || originator == "" || len(userAgent) > maxObservedUserAgentBytes || len(originator) > maxObservedOriginatorBytes || hasControl(userAgent) || hasControl(originator) {
-		return ObservedProfile{}, false
+	if userAgent == "" && originator == "" {
+		return ObservedProfile{}, ObservationAbsent
+	}
+	if userAgent == "" {
+		return ObservedProfile{}, ObservationMissingUserAgent
+	}
+	if originator == "" {
+		return ObservedProfile{}, ObservationMissingOriginator
+	}
+	if len(userAgent) > maxObservedUserAgentBytes || len(originator) > maxObservedOriginatorBytes {
+		return ObservedProfile{}, ObservationInvalidLength
+	}
+	if hasControl(userAgent) || hasControl(originator) {
+		return ObservedProfile{}, ObservationInvalidControl
 	}
 	first := userAgent
 	if index := strings.IndexByte(first, ' '); index >= 0 {
@@ -60,18 +108,27 @@ func ParseObserved(userAgent, originator string) (ObservedProfile, bool) {
 	}
 	separator := strings.LastIndexByte(first, '/')
 	if separator <= 0 || separator == len(first)-1 {
-		return ObservedProfile{}, false
+		return ObservedProfile{}, ObservationInvalidFormat
 	}
 	family, versionText := first[:separator], first[separator+1:]
-	if familyRank(family) == 0 || originator != family || !strings.Contains(userAgent, "("+family+"; "+versionText+")") {
-		return ObservedProfile{}, false
+	if familyRank(family) == 0 {
+		return ObservedProfile{}, ObservationUnsupportedFamily
+	}
+	if originator != family {
+		return ObservedProfile{}, ObservationFamilyMismatch
+	}
+	if !strings.Contains(userAgent, "("+family+"; "+versionText+")") {
+		return ObservedProfile{}, ObservationVersionMismatch
 	}
 	version, ok := parseObservedVersion(versionText)
-	minimum, maximum, supportedFamily := familyVersionRange(family)
-	if !ok || !supportedFamily || compareObservedVersion(version, minimum) < 0 || compareObservedVersion(version, maximum) > 0 {
-		return ObservedProfile{}, false
+	if !ok {
+		return ObservedProfile{}, ObservationInvalidFormat
 	}
-	return ObservedProfile{UserAgent: userAgent, Originator: originator, Family: family, Version: versionText}, true
+	minimum, maximum, supportedFamily := familyVersionRange(family)
+	if !supportedFamily || compareObservedVersion(version, minimum) < 0 || compareObservedVersion(version, maximum) > 0 {
+		return ObservedProfile{}, ObservationUnsupportedVersion
+	}
+	return ObservedProfile{UserAgent: userAgent, Originator: originator, Family: family, Version: versionText}, ObservationVerified
 }
 
 // PromoteObserved returns a new candidate only when it belongs to a preferred

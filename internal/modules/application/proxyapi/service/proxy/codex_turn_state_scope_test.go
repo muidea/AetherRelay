@@ -68,23 +68,32 @@ func TestCodexClientIdentityReachesExecutor(t *testing.T) {
 		originator   string
 		wantAgent    string
 		wantOriginat string
+		wantReason   string
 	}{
 		"native responses": {
 			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
-			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui",
+			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui", wantReason: "verified",
 		},
 		"absent identity": {
 			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
-			wantAgent: "", wantOriginat: "",
+			wantAgent: "", wantOriginat: "", wantReason: "absent",
+		},
+		"partial identity is atomic fallback": {
+			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
+			userAgent: clientAgent, wantAgent: "", wantOriginat: "", wantReason: "missing_originator",
+		},
+		"non Codex identity remains available to off mode": {
+			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
+			userAgent: "third-party-sdk/1.0.0", originator: "third-party", wantAgent: "third-party-sdk/1.0.0", wantOriginat: "third-party", wantReason: "unsupported_family",
 		},
 		"oversized identity": {
 			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
 			userAgent: strings.Repeat("x", codexClientUserAgentLimit+1), originator: strings.Repeat("y", codexClientOriginatorLimit+1),
-			wantAgent: "", wantOriginat: "",
+			wantAgent: "", wantOriginat: "", wantReason: "invalid_length",
 		},
 		"chat adapter": {
 			path: "/v1/chat/completions", body: `{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`,
-			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui",
+			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui", wantReason: "verified",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -109,7 +118,46 @@ func TestCodexClientIdentityReachesExecutor(t *testing.T) {
 			if received.ClientUserAgent != testCase.wantAgent || received.ClientOriginator != testCase.wantOriginat {
 				t.Fatalf("CP-HDR-003/004 user-agent=%q originator=%q", received.ClientUserAgent, received.ClientOriginator)
 			}
+			if received.Diagnostics.ClientIdentityReason != testCase.wantReason {
+				t.Fatalf("client identity reason=%q want=%q", received.Diagnostics.ClientIdentityReason, testCase.wantReason)
+			}
 		})
+	}
+}
+
+// CP-SCHED-002/CP-HDR-022: absent conversation signals get one server-owned
+// request scope, never affinity or Turn-State sharing through public request IDs.
+func TestStatelessCodexRequestsUseIndependentServerScopes(t *testing.T) {
+	received := make(chan codexresponses.Request, 2)
+	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+		received <- request
+		return codexresponses.Result{Body: []byte(`{"id":"resp_scope","model":"gpt-5.2-codex","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":2}}`)}, nil
+	}})
+	for range 2 {
+		request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.2-codex","input":"hello"}`))
+		request.Header.Set("Authorization", "Bearer test-client-key")
+		request.Header.Set(RequestIDHeader, "client-reused-request-id")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	first, second := <-received, <-received
+	if first.SessionHash == "" || second.SessionHash == "" || first.SessionHash == second.SessionHash {
+		t.Fatalf("stateless session hashes were not isolated: %q %q", first.SessionHash, second.SessionHash)
+	}
+	var firstBody, secondBody map[string]any
+	if decodeCodexJSON(first.Body, &firstBody) != nil || decodeCodexJSON(second.Body, &secondBody) != nil {
+		t.Fatal("decode normalized request bodies")
+	}
+	firstCache, _ := firstBody["prompt_cache_key"].(string)
+	secondCache, _ := secondBody["prompt_cache_key"].(string)
+	if firstCache == "" || secondCache == "" || firstCache == secondCache {
+		t.Fatalf("stateless cache identities were not isolated: %q %q", firstCache, secondCache)
+	}
+	if first.SessionScope != "" || second.SessionScope != "" {
+		t.Fatalf("stateless requests received turn-state scopes: %q %q", first.SessionScope, second.SessionScope)
 	}
 }
 
@@ -173,8 +221,8 @@ func TestCodexTurnStateScopeDigestFollowsDeclaredConversation(t *testing.T) {
 	}
 }
 
-// CP-HDR-022: requests that declare no conversation are not a shared bucket, even
-// though the scheduling session hash substitutes a synthetic signal for them.
+// CP-HDR-022: requests that declare no conversation are neither a shared state
+// bucket nor a shared scheduling conversation.
 func TestCodexTurnStateScopeDigestRejectsUndeclaredConversation(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	body := map[string]any{"input": "hello"}
@@ -187,8 +235,7 @@ func TestCodexTurnStateScopeDigestRejectsUndeclaredConversation(t *testing.T) {
 	if scope := codexTurnStateScopeDigest(nil, "gpt-5.2-codex", body); scope != "" {
 		t.Fatalf("CP-HDR-022 nil request scope=%q", scope)
 	}
-	// The scheduling digest still produces a stable shared session for the same
-	// request, which is what account stickiness relies on.
+	// The scheduling digest remains stable within this request only.
 	if session := codexSessionHash(request, "gpt-5.2-codex", body); session == "" {
 		t.Fatal("CP-SCHED-002 scheduling session must stay non-empty")
 	}

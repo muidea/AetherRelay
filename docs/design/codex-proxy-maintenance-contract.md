@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`12.0.0`
+> 合同版本：`12.0.1`
 >
 > 状态：`active`
 >
@@ -9,6 +9,8 @@
 > 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`12.0.1` 收口非 Codex 客户端及缺失信息边界：客户端实现身份在所有模式下按 User-Agent/Originator 原子组处理，任一缺失或非法时整组回落，禁止客户端字段与内置字段拼接；非 Codex 完整安全组合只在显式 `off` 下透传，`scoped` 未选出有效账号 profile 时使用内置 fallback。完全没有会话信号的请求改用服务端请求级 nonce 隔离调度 Session 与默认 cache key，不再共享固定 `default`，客户端可控的 `X-Request-ID` 不参与该 nonce。业务请求不因身份不具候选资格而拒绝，逐次诊断只记录有界原因枚举。上述行为补齐 `12.0.0` 已声明的原子身份和 `CP-SCHED-002` 请求域 session 合同，按 PATCH 发布。
 
 `12.0.0` 将 `scoped` 模式的 `User-Agent`/`Originator` 从逐请求透传收敛为账号级、客户端来源的原子 profile：账号选择时才观察候选，`codex-tui` 优先于 `codex_exec`，同 family 只接受当前已验证版本范围内的严格三段版本并只向更高版本提升，同版本保留已选平台以避免多客户端抖动。选中值同时用于推理、模型发现、用量查询与 refresh；`off` 仍逐请求透传，授权码交换及账号尚无有效观察值时仍回落内置 profile。profile 加密保存、不进入管理视图或普通凭据导出；重认证保留，显式把账号槽位替换为另一凭据时清除。这改变默认 `scoped` 的可观察身份，按 MAJOR 发布。
 
@@ -212,7 +214,7 @@
 | --- | --- | --- |
 | `Authorization` | generate：只来自选中账号 | `CP-HDR-001` |
 | `ChatGPT-Account-ID` | generate：只来自选中账号 | `CP-HDR-002` |
-| `User-Agent` | `off`：合法客户端值逐请求复用；`scoped`：使用所选账号的客户端来源 profile；缺失时回落内置 profile | `CP-HDR-003` |
+| `User-Agent` | `off`：完整安全客户端组合逐请求复用；`scoped`：使用所选账号的客户端来源 profile；整组缺失、无效或未选中时回落内置 profile | `CP-HDR-003` |
 | `Originator` | 与 `User-Agent` 作为不可拆分 profile 同源选择；不得独立拼接 | `CP-HDR-004` |
 | `Accept` | generate：HTTP Responses 与 compact upstream 均为 SSE；compact downstream 再投影 JSON/SSE | `CP-HDR-005` |
 | `OpenAI-Beta` | generate/merge allowlist：WebSocket beta | `CP-HDR-006` |
@@ -255,7 +257,7 @@
 
 `CP-HDR-024` 身份术语必须按 [Codex 身份与会话语义基准](codex-identity-semantics.md) 分层使用：Installation 是安装/设备层身份，Client Session 是 CLI 会话，`sessionHash` 是 Key ID + 模型 + 客户端会话信号派生的代理 UUID，Upstream Session/Thread/Window 是 attempt 级出站身份，Turn 是可跨多个 HTTP/tool 请求的逻辑交互，Turn-State scope 是账号与客户端声明会话共同决定的独立记录单位。API Key 明文不得进入身份派生；同一 Key ID 槽位替换明文不构成新命名空间。`X-Client-Request-Id` 取 attempt 的 `Thread-Id`，不得误用为 AetherRelay 单请求诊断 ID。实现、测试、日志分析和文档不得用无所有权前缀的“Session”替代这些不同层级。
 
-`CP-HDR-025` `scoped` 的客户端来源 profile 以账号为 scope，并把同一次请求的 `User-Agent` 与 `Originator` 作为不可拆分候选。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；当前 family 顺序为 `codex-tui > codex_exec`，已验证范围分别为 `codex-tui 0.154.0..0.155.0` 与 `codex_exec 0.153.4`。更高优先级 family 可替换低优先级 family；同 family 只允许严格升版；同版本不同平台、低版本、未知 family、不一致组合或超出已验证范围的版本均保持当前值。候选只能在账号实际被某次 attempt 选中后晋升，failover 对每个实际选中账号分别观察，不得由未使用请求预热其它账号。选择结果加密持久化，不进入管理视图、日志或普通凭据导出；OAuth 重认证保留，显式替换为另一凭据清除。`off` 不读取或更新此 profile，保持逐请求原值传递。
+`CP-HDR-025` `scoped` 的客户端来源 profile 以账号为 scope，并把同一次请求的 `User-Agent` 与 `Originator` 作为不可拆分候选。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；当前 family 顺序为 `codex-tui > codex_exec`，已验证范围分别为 `codex-tui 0.154.0..0.155.0` 与 `codex_exec 0.153.4`。更高优先级 family 可替换低优先级 family；同 family 只允许严格升版；同版本不同平台、低版本、未知 family、不一致组合或超出已验证范围的版本均保持当前值。候选只能在账号实际被某次 attempt 选中后晋升，failover 对每个实际选中账号分别观察，不得由未使用请求预热其它账号。选择结果加密持久化，不进入管理视图、日志或普通凭据导出；OAuth 重认证保留，显式替换为另一凭据清除。`off` 不读取或更新此 profile；只有两个字段都存在、长度安全且无控制字符时才整组透传，否则整组使用内置 fallback，禁止独立回落形成混合身份。非 Codex family 不具有 scoped 候选资格，但不得仅因此拒绝业务请求。
 
 `CP-FP-001` 账号 `fingerprint_mode` 只允许 `off/scoped`，缺失和空值默认 `scoped`。管理 API 与导入对其它显式值直接拒绝；加密存量中的缺失、未知或已删除值加载时直接重写为 `scoped`。
 
@@ -353,7 +355,7 @@
 
 `CP-SCHED-011` 账号候选在 session 粘性与 `priority` 之后、最终轮转之前，必须先按「额度证据」排序：拥有新鲜用量快照、且不存在未到期 limit-reached 窗口的账号，优先于额度未知或快照已过期的账号。该规则只改变同优先级候选之间的排序，不改变准入结论——`CP-CAP-005` 仍然保证缺失或过期快照可以参与尝试，因此当全部候选都缺少新鲜额度证据时，选择结果与引入本规则前一致（继续按轮转）；粘性账号（`CP-SCHED-004`）仍然优先于本规则。依据：部署轮次 `work-office/000001` 观测到某 `free` 账号在其 30 天窗口已 100% 时仍被选中，随后该轮响应头才首次暴露耗尽事实，代价是一次长耗时请求；`interactions_old`/`interactions_new` 中没有更早的可归属观测，说明缺口位于「快照过期 + 尚未轮询」窗口。验收覆盖：新鲜有余量优先于未知/过期、全部未知时保持原有轮转、粘性账号仍然命中、未到期 limit-reached 快照仍被硬性排除。
 
-`CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`client_metadata.session_id`（仅缺失时以 `thread_id` 作为会话兜底）、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。显式不同的 `Thread-Id` / `X-Client-Request-Id` / `client_metadata.thread_id` 另行冻结为 LogicalThread，不改变账号亲和使用的 LogicalConversation。无显式信号时可以生成请求域 session，但不能用完整敏感正文作为持久化 key。
+`CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`client_metadata.session_id`（仅缺失时以 `thread_id` 作为会话兜底）、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。显式不同的 `Thread-Id` / `X-Client-Request-Id` / `client_metadata.thread_id` 另行冻结为 LogicalThread，不改变账号亲和使用的 LogicalConversation。无显式信号时必须使用服务端生成、仅本次 HTTP/WS 建连请求有效的 nonce 生成请求域 session 与默认 cache identity；不得使用固定 `default`、客户端可控 `X-Request-ID` 或完整敏感正文作为持久化 key，也不得形成跨请求账号粘性。
 
 `CP-SCHED-003` session key 必须按客户端 API key ID 和 model 命名空间隔离；存储哈希，不保存原值。
 
@@ -407,7 +409,7 @@
 
 `CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、首事件耗时、总耗时、事件数、字节数和最后事件时间；用量事件与归档 metadata 在首个有效 SSE data 到达时记录 `first_event_duration_ms`，并始终记录总 `duration_ms`。本地准入失败还必须在用量明细、CSV 和结构化汇总日志中保留安全的 `failure_class`、`retryable`、`retry_after_seconds`，汇总日志携带同一 Usage Event ID，且 Prometheus 以有界原因枚举统计准入拒绝。不输出请求正文、凭据、账号身份或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
 
-`CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码和白名单 request_kind/compaction reason/phase。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
+`CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码、白名单 request_kind/compaction reason/phase，以及客户端实现身份的有界判定原因。身份原因只允许 `verified/absent/missing_user_agent/missing_originator/invalid_length/invalid_control_character/invalid_format/unsupported_family/family_mismatch/version_mismatch/unsupported_version`，不得记录原始 UA/Originator。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
 
 `5.0.0` 验收：HTTP 404 与 SSE/WS typed 错误分类、普通错误不重试、同模型限次切号及耗尽保真、stateful/输出后不重放、模型冷却隔离/持久化/过期/凭据替换恢复、诊断白名单；客户端跨模型压缩恢复与真实账号可用性另行 smoke 验证，不以离线测试宣称已修复 CLI。
 
@@ -488,6 +490,13 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`12.0.1` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 非 Codex/残缺客户端身份原子回落与原因诊断 | CP-HDR-003..004, CP-HDR-025, CP-OBS-006 | implemented | `pkg/aetherrelaycodexidentity/identity.go`, `proxyapi/service/proxy/codex_compat.go`, `proxyapi/biz/codex_responses.go`, `proxyapi/biz/codex_diagnostics.go` | `identity_test.go`, `codex_turn_state_scope_test.go`, `proxyapi/biz/codex_responses_test.go` |
+| 无会话信号请求级隔离 | CP-SCHED-002, CP-HDR-022 | implemented | `proxyapi/service/proxy/requestid.go`, `proxyapi/service/proxy/codex_compat.go` | `codex_session_identity_test.go`, `codex_turn_state_scope_test.go`, `codex_responses_test.go` |
 
 `12.0.0` 新增实施追踪：
 

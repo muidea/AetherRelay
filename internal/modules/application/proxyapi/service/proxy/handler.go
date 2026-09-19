@@ -1384,7 +1384,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		}
 		if !rawStream {
 			features.Diagnostics.RequestID = requestIDFromContext(r.Context())
-			userAgent, originator := codexClientIdentity(r.Header)
+			userAgent, originator := codexClientIdentityWithDiagnostics(r.Header, &features.Diagnostics)
 			turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, body)
 			if round != nil && len(turnMetadataIgnored) > 0 {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 )
 
 func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Failure) {
@@ -25,9 +26,14 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 	if !codexresponses.ValidTurnStateSource(turnStateSource) {
 		turnStateSource = codexresponses.TurnStateSourceAbsent
 	}
+	clientIdentityReason := codexidentity.ObservationReason(request.Diagnostics.ClientIdentityReason)
+	if !codexidentity.ValidObservationReason(clientIdentityReason) {
+		clientIdentityReason = codexidentity.ObservationAbsent
+	}
 	attrs := []any{"request_id", request.Diagnostics.RequestID, "inbound_model", model,
 		"upstream_model", model, "account_attempt", request.AccountAttempt,
 		"prompt_cache_key_source", cacheKeySource, "turn_state_source", turnStateSource,
+		"client_identity_reason", clientIdentityReason,
 		"request_kind", request.Diagnostics.RequestKind, "compaction_reason", request.Diagnostics.CompactionReason,
 		"compaction_phase", request.Diagnostics.CompactionPhase}
 	if failure != nil {

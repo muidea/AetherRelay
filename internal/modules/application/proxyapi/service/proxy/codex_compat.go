@@ -18,6 +18,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 )
 
 const codexInputItemIDLimit = 64
@@ -318,13 +319,29 @@ func codexTurnStateFromHeaders(headers http.Header) (string, error) {
 	return turnState, nil
 }
 
-// codexClientIdentity implements CP-HDR-003/004 on the inference path: the
-// downstream client's own identity is reused verbatim. Missing or malformed
-// values stay empty so the upstream Block falls back to the versioned profile,
-// and the pair never influences credentials or account selection.
+// codexClientIdentity implements CP-HDR-003/004 as an atomic pair. A complete,
+// bounded non-Codex pair remains available to explicit off mode, but one
+// missing or malformed field clears both values so no mixed client/fallback
+// identity can be emitted.
 func codexClientIdentity(headers http.Header) (userAgent, originator string) {
-	return boundedCodexIdentityValue(headers.Get("User-Agent"), codexClientUserAgentLimit),
-		boundedCodexIdentityValue(headers.Get("Originator"), codexClientOriginatorLimit)
+	userAgent = boundedCodexIdentityValue(headers.Get("User-Agent"), codexClientUserAgentLimit)
+	originator = boundedCodexIdentityValue(headers.Get("Originator"), codexClientOriginatorLimit)
+	if userAgent == "" || originator == "" {
+		return "", ""
+	}
+	return userAgent, originator
+}
+
+func codexClientIdentityReason(headers http.Header) string {
+	_, reason := codexidentity.ClassifyObserved(headers.Get("User-Agent"), headers.Get("Originator"))
+	return string(reason)
+}
+
+func codexClientIdentityWithDiagnostics(headers http.Header, diagnostics *codexresponses.Diagnostics) (string, string) {
+	if diagnostics != nil {
+		diagnostics.ClientIdentityReason = codexClientIdentityReason(headers)
+	}
+	return codexClientIdentity(headers)
 }
 
 func boundedCodexIdentityValue(value string, limit int) string {
@@ -1545,7 +1562,14 @@ func codexSessionDigest(r *http.Request, model string, body map[string]any, incl
 	}
 	signal := codexSessionSignal(r, body, includeRoutingOnly)
 	if signal == "" {
-		signal = "default"
+		requestScope := requestScopeIDFromContext(r.Context())
+		if requestScope == "" {
+			// Direct unit callers may bypass the HTTP middleware. The request object
+			// still provides a stable value for repeated projections of that one
+			// invocation without creating cross-request affinity.
+			requestScope = fmt.Sprintf("%p", r)
+		}
+		signal = "request\x00" + requestScope
 	}
 	identity := clientauth.ClientIdentityFromContext(r.Context())
 	// CP-HDR-007..010: the outbound session identity is a deterministic UUID — the
@@ -1644,11 +1668,11 @@ func codexSessionHeaderSignal(r *http.Request, includeRoutingOnly bool) string {
 
 // codexTurnStateScopeDigest implements the CP-HDR-022 record unit: the digest of
 // an explicitly declared downstream conversation, namespaced by client identity
-// and model exactly like the scheduling session. The scheduling digest replaces a
-// missing signal with a shared synthetic one, which must never become a turn
-// state bucket, so a client without any declared conversation identity gets no
-// record unit at all instead. The declared conversation outranks the client cache
-// key, which may be shared across conversations of the same credential.
+// and model exactly like the scheduling session. Scheduling uses a request-only
+// nonce when the signal is missing, but that nonce must never become a turn state
+// bucket, so a client without any declared conversation identity gets no record
+// unit at all. The declared conversation outranks the client cache key, which may
+// be shared across conversations of the same credential.
 func codexTurnStateScopeDigest(r *http.Request, model string, body map[string]any) string {
 	if r == nil {
 		return ""

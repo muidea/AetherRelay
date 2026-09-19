@@ -6,7 +6,7 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `12.0.0` 工作树（2026-09-19）
+> 实现基线：AetherRelay `12.0.1` 工作树（2026-09-19）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
 
@@ -103,7 +103,7 @@ sessionHash = StableUUID(KeyID + Model + Client Session Signal)
 
 默认 `prompt_cache_key` 使用同一命名空间规则的独立 `promptCacheHash`，但它会排除 `X-Claude-Code-Session-Id` 等 routing-only 信号，不能简单复用 `sessionHash`。客户端显式提供的 `prompt_cache_key` 保持原值。
 
-客户端会话信号按 `CP-SCHED-002` 的实现优先级解析；body-only 情况优先使用 `client_metadata.session_id`，只有它缺失时才把 `thread_id` 作为会话兜底。显式不同的 Thread 另行形成 LogicalThread，不得让同一 LogicalConversation 因 Thread 变化而得到不同的 scoped Session。信号完全缺失时，调度可使用合成的 `default`，但该合成值不得成为 Turn-State 记录单位。
+客户端会话信号按 `CP-SCHED-002` 的实现优先级解析；body-only 情况优先使用 `client_metadata.session_id`，只有它缺失时才把 `thread_id` 作为会话兜底。显式不同的 Thread 另行形成 LogicalThread，不得让同一 LogicalConversation 因 Thread 变化而得到不同的 scoped Session。信号完全缺失时，使用服务端生成的请求级 nonce 分别派生本次请求的 `sessionHash` 与默认 cache identity；不得使用固定 `default` 或客户端可控 `X-Request-ID`，也不得形成跨请求粘性。
 
 API Key 明文不得进入派生。替换同一 Key ID 槽位中的 Key 明文不会改变 `KeyID` 命名空间；创建不同 Key ID 才构成新的客户端身份命名空间。
 
@@ -182,6 +182,8 @@ Turn 是一次逻辑交互，生命周期短于 Session，但不必等于一次 
 - 当前只验证严格三段版本：`codex-tui 0.154.0..0.155.0` 与 `codex_exec 0.153.4`。未知 family、family/Originator/版本自述不一致、同版本其它平台和超出已验证范围的候选不改变账号状态。
 - profile 加密持久化，不进入管理视图、普通凭据导出或日志；OAuth 重认证保留，显式将槽位替换为另一账号凭据时清除。
 
+“合法原始值”是原子组概念：两个字段必须同时存在、长度有界且不含控制字符；任一字段缺失或非法时整组回落内置 profile，不能把客户端字段与内置字段拼接。非 Codex family 的完整安全组合不会成为 scoped 候选，scoped 账号尚无已选 profile 时也不会透传它；仅显式 `off` 保留这种完整组合。身份不具候选资格本身不构成业务请求错误。
+
 这是一种“来源于客户端的稳定选择”，不是固定伪造值，也不是把多个客户端的所有字段合并。验证上限或 family 顺序变化属于协议决策，必须同步修改合同、测试与本文。
 
 ## 3. Turn Metadata 字段分层
@@ -242,7 +244,7 @@ Turn-State Scope =
 3. 显式 `prompt_cache_key`；
 4. 全部缺失时没有 scope，不记录也不回放。
 
-`session_id="x"` 与 `thread_id="x"` 必须是不同元组，字段名是身份的一部分。调度使用的合成 `default` 绝不能成为 Turn-State bucket。
+`session_id="x"` 与 `thread_id="x"` 必须是不同元组，字段名是身份的一部分。完全缺失时生成的请求级会话绝不能成为 Turn-State bucket，也不能跨请求复用。
 
 ## 6. fingerprint 当前方案
 
@@ -427,5 +429,6 @@ AccountProjection
 - [ ] 验证 header、Turn Metadata 与 body `client_metadata` 的一致性；
 - [ ] 验证 failover 不残留上一账号身份；
 - [ ] 验证无状态请求不会获得共享 Turn-State bucket；
+- [ ] 验证无状态请求不会共享调度 Session、默认 cache identity，且客户端复用 `X-Request-ID` 不会破坏隔离；
 - [ ] 同步更新本文、首要维护合同版本/规则、自动化测试与实施追踪表；
 - [ ] 如使用真实归档，只记录脱敏统计和关系，不提交原始身份或凭据。

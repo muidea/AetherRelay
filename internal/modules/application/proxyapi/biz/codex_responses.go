@@ -765,8 +765,14 @@ func codexClientIdentityCandidate(userAgent, originator string) accevents.Client
 }
 
 func resolvedCodexClientIdentity(account accevents.AcquireResult, userAgent, originator string) upevents.ClientIdentity {
-	if strings.TrimSpace(account.FingerprintMode) == accevents.FingerprintModeScoped && strings.TrimSpace(account.ClientIdentity.UserAgent) != "" && strings.TrimSpace(account.ClientIdentity.Originator) != "" {
-		return toUpstreamAccountClientIdentity(account.ClientIdentity)
+	if strings.TrimSpace(account.FingerprintMode) == accevents.FingerprintModeScoped {
+		if strings.TrimSpace(account.ClientIdentity.UserAgent) != "" && strings.TrimSpace(account.ClientIdentity.Originator) != "" {
+			return toUpstreamAccountClientIdentity(account.ClientIdentity)
+		}
+		return upevents.ClientIdentity{}
+	}
+	if strings.TrimSpace(userAgent) == "" || strings.TrimSpace(originator) == "" {
+		return upevents.ClientIdentity{}
 	}
 	return upevents.ClientIdentity{UserAgent: userAgent, Originator: originator}
 }

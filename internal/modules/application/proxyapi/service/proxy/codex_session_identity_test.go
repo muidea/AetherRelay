@@ -47,6 +47,26 @@ func TestCodexSessionIdentityIsStableUUID(t *testing.T) {
 	}
 }
 
+func TestCodexSessionIdentityIsRequestScopedWhenConversationIsMissing(t *testing.T) {
+	first := codexIdentityRequest("key-a", "gpt-5.6-sol", nil)
+	second := codexIdentityRequest("key-a", "gpt-5.6-sol", nil)
+	firstHash := codexSessionHash(first, "gpt-5.6-sol", nil)
+	if repeated := codexSessionHash(first, "gpt-5.6-sol", nil); repeated != firstHash {
+		t.Fatalf("one request changed its fallback conversation: %q vs %q", firstHash, repeated)
+	}
+	if secondHash := codexSessionHash(second, "gpt-5.6-sol", nil); secondHash == firstHash {
+		t.Fatalf("stateless requests shared a fallback conversation: %q", firstHash)
+	}
+
+	// A public request ID is client-controlled and must not restore cross-request
+	// affinity. Production middleware supplies a separate server nonce.
+	first = first.WithContext(withRequestScopeID(withRequestID(first.Context(), "reused-public-id"), "server-scope-a"))
+	second = second.WithContext(withRequestScopeID(withRequestID(second.Context(), "reused-public-id"), "server-scope-b"))
+	if codexSessionHash(first, "gpt-5.6-sol", nil) == codexSessionHash(second, "gpt-5.6-sol", nil) {
+		t.Fatal("client-controlled request id merged stateless conversations")
+	}
+}
+
 func TestCodexLogicalThreadHashOnlyCapturesDistinctThread(t *testing.T) {
 	request := codexIdentityRequest("key-a", "gpt-5.6-sol", map[string]string{"Session-Id": "conversation-a", "Thread-Id": "conversation-a"})
 	if got := codexLogicalThreadHash(request, "gpt-5.6-sol", nil); got != "" {

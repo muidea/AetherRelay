@@ -4,10 +4,11 @@ import "encoding/json"
 
 // Diagnostics contains only bounded diagnostic hints, never routing inputs.
 type Diagnostics struct {
-	RequestID        string
-	RequestKind      string
-	CompactionReason string
-	CompactionPhase  string
+	RequestID            string
+	RequestKind          string
+	CompactionReason     string
+	CompactionPhase      string
+	ClientIdentityReason string
 }
 
 // ParseDiagnostics projects enums only; metadata may contain private prompts,

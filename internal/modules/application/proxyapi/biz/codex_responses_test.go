@@ -371,6 +371,12 @@ func TestResolvedCodexClientIdentityUsesScopedSelectionAndOffPassthrough(t *test
 	if off.UserAgent != rawUserAgent || off.Originator != "codex-tui" {
 		t.Fatalf("off identity=%+v", off)
 	}
+	if partial := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeOff}, rawUserAgent, ""); partial != (upevents.ClientIdentity{}) {
+		t.Fatalf("off partial identity did not fall back atomically: %+v", partial)
+	}
+	if unselected := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeScoped}, "third-party-sdk/1.0.0", "third-party"); unselected != (upevents.ClientIdentity{}) {
+		t.Fatalf("scoped account without verified selection forwarded third-party identity: %+v", unselected)
+	}
 }
 
 func TestCodexTurnStateGuardDropsKnownCrossAccountEcho(t *testing.T) {

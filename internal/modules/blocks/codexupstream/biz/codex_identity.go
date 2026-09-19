@@ -31,20 +31,26 @@ func codexClientIdentityValue(value string, limit int) string {
 	return value
 }
 
-// requestUserAgent and requestOriginator resolve the identity sent upstream:
-// the client's own value when it passed the boundary, else the versioned profile.
+// requestUserAgent and requestOriginator resolve one atomic identity pair. If
+// either client field fails the boundary, both fields use the fallback profile.
 func (p codexRequestProfile) requestUserAgent() string {
-	if value := codexClientIdentityValue(p.clientIdentity.UserAgent, maxClientUserAgentBytes); value != "" {
-		return value
+	if userAgent, _, ok := p.requestClientIdentity(); ok {
+		return userAgent
 	}
 	return currentIdentity.UserAgent
 }
 
 func (p codexRequestProfile) requestOriginator() string {
-	if value := codexClientIdentityValue(p.clientIdentity.Originator, maxClientOriginatorBytes); value != "" {
-		return value
+	if _, originator, ok := p.requestClientIdentity(); ok {
+		return originator
 	}
 	return currentIdentity.Originator
+}
+
+func (p codexRequestProfile) requestClientIdentity() (string, string, bool) {
+	userAgent := codexClientIdentityValue(p.clientIdentity.UserAgent, maxClientUserAgentBytes)
+	originator := codexClientIdentityValue(p.clientIdentity.Originator, maxClientOriginatorBytes)
+	return userAgent, originator, userAgent != "" && originator != ""
 }
 
 type codexRequestProfile struct {
@@ -57,7 +63,7 @@ type codexRequestProfile struct {
 	// observation keeps credential headers verbatim. The zero value redacts.
 	archiveUnredacted bool
 	// clientIdentity is CP-HDR-003/004: the downstream client's bounded identity.
-	// Any empty or rejected field falls back to the versioned profile.
+	// Any empty or rejected field makes the whole pair use the fallback profile.
 	clientIdentity events.ClientIdentity
 	// turnMetadata is the CP-HDR-011 client projection: turn level values and
 	// attributes only. Session identity is never taken from it.

@@ -74,7 +74,7 @@ func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, req
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, clientStream, http.StatusInternalServerError, normalizeErr.Error())
 		return
 	}
-	userAgent, originator := codexClientIdentity(r.Header)
+	userAgent, originator := codexClientIdentityWithDiagnostics(r.Header, &features.Diagnostics)
 	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, clientBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, clientBody), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
@@ -224,7 +224,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		h.writeCodexResponsesError(w, r, round, started, provider, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
-	userAgent, originator := codexClientIdentity(r.Header)
+	userAgent, originator := codexClientIdentityWithDiagnostics(r.Header, &features.Diagnostics)
 	turnMetadata, turnMetadataIgnored := codexTurnMetadataFromBody(r.Header, body)
 	if round != nil && len(turnMetadataIgnored) > 0 {
 		round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))

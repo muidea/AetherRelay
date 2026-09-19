@@ -50,16 +50,41 @@ func TestObservedProfilePromotionUsesVerifiedClientPairs(t *testing.T) {
 }
 
 func TestObservedProfileRejectsUnverifiedOrInconsistentCandidates(t *testing.T) {
-	for _, candidate := range []ObservedProfile{
-		{UserAgent: "unknown/0.155.0 (unknown; 0.155.0)", Originator: "unknown"},
-		{UserAgent: "codex-tui/0.155.0 (Ubuntu; x86_64) terminal (codex-tui; 0.155.0)", Originator: "codex_exec"},
-		{UserAgent: "codex-tui/0.153.4 (Ubuntu; x86_64) terminal (codex-tui; 0.153.4)", Originator: "codex-tui"},
-		{UserAgent: "codex_exec/0.154.0 (Ubuntu; x86_64) terminal (codex_exec; 0.154.0)", Originator: "codex_exec"},
-		{UserAgent: "codex-tui/0.156.0 (Ubuntu; x86_64) terminal (codex-tui; 0.156.0)", Originator: "codex-tui"},
-		{UserAgent: "codex-tui/0.155.0\r\nInjected: true (codex-tui; 0.155.0)", Originator: "codex-tui"},
+	for _, candidate := range []struct {
+		ObservedProfile
+		Reason ObservationReason
+	}{
+		{ObservedProfile: ObservedProfile{UserAgent: "unknown/0.155.0 (unknown; 0.155.0)", Originator: "unknown"}, Reason: ObservationUnsupportedFamily},
+		{ObservedProfile: ObservedProfile{UserAgent: "codex-tui/0.155.0 (Ubuntu; x86_64) terminal (codex-tui; 0.155.0)", Originator: "codex_exec"}, Reason: ObservationFamilyMismatch},
+		{ObservedProfile: ObservedProfile{UserAgent: "codex-tui/0.153.4 (Ubuntu; x86_64) terminal (codex-tui; 0.153.4)", Originator: "codex-tui"}, Reason: ObservationUnsupportedVersion},
+		{ObservedProfile: ObservedProfile{UserAgent: "codex_exec/0.154.0 (Ubuntu; x86_64) terminal (codex_exec; 0.154.0)", Originator: "codex_exec"}, Reason: ObservationUnsupportedVersion},
+		{ObservedProfile: ObservedProfile{UserAgent: "codex-tui/0.156.0 (Ubuntu; x86_64) terminal (codex-tui; 0.156.0)", Originator: "codex-tui"}, Reason: ObservationUnsupportedVersion},
+		{ObservedProfile: ObservedProfile{UserAgent: "codex-tui/0.155.0\r\nInjected: true (codex-tui; 0.155.0)", Originator: "codex-tui"}, Reason: ObservationInvalidControl},
 	} {
 		if _, ok := ParseObserved(candidate.UserAgent, candidate.Originator); ok {
 			t.Fatalf("unverified profile accepted: %+v", candidate)
 		}
+		if _, reason := ClassifyObserved(candidate.UserAgent, candidate.Originator); reason != candidate.Reason {
+			t.Fatalf("candidate=%+v reason=%q want=%q", candidate.ObservedProfile, reason, candidate.Reason)
+		}
+	}
+}
+
+func TestObservedProfileClassifiesMissingAtomicFields(t *testing.T) {
+	for _, testCase := range []struct {
+		UserAgent  string
+		Originator string
+		Reason     ObservationReason
+	}{
+		{Reason: ObservationAbsent},
+		{Originator: "codex-tui", Reason: ObservationMissingUserAgent},
+		{UserAgent: "codex-tui/0.155.0", Reason: ObservationMissingOriginator},
+	} {
+		if _, reason := ClassifyObserved(testCase.UserAgent, testCase.Originator); reason != testCase.Reason {
+			t.Fatalf("identity=(%q,%q) reason=%q want=%q", testCase.UserAgent, testCase.Originator, reason, testCase.Reason)
+		}
+	}
+	if ValidObservationReason(ObservationReason("raw-client-value")) {
+		t.Fatal("unbounded observation reason was accepted")
 	}
 }

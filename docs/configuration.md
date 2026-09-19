@@ -237,6 +237,7 @@ codex_oauth:
 - Codex 账号管理列表和导入结构只支持 `fingerprint_mode=off/scoped`，默认 `scoped`；导入或 PATCH 的其它显式值直接拒绝，加密存量中的缺失、未知或旧模式在加载时直接改写为 `scoped`。该设置属于账号状态而非 YAML 全局开关，因此 `config.example.yaml` 不新增对应键，并随整体账号池 bundle 持久化。统一账号池和独立 Codex 账号列表都会显示当前模式并提供切换控件；显式 `off` 不会被隐藏。
 - `scoped` 使用加密账号文档内的系统随机 seed 派生账号级 Installation，并按 LogicalConversation/LogicalThread 单射派生 Session/Thread；同时改写上游 header 与 `client_metadata`。seed 不进入管理投影或普通凭据导出，重新认证和数据库归档恢复会保留，作为新账号导入或显式替换槽位凭据时重新生成。`off` 使用 AetherRelay 客户端隔离 session，不发送账号 Installation。
 - `scoped` 的客户端来源 profile 同样加密保存在账号文档中，不进入管理投影或普通凭据导出；OAuth 重认证保留，显式替换槽位为另一凭据时清除。它是账号运行状态，不新增 YAML 配置项。
+- 非 Codex 客户端可以使用原生 Responses、Chat 或 Anthropic 适配入口，但不因此获得 scoped profile 候选资格。User-Agent/Originator 始终整组处理：任一缺失、超长或包含控制字符时整组使用 fallback；完整非 Codex 组合只在显式 `off` 下透传。完全没有会话 header、metadata session/thread 或显式 cache key 时，代理以服务端请求级 nonce 隔离本次 Session 与默认 cache identity，不提供跨请求粘性，也不新增配置项。
 - `prompt_cache_key` 与账号指纹解耦：客户端显式值保持不变，缺失时按客户端 API Key ID、模型和客户端会话生成稳定隔离值。账号切换、指纹模式切换或 seed 更新不会主动改变该缓存分片；运行日志只记录 `explicit/generated/absent` 来源枚举，不记录缓存键。
 
 ## 本地管理页
