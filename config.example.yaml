@@ -1,89 +1,45 @@
 server:
-  # 默认仅绑定 loopback。若改为 0.0.0.0:8080 / :8080 等非 loopback,
-  # 非 loopback 监听时仍需由网络层保护数据端点。
+  # 非 loopback 监听需由网络层保护数据端点。
   listen_addr: 127.0.0.1:8080
-  # 请求体 / 上游响应大小上限(字节)。
   max_request_body_bytes: 33554432
   max_upstream_response_bytes: 67108864
-  # 流式累计输出与单条 SSE 行上限。
   max_stream_bytes: 67108864
   max_sse_line_bytes: 1048576
-  # 默认不写 interactions 归档（包括脱敏元数据）。仅在受控排障期间显式开启。
-  # 开启后按客户端 API Key 记录每轮对话的脱敏元数据。管理型 Provider 与
-  # Codex OAuth 记录客户端请求、最终上游 attempt、客户端响应的 HTTP header，
-  # 以及路由、耗时与用量摘要；ChatGPT Web 多阶段上游归档为后续待办。
-  # header 属元数据层，不受 archive_full_content 控制。
+  # 归档默认关闭；完整正文与未脱敏 header 可能含凭据，仅限受控排障。
   archive_interactions: false
-  # 仅当 archive_interactions=true 时生效：是否额外落盘完整请求/响应正文。
-  # 正文可能包含敏感数据；排障结束后应恢复为 false。
   archive_full_content: false
-  # 仅当 archive_interactions=true 时生效：归档 header 是否保真（CP-OBS-009）。
-  # true 时客户端请求/上游请求/上游响应/客户端响应四个方向的全部 header 按原值落盘，
-  # 包含明文凭据、账号身份与会话/turn 原值，仅用于受控排障；日志、指标、错误响应与
-  # 管理视图始终脱敏。归档文件应视同凭据保管，排障结束后恢复为 false。
   archive_unredacted_headers: false
   verbose_logging: true
   log_format: text
   request_timeout_seconds: 300
   stream_idle_timeout_seconds: 300
-  # Converted SSE first-event deadline. Keep it shorter than the inter-event
-  # idle window so an upstream that never starts cannot occupy a request.
-  # 90 seconds accommodates observed Codex OAuth cold starts for large contexts.
+  # 首事件超时应短于流空闲超时；90 秒兼容 Codex OAuth 大上下文冷启动。
   stream_first_event_timeout_seconds: 90
   upstream_body_idle_timeout_seconds: 180
-  # 可观测性端点(/metrics, /stats)访问控制。默认仅 loopback 可访问,
-  # 在受信内网可以设为 true 开放给 Prometheus / TUI 拉取。
   metrics_remote_access: false
-  # 可选:白名单 CIDR 列表(逗号分隔),仅在 metrics_remote_access=true 时生效。
-  # 非空:仅允许列表内网段(+loopback);空:允许任意远程来源。
+  # 远程指标访问启用后，空白名单表示允许任意来源。
   metrics_allowed_cidrs:
   # 仅信任这些直接反向代理提供的 X-Forwarded-Proto。
-  # 同机 Nginx 可配置 127.0.0.1/32；容器部署填写实际 bridge gateway 地址。
   trusted_proxy_cidrs: 127.0.0.1/32, ::1/128
-  # SLO 阈值:任一字段保持 0 即禁用对应规则。
-  # slo_cache_hit_rate_min: 单 provider 最低缓存命中率(0~1),样本不足 10 跳过。
-  # slo_upstream_error_rate_max: 单 provider 最高上游错误率(0~1)。
-  # slo_p99_latency_max_ms: 单 provider p99 延迟上限(毫秒)。
-  # slo_check_interval_seconds: 后台巡检周期,0 表示禁用周期检查。
-  # slo_violation_webhook: 状态变化时异步 POST {entered,resolved};有界队列+4 worker。
-  # 持续违规不重复投递。尽力而为:shutdown 不等待;日志仅 scheme://host。
+  # SLO 字段为 0 时禁用对应规则。
   slo_cache_hit_rate_min: 0.2
   slo_upstream_error_rate_max: 0.05
   slo_p99_latency_max_ms: 30000
   slo_check_interval_seconds: 60
   slo_violation_webhook:
 
-  # Admin 登录安全（可选）。默认 false：Admin 仅 loopback 可访问。
-  # 设为 true 后取消来源限制，必须先登录；HTTP/HTTPS 均可访问。
+  # Admin 可选配置；密码仅接受 Argon2id PHC 哈希。
   # admin_auth_enabled: false
-  # Admin 页面/API 前缀，默认 /admin；启动期路由，变更需重启。
   # admin_base_path: /admin
-  # Admin Web 的实例默认语言：zh-CN 或 en-US，默认 zh-CN；管理页可热更新。
   # admin_default_language: zh-CN
-  # 单管理员账号（区分大小写）。
   # admin_username: ops-admin
-  # 仅接受 Argon2id PHC 哈希；用 `AetherRelay admin password-hash` 生成后注入。
   # admin_password_hash: ${AETHERRELAY_ADMIN_PASSWORD_HASH}
-  # true 时会话 Cookie 仅随 HTTPS 请求发送；默认 false，兼容 HTTP。
   # admin_session_cookie_secure: false
-  # 会话绝对有效期（秒），默认 28800（8h），范围 300~86400。
   # admin_session_ttl_seconds: 28800
 
-# 路由仅按运行期有效目录中的 exact model。一个模型可匹配多个 enabled Provider：
-# 按 priority 降序选择；同优先级按 Provider 名稳定排序。仅在客户端尚未收到响应时，
-# 对网络错误、408、429、5xx 与首个流事件失败尝试 fallback: true 的下一候选。
-# 不支持 default_provider、fallbacks 列表或请求侧强制指定 Provider。
-# 客户端使用标准 path:
-#   OpenAI:  POST /v1/chat/completions|/v1/responses|/v1/completions|/v1/embeddings, GET /v1/models
-#   Anthropic: POST /v1/messages
-# 已禁用 X-AI-Provider / ?provider= / provider/model 显式选择。
-# endpoints 是接口支持的唯一声明；客户端可服务 path 由它与共享路由矩阵决定
-# (含 OpenAI chat ↔ Anthropic messages 基础文本转换)。
-
-# 客户端 API Key 不在配置文件中声明，由 Admin 创建并保存在 state.database。
-
-# 单一持久化工作区：DuckDB 保存用量、账号、任务和图片元数据；
-# 原始图片、缩略图和交互归档保存在固定子目录。每个实例必须独占该目录。
+# 路由按 exact model 与 priority 选择；不支持请求侧指定 Provider。
+# API Key、Provider 与账号凭据由 Admin 管理并加密保存到 state.database。
+# 每个实例必须独占 state.dir。
 state:
   dir: var
   database: aetherrelay.duckdb
@@ -92,18 +48,12 @@ state:
   query_cache_seconds: 15
   interaction_retention: 500
 
-# ChatGPT Web 账号池与图片能力始终启用；账号凭据不写入本配置，
-# 由 Admin 管理台导入（账号池 → ChatGPT Web）。
+# ChatGPT Web 账号由 Admin 导入，凭据不写入本配置。
 chatgpt_web:
-  # 控制内建 Provider 是否参与模型路由；不影响账号池、图片与临时对话。
-  # 省略时为 true；Provider 管理页可热更新此项。
   provider_enabled: true
-  # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 10。
   priority: 10
-  # 账号级到期调度的目标新鲜度；0 关闭自动刷新。调度器小批量、有限并发执行，
-  # 不会在每个周期重新提交一次全池任务。
+  # 0 关闭账号自动刷新。
   refresh_account_interval_minute: 15
-  # Admin 临时文本多轮对话（服务端 DuckDB 持久化；浏览器不落会话正文）
   temporary_chat:
     enabled: true
     retention_days: 30
@@ -112,56 +62,31 @@ chatgpt_web:
     max_message_bytes: 262144
     turn_timeout_seconds: 300
 
-# 独立 Codex CLI OAuth 账号池始终启用；凭据仅保存于 state.database，
-# 不写入 YAML。模型按账号自动发现并缓存，健康账号快照的并集会对外发布；
-# 它们仅服务原生 POST /v1/responses。
+# Codex OAuth 凭据仅保存于 state.database；fingerprint_mode 为账号级状态，
+# 仅支持 off/scoped，缺省为 scoped，通过管理页或账号池 bundle 调整。
 codex_oauth:
   # HTTP 流单次尝试的独立总时限；0 关闭。首事件和空闲超时仍由 server 控制。
   stream_max_duration_seconds: 0
-  # 控制内建 Provider 是否参与模型路由；不影响 Codex 账号池维护。
-  # 省略时为 true；Provider 管理页可热更新此项。
   provider_enabled: true
-  # 内建 Provider 的候选优先级，范围 -1000~1000；省略时为 90。
   priority: 90
-  # 0 关闭临期令牌的周期刷新；401 时仍会单飞刷新并安全重试一次。
+  # 0 关闭周期刷新；401 仍会刷新并安全重试一次。
   refresh_account_interval_minute: 30
-  # 账号级上游用量刷新目标周期；0 关闭。Responses 响应头仍会被动更新用量。
+  # 0 关闭主动用量刷新；Responses 响应头仍会被动更新。
   usage_refresh_interval_minute: 10
-  # Responses WebSocket 资源边界；修改后只影响新连接。
   websocket_max_sessions: 128
   websocket_max_message_bytes: 1048576
   websocket_idle_timeout_seconds: 300
   websocket_max_lifetime_seconds: 1800
-  # 会话级 Turn-State 记忆：客户端未提供 X-Codex-Turn-State 时，按客户端声明的会话回填该
-  # 会话最近一次观测到的值。省略时为 true；false 只停止回填，仍然继续记录，可热更新。
+  # 客户端未提供 Turn-State 时，按其会话回填最近观测值。
   turn_state_fallback: true
-  # 该会话没有任何观测记录时的兜底值。仓库不内置该值，需要兜底时在此填写上游下发的
-  # opaque 值（或用 AETHERRELAY_CODEX_OAUTH_DEFAULT_TURN_STATE 注入）；未填写时该请求
-  # 不发送这个 header。它只用于上游请求头，不会写入日志、归档、指标或管理视图，可热更新。
+  # 无会话记录时的 opaque 兜底值；空值表示不发送该 header。
   default_turn_state: ""
-  # 运维强制开关：启用后 X-Codex-Turn-State 只取上面的 default_turn_state —— 客户端提供的
-  # 值、会话记录都不再参与，force 优先于 turn_state_fallback。省略时为 false；打开时必须
-  # 配置非空 default_turn_state，否则启动失败。用于把请求固定到一个已知良好的状态。
+  # 强制使用兜底值并忽略客户端/会话值；启用时兜底值不能为空。
   turn_state_force_default: false
 
-# 直连 Provider 通过管理台创建；定义与 API Key 使用 AETHERRELAY_CREDENTIAL_KEY
-# 加密后保存到 state.database，不写入 config.yaml。chatgptweb 与 codexoauth
-# 是账号池注入的内建 Provider，模型来自账号池发现结果。
-# Responses↔Anthropic 转换只按 exact model 与候选当前上游 endpoint 匹配固定
-# profile，不绑定 Provider。messages 对应 Responses→Anthropic，responses 对应
-# Anthropic→Responses；未声明 endpoint profile 时默认不开放该方向。
-
-# 可选模型元数据目录（所有 Provider 共用）。model ID 严格区分大小写（exact match）。
-# enabled provider 的精确 models 与账号池发现结果决定模型是否存在；
-# metadata 只按 exact ID 补充容量，不发布模型、不创建路由，也允许暂时未被使用。
-# 固定转换 profile：level1=text；level2=level1+文本 SSE；level3=level2+非流式
-# function tools；level2_reasoning/level3_reasoning 在对应等级上增加 reasoning 降级适配。
-# 所有现有 profile 均不开放图片、文档、结构化输出、continuation 或流式 tools。
+# metadata 仅按精确模型 ID 补充能力，不创建路由。
 model_metadata:
-  # 同一份 metadata 会覆盖所有同 ID 的管理型与内建候选。
-  # GPT-6/GPT-5.6/GPT-5.5/GPT-5.4-mini 使用 Codex 0.153.4 (2026-09-07)
-  # 客户端能力与上下文预算，不等于公共 API 标称窗口或账号权限。
-  # API-only 部署可按上游实测限制覆盖；字段含义与来源见 docs/configuration.md。
+  # 客户端能力与上下文预算来源见 docs/configuration.md。
   DeepSeek-V4-Flash:
     context_window_tokens: 1000000
     max_output_tokens: 29000
@@ -275,6 +200,3 @@ model_metadata:
   minimax-m2.7-highspeed:
     context_window_tokens: 204800
     max_output_tokens: 131100
-# 同名静态与自动模型会共同构成候选链：静态默认 priority=100，
-# Codex OAuth 固定为 90（可用于原生 /v1/responses 回退），
-# ChatGPT Web 固定为 10 且默认不作为回退。
