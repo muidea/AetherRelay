@@ -242,7 +242,7 @@ Turn-State Scope =
 
 HTTP、SSE、compact 和 WebSocket 握手必须使用同一份不可变 attempt snapshot。failover 到另一个账号时必须重新生成，不得残留上一账号的 Installation、Session、Thread、Window 或 Turn-State。
 
-运行时、管理 API、账号池导入和管理页只接受 `off/scoped`。缺失或空值默认 `scoped`；加密存量中的未知值和已删除的 `device/session/full` 在加载时直接重写为 `scoped`。显式 `off` 保留为排障和快速回退开关。
+运行时、管理 API、账号池导入和管理页只接受 `off/scoped`。缺失或空值默认 `scoped`；加密存量中的未知值和已删除的 `device/session/full` 在加载时直接重写为 `scoped`。显式 `off` 保留为排障和快速回退开关。统一账号池与独立 Codex 账号列表都必须显示账号当前模式并允许在两者间切换；不得因 `off` 非默认而隐藏其状态，否则存量账号将失去恢复默认 `scoped` 的正常运维路径。
 
 ### 6.2 scoped 投影
 

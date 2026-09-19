@@ -1094,13 +1094,8 @@ function normalizedCodexFingerprintMode(value){
 function codexFingerprintControl(account){
   const mode=normalizedCodexFingerprintMode(account?.fingerprint_mode),id=String(account?.id||"");
   const options=[["scoped","作用域（默认）"],["off","关闭"]];
-  return `<div style="margin-top:5px"><label class="subtle" title="${esc(t("默认按下游会话隔离收敛；可显式关闭"))}">${esc(t("指纹收敛"))} <select class="control" style="display:inline-block;width:auto;min-width:92px;padding:2px 5px" data-codex-fingerprint="${esc(id)}" ${state.codex.busy?"disabled":""}>${options.map(([value,label])=>`<option value="${value}" ${value===mode?"selected":""}>${esc(t(label))}</option>`).join("")}</select></label></div>`;
-}
-function codexFingerprintSummary(account){
-  const mode=normalizedCodexFingerprintMode(account?.fingerprint_mode);
-  if(mode==="off")return "";
-  const labels={scoped:"作用域（默认）"};
-  return `<span>${esc(t("指纹"))} ${esc(t(labels[mode]||mode))}</span>`;
+  const updating=Boolean(state.codex?.busy)||Boolean(state.unified?.updating?.has(unifiedCredentialKey("codex",id)));
+  return `<div style="margin-top:5px"><label class="subtle" title="${esc(t("默认按下游会话隔离收敛；可显式关闭"))}">${esc(t("指纹收敛"))} <select class="control" style="display:inline-block;width:auto;min-width:92px;padding:2px 5px" data-codex-fingerprint="${esc(id)}" ${updating?"disabled":""}>${options.map(([value,label])=>`<option value="${value}" ${value===mode?"selected":""}>${esc(t(label))}</option>`).join("")}</select></label></div>`;
 }
 function codexAccountIdentity(account){
   const id=String(account?.id||"");
@@ -1406,7 +1401,7 @@ function unifiedCodexSummary(account){
   const usage=first?`剩余 ${Math.round(remaining)}%`:(windows.length?"用量未知":"用量未同步");
   const usageClass=remaining===null?"":remaining<=0?" exhausted":remaining<=30?" warning":"";
   const usageView=remaining===null?`<span class="unified-slot-meta-text">${esc(usage)}</span>`:`<div class="unified-usage"><div class="unified-usage-head"><span>用量</span><strong>${esc(usage)}</strong></div><div class="unified-usage-meter${usageClass}"><i style="width:${Math.round(remaining)}%"></i></div></div>`;
-  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span>${codexFingerprintSummary(account)}${usageView}</div>${codexAccountModelList(account)}${codexRefreshBadge(account)}${accountRefreshScheduleBadge(account,"codex")}${modelDiscoveryBadge(account)}`;
+  return `<div class="unified-slot-meta"><span>${models.length?`模型数量 ${models.length}`:"模型未同步"}</span>${codexFingerprintControl(account)}${usageView}</div>${codexAccountModelList(account)}${codexRefreshBadge(account)}${accountRefreshScheduleBadge(account,"codex")}${modelDiscoveryBadge(account)}`;
 }
 function unifiedCodexSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 Codex CLI 凭据</div>`;
@@ -1432,6 +1427,7 @@ function renderUnifiedAccounts(){
   document.querySelectorAll("[data-ua-codex-usage]").forEach(el=>el.onclick=()=>startCodexUsageRefresh([el.dataset.uaCodexUsage]));
   document.querySelectorAll("[data-ua-codex-refresh]").forEach(el=>el.onclick=()=>refreshCodexAccounts([el.dataset.uaCodexRefresh]));
   document.querySelectorAll("[data-ua-codex-enabled]").forEach(el=>el.onchange=()=>setUnifiedCredentialEnabled("codex",el.dataset.uaCodexEnabled,el.checked));
+  document.querySelectorAll("[data-codex-fingerprint]").forEach(el=>el.onchange=()=>updateCodexFingerprintMode(el));
   document.querySelectorAll("[data-ua-codex-reauth]").forEach(el=>el.onclick=()=>{const account=state.codex.accounts.find(item=>item.id===el.dataset.uaCodexReauth);openCodexOAuth(account?.id,account?.email)});
   document.querySelectorAll("[data-ua-codex-delete]").forEach(el=>el.onclick=()=>deleteCodexAccounts([el.dataset.uaCodexDelete]));
 }
@@ -1498,14 +1494,21 @@ function renderCodexAccounts(){
 async function updateCodexFingerprintMode(select){
   const id=String(select?.dataset?.codexFingerprint||"").trim(),mode=normalizedCodexFingerprintMode(select?.value);
   if(!id)return;
+  const key=unifiedCredentialKey("codex",id);
+  if(state.unified.updating.has(key))return;
+  state.unified.updating.add(key);
   select.disabled=true;
   try{
     const result=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(id)}`),{method:"PATCH",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({fingerprint_mode:mode})});
     const index=state.codex.accounts.findIndex(item=>item.id===id);
     if(index>=0&&result?.item)state.codex.accounts[index]=result.item;
     toast(mode==="off"?t("已关闭 Codex 指纹收敛"):t("Codex 指纹收敛已设为 {mode}",{mode}));
-  }catch(e){toast(e.message,"error");await loadCodexAccounts();return}
-  renderCodexAccounts();renderUnifiedAccounts();
+  }catch(e){toast(e.message,"error");await loadCodexAccounts()}
+  finally{
+    state.unified.updating.delete(key);
+    select.disabled=false;
+    renderCodexAccounts();renderUnifiedAccounts();
+  }
 }
 function selectedCodexIDs(){return [...state.codex.selected]}
 const accountImportMaxBytes=1<<20,accountImportMaxItems=1000,accountImportMaxFiles=20;

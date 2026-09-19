@@ -13,31 +13,59 @@ function functionSource(name){
   return match[0];
 }
 
-function harness(){
-  const requests=[],messages=[];
+function harness(options={}){
+  const requests=[],messages=[],reloads={codex:0};
   const context=vm.createContext({
-    state:{locale:'zh-CN',unified:{loading:false,updating:new Set()},cg:{accounts:[]},codex:{accounts:[]}},
+    state:{locale:'zh-CN',unified:{loading:false,updating:new Set()},cg:{accounts:[]},codex:{accounts:[],busy:false}},
     t:(text,values={})=>text.replace(/\{(\w+)\}/g,(_,key)=>values[key]??''),
-    request:async(url,options)=>{requests.push({url,options});return {item:{}}},
+    request:async(url,requestOptions)=>{requests.push({url,options:requestOptions});if(options.request)return options.request(url,requestOptions);return {item:{}}},
     apiURL:path=>`/admin${path}`,
     authHeaders:headers=>headers,
     invalidateFeatureCatalog:()=>{},
     toast:(message,tone)=>messages.push({message,tone}),
     loadUnifiedAccounts:async()=>{},
+    loadCodexAccounts:async()=>{reloads.codex++},
+    renderCodexAccounts:()=>{},
     renderUnifiedAccounts:()=>{},
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0],context);
-  for(const name of ['normalizedCodexFingerprintMode','codexFingerprintSummary','unifiedCredentialKey','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled']){
+  for(const name of ['normalizedCodexFingerprintMode','unifiedCredentialKey','codexFingerprintControl','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode']){
     vm.runInContext(functionSource(name),context);
   }
-  return {context,requests,messages};
+  return {context,requests,messages,reloads};
 }
 
-test('unified account summary uses scoped as the default fingerprint mode',()=>{
+test('unified account fingerprint control exposes off and scoped modes',()=>{
   const {context:c}=harness();
-  assert.equal(c.codexFingerprintSummary({fingerprint_mode:'off'}),'');
-  assert.match(c.codexFingerprintSummary({}),/>指纹 作用域（默认）</);
-  assert.match(c.codexFingerprintSummary({fingerprint_mode:'scoped'}),/>指纹 作用域（默认）</);
+  const off=c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'});
+  assert.match(off,/data-codex-fingerprint="codex-1"/);
+  assert.match(off,/<option value="off" selected>/);
+  assert.match(c.codexFingerprintControl({id:'codex-1'}),/<option value="scoped" selected>/);
+  c.state.unified.updating.add('codex:codex-1');
+  assert.match(c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'}),/ disabled>/);
+});
+
+test('unified account fingerprint control patches mode and clears busy state',async()=>{
+  const {context:c,requests,messages}=harness({request:async()=>({item:{id:'codex/id',fingerprint_mode:'scoped'}})});
+  c.state.codex.accounts=[{id:'codex/id',fingerprint_mode:'off'}];
+  const select={dataset:{codexFingerprint:'codex/id'},value:'scoped',disabled:false};
+  await c.updateCodexFingerprintMode(select);
+  assert.equal(requests[0].url,'/admin/api/codex/accounts/codex%2Fid');
+  assert.deepEqual(JSON.parse(requests[0].options.body),{fingerprint_mode:'scoped'});
+  assert.equal(c.state.codex.accounts[0].fingerprint_mode,'scoped');
+  assert.equal(c.state.unified.updating.size,0);
+  assert.equal(select.disabled,false);
+  assert.deepEqual(messages.map(item=>item.message),['Codex 指纹收敛已设为 scoped']);
+});
+
+test('failed fingerprint update reloads authoritative account state',async()=>{
+  const {context:c,messages,reloads}=harness({request:async()=>{throw new Error('更新失败')}});
+  const select={dataset:{codexFingerprint:'codex-1'},value:'scoped',disabled:false};
+  await c.updateCodexFingerprintMode(select);
+  assert.equal(reloads.codex,1);
+  assert.equal(c.state.unified.updating.size,0);
+  assert.equal(select.disabled,false);
+  assert.deepEqual(messages,[{message:'更新失败',tone:'error'}]);
 });
 
 test('unified account slots render independent credential switches',()=>{
