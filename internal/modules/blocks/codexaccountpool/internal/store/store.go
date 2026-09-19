@@ -15,6 +15,7 @@ import (
 
 	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	"aetherrelay/internal/pkg/accountidentity"
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 	"aetherrelay/internal/pkg/aetherrelaycredential"
 	"aetherrelay/internal/pkg/aetherrelaystate"
 	"github.com/google/uuid"
@@ -82,6 +83,10 @@ type account struct {
 	// FingerprintSeed is encrypted with the rest of the account document. It is
 	// deliberately absent from management views and credential exports.
 	FingerprintSeed string `json:"fingerprint_seed,omitempty"`
+	// ClientIdentityProfile is the selected client-observed UA/originator pair.
+	// It stays inside the encrypted account document and is never exported by
+	// management credential APIs.
+	ClientIdentityProfile *codexidentity.ObservedProfile `json:"client_identity_profile,omitempty"`
 }
 
 type Store struct {
@@ -156,6 +161,9 @@ func (s *Store) loadEncrypted() error {
 			migrated = true
 		}
 		if reconcileFingerprintSeed(&item) {
+			migrated = true
+		}
+		if reconcileClientIdentityProfile(&item) {
 			migrated = true
 		}
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
@@ -451,6 +459,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		}
 		if rotateFingerprintSeed {
 			existing.FingerprintSeed = ""
+			existing.ClientIdentityProfile = nil
 		}
 		reconcileFingerprintSeed(existing)
 		if existing.Status == "" || (reauthenticated && existing.Status == events.StatusAbnormal) {
@@ -607,6 +616,10 @@ func (s *Store) AcquirePreferredTransport(model string, exclude []string, prefer
 }
 
 func (s *Store) AcquirePreferredTransportWithBusy(model string, exclude, busy []string, preferredID, transport string) (events.AcquireResult, error) {
+	return s.AcquirePreferredTransportWithBusyIdentity(model, exclude, busy, preferredID, transport, events.ClientIdentityCandidate{})
+}
+
+func (s *Store) AcquirePreferredTransportWithBusyIdentity(model string, exclude, busy []string, preferredID, transport string, candidate events.ClientIdentityCandidate) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	model = strings.TrimSpace(model)
@@ -623,6 +636,7 @@ func (s *Store) AcquirePreferredTransportWithBusy(model string, exclude, busy []
 		_, excludedPreferred := excluded[preferred.ID]
 		_, busyPreferred := busySet[preferred.ID]
 		if !excludedPreferred && !busyPreferred && transportSupport(preferred, transport) == 1 {
+			promoteClientIdentityProfile(preferred, candidate)
 			preferred.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
@@ -651,6 +665,7 @@ func (s *Store) AcquirePreferredTransportWithBusy(model string, exclude, busy []
 				if _, found := busySet[item.ID]; found {
 					continue
 				}
+				promoteClientIdentityProfile(item, candidate)
 				s.index = (pos + 1) % len(s.order)
 				item.LastUsedAt = now.Format(time.RFC3339)
 				if err := s.saveLocked(); err != nil {
@@ -675,6 +690,7 @@ func acquireResult(item *account) events.AcquireResult {
 		Proxy:           item.Proxy,
 		FingerprintMode: mode,
 		FingerprintSeed: item.FingerprintSeed,
+		ClientIdentity:  clientIdentityProfile(item),
 	}
 }
 
@@ -742,6 +758,12 @@ func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
 		return events.CredentialInput{}, false
 	}
 	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode}, true
+}
+
+func (s *Store) ClientIdentityProfile(id string) events.ClientIdentityProfile {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return clientIdentityProfile(s.items[strings.TrimSpace(id)])
 }
 
 func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
@@ -1228,6 +1250,7 @@ func (s *Store) ListDiscoveryCandidates(accountIDs []string) events.ListDiscover
 			AccessToken:        item.AccessToken,
 			AccountIDHeader:    item.AccountIDHeader,
 			Proxy:              item.Proxy,
+			ClientIdentity:     clientIdentityProfile(item),
 			NeedsDiscovery:     needs,
 			DiscoveryDue:       (needs || hasFailure) && retryDue,
 			DiscoveryBackedOff: backedOff,
@@ -1362,6 +1385,7 @@ func (s *Store) ListUsageCandidatesForSchedule(accountIDs []string, dueOnly bool
 			AccessToken:     item.AccessToken,
 			AccountIDHeader: item.AccountIDHeader,
 			Proxy:           item.Proxy,
+			ClientIdentity:  clientIdentityProfile(item),
 		}}
 		if dueOnly {
 			candidate.priority = 1
@@ -1801,6 +1825,45 @@ func reconcileFingerprintSeed(item *account) bool {
 		return true
 	}
 	return false
+}
+
+func reconcileClientIdentityProfile(item *account) bool {
+	if item == nil || item.ClientIdentityProfile == nil {
+		return false
+	}
+	normalized, valid := codexidentity.ParseObserved(item.ClientIdentityProfile.UserAgent, item.ClientIdentityProfile.Originator)
+	if !valid {
+		item.ClientIdentityProfile = nil
+		return true
+	}
+	if *item.ClientIdentityProfile == normalized {
+		return false
+	}
+	item.ClientIdentityProfile = &normalized
+	return true
+}
+
+func promoteClientIdentityProfile(item *account, candidate events.ClientIdentityCandidate) bool {
+	if item == nil || item.FingerprintMode != events.FingerprintModeScoped {
+		return false
+	}
+	current := codexidentity.ObservedProfile{}
+	if item.ClientIdentityProfile != nil {
+		current = *item.ClientIdentityProfile
+	}
+	next, promoted := codexidentity.PromoteObserved(current, codexidentity.ObservedProfile{UserAgent: candidate.UserAgent, Originator: candidate.Originator})
+	if promoted {
+		item.ClientIdentityProfile = &next
+	}
+	return promoted
+}
+
+func clientIdentityProfile(item *account) events.ClientIdentityProfile {
+	if item == nil || item.FingerprintMode != events.FingerprintModeScoped || item.ClientIdentityProfile == nil {
+		return events.ClientIdentityProfile{}
+	}
+	profile := item.ClientIdentityProfile
+	return events.ClientIdentityProfile{UserAgent: profile.UserAgent, Originator: profile.Originator, Family: profile.Family, Version: profile.Version}
 }
 
 func unique(values []string) []string {

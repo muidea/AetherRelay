@@ -143,6 +143,53 @@ func TestScopedFingerprintConvergenceIsDefaultAndPersists(t *testing.T) {
 	}
 }
 
+func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T) {
+	store := openTestStore(t)
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil || added != 1 {
+		t.Fatalf("import added=%d err=%v", added, err)
+	}
+	id := store.List()[0].ID
+	now := time.Now().UTC()
+	if _, ok, err := store.PutModelSnapshot(id, events.AccountModelSnapshot{Models: []events.AccountModelEntry{{ID: "gpt-test"}}, DiscoveredAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}); err != nil || !ok {
+		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
+	}
+	work := events.ClientIdentityCandidate{UserAgent: "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)", Originator: "codex-tui"}
+	test := events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"}
+
+	acquired, err := store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, work)
+	if err != nil || acquired.ClientIdentity.UserAgent != work.UserAgent || acquired.ClientIdentity.Version != "0.154.0" {
+		t.Fatalf("initial identity=%+v err=%v", acquired.ClientIdentity, err)
+	}
+	acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, test)
+	if err != nil || acquired.ClientIdentity.UserAgent != test.UserAgent || acquired.ClientIdentity.Version != "0.155.0" {
+		t.Fatalf("promoted identity=%+v err=%v", acquired.ClientIdentity, err)
+	}
+	for _, candidate := range []events.ClientIdentityCandidate{
+		work,
+		{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.155.0)", Originator: "codex-tui"},
+		{UserAgent: "codex-tui/0.156.0 (Ubuntu 24.4.0; x86_64) unknown (codex-tui; 0.156.0)", Originator: "codex-tui"},
+	} {
+		acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, candidate)
+		if err != nil || acquired.ClientIdentity.UserAgent != test.UserAgent {
+			t.Fatalf("identity was replaced by candidate=%+v: selected=%+v err=%v", candidate, acquired.ClientIdentity, err)
+		}
+	}
+
+	off := events.FingerprintModeOff
+	if _, err := store.Update(id, nil, nil, &off); err != nil {
+		t.Fatal(err)
+	}
+	acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, work)
+	if err != nil || acquired.ClientIdentity != (events.ClientIdentityProfile{}) {
+		t.Fatalf("off mode exposed scoped identity=%+v err=%v", acquired.ClientIdentity, err)
+	}
+	exported := store.ExportByIDs([]string{id})
+	payload, marshalErr := json.Marshal(exported)
+	if marshalErr != nil || contains(string(payload), "codex-tui") || contains(string(payload), "client_identity") {
+		t.Fatalf("credential export leaked observed identity: %s err=%v", payload, marshalErr)
+	}
+}
+
 func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	store := openTestStore(t)
 	if added, _, _, err := store.Import([]events.CredentialInput{{AccountID: "upstream-account", AccessToken: "old-access", RefreshToken: "old-refresh", FingerprintMode: events.FingerprintModeScoped}}); err != nil || added != 1 {
@@ -153,6 +200,7 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 		t.Fatalf("items=%+v", items)
 	}
 	oldSeed := store.items[items[0].ID].FingerprintSeed
+	promoteClientIdentityProfile(store.items[items[0].ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
 	if _, err := store.RecordTransportCapability(items[0].ID, events.TransportCompact, false); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +225,9 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	if newSeed := store.items[items[0].ID].FingerprintSeed; newSeed == "" || newSeed == oldSeed {
 		t.Fatalf("explicit credential replacement retained private seed: old=%q new=%q", oldSeed, newSeed)
 	}
+	if store.items[items[0].ID].ClientIdentityProfile != nil {
+		t.Fatalf("explicit credential replacement retained observed identity: %+v", store.items[items[0].ID].ClientIdentityProfile)
+	}
 }
 
 func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *testing.T) {
@@ -187,6 +238,8 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	}
 	view := store.List()[0]
 	seed := store.items[view.ID].FingerprintSeed
+	promoteClientIdentityProfile(store.items[view.ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
+	identity := *store.items[view.ID].ClientIdentityProfile
 	status := events.StatusAbnormal
 	if _, err := store.Update(view.ID, &status, nil, nil); err != nil {
 		t.Fatal(err)
@@ -213,6 +266,9 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	}
 	if store.items[view.ID].FingerprintSeed != seed {
 		t.Fatalf("reauthentication rotated fingerprint seed: old=%q new=%q", seed, store.items[view.ID].FingerprintSeed)
+	}
+	if store.items[view.ID].ClientIdentityProfile == nil || *store.items[view.ID].ClientIdentityProfile != identity {
+		t.Fatalf("reauthentication changed observed identity: before=%+v after=%+v", identity, store.items[view.ID].ClientIdentityProfile)
 	}
 	exported := store.ExportByIDs([]string{view.ID})
 	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].Proxy != first.Proxy {

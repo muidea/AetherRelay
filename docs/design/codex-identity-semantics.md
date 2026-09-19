@@ -6,7 +6,7 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `11.0.0` 工作树（2026-09-19）
+> 实现基线：AetherRelay `12.0.0` 工作树（2026-09-19）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
 
@@ -17,6 +17,7 @@
 - `X-Client-Request-Id`、`Session_Id` 等兼容 header；
 - `client_metadata` 或 `X-Codex-Turn-Metadata` 的身份字段归属；
 - fingerprint `off/scoped`；
+- `User-Agent`/`Originator` 的候选校验、账号级选择和生命周期；
 - prompt cache 或账号调度对会话身份的使用；
 - Turn-State scope、记录或回填边界；
 - API Key ID、模型或客户端身份对上述命名空间的影响。
@@ -171,6 +172,18 @@ Turn 是一次逻辑交互，生命周期短于 Session，但不必等于一次 
 
 客户端未声明 `root_turn_id` 时可以回落到 `turn_id`；fingerprint profile 仅在客户端未声明 turn 字段时提供 attempt 级兜底。
 
+### 2.9 Client Identity Profile
+
+`User-Agent` 与 `Originator` 是客户端实现身份，不属于 Installation、Session 或 Thread，但在 `scoped` 模式下必须与账号的其它上游投影保持稳定。两者必须作为同一次请求观察到的原子 profile 处理，禁止从不同请求分别挑选再拼接。
+
+- `off`：推理请求保持合法原始值逐请求透传；没有下游请求上下文的账号域调用使用内置 profile。
+- `scoped`：账号实际被选中时观察候选，并为该账号选择一个稳定 profile；推理、refresh、模型发现和用量查询共用它。
+- 选择顺序：已验证 family 中 `codex-tui` 优先于 `codex_exec`；同 family 只向严格更高版本提升；同版本保留当前平台文本。
+- 当前只验证严格三段版本：`codex-tui 0.154.0..0.155.0` 与 `codex_exec 0.153.4`。未知 family、family/Originator/版本自述不一致、同版本其它平台和超出已验证范围的候选不改变账号状态。
+- profile 加密持久化，不进入管理视图、普通凭据导出或日志；OAuth 重认证保留，显式将槽位替换为另一账号凭据时清除。
+
+这是一种“来源于客户端的稳定选择”，不是固定伪造值，也不是把多个客户端的所有字段合并。验证上限或 family 顺序变化属于协议决策，必须同步修改合同、测试与本文。
+
 ## 3. Turn Metadata 字段分层
 
 ### 3.1 代理所有的身份字段
@@ -266,7 +279,13 @@ Upstream Window       = Upstream Thread + ":" + ClientWindowNumber
 
 旧 `device/session/full` 已失效并从全部配置入口删除；实现不得根据这些字符串进入隐藏兼容分支。
 
-### 6.3 信息守恒与账号切换
+### 6.3 客户端实现身份收敛
+
+账号选择发生前，当前请求携带原始 `User-Agent`/`Originator` 候选，但候选只有在账号实际入选后才可影响该账号。首次有效候选建立 profile；之后按 family 优先级和版本单调晋升。failover 时每个实际尝试的账号独立观察同一客户端候选，未被选中的账号不得被预热。
+
+选择结果是账号物理投影的一部分，而不是 LogicalConversation 的一部分。因此多个下游 CLI 使用同一账号时仍保留各自 Session/Thread 隔离，但上游看到稳定的账号级客户端实现身份；不同账号可因各自观察历史而使用不同 profile。
+
+### 6.4 信息守恒与账号切换
 
 账号选择前必须构造不可变的语义胶囊：
 
@@ -286,6 +305,7 @@ failover 时保持该胶囊不变，只允许替换账号物理投影：
 ```text
 AccountProjection
   ├── Authorization / Account ID
+  ├── scoped Client Identity Profile
   ├── Upstream Installation
   ├── scoped Session / Thread
   ├── Window 前缀
@@ -349,6 +369,20 @@ AccountProjection
 - 新阶段 15 个非零 Window `38` 与 8 个 Window `0` 均在 header 和 metadata 中保持一致；
 - 客户端 Installation 继续被剥离，现场仍是 fingerprint `off`。
 
+### 7.4 2026-09-19 scoped 联合验证
+
+前提：`/mnt/d/interactions/interactions` 同时包含 `test-office`（另一 CLI，23 个请求）和 `work-office`（原 CLI，1 个请求），两者使用不同 API Key ID，经同一个已启用 `scoped` 的 Codex OAuth 账号出站。
+
+观察：
+
+- 24 个请求全部返回 200，23 个请求具有非零 `cached_input_tokens`；
+- 两组流量上游 `ChatGPT-Account-ID` 与 `X-Codex-Installation-Id` 完全一致，证明账号选择与账号级 Installation 已收敛；
+- 各客户端会话仍映射为各自稳定且互不相同的上游 Session/Thread，未因共享 Installation 合并；
+- `test-office` 为 `codex-tui 0.155.0 / gnome-terminal`，`work-office` 为 `codex-tui 0.154.0 / WindowsTerminal`，两者 Originator 均为 `codex-tui`；
+- 当时实现仍逐请求透传，因此同一上游账号出现两组 User-Agent。这正是 `12.0.0` 引入账号级候选选择的直接依据：按新规则该账号在观察到 `0.155.0` 后保持该完整 profile，后续 `0.154.0` 不再使其回退或切换平台。
+
+这批归档产生于 `12.0.0` 部署前，只能证明问题与输入组合，不能冒充新实现的线上验证。新实现当前由使用上述两组聚合值的自动化回归覆盖；部署后的真实流量仍需另行 canary。
+
 ## 8. 已确认与未确认边界
 
 ### 8.1 已确认
@@ -364,13 +398,15 @@ AccountProjection
 9. 客户端 Installation 在 fingerprint `off` 时不向上游透传。
 10. Turn 字段与代理身份字段具有不同所有权。
 11. Turn-State scope 必须独立于收敛后的 Upstream Session。
+12. 同一 scoped 账号可以同时承载不同客户端版本；逐请求透传会造成账号级 User-Agent 不稳定。
+13. 最新样本中较高的已验证候选为 `codex-tui 0.155.0`，且与 `0.154.0` 的 Originator 相同。
 
 ### 8.2 尚未由现场流量确认
 
 1. 同一 CLI、Session、模型切换到不同 Key ID 后的上游 Session。
-2. 同一 API Key ID 被两个不同 CLI 同时使用时的完整行为。
+2. 同一 API Key ID 被两个不同 CLI 同时使用时的长期并发行为。
 3. 原生 CLI 何时产生 `Thread-Id != Session-Id`。
-4. 默认 `scoped` 的真实账号 canary 与上游长期行为。
+4. `12.0.0` 客户端实现身份收敛部署后的真实账号 canary 与上游长期行为。
 5. `Session_Id` 兼容别名的必要性；三组样本均未出现。
 6. 正文 `client_metadata` 与 header 的现场一致性；本次归档没有保存正文。
 7. 只有 `Thread-Id`、没有 `Session-Id` 时是否应成为调度信号。
@@ -384,6 +420,7 @@ AccountProjection
 - [ ] 明确变更的是客户端身份、`sessionHash`、上游身份还是 Turn-State scope；
 - [ ] 明确 API Key 明文与 Key ID 的影响是否不同；
 - [ ] 覆盖 `off/scoped`，并确认没有重新引入 `device/session/full` 隐式兼容分支；
+- [ ] 覆盖 User-Agent/Originator 原子校验、family 优先级、单调升版、同版本平台稳定及验证上限；
 - [ ] 验证不同 LogicalConversation 在 scoped 投影中不会碰撞；
 - [ ] 验证 failover 只替换 AccountProjection，SemanticEnvelope 保持不变；
 - [ ] 覆盖 HTTP、SSE、compact、WebSocket 适用入口；

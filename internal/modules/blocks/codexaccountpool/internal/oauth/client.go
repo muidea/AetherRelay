@@ -29,6 +29,8 @@ const (
 type Request struct {
 	RefreshToken string
 	Proxy        string
+	UserAgent    string
+	Originator   string
 }
 
 type AuthorizationCodeRequest struct {
@@ -80,10 +82,10 @@ func refresh(ctx context.Context, request Request, endpoint string) (Result, err
 	if err != nil {
 		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("encode OAuth refresh request: %w", err)}
 	}
-	return exchange(ctx, endpoint, strings.NewReader(string(body)), "application/json", request.Proxy)
+	return exchange(ctx, endpoint, strings.NewReader(string(body)), "application/json", request.Proxy, request.UserAgent, request.Originator)
 }
 
-func exchange(ctx context.Context, endpoint string, requestBody io.Reader, contentType, proxy string) (Result, error) {
+func exchange(ctx context.Context, endpoint string, requestBody io.Reader, contentType, proxy string, observedIdentity ...string) (Result, error) {
 	client, err := newHTTPClient(proxy)
 	if err != nil {
 		return Result{}, &Error{Permanent: true, Class: "invalid_request", Cause: err}
@@ -95,6 +97,12 @@ func exchange(ctx context.Context, endpoint string, requestBody io.Reader, conte
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	identity := codexidentity.Current()
+	if len(observedIdentity) >= 2 {
+		if observed, ok := codexidentity.ParseObserved(observedIdentity[0], observedIdentity[1]); ok {
+			identity.UserAgent = observed.UserAgent
+			identity.Originator = observed.Originator
+		}
+	}
 	// The auth.openai.com credential face emitted by the verified client sends
 	// the canonical UA/originator pair, but no inference-only Version header.
 	req.Header.Set("User-Agent", identity.UserAgent)

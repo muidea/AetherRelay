@@ -38,6 +38,23 @@ func TestRefreshUsesCurrentCodexJSONContract(t *testing.T) {
 	}
 }
 
+func TestRefreshUsesSelectedAccountClientIdentity(t *testing.T) {
+	userAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != userAgent || r.Header.Get("Originator") != "codex-tui" || r.Header.Get("Version") != "" {
+			t.Fatalf("selected credential identity headers=%v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"access-new","refresh_token":"refresh-new","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	result, err := refresh(context.Background(), Request{RefreshToken: "refresh-secret", UserAgent: userAgent, Originator: "codex-tui"}, server.URL)
+	if err != nil || result.AccessToken != "access-new" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestRefreshClassifiesOnlyKnownCredentialFailuresAsPermanent(t *testing.T) {
 	tests := []struct {
 		name      string

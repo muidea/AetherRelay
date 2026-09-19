@@ -218,7 +218,7 @@ codex_oauth:
 - 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现模型；该路径不作为 AetherRelay 入站端点。结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。
 - 管理页可按账号读取 `GET /backend-api/wham/usage`，并展示上游观测到的套餐类型、主/次窗口、代码审查和附加窗口的 `used_percent`、恢复时间与限制状态。导入、凭据刷新、OAuth 完成会触发一次账号范围刷新；也可在账号池选中账号后手动刷新。快照有效期为 15 分钟，刷新失败会保留上一份快照并标记错误；不会高频轮询，也不把窗口百分比伪装为 Token 数、请求数或路由可用性。
-- Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。授权码交换、刷新、模型发现与用量读取都从统一 Codex identity profile 生成 `User-Agent` 与 `Originator`，且不向 credential endpoint 发送 inference-only `Version`；推理路径（Responses HTTP/SSE、compact、WebSocket 握手及两个适配入口）在客户端提供合法值时原样复用客户端的 `User-Agent` 与 `Originator`，缺失、超长或含控制字符时回落 profile。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
+- Codex refresh token 请求遵循当前 CLI 合同：以 JSON 提交 `client_id`、`grant_type=refresh_token` 和 `refresh_token`，不附加刷新阶段的 `scope`。`scoped` 账号会从实际选中它的请求中原子观察 `User-Agent`/`Originator`，按已验证 family 优先级和版本单调选择账号 profile，并让推理、刷新、模型发现与用量读取共用；账号尚无有效观察值以及授权码交换时回落内置 profile。`off` 的推理路径保持合法客户端值逐请求透传，无请求上下文的账号域调用回落内置 profile。credential endpoint 不发送 inference-only `Version`。只有上游明确返回 `refresh_token_expired`、`refresh_token_reused`、`refresh_token_invalidated`，或返回 HTTP 401 时，账号才按永久凭据失败处理；普通 400、网络错误和服务端错误不会被误标为 `invalid_token`。新的 PKCE 登录请求包含当前 Codex CLI 使用的离线与 connector scopes。
 - Codex 的 refresh token 健康与当前 access token 路由健康分别投影：凭据刷新失败会保留安全错误类别和时间，但不会仅凭该结果把仍能通过鉴权的账号移出路由。成功的模型发现、用量查询或 Responses 请求会恢复系统判定的异常状态；操作员显式设置的 `disabled` 永不被后台成功结果覆盖。恢复状态后会立即刷新有效模型目录。
 - Codex Responses 在账号切换耗尽时保留最后一个真实上游失败，不再用后续的“无可用账号”覆盖首个 401、403、429 或 5xx。安全错误响应和日志会携带上游 HTTP 状态但不记录响应正文、Token、账号头或代理；上游 401 且 refresh token 恢复失败时按 `invalid_token` 反馈，不再误记为普通“上游故障”。
 - 调用中上游明确返回的 `usage_limit_reached` 会另行记录为凭据级额度耗尽与可选恢复时间，并驱动该凭据全部模型的单调冷却；成功请求或后续较短失败不会提前释放。普通 429 仍只产生模型冷却。这个运行时观察与管理页的套餐用量窗口相互补充，不能彼此替代。
@@ -236,6 +236,7 @@ codex_oauth:
 - WebSocket 四项上限分别约束活跃下游 session 数、单消息字节数、读空闲时间和连接最大存活时间；热更新只作用于新握手，已有连接沿用握手时快照。第二个及后续 turn 若在任何业务帧输出前收到 429，代理只在完整 transcript 不超过消息上限且 function/custom/MCP call-output 重新校验通过时关闭旧 session、切换账号并重放，单 turn 最多迁移两次；已有增量输出时绝不重放。
 - Codex 账号管理列表和导入结构只支持 `fingerprint_mode=off/scoped`，默认 `scoped`；导入或 PATCH 的其它显式值直接拒绝，加密存量中的缺失、未知或旧模式在加载时直接改写为 `scoped`。该设置属于账号状态而非 YAML 全局开关，因此 `config.example.yaml` 不新增对应键，并随整体账号池 bundle 持久化。统一账号池和独立 Codex 账号列表都会显示当前模式并提供切换控件；显式 `off` 不会被隐藏。
 - `scoped` 使用加密账号文档内的系统随机 seed 派生账号级 Installation，并按 LogicalConversation/LogicalThread 单射派生 Session/Thread；同时改写上游 header 与 `client_metadata`。seed 不进入管理投影或普通凭据导出，重新认证和数据库归档恢复会保留，作为新账号导入或显式替换槽位凭据时重新生成。`off` 使用 AetherRelay 客户端隔离 session，不发送账号 Installation。
+- `scoped` 的客户端来源 profile 同样加密保存在账号文档中，不进入管理投影或普通凭据导出；OAuth 重认证保留，显式替换槽位为另一凭据时清除。它是账号运行状态，不新增 YAML 配置项。
 - `prompt_cache_key` 与账号指纹解耦：客户端显式值保持不变，缺失时按客户端 API Key ID、模型和客户端会话生成稳定隔离值。账号切换、指纹模式切换或 seed 更新不会主动改变该缓存分片；运行日志只记录 `explicit/generated/absent` 来源枚举，不记录缓存键。
 
 ## 本地管理页

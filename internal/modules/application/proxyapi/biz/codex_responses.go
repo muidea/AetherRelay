@@ -35,7 +35,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
-		account, err := s.acquireCodexAccountForTransport(ctx, request.Model, tried, request.SessionHash, accevents.TransportWebsocket)
+		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportWebsocket, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
 		if err != nil {
 			if terminalAdmissionFailure(err) {
 				return codexresponses.WebsocketOpenResult{}, err
@@ -51,7 +51,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
 			BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
 			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(),
-			ClientIdentity: upevents.ClientIdentity{UserAgent: request.ClientUserAgent, Originator: request.ClientOriginator}, TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
+			ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
 		})).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -384,7 +384,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		if ctx.Err() != nil {
 			return codexresponses.Result{}, clientFailure(ctx.Err())
 		}
-		account, err := s.acquireCodexAccount(ctx, request.Model, tried, request.SessionHash)
+		account, err := s.acquireCodexAccountWithIdentity(ctx, request.Model, tried, request.SessionHash, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
 		if err != nil {
 			if terminalAdmissionFailure(err) {
 				return codexresponses.Result{}, err
@@ -405,7 +405,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed}, request)
+				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: account.ClientIdentity}, request)
 				if failure == nil {
 					s.releaseCodexAccount(ctx, account.LeaseID)
 					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
@@ -483,7 +483,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
-		account, err := s.acquireCodexAccountForTransport(ctx, request.Model, tried, request.SessionHash, accevents.TransportCompact)
+		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportCompact, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
 		if err != nil {
 			if terminalAdmissionFailure(err) {
 				return codexresponses.Result{}, err
@@ -500,7 +500,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy,
 			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
 			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(),
-			ClientIdentity: upevents.ClientIdentity{UserAgent: request.ClientUserAgent, Originator: request.ClientOriginator}, TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
+			ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
 		})).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -574,7 +574,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if ctx.Err() != nil {
 			return clientFailure(ctx.Err())
 		}
-		account, err := s.acquireCodexAccount(ctx, request.Model, tried, request.SessionHash)
+		account, err := s.acquireCodexAccountWithIdentity(ctx, request.Model, tried, request.SessionHash, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
 		if err != nil {
 			if terminalAdmissionFailure(err) {
 				return err
@@ -722,11 +722,19 @@ func retryableCodexRequestFailure(failure *codexresponses.Failure, request codex
 }
 
 func (s *Proxy) acquireCodexAccount(ctx context.Context, model string, exclude []string, sessionHash ...string) (accevents.AcquireResult, error) {
-	return s.acquireCodexAccountForTransport(ctx, model, exclude, firstString(sessionHash), accevents.TransportResponses)
+	return s.acquireCodexAccountForTransportWithIdentity(ctx, model, exclude, firstString(sessionHash), accevents.TransportResponses, accevents.ClientIdentityCandidate{})
 }
 
 func (s *Proxy) acquireCodexAccountForTransport(ctx context.Context, model string, exclude []string, sessionHash, transport string) (accevents.AcquireResult, error) {
-	command := accevents.AcquireCommand{Model: model, Exclude: exclude, SessionHash: sessionHash, Transport: transport}
+	return s.acquireCodexAccountForTransportWithIdentity(ctx, model, exclude, sessionHash, transport, accevents.ClientIdentityCandidate{})
+}
+
+func (s *Proxy) acquireCodexAccountWithIdentity(ctx context.Context, model string, exclude []string, sessionHash string, identity accevents.ClientIdentityCandidate) (accevents.AcquireResult, error) {
+	return s.acquireCodexAccountForTransportWithIdentity(ctx, model, exclude, sessionHash, accevents.TransportResponses, identity)
+}
+
+func (s *Proxy) acquireCodexAccountForTransportWithIdentity(ctx context.Context, model string, exclude []string, sessionHash, transport string, identity accevents.ClientIdentityCandidate) (accevents.AcquireResult, error) {
+	command := accevents.AcquireCommand{Model: model, Exclude: exclude, SessionHash: sessionHash, Transport: transport, ClientIdentity: identity}
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquire, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, command)).Get()
 	account, ok := value.(accevents.AcquireResult)
 	if ctx.Err() != nil {
@@ -750,6 +758,21 @@ func (s *Proxy) acquireCodexAccountForTransport(ctx context.Context, model strin
 		return accevents.AcquireResult{}, failure
 	}
 	return account, nil
+}
+
+func codexClientIdentityCandidate(userAgent, originator string) accevents.ClientIdentityCandidate {
+	return accevents.ClientIdentityCandidate{UserAgent: userAgent, Originator: originator}
+}
+
+func resolvedCodexClientIdentity(account accevents.AcquireResult, userAgent, originator string) upevents.ClientIdentity {
+	if strings.TrimSpace(account.FingerprintMode) == accevents.FingerprintModeScoped && strings.TrimSpace(account.ClientIdentity.UserAgent) != "" && strings.TrimSpace(account.ClientIdentity.Originator) != "" {
+		return toUpstreamAccountClientIdentity(account.ClientIdentity)
+	}
+	return upevents.ClientIdentity{UserAgent: userAgent, Originator: originator}
+}
+
+func toUpstreamAccountClientIdentity(profile accevents.ClientIdentityProfile) upevents.ClientIdentity {
+	return upevents.ClientIdentity{UserAgent: profile.UserAgent, Originator: profile.Originator, Version: profile.Version}
 }
 
 func terminalAdmissionFailure(err error) bool {
@@ -793,7 +816,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 	request.TurnStateSource = turnStateSource
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: upevents.ClientIdentity{UserAgent: request.ClientUserAgent, Originator: request.ClientOriginator}, TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
 	if err != nil {
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream unavailable"))
 	}
@@ -842,7 +865,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			failure.TurnStateSource = turnStateSource
 		}
 	}()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: upevents.ClientIdentity{UserAgent: request.ClientUserAgent, Originator: request.ClientOriginator}, TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
 	if err != nil {
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream unavailable"))
 	}

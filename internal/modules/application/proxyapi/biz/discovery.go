@@ -415,6 +415,7 @@ func (s *Proxy) listCodexModels(ctx context.Context, candidate codexevents.Disco
 		AccessToken:     candidate.AccessToken,
 		AccountIDHeader: candidate.AccountIDHeader,
 		Proxy:           candidate.Proxy,
+		ClientIdentity:  toUpstreamAccountClientIdentity(candidate.ClientIdentity),
 	})).Get()
 	listed, ok := value.(codexupevents.ListModelsResult)
 	if !ok {

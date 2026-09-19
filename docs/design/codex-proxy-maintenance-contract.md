@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`11.0.0`
+> 合同版本：`12.0.0`
 >
 > 状态：`active`
 >
@@ -9,6 +9,8 @@
 > 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`12.0.0` 将 `scoped` 模式的 `User-Agent`/`Originator` 从逐请求透传收敛为账号级、客户端来源的原子 profile：账号选择时才观察候选，`codex-tui` 优先于 `codex_exec`，同 family 只接受当前已验证版本范围内的严格三段版本并只向更高版本提升，同版本保留已选平台以避免多客户端抖动。选中值同时用于推理、模型发现、用量查询与 refresh；`off` 仍逐请求透传，授权码交换及账号尚无有效观察值时仍回落内置 profile。profile 加密保存、不进入管理视图或普通凭据导出；重认证保留，显式把账号槽位替换为另一凭据时清除。这改变默认 `scoped` 的可观察身份，按 MAJOR 发布。
 
 `11.0.0` 实施身份收敛终态：运行时与管理面只接受 `off/scoped`，默认值改为 `scoped`，原 `device/session/full` 不再保留兼容入口；加密存量中的缺失、未知或已删除模式在加载时直接收口为 `scoped`。`scoped` 使用账号级 Installation、账号与 LogicalConversation 共同派生的 Session、以及账号/会话/LogicalThread 共同派生的 Thread。请求进入执行器时冻结 LogicalTurn 与开始时间，failover 只重算账号物理投影并保持正文、cache identity、Window Number、turn 属性和 JSON 类型/精度不变。默认身份及配置枚举发生不兼容变化，因此按 MAJOR 发布。
 
@@ -210,8 +212,8 @@
 | --- | --- | --- |
 | `Authorization` | generate：只来自选中账号 | `CP-HDR-001` |
 | `ChatGPT-Account-ID` | generate：只来自选中账号 | `CP-HDR-002` |
-| `User-Agent` | client：客户端提供合法值时原样复用，否则回落版本 profile | `CP-HDR-003` |
-| `Originator` | client：客户端提供合法值时原样复用，否则回落版本 profile（当前 `codex_exec`） | `CP-HDR-004` |
+| `User-Agent` | `off`：合法客户端值逐请求复用；`scoped`：使用所选账号的客户端来源 profile；缺失时回落内置 profile | `CP-HDR-003` |
+| `Originator` | 与 `User-Agent` 作为不可拆分 profile 同源选择；不得独立拼接 | `CP-HDR-004` |
 | `Accept` | generate：HTTP Responses 与 compact upstream 均为 SSE；compact downstream 再投影 JSON/SSE | `CP-HDR-005` |
 | `OpenAI-Beta` | generate/merge allowlist：WebSocket beta | `CP-HDR-006` |
 | `Session-Id` / `session_id` | normalize：由 session owner 生成，确定性 UUID 形态 | `CP-HDR-007` |
@@ -245,13 +247,15 @@
 
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
 
-`CP-HDR-021` Codex OAuth 授权码交换、refresh token、模型发现与用量查询属于凭据/账号域请求，必须共用同一份版本化身份 authority，不得接收任何客户端提供的身份值；inference transport 在客户端提供合法身份时按 `CP-HDR-003`/`CP-HDR-004` 复用，否则使用同一份 profile。OAuth credential endpoint 不发送 inference-only `Version` header。任何 profile 升级必须同时覆盖 credential 与 inference 测试。
+`CP-HDR-021` Codex OAuth 授权码交换、refresh token、模型发现与用量查询属于凭据/账号域请求。授权码交换没有已选账号，使用内置版本 profile；`scoped` 账号的 refresh、模型发现与用量查询必须使用该账号已选的客户端来源 profile，尚未观察到有效候选时回落内置 profile；`off` 账号的这些无下游请求上下文的路径同样回落内置 profile。推理路径遵循 `CP-HDR-003`/`CP-HDR-004`。OAuth credential endpoint 不发送 inference-only `Version` header；模型发现的 `client_version` 必须与账号 profile 的版本一致。任何 profile 规则升级必须同时覆盖 credential、账号域与 inference 测试。
 
 `CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位包含账号、规范化 fingerprint mode、账号 fingerprint session 与客户端声明会话摘要；`off/scoped` 都必须保留声明会话维度，禁止跨会话回填。声明会话依次取显式会话 header、`client_metadata.session_id/thread_id` 固定元组、显式 `prompt_cache_key`；全部缺失时不记录也不回放，调度使用的合成 `default` 不得成为 bucket。回填顺序为该记录单位最近观测值、配置默认值、缺失；客户端已提供但被来源守卫剥离的值不得由回填替换。failover 后只可使用新账号记录或默认值，不得沿用上一账号状态。HTTP、SSE、compact、WebSocket 握手及两个适配入口共用该实现；WS 后续 turn 不受本规则影响。`turn_state_force_default` 启用时只使用有效默认值且优先于 fallback，强制值不污染会话记录。
 
 `CP-HDR-023` `CP-HDR-022` 的记录是 `CP-HDR-020`「不记录原值」的受控例外，且该要求在此限定为不落盘：为完成回填，记录必须在进程内存中持有 opaque 原值，但该值不得进入日志、归档、指标、错误响应、管理视图或任何导出。记录随新观测更新，进程生命周期内保留（不设 TTL），受条数上限与总字节预算双重约束，超限时按最旧观测批量淘汰；配置热更新不得清空记录，Block Teardown 必须清零。内置默认值属于"非本账号铸造的值"，本规则把它作为受控例外允许出站：`codex_oauth.turn_state_fallback` 关闭时不得回填但仍必须记录，`codex_oauth.default_turn_state` 只提供值、不改变本规则的任何边界。诊断只记录 `client/session/default/stripped/forced/absent` 有界来源枚举与是否发生回填的布尔，不记录值；`stripped` 表示"存在一个值（客户端提供的或会话记录回放的）但被 `CP-HDR-020` 剥离"，`forced` 表示该值来自强制默认开关，两者都必须与"客户端没有声明"的 `absent` 可区分；归档默认同样只记录该布尔，只有显式开启 `CP-OBS-009` 后才按原值写入该 header。来源枚举对每个 attempt 都有效。归档布尔是三态：产生上游结果或交付首个业务事件时必须显式写入 `true`/`false`，因此"没有回填"与"没有产生结果"（输出前失败）在归档中必须可区分，不能都表示为字段缺失；输出前失败时以同一 `request_id` 的运行日志为准。该布尔的判定是「出站的值不是客户端提供的」，因此 `session`、`default` 与 `forced` 都记 `true`，具体来源由日志的来源枚举区分。
 
 `CP-HDR-024` 身份术语必须按 [Codex 身份与会话语义基准](codex-identity-semantics.md) 分层使用：Installation 是安装/设备层身份，Client Session 是 CLI 会话，`sessionHash` 是 Key ID + 模型 + 客户端会话信号派生的代理 UUID，Upstream Session/Thread/Window 是 attempt 级出站身份，Turn 是可跨多个 HTTP/tool 请求的逻辑交互，Turn-State scope 是账号与客户端声明会话共同决定的独立记录单位。API Key 明文不得进入身份派生；同一 Key ID 槽位替换明文不构成新命名空间。`X-Client-Request-Id` 取 attempt 的 `Thread-Id`，不得误用为 AetherRelay 单请求诊断 ID。实现、测试、日志分析和文档不得用无所有权前缀的“Session”替代这些不同层级。
+
+`CP-HDR-025` `scoped` 的客户端来源 profile 以账号为 scope，并把同一次请求的 `User-Agent` 与 `Originator` 作为不可拆分候选。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；当前 family 顺序为 `codex-tui > codex_exec`，已验证范围分别为 `codex-tui 0.154.0..0.155.0` 与 `codex_exec 0.153.4`。更高优先级 family 可替换低优先级 family；同 family 只允许严格升版；同版本不同平台、低版本、未知 family、不一致组合或超出已验证范围的版本均保持当前值。候选只能在账号实际被某次 attempt 选中后晋升，failover 对每个实际选中账号分别观察，不得由未使用请求预热其它账号。选择结果加密持久化，不进入管理视图、日志或普通凭据导出；OAuth 重认证保留，显式替换为另一凭据清除。`off` 不读取或更新此 profile，保持逐请求原值传递。
 
 `CP-FP-001` 账号 `fingerprint_mode` 只允许 `off/scoped`，缺失和空值默认 `scoped`。管理 API 与导入对其它显式值直接拒绝；加密存量中的缺失、未知或已删除值加载时直接重写为 `scoped`。
 
@@ -484,6 +488,12 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`12.0.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| scoped 账号级客户端来源 profile 选择 | CP-HDR-003..004, CP-HDR-021, CP-HDR-025 | implemented | `pkg/aetherrelaycodexidentity/identity.go`, `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/biz.go`, `codexaccountpool/internal/oauth/client.go` | `identity_test.go`, `store_test.go`, `encrypted_store_test.go`, `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `oauth/client_test.go` |
 
 `11.0.0` 新增实施追踪：
 

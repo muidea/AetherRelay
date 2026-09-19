@@ -168,14 +168,33 @@ type UpdateResult struct {
 	Item AccountView `json:"item"`
 }
 
+// ClientIdentityCandidate is the atomic bounded pair observed on one
+// downstream request. The account store validates and ranks it before it can
+// become an account-scoped upstream profile.
+type ClientIdentityCandidate struct {
+	UserAgent  string
+	Originator string
+}
+
+// ClientIdentityProfile is the selected client-sourced identity for one
+// encrypted account. It is EventHub-only and never enters management views or
+// ordinary credential exports.
+type ClientIdentityProfile struct {
+	UserAgent  string
+	Originator string
+	Family     string
+	Version    string
+}
+
 // AcquireResult contains only request-time credentials. It is restricted to
 // the EventHub path and must not be returned from any HTTP adapter.
 type AcquireCommand struct {
-	Model       string
-	Transport   string
-	Exclude     []string
-	SessionHash string
-	PreferredID string
+	Model          string
+	Transport      string
+	Exclude        []string
+	SessionHash    string
+	PreferredID    string
+	ClientIdentity ClientIdentityCandidate
 }
 type AcquireResult struct {
 	// Admission denial carries no credentials; time is known only for bounded cooldowns.
@@ -189,7 +208,8 @@ type AcquireResult struct {
 	FingerprintMode   string
 	// FingerprintSeed is a system-managed secret used only to derive outbound
 	// Codex identity. It must never cross an HTTP management projection.
-	FingerprintSeed string `json:"-"`
+	FingerprintSeed string                `json:"-"`
+	ClientIdentity  ClientIdentityProfile `json:"-"`
 }
 
 type ReleaseCommand struct{ LeaseID string }
@@ -300,6 +320,7 @@ type DiscoveryCandidate struct {
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
+	ClientIdentity  ClientIdentityProfile
 	NeedsDiscovery  bool
 	DiscoveryDue    bool
 	// DiscoveryBackedOff remains true during the persisted retry window even
@@ -338,6 +359,7 @@ type UsageCandidate struct {
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
+	ClientIdentity  ClientIdentityProfile
 }
 
 type ListUsageCandidatesCommand struct {

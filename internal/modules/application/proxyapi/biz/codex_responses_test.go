@@ -358,6 +358,21 @@ func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 	}
 }
 
+func TestResolvedCodexClientIdentityUsesScopedSelectionAndOffPassthrough(t *testing.T) {
+	rawUserAgent := "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
+	selectedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	profile := accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.155.0"}
+
+	scoped := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeScoped, ClientIdentity: profile}, rawUserAgent, "codex-tui")
+	if scoped.UserAgent != selectedUserAgent || scoped.Originator != "codex-tui" {
+		t.Fatalf("scoped identity=%+v", scoped)
+	}
+	off := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeOff, ClientIdentity: profile}, rawUserAgent, "codex-tui")
+	if off.UserAgent != rawUserAgent || off.Originator != "codex-tui" {
+		t.Fatalf("off identity=%+v", off)
+	}
+}
+
 func TestCodexTurnStateGuardDropsKnownCrossAccountEcho(t *testing.T) {
 	proxy := &Proxy{}
 	headers := []upevents.Header{{Name: "X-Codex-Turn-State", Value: "opaque-state"}}
@@ -389,13 +404,18 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	acquires := 0
-	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+	rawUserAgent := "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
+	selectedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
 		acquires++
+		if command := ev.Data().(accevents.AcquireCommand); command.ClientIdentity.UserAgent != rawUserAgent || command.ClientIdentity.Originator != "codex-tui" {
+			t.Errorf("acquire client identity=%+v", command.ClientIdentity)
+		}
 		if acquires == 1 {
-			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
+			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: rawUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.154.0"}}, nil)
 			return
 		}
-		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222"}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.155.0"}}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
 	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
@@ -412,7 +432,7 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	})
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexTurnStates: map[string]codexTurnStateOrigin{}}
 	proxy.noteCodexTurnState("account-a", upevents.CodexFingerprint{}, "client-session", []upevents.Header{{Name: "X-Codex-Turn-State", Value: "state-a"}})
-	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), SessionHash: "client-session", TurnState: "state-a"})
+	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), SessionHash: "client-session", TurnState: "state-a", ClientUserAgent: rawUserAgent, ClientOriginator: "codex-tui"})
 	if err != nil || string(completed.Body) != `{"id":"resp-b"}` {
 		t.Fatalf("completed=%s err=%v", completed.Body, err)
 	}
@@ -422,6 +442,9 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	}
 	if second.Fingerprint.Mode != accevents.FingerprintModeScoped || second.Fingerprint.InstallationID == first.Fingerprint.InstallationID || second.Fingerprint.SessionID == first.Fingerprint.SessionID || second.Fingerprint.TurnID != first.Fingerprint.TurnID || second.Fingerprint.TurnStartedAtUnixMS != first.Fingerprint.TurnStartedAtUnixMS || second.TurnState != "" {
 		t.Fatalf("failover did not preserve semantics and replace account projection: first=%+v second=%+v", first, second)
+	}
+	if first.ClientIdentity.UserAgent != rawUserAgent || second.ClientIdentity.UserAgent != selectedUserAgent {
+		t.Fatalf("failover did not select identity per account: first=%+v second=%+v", first.ClientIdentity, second.ClientIdentity)
 	}
 }
 

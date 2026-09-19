@@ -71,11 +71,25 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	}
 	id := store.order[0]
 	seed := store.items[id].FingerprintSeed
+	observedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	if !promoteClientIdentityProfile(store.items[id], events.ClientIdentityCandidate{UserAgent: observedUserAgent, Originator: "codex-tui"}) {
+		t.Fatal("valid observed identity was not selected")
+	}
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
 	if seed == "" {
 		t.Fatal("enabled account has no private fingerprint seed")
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(observedUserAgent)) {
+		t.Fatal("DuckDB file contains plaintext observed client identity")
 	}
 
 	restored, err := Open(path, "256MB", 1, codec)
@@ -85,6 +99,9 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	defer restored.Close()
 	if restored.items[id].FingerprintSeed != seed {
 		t.Fatalf("fingerprint seed changed across restart: before=%q after=%q", seed, restored.items[id].FingerprintSeed)
+	}
+	if profile := restored.items[id].ClientIdentityProfile; profile == nil || profile.UserAgent != observedUserAgent || profile.Version != "0.155.0" {
+		t.Fatalf("observed client identity changed across restart: %+v", profile)
 	}
 }
 

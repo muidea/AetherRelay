@@ -240,7 +240,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 			busy = append(busy, accountID)
 		}
 	}
-	item, err := s.store.AcquirePreferredTransportWithBusy(cmd.Model, exclude, busy, preferred, cmd.Transport)
+	item, err := s.store.AcquirePreferredTransportWithBusyIdentity(cmd.Model, exclude, busy, preferred, cmd.Transport, cmd.ClientIdentity)
 	if err != nil {
 		result.Set(item, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return
@@ -590,7 +590,8 @@ func (s *Account) refreshTokenOnce(ctx context.Context, accountID string) (event
 	}
 	oauthCtx, cancel := s.oauthRequestContext(ctx)
 	defer cancel()
-	result, err := oauth.Refresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy})
+	identity := s.store.ClientIdentityProfile(accountID)
+	result, err := oauth.Refresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
 	if err != nil {
 		class, permanent := events.ErrorUpstream, false
 		if oauthErr, ok := err.(*oauth.Error); ok {

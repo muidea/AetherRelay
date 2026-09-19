@@ -119,6 +119,10 @@ type TurnMetadata struct {
 type ClientIdentity struct {
 	UserAgent  string
 	Originator string
+	// Version is populated only for a validated account-scoped observed profile.
+	// It lets account-domain endpoints align their explicit client_version query
+	// with the exact UA/originator pair selected by the account pool.
+	Version string
 }
 
 // CompleteCommand and StartCommand deliberately carry bounded source-wire JSON
@@ -137,9 +141,8 @@ type CompleteCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
-	// the inference path. Empty or invalid fields fall back to the versioned
-	// profile, and credential/account-domain calls never carry it.
+	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
+	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity
 	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
 	// part of it.
@@ -170,9 +173,8 @@ type CompactCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
-	// the inference path. Empty or invalid fields fall back to the versioned
-	// profile, and credential/account-domain calls never carry it.
+	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
+	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity
 	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
 	// part of it.
@@ -205,9 +207,8 @@ type StartCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
-	// the inference path. Empty or invalid fields fall back to the versioned
-	// profile, and credential/account-domain calls never carry it.
+	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
+	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity
 	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
 	// part of it.
@@ -253,9 +254,8 @@ type WSOpenCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
-	// ClientIdentity is CP-HDR-003/004: the bounded downstream identity reused on
-	// the inference path. Empty or invalid fields fall back to the versioned
-	// profile, and credential/account-domain calls never carry it.
+	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
+	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity
 	// TurnMetadata is the CP-HDR-011 client projection; identity fields are not
 	// part of it.
@@ -301,6 +301,7 @@ type ListModelsCommand struct {
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
+	ClientIdentity  ClientIdentity
 }
 
 // ModelDescriptor is the small, validated projection of a Codex model-list
@@ -324,6 +325,7 @@ type GetUsageCommand struct {
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
+	ClientIdentity  ClientIdentity
 }
 
 type UsageWindow struct {

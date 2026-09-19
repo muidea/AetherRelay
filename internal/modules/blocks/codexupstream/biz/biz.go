@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -560,7 +561,7 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex model list command"))
 		return
 	}
-	models, class, err := listModels(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy)
+	models, class, err := listModels(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.ClientIdentity)
 	if err != nil {
 		result.Set(events.ListModelsResult{ErrorClass: class}, cd.NewError(cd.Unexpected, "Codex model discovery failed: "+string(class)))
 		return
@@ -580,7 +581,7 @@ func (s *Upstream) handleGetUsage(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage command"))
 		return
 	}
-	planType, windows, class, err := getUsage(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy)
+	planType, windows, class, err := getUsage(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.ClientIdentity)
 	if err != nil {
 		result.Set(events.GetUsageResult{ErrorClass: class}, nil)
 		return
@@ -761,19 +762,30 @@ func codexArchiveSensitiveHeader(key string) bool {
 	}
 }
 
-func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]events.ModelDescriptor, events.ErrorClass, error) {
+func listModels(ctx context.Context, accessToken, accountID, proxy string, identities ...events.ClientIdentity) ([]events.ModelDescriptor, events.ErrorClass, error) {
+	identity := firstClientIdentity(identities)
 	client, err := newHTTPClient(proxy)
 	if err != nil {
 		return nil, events.ErrorProtocol, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	requestURL := modelsURL
+	if version := strings.TrimSpace(identity.Version); version != "" {
+		if parsed, parseErr := url.Parse(requestURL); parseErr == nil {
+			query := parsed.Query()
+			query.Set("client_version", version)
+			parsed.RawQuery = query.Encode()
+			requestURL = parsed.String()
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, events.ErrorProtocol, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
-	req.Header.Set("User-Agent", currentIdentity.UserAgent)
-	req.Header.Set("Originator", currentIdentity.Originator)
+	profile := codexRequestProfile{clientIdentity: identity}
+	req.Header.Set("User-Agent", profile.requestUserAgent())
+	req.Header.Set("Originator", profile.requestOriginator())
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -799,7 +811,8 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string) ([]ev
 	return models, "", nil
 }
 
-func getUsage(ctx context.Context, accessToken, accountID, proxy string) (string, []events.UsageWindow, events.ErrorClass, error) {
+func getUsage(ctx context.Context, accessToken, accountID, proxy string, identities ...events.ClientIdentity) (string, []events.UsageWindow, events.ErrorClass, error) {
+	identity := firstClientIdentity(identities)
 	client, err := newHTTPClient(proxy)
 	if err != nil {
 		return "", nil, events.ErrorProtocol, err
@@ -811,8 +824,9 @@ func getUsage(ctx context.Context, accessToken, accountID, proxy string) (string
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
-	req.Header.Set("User-Agent", currentIdentity.UserAgent)
-	req.Header.Set("Originator", currentIdentity.Originator)
+	profile := codexRequestProfile{clientIdentity: identity}
+	req.Header.Set("User-Agent", profile.requestUserAgent())
+	req.Header.Set("Originator", profile.requestOriginator())
 	if accountID = strings.TrimSpace(accountID); accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -836,6 +850,13 @@ func getUsage(ctx context.Context, accessToken, accountID, proxy string) (string
 		return "", nil, events.ErrorProtocol, err
 	}
 	return planType, windows, "", nil
+}
+
+func firstClientIdentity(values []events.ClientIdentity) events.ClientIdentity {
+	if len(values) == 0 {
+		return events.ClientIdentity{}
+	}
+	return values[0]
 }
 
 type usageResponse struct {

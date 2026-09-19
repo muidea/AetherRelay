@@ -1078,14 +1078,15 @@ func TestCodexWindowNumberTravelsToCarriers(t *testing.T) {
 }
 
 func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
+	selected := events.ClientIdentity{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui", Version: "0.155.0"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != currentIdentity.ClientVersion {
+		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != selected.Version {
 			t.Fatalf("request=%s %s", r.Method, r.URL.String())
 		}
 		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
 			t.Fatalf("account headers=%v", r.Header)
 		}
-		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator {
+		if r.Header.Get("User-Agent") != selected.UserAgent || r.Header.Get("Originator") != selected.Originator {
 			t.Fatalf("Codex identity headers=%v", r.Header)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1096,7 +1097,7 @@ func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 	modelsURL = server.URL + "?client_version=" + currentIdentity.ClientVersion
 	t.Cleanup(func() { modelsURL = previousURL })
 
-	models, class, err := listModels(context.Background(), "access-token", "account-header", "")
+	models, class, err := listModels(context.Background(), "access-token", "account-header", "", selected)
 	if err != nil || class != "" {
 		t.Fatalf("list models class=%q err=%v", class, err)
 	}
@@ -1106,6 +1107,7 @@ func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 }
 
 func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
+	selected := events.ClientIdentity{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui", Version: "0.155.0"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/usage" {
 			t.Fatalf("request=%s %s", r.Method, r.URL.String())
@@ -1113,7 +1115,7 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer access-token" || r.Header.Get("ChatGPT-Account-ID") != "account-header" {
 			t.Fatalf("account headers=%v", r.Header)
 		}
-		if r.Header.Get("User-Agent") != currentIdentity.UserAgent || r.Header.Get("Originator") != currentIdentity.Originator || r.Header.Get("Content-Type") != "application/json" {
+		if r.Header.Get("User-Agent") != selected.UserAgent || r.Header.Get("Originator") != selected.Originator || r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("Codex usage headers=%v", r.Header)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1129,7 +1131,7 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 	usageURL = server.URL + "/usage"
 	t.Cleanup(func() { usageURL = previousURL })
 
-	plan, windows, class, err := getUsage(context.Background(), "access-token", "account-header", "")
+	plan, windows, class, err := getUsage(context.Background(), "access-token", "account-header", "", selected)
 	if err != nil || class != "" || plan != "pro" || len(windows) != 4 {
 		t.Fatalf("usage plan=%q windows=%+v class=%q err=%v", plan, windows, class, err)
 	}

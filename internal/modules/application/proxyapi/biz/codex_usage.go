@@ -188,6 +188,7 @@ func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCa
 		AccessToken:     candidate.AccessToken,
 		AccountIDHeader: candidate.AccountIDHeader,
 		Proxy:           candidate.Proxy,
+		ClientIdentity:  toUpstreamAccountClientIdentity(candidate.ClientIdentity),
 	})).Get()
 	if err != nil {
 		return codexupevents.GetUsageResult{}, err
