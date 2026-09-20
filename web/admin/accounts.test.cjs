@@ -29,7 +29,7 @@ function harness(options={}){
     renderUnifiedAccounts:()=>{},
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0],context);
-  for(const name of ['normalizedCodexFingerprintMode','unifiedCredentialKey','codexFingerprintControl','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode']){
+  for(const name of ['normalizedCodexFingerprintMode','unifiedCredentialKey','codexFingerprintControl','codexConcurrencyControl','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode','updateCodexMaxConcurrency']){
     vm.runInContext(functionSource(name),context);
   }
   return {context,requests,messages,reloads};
@@ -43,6 +43,27 @@ test('unified account fingerprint control exposes off and scoped modes',()=>{
   assert.match(c.codexFingerprintControl({id:'codex-1'}),/<option value="scoped" selected>/);
   c.state.unified.updating.add('codex:codex-1');
   assert.match(c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'}),/ disabled>/);
+});
+
+test('account concurrency control defaults to two and patches the selected account',async()=>{
+  const {context:c,requests,messages}=harness({request:async()=>({item:{id:'codex/id',max_concurrency:3}})});
+  assert.match(c.codexConcurrencyControl({id:'codex/id'}),/value="2"/);
+  c.state.codex.accounts=[{id:'codex/id',max_concurrency:2}];
+  const input={dataset:{codexConcurrency:'codex/id'},value:'3',disabled:false};
+  await c.updateCodexMaxConcurrency(input);
+  assert.equal(requests[0].url,'/admin/api/codex/accounts/codex%2Fid');
+  assert.deepEqual(JSON.parse(requests[0].options.body),{max_concurrency:3});
+  assert.equal(c.state.codex.accounts[0].max_concurrency,3);
+  assert.equal(c.state.unified.updating.size,0);
+  assert.deepEqual(messages.map(item=>item.message),['Codex 账号最大并发已设为 3']);
+});
+
+test('account concurrency control rejects values outside one to thirty-two',async()=>{
+  const {context:c,requests,messages,reloads}=harness();
+  await c.updateCodexMaxConcurrency({dataset:{codexConcurrency:'codex-1'},value:'0',disabled:false});
+  assert.equal(requests.length,0);
+  assert.equal(reloads.codex,1);
+  assert.deepEqual(messages,[{message:'最大并发必须是 1 到 32 之间的整数',tone:'error'}]);
 });
 
 test('unified account fingerprint control patches mode and clears busy state',async()=>{

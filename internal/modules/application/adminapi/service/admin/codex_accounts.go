@@ -82,11 +82,12 @@ func (h *Handler) updateCodexAccount(w http.ResponseWriter, r *http.Request, rel
 		Status          *string `json:"status"`
 		Proxy           *string `json:"proxy"`
 		FingerprintMode *string `json:"fingerprint_mode"`
+		MaxConcurrency  *int    `json:"max_concurrency"`
 	}
 	if !decodeAdminBody(w, r, &body) {
 		return
 	}
-	if body.Status == nil && body.Proxy == nil && body.FingerprintMode == nil {
+	if body.Status == nil && body.Proxy == nil && body.FingerprintMode == nil && body.MaxConcurrency == nil {
 		writeError(w, http.StatusBadRequest, "at least one account field is required")
 		return
 	}
@@ -102,7 +103,11 @@ func (h *Handler) updateCodexAccount(w http.ResponseWriter, r *http.Request, rel
 		}
 		body.FingerprintMode = &mode
 	}
-	result, err := h.codex.UpdateCodexAccount(r.Context(), codexevents.UpdateCommand{ID: id, Status: body.Status, Proxy: body.Proxy, FingerprintMode: body.FingerprintMode})
+	if body.MaxConcurrency != nil && (*body.MaxConcurrency < codexevents.MinMaxConcurrency || *body.MaxConcurrency > codexevents.MaxMaxConcurrency) {
+		writeError(w, http.StatusBadRequest, "max_concurrency must be between 1 and 32")
+		return
+	}
+	result, err := h.codex.UpdateCodexAccount(r.Context(), codexevents.UpdateCommand{ID: id, Status: body.Status, Proxy: body.Proxy, FingerprintMode: body.FingerprintMode, MaxConcurrency: body.MaxConcurrency})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

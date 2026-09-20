@@ -105,8 +105,8 @@ func TestAcquireKeepsHealthySessionAffinity(t *testing.T) {
 
 func TestAcquireEnforcesConcurrencyAndReleaseIsIdempotent(t *testing.T) {
 	account, _, _ := newSchedulingAccount(t)
-	leasing := make([]events.AcquireResult, 0, defaultAccountConcurrency)
-	for i := 0; i < defaultAccountConcurrency; i++ {
+	leasing := make([]events.AcquireResult, 0, events.DefaultMaxConcurrency)
+	for i := 0; i < events.DefaultMaxConcurrency; i++ {
 		leasing = append(leasing, acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", PreferredID: account.store.List()[0].ID}))
 	}
 	preferredID := leasing[0].AccountID
@@ -129,8 +129,24 @@ func TestAcquireEnforcesConcurrencyAndReleaseIsIdempotent(t *testing.T) {
 	if again.AccountID != preferredID {
 		t.Fatal("released account did not regain an available slot")
 	}
-	if account.inflight[preferredID] != defaultAccountConcurrency {
-		t.Fatalf("inflight=%d, want %d", account.inflight[preferredID], defaultAccountConcurrency)
+	if account.inflight[preferredID] != events.DefaultMaxConcurrency {
+		t.Fatalf("inflight=%d, want %d", account.inflight[preferredID], events.DefaultMaxConcurrency)
+	}
+}
+
+func TestAcquireUsesAccountSpecificConcurrencyLimit(t *testing.T) {
+	account, _, ids := newSchedulingAccount(t)
+	limit := 1
+	if _, err := account.store.Update(ids[0], nil, nil, nil, &limit); err != nil {
+		t.Fatal(err)
+	}
+	first := acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", PreferredID: ids[0]})
+	if first.AccountID != ids[0] {
+		t.Fatalf("first account=%q want=%q", first.AccountID, ids[0])
+	}
+	overflow := acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", PreferredID: ids[0]})
+	if overflow.AccountID == ids[0] {
+		t.Fatal("account-specific concurrency limit did not reject another lease")
 	}
 }
 

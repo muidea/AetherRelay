@@ -403,6 +403,7 @@ AccountProjection
 11. Turn-State scope 必须独立于收敛后的 Upstream Session。
 12. 同一 scoped 账号可以同时承载不同客户端版本；逐请求透传会造成账号级 User-Agent 不稳定。
 13. 最新样本中较高的已验证候选为 `codex-tui 0.155.0`，且与 `0.154.0` 的 Originator 相同。
+14. 身份/会话隔离与容量限制是两个正交维度：`sessionHash` 继续按 Key ID、模型和客户端会话隔离；`max_concurrency` 则按上游账号统计所有客户端的在途 turn。默认值为 `2`，管理页可按账号设置 `1–32`，占满只形成 `accounts_busy`，不能改写 Session、Thread、Installation、指纹 profile 或账号冷却。
 
 ### 8.2 尚未由现场流量确认
 

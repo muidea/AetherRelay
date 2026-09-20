@@ -41,6 +41,12 @@ const (
 )
 
 const (
+	DefaultMaxConcurrency = 2
+	MinMaxConcurrency     = 1
+	MaxMaxConcurrency     = 32
+)
+
+const (
 	// Scoped convergence is the default. Off is an explicit operational escape
 	// hatch; no legacy convergence modes remain in the public contract.
 	FingerprintModeOff    = "off"
@@ -93,6 +99,7 @@ type AccountView struct {
 	CompactSupported         *bool                 `json:"compact_supported,omitempty"`
 	WebsocketSupported       *bool                 `json:"websocket_supported,omitempty"`
 	FingerprintMode          string                `json:"fingerprint_mode"`
+	MaxConcurrency           int                   `json:"max_concurrency"`
 }
 
 type CooldownView struct {
@@ -132,6 +139,7 @@ type CredentialInput struct {
 	Expired         string `json:"expired,omitempty"`
 	Proxy           string `json:"proxy,omitempty"`
 	FingerprintMode string `json:"fingerprint_mode,omitempty"`
+	MaxConcurrency  int    `json:"max_concurrency,omitempty"`
 	// TargetID is an internal import selector. It is populated only by the
 	// Admin account-bundle orchestration and is never serialized or exported.
 	TargetID string `json:"-"`
@@ -163,6 +171,7 @@ type UpdateCommand struct {
 	Status          *string
 	Proxy           *string
 	FingerprintMode *string
+	MaxConcurrency  *int
 }
 type UpdateResult struct {
 	Item AccountView `json:"item"`

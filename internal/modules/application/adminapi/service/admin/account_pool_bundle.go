@@ -66,6 +66,7 @@ type accountPoolBundleCodex struct {
 	Expired         string `json:"expired,omitempty"`
 	Proxy           string `json:"proxy,omitempty"`
 	FingerprintMode string `json:"fingerprint_mode,omitempty"`
+	MaxConcurrency  int    `json:"max_concurrency,omitempty"`
 }
 
 type accountPoolBundleImportResult struct {
@@ -248,7 +249,7 @@ func (h *Handler) exportAccountPoolBundle(w http.ResponseWriter, r *http.Request
 		effectiveIdentity := firstNonEmpty(view.IdentityKey, accountidentity.Key(item.AccountID, effectiveEmail))
 		slots = append(slots, accountPoolBundleExportSlot{
 			position: len(slots), email: effectiveEmail, identity: effectiveIdentity,
-			codex: &accountPoolBundleCodex{CredentialType: "codex_oauth", AccountID: item.AccountID, IdentityKey: effectiveIdentity, Email: item.Email, AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode},
+			codex: &accountPoolBundleCodex{CredentialType: "codex_oauth", AccountID: item.AccountID, IdentityKey: effectiveIdentity, Email: item.Email, AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency},
 		})
 	}
 	accounts := groupAccountPoolBundleExportSlots(slots)
@@ -435,6 +436,9 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			default:
 				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli.fingerprint_mode is invalid", i)
 			}
+			if slot.MaxConcurrency != 0 && (slot.MaxConcurrency < codexevents.MinMaxConcurrency || slot.MaxConcurrency > codexevents.MaxMaxConcurrency) {
+				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli.max_concurrency must be between 1 and 32", i)
+			}
 			if err := validateSlotText(slot.AccountID, 512, fmt.Sprintf("accounts[%d].slots.codex_cli.account_id", i)); err != nil {
 				return nil, nil, nil, err
 			}
@@ -465,7 +469,7 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			if err := validateBundleProxy(slot.Proxy, fmt.Sprintf("accounts[%d].slots.codex_cli.proxy", i)); err != nil {
 				return nil, nil, nil, err
 			}
-			appendCodex(account.AccountRef, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode})
+			appendCodex(account.AccountRef, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode, MaxConcurrency: slot.MaxConcurrency})
 		}
 	}
 	rememberCredentials := func(accountRef, kind, accessToken, refreshToken string) {

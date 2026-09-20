@@ -143,6 +143,30 @@ func TestScopedFingerprintConvergenceIsDefaultAndPersists(t *testing.T) {
 	}
 }
 
+func TestAccountMaxConcurrencyDefaultsUpdatesAndExports(t *testing.T) {
+	store := openTestStore(t)
+	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil || added != 1 {
+		t.Fatalf("import added=%d err=%v", added, err)
+	}
+	item := store.List()[0]
+	if item.MaxConcurrency != events.DefaultMaxConcurrency {
+		t.Fatalf("default max_concurrency=%d", item.MaxConcurrency)
+	}
+	limit := 3
+	updated, err := store.Update(item.ID, nil, nil, nil, &limit)
+	if err != nil || updated.MaxConcurrency != limit {
+		t.Fatalf("updated=%+v err=%v", updated, err)
+	}
+	exported := store.ExportByIDs([]string{item.ID})
+	if len(exported) != 1 || exported[0].MaxConcurrency != limit {
+		t.Fatalf("exported=%+v", exported)
+	}
+	invalid := events.MaxMaxConcurrency + 1
+	if _, err := store.Update(item.ID, nil, nil, nil, &invalid); err == nil {
+		t.Fatal("invalid max concurrency was accepted")
+	}
+}
+
 func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T) {
 	store := openTestStore(t)
 	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil || added != 1 {

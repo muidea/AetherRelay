@@ -214,6 +214,7 @@ codex_oauth:
 
 - Codex HTTP SSE（含复用执行链的 Chat/Messages 流）使用 `server.stream_first_event_timeout_seconds` 限制从发起上游请求到首个可交付业务事件的等待，`server.stream_idle_timeout_seconds` 限制后续 SSE data 空闲；两者为 `0` 时关闭对应限制，空行/注释不续期。持续工具参数输出不会因 `request_timeout_seconds` 到期中断。`codex_oauth.stream_max_duration_seconds` 为可选单次上游流总时限，默认 `0` 关闭；到期属于本地策略失败，不冷却账号、不触发 Provider 熔断，也不切号重放。此项只用于 HTTP 流；compact/unary 与 WS 保留各自超时合同。
 - 账号池暂时无可用账号时返回 503；已知冷却恢复时间时附 `Retry-After` 秒数与 `failure_class=accounts_cooling`。该准入拒绝不增加 Provider 健康失败，不延长现有熔断；并发槽占满或无法确定恢复时间时不编造恢复时间。安全的失败分类、可重试标记和等待秒数会进入使用明细、CSV 与结构化汇总日志。真实上游首事件/空闲超时仍记故障，已输出后禁止自动重放。
+- Codex 最大并发按账号配置，不是进程级统一值。管理页的独立 Codex 账号表和统一账号池 Codex 槽位均提供 `max_concurrency`，默认 `2`，范围 `1–32`；修改立即影响新请求，无需重启。降低上限时已有请求继续完成，所有合格账号均占满时返回 503 和 `failure_class=accounts_busy`，不会因此冷却账号。账号凭据 JSON 与整体账号池 bundle 会保留该字段。
 
 - 每个正常 Codex OAuth 账号会通过带该账号凭据、`ChatGPT-Account-ID` 与账号代理的 ChatGPT 上游 `GET /backend-api/codex/models` 自动发现模型；该路径不作为 AetherRelay 入站端点。结果以受限投影持久化到账号池，6 小时后过期。自动发现只处理正常账号；操作员显式选择账号同步模型时可重试异常账号，但不会绕过显式禁用。失败账号以 30 秒到 5 分钟的指数退避重试，不影响其它账号。
 - 导入凭据、刷新凭据或完成 OAuth 后会立即提交模型同步；管理页也可对选中账号或全部账号执行“同步模型”。`POST <admin_base_path>/api/codex/accounts/discovery` 接受可选 `account_ids`，返回 `progress_id`；`GET .../discovery/progress/{progress_id}` 返回进度。任务记录只在当前进程中保留 30 分钟，持久化模型快照才是重启后的权威状态。

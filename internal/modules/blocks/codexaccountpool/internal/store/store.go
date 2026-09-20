@@ -80,6 +80,7 @@ type account struct {
 	CompactProtocol      string                       `json:"compact_protocol,omitempty"`
 	WebsocketSupported   *bool                        `json:"websocket_supported,omitempty"`
 	FingerprintMode      string                       `json:"fingerprint_mode,omitempty"`
+	MaxConcurrency       int                          `json:"max_concurrency"`
 	// FingerprintSeed is encrypted with the rest of the account document. It is
 	// deliberately absent from management views and credential exports.
 	FingerprintSeed string `json:"fingerprint_seed,omitempty"`
@@ -160,6 +161,10 @@ func (s *Store) loadEncrypted() error {
 			item.FingerprintMode = events.FingerprintModeScoped
 			migrated = true
 		}
+		if item.MaxConcurrency == 0 {
+			item.MaxConcurrency = events.DefaultMaxConcurrency
+			migrated = true
+		}
 		if reconcileFingerprintSeed(&item) {
 			migrated = true
 		}
@@ -199,6 +204,9 @@ func validatePersistedAccount(documentID string, item *account) error {
 	}
 	if item.CompactProtocol != nativeCompactProtocol {
 		return fmt.Errorf("account %q does not use the final compact protocol", documentID)
+	}
+	if !validMaxConcurrency(item.MaxConcurrency) {
+		return fmt.Errorf("account %q has invalid max concurrency", documentID)
 	}
 	return nil
 }
@@ -355,6 +363,9 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 			}
 			input.FingerprintMode = mode
 		}
+		if input.MaxConcurrency != 0 && !validMaxConcurrency(input.MaxConcurrency) {
+			return 0, 0, skipped, nil, fmt.Errorf("max_concurrency must be between %d and %d", events.MinMaxConcurrency, events.MaxMaxConcurrency)
+		}
 		seenRefresh[input.RefreshToken] = struct{}{}
 		seenAccess[input.AccessToken] = struct{}{}
 		normalized = append(normalized, input)
@@ -424,7 +435,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		rotateFingerprintSeed := existing != nil && !reauthenticated && strings.TrimSpace(input.TargetID) != "" &&
 			existing.AccessToken != input.AccessToken && existing.RefreshToken != input.RefreshToken
 		if existing == nil {
-			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeScoped}
+			existing = &account{ID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339), Status: events.StatusNormal, CompactProtocol: nativeCompactProtocol, FingerprintMode: events.FingerprintModeScoped, MaxConcurrency: events.DefaultMaxConcurrency}
 			s.items[existing.ID] = existing
 			s.order = append(s.order, existing.ID)
 			added++
@@ -456,6 +467,11 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 			existing.FingerprintMode = input.FingerprintMode
 		} else if existing.FingerprintMode == "" {
 			existing.FingerprintMode = events.FingerprintModeScoped
+		}
+		if input.MaxConcurrency != 0 {
+			existing.MaxConcurrency = input.MaxConcurrency
+		} else if existing.MaxConcurrency == 0 {
+			existing.MaxConcurrency = events.DefaultMaxConcurrency
 		}
 		if rotateFingerprintSeed {
 			existing.FingerprintSeed = ""
@@ -512,6 +528,12 @@ func unchangedCodexImport(existing *account, input events.CredentialInput) bool 
 	} else if fingerprintMode == "" {
 		fingerprintMode = events.FingerprintModeScoped
 	}
+	maxConcurrency := existing.MaxConcurrency
+	if input.MaxConcurrency != 0 {
+		maxConcurrency = input.MaxConcurrency
+	} else if maxConcurrency == 0 {
+		maxConcurrency = events.DefaultMaxConcurrency
+	}
 	return existing.AccessToken == input.AccessToken &&
 		existing.RefreshToken == input.RefreshToken &&
 		existing.IDToken == strings.TrimSpace(input.IDToken) &&
@@ -519,7 +541,8 @@ func unchangedCodexImport(existing *account, input events.CredentialInput) bool 
 		existing.Email == strings.TrimSpace(input.Email) &&
 		existing.Expired == strings.TrimSpace(input.Expired) &&
 		existing.Proxy == strings.TrimSpace(input.Proxy) &&
-		existing.FingerprintMode == fingerprintMode
+		existing.FingerprintMode == fingerprintMode &&
+		existing.MaxConcurrency == maxConcurrency
 }
 
 func (s *Store) Delete(ids []string) (int, error) {
@@ -550,9 +573,13 @@ func (s *Store) Delete(ids []string) (int, error) {
 	return deleted, s.saveLocked()
 }
 
-func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (events.AccountView, error) {
+func (s *Store) Update(id string, status, proxy, fingerprintMode *string, concurrency ...*int) (events.AccountView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var maxConcurrency *int
+	if len(concurrency) > 0 {
+		maxConcurrency = concurrency[0]
+	}
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
@@ -582,6 +609,9 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (event
 		}
 		normalizedMode = value
 	}
+	if maxConcurrency != nil && !validMaxConcurrency(*maxConcurrency) {
+		return events.AccountView{}, fmt.Errorf("max_concurrency must be between %d and %d", events.MinMaxConcurrency, events.MaxMaxConcurrency)
+	}
 	changed := false
 	if status != nil && item.Status != normalizedStatus {
 		item.Status = normalizedStatus
@@ -594,6 +624,9 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (event
 		item.FingerprintMode = normalizedMode
 		reconcileFingerprintSeed(item)
 	}
+	if maxConcurrency != nil {
+		item.MaxConcurrency = *maxConcurrency
+	}
 	if err := s.saveLocked(); err != nil {
 		return events.AccountView{}, err
 	}
@@ -601,6 +634,23 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string) (event
 		s.bumpCatalogLocked()
 	}
 	return toView(item, time.Now().UTC()), nil
+}
+
+// ConcurrencyLimits returns a detached account-to-limit snapshot for the
+// scheduler. A lowered limit takes effect for new leases immediately; active
+// leases are allowed to finish normally.
+func (s *Store) ConcurrencyLimits() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limits := make(map[string]int, len(s.items))
+	for id, item := range s.items {
+		limit := item.MaxConcurrency
+		if !validMaxConcurrency(limit) {
+			limit = events.DefaultMaxConcurrency
+		}
+		limits[id] = limit
+	}
+	return limits
 }
 
 func (s *Store) Acquire(model string, exclude []string) (events.AcquireResult, error) {
@@ -757,7 +807,7 @@ func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
 	if item == nil || strings.TrimSpace(item.RefreshToken) == "" {
 		return events.CredentialInput{}, false
 	}
-	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode}, true
+	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency}, true
 }
 
 func (s *Store) ClientIdentityProfile(id string) events.ClientIdentityProfile {
@@ -784,7 +834,7 @@ func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
 		result = append(result, events.CredentialInput{
 			CredentialType: "codex_cli",
 			AccessToken:    item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken,
-			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode,
+			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency,
 		})
 	}
 	return result
@@ -1169,6 +1219,7 @@ func toView(item *account, now time.Time) events.AccountView {
 		CompactSupported:           item.CompactSupported,
 		WebsocketSupported:         item.WebsocketSupported,
 		FingerprintMode:            item.FingerprintMode,
+		MaxConcurrency:             item.MaxConcurrency,
 	}
 	if item.ModelSnapshot != nil {
 		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)
@@ -1787,6 +1838,10 @@ func normalizeFingerprintMode(value string) (string, bool) {
 	default:
 		return events.FingerprintModeOff, false
 	}
+}
+
+func validMaxConcurrency(value int) bool {
+	return value >= events.MinMaxConcurrency && value <= events.MaxMaxConcurrency
 }
 
 func fingerprintModeRequiresSeed(mode string) bool {

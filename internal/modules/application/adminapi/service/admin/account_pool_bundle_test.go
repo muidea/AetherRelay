@@ -63,7 +63,7 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	codex := &codexAccountRuntimeStub{
 		accounts: []codexevents.AccountView{{ID: "codex-1", Email: "user@example.com"}},
-		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeScoped}},
+		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeScoped, MaxConcurrency: 3}},
 	}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/export", strings.NewReader(`{}`))
@@ -89,6 +89,9 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	if payload.Accounts[0].Slots.Codex.FingerprintMode != codexevents.FingerprintModeScoped {
 		t.Fatalf("export lost fingerprint mode: %+v", payload.Accounts[0].Slots.Codex)
+	}
+	if payload.Accounts[0].Slots.Codex.MaxConcurrency != 3 {
+		t.Fatalf("export lost max concurrency: %+v", payload.Accounts[0].Slots.Codex)
 	}
 	exportedAt, err := time.Parse(time.RFC3339, payload.ExportedAt)
 	if err != nil {
@@ -189,7 +192,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SCOPED "}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SCOPED ","max_concurrency":3}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -198,7 +201,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeScoped {
+	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeScoped || codex.imported[0].MaxConcurrency != 3 {
 		t.Fatalf("web imports=%+v codex imports=%+v", web.addedAccounts, codex.imported)
 	}
 }

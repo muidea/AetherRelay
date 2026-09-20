@@ -31,7 +31,6 @@ const (
 	oauthSessionMax           = 64
 	refreshLead               = 5 * time.Minute
 	defaultSessionAffinityTTL = time.Hour
-	defaultAccountConcurrency = 4
 )
 
 type sessionBinding struct {
@@ -197,11 +196,11 @@ func (s *Account) handleUpdate(ev event.Event, result event.Result) {
 		return
 	}
 	cmd, ok := ev.Data().(events.UpdateCommand)
-	if !ok || strings.TrimSpace(cmd.ID) == "" || (cmd.Status == nil && cmd.Proxy == nil && cmd.FingerprintMode == nil) {
+	if !ok || strings.TrimSpace(cmd.ID) == "" || (cmd.Status == nil && cmd.Proxy == nil && cmd.FingerprintMode == nil && cmd.MaxConcurrency == nil) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account update command"))
 		return
 	}
-	item, err := s.store.Update(cmd.ID, cmd.Status, cmd.Proxy, cmd.FingerprintMode)
+	item, err := s.store.Update(cmd.ID, cmd.Status, cmd.Proxy, cmd.FingerprintMode, cmd.MaxConcurrency)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -235,8 +234,13 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 			delete(s.sessions, strings.TrimSpace(cmd.SessionHash))
 		}
 	}
+	limits := s.store.ConcurrencyLimits()
 	for accountID, count := range s.inflight {
-		if count >= defaultAccountConcurrency {
+		limit := limits[accountID]
+		if limit <= 0 {
+			limit = events.DefaultMaxConcurrency
+		}
+		if count >= limit {
 			busy = append(busy, accountID)
 		}
 	}

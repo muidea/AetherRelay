@@ -365,7 +365,7 @@
 
 `CP-SCHED-004` 粘性账号不健康、不支持模型、额度耗尽或没有并发槽时可以解除绑定并重新选择；已产生输出的 turn 除外。
 
-`CP-SCHED-005` 每账号并发槽必须覆盖 HTTP/SSE/WS turn 的完整上游生命周期，并在取消、错误和 shutdown 时释放。
+`CP-SCHED-005` 每账号并发槽必须覆盖 HTTP/SSE/WS turn 的完整上游生命周期，并在取消、错误和 shutdown 时释放。上限是账号持久化字段 `max_concurrency`，默认 `2`、允许 `1–32`；独立 Codex 账号页与统一账号页必须显示并可修改，PATCH、凭据导入导出和整体账号池迁移不得丢失该值。降低上限不强杀已有 turn，只阻止新租约，直到在途数量回落；账号已满只产生 `accounts_busy`，不得写入冷却或 Provider 健康失败。
 
 `CP-SCHED-006` 账号选择结果和凭据只通过 typed EventHub command/result 跨 Block；HTTP handler 不接收 EventHub、Store 或 OAuth token。
 

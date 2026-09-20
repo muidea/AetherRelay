@@ -238,6 +238,36 @@ func TestCodexAccountPatchAcceptsExplicitFingerprintMode(t *testing.T) {
 	}
 }
 
+func TestCodexAccountPatchAcceptsMaxConcurrency(t *testing.T) {
+	runtime := &codexAccountRuntimeStub{}
+	handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/codex/accounts/account-1", strings.NewReader(`{"max_concurrency":3}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-AetherRelay-Admin", "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || runtime.updated.MaxConcurrency == nil || *runtime.updated.MaxConcurrency != 3 {
+		t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.updated, rec.Body.String())
+	}
+}
+
+func TestCodexAccountPatchRejectsInvalidMaxConcurrency(t *testing.T) {
+	for _, value := range []string{"0", "33"} {
+		t.Run(value, func(t *testing.T) {
+			runtime := &codexAccountRuntimeStub{}
+			handler := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+			req := httptest.NewRequest(http.MethodPatch, "/admin/api/codex/accounts/account-1", strings.NewReader(`{"max_concurrency":`+value+`}`))
+			req.RemoteAddr = "127.0.0.1:1234"
+			req.Header.Set("X-AetherRelay-Admin", "1")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || runtime.updated.ID != "" {
+				t.Fatalf("status=%d command=%+v body=%s", rec.Code, runtime.updated, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestCodexAccountPatchControlsCredentialStatus(t *testing.T) {
 	for _, status := range []string{codexevents.StatusDisabled, codexevents.StatusNormal} {
 		t.Run(status, func(t *testing.T) {
