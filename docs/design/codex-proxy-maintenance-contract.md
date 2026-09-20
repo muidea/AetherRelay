@@ -1,14 +1,16 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`12.0.1`
+> 合同版本：`12.1.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-19
+> 生效日期：2026-09-20
 >
 > 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`12.1.0` 恢复官方 CLI `X-Codex-Turn-Metadata.compaction` 的有界结构化透传：仅接受对象及已验证枚举 `reason=comp_hash_changed|context_limit|model_downshift|user_requested`、`phase=pre_turn|post_turn|mid_turn`，合法部分与其它 turn 属性一起进入 header 和 body 内嵌 metadata；非法类型、未知枚举与额外子字段继续按字段名进入 ignored-features，不记录值、不拒绝业务请求。`request_kind`、正文 `compaction_trigger`、beta feature 与既有有界诊断保持独立且一致。这恢复了此前仅供本地诊断、未交付上游的客户端信息，按 MINOR 发布。
 
 `12.0.1` 收口非 Codex 客户端及缺失信息边界：客户端实现身份在所有模式下按 User-Agent/Originator 原子组处理，任一缺失或非法时整组回落，禁止客户端字段与内置字段拼接；非 Codex 完整安全组合只在显式 `off` 下透传，`scoped` 未选出有效账号 profile 时使用内置 fallback。完全没有会话信号的请求改用服务端请求级 nonce 隔离调度 Session 与默认 cache key，不再共享固定 `default`，客户端可控的 `X-Request-ID` 不参与该 nonce。业务请求不因身份不具候选资格而拒绝，逐次诊断只记录有界原因枚举。上述行为补齐 `12.0.0` 已声明的原子身份和 `CP-SCHED-002` 请求域 session 合同，按 PATCH 发布。
 
@@ -240,7 +242,7 @@
 - **身份字段**（`installation_id`、`session_id`、`thread_id`、`window_id`）取本次 attempt 的代理身份：指纹收敛启用时来自账号 seed 快照（`CP-FP-002`/`CP-FP-005`），关闭时等于本次请求实际发送的 `Session-Id` / `Thread-Id` / `X-Codex-Window-Id`。三个载体（身份 header、`X-Codex-Turn-Metadata`、body `client_metadata`）必须字节一致，客户端原值只在字段级被忽略，不得回灌。
 - `window_id` 的**号段是身份字段中唯一的客户端来源**（`CP-HDR-010`）：会话段由代理决定，号段取客户端声明——`X-Codex-Window-Id` 的数值后缀优先，其次同一份元数据的 `window_number` 属性，都没有则为 `0`。号段只接受有界十进制整数，越界或不可解析按未声明处理，不得猜测；因此三个载体的 `window_id` 必须同源，且与 `window_number` 属性一致。号段属 turn 级信息，不构成会话身份，也不影响 `CP-HDR-007..009` 的隔离。
 - **turn 级字段**（`turn_id`、`root_turn_id`、`turn_started_at_unix_ms`）客户端声明则采用客户端值，未声明时回落指纹快照值或本次 attempt 生成值；它们不属于会话身份，因此不违反 `CP-HDR-007..010`，且在 failover 重试中保持同一 turn 标识。
-- **属性字段**（`window_number`、`context_window_id`、`request_kind`、`thread_source`、`sandbox`、`sandbox_mode`、`agent_name`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled`）原样透传，仅接受标量值，并且**只出现在 `X-Codex-Turn-Metadata` 与内嵌 `x-codex-turn-metadata` 的 JSON 中**。
+- **属性字段**（`window_number`、`context_window_id`、`request_kind`、`thread_source`、`sandbox`、`sandbox_mode`、`agent_name`、`auto_review_enabled`、`node_repl_auto_review_required`、`node_repl_disabled`）原样透传，仅接受标量值，并且**只出现在 `X-Codex-Turn-Metadata` 与内嵌 `x-codex-turn-metadata` 的 JSON 中**。`compaction` 是唯一允许的结构化属性：只保留对象中的有界 `reason`/`phase` 枚举；对象类型错误、未知枚举或其它子字段按具体字段名忽略，不能借此放宽任意嵌套对象。
 - body `client_metadata` 的**顶层投影值必须是字符串**，键集合不得超出 `CP-REQ-016` 的已知 Codex 键（`session_id`、`thread_id`、`turn_id`、`root_turn_id`、`x-codex-installation-id`、`x-codex-window-id`、`x-codex-turn-metadata` 等）：属性、数字与布尔值不得平铺到顶层，带类型信息只进内嵌 JSON。依据：现场验证 `gpt-5.6-sol` 在 `client_metadata.auto_review_enabled` 上返回 `invalid_type`（预期字符串、实际布尔）。
 - 解析来源优先 `X-Codex-Turn-Metadata` 头，缺失时回落到 body `client_metadata` 内嵌的同名 JSON（与 `CP-OBS-006` 的诊断解析同一顺序）。整体受有界上限约束：字段数、单值长度与总字节都必须设限，越界按未知键处理。
 - 白名单之外的键不转上游，并记入有界 ignored-features（字段名，不记值）；不得因为未知键拒绝整个请求，也不能让未知键改变字段归属。
@@ -490,6 +492,12 @@
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`12.1.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| Turn-Metadata compaction 有界结构化透传 | CP-HDR-011, CP-REQ-016, CP-OBS-006 | implemented | `proxyapi/service/proxy/codex_compat.go`, `codexupstream/biz/codex_identity.go` | `proxyapi/service/proxy/codex_turn_metadata_test.go`, `codexupstream/biz/biz_test.go` |
 
 `12.0.1` 新增实施追踪：
 

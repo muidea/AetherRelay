@@ -25,6 +25,7 @@ func TestCodexTurnMetadataProjectionSplitsOwnership(t *testing.T) {
 		"agent_name": "/root",
 		"auto_review_enabled": false,
 		"node_repl_disabled": true,
+		"compaction": {"reason":"context_limit","phase":"mid_turn","private_hint":"must-not-pass"},
 		"unknown_future_key": "must-not-pass"
 	}`
 	projection, ignored := codexTurnMetadataProjection(nil, raw)
@@ -37,6 +38,9 @@ func TestCodexTurnMetadataProjectionSplitsOwnership(t *testing.T) {
 			t.Fatalf("CP-HDR-011 attributes lost %s: %s", want, attributes)
 		}
 	}
+	if !strings.Contains(attributes, `"compaction":{"phase":"mid_turn","reason":"context_limit"}`) {
+		t.Fatalf("CP-HDR-011 compaction metadata lost: %s", attributes)
+	}
 	// 身份字段与未知键都不转上游。
 	for _, forbidden := range []string{"client-install", "client-session", "client-thread", "unknown_future_key"} {
 		if strings.Contains(attributes, forbidden) {
@@ -44,7 +48,7 @@ func TestCodexTurnMetadataProjectionSplitsOwnership(t *testing.T) {
 		}
 	}
 	joined := strings.Join(ignored, ",")
-	for _, want := range []string{"turn_metadata.session_id", "turn_metadata.thread_id", "turn_metadata.window_id", "turn_metadata.installation_id", "turn_metadata.unknown_future_key"} {
+	for _, want := range []string{"turn_metadata.session_id", "turn_metadata.thread_id", "turn_metadata.window_id", "turn_metadata.installation_id", "turn_metadata.compaction.private_hint", "turn_metadata.unknown_future_key"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("CP-HDR-011 ignored features missing %s: %v", want, ignored)
 		}
@@ -53,6 +57,35 @@ func TestCodexTurnMetadataProjectionSplitsOwnership(t *testing.T) {
 	scalarOnly, scalarIgnored := codexTurnMetadataProjection(nil, `{"sandbox":{"nested":true},"request_kind":"turn"}`)
 	if strings.Contains(string(scalarOnly.Attributes), "nested") || !strings.Contains(strings.Join(scalarIgnored, ","), "turn_metadata.sandbox") {
 		t.Fatalf("CP-HDR-011 non-scalar attribute=%s ignored=%v", scalarOnly.Attributes, scalarIgnored)
+	}
+}
+
+func TestCodexTurnMetadataCompactionStaysBounded(t *testing.T) {
+	projection, ignored := codexTurnMetadataProjection(nil, `{"request_kind":"compaction","compaction":{"reason":"context_limit","phase":"mid_turn","prompt":"secret"}}`)
+	attributes := string(projection.Attributes)
+	if !strings.Contains(attributes, `"compaction":{"phase":"mid_turn","reason":"context_limit"}`) || strings.Contains(attributes, "secret") {
+		t.Fatalf("CP-HDR-011 bounded compaction=%s", attributes)
+	}
+	if !strings.Contains(strings.Join(ignored, ","), "turn_metadata.compaction.prompt") {
+		t.Fatalf("CP-HDR-011 compaction ignored=%v", ignored)
+	}
+
+	projection, ignored = codexTurnMetadataProjection(nil, `{"compaction":{"reason":"private","phase":17}}`)
+	if strings.Contains(string(projection.Attributes), "compaction") {
+		t.Fatalf("CP-HDR-011 invalid compaction projection=%s", projection.Attributes)
+	}
+	joined := strings.Join(ignored, ",")
+	for _, want := range []string{"turn_metadata.compaction.reason", "turn_metadata.compaction.phase"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("CP-HDR-011 invalid compaction ignored=%v", ignored)
+		}
+	}
+
+	for _, raw := range []string{`{"compaction":null}`, `{"compaction":[]}`, `{"compaction":"context_limit"}`, `{"compaction":{}}`} {
+		projection, ignored = codexTurnMetadataProjection(nil, raw)
+		if strings.Contains(string(projection.Attributes), "compaction") || !strings.Contains(strings.Join(ignored, ","), "turn_metadata.compaction") {
+			t.Fatalf("CP-HDR-011 malformed compaction raw=%s projection=%s ignored=%v", raw, projection.Attributes, ignored)
+		}
 	}
 }
 

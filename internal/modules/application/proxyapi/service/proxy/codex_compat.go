@@ -217,6 +217,16 @@ func codexTurnMetadataProjection(headers http.Header, raw string) (codexresponse
 				continue
 			}
 			projection.TurnStartedAtMS = number
+		case "compaction":
+			if len(attributes) >= codexTurnMetadataMaxAttributes {
+				ignored = append(ignored, "turn_metadata.compaction")
+				continue
+			}
+			normalized, compactionIgnored, ok := boundedTurnMetadataCompaction(value)
+			ignored = append(ignored, compactionIgnored...)
+			if ok {
+				attributes[key] = normalized
+			}
 		default:
 			if _, allowed := codexTurnMetadataAttributes[key]; !allowed || len(attributes) >= codexTurnMetadataMaxAttributes || !boundedTurnMetadataScalar(value) {
 				ignored = append(ignored, "turn_metadata."+key)
@@ -306,6 +316,62 @@ func boundedTurnMetadataScalar(raw json.RawMessage) bool {
 		var number json.Number
 		return json.Unmarshal(raw, &number) == nil
 	}
+}
+
+// boundedTurnMetadataCompaction is the sole structured Turn-Metadata attribute.
+// Official Codex clients use it to describe why and when a compaction request was
+// generated. Keep only the protocol enums already accepted by diagnostics; every
+// other nested value remains fail-closed and is reported by field name.
+func boundedTurnMetadataCompaction(raw json.RawMessage) (json.RawMessage, []string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || len(trimmed) > codexTurnMetadataValueLimit || trimmed[0] != '{' {
+		return nil, []string{"turn_metadata.compaction"}, false
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(trimmed, &envelope) != nil || envelope == nil {
+		return nil, []string{"turn_metadata.compaction"}, false
+	}
+	keys := make([]string, 0, len(envelope))
+	for key := range envelope {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	normalized := make(map[string]string, 2)
+	ignored := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value, ok := boundedTurnMetadataString(envelope[key])
+		if !ok {
+			ignored = append(ignored, "turn_metadata.compaction."+key)
+			continue
+		}
+		switch key {
+		case "reason":
+			if !codexresponses.ValidCompactionReason(value) {
+				ignored = append(ignored, "turn_metadata.compaction.reason")
+				continue
+			}
+			normalized[key] = value
+		case "phase":
+			if !codexresponses.ValidCompactionPhase(value) {
+				ignored = append(ignored, "turn_metadata.compaction.phase")
+				continue
+			}
+			normalized[key] = value
+		default:
+			ignored = append(ignored, "turn_metadata.compaction."+key)
+		}
+	}
+	if len(normalized) == 0 {
+		if len(envelope) == 0 {
+			ignored = append(ignored, "turn_metadata.compaction")
+		}
+		return nil, ignored, false
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, append(ignored, "turn_metadata.compaction"), false
+	}
+	return encoded, ignored, true
 }
 
 // codexTurnStateFromHeaders applies the CP-HDR-012 boundary to an inbound turn

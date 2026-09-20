@@ -6,7 +6,7 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `12.0.1` 工作树（2026-09-19）
+> 实现基线：AetherRelay `12.1.0` 工作树（2026-09-20）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
 
@@ -169,8 +169,9 @@ Turn 是一次逻辑交互，生命周期短于 Session，但不必等于一次 
 - `turn_started_at_unix_ms`
 - `request_kind`
 - `window_number` 及其它 `CP-HDR-011` 白名单属性
+- `compaction`：唯一允许的结构化属性，只保留已验证枚举中的 `reason` 与 `phase`
 
-客户端未声明 `root_turn_id` 时可以回落到 `turn_id`；fingerprint profile 仅在客户端未声明 turn 字段时提供 attempt 级兜底。
+客户端未声明 `root_turn_id` 时可以回落到 `turn_id`；fingerprint profile 仅在客户端未声明 turn 字段时提供 attempt 级兜底。`compaction` 不参与身份、调度或 Turn-State scope，但合法部分必须随不可变语义胶囊进入每个 attempt 的 header 与 body 内嵌 metadata；正文 `compaction_trigger` 仍是执行远程压缩的独立协议信号。
 
 ### 2.9 Client Identity Profile
 

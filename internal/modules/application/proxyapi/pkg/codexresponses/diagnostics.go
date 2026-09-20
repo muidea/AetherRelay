@@ -32,13 +32,31 @@ func ParseDiagnostics(metadata string) Diagnostics {
 	case "turn", "compaction":
 		result.RequestKind = value.Kind
 	}
-	switch value.Compaction.Reason {
-	case "comp_hash_changed", "context_limit", "model_downshift", "user_requested":
+	if ValidCompactionReason(value.Compaction.Reason) {
 		result.CompactionReason = value.Compaction.Reason
 	}
-	switch value.Compaction.Phase {
-	case "pre_turn", "post_turn", "mid_turn":
+	if ValidCompactionPhase(value.Compaction.Phase) {
 		result.CompactionPhase = value.Compaction.Phase
 	}
 	return result
+}
+
+// ValidCompactionReason and ValidCompactionPhase are the shared bounded enums
+// used by both diagnostics and the CP-HDR-011 metadata projection.
+func ValidCompactionReason(value string) bool {
+	switch value {
+	case "comp_hash_changed", "context_limit", "model_downshift", "user_requested":
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidCompactionPhase(value string) bool {
+	switch value {
+	case "pre_turn", "post_turn", "mid_turn":
+		return true
+	default:
+		return false
+	}
 }

@@ -778,7 +778,7 @@ func TestPerformUsesAllowlistedCodexFeatureHeaders(t *testing.T) {
 func TestCodexTurnMetadataCarriersStayConsistent(t *testing.T) {
 	projection := events.TurnMetadata{
 		TurnID: "client-turn", RootTurnID: "client-root-turn", TurnStartedAtMS: 1789711880466,
-		Attributes: []byte(`{"request_kind":"turn","sandbox_mode":"read-only","window_number":3}`),
+		Attributes: []byte(`{"compaction":{"reason":"context_limit","phase":"mid_turn"},"request_kind":"compaction","sandbox_mode":"read-only","window_number":3}`),
 	}
 	profile := codexRequestProfile{sessionHash: "session-hash", turnMetadata: projection}
 
@@ -800,10 +800,14 @@ func TestCodexTurnMetadataCarriersStayConsistent(t *testing.T) {
 	if metadata["turn_id"] != "client-turn" || metadata["root_turn_id"] != "client-root-turn" || metadata["turn_started_at_unix_ms"] != float64(1789711880466) {
 		t.Fatalf("CP-HDR-011 turn level=%v", metadata)
 	}
-	for key, want := range map[string]any{"request_kind": "turn", "sandbox_mode": "read-only", "window_number": float64(3)} {
+	for key, want := range map[string]any{"request_kind": "compaction", "sandbox_mode": "read-only", "window_number": float64(3)} {
 		if metadata[key] != want {
 			t.Fatalf("CP-HDR-011 attribute %s=%v want %v", key, metadata[key], want)
 		}
+	}
+	compaction, _ := metadata["compaction"].(map[string]any)
+	if compaction["reason"] != "context_limit" || compaction["phase"] != "mid_turn" {
+		t.Fatalf("CP-HDR-011 compaction metadata=%v", metadata)
 	}
 	// 客户端身份即使出现在投影里也不会被采用（身份键在入站侧已被剥离，这里验证
 	// 载体自身不会回灌）。
@@ -829,7 +833,7 @@ func TestCodexTurnMetadataCarriersStayConsistent(t *testing.T) {
 	}
 	// 属性只进内嵌 JSON：顶层只允许已知的字符串键（上游以 invalid_type 拒绝其它类型）。
 	embedded, _ := envelope.ClientMetadata["x-codex-turn-metadata"].(string)
-	if !strings.Contains(embedded, `"sandbox_mode":"read-only"`) || !strings.Contains(embedded, `"window_number":3`) {
+	if !strings.Contains(embedded, `"sandbox_mode":"read-only"`) || !strings.Contains(embedded, `"window_number":3`) || !strings.Contains(embedded, `"compaction":{"phase":"mid_turn","reason":"context_limit"}`) {
 		t.Fatalf("CP-HDR-011 embedded metadata=%s", embedded)
 	}
 	for key, value := range envelope.ClientMetadata {
