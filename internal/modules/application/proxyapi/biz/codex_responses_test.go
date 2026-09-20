@@ -362,6 +362,16 @@ func TestResolvedCodexClientIdentityUsesScopedSelectionAndOffPassthrough(t *test
 	rawUserAgent := "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
 	selectedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
 	profile := accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.155.0"}
+	// Cross-protocol adapters deliberately send no source identity candidate.
+	for _, mode := range []string{accevents.FingerprintModeScoped, accevents.FingerprintModeOff} {
+		converted := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: mode, ClientIdentity: profile}, "", "")
+		if mode == accevents.FingerprintModeScoped && converted.UserAgent != selectedUserAgent {
+			t.Fatal("converted scoped request lost account profile")
+		}
+		if mode == accevents.FingerprintModeOff && converted != (upevents.ClientIdentity{}) {
+			t.Fatal("converted off request must use native transport fallback")
+		}
+	}
 
 	scoped := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeScoped, ClientIdentity: profile}, rawUserAgent, "codex-tui")
 	if scoped.UserAgent != selectedUserAgent || scoped.Originator != "codex-tui" {

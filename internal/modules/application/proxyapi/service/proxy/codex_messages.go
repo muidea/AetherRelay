@@ -19,6 +19,23 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	capability := config.ConversionCapability{Level: 2, Text: true, Tools: true, Streaming: true, Continuation: true}
+	var err error
+	capability, err = anthropicTargetReasoning(body, h.currentConfig().ModelMetadata[model], capability)
+	if err != nil {
+		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
+		return
+	}
+	if session := anthropicEmbeddedSession(body); session != "" {
+		header := strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id"))
+		if header != "" && header != session {
+			h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, fmt.Errorf("metadata.user_id.session_id conflicts with session header")))
+			return
+		}
+		if header == "" {
+			r = r.Clone(r.Context())
+			r.Header.Set("X-Claude-Code-Session-Id", session)
+		}
+	}
 	responsesBody, degraded, err := buildResponsesFromAnthropicWithCapability(body, model, stream, capability)
 	if err != nil {
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
@@ -47,7 +64,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	}
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
 	diagnostics := codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
-	userAgent, originator := codexClientIdentityWithDiagnostics(r.Header, &diagnostics)
+	userAgent, originator := codexConvertedClientIdentityWithDiagnostics(r.Header, &diagnostics)
 	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
 	request.Diagnostics = diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())

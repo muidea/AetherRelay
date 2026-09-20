@@ -216,7 +216,7 @@
 | --- | --- | --- |
 | `Authorization` | generate：只来自选中账号 | `CP-HDR-001` |
 | `ChatGPT-Account-ID` | generate：只来自选中账号 | `CP-HDR-002` |
-| `User-Agent` | `off`：完整安全客户端组合逐请求复用；`scoped`：使用所选账号的客户端来源 profile；整组缺失、无效或未选中时回落内置 profile | `CP-HDR-003` |
+| `User-Agent` | 原生入口 `off`：完整安全客户端组合逐请求复用；`scoped`：使用所选账号的客户端来源 profile；跨协议入口不观察或透传源 UA/Originator，`off` 使用内置 Codex profile，`scoped` 使用账号 profile；缺失时整组回落内置 profile | `CP-HDR-003` |
 | `Originator` | 与 `User-Agent` 作为不可拆分 profile 同源选择；不得独立拼接 | `CP-HDR-004` |
 | `Accept` | generate：HTTP Responses 与 compact upstream 均为 SSE；compact downstream 再投影 JSON/SSE | `CP-HDR-005` |
 | `OpenAI-Beta` | generate/merge allowlist：WebSocket beta | `CP-HDR-006` |
@@ -351,6 +351,10 @@
 
 ## 8. 账号调度与会话粘性
 
+跨协议→Codex 的出站验收必须同时检查源协议字段不泄漏和目标字段不缺失。Messages/Chat 转换不得向执行器提交源 UA/Originator 候选，即使它看起来是合法 Codex 客户端组合；不得透传 Anthropic/Stainless/Claude 专有请求头。正文经 Codex normalizer 强制 stream=true、store=false，补齐 instructions、缓存身份；max_tokens 等兼容但不支持的控制项清理并记录降级。上游 Block 从账号和会话投影补齐鉴权、账号头、Codex UA/Originator、Beta、Session/Thread/Window/Turn 及一致的 client_metadata；Installation、Turn-State、工具与推理字段按适用条件生成，不把可选字段错误地当成全模式必填。HTTP/SSE 两个转换入口及 off/scoped 均须覆盖验收。
+
+Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_id` 和系统/消息块 ephemeral 缓存提示，并分别记录 `metadata.user_id`、`cache_control` 降级，保留正文与工具 schema；未知扩展不放行。Codex 入口识别已验证 Claude 身份封装并核对会话头，按模型声明将 adaptive thinking 和客户端 effort 映射到 Responses reasoning，不支持的 effort 拒绝。普通 Responses Provider 已启用对应推理适配时，同样按目标模型验证显式 effort。详见身份语义基准的 Claude Messages 转换补充。
+
 `5.0.1` 固化 `CP-SCHED-009`：首次选择、PreferredID/session 粘性及任何重试切号，必须在账号 owner 锁内用与 `CP-CAP-010` 管理投影相同的模型可用性判定重新检查。只 trim 首尾空白，模型 ID 大小写敏感、精确匹配；不得用目录并集、静态 profile、相似名称或别名替代账号自身的有效快照。模型缺失/未知、快照过期、账号不可用、模型或账号冷却、有效额度耗尽均不得选中；并发及 transport 约束只可进一步收紧。无候选立即失败，不放宽模型条件。验收覆盖三个 transport 的不支持/过期/冷却/粘性候选跳过、切号前状态变化和全部候选不可用。
 
 `CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → 额度证据 → LRU/round-robin。
@@ -365,7 +369,7 @@
 
 `CP-SCHED-004` 粘性账号不健康、不支持模型、额度耗尽或没有并发槽时可以解除绑定并重新选择；已产生输出的 turn 除外。
 
-`CP-SCHED-005` 每账号并发槽必须覆盖 HTTP/SSE/WS turn 的完整上游生命周期，并在取消、错误和 shutdown 时释放。上限是账号持久化字段 `max_concurrency`，默认 `2`、允许 `1–32`；独立 Codex 账号页与统一账号页必须显示并可修改，PATCH、凭据导入导出和整体账号池迁移不得丢失该值。降低上限不强杀已有 turn，只阻止新租约，直到在途数量回落；账号已满只产生 `accounts_busy`，不得写入冷却或 Provider 健康失败。
+`CP-SCHED-005` 每账号并发槽必须覆盖 HTTP/SSE/WS turn 的完整上游生命周期，并在取消、错误和 shutdown 时释放。上限是账号持久化字段 `max_concurrency`，默认 `2`、允许 `1–32`；独立 Codex 账号页与统一账号页必须显示并可修改，账号属性先形成页面草稿，只有显式“保存设置”才把同账号的多项变更合并为一次 PATCH，取消不得发送请求。凭据导入导出和整体账号池迁移不得丢失该值。降低上限不强杀已有 turn，只阻止新租约，直到在途数量回落；账号已满只产生 `accounts_busy`，不得写入冷却或 Provider 健康失败。
 
 `CP-SCHED-006` 账号选择结果和凭据只通过 typed EventHub command/result 跨 Block；HTTP handler 不接收 EventHub、Store 或 OAuth token。
 

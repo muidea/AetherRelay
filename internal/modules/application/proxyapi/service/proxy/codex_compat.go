@@ -78,7 +78,7 @@ func codexIgnoredHeaderNames(r *http.Request) []string {
 }
 
 var codexDropCompatibleFields = []string{
-	"max_output_tokens", "max_completion_tokens", "temperature", "top_p",
+	"max_output_tokens", "max_completion_tokens", "max_tokens", "temperature", "top_p",
 	"frequency_penalty", "presence_penalty", "user", "metadata",
 	"prompt_cache_retention", "prompt_cache_options", "safety_identifier", "truncation",
 }
@@ -408,6 +408,17 @@ func codexClientIdentityWithDiagnostics(headers http.Header, diagnostics *codexr
 		diagnostics.ClientIdentityReason = codexClientIdentityReason(headers)
 	}
 	return codexClientIdentity(headers)
+}
+
+// A converted request has a Codex upstream identity, not the source SDK's
+// identity. Empty candidates preserve the account's verified scoped profile;
+// without one (including off mode) the transport uses its native Codex pair.
+// Keep only the bounded classification for local diagnostics.
+func codexConvertedClientIdentityWithDiagnostics(headers http.Header, diagnostics *codexresponses.Diagnostics) (string, string) {
+	if diagnostics != nil {
+		diagnostics.ClientIdentityReason = codexClientIdentityReason(headers)
+	}
+	return "", ""
 }
 
 func boundedCodexIdentityValue(value string, limit int) string {

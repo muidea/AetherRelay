@@ -284,6 +284,10 @@ Upstream Window       = Upstream Thread + ":" + ClientWindowNumber
 
 ### 6.3 客户端实现身份收敛
 
+跨协议转换优先遵守目标协议合同：Anthropic Messages、OpenAI Chat 转 Codex 时，不把源客户端 UA/Originator 提交为账号身份候选，亦不透传它们。`scoped` 使用账号已选的有效 Codex profile，无可用 profile 时整组回落内置 Codex 身份；`off` 在跨协议入口同样整组使用内置 Codex 身份，不能绕过目标协议边界。下述客户端候选观察规则适用于原生 Codex/Responses 入口。
+
+转换后的正文统一通过 Codex normalizer；目标层负责补齐 instructions、stream=true、store=false、缓存身份和每次尝试的 client_metadata，账号层负责鉴权、账号头及 Session/Thread/Window/Turn 投影。Installation 只在 scoped 下发送；Turn-State 依现有来源和回填规则处理，不能为凑齐字段编造。Anthropic-Version/Beta、X-Stainless-*、X-Claude-* 和 metadata.user_id、cache_control、thinking/output_config 的源协议形态不进入上游协议封装。消息文本、工具 schema/参数中的同名业务字段不属于协议头或封装，不得误删。
+
 账号选择发生前，当前请求携带原始 `User-Agent`/`Originator` 候选，但候选只有在账号实际入选后才可影响该账号。首次有效候选建立 profile；之后按 family 优先级和版本单调晋升。failover 时每个实际尝试的账号独立观察同一客户端候选，未被选中的账号不得被预热。
 
 选择结果是账号物理投影的一部分，而不是 LogicalConversation 的一部分。因此多个下游 CLI 使用同一账号时仍保留各自 Session/Thread 隔离，但上游看到稳定的账号级客户端实现身份；不同账号可因各自观察历史而使用不同 profile。
@@ -418,6 +422,14 @@ AccountProjection
 未确认项不得被实现注释或对外文档表述为现场事实；只能标记为合同决策、自动化测试覆盖或待验证假设。
 
 ## 9. 后续开发检查表
+
+### Claude Messages 转换补充（2026-09-20）
+
+现场 `claude-owner/001141` 完整请求确认：`metadata.user_id` 是含 `device_id`、空 `account_uuid`、`session_id` 的 JSON 字符串，内嵌 session 与 `X-Claude-Code-Session-Id` 相等；系统和消息文本包含 ephemeral 缓存提示，推理参数为 adaptive + max。这是已观察的客户端封装，不是所有 Anthropic user_id 的通用格式。
+
+Anthropic→Responses 转换校验 `metadata.user_id` 类型，未知 metadata 键继续拒绝；该用户标识不向 Responses 透传，记录 `metadata.user_id` 降级。Codex 入口仅识别上述三字段封装，缺失会话头时补入路由专用会话信号，头与正文冲突时拒绝；普通 opaque user_id 不参与会话派生。设备与账号标识不得直接成为上游 Installation。该路由信号继续不进入 prompt_cache_key。
+
+ephemeral 缓存提示（可选 ttl=5m/1h）在系统/消息内容块中校验后移除，并记录 `cache_control` 降级；不改正文或工具 schema，不承诺保留 Anthropic 缓存边界或计费语义。Codex 推理适配按目标模型声明校验客户端 effort，adaptive + max 映射为 reasoning.effort=max；目标不支持时拒绝，不静默降到默认 effort。以上为实现与离线测试合同，部署后的真实终态仍需验证。
 
 涉及本文字段的每次修改必须完成：
 

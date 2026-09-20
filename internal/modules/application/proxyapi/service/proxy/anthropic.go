@@ -227,6 +227,11 @@ func conversionFeatureFromError(err error) string {
 		return ""
 	}
 	msg := err.Error()
+	for _, prefix := range []string{"metadata.", "cache_control", "output_config."} {
+		if strings.HasPrefix(msg, prefix) {
+			return strings.Fields(msg)[0]
+		}
+	}
 	// 从已知错误文案提取 feature 名。
 	for _, key := range []string{
 		"tools", "tool_choice", "functions", "function_call", "response_format",

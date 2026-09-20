@@ -16,7 +16,7 @@ function functionSource(name){
 function harness(options={}){
   const requests=[],messages=[],reloads={codex:0};
   const context=vm.createContext({
-    state:{locale:'zh-CN',unified:{loading:false,updating:new Set()},cg:{accounts:[]},codex:{accounts:[],busy:false}},
+    state:{locale:'zh-CN',unified:{loading:false,updating:new Set()},cg:{accounts:[]},codex:{accounts:[],settingsDrafts:new Map(),busy:false}},
     t:(text,values={})=>text.replace(/\{(\w+)\}/g,(_,key)=>values[key]??''),
     request:async(url,requestOptions)=>{requests.push({url,options:requestOptions});if(options.request)return options.request(url,requestOptions);return {item:{}}},
     apiURL:path=>`/admin${path}`,
@@ -27,9 +27,10 @@ function harness(options={}){
     loadCodexAccounts:async()=>{reloads.codex++},
     renderCodexAccounts:()=>{},
     renderUnifiedAccounts:()=>{},
+    document:{querySelectorAll:()=>[]},
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0],context);
-  for(const name of ['normalizedCodexFingerprintMode','unifiedCredentialKey','codexFingerprintControl','codexConcurrencyControl','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode','updateCodexMaxConcurrency']){
+  for(const name of ['normalizedCodexFingerprintMode','unifiedCredentialKey','codexSettingsValue','codexSettingsDirty','codexFingerprintControl','codexConcurrencyControl','codexSettingsActions','refreshCodexSettingsDraftUI','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode','updateCodexMaxConcurrency','cancelCodexAccountSettings','saveCodexAccountSettings']){
     vm.runInContext(functionSource(name),context);
   }
   return {context,requests,messages,reloads};
@@ -45,47 +46,52 @@ test('unified account fingerprint control exposes off and scoped modes',()=>{
   assert.match(c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'}),/ disabled>/);
 });
 
-test('account concurrency control defaults to two and patches the selected account',async()=>{
+test('account settings remain local until one explicit save',async()=>{
   const {context:c,requests,messages}=harness({request:async()=>({item:{id:'codex/id',max_concurrency:3}})});
   assert.match(c.codexConcurrencyControl({id:'codex/id'}),/value="2"/);
-  c.state.codex.accounts=[{id:'codex/id',max_concurrency:2}];
+  c.state.codex.accounts=[{id:'codex/id',fingerprint_mode:'scoped',max_concurrency:2}];
   const input={dataset:{codexConcurrency:'codex/id'},value:'3',disabled:false};
-  await c.updateCodexMaxConcurrency(input);
+  c.updateCodexMaxConcurrency(input);
+  c.updateCodexFingerprintMode({dataset:{codexFingerprint:'codex/id'},value:'off'});
+  assert.equal(requests.length,0);
+  assert.match(c.codexSettingsActions(c.state.codex.accounts[0]),/data-codex-settings-save="codex\/id"/);
+  await c.saveCodexAccountSettings('codex/id');
   assert.equal(requests[0].url,'/admin/api/codex/accounts/codex%2Fid');
-  assert.deepEqual(JSON.parse(requests[0].options.body),{max_concurrency:3});
+  assert.deepEqual(JSON.parse(requests[0].options.body),{fingerprint_mode:'off',max_concurrency:3});
   assert.equal(c.state.codex.accounts[0].max_concurrency,3);
   assert.equal(c.state.unified.updating.size,0);
-  assert.deepEqual(messages.map(item=>item.message),['Codex 账号最大并发已设为 3']);
+  assert.equal(c.state.codex.settingsDrafts.size,0);
+  assert.deepEqual(messages.map(item=>item.message),['Codex 账号设置已保存']);
 });
 
-test('account concurrency control rejects values outside one to thirty-two',async()=>{
+test('account concurrency control rejects values outside one to thirty-two',()=>{
   const {context:c,requests,messages,reloads}=harness();
-  await c.updateCodexMaxConcurrency({dataset:{codexConcurrency:'codex-1'},value:'0',disabled:false});
+  c.updateCodexMaxConcurrency({dataset:{codexConcurrency:'codex-1'},value:'0',disabled:false});
   assert.equal(requests.length,0);
-  assert.equal(reloads.codex,1);
+  assert.equal(reloads.codex,0);
   assert.deepEqual(messages,[{message:'最大并发必须是 1 到 32 之间的整数',tone:'error'}]);
 });
 
-test('unified account fingerprint control patches mode and clears busy state',async()=>{
+test('cancel discards staged account settings without a request',()=>{
   const {context:c,requests,messages}=harness({request:async()=>({item:{id:'codex/id',fingerprint_mode:'scoped'}})});
   c.state.codex.accounts=[{id:'codex/id',fingerprint_mode:'off'}];
   const select={dataset:{codexFingerprint:'codex/id'},value:'scoped',disabled:false};
-  await c.updateCodexFingerprintMode(select);
-  assert.equal(requests[0].url,'/admin/api/codex/accounts/codex%2Fid');
-  assert.deepEqual(JSON.parse(requests[0].options.body),{fingerprint_mode:'scoped'});
-  assert.equal(c.state.codex.accounts[0].fingerprint_mode,'scoped');
-  assert.equal(c.state.unified.updating.size,0);
-  assert.equal(select.disabled,false);
-  assert.deepEqual(messages.map(item=>item.message),['Codex 指纹收敛已设为 scoped']);
+  c.updateCodexFingerprintMode(select);
+  c.cancelCodexAccountSettings('codex/id');
+  assert.equal(requests.length,0);
+  assert.equal(c.state.codex.settingsDrafts.size,0);
+  assert.deepEqual(messages,[]);
 });
 
-test('failed fingerprint update reloads authoritative account state',async()=>{
+test('failed settings save preserves the draft for retry',async()=>{
   const {context:c,messages,reloads}=harness({request:async()=>{throw new Error('更新失败')}});
+  c.state.codex.accounts=[{id:'codex-1',fingerprint_mode:'off',max_concurrency:2}];
   const select={dataset:{codexFingerprint:'codex-1'},value:'scoped',disabled:false};
-  await c.updateCodexFingerprintMode(select);
-  assert.equal(reloads.codex,1);
+  c.updateCodexFingerprintMode(select);
+  await c.saveCodexAccountSettings('codex-1');
+  assert.equal(reloads.codex,0);
+  assert.equal(c.state.codex.settingsDrafts.size,1);
   assert.equal(c.state.unified.updating.size,0);
-  assert.equal(select.disabled,false);
   assert.deepEqual(messages,[{message:'更新失败',tone:'error'}]);
 });
 

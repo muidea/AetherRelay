@@ -990,6 +990,10 @@ func buildResponsesFromAnthropic(body map[string]any, model string, stream bool)
 }
 
 func buildResponsesFromAnthropicWithCapability(body map[string]any, model string, stream bool, capability config.ConversionCapability) ([]byte, []string, error) {
+	body, annotations, projectionErr := projectAnthropicAnnotations(body)
+	if projectionErr != nil {
+		return nil, nil, projectionErr
+	}
 	if err := rejectConversionFields(body, map[string]struct{}{
 		"model": {}, "messages": {}, "max_tokens": {}, "system": {}, "stream": {},
 		"temperature": {}, "top_p": {}, "tools": {}, "tool_choice": {}, "thinking": {}, "output_config": {},
@@ -1079,7 +1083,7 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 		return nil, nil, err
 	}
 	encoded, err := json.Marshal(out)
-	return encoded, ignored, err
+	return encoded, uniqueSortedFeatures(append(annotations, ignored...)), err
 }
 
 // disableResponsesReasoningForOmittedAnthropicThinking preserves the source

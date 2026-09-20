@@ -93,7 +93,7 @@ func TestCodexClientIdentityReachesExecutor(t *testing.T) {
 		},
 		"chat adapter": {
 			path: "/v1/chat/completions", body: `{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`,
-			userAgent: clientAgent, originator: "codex-tui", wantAgent: clientAgent, wantOriginat: "codex-tui", wantReason: "verified",
+			userAgent: clientAgent, originator: "codex-tui", wantAgent: "", wantOriginat: "", wantReason: "verified",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -176,12 +176,12 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 			t.Fatalf("admin page missing provider source marker %q", marker)
 		}
 	}
-	for _, marker := range []string{"function codexFingerprintControl(account)", "${codexFingerprintControl(account)}", `document.querySelectorAll("[data-codex-fingerprint]")`, "async function updateCodexFingerprintMode(select)", `JSON.stringify({fingerprint_mode:mode})`, "function validCodexImportFingerprintMode(value)"} {
+	for _, marker := range []string{"function codexFingerprintControl(account)", "${codexFingerprintControl(account)}", `document.querySelectorAll("[data-codex-fingerprint]")`, "function updateCodexFingerprintMode(select)", "function codexSettingsActions(account)", "function validCodexImportFingerprintMode(value)"} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing Codex fingerprint marker %q", marker)
 		}
 	}
-	for _, marker := range []string{"function codexConcurrencyControl(account)", "${codexConcurrencyControl(account)}", `document.querySelectorAll("[data-codex-concurrency]")`, "async function updateCodexMaxConcurrency(input)", `JSON.stringify({max_concurrency:value})`} {
+	for _, marker := range []string{"function codexConcurrencyControl(account)", "${codexConcurrencyControl(account)}", `document.querySelectorAll("[data-codex-concurrency]")`, "function updateCodexMaxConcurrency(input)", "async function saveCodexAccountSettings(id)", "JSON.stringify(payload)", `data-codex-settings-save=`} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("admin page missing Codex concurrency marker %q", marker)
 		}

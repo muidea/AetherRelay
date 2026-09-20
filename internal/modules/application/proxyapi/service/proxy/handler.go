@@ -2086,6 +2086,17 @@ func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw [
 				continue
 			}
 			capability, _ := h.declaredConversionCapability(plan)
+			if capability.Reasoning && capability.ReasoningAdapter == config.ReasoningAdapterAnthropicToResponsesEffort {
+				var err error
+				capability, err = anthropicTargetReasoning(body, h.currentConfig().ModelMetadata[plan.ModelID], capability)
+				if err != nil {
+					apiErr := conversionAPIError(plan, err)
+					if firstErr == nil {
+						firstErr = &apiErr
+					}
+					continue
+				}
+			}
 			conversionBody := h.withBoundedDefaultOutputLimit(plan, body)
 			encoded, degraded, err := buildResponsesFromAnthropicWithCapability(conversionBody, plan.ModelID, stream, capability)
 			if err != nil {
