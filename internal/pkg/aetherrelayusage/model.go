@@ -33,37 +33,39 @@ type StartRecord struct {
 
 // CompleteRecord 是请求退出路径上的最终结算。
 type CompleteRecord struct {
-	EventID                  string
-	CompletedAt              time.Time
-	Provider                 string
-	Model                    string
-	UpstreamProtocol         string
-	UpstreamEndpoint         string
-	ConversionMode           string
-	ConversionLevel          int
-	ConversionDuration       time.Duration
-	ConversionDegraded       bool
-	IgnoredFeatures          []string
-	UnsupportedFeatures      []string
-	InputTokens              int64
-	OutputTokens             int64
-	CachedInputTokens        int64
-	CacheCreationInputTokens int64
-	HTTPStatus               int
-	Outcome                  string
-	ErrorCode                string
-	FailureClass             string
-	Retryable                *bool
-	RetryAfterSeconds        int
-	Duration                 time.Duration
-	FirstEventDuration       time.Duration
-	UpstreamDuration         time.Duration
-	UpstreamStatus           int
-	UpstreamContentType      string
-	UpstreamContentLength    int64
-	UpstreamTransferEncoding string
-	Stream                   bool
-	Estimated                bool
+	CachedInputTokensKnown        bool
+	CacheCreationInputTokensKnown bool
+	EventID                       string
+	CompletedAt                   time.Time
+	Provider                      string
+	Model                         string
+	UpstreamProtocol              string
+	UpstreamEndpoint              string
+	ConversionMode                string
+	ConversionLevel               int
+	ConversionDuration            time.Duration
+	ConversionDegraded            bool
+	IgnoredFeatures               []string
+	UnsupportedFeatures           []string
+	InputTokens                   int64
+	OutputTokens                  int64
+	CachedInputTokens             int64
+	CacheCreationInputTokens      int64
+	HTTPStatus                    int
+	Outcome                       string
+	ErrorCode                     string
+	FailureClass                  string
+	Retryable                     *bool
+	RetryAfterSeconds             int
+	Duration                      time.Duration
+	FirstEventDuration            time.Duration
+	UpstreamDuration              time.Duration
+	UpstreamStatus                int
+	UpstreamContentType           string
+	UpstreamContentLength         int64
+	UpstreamTransferEncoding      string
+	Stream                        bool
+	Estimated                     bool
 }
 
 // UsageFilter 用于 Dashboard / 导出筛选。
@@ -87,45 +89,51 @@ type EventFilter struct {
 
 // Summary 是聚合统计口径。
 type Summary struct {
-	CachedInputTokens        int64   `json:"cached_input_tokens"`
-	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
-	CacheHitRate             float64 `json:"cache_hit_rate"`
-	Requests                 int64   `json:"requests"`
-	SuccessRequests          int64   `json:"success_requests"`
-	FailedRequests           int64   `json:"failed_requests"`
-	InputTokens              int64   `json:"input_tokens"`
-	OutputTokens             int64   `json:"output_tokens"`
-	TotalTokens              int64   `json:"total_tokens"`
-	AvgTokensPerReq          float64 `json:"average_tokens_per_request"`
-	SuccessRate              float64 `json:"success_rate"`
+	CachedInputTokensKnown        bool    `json:"cached_input_tokens_known"`
+	CacheCreationInputTokensKnown bool    `json:"cache_creation_input_tokens_known"`
+	CachedInputTokens             int64   `json:"cached_input_tokens"`
+	CacheCreationInputTokens      int64   `json:"cache_creation_input_tokens"`
+	CacheHitRate                  float64 `json:"cache_hit_rate"`
+	Requests                      int64   `json:"requests"`
+	SuccessRequests               int64   `json:"success_requests"`
+	FailedRequests                int64   `json:"failed_requests"`
+	InputTokens                   int64   `json:"input_tokens"`
+	OutputTokens                  int64   `json:"output_tokens"`
+	TotalTokens                   int64   `json:"total_tokens"`
+	AvgTokensPerReq               float64 `json:"average_tokens_per_request"`
+	SuccessRate                   float64 `json:"success_rate"`
 }
 
 // DailyBucket 是按 UTC 日期的趋势点。
 type DailyBucket struct {
-	CachedInputTokens        int64   `json:"cached_input_tokens"`
-	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
-	CacheHitRate             float64 `json:"cache_hit_rate"`
-	Date                     string  `json:"date"`
-	Requests                 int64   `json:"requests"`
-	InputTokens              int64   `json:"input_tokens"`
-	OutputTokens             int64   `json:"output_tokens"`
-	TotalTokens              int64   `json:"total_tokens"`
+	CachedInputTokensKnown        bool    `json:"cached_input_tokens_known"`
+	CacheCreationInputTokensKnown bool    `json:"cache_creation_input_tokens_known"`
+	CachedInputTokens             int64   `json:"cached_input_tokens"`
+	CacheCreationInputTokens      int64   `json:"cache_creation_input_tokens"`
+	CacheHitRate                  float64 `json:"cache_hit_rate"`
+	Date                          string  `json:"date"`
+	Requests                      int64   `json:"requests"`
+	InputTokens                   int64   `json:"input_tokens"`
+	OutputTokens                  int64   `json:"output_tokens"`
+	TotalTokens                   int64   `json:"total_tokens"`
 }
 
 // KeySummary 是按 api_key_id 的汇总。
 type KeySummary struct {
-	CachedInputTokens        int64      `json:"cached_input_tokens"`
-	CacheCreationInputTokens int64      `json:"cache_creation_input_tokens"`
-	CacheHitRate             float64    `json:"cache_hit_rate"`
-	APIKeyID                 string     `json:"api_key_id"`
-	Status                   string     `json:"status,omitempty"`
-	Requests                 int64      `json:"requests"`
-	SuccessRequests          int64      `json:"success_requests"`
-	FailedRequests           int64      `json:"failed_requests"`
-	InputTokens              int64      `json:"input_tokens"`
-	OutputTokens             int64      `json:"output_tokens"`
-	TotalTokens              int64      `json:"total_tokens"`
-	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
+	CachedInputTokensKnown        bool       `json:"cached_input_tokens_known"`
+	CacheCreationInputTokensKnown bool       `json:"cache_creation_input_tokens_known"`
+	CachedInputTokens             int64      `json:"cached_input_tokens"`
+	CacheCreationInputTokens      int64      `json:"cache_creation_input_tokens"`
+	CacheHitRate                  float64    `json:"cache_hit_rate"`
+	APIKeyID                      string     `json:"api_key_id"`
+	Status                        string     `json:"status,omitempty"`
+	Requests                      int64      `json:"requests"`
+	SuccessRequests               int64      `json:"success_requests"`
+	FailedRequests                int64      `json:"failed_requests"`
+	InputTokens                   int64      `json:"input_tokens"`
+	OutputTokens                  int64      `json:"output_tokens"`
+	TotalTokens                   int64      `json:"total_tokens"`
+	LastUsedAt                    *time.Time `json:"last_used_at,omitempty"`
 }
 
 // ClientAPIKeyMetadata stores lifecycle timestamps independently from the
@@ -164,47 +172,50 @@ type ScopeInfo struct {
 
 // Event 是一条安全明细(无正文/密钥)。
 type Event struct {
-	CacheHitRate             float64    `json:"cache_hit_rate"`
-	EventID                  string     `json:"event_id"`
-	RoundID                  int64      `json:"round_id,omitempty"`
-	StartedAt                time.Time  `json:"started_at"`
-	CompletedAt              *time.Time `json:"completed_at,omitempty"`
-	APIKeyID                 string     `json:"api_key_id"`
-	Provider                 string     `json:"provider,omitempty"`
-	Model                    string     `json:"model,omitempty"`
-	Operation                string     `json:"operation,omitempty"`
-	Route                    string     `json:"route,omitempty"`
-	ClientEndpoint           string     `json:"client_endpoint,omitempty"`
-	ClientProtocol           string     `json:"client_protocol,omitempty"`
-	UpstreamProtocol         string     `json:"upstream_protocol,omitempty"`
-	UpstreamEndpoint         string     `json:"upstream_endpoint,omitempty"`
-	ConversionMode           string     `json:"conversion_mode,omitempty"`
-	ConversionLevel          int        `json:"conversion_level,omitempty"`
-	ConversionDurationMS     int64      `json:"conversion_duration_ms,omitempty"`
-	ConversionDegraded       bool       `json:"conversion_degraded,omitempty"`
-	IgnoredFeatures          []string   `json:"ignored_features,omitempty"`
-	UnsupportedFeatures      []string   `json:"unsupported_features,omitempty"`
-	InputTokens              int64      `json:"input_tokens"`
-	OutputTokens             int64      `json:"output_tokens"`
-	TotalTokens              int64      `json:"total_tokens"`
-	CachedInputTokens        int64      `json:"cached_input_tokens"`
-	CacheCreationInputTokens int64      `json:"cache_creation_input_tokens"`
-	HTTPStatus               int        `json:"http_status,omitempty"`
-	Outcome                  string     `json:"outcome,omitempty"`
-	ErrorCode                string     `json:"error_code,omitempty"`
-	FailureClass             string     `json:"failure_class,omitempty"`
-	Retryable                *bool      `json:"retryable,omitempty"`
-	RetryAfterSeconds        int        `json:"retry_after_seconds,omitempty"`
-	DurationMS               int64      `json:"duration_ms,omitempty"`
-	FirstEventDurationMS     int64      `json:"first_event_duration_ms,omitempty"`
-	UpstreamDurationMS       int64      `json:"upstream_duration_ms,omitempty"`
-	UpstreamStatus           int        `json:"upstream_status,omitempty"`
-	UpstreamContentType      string     `json:"upstream_content_type,omitempty"`
-	UpstreamContentLength    int64      `json:"upstream_content_length,omitempty"`
-	UpstreamTransferEncoding string     `json:"upstream_transfer_encoding,omitempty"`
-	Stream                   bool       `json:"stream"`
-	Estimated                bool       `json:"estimated"`
-	State                    string     `json:"state"`
+	CachedInputTokensKnown        bool       `json:"cached_input_tokens_known"`
+	CacheCreationInputTokensKnown bool       `json:"cache_creation_input_tokens_known"`
+	UpstreamContentLengthKnown    bool       `json:"upstream_content_length_known"`
+	CacheHitRate                  float64    `json:"cache_hit_rate"`
+	EventID                       string     `json:"event_id"`
+	RoundID                       int64      `json:"round_id,omitempty"`
+	StartedAt                     time.Time  `json:"started_at"`
+	CompletedAt                   *time.Time `json:"completed_at,omitempty"`
+	APIKeyID                      string     `json:"api_key_id"`
+	Provider                      string     `json:"provider,omitempty"`
+	Model                         string     `json:"model,omitempty"`
+	Operation                     string     `json:"operation,omitempty"`
+	Route                         string     `json:"route,omitempty"`
+	ClientEndpoint                string     `json:"client_endpoint,omitempty"`
+	ClientProtocol                string     `json:"client_protocol,omitempty"`
+	UpstreamProtocol              string     `json:"upstream_protocol,omitempty"`
+	UpstreamEndpoint              string     `json:"upstream_endpoint,omitempty"`
+	ConversionMode                string     `json:"conversion_mode,omitempty"`
+	ConversionLevel               int        `json:"conversion_level"`
+	ConversionDurationMS          int64      `json:"conversion_duration_ms"`
+	ConversionDegraded            bool       `json:"conversion_degraded"`
+	IgnoredFeatures               []string   `json:"ignored_features,omitempty"`
+	UnsupportedFeatures           []string   `json:"unsupported_features,omitempty"`
+	InputTokens                   int64      `json:"input_tokens"`
+	OutputTokens                  int64      `json:"output_tokens"`
+	TotalTokens                   int64      `json:"total_tokens"`
+	CachedInputTokens             int64      `json:"cached_input_tokens"`
+	CacheCreationInputTokens      int64      `json:"cache_creation_input_tokens"`
+	HTTPStatus                    int        `json:"http_status,omitempty"`
+	Outcome                       string     `json:"outcome,omitempty"`
+	ErrorCode                     string     `json:"error_code,omitempty"`
+	FailureClass                  string     `json:"failure_class,omitempty"`
+	Retryable                     *bool      `json:"retryable,omitempty"`
+	RetryAfterSeconds             int        `json:"retry_after_seconds,omitempty"`
+	DurationMS                    int64      `json:"duration_ms,omitempty"`
+	FirstEventDurationMS          int64      `json:"first_event_duration_ms,omitempty"`
+	UpstreamDurationMS            int64      `json:"upstream_duration_ms,omitempty"`
+	UpstreamStatus                int        `json:"upstream_status,omitempty"`
+	UpstreamContentType           string     `json:"upstream_content_type,omitempty"`
+	UpstreamContentLength         int64      `json:"upstream_content_length"`
+	UpstreamTransferEncoding      string     `json:"upstream_transfer_encoding,omitempty"`
+	Stream                        bool       `json:"stream"`
+	Estimated                     bool       `json:"estimated"`
+	State                         string     `json:"state"`
 }
 
 // EventPage 是 cursor 分页结果。

@@ -20,6 +20,7 @@ type codexChatToolStreamState struct {
 }
 
 type codexChatStreamState struct {
+	Usage          tokenUsage
 	ID, Model      string
 	Input, Output  int
 	Started, Done  bool
@@ -36,13 +37,18 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
+	plan.ConversionLevel = 2
+	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
+	conversionStart := time.Now()
 	raw, err := buildCodexResponsesFromChat(body, model)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
 		return
 	}
 	normalized, normalizedBody, ignored, err := normalizeCodexRequest(raw, false)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -53,16 +59,18 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 	// state must reach the executor instead of being replaced by the fallback.
 	turnState, err := codexTurnStateFromHeaders(r.Header)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
 	sessionHash := codexSessionHash(r, model, normalizedBody)
 	normalized, _, cacheKeySource, err := ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
+	round.SetConversionDuration(time.Since(conversionStart))
 	diagnostics := codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	userAgent, originator := codexConvertedClientIdentityWithDiagnostics(r.Header, &diagnostics)
 	request := codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
@@ -79,7 +87,9 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 	}
 	h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, result.Attempt, nil)
 	round.SetTurnStateFallback(codexresponses.TurnStateFallback(result.TurnStateSource))
+	conversionStart = time.Now()
 	converted, usage, convertErr := convertCodexResponsesToChat(result.Body, model)
+	round.SetConversionDuration(round.ConversionDuration + time.Since(conversionStart))
 	if convertErr != nil {
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
 		return
@@ -330,6 +340,7 @@ func convertCodexResponsesToChat(body []byte, fallbackModel string) ([]byte, tok
 	}
 	usage := tokenUsage{}
 	if rawUsage, ok := response["usage"].(map[string]any); ok {
+		usage, _ = usageFromMap(rawUsage)
 		usage.PromptTokens = intNumber(rawUsage["input_tokens"])
 		usage.CompletionTokens = intNumber(rawUsage["output_tokens"])
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
@@ -350,7 +361,9 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 		if payload == "" || payload == "[DONE]" {
 			return nil
 		}
+		mappingStart := time.Now()
 		chunks, err := codexResponsesEventToChat([]byte(payload), state)
+		round.SetConversionDuration(round.ConversionDuration + time.Since(mappingStart))
 		if err != nil {
 			return err
 		}
@@ -383,7 +396,7 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		return nil
 	}, emit)
-	usage := tokenUsage{PromptTokens: state.Input, CompletionTokens: state.Output, TotalTokens: state.Input + state.Output, Known: state.Input > 0 || state.Output > 0}
+	usage := state.Usage
 	duration := time.Since(started)
 	_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
 	if err != nil || !state.Done {
@@ -415,6 +428,8 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 		return openAIStreamChunk(state.ID, state.Model, created, []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}, usage)
 	}
 	switch typ {
+	case "keepalive":
+		return nil, nil
 	case "response.created", "response.in_progress":
 		if state.Started {
 			return nil, nil
@@ -520,6 +535,7 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 		}
 		response, _ := event["response"].(map[string]any)
 		if rawUsage, ok := response["usage"].(map[string]any); ok {
+			state.Usage, _ = usageFromMap(rawUsage)
 			state.Input = intNumber(rawUsage["input_tokens"])
 			state.Output = intNumber(rawUsage["output_tokens"])
 		}
@@ -531,7 +547,7 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 			finish = codexChatIncompleteFinishReason(response)
 		}
 		state.Done = true
-		usage := tokenUsage{PromptTokens: state.Input, CompletionTokens: state.Output, TotalTokens: state.Input + state.Output, Known: true}
+		usage := state.Usage
 		return [][]byte{chunk(map[string]any{}, finish, usage), []byte("[DONE]")}, nil
 	default:
 		return nil, fmt.Errorf("responses stream event %q", typ)

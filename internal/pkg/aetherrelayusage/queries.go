@@ -213,7 +213,8 @@ SELECT
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
     coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
 FROM usage_events
 WHERE ` + where
 	var sum Summary
@@ -226,6 +227,7 @@ WHERE ` + where
 		&sum.TotalTokens,
 		&sum.CachedInputTokens,
 		&sum.CacheCreationInputTokens,
+		&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
 	)
 	if err != nil {
 		return Summary{}, ErrStoreUnavailable
@@ -243,7 +245,8 @@ SELECT
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
     coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
 FROM usage_events
 WHERE ` + where + `
 GROUP BY usage_date
@@ -257,7 +260,7 @@ ORDER BY usage_date`
 	var out []DailyBucket
 	for rows.Next() {
 		var b DailyBucket
-		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens); err != nil {
+		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown); err != nil {
 			return nil, ErrStoreUnavailable
 		}
 		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.InputTokens)
@@ -285,7 +288,8 @@ SELECT
     coalesce(sum(total_tokens), 0) AS total_tokens,
     max(started_at) AS last_used_at,
     coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
 FROM usage_events
 WHERE ` + where + `
 GROUP BY api_key_id
@@ -311,6 +315,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			&last,
 			&k.CachedInputTokens,
 			&k.CacheCreationInputTokens,
+			&k.CachedInputTokensKnown, &k.CacheCreationInputTokensKnown,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}
@@ -372,10 +377,11 @@ SELECT
     coalesce(conversion_degraded, false), coalesce(ignored_features, ''), coalesce(unsupported_features, ''),
     input_tokens, output_tokens, total_tokens,
     cached_input_tokens, cache_creation_input_tokens,
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false),
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
-    upstream_status, coalesce(upstream_content_type, ''), coalesce(upstream_content_length, 0), coalesce(upstream_transfer_encoding, ''),
+    upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
     stream, estimated, state
 FROM usage_events
 WHERE ` + where + `
@@ -396,7 +402,7 @@ LIMIT ?`
 		var httpStatus sql.NullInt64
 		var durationMS, firstEventMS, upstreamMS, retryAfter sql.NullInt64
 		var retryable sql.NullBool
-		var upstreamStatus sql.NullInt64
+		var upstreamStatus, contentLength sql.NullInt64
 		var ignored, unsupported string
 		var usageDate string
 		if err := rows.Scan(
@@ -410,13 +416,16 @@ LIMIT ?`
 			&e.ConversionLevel, &e.ConversionDurationMS, &e.ConversionDegraded, &ignored, &unsupported,
 			&e.InputTokens, &e.OutputTokens, &e.TotalTokens,
 			&e.CachedInputTokens, &e.CacheCreationInputTokens,
+			&e.CachedInputTokensKnown, &e.CacheCreationInputTokensKnown,
 			&httpStatus, &e.Outcome, &e.ErrorCode,
 			&e.FailureClass, &retryable, &retryAfter,
-			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &e.UpstreamContentLength, &e.UpstreamTransferEncoding,
+			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &contentLength, &e.UpstreamTransferEncoding,
 			&e.Stream, &e.Estimated, &e.State,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
 		}
+		e.UpstreamContentLengthKnown = contentLength.Valid
+		e.UpstreamContentLength = contentLength.Int64
 		e.StartedAt = e.StartedAt.UTC()
 		e.CacheHitRate = cacheHitRate(e.CachedInputTokens, e.InputTokens)
 		if completedAt.Valid {
@@ -486,7 +495,8 @@ SELECT
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
     coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens
+    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
 FROM usage_events
 GROUP BY api_key_id`
 	rows, err := s.db.QueryContext(ctx, q)
@@ -509,6 +519,7 @@ GROUP BY api_key_id`
 			&sum.TotalTokens,
 			&sum.CachedInputTokens,
 			&sum.CacheCreationInputTokens,
+			&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}

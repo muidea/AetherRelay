@@ -603,6 +603,31 @@ func TestLoadStreamFirstEventTimeout(t *testing.T) {
 	}
 }
 
+func TestFirstEventTimeoutDefaultAndExplicitOverride(t *testing.T) {
+	t.Setenv("AETHERRELAY_STREAM_FIRST_EVENT_TIMEOUT_SECONDS", "")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StreamFirstEventTimeout != 180*time.Second {
+		t.Fatalf("default=%s", cfg.StreamFirstEventTimeout)
+	}
+	for _, seconds := range []string{"90", "0"} {
+		t.Setenv("AETHERRELAY_STREAM_FIRST_EVENT_TIMEOUT_SECONDS", seconds)
+		cfg, err = Load("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 90 * time.Second
+		if seconds == "0" {
+			want = 0
+		}
+		if cfg.StreamFirstEventTimeout != want {
+			t.Fatalf("explicit %s overridden: %s", seconds, cfg.StreamFirstEventTimeout)
+		}
+	}
+}
+
 func TestLoadRejectsDefaultProviderConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`

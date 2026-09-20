@@ -909,6 +909,11 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	observedAttempt = toCodexHTTPAttempt(startedUpstream.Attempt)
+	// Publish headers before waiting for the first business event. Completion
+	// reports any later error for the same attempt; the adapter deduplicates it.
+	if request.ObserveAttempt != nil && startedUpstream.ErrorClass == "" {
+		request.ObserveAttempt(observedAttempt, nil)
+	}
 	if startedUpstream.ErrorClass != "" {
 		failure := failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus, startedUpstream.SafeError)
 		failure.Attempt = toCodexHTTPAttempt(startedUpstream.Attempt)
@@ -1101,7 +1106,8 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			Body: bytes.Clone(attempt.Request.Body), BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
 		},
 		Response: codexresponses.HTTPResponseObservation{
-			Observed: attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
+			TransferEncoding: attempt.Response.TransferEncoding,
+			Observed:         attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
 			ContentLength: attempt.Response.ContentLength, DurationMS: attempt.Response.DurationMS,
 			Headers: toCodexHeaders(attempt.Response.Headers),
 		},

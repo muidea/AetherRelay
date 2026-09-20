@@ -49,6 +49,8 @@ var csvExportHeader = []string{
 	"stream",
 	"estimated",
 	"state",
+	"cached_input_tokens_known",
+	"cache_creation_input_tokens_known",
 }
 
 // ExportCSV 按筛选条件流式写出 CSV。
@@ -86,7 +88,8 @@ SELECT
     http_status, coalesce(outcome, ''), coalesce(error_code, ''),
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
-    stream, estimated, state
+    stream, estimated, state,
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false)
 FROM usage_events
 WHERE ` + where + `
 ORDER BY started_at ASC, event_id ASC`
@@ -120,6 +123,7 @@ ORDER BY started_at ASC, event_id ASC`
 			retryable                                            sql.NullBool
 			conversionLevel, conversionDurationMS                int64
 			conversionDegraded                                   bool
+			cachedKnown, creationKnown                           bool
 		)
 		if err := rows.Scan(
 			&eventID, &roundID, &startedAt, &completedAt,
@@ -136,6 +140,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&failureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
+			&cachedKnown, &creationKnown,
 		); err != nil {
 			return ErrStoreUnavailable
 		}
@@ -208,6 +213,8 @@ ORDER BY started_at ASC, event_id ASC`
 			strconv.FormatBool(stream),
 			strconv.FormatBool(estimated),
 			state,
+			strconv.FormatBool(cachedKnown),
+			strconv.FormatBool(creationKnown),
 		}
 		if err := cw.Write(row); err != nil {
 			return fmt.Errorf("write csv row: %w", err)

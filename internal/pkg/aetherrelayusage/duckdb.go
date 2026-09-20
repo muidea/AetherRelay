@@ -202,6 +202,13 @@ INSERT INTO usage_events (
 	return nil
 }
 
+func nullableContentLength(status int, length int64) any {
+	if status <= 0 || length < 0 {
+		return nil
+	}
+	return length
+}
+
 // Complete 仅更新 state=started 的行;受影响行必须为 1。
 func (s *DuckDBStore) Complete(ctx context.Context, rec CompleteRecord) error {
 	if s.closed.Load() {
@@ -256,6 +263,8 @@ SET
     total_tokens = ?,
     cached_input_tokens = ?,
     cache_creation_input_tokens = ?,
+    cached_input_tokens_known = ?,
+    cache_creation_input_tokens_known = ?,
     http_status = ?,
     outcome = ?,
     error_code = ?,
@@ -290,6 +299,8 @@ WHERE event_id = ?
 		total,
 		rec.CachedInputTokens,
 		rec.CacheCreationInputTokens,
+		rec.CachedInputTokensKnown || rec.CachedInputTokens > 0,
+		rec.CacheCreationInputTokensKnown || rec.CacheCreationInputTokens > 0,
 		rec.HTTPStatus,
 		nullString(rec.Outcome),
 		nullString(rec.ErrorCode),
@@ -303,7 +314,7 @@ WHERE event_id = ?
 		rec.Estimated,
 		nullInt(rec.UpstreamStatus),
 		nullString(rec.UpstreamContentType),
-		nullPositiveInt64(rec.UpstreamContentLength),
+		nullableContentLength(rec.UpstreamStatus, rec.UpstreamContentLength),
 		nullString(rec.UpstreamTransferEncoding),
 		StateCompleted,
 		rec.EventID,

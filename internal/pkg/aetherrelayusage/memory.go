@@ -122,6 +122,8 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.OutputTokens = rec.OutputTokens
 	e.TotalTokens = total
 	e.CachedInputTokens = rec.CachedInputTokens
+	e.CachedInputTokensKnown = rec.CachedInputTokensKnown || rec.CachedInputTokens > 0
+	e.CacheCreationInputTokensKnown = rec.CacheCreationInputTokensKnown || rec.CacheCreationInputTokens > 0
 	e.CacheCreationInputTokens = rec.CacheCreationInputTokens
 	e.CacheHitRate = cacheHitRate(e.CachedInputTokens, e.InputTokens)
 	e.HTTPStatus = rec.HTTPStatus
@@ -136,6 +138,10 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.UpstreamStatus = rec.UpstreamStatus
 	e.UpstreamContentType = rec.UpstreamContentType
 	e.UpstreamContentLength = rec.UpstreamContentLength
+	e.UpstreamContentLengthKnown = rec.UpstreamStatus > 0 && rec.UpstreamContentLength >= 0
+	if !e.UpstreamContentLengthKnown {
+		e.UpstreamContentLength = 0
+	}
 	e.UpstreamTransferEncoding = rec.UpstreamTransferEncoding
 	e.Stream = rec.Stream
 	e.Estimated = rec.Estimated
@@ -223,6 +229,8 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			continue
 		}
 		sum.Requests++
+		sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (sum.Requests == 1 || sum.CachedInputTokensKnown)
+		sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (sum.Requests == 1 || sum.CacheCreationInputTokensKnown)
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
 		sum.TotalTokens += e.TotalTokens
@@ -241,6 +249,8 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			dailyMap[day] = b
 		}
 		b.Requests++
+		b.CachedInputTokensKnown = e.CachedInputTokensKnown && (b.Requests == 1 || b.CachedInputTokensKnown)
+		b.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (b.Requests == 1 || b.CacheCreationInputTokensKnown)
 		b.InputTokens += e.InputTokens
 		b.OutputTokens += e.OutputTokens
 		b.TotalTokens += e.TotalTokens
@@ -253,6 +263,8 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			keyMap[e.APIKeyID] = k
 		}
 		k.Requests++
+		k.CachedInputTokensKnown = e.CachedInputTokensKnown && (k.Requests == 1 || k.CachedInputTokensKnown)
+		k.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (k.Requests == 1 || k.CacheCreationInputTokensKnown)
 		k.InputTokens += e.InputTokens
 		k.OutputTokens += e.OutputTokens
 		k.TotalTokens += e.TotalTokens
@@ -472,6 +484,8 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			strconv.FormatBool(e.Stream),
 			strconv.FormatBool(e.Estimated),
 			e.State,
+			strconv.FormatBool(e.CachedInputTokensKnown),
+			strconv.FormatBool(e.CacheCreationInputTokensKnown),
 		}
 		if err := cw.Write(row); err != nil {
 			return err
@@ -491,6 +505,8 @@ func (s *MemoryStore) AllTimeByKey(_ context.Context) (map[string]Summary, error
 	for _, e := range s.events {
 		sum := out[e.APIKeyID]
 		sum.Requests++
+		sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (sum.Requests == 1 || sum.CachedInputTokensKnown)
+		sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (sum.Requests == 1 || sum.CacheCreationInputTokensKnown)
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
 		sum.TotalTokens += e.TotalTokens

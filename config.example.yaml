@@ -14,7 +14,7 @@ server:
   request_timeout_seconds: 300
   stream_idle_timeout_seconds: 300
   # 首事件超时应短于流空闲超时；90 秒兼容 Codex OAuth 大上下文冷启动。
-  stream_first_event_timeout_seconds: 90
+  stream_first_event_timeout_seconds: 180
   upstream_body_idle_timeout_seconds: 180
   metrics_remote_access: false
   # 远程指标访问启用后，空白名单表示允许任意来源。

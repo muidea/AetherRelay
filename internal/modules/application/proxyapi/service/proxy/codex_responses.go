@@ -541,7 +541,9 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind = streamKind("upstream_authentication_required")
 	case codexresponses.KindStreamLifetime:
 		kind = streamKind("stream_lifetime_timeout")
-	case codexresponses.KindFirstEventTimeout, codexresponses.KindIdleTimeout:
+	case codexresponses.KindFirstEventTimeout:
+		kind, countUpstream = streamKindFirstEventTimeout, true
+	case codexresponses.KindIdleTimeout:
 		kind, countUpstream = streamKindIdleTimeout, true
 	case codexresponses.KindClientCanceled:
 		kind = streamKindClientCanceled

@@ -1626,10 +1626,23 @@ func codexSessionHash(r *http.Request, model string, body map[string]any) string
 	return codexSessionDigest(r, model, body, true)
 }
 
-// codexPromptCacheHash deliberately excludes routing-only signals. Claude
-// Code's session id stabilizes account selection for /v1/messages but must not
-// become an upstream prompt_cache_key.
+// codexPromptCacheHash namespaces validated Claude sessions independently of
+// account routing. Neither the raw session nor the selected account is a key.
 func codexPromptCacheHash(r *http.Request, model string, body map[string]any) string {
+	if r != nil && r.URL != nil && strings.TrimRight(r.URL.Path, "/") == "/v1/messages" {
+		session := strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id"))
+		valid := session != "" && len(session) <= 256
+		for _, ch := range session {
+			if ch < 33 || ch > 126 {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			identity := clientauth.ClientIdentityFromContext(r.Context())
+			return aetherrelaycodex.StableUUID("aetherrelay:claude-cache:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + session)
+		}
+	}
 	return codexSessionDigest(r, model, body, false)
 }
 

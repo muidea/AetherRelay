@@ -28,6 +28,8 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	TransferEncoding string
+
 	Observed      bool
 	At            time.Time
 	Status        int

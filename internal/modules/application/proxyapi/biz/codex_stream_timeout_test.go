@@ -49,6 +49,7 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
 			accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 			var acquired, released, canceled, pulls atomic.Int32
+			var headersObserved atomic.Bool
 			recorded := make(chan accevents.RecordResultCommand, 4)
 			accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
 				if acquired.Add(1) > 1 {
@@ -73,7 +74,11 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorNetwork}, nil)
 					return
 				}
-				result.Set(upevents.StartResult{StreamID: "stream"}, nil)
+				start := upevents.StartResult{StreamID: "stream"}
+				if tc.name == "first" {
+					start.Attempt = upevents.HTTPAttempt{Request: upevents.HTTPRequestObservation{At: time.Now(), Method: "POST", URL: "https://example.test/responses"}, Response: upevents.HTTPResponseObservation{Observed: true, Status: 200, ContentLength: -1}}
+				}
+				result.Set(start, nil)
 			})
 			up.Subscribe(upevents.TopicPull, func(ev event.Event, result event.Result) {
 				n := pulls.Add(1)
@@ -86,6 +91,9 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 					return
 				}
 				if tc.name == "first" || (tc.name == "idle" && n > 1) {
+					if tc.name == "first" && !headersObserved.Load() {
+						t.Error("headers not observed before first-event wait")
+					}
 					<-ev.Context().Done()
 					result.Set(nil, cd.NewError(cd.Unexpected, "pull canceled"))
 					return
@@ -121,7 +129,11 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			var firstEvent time.Duration
-			err := proxy.StreamCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, func(info codexresponses.StreamStart) error {
+			err := proxy.StreamCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), ObserveAttempt: func(attempt codexresponses.HTTPAttempt, err error) {
+				if err == nil && attempt.Response.Observed && attempt.Response.Status == 200 {
+					headersObserved.Store(true)
+				}
+			}}, func(info codexresponses.StreamStart) error {
 				firstEvent = info.FirstEventDuration
 				return nil
 			}, func([]byte) error {

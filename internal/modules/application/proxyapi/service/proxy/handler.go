@@ -625,6 +625,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(withArchiveRound(r.Context(), round))
 	eventID := newRequestID()
+	if round != nil {
+		round.EventID = eventID
+	}
 	if eventID == "" {
 		writeClientProtocolError(w, http.StatusServiceUnavailable, clientProtocolFromRequest(r), APIError{
 			Code: ErrorCodeUsageStoreUnavailable, Message: "usage store unavailable",
@@ -789,23 +792,25 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		}
 	}
 	rec := usage.CompleteRecord{
-		EventID:                  requestID,
-		CompletedAt:              time.Now().UTC(),
-		Provider:                 provider,
-		Model:                    model,
-		InputTokens:              int64(tok.PromptTokens),
-		OutputTokens:             int64(tok.CompletionTokens),
-		CachedInputTokens:        int64(tok.CachedInputTokens),
-		CacheCreationInputTokens: int64(tok.CacheCreationInputTokens),
-		HTTPStatus:               status,
-		Outcome:                  outcome,
-		ErrorCode:                errorCode,
-		FailureClass:             failureClass,
-		Retryable:                retryable,
-		RetryAfterSeconds:        retryAfterSeconds,
-		Duration:                 duration,
-		Stream:                   stream,
-		Estimated:                tok.Estimated,
+		CachedInputTokensKnown:        tok.CachedInputTokensKnown,
+		CacheCreationInputTokensKnown: tok.CacheCreationInputTokensKnown,
+		EventID:                       requestID,
+		CompletedAt:                   time.Now().UTC(),
+		Provider:                      provider,
+		Model:                         model,
+		InputTokens:                   int64(tok.PromptTokens),
+		OutputTokens:                  int64(tok.CompletionTokens),
+		CachedInputTokens:             int64(tok.CachedInputTokens),
+		CacheCreationInputTokens:      int64(tok.CacheCreationInputTokens),
+		HTTPStatus:                    status,
+		Outcome:                       outcome,
+		ErrorCode:                     errorCode,
+		FailureClass:                  failureClass,
+		Retryable:                     retryable,
+		RetryAfterSeconds:             retryAfterSeconds,
+		Duration:                      duration,
+		Stream:                        stream,
+		Estimated:                     tok.Estimated,
 	}
 	if r != nil {
 		rec.FirstEventDuration = firstEventDurationFromContext(r.Context())
@@ -1168,7 +1173,7 @@ func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, 
 
 func (h *Handler) startRound(apiKeyID string) (*archive.Round, error) {
 	if h.interactionRecorder == nil {
-		return nil, nil
+		return archive.NewObservationRound(), nil
 	}
 	if strings.TrimSpace(apiKeyID) == "" {
 		return h.interactionRecorder.Start()
@@ -2984,6 +2989,9 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 			errorCode = string(fail.Kind)
 		}
 	}
+	if round != nil {
+		round.ErrorCode = errorCode
+	}
 	clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode := "", "", "", ""
 	conversionLevel := 0
 	if round != nil {
@@ -3065,30 +3073,33 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		}
 	}
 	meta := archive.Metadata{
-		FinishedAt:               time.Now(),
-		Provider:                 provider,
-		Model:                    model,
-		StablePrefixHash:         stableHash,
-		RequestFingerprint:       fingerprint,
-		StablePrefixDrift:        drift,
-		StablePrefixDriftCount:   driftCount,
-		Stream:                   stream,
-		HTTPStatus:               status,
-		Outcome:                  outcome,
-		DurationMS:               duration.Milliseconds(),
-		InputTokens:              usage.PromptTokens,
-		OutputTokens:             usage.CompletionTokens,
-		TotalTokens:              usage.PromptTokens + usage.CompletionTokens,
-		CachedInputTokens:        usage.CachedInputTokens,
-		CacheCreationInputTokens: usage.CacheCreationInputTokens,
-		CacheHitRate:             usage.CacheHitRate(),
-		Estimated:                usage.Estimated,
-		FullContentEnabled:       fullContent,
-		Error:                    message,
+		CachedInputTokensKnown:        usage.CachedInputTokensKnown,
+		CacheCreationInputTokensKnown: usage.CacheCreationInputTokensKnown,
+		FinishedAt:                    time.Now(),
+		Provider:                      provider,
+		Model:                         model,
+		StablePrefixHash:              stableHash,
+		RequestFingerprint:            fingerprint,
+		StablePrefixDrift:             drift,
+		StablePrefixDriftCount:        driftCount,
+		Stream:                        stream,
+		HTTPStatus:                    status,
+		Outcome:                       outcome,
+		DurationMS:                    duration.Milliseconds(),
+		InputTokens:                   usage.PromptTokens,
+		OutputTokens:                  usage.CompletionTokens,
+		TotalTokens:                   usage.PromptTokens + usage.CompletionTokens,
+		CachedInputTokens:             usage.CachedInputTokens,
+		CacheCreationInputTokens:      usage.CacheCreationInputTokens,
+		CacheHitRate:                  usage.CacheHitRate(),
+		Estimated:                     usage.Estimated,
+		FullContentEnabled:            fullContent,
+		Error:                         message,
 	}
 	if round != nil {
 		meta.RequestID = round.RequestID
-		meta.EventID = round.RequestID
+		meta.ErrorCode = round.ErrorCode
+		meta.EventID = round.EventID
 		meta.APIKeyID = round.APIKeyID
 		meta.Operation = round.Operation
 		meta.ClientEndpoint = round.ClientEndpoint
@@ -3110,6 +3121,11 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.ConversionDurationMS = round.ConversionDuration.Milliseconds()
 		meta.ConversionDegraded = round.ConversionDegraded
 		meta.FirstEventDurationMS = round.FirstEventDuration.Milliseconds()
+		meta.UpstreamStatus = round.UpstreamStatus
+		meta.UpstreamContentType = round.UpstreamContentType
+		meta.UpstreamContentLength = round.UpstreamContentLength
+		meta.UpstreamTransferEncoding = round.UpstreamTransferEncoding
+		meta.UpstreamDurationMS = round.UpstreamDuration.Milliseconds()
 	}
 	if round != nil {
 		if round.HasFile("request.meta.json") {
@@ -3198,6 +3214,8 @@ func (h *Handler) printSummary(round *archive.Round, eventID, provider, model st
 		slog.Int("output_tokens", usage.CompletionTokens),
 		slog.Int("total_tokens", usage.PromptTokens+usage.CompletionTokens),
 		slog.Int("cached_input_tokens", usage.CachedInputTokens),
+		slog.Bool("cached_input_tokens_known", usage.CachedInputTokensKnown),
+		slog.Bool("cache_creation_input_tokens_known", usage.CacheCreationInputTokensKnown),
 		slog.Int("cache_creation_input_tokens", usage.CacheCreationInputTokens),
 		slog.Float64("cache_hit_rate", usage.CacheHitRate()),
 		slog.Bool("estimated", usage.Estimated),

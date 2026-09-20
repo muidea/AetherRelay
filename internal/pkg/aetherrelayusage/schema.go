@@ -7,8 +7,8 @@ import (
 )
 
 // initializeSchema creates the final usage schema and verifies every column
-// used by the runtime. Historical schemas are deliberately not upgraded or
-// reset; an incompatible database fails startup without modifying its data.
+// used by the runtime. Only additive observation flags extend the current
+// schema; incompatible historical layouts fail without resetting their data.
 func initializeSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -34,6 +34,14 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
+	}
+	// DuckDB cannot reliably commit multiple ALTERs on a persisted indexed table
+	// in one transaction. Each additive step is independently atomic/idempotent;
+	// interruption is safe to resume and never rewrites existing usage or keys.
+	for _, column := range []string{"cached_input_tokens_known", "cache_creation_input_tokens_known"} {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS "+column+" BOOLEAN DEFAULT FALSE"); err != nil {
+			return fmt.Errorf("add usage observation column: %w", err)
+		}
 	}
 	return nil
 }

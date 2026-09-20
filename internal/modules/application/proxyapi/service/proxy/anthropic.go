@@ -1261,7 +1261,9 @@ func anthropicStreamEvents(payload string, id, model *string, usage *tokenUsage,
 			if parsed, ok := anthropicUsage(message["usage"]); ok {
 				usage.PromptTokens = parsed.PromptTokens
 				usage.CachedInputTokens = parsed.CachedInputTokens
+				usage.CachedInputTokensKnown = parsed.CachedInputTokensKnown
 				usage.CacheCreationInputTokens = parsed.CacheCreationInputTokens
+				usage.CacheCreationInputTokensKnown = parsed.CacheCreationInputTokensKnown
 				usage.Known = true
 			}
 		}
@@ -1300,11 +1302,13 @@ func anthropicStreamEvents(payload string, id, model *string, usage *tokenUsage,
 	case "message_delta":
 		if parsed, ok := anthropicUsage(event["usage"]); ok {
 			usage.CompletionTokens = parsed.CompletionTokens
-			if parsed.CachedInputTokens > 0 {
+			if parsed.CachedInputTokensKnown {
 				usage.CachedInputTokens = parsed.CachedInputTokens
+				usage.CachedInputTokensKnown = parsed.CachedInputTokensKnown
 			}
-			if parsed.CacheCreationInputTokens > 0 {
+			if parsed.CacheCreationInputTokensKnown {
 				usage.CacheCreationInputTokens = parsed.CacheCreationInputTokens
+				usage.CacheCreationInputTokensKnown = parsed.CacheCreationInputTokensKnown
 			}
 			usage.Known = true
 		}

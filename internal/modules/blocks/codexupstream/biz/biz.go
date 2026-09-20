@@ -209,7 +209,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		var safeError events.SafeError
 		var responseHeader []events.Header
 		if response != nil {
-			attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt, profile.archiveUnredacted)
+			attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
 			status = response.StatusCode
 			responseHeader = responseHeaders(response.Header)
 			responseBody, observation, retryAfter, safeError = readErrorObservationParts(response.Header, response.Body)
@@ -226,7 +226,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	}
 	var responseHeader []events.Header
 	if response != nil {
-		attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt, profile.archiveUnredacted)
+		attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
 		responseHeader = responseHeaders(response.Header)
 		if response.Body != nil {
 			_ = response.Body.Close()
@@ -711,14 +711,15 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 		attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 		return nil, attempt, classifyTransport(err), 0, err
 	}
-	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.Header, requestAt, profile.archiveUnredacted)
+	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
 	return response, attempt, "", retryAfterSeconds(response.Header), nil
 }
 
-func observedHTTPResponse[H ~map[string][]string](status int, contentLength int64, headers H, requestAt time.Time, unredacted bool) events.HTTPResponseObservation {
+func observedHTTPResponse[H ~map[string][]string](status int, contentLength int64, transferEncoding []string, headers H, requestAt time.Time, unredacted bool) events.HTTPResponseObservation {
 	return events.HTTPResponseObservation{
 		Observed: true, At: time.Now(), Status: status, ContentLength: contentLength,
-		DurationMS: time.Since(requestAt).Milliseconds(), Headers: safeHeaders(headers, unredacted),
+		TransferEncoding: strings.Join(transferEncoding, ", "),
+		DurationMS:       time.Since(requestAt).Milliseconds(), Headers: safeHeaders(headers, unredacted),
 	}
 }
 

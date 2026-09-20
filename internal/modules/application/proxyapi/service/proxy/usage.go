@@ -10,13 +10,15 @@ import (
 )
 
 type tokenUsage struct {
-	PromptTokens             int  `json:"prompt_tokens"`
-	CompletionTokens         int  `json:"completion_tokens"`
-	TotalTokens              int  `json:"total_tokens"`
-	CachedInputTokens        int  `json:"-"`
-	CacheCreationInputTokens int  `json:"-"`
-	Estimated                bool `json:"-"`
-	Known                    bool `json:"-"`
+	CachedInputTokensKnown        bool `json:"-"`
+	CacheCreationInputTokensKnown bool `json:"-"`
+	PromptTokens                  int  `json:"prompt_tokens"`
+	CompletionTokens              int  `json:"completion_tokens"`
+	TotalTokens                   int  `json:"total_tokens"`
+	CachedInputTokens             int  `json:"-"`
+	CacheCreationInputTokens      int  `json:"-"`
+	Estimated                     bool `json:"-"`
+	Known                         bool `json:"-"`
 }
 
 func (u tokenUsage) CacheHitRate() float64 {
@@ -39,6 +41,9 @@ func usageFromRaw(raw json.RawMessage) (tokenUsage, bool) {
 		applyUsageDetails(&usage, payload)
 	}
 	usage.Known = true
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
 	return usage, true
 }
 
@@ -97,33 +102,52 @@ func applyUsageDetails(usage *tokenUsage, payload map[string]any) {
 	if usage.CompletionTokens == 0 {
 		usage.CompletionTokens, _ = numberAsInt(payload["output_tokens"])
 	}
-	if value, ok := numberAsInt(payload["cache_read_input_tokens"]); ok {
+	if value, ok := cacheTokenCount(payload["cache_read_input_tokens"]); ok {
 		usage.CachedInputTokens = value
+		usage.CachedInputTokensKnown = true
 	}
-	if value, ok := numberAsInt(payload["cache_creation_input_tokens"]); ok {
+	if value, ok := cacheTokenCount(payload["cache_creation_input_tokens"]); ok {
 		usage.CacheCreationInputTokens = value
+		usage.CacheCreationInputTokensKnown = true
 	}
 	if details, ok := payload["prompt_tokens_details"].(map[string]any); ok {
-		if value, ok := numberAsInt(details["cached_tokens"]); ok {
+		if value, ok := cacheTokenCount(details["cached_tokens"]); ok {
 			usage.CachedInputTokens = value
+			usage.CachedInputTokensKnown = true
 		}
 	}
 	if details, ok := payload["input_tokens_details"].(map[string]any); ok {
-		if value, ok := numberAsInt(details["cached_tokens"]); ok {
+		if value, ok := cacheTokenCount(details["cached_tokens"]); ok {
 			usage.CachedInputTokens = value
+			usage.CachedInputTokensKnown = true
 		}
-		if value, ok := numberAsInt(details["cache_read_tokens"]); ok {
+		if value, ok := cacheTokenCount(details["cache_read_tokens"]); ok {
 			usage.CachedInputTokens = value
+			usage.CachedInputTokensKnown = true
 		}
-		if value, ok := numberAsInt(details["cache_creation_tokens"]); ok {
+		if value, ok := cacheTokenCount(details["cache_creation_tokens"]); ok {
 			usage.CacheCreationInputTokens = value
+			usage.CacheCreationInputTokensKnown = true
 		}
 		// Responses reports cache writes separately from ordinary uncached input.
 		// The canonical field wins over compatibility aliases, including zero.
-		if value, ok := numberAsInt(details["cache_write_tokens"]); ok {
+		if value, ok := cacheTokenCount(details["cache_write_tokens"]); ok {
 			usage.CacheCreationInputTokens = value
+			usage.CacheCreationInputTokensKnown = true
 		}
 	}
+}
+
+// Cache counters are absolute, non-negative integers; invalid values are absent.
+func cacheTokenCount(value any) (int, bool) {
+	n, ok := numberAsInt(value)
+	if !ok || n < 0 {
+		return 0, false
+	}
+	if f, isFloat := value.(float64); isFloat && float64(n) != f {
+		return 0, false
+	}
+	return n, true
 }
 
 func estimatePromptTokens(body map[string]any) int {

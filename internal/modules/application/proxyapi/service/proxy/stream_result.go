@@ -8,22 +8,23 @@ import (
 )
 
 // streamKind 描述流式/请求结束后的业务结果，用于 metrics outcome。
-// 完整枚举: success | client_canceled | idle_timeout | limit_exceeded |
+// 完整枚举: success | client_canceled | first_event_timeout | idle_timeout | limit_exceeded |
 // upstream_truncated | upstream_failed | incomplete | client_write | conversion | protocol | error
 type streamKind string
 
 const (
-	streamKindSuccess        streamKind = "success"
-	streamKindClientCanceled streamKind = "client_canceled"
-	streamKindIdleTimeout    streamKind = "idle_timeout"
-	streamKindLimitExceeded  streamKind = "limit_exceeded"
-	streamKindUpstreamTrunc  streamKind = "upstream_truncated"
-	streamKindUpstreamFailed streamKind = "upstream_failed" // 上游显式失败(如 response.failed)
-	streamKindIncomplete     streamKind = "incomplete"      // 上游未完成(如 response.incomplete)
-	streamKindClientWrite    streamKind = "client_write"
-	streamKindConversion     streamKind = "conversion"
-	streamKindProtocol       streamKind = "protocol"
-	streamKindError          streamKind = "error"
+	streamKindSuccess           streamKind = "success"
+	streamKindClientCanceled    streamKind = "client_canceled"
+	streamKindIdleTimeout       streamKind = "idle_timeout"
+	streamKindFirstEventTimeout streamKind = "first_event_timeout"
+	streamKindLimitExceeded     streamKind = "limit_exceeded"
+	streamKindUpstreamTrunc     streamKind = "upstream_truncated"
+	streamKindUpstreamFailed    streamKind = "upstream_failed" // 上游显式失败(如 response.failed)
+	streamKindIncomplete        streamKind = "incomplete"      // 上游未完成(如 response.incomplete)
+	streamKindClientWrite       streamKind = "client_write"
+	streamKindConversion        streamKind = "conversion"
+	streamKindProtocol          streamKind = "protocol"
+	streamKindError             streamKind = "error"
 )
 
 // streamProtocol 选择流式终止事件语义。
@@ -99,7 +100,9 @@ func streamFailFromMessage(msg string) *streamFail {
 	switch {
 	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "client canceled"):
 		kind = streamKindClientCanceled
-	case strings.Contains(lower, "idle timeout") || strings.Contains(lower, "first event timeout") || strings.Contains(lower, "first/next event timeout"):
+	case strings.Contains(lower, "first event timeout"):
+		kind = streamKindFirstEventTimeout
+	case strings.Contains(lower, "idle timeout"):
 		kind = streamKindIdleTimeout
 	case strings.Contains(lower, "exceeds") || strings.Contains(lower, "limit"):
 		kind = streamKindLimitExceeded

@@ -933,8 +933,8 @@ func TestCodexNormalizationPreservesLargeIntegers(t *testing.T) {
 	}
 }
 
-// CP-SCHED-002: Claude Code session IDs are routing-only affinity signals.
-func TestClaudeCodeSessionIDIsRoutingOnly(t *testing.T) {
+// CP-SCHED-002: Claude cache identity is separate from account routing identity.
+func TestClaudeCodeSessionIdentityNamespaces(t *testing.T) {
 	requestA := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	requestA.Header.Set("X-Claude-Code-Session-Id", "claude-session-a")
 	requestB := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
@@ -944,7 +944,7 @@ func TestClaudeCodeSessionIDIsRoutingOnly(t *testing.T) {
 		t.Fatal("Claude Code session id did not affect routing affinity")
 	}
 	if codexPromptCacheHash(requestA, "gpt-test", body) == codexPromptCacheHash(requestB, "gpt-test", body) {
-		t.Fatal("stateless Claude Code requests shared prompt cache identity")
+		t.Fatal("different Claude Code sessions shared prompt cache identity")
 	}
 }
 

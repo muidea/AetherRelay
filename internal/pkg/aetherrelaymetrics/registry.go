@@ -31,7 +31,7 @@ const otherModelLabel = "_other"
 // requestKey 是请求计数/直方图的复合 label。
 // Outcome 描述业务结果(完整枚举):
 //
-//	success | client_canceled | idle_timeout | limit_exceeded |
+//	success | client_canceled | first_event_timeout | idle_timeout | limit_exceeded |
 //	upstream_truncated | upstream_failed | incomplete | endpoint_drift |
 //	client_write | conversion | protocol | error
 //
@@ -499,7 +499,7 @@ func shouldTrackProviderHealth(status int, outcome string) bool {
 		return true
 	}
 	switch outcome {
-	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol", "endpoint_drift":
+	case "upstream_failed", "upstream_truncated", "first_event_timeout", "idle_timeout", "protocol", "endpoint_drift":
 		return true
 	default:
 		return false
@@ -511,7 +511,7 @@ func retryableHealthFailure(status int, outcome string) bool {
 		return true
 	}
 	switch outcome {
-	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol":
+	case "upstream_failed", "upstream_truncated", "first_event_timeout", "idle_timeout", "protocol":
 		return true
 	default:
 		return false

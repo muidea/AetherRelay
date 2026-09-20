@@ -662,6 +662,26 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 ## 30. 灰度、熔断与回滚
 
+### 2026-09-20 后续日志收口（13.1.0）
+
+001381、001383 上游分别在 1231/1111 ms 返回 HTTP 200，但 90 秒内没有首个业务事件，代理返回 504；相同正文随后在 001382/001384 成功。001385 首事件等待 86991 ms，最终成功 end_turn。上游报告 safety buffering，但日志不足以把它确定为根因。
+
+首事件默认/模板预算调整为 180 秒，沿用现有配置且保留显式 90/0 的含义；不新增按请求头扩展预算，不绕过心跳、首事件、空闲和输出后禁止重放边界。上游 200、下游 504、first_event_timeout 必须同时准确保留；首事件失败不能标成 idle_timeout。metadata.error_code 与用量、诊断同源。Headers 阶段先观测，终态按变化更新；相同 attempt 不重复写正文/打印相同响应，新的重试仍独立归档，迟到旧回调不得覆盖最后尝试。
+
+此轮不改变 UA、身份、缓存或账号惩罚/重试规则。线上 1547001 的 end_turn 证据已成立，但 13.0/13.1 修复和新预算仍须部署后验证。
+
+### 2026-09-20 转换观测补全（13.0.0）
+
+现场 `claude-owner/001377–001380` 已观察到成功工具续轮，当时尚不能据此宣称整段任务已到 `end_turn`；后续 001385、001386 已确认真实 end_turn + message_stop（部署版本 1547001）。事件 `6800a4e050fafd3bb5ac30d30e66f3ec` 的管理页缺项来自观测未贯通，缓存零值也不足以证明真实未命中。本轮规则如下：
+
+- Codex 的 Messages/Chat 有界转换等级为 2；记录本地请求/响应转换处理耗时，不包含上游等待和客户端写入。毫秒取整后 0 合法，不显示为空。重复设置传输计划不能清除已经发生的降级；请求与响应的省略项合并。
+- 上游 owner 提供每次 HTTP 尝试的值类型观测，ProxyAPI 负责归档与用量结算。最终尝试的 status、实际 Content-Type、Content-Length、Transfer-Encoding 和响应头耗时贯通 EventHub、usage_events、metadata.json 与管理页。不能用下游 SSE Content-Type 补造上游缺失头；长度未知用存在性区分，明确 0 必须保留。最终尝试无响应时清除前一尝试的头统计，逐尝试档案仍保留。
+- 总耗时覆盖整个请求，响应头耗时只指最终尝试，首事件耗时仍指首业务事件，不把 keepalive 算入。转换/上游统计不依赖交互归档开关。metadata.event_id 与实际用量 Event ID 对齐，request_id 仍独立。
+- Codex Responses 非流式及 SSE 终态保留缓存读取/创建明细和字段存在性。管理统计使用上游原始总输入；Anthropic 响应的 input_tokens 扣除明确报告的缓存读写，另列 cache_read_input_tokens/cache_creation_input_tokens，避免双计数。缺失不伪造；汇总有未知样本时展示不完整，历史数据不猜测回填。CSV 导出在原列尾部追加两项 `*_known`，避免导出后重新混淆未知与零。
+- 默认 Claude cache identity 按身份语义基准 13.0.0 执行；不恢复源协议 metadata/cache_control，不改变 UA/Originator、Installation、Session/Thread 或 Turn-State 投影，不承诺实际命中。
+
+本地验收覆盖工具结果续传至 end_turn、缓存缺失/显式零/非零、重试最终响应归属、无归档统计、数据库存在性及管理页显示。上线仍需重新验证真实 end_turn、跨轮 cache identity 和上游实际缓存命中，不能以离线测试替代运行证据。
+
 转换能力默认关闭，只有 exact model 的当前 upstream endpoint 配置固定 profile 时才开启。Provider endpoint 热更新会原子重建有效目录，因此 `/v1/models` 与请求路由使用同一代模板匹配结果。灰度期间监控：
 
 - conversion error rate；

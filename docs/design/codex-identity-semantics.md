@@ -6,7 +6,7 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `12.2.0` 工作树（2026-09-20）
+> 实现基线：AetherRelay `13.1.0` 工作树（2026-09-20）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
 
@@ -39,7 +39,7 @@
 
 Client Session Signal
   ├── sessionHash：账号亲和、LogicalConversation 与 off 上游身份
-  ├── promptCacheHash：排除 routing-only 信号后的默认 prompt cache 身份
+  ├── promptCacheHash：独立默认 cache 身份；Claude 有效会话按 Key ID + 模型 + 会话派生
   ├── SessionScope：Turn-State 的客户端声明会话摘要
   └── Upstream Identity：本次 attempt 实际发送的 Session/Thread/Window
 ```
@@ -49,7 +49,7 @@ Client Session Signal
 | 层级 | 所有者 | 主要用途 | 是否允许直接混用 |
 | --- | --- | --- | --- |
 | 客户端身份 | Codex CLI | 描述安装、会话、线程、窗口和 turn | 不得直接覆盖代理身份 |
-| `sessionHash` / `promptCacheHash` | ProxyAPI service | 调度亲和、默认 cache key、默认上游身份 | routing-only 信号不得进入 cache key；两者都不能充当无状态请求的 Turn-State scope |
+| `sessionHash` / `promptCacheHash` | ProxyAPI service | 调度亲和、默认 cache key、默认上游身份 | Claude 会话只经独立命名空间派生 cache key，不透传原值；两者都不能充当无状态请求的 Turn-State scope |
 | 上游身份 | CodexUpstream attempt | 上游上下文、缓存与指纹连续性 | 每次 failover 必须按新账号重建 |
 | Turn-State scope | ProxyAPI biz | 账号内按客户端声明会话记录 opaque 状态 | 不能仅按收敛后的上游 Session 分桶 |
 
@@ -101,7 +101,7 @@ sessionHash = StableUUID(KeyID + Model + Client Session Signal)
 - fingerprint `off` 时的默认上游 Session/Thread；
 - fingerprint `scoped` 中的 LogicalConversation 投影输入。
 
-默认 `prompt_cache_key` 使用同一命名空间规则的独立 `promptCacheHash`，但它会排除 `X-Claude-Code-Session-Id` 等 routing-only 信号，不能简单复用 `sessionHash`。客户端显式提供的 `prompt_cache_key` 保持原值。
+默认 `prompt_cache_key` 使用独立 `promptCacheHash`。原生 Codex 规则不变；`/v1/messages` 对有效 `X-Claude-Code-Session-Id` 使用 `aetherrelay:claude-cache:v1` 命名空间，按 Key ID、目标模型、会话派生确定性 UUID，不包含上游账号。会话 trim 后为 1–256 字节可见 ASCII（不含空格/控制字符）；缺失或无效时回到既有原生信号解析，无其他有效信号则使用本次请求 nonce。相同会话续轮稳定，不同 Key ID/模型/会话隔离，账号切换不改变 cache key；不保证不同账号共享上游物理缓存。客户端显式提供的原生 `prompt_cache_key` 保持原值，Anthropic 不因此新增可透传字段。
 
 客户端会话信号按 `CP-SCHED-002` 的实现优先级解析；body-only 情况优先使用 `client_metadata.session_id`，只有它缺失时才把 `thread_id` 作为会话兜底。显式不同的 Thread 另行形成 LogicalThread，不得让同一 LogicalConversation 因 Thread 变化而得到不同的 scoped Session。信号完全缺失时，使用服务端生成的请求级 nonce 分别派生本次请求的 `sessionHash` 与默认 cache identity；不得使用固定 `default` 或客户端可控 `X-Request-ID`，也不得形成跨请求粘性。
 
@@ -427,7 +427,7 @@ AccountProjection
 
 现场 `claude-owner/001141` 完整请求确认：`metadata.user_id` 是含 `device_id`、空 `account_uuid`、`session_id` 的 JSON 字符串，内嵌 session 与 `X-Claude-Code-Session-Id` 相等；系统和消息文本包含 ephemeral 缓存提示，推理参数为 adaptive + max。这是已观察的客户端封装，不是所有 Anthropic user_id 的通用格式。
 
-Anthropic→Responses 转换校验 `metadata.user_id` 类型，未知 metadata 键继续拒绝；该用户标识不向 Responses 透传，记录 `metadata.user_id` 降级。Codex 入口仅识别上述三字段封装，缺失会话头时补入路由专用会话信号，头与正文冲突时拒绝；普通 opaque user_id 不参与会话派生。设备与账号标识不得直接成为上游 Installation。该路由信号继续不进入 prompt_cache_key。
+Anthropic→Responses 转换校验 `metadata.user_id` 类型，未知 metadata 键继续拒绝；该用户标识不向 Responses 透传，记录 `metadata.user_id` 降级。Codex 入口仅识别上述三字段封装，缺失会话头时补入已校验会话信号，头与正文冲突时拒绝；普通 opaque user_id 不参与会话派生。设备与账号标识不得直接成为上游 Installation。该会话信号按上文独立 cache 命名空间派生默认键；原始 session/device/account 不直接透传。
 
 ephemeral 缓存提示（可选 ttl=5m/1h）在系统/消息内容块中校验后移除，并记录 `cache_control` 降级；不改正文或工具 schema，不承诺保留 Anthropic 缓存边界或计费语义。Codex 推理适配按目标模型声明校验客户端 effort，adaptive + max 映射为 reasoning.effort=max；目标不支持时拒绝，不静默降到默认 effort。以上为实现与离线测试合同，部署后的真实终态仍需验证。
 

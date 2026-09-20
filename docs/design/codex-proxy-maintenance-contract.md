@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`12.2.0`
+> 合同版本：`13.1.0`
 >
 > 状态：`active`
 >
@@ -9,6 +9,10 @@
 > 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`13.1.0` 根据 001381/001383 的真实首事件超时补齐 phase 口径：首事件与流中空闲分别结算为 first_event_timeout / idle_timeout，归档 error_code 与用量保持一致；失败诊断优先引用已观察的 HTTP 响应，不把上游 200 与下游 504 混同。首事件默认和模板预算提高至 180 秒，显式配置仍优先，不修改重试/账号反馈规则，不以 safety-buffering 头自动延长或关闭保护。响应头到达即发布观测，同一 attempt 请求只归档一次，响应仅在事实/终态变化时更新；重复及旧 attempt 回调不能回滚最终快照。
+
+`13.0.0` 将经过校验的 Claude 会话信号纳入独立缓存身份：Key ID、模型与会话共同派生，不传原值，不依赖账号；无有效会话仍使用请求级隔离。原生 Codex 显式缓存键及身份派生保持不变。改变 Claude 默认缓存命名空间，按 MAJOR 发布。同时补齐转换等级/实际转换耗时/降级状态、最终上游响应观测与缓存明细；未知缓存读取/创建不能冒充已知零。统计不依赖交互归档开关。上游响应头耗时指最终 HTTP 尝试，总耗时包含全部尝试及响应过程。
 
 `12.2.0` 补齐已观察到的 Claude 工具结果续轮及 Responses 心跳处理，并增加最终 HTTP 出站正文、逐次尝试归档和转换错误路径。源协议 `is_error` 不直接透传，失败语义进入目标工具输出；本地流转换失败独立分类，不惩罚账号。新增归档能力沿用既有开关，不改变身份派生、并发上限或冷却策略。
 
@@ -305,7 +309,7 @@
 
 `CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
-`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 90 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得单独触发提交客户端响应。首个业务 data 前的 SSE 字段必须有界暂存，并在业务事件到达后按原顺序交付。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
+`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 180 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得单独触发提交客户端响应。首个业务 data 前的 SSE 字段必须有界暂存，并在业务事件到达后按原顺序交付。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
 
 `CP-STREAM-014` `response.incomplete` 在本 turn 没有非空文本、reasoning、工具参数增量或 output item，`response.output` 也为空，并且 `response.usage.output_tokens` 明确为整数 0 时，是上游静默失败。HTTP 非流式与未提交业务输出的 SSE 必须按 upstream failure 切号；WebSocket 必须返回明确失败并废弃连接；Chat/Anthropic adapter 不得生成正常 stop。缺少 usage、非零 token 或存在任一输出证据时仍按 `CP-STREAM-007` 处理。
 
@@ -363,7 +367,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-SCHED-011` 账号候选在 session 粘性与 `priority` 之后、最终轮转之前，必须先按「额度证据」排序：拥有新鲜用量快照、且不存在未到期 limit-reached 窗口的账号，优先于额度未知或快照已过期的账号。该规则只改变同优先级候选之间的排序，不改变准入结论——`CP-CAP-005` 仍然保证缺失或过期快照可以参与尝试，因此当全部候选都缺少新鲜额度证据时，选择结果与引入本规则前一致（继续按轮转）；粘性账号（`CP-SCHED-004`）仍然优先于本规则。依据：部署轮次 `work-office/000001` 观测到某 `free` 账号在其 30 天窗口已 100% 时仍被选中，随后该轮响应头才首次暴露耗尽事实，代价是一次长耗时请求；`interactions_old`/`interactions_new` 中没有更早的可归属观测，说明缺口位于「快照过期 + 尚未轮询」窗口。验收覆盖：新鲜有余量优先于未知/过期、全部未知时保持原有轮转、粘性账号仍然命中、未到期 limit-reached 快照仍被硬性排除。
 
-`CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`client_metadata.session_id`（仅缺失时以 `thread_id` 作为会话兜底）、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的 `X-Claude-Code-Session-Id` 是账号路由专用信号，不得进入上游 `prompt_cache_key`。显式不同的 `Thread-Id` / `X-Client-Request-Id` / `client_metadata.thread_id` 另行冻结为 LogicalThread，不改变账号亲和使用的 LogicalConversation。无显式信号时必须使用服务端生成、仅本次 HTTP/WS 建连请求有效的 nonce 生成请求域 session 与默认 cache identity；不得使用固定 `default`、客户端可控 `X-Request-ID` 或完整敏感正文作为持久化 key，也不得形成跨请求账号粘性。
+`CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`client_metadata.session_id`（仅缺失时以 `thread_id` 作为会话兜底）、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的有效 `X-Claude-Code-Session-Id` 同时参与账号路由亲和与独立默认缓存身份派生；cache 命名空间按 Key ID + 模型 + 校验后会话隔离，不含上游账号、不透传原值，详见身份语义基准。显式不同的 `Thread-Id` / `X-Client-Request-Id` / `client_metadata.thread_id` 另行冻结为 LogicalThread，不改变账号亲和使用的 LogicalConversation。无显式信号时必须使用服务端生成、仅本次 HTTP/WS 建连请求有效的 nonce 生成请求域 session 与默认 cache identity；不得使用固定 `default`、客户端可控 `X-Request-ID` 或完整敏感正文作为持久化 key，也不得形成跨请求账号粘性。
 
 `CP-SCHED-003` session key 必须按客户端 API key ID 和 model 命名空间隔离；存储哈希，不保存原值。
 
@@ -457,13 +461,13 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-001` 用量统一记录客户端身份、模型、上游协议、transport（HTTP/SSE/WS/compact）、账号安全引用、是否估算和最终 outcome。
 
-`CP-OBS-002` outcome 至少包括 `success`、`client_canceled`、`invalid_request`、`authentication_failed`、`rate_limited`、`quota_exhausted`、`upstream_failed`、`upstream_truncated`、`idle_timeout`、`protocol_error`。
+`CP-OBS-002` outcome 至少包括 `success`、`client_canceled`、`invalid_request`、`authentication_failed`、`rate_limited`、`quota_exhausted`、`upstream_failed`、`upstream_truncated`、`first_event_timeout`、`idle_timeout`、`protocol_error`。
 
 `CP-OBS-003` 指标和日志只记录有界错误类别，不记录上游正文、token、代理凭据、原始 session 或完整 account ID。
 
 `CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
 
-`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率仍为累计读取 / 累计输入；缺失写入沿用零值，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态，以及事件结算与 dashboard 汇总。
+`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率仍为累计读取 / 累计输入；缓存读写分别携带 `*_known` 标志，显式零为已知、缺失或非法为未知；聚合存在未知样本时标为不完整，不将缺失显示成零命中，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态，以及事件结算与 dashboard 汇总。
 
 `CP-OBS-010` Codex HTTP Responses/compact 的最终出站正文必须取自 `codexupstream` 完成 `client_metadata` 注入后的发送字节，不得用入站正文或转换中间态冒充。仅 `archive_interactions && archive_full_content` 启用时，owner 通过 typed observation 携带正文，proxyapi 沿用附件摘要策略落盘。代理注入的 `client_metadata` 身份及内嵌 turn metadata 默认脱敏；显式 `archive_unredacted_headers` 开启时同步保真，业务文本/工具参数不按同名字段误删。普通日志永不输出正文。每个 HTTP 尝试独立编号归档；握手和终态更新同一尝试，账号切换与刷新重试不得覆盖先前尝试。无上游请求的本地拒绝只记录转换错误，不创建伪上游记录。本规则不宣称覆盖 WebSocket 帧与 ChatGPT Web 多阶段请求。
 
@@ -593,6 +597,8 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | --- | --- | --- | --- | --- |
 | 模型级不可用与有限切号 | CP-FAIL-018 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `model_not_found_test.go`, `codex_model_not_found_test.go`, `model_availability_test.go` |
 | 压缩请求白名单诊断 | CP-OBS-006 | implemented | `proxyapi/pkg/codexresponses/diagnostics.go`, `proxyapi/biz/codex_diagnostics.go` | `diagnostics_test.go`, `proxyapi/service/proxy/codex_model_not_found_test.go` |
+| 首事件预算、超时分类与幂等归档 | CP-STREAM-013 / CP-OBS-002 | implemented（本地）；部署待复验 | `proxyapi/biz`, `proxyapi/service/proxy`, `aetherrelayconfig` | `codex_stream_timeout_test.go`, `codex_diagnostics_test.go`, `codex_timeout_closure_test.go` |
+| 转换与上游观测、缓存存在性 | CP-OBS-007 / CP-SCHED-002 | implemented（本地）；线上待复验 | `proxyapi/service/proxy`, `aetherrelayusage`, `aetherrelayarchive`, `web/admin` | `codex_conversion_observation_test.go`, `observation_presence_test.go`, `web/admin/usage.test.cjs` |
 | 缓存读写统一采集 | CP-OBS-007 | implemented | `proxyapi/service/proxy/usage.go`, `proxyapi/service/proxy/stream_archive.go` | `cache_write_usage_test.go`, `handler_test.go`, `aetherrelayusage/cache_statistics_test.go` |
 | 逐账号完整模型列表 | CP-CAP-010 | implemented | `codexaccountpool/internal/store/model_availability.go`, `web/admin/index.html` | `model_availability_test.go`, `web/admin/models.test.cjs` |
 | 切号严格匹配账号模型 | CP-SCHED-009 | implemented | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/strict_model_selection_test.go`, `codexaccountpool/biz/strict_model_selection_test.go` |
@@ -669,7 +675,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | WebSocket 握手拒绝 quota | CLIProxyAPI `fcea738f`、`ca601db0`；sub2api `5d9c7abed`、`571d1e1d9`；脱敏样本 HTTP 429 + `usage_limit_reached` + `resets_in_seconds` | 握手体只投影安全错误；明确 usage-limit 进入 credential-wide cooldown，普通 429 保持 exact-model；只有 101 quota header 合并账号快照，Spark 不污染普通模型 |
 | 非流式 HTTP 200 terminal fault | sub2api `81ac8ccd6`；脱敏样本 SSE `response.failed` + `invalid_request_error` | 与 streaming 共用 terminal 分类；确定性请求错误停止 failover |
 | Codex 大整数规范化 | sub2api `d6012b0b3`；脱敏样本 `sequence=900719925474099312345` | 动态 JSON 使用 `UseNumber`，请求、WS event 与重放保持原值 |
-| Claude Code 会话亲和 | sub2api `5688bcba9`；脱敏样本 `/v1/messages` + `X-Claude-Code-Session-Id: session-a` | 仅作为 hashed 路由亲和，不能派生上游 cache key |
+| Claude Code 会话亲和 | sub2api `5688bcba9`；脱敏样本 `/v1/messages` + `X-Claude-Code-Session-Id: session-a` | 原始证据用于路由；13.0.0 起经校验后另行派生账号无关 cache identity |
 | HTTPS 代理 CONNECT ALPN | CLIProxyAPI `8dd78042`；脱敏样本 HTTPS proxy 同时提供 `h2,http/1.1` | proxy TLS leg 固定 `http/1.1`，避免 h2 CONNECT greeting/EOF |
 | OAuth identity header | sub2api `bb6c3b4f6`、`a34123959`：credential 请求复用 Codex UA/originator，并避免 inference-only version | credential 与 inference 共用不可变 profile authority |
 | HTTP upgrade wrapper | magicEngine `v1.5.1` / `4d359d0`：response writer 透传 Hijacker、标记 101、支持 Unwrap，并让 Flush 正确提交状态 | AetherRelay 依赖正式 tag，vendor 只由 module 刷新，不保留本地补丁 |

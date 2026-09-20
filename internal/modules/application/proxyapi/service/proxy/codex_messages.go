@@ -18,16 +18,21 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
 		return
 	}
+	plan.ConversionLevel = 2
+	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
+	conversionStart := time.Now()
 	capability := config.ConversionCapability{Level: 2, Text: true, Tools: true, Streaming: true, Continuation: true}
 	var err error
 	capability, err = anthropicTargetReasoning(body, h.currentConfig().ModelMetadata[model], capability)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
 		return
 	}
 	if session := anthropicEmbeddedSession(body); session != "" {
 		header := strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id"))
 		if header != "" && header != session {
+			round.SetConversionDuration(time.Since(conversionStart))
 			h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, fmt.Errorf("metadata.user_id.session_id conflicts with session header")))
 			return
 		}
@@ -38,11 +43,13 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	}
 	responsesBody, degraded, err := buildResponsesFromAnthropicWithCapability(body, model, stream, capability)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
 		return
 	}
 	normalized, normalizedBody, ignored, err := normalizeCodexRequest(responsesBody, false)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -53,16 +60,18 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	// state must reach the executor instead of being replaced by the fallback.
 	turnState, err := codexTurnStateFromHeaders(r.Header)
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
 	sessionHash := codexSessionHash(r, model, normalizedBody)
 	normalized, _, cacheKeySource, err := ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 	if err != nil {
+		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
+	round.SetConversionDuration(time.Since(conversionStart))
 	diagnostics := codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	userAgent, originator := codexConvertedClientIdentityWithDiagnostics(r.Header, &diagnostics)
 	request := codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
@@ -76,7 +85,9 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		}
 		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, result.Attempt, nil)
 		round.SetTurnStateFallback(codexresponses.TurnStateFallback(result.TurnStateSource))
+		conversionStart = time.Now()
 		converted, usage, degradedResponse, convertErr := convertOpenAIResponsesToAnthropicWithCapability(result.Body, model, capability)
+		round.SetConversionDuration(round.ConversionDuration + time.Since(conversionStart))
 		if convertErr != nil {
 			h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
 			return
@@ -115,11 +126,14 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		if payload == "" || payload == "[DONE]" {
 			return nil
 		}
+		mappingStart := time.Now()
 		events, err := mapper([]byte(payload), state)
 		if err != nil {
+			round.SetConversionDuration(round.ConversionDuration + time.Since(mappingStart))
 			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
 		encoded, err := encodeConversionSSE(events, true)
+		round.SetConversionDuration(round.ConversionDuration + time.Since(mappingStart))
 		if err != nil {
 			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
@@ -144,7 +158,8 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		return nil
 	}
 	err := h.codexResponses.StreamCodexResponses(r.Context(), request, startStream, emit)
-	usage := tokenUsage{PromptTokens: state.InputTokens, CompletionTokens: state.OutputTokens, TotalTokens: state.InputTokens + state.OutputTokens, Known: state.InputTokens > 0 || state.OutputTokens > 0}
+	markConversionDegraded(round, state.IgnoredFeatures)
+	usage := state.tokenUsage()
 	duration := time.Since(started)
 	_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
 	if err != nil || !state.Completed {

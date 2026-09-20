@@ -19,7 +19,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheHint', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -30,6 +30,22 @@ function harness() {
 
 test('all embedded scripts parse', () => {
   for (const script of scripts) new vm.Script(script);
+});
+
+test('observation presence preserves unknown, known zero and partial totals', () => {
+  const {context:c,elements}=harness();
+  assert.equal(c.usageCacheRate({input_tokens:100,cache_hit_rate:0,cached_input_tokens_known:false}), '—');
+  assert.equal(c.usageCacheRate({input_tokens:100,cache_hit_rate:0,cached_input_tokens_known:true}), '0%');
+  assert.equal(c.usageCacheTokens({cached_input_tokens:0,cached_input_tokens_known:false},'cached_input_tokens'), '未提供');
+  assert.equal(c.usageCacheTokens({cached_input_tokens:0,cached_input_tokens_known:true},'cached_input_tokens'), '0');
+  assert.match(c.usageCacheTokens({cached_input_tokens:40,cached_input_tokens_known:false},'cached_input_tokens'), /40.*不完整/);
+  c.showUsageEvent({upstream_status:200,upstream_content_length:0,upstream_content_length_known:true,conversion_level:2,conversion_duration_ms:0,conversion_degraded:false});
+  assert.match(elements.usageEventDetail.innerHTML,/上游 Content-Length<\/dt><dd>0/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换等级<\/dt><dd>2/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换降级<\/dt><dd>false/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换耗时（秒）<\/dt><dd>0/);
+  c.showUsageEvent({upstream_status:200,upstream_content_length:0,upstream_content_length_known:false});
+  assert.match(elements.usageEventDetail.innerHTML,/上游 Content-Length<\/dt><dd>未知/);
 });
 
 test('cache rate distinguishes no input, missing data, misses and hits', () => {
@@ -95,6 +111,8 @@ test('upstream column distinguishes admission rejection from missing response', 
   assert.equal(c.usageUpstreamMeta({outcome: 'provider_unavailable'}).label, '未发起');
   assert.equal(c.usageUpstreamMeta({outcome: 'provider_unavailable', failure_class: 'accounts_cooling', retry_after_seconds: 5}).title, '请求在路由或账号池准入阶段结束，未发起上游 HTTP 请求 · accounts_cooling · 建议等待 5 秒');
   assert.equal(c.usageUpstreamMeta({outcome: 'upstream_failed'}).label, '无响应');
+  assert.equal(c.usageUpstreamMeta({outcome: 'first_event_timeout'}).label, '无响应');
+  assert.equal(c.usageUpstreamMeta({outcome: 'first_event_timeout',upstream_status:200}).label, '200');
   assert.equal(c.usageUpstreamMeta({upstream_status: 429, upstream_content_type: 'application/json'}).label, '429 · application/json');
 });
 

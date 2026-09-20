@@ -145,7 +145,7 @@ func serveConvertedSSEWithTimeouts(ctx context.Context, w http.ResponseWriter, i
 		case <-timer.C:
 			closeInput()
 			if !headersWritten {
-				return fmt.Errorf("upstream SSE first/next event timeout after %s", firstEventTimeout.Truncate(time.Millisecond))
+				return fmt.Errorf("upstream SSE first event timeout after %s", firstEventTimeout.Truncate(time.Millisecond))
 			}
 			return fmt.Errorf("upstream SSE idle timeout after %s", idleTimeout.Truncate(time.Millisecond))
 		case result := <-lineCh:
@@ -375,7 +375,14 @@ func (h *Handler) handleConvertedSSE(w http.ResponseWriter, r *http.Request, res
 		return err
 	}
 	state := &textConversionStreamState{}
-	conversionStart := time.Now()
+	measuredMapper := func(payload []byte, state *textConversionStreamState) ([]map[string]any, error) {
+		started := time.Now()
+		out, err := mapper(payload, state)
+		if round != nil {
+			round.SetConversionDuration(round.ConversionDuration + time.Since(started))
+		}
+		return out, err
+	}
 	cfg := h.currentConfig()
 	firstTimeout := cfg.StreamFirstEventTimeout
 	if firstTimeout <= 0 {
@@ -385,17 +392,14 @@ func (h *Handler) handleConvertedSSE(w http.ResponseWriter, r *http.Request, res
 	if idleTimeout <= 0 {
 		idleTimeout = firstTimeout
 	}
-	err := serveConvertedSSEWithTimeouts(r.Context(), w, resp.Body, mapper, state, true, firstTimeout, idleTimeout)
-	if round != nil {
-		round.SetConversionDuration(time.Since(conversionStart))
-	}
+	err := serveConvertedSSEWithTimeouts(r.Context(), w, resp.Body, measuredMapper, state, true, firstTimeout, idleTimeout)
 	if state.Output.Len() > 0 {
 		if archiveErr := h.writeArchiveResponse(round, "response.sse", state.Output.Bytes()); archiveErr != nil {
 			log.Printf("archive converted SSE: %v", archiveErr)
 		}
 	}
 	markConversionDegraded(round, state.IgnoredFeatures)
-	usage := tokenUsage{PromptTokens: state.InputTokens, CompletionTokens: state.OutputTokens, TotalTokens: state.InputTokens + state.OutputTokens, Known: state.InputTokens > 0 || state.OutputTokens > 0}
+	usage := state.tokenUsage()
 	duration := time.Since(start)
 	if err != nil {
 		if !state.HeadersWritten {
@@ -426,7 +430,9 @@ func conversionStreamFailure(err error) *streamFail {
 		return newStreamFail(streamKindClientCanceled, message, err, false)
 	case strings.Contains(lower, "client write") || strings.Contains(lower, "broken pipe"):
 		return newStreamFail(streamKindClientWrite, message, err, false)
-	case strings.Contains(lower, "idle timeout") || strings.Contains(lower, "first event timeout") || strings.Contains(lower, "first/next event timeout"):
+	case strings.Contains(lower, "first event timeout"):
+		return newStreamFail(streamKindFirstEventTimeout, message, err, true)
+	case strings.Contains(lower, "idle timeout"):
 		return newStreamFail(streamKindIdleTimeout, message, err, true)
 	case strings.Contains(lower, "exceeds") || strings.Contains(lower, "limit"):
 		return newStreamFail(streamKindLimitExceeded, message, err, false)
@@ -561,6 +567,14 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 		model = fallbackModel
 	}
 	usage := tokenUsage{PromptTokens: in.Usage.Input, CompletionTokens: in.Usage.Output, TotalTokens: in.Usage.Input + in.Usage.Output}
+	var envelope struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if json.Unmarshal(body, &envelope) == nil {
+		if parsed, ok := usageFromRaw(envelope.Usage); ok {
+			usage = parsed
+		}
+	}
 	if len(content) == 0 {
 		content = []any{map[string]any{"type": "text", "text": ""}}
 	}
@@ -568,7 +582,7 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 	if err != nil {
 		return nil, tokenUsage{}, nil, err
 	}
-	out := map[string]any{"id": in.ID, "type": "message", "role": "assistant", "model": model, "content": content, "stop_reason": stopReason, "stop_sequence": nil, "usage": map[string]any{"input_tokens": usage.PromptTokens, "output_tokens": usage.CompletionTokens}}
+	out := map[string]any{"id": in.ID, "type": "message", "role": "assistant", "model": model, "content": content, "stop_reason": stopReason, "stop_sequence": nil, "usage": anthropicUsageFields(usage)}
 	if out["id"] == "" {
 		out["id"] = "msg-responses"
 	}
@@ -1629,6 +1643,8 @@ type responsesAnthropicToolState struct {
 }
 
 type textConversionStreamState struct {
+	CacheUsage tokenUsage
+
 	ID, Model                                      string
 	InputTokens, OutputTokens                      int
 	StopReason, StopSequence                       string
@@ -1653,6 +1669,34 @@ func (s *textConversionStreamState) markIgnored(feature string) {
 		return
 	}
 	s.IgnoredFeatures = uniqueSortedFeatures(append(s.IgnoredFeatures, feature))
+}
+
+func (s *textConversionStreamState) tokenUsage() tokenUsage {
+	u := s.CacheUsage
+	u.PromptTokens, u.CompletionTokens = s.InputTokens, s.OutputTokens
+	u.TotalTokens = s.InputTokens + s.OutputTokens
+	u.Known = u.Known || s.InputTokens > 0 || s.OutputTokens > 0
+	return u
+}
+
+// Responses input_tokens includes cache reads; Anthropic input_tokens excludes
+// separately declared cache reads and writes. Do not double-count downstream.
+func anthropicUsageFields(u tokenUsage) map[string]any {
+	input := u.PromptTokens
+	result := map[string]any{"output_tokens": u.CompletionTokens}
+	if u.CachedInputTokensKnown {
+		result["cache_read_input_tokens"] = u.CachedInputTokens
+		input -= u.CachedInputTokens
+	}
+	if u.CacheCreationInputTokensKnown {
+		result["cache_creation_input_tokens"] = u.CacheCreationInputTokens
+		input -= u.CacheCreationInputTokens
+	}
+	if input < 0 {
+		input = 0
+	}
+	result["input_tokens"] = input
+	return result
 }
 
 // responsesTerminationToAnthropic keeps the conversion fail-closed when a
@@ -2087,6 +2131,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			return nil, err
 		}
 		if usage, ok := response["usage"].(map[string]any); ok {
+			state.CacheUsage, _ = usageFromMap(usage)
 			state.InputTokens = intNumber(usage["input_tokens"])
 			state.OutputTokens = intNumber(usage["output_tokens"])
 		}
@@ -2098,7 +2143,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": state.OutputTokens}}, map[string]any{"type": "message_stop"})
+		out = append(out, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil}, "usage": anthropicUsageFields(state.tokenUsage())}, map[string]any{"type": "message_stop"})
 	default:
 		return nil, fmt.Errorf("responses stream event %q", typ)
 	}

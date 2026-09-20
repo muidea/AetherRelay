@@ -26,7 +26,15 @@ type Recorder struct {
 	active        map[int]struct{}
 }
 
+// NewObservationRound retains request statistics without creating archive files.
+func NewObservationRound() *Round {
+	return &Round{memoryOnly: true, StartedAt: time.Now(), UpstreamContentLength: -1}
+}
+
 type Round struct {
+	memoryOnly bool
+	EventID    string
+
 	ID                 int       `json:"id"`
 	Dir                string    `json:"dir"`
 	StartedAt          time.Time `json:"started_at"`
@@ -61,6 +69,10 @@ type Round struct {
 	RetryAfterSeconds   int
 	// UpstreamAttempts deduplicates handshake and terminal observations.
 	UpstreamAttempts map[string]int
+	// Digests only: never retain another copy of credentials or response headers.
+	UpstreamResponseDigests map[int][32]byte
+	UpstreamAttemptFailed   map[int]bool
+	ErrorCode               string
 	// UpstreamDuration 是本次上游 HTTP 请求（含首包探测）的耗时，仅供
 	// usage 结算使用；完整 metadata 当前仍保留总请求耗时。
 	UpstreamDuration         time.Duration
@@ -171,13 +183,15 @@ func (r *Round) SetTransportPlan(operation, clientEndpoint, clientProtocol, upst
 	r.UpstreamProtocol = upstreamProtocol
 	r.UpstreamEndpoint = upstreamEndpoint
 	r.ConversionMode = conversionMode
-	r.ConversionDegraded = false
 	if conversionMode == "responses_to_anthropic" || conversionMode == "anthropic_to_responses" {
 		r.ConversionLevel = 1
 	} else if conversionMode == "openai_to_anthropic" || conversionMode == "anthropic_to_openai" {
 		r.ConversionLevel = 1
 	} else {
 		r.ConversionLevel = 0
+	}
+	if conversionMode == "anthropic_to_codex_responses" || conversionMode == "chat_to_codex_responses" {
+		r.ConversionLevel = 2
 	}
 }
 
@@ -231,11 +245,19 @@ func (r *Round) SetIgnoredFeatures(features []string) {
 }
 
 type Metadata struct {
-	ID         int       `json:"id"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
-	RequestID  string    `json:"request_id,omitempty"`
-	// EventID 与 usage_events.event_id 对齐(通常等于 request_id)。
+	ErrorCode                     string    `json:"error_code,omitempty"`
+	CachedInputTokensKnown        bool      `json:"cached_input_tokens_known"`
+	CacheCreationInputTokensKnown bool      `json:"cache_creation_input_tokens_known"`
+	UpstreamStatus                int       `json:"upstream_status,omitempty"`
+	UpstreamContentType           string    `json:"upstream_content_type,omitempty"`
+	UpstreamContentLength         int64     `json:"upstream_content_length"`
+	UpstreamTransferEncoding      string    `json:"upstream_transfer_encoding,omitempty"`
+	UpstreamDurationMS            int64     `json:"upstream_duration_ms,omitempty"`
+	ID                            int       `json:"id"`
+	StartedAt                     time.Time `json:"started_at"`
+	FinishedAt                    time.Time `json:"finished_at"`
+	RequestID                     string    `json:"request_id,omitempty"`
+	// EventID 与 usage_events.event_id 对齐，独立于客户端关联用的 request_id。
 	EventID string `json:"event_id,omitempty"`
 	// APIKeyID 为客户端身份稳定 ID;永不保存原始密钥。
 	APIKeyID string `json:"api_key_id,omitempty"`
@@ -248,15 +270,15 @@ type Metadata struct {
 	UpstreamProtocol     string   `json:"upstream_protocol,omitempty"`
 	UpstreamEndpoint     string   `json:"upstream_endpoint,omitempty"`
 	ConversionMode       string   `json:"conversion_mode,omitempty"`
-	ConversionLevel      int      `json:"conversion_level,omitempty"`
+	ConversionLevel      int      `json:"conversion_level"`
 	IgnoredFeatures      []string `json:"ignored_features,omitempty"`
 	UnsupportedFeatures  []string `json:"unsupported_features,omitempty"`
 	ConversionErrorPath  string   `json:"conversion_error_path,omitempty"`
 	FailureClass         string   `json:"failure_class,omitempty"`
 	Retryable            *bool    `json:"retryable,omitempty"`
 	RetryAfterSeconds    int      `json:"retry_after_seconds,omitempty"`
-	ConversionDurationMS int64    `json:"conversion_duration_ms,omitempty"`
-	ConversionDegraded   bool     `json:"conversion_degraded,omitempty"`
+	ConversionDurationMS int64    `json:"conversion_duration_ms"`
+	ConversionDegraded   bool     `json:"conversion_degraded"`
 	// TurnStateFallback 为 nil 时省略：只有产生了上游结果的 round 才会留下明确的
 	// true/false（CP-HDR-023）。
 	TurnStateFallback      *bool  `json:"turn_state_fallback,omitempty"`
@@ -379,6 +401,9 @@ func (r *Recorder) FullContent() bool {
 
 // FullContent 报告本 round 所属归档器是否落盘完整正文。
 func (r *Round) FullContent() bool {
+	if r != nil && r.memoryOnly {
+		return false
+	}
 	if r == nil || r.recorder == nil {
 		return true // nil recorder 视为不限制(测试场景)
 	}
@@ -427,7 +452,7 @@ func (r *Recorder) start(apiKeyID string, legacy bool) (*Round, error) {
 		r.mu.Unlock()
 		return nil, err
 	}
-	return &Round{ID: id, Dir: dir, APIKeyID: apiKeyID, StartedAt: time.Now(), recorder: r, written: map[string]struct{}{}}, nil
+	return &Round{ID: id, Dir: dir, APIKeyID: apiKeyID, StartedAt: time.Now(), UpstreamContentLength: -1, recorder: r, written: map[string]struct{}{}}, nil
 }
 
 func archiveScope(apiKeyID string) string {
@@ -469,7 +494,7 @@ func (r *Round) WriteRequest(body []byte) error {
 	if r == nil {
 		return nil
 	}
-	if r.recorder != nil && !r.recorder.fullContent {
+	if r.memoryOnly || (r.recorder != nil && !r.recorder.fullContent) {
 		return nil
 	}
 	if err := writeJSONOrRaw(filepath.Join(r.Dir, "request.json"), body); err != nil {
@@ -480,7 +505,7 @@ func (r *Round) WriteRequest(body []byte) error {
 }
 
 func (r *Round) WriteJSON(name string, value any) error {
-	if r == nil {
+	if r == nil || r.memoryOnly {
 		return nil
 	}
 	if name == "" {
@@ -501,7 +526,7 @@ func (r *Round) WriteResponse(name string, body []byte) error {
 	if r == nil {
 		return nil
 	}
-	if r.recorder != nil && !r.recorder.fullContent {
+	if r.memoryOnly || (r.recorder != nil && !r.recorder.fullContent) {
 		return nil
 	}
 	if name == "" {
@@ -518,7 +543,7 @@ func (r *Round) CreateResponseWriter(name string) (io.WriteCloser, error) {
 	if r == nil {
 		return nil, nil
 	}
-	if r.recorder != nil && !r.recorder.fullContent {
+	if r.memoryOnly || (r.recorder != nil && !r.recorder.fullContent) {
 		return nopWriteCloser{}, nil
 	}
 	if name == "" {
@@ -546,7 +571,7 @@ func (r *Round) WriteMetadata(metadata Metadata) error {
 		metadata.RequestID = r.RequestID
 	}
 	if metadata.EventID == "" {
-		metadata.EventID = r.RequestID
+		metadata.EventID = r.EventID
 	}
 	if metadata.APIKeyID == "" {
 		metadata.APIKeyID = r.APIKeyID

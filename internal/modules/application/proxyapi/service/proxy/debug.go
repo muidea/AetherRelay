@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -47,6 +48,7 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	TransferEncoding  string              `json:"transfer_encoding,omitempty"`
 	FailureClass      string              `json:"failure_class,omitempty"`
 	RetryAfterSeconds int                 `json:"retry_after_seconds,omitempty"`
 	UpstreamErrorCode string              `json:"upstream_error_code,omitempty"`
@@ -243,7 +245,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	requestAt := attempt.Request.At
 	if requestAt.IsZero() {
-		requestAt = time.Now()
+		requestAt = round.StartedAt
 	}
 	requestHeaders := h.archiveHeaders(codexHeadersToHTTP(attempt.Request.Headers))
 	if round.UpstreamAttempts == nil {
@@ -251,44 +253,66 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	key := attempt.Request.At.Format(time.RFC3339Nano) + " " + attempt.Request.Method + " " + attempt.Request.URL
 	index := round.UpstreamAttempts[key]
-	if index == 0 {
+	newAttempt := index == 0
+	if newAttempt {
 		index = len(round.UpstreamAttempts) + 1
 		round.UpstreamAttempts[key] = index
 	}
-	requestInfo := upstreamDebugInfo{
-		Attempt: index,
-		RoundID: round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
-		Method: attempt.Request.Method, URL: attempt.Request.URL, BodyBytes: attempt.Request.BodyBytes, Headers: requestHeaders,
+	if index < len(round.UpstreamAttempts) {
+		return
 	}
-	if round.FullContent() && len(attempt.Request.Body) > 0 {
-		body := h.codexArchiveBody(attempt.Request.Body)
-		name := fmt.Sprintf("upstream_request_%03d.body.json", index)
-		if err := h.writeArchiveResponse(round, name, body); err != nil {
-			log.Printf("archive Codex upstream body: %v", err)
-		} else {
-			requestInfo.BodyPath = name
+	if round.UpstreamAttemptFailed[index] && attemptErr == nil {
+		return // A late handshake callback cannot erase a terminal error.
+	}
+	if attemptErr != nil {
+		if round.UpstreamAttemptFailed == nil {
+			round.UpstreamAttemptFailed = make(map[int]bool)
 		}
-		if err := h.writeArchiveResponse(round, "upstream_request_body.json", body); err != nil {
-			log.Printf("archive Codex upstream body snapshot: %v", err)
+		round.UpstreamAttemptFailed[index] = true
+	}
+	if newAttempt {
+		requestInfo := upstreamDebugInfo{
+			Attempt: index,
+			RoundID: round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
+			Method: attempt.Request.Method, URL: attempt.Request.URL, BodyBytes: attempt.Request.BodyBytes, Headers: requestHeaders,
 		}
-	}
-	if err := round.WriteJSON(fmt.Sprintf("upstream_request_%03d.json", index), requestInfo); err != nil {
-		log.Printf("archive Codex attempt request: %v", err)
-	}
-	if err := round.WriteJSON("upstream_request.json", requestInfo); err != nil {
-		log.Printf("archive Codex upstream request metadata: %v", err)
-	}
-	h.debugfRound(round, r, "round=%06d Codex upstream request provider=%s method=%s url=%s body_bytes=%d headers=%s",
-		round.ID, providerName, requestInfo.Method, requestInfo.URL, requestInfo.BodyBytes, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Request.Headers))))
+		if round.FullContent() && len(attempt.Request.Body) > 0 {
+			body := h.codexArchiveBody(attempt.Request.Body)
+			name := fmt.Sprintf("upstream_request_%03d.body.json", index)
+			if err := h.writeArchiveResponse(round, name, body); err != nil {
+				log.Printf("archive Codex upstream body: %v", err)
+			} else {
+				requestInfo.BodyPath = name
+			}
+			if err := h.writeArchiveResponse(round, "upstream_request_body.json", body); err != nil {
+				log.Printf("archive Codex upstream body snapshot: %v", err)
+			}
+		}
+		if err := round.WriteJSON(fmt.Sprintf("upstream_request_%03d.json", index), requestInfo); err != nil {
+			log.Printf("archive Codex attempt request: %v", err)
+		}
+		if err := round.WriteJSON("upstream_request.json", requestInfo); err != nil {
+			log.Printf("archive Codex upstream request metadata: %v", err)
+		}
+		h.debugfRound(round, r, "round=%06d Codex upstream request provider=%s method=%s url=%s body_bytes=%d headers=%s",
+			round.ID, providerName, requestInfo.Method, requestInfo.URL, requestInfo.BodyBytes, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Request.Headers))))
 
+	}
 	responseAt := attempt.Response.At
 	if responseAt.IsZero() {
-		responseAt = time.Now()
+		responseAt = requestAt
 	}
 	responseHeaders := h.archiveHeaders(codexHeadersToHTTP(attempt.Response.Headers))
+	if attempt.Response.Observed {
+		round.SetUpstreamHeaders(attempt.Response.Status, http.Header(responseHeaders).Get("Content-Type"), attempt.Response.ContentLength, attempt.Response.TransferEncoding, time.Duration(attempt.Response.DurationMS)*time.Millisecond)
+	} else {
+		// A later transport failure must not inherit an earlier attempt's headers.
+		round.SetUpstreamHeaders(0, "", -1, "", 0)
+	}
 	responseInfo := upstreamResponseDebugInfo{
-		Attempt: index,
-		RoundID: round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
+		TransferEncoding: attempt.Response.TransferEncoding,
+		Attempt:          index,
+		RoundID:          round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
 		Status: attempt.Response.Status, DurationMS: attempt.Response.DurationMS,
 		ContentType: http.Header(responseHeaders).Get("Content-Type"), ContentLength: attempt.Response.ContentLength,
 		Headers: responseHeaders,
@@ -301,11 +325,28 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 			responseInfo.UpstreamErrorCode = failure.UpstreamCode
 		}
 	}
+	encoded, encodeErr := json.Marshal(responseInfo)
+	if encodeErr != nil {
+		return
+	}
+	digest := sha256.Sum256(encoded)
+	if round.UpstreamResponseDigests == nil {
+		round.UpstreamResponseDigests = make(map[int][32]byte)
+	}
+	if previous, ok := round.UpstreamResponseDigests[index]; ok && previous == digest {
+		return
+	}
+	written := true
 	if err := round.WriteJSON(fmt.Sprintf("upstream_response_%03d.json", index), responseInfo); err != nil {
+		written = false
 		log.Printf("archive Codex attempt response: %v", err)
 	}
 	if err := round.WriteJSON("upstream_response.json", responseInfo); err != nil {
+		written = false
 		log.Printf("archive Codex upstream response metadata: %v", err)
+	}
+	if written {
+		round.UpstreamResponseDigests[index] = digest
 	}
 	h.debugfRound(round, r, "round=%06d Codex upstream response provider=%s status=%d duration=%dms content_type=%q content_length=%d error=%q headers=%s",
 		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))))

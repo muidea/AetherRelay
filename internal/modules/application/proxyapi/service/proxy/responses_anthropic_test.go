@@ -1075,7 +1075,7 @@ func TestConvertedSSECommentsDoNotExtendFirstEventTimeout(t *testing.T) {
 	}()
 	started := time.Now()
 	err := serveConvertedSSEWithTimeouts(context.Background(), httptest.NewRecorder(), reader, responsesEventToAnthropic, &textConversionStreamState{}, true, 25*time.Millisecond, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "first/next event timeout") {
+	if err == nil || !strings.Contains(err.Error(), "first event timeout") {
 		t.Fatalf("err=%v", err)
 	}
 	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
@@ -1149,6 +1149,7 @@ func TestConversionStreamFailureClassification(t *testing.T) {
 	}{
 		{err: context.Canceled, kind: streamKindClientCanceled},
 		{err: fmt.Errorf("upstream SSE idle timeout after 1s"), kind: streamKindIdleTimeout},
+		{err: fmt.Errorf("upstream SSE first event timeout after 1s"), kind: streamKindFirstEventTimeout},
 		{err: fmt.Errorf("conversion SSE exceeds 10 bytes"), kind: streamKindLimitExceeded},
 		{err: fmt.Errorf("conversion SSE ended without terminal event"), kind: streamKindUpstreamTrunc},
 		{err: codexresponses.NewFailure(codexresponses.KindNetwork, 0, fmt.Errorf("connection reset")), kind: streamKindUpstreamTrunc},

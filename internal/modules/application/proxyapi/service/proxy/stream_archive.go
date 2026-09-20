@@ -171,28 +171,30 @@ func openAIUsagePayload(usage tokenUsage) map[string]any {
 		"completion_tokens": usage.CompletionTokens,
 		"total_tokens":      usage.PromptTokens + usage.CompletionTokens,
 	}
-	if usage.CachedInputTokens > 0 {
+	if usage.CachedInputTokensKnown || usage.CachedInputTokens > 0 {
 		payload["prompt_tokens_details"] = map[string]any{
 			"cached_tokens": usage.CachedInputTokens,
 		}
 	}
-	if usage.CacheCreationInputTokens > 0 {
+	if usage.CacheCreationInputTokensKnown || usage.CacheCreationInputTokens > 0 {
 		payload["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
 	}
 	return payload
 }
 
 type anthropicRawStreamAccumulator struct {
-	ID                       string
-	Model                    string
-	Content                  strings.Builder
-	StopReason               string
-	InputTokens              int
-	OutputTokens             int
-	CachedInputTokens        int
-	CacheCreationInputTokens int
-	maxContent               int
-	truncated                bool
+	CachedInputTokensKnown        bool
+	CacheCreationInputTokensKnown bool
+	ID                            string
+	Model                         string
+	Content                       strings.Builder
+	StopReason                    string
+	InputTokens                   int
+	OutputTokens                  int
+	CachedInputTokens             int
+	CacheCreationInputTokens      int
+	maxContent                    int
+	truncated                     bool
 }
 
 func newAnthropicRawStreamAccumulator(fallbackModel string) *anthropicRawStreamAccumulator {
@@ -262,7 +264,9 @@ func (a *anthropicRawStreamAccumulator) TrackSSELine(line []byte) {
 			if usage, ok := anthropicUsage(message["usage"]); ok {
 				a.InputTokens = usage.PromptTokens
 				a.CachedInputTokens = usage.CachedInputTokens
+				a.CachedInputTokensKnown = usage.CachedInputTokensKnown
 				a.CacheCreationInputTokens = usage.CacheCreationInputTokens
+				a.CacheCreationInputTokensKnown = usage.CacheCreationInputTokensKnown
 			}
 		}
 	case "content_block_delta":
@@ -274,11 +278,13 @@ func (a *anthropicRawStreamAccumulator) TrackSSELine(line []byte) {
 	case "message_delta":
 		if usage, ok := anthropicUsage(event["usage"]); ok {
 			a.OutputTokens = usage.CompletionTokens
-			if usage.CachedInputTokens > 0 {
+			if usage.CachedInputTokensKnown || usage.CachedInputTokens > 0 {
 				a.CachedInputTokens = usage.CachedInputTokens
+				a.CachedInputTokensKnown = usage.CachedInputTokensKnown
 			}
-			if usage.CacheCreationInputTokens > 0 {
+			if usage.CacheCreationInputTokensKnown || usage.CacheCreationInputTokens > 0 {
 				a.CacheCreationInputTokens = usage.CacheCreationInputTokens
+				a.CacheCreationInputTokensKnown = usage.CacheCreationInputTokensKnown
 			}
 		}
 		if delta, ok := event["delta"].(map[string]any); ok {
@@ -291,11 +297,13 @@ func (a *anthropicRawStreamAccumulator) TrackSSELine(line []byte) {
 
 func (a *anthropicRawStreamAccumulator) FinalizeUsage(requestBody map[string]any) tokenUsage {
 	usage := tokenUsage{
-		PromptTokens:             a.InputTokens,
-		CompletionTokens:         a.OutputTokens,
-		CachedInputTokens:        a.CachedInputTokens,
-		CacheCreationInputTokens: a.CacheCreationInputTokens,
-		Known:                    a.InputTokens > 0 || a.OutputTokens > 0,
+		PromptTokens:                  a.InputTokens,
+		CompletionTokens:              a.OutputTokens,
+		CachedInputTokens:             a.CachedInputTokens,
+		CachedInputTokensKnown:        a.CachedInputTokensKnown,
+		CacheCreationInputTokensKnown: a.CacheCreationInputTokensKnown,
+		CacheCreationInputTokens:      a.CacheCreationInputTokens,
+		Known:                         a.InputTokens > 0 || a.OutputTokens > 0,
 	}
 	if usage.PromptTokens == 0 {
 		usage.PromptTokens = estimatePromptTokens(requestBody)
@@ -328,10 +336,10 @@ func anthropicUsagePayload(usage tokenUsage) map[string]any {
 		"input_tokens":  usage.PromptTokens,
 		"output_tokens": usage.CompletionTokens,
 	}
-	if usage.CachedInputTokens > 0 {
+	if usage.CachedInputTokensKnown || usage.CachedInputTokens > 0 {
 		payload["cache_read_input_tokens"] = usage.CachedInputTokens
 	}
-	if usage.CacheCreationInputTokens > 0 {
+	if usage.CacheCreationInputTokensKnown || usage.CacheCreationInputTokens > 0 {
 		payload["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
 	}
 	return payload

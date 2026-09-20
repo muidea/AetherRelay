@@ -37,7 +37,11 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 		"request_kind", request.Diagnostics.RequestKind, "compaction_reason", request.Diagnostics.CompactionReason,
 		"compaction_phase", request.Diagnostics.CompactionPhase}
 	if failure != nil {
-		attrs = append(attrs, "error_class", string(failure.Kind), "upstream_error_code", failure.UpstreamCode, "upstream_status", failure.HTTPStatus)
+		status := failure.HTTPStatus
+		if failure.Attempt.Response.Observed {
+			status = failure.Attempt.Response.Status
+		}
+		attrs = append(attrs, "error_class", string(failure.Kind), "upstream_error_code", failure.UpstreamCode, "upstream_status", status)
 		slog.Warn("Codex attempt failed", attrs...)
 	} else {
 		slog.Debug("Codex attempt completed", attrs...)

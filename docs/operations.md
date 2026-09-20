@@ -268,3 +268,17 @@ make release VERSION=v1.2.3
 Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex stream stopped` 的 `phase`、`error_class`、`first_event_duration_ms`、`total_duration_ms`、`event_count`、`stream_bytes` 和 `last_event_at`；兼容字段 `duration_ms` 与 `total_duration_ms` 相同。`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
 
 账号池 503 的 `accounts_cooling` 与 `Retry-After` 表示暂时冷却，不等于新一次上游故障；`no_eligible_account` 或 `accounts_busy_or_excluded` 需结合账号模型、状态和并发占用检查。准入拒绝、客户端取消/写失败和本地最大流时长不会追加 Provider 熔断样本。已有熔断到期后允许恢复请求，真实成功才清零连续失败；HTTP 200 的流仍须以合法终态确认成功。
+
+## 2026-09-20 转换观测升级说明
+
+13.0.0 不新增配置开关，配置模板无需改动。交互归档及 content/脱敏开关仍仅控制归档行为，不再决定转换和上游用量观测是否可见。
+
+当前 DuckDB schema 在启动时追加缓存读写 `*_known` 两个布尔列，保留原有用量和客户端配置；更早的不兼容布局仍拒绝启动，不自动重建。历史记录无法证明缓存字段是否存在，因此标为未知，不将旧零值解释为真实未命中。升级前按既有流程备份数据库。Claude 有效会话的默认 cache identity 命名空间发生变化，升级首轮可能冷缓存。
+
+部署后以同一 Event ID 对比用量详情和 metadata.json，再核对最终 upstream_response 与逐次尝试记录。检查 level=2、降级项一致、响应头观测、缓存存在性；继续执行工具续轮直到真实 end_turn。没有 Content-Type 或未知长度可为上游真实缺失，不能仅凭管理页空值判定转发失败。详见[转换设计](design/responses-anthropic-conversion.md)与[身份语义基准](design/codex-identity-semantics.md)。
+
+## 首事件超时收口（13.1.0）
+
+新默认及 config.example.yaml 的 `server.stream_first_event_timeout_seconds` 为 180，原配置显式 90 不会被覆盖；远端 x600 当前仍为 90，本轮代码修改不远程修改配置或重启服务。部署验证时按需将此项调整为 180，保留 `stream_idle_timeout_seconds: 300`。不要用改 request_timeout 代替首事件预算，也不要把 safety buffering 当作自动免超时依据。
+
+日志应分别保留上游 HTTP 200、下游 HTTP 504 与 first_event_timeout；metadata.error_code 和用量一致。首事件超时与 idle_timeout 分开显示，新统计不回填历史分类。首事件前的响应头即归档；同一请求的重复观测不再重复写正文，相同响应不重复记录，终态失败仍更新。13.0.0 的配置模板“无需改动”仅指该次缓存/观测补全，13.1.0 已更新首事件预算模板。
