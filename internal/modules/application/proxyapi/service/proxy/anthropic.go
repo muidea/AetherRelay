@@ -199,13 +199,30 @@ func ValidateConversionRequest(plan TransportPlan, body map[string]any) *APIErro
 	return nil
 }
 
+type conversionLocationError struct {
+	Path string
+	Err  error
+}
+
+func (e *conversionLocationError) Error() string { return e.Path + ": " + e.Err.Error() }
+func (e *conversionLocationError) Unwrap() error { return e.Err }
+
 func conversionAPIError(plan TransportPlan, err error) APIError {
 	feature := conversionFeatureFromError(err)
+	path := ""
+	var located *conversionLocationError
+	if errors.As(err, &located) {
+		path = located.Path
+	}
 	msg := err.Error()
 	if feature != "" {
 		msg = fmt.Sprintf("conversion does not support %q; simplify request or use a native endpoint contract", feature)
 	}
+	if path != "" {
+		msg += " (at " + path + ")"
+	}
 	return APIError{
+		Param:            path,
 		Code:             ErrorCodeConversionUnsupported,
 		Message:          msg,
 		Model:            plan.ModelID,
@@ -238,7 +255,7 @@ func conversionFeatureFromError(err error) string {
 		"max_output_tokens", "max_tokens", "stream",
 		"stop_sequences", "stop",
 		"parallel_tool_calls", "disable_parallel_tool_use", "store", "truncation", "include", "conversation", "prompt", "metadata", "service_tier", "thinking", "background", "reasoning", "previous_response_id", "text.format",
-		"tool_calls", "tool role", "tool_use", "tool_result",
+		"tool_result.is_error", "tool_calls", "tool role", "tool_use", "tool_result", "tool call", "tool result",
 		"image", "image_url", "input_image", "audio", "input_audio", "document", "file",
 	} {
 		if strings.Contains(msg, key) || strings.Contains(msg, `"`+key+`"`) {

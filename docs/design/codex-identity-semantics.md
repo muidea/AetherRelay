@@ -6,7 +6,7 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `12.1.0` 工作树（2026-09-20）
+> 实现基线：AetherRelay `12.2.0` 工作树（2026-09-20）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
 
@@ -430,6 +430,12 @@ AccountProjection
 Anthropic→Responses 转换校验 `metadata.user_id` 类型，未知 metadata 键继续拒绝；该用户标识不向 Responses 透传，记录 `metadata.user_id` 降级。Codex 入口仅识别上述三字段封装，缺失会话头时补入路由专用会话信号，头与正文冲突时拒绝；普通 opaque user_id 不参与会话派生。设备与账号标识不得直接成为上游 Installation。该路由信号继续不进入 prompt_cache_key。
 
 ephemeral 缓存提示（可选 ttl=5m/1h）在系统/消息内容块中校验后移除，并记录 `cache_control` 降级；不改正文或工具 schema，不承诺保留 Anthropic 缓存边界或计费语义。Codex 推理适配按目标模型声明校验客户端 effort，adaptive + max 映射为 reasoning.effort=max；目标不支持时拒绝，不静默降到默认 effort。以上为实现与离线测试合同，部署后的真实终态仍需验证。
+
+### Claude 最新部署复验与后续收口（2026-09-20）
+
+部署 `4e997c9` 后，`001198` 已进入 Codex 上游，出站 UA/Originator 为 Codex 身份，Session/Thread/Installation/Window 与 Turn-Metadata 一致，未见 Anthropic、Stainless、Claude 专有 header 透传。该轮上游流内过载，`001199` 随后因账号冷却返回 503、Retry-After=29；不是 metadata 拒绝或并发额度不足。`001200` 遇到 keepalive 转换错误；`001202` 成功（输入 31054、输出 282 tokens）；`001203` 工具结果续轮在本地失败，其两个结果均带 `is_error:false`，旧转换器未接纳该字段。以上是旧部署的现场证据，不代表本轮新实现已上线。
+
+`12.2.0` 不改变身份派生和收敛规则。归档新增 `upstream_request_body.json` 及逐 HTTP attempt 正文，用于核验最终 `client_metadata` 与 header 一致性；身份默认脱敏，现有 header 保真开关显式开启时，同步保留该代理注入身份的正文原值。完整正文开关关闭则不携带或保存出站正文。附件摘要策略不变。原日志仅有上游元信息，不能据此断言最终正文全部符合协议；新增归档、工具结果续轮和心跳修复仍需重新部署后验证。
 
 涉及本文字段的每次修改必须完成：
 

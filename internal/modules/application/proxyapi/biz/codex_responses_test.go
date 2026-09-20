@@ -198,8 +198,12 @@ func TestCompleteCodexResponsesSwitchesBeforeOutputForRetryableStatuses(t *testi
 				result.Set(upevents.CompleteResult{Body: []byte(`{"id":"resp_ok"}`)}, nil)
 			})
 			proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-			if _, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}); err != nil || acquires != 2 {
+			var observations []error
+			if _, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), ObserveAttempt: func(_ codexresponses.HTTPAttempt, err error) { observations = append(observations, err) }}); err != nil || acquires != 2 {
 				t.Fatalf("CP-FAIL-004..007 status=%d acquires=%d err=%v", testCase.statusCode, acquires, err)
+			}
+			if len(observations) != 2 || observations[0] == nil || observations[1] != nil {
+				t.Fatalf("lost retry observations: %v", observations)
 			}
 		})
 	}

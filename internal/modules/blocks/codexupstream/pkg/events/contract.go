@@ -25,10 +25,10 @@ type Header struct {
 	Value string
 }
 
-// HTTPAttempt is the archive-safe projection of one Codex upstream handshake.
-// Header values are redacted by the codexupstream owner before they cross the
-// EventHub boundary; credentials and account/session identity never leave the
-// Block in clear text.
+// HTTPAttempt is the opt-in archive projection of one upstream handshake.
+// Headers are redacted unless explicitly requested otherwise. Body is copied
+// only for full-content archival; proxyapi applies archive-only identity and
+// attachment redaction. Neither projection may be printed as diagnostic data.
 type HTTPAttempt struct {
 	Request  HTTPRequestObservation
 	Response HTTPResponseObservation
@@ -39,7 +39,9 @@ type HTTPRequestObservation struct {
 	Method    string
 	URL       string
 	BodyBytes int
-	Headers   []Header
+	// Body is the final wire payload; present only with ArchiveFullContent.
+	Body    []byte
+	Headers []Header
 }
 
 type HTTPResponseObservation struct {
@@ -141,6 +143,7 @@ type CompleteCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
+	ArchiveFullContent       bool
 	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
 	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity
@@ -173,6 +176,7 @@ type CompactCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
+	ArchiveFullContent       bool
 	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
 	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity
@@ -207,6 +211,7 @@ type StartCommand struct {
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
+	ArchiveFullContent       bool
 	// ClientIdentity is CP-HDR-003/004: either the scoped account selection or the
 	// bounded downstream identity. Empty or invalid fields use the fallback profile.
 	ClientIdentity ClientIdentity

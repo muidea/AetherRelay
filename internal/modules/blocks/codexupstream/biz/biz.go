@@ -118,7 +118,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex compact body"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: ensureCodexBetaFeature(cmd.BetaFeatures, defaultCodexBetaFeatures), responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, archiveFullContent: cmd.ArchiveFullContent, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	response, attempt, class, retryAfter, err := performURL(ev.Context(), responsesURL, "text/event-stream", cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompactResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -437,7 +437,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, archiveFullContent: cmd.ArchiveFullContent, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.CompleteResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -471,7 +471,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid native Responses request"))
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
+	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, archiveFullContent: cmd.ArchiveFullContent, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
 	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
 	if err != nil {
 		result.Set(events.StartResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
@@ -702,6 +702,9 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	requestAt := time.Now()
 	attempt.Request = events.HTTPRequestObservation{
 		At: requestAt, Method: req.Method, URL: req.URL.String(), BodyBytes: len(body), Headers: safeHTTPHeaders(req.Header, profile.archiveUnredacted),
+	}
+	if profile.archiveFullContent {
+		attempt.Request.Body = bytes.Clone(body)
 	}
 	response, err := client.Do(req)
 	if err != nil {

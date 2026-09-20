@@ -499,7 +499,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy,
 			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
-			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(),
+			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent,
 			ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
 		})).Get()
 		if sendErr != nil {
@@ -513,6 +513,9 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex compact result"))
 		}
 		if completed.ErrorClass == "" {
+			if request.ObserveAttempt != nil {
+				request.ObserveAttempt(toCodexHTTPAttempt(completed.Attempt), nil)
+			}
 			logCodexAttempt(request, nil)
 			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
 			s.noteCodexTurnState(account.AccountID, fingerprint, request.SessionScope, completed.Headers)
@@ -524,6 +527,9 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
 		failure.Attempt = toCodexHTTPAttempt(completed.Attempt)
 		failure.TurnStateSource = turnStateSource
+		if request.ObserveAttempt != nil {
+			request.ObserveAttempt(failure.Attempt, failure)
+		}
 		logCodexAttempt(request, failure)
 		lastFailure = failure
 		if completed.NativeCompactionUnsupported {
@@ -816,13 +822,22 @@ func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
 }
 
 func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (out codexresponses.Result, failure *codexresponses.Failure) {
-	defer func() { logCodexAttempt(request, failure) }()
+	defer func() {
+		logCodexAttempt(request, failure)
+		if request.ObserveAttempt != nil {
+			if failure != nil {
+				request.ObserveAttempt(failure.Attempt, failure)
+			} else {
+				request.ObserveAttempt(out.Attempt, nil)
+			}
+		}
+	}()
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
 	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 	request.TurnStateSource = turnStateSource
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
 	if err != nil {
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream unavailable"))
 	}
@@ -844,6 +859,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) (resultErr error) {
 	parent := ctx
 	ctx, guard := newCodexStreamGuard(parent, s.config.StreamFirstEventTimeout, s.config.StreamIdleTimeout, s.config.CodexOAuth.StreamMaxDuration)
+	var observedAttempt codexresponses.HTTPAttempt
 	phase := "start"
 	streamID := ""
 	defer func() {
@@ -861,7 +877,20 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			_, _ = s.SendEvent(event.NewEventWithContext(upevents.TopicCancel, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.CancelCommand{StreamID: streamID})).Get()
 		}
 		failure, _ := codexresponses.AsFailure(resultErr)
+		if failure != nil && failure.Attempt.Request.URL == "" {
+			failure.Attempt = observedAttempt
+		}
+		if failure != nil {
+			failure.TurnStateSource = request.TurnStateSource
+		}
 		logCodexStreamAttempt(request, failure, phase, guard)
+		if request.ObserveAttempt != nil {
+			if failure != nil {
+				request.ObserveAttempt(failure.Attempt, failure)
+			} else {
+				request.ObserveAttempt(observedAttempt, resultErr)
+			}
+		}
 	}()
 	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
@@ -871,7 +900,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			failure.TurnStateSource = turnStateSource
 		}
 	}()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
+	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
 	if err != nil {
 		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream unavailable"))
 	}
@@ -879,12 +908,13 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 	if !ok {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
+	observedAttempt = toCodexHTTPAttempt(startedUpstream.Attempt)
 	if startedUpstream.ErrorClass != "" {
 		failure := failureFromUpstream(startedUpstream.ErrorClass, startedUpstream.RetryAfterSeconds, startedUpstream.RateLimit, startedUpstream.HTTPStatus, startedUpstream.SafeError)
 		failure.Attempt = toCodexHTTPAttempt(startedUpstream.Attempt)
 		return failure
 	}
-	attempt := toCodexHTTPAttempt(startedUpstream.Attempt)
+	attempt := observedAttempt
 	defer func() {
 		if failure, ok := codexresponses.AsFailure(resultErr); ok && failure.Attempt.Request.URL == "" {
 			failure.Attempt = attempt
@@ -1030,7 +1060,7 @@ func refreshFailureClass(result accevents.RefreshTokenResult) string {
 }
 
 func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success bool, class string, retryAfter int, quotaExhausted bool, quotaResetAt string) {
-	if strings.TrimSpace(id) == "" || (!success && (class == string(codexresponses.KindClientCanceled) || class == string(codexresponses.KindClientWrite) || class == string(codexresponses.KindStreamLifetime))) {
+	if strings.TrimSpace(id) == "" || (!success && (class == string(codexresponses.KindClientCanceled) || class == string(codexresponses.KindClientWrite) || class == string(codexresponses.KindStreamLifetime) || class == string(codexresponses.KindConversion))) {
 		return
 	}
 	if class == string(codexresponses.KindFirstEventTimeout) || class == string(codexresponses.KindIdleTimeout) {
@@ -1068,7 +1098,7 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 	return codexresponses.HTTPAttempt{
 		Request: codexresponses.HTTPRequestObservation{
 			At: attempt.Request.At, Method: attempt.Request.Method, URL: attempt.Request.URL,
-			BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
+			Body: bytes.Clone(attempt.Request.Body), BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
 		},
 		Response: codexresponses.HTTPResponseObservation{
 			Observed: attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,

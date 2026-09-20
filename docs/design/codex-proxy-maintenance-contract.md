@@ -1,6 +1,6 @@
 # Codex 反向代理首要维护合同
 
-> 合同版本：`12.1.0`
+> 合同版本：`12.2.0`
 >
 > 状态：`active`
 >
@@ -9,6 +9,8 @@
 > 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`12.2.0` 补齐已观察到的 Claude 工具结果续轮及 Responses 心跳处理，并增加最终 HTTP 出站正文、逐次尝试归档和转换错误路径。源协议 `is_error` 不直接透传，失败语义进入目标工具输出；本地流转换失败独立分类，不惩罚账号。新增归档能力沿用既有开关，不改变身份派生、并发上限或冷却策略。
 
 `12.1.0` 恢复官方 CLI `X-Codex-Turn-Metadata.compaction` 的有界结构化透传：仅接受对象及已验证枚举 `reason=comp_hash_changed|context_limit|model_downshift|user_requested`、`phase=pre_turn|post_turn|mid_turn`，合法部分与其它 turn 属性一起进入 header 和 body 内嵌 metadata；非法类型、未知枚举与额外子字段继续按字段名进入 ignored-features，不记录值、不拒绝业务请求。`request_kind`、正文 `compaction_trigger`、beta feature 与既有有界诊断保持独立且一致。这恢复了此前仅供本地诊断、未交付上游的客户端信息，按 MINOR 发布。
 
@@ -463,6 +465,10 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率仍为累计读取 / 累计输入；缺失写入沿用零值，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态，以及事件结算与 dashboard 汇总。
 
+`CP-OBS-010` Codex HTTP Responses/compact 的最终出站正文必须取自 `codexupstream` 完成 `client_metadata` 注入后的发送字节，不得用入站正文或转换中间态冒充。仅 `archive_interactions && archive_full_content` 启用时，owner 通过 typed observation 携带正文，proxyapi 沿用附件摘要策略落盘。代理注入的 `client_metadata` 身份及内嵌 turn metadata 默认脱敏；显式 `archive_unredacted_headers` 开启时同步保真，业务文本/工具参数不按同名字段误删。普通日志永不输出正文。每个 HTTP 尝试独立编号归档；握手和终态更新同一尝试，账号切换与刷新重试不得覆盖先前尝试。无上游请求的本地拒绝只记录转换错误，不创建伪上游记录。本规则不宣称覆盖 WebSocket 帧与 ChatGPT Web 多阶段请求。
+
+`CP-OBS-011` 转换失败须保留安全字段路径及有界 feature；流转换异常记为 `conversion`，不得冒充客户端写入失败，不触发账号冷却。JSON `keepalive` 与 SSE 注释均不是业务输出，不完成请求、不续业务空闲/首事件超时；未知业务事件继续拒绝。账号冷却等准入失败的 `failure_class/retryable/retry_after_seconds` 必须同时进入运行记录和 round 元数据。
+
 ## 12. 运行时与组件边界
 
 `CP-ARCH-001` 进程只使用 `framework/application` 创建的一套 EventHub 和 BackgroundRoutine。
@@ -496,6 +502,13 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`12.2.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现 | 验收 |
+| --- | --- | --- | --- | --- |
+| 工具结果续轮、错误定位、心跳及错误归类 | CP-OBS-011 | implemented（线上待部署复验） | `proxyapi/service/proxy/responses_anthropic.go`, `codex_messages.go`, `proxyapi/biz/codex_stream_timeout.go` | `claude_continuation_test.go`, `codex_stream_timeout_test.go` |
+| 最终 HTTP 正文与逐次尝试归档 | CP-OBS-010 | implemented（线上待部署复验） | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `proxyapi/service/proxy/debug.go` | `archive_body_test.go`, `upstream_body_archive_test.go`, `codex_responses_test.go` |
 
 `12.1.0` 新增实施追踪：
 

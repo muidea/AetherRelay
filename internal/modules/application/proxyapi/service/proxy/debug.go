@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -32,6 +34,8 @@ type requestDebugInfo struct {
 }
 
 type upstreamDebugInfo struct {
+	Attempt   int                 `json:"attempt,omitempty"`
+	BodyPath  string              `json:"body_path,omitempty"`
 	RoundID   int                 `json:"round_id"`
 	At        time.Time           `json:"at"`
 	Provider  string              `json:"provider"`
@@ -43,16 +47,20 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
-	RoundID       int                 `json:"round_id"`
-	At            time.Time           `json:"at"`
-	Provider      string              `json:"provider"`
-	Protocol      string              `json:"protocol"`
-	Status        int                 `json:"status"`
-	DurationMS    int64               `json:"duration_ms"`
-	ContentType   string              `json:"content_type,omitempty"`
-	ContentLength int64               `json:"content_length"`
-	Headers       map[string][]string `json:"headers,omitempty"`
-	Error         string              `json:"error,omitempty"`
+	FailureClass      string              `json:"failure_class,omitempty"`
+	RetryAfterSeconds int                 `json:"retry_after_seconds,omitempty"`
+	UpstreamErrorCode string              `json:"upstream_error_code,omitempty"`
+	Attempt           int                 `json:"attempt,omitempty"`
+	RoundID           int                 `json:"round_id"`
+	At                time.Time           `json:"at"`
+	Provider          string              `json:"provider"`
+	Protocol          string              `json:"protocol"`
+	Status            int                 `json:"status"`
+	DurationMS        int64               `json:"duration_ms"`
+	ContentType       string              `json:"content_type,omitempty"`
+	ContentLength     int64               `json:"content_length"`
+	Headers           map[string][]string `json:"headers,omitempty"`
+	Error             string              `json:"error,omitempty"`
 }
 
 func (h *Handler) debugfRound(round *archive.Round, r *http.Request, format string, args ...any) {
@@ -161,6 +169,16 @@ func (h *Handler) archiveAndLogUpstreamRequest(round *archive.Round, r *http.Req
 		BodyBytes: bodyBytes,
 		Headers:   h.archiveHeaders(req.Header),
 	}
+	if round.FullContent() && req.GetBody != nil {
+		reader, err := req.GetBody()
+		if err == nil {
+			body, readErr := io.ReadAll(reader)
+			_ = reader.Close()
+			if readErr == nil && h.writeArchiveResponse(round, "upstream_request_body.json", body) == nil {
+				info.BodyPath = "upstream_request_body.json"
+			}
+		}
+	}
 	if err := round.WriteJSON("upstream_request.json", info); err != nil {
 		log.Printf("archive upstream request metadata: %v", err)
 	}
@@ -228,9 +246,34 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		requestAt = time.Now()
 	}
 	requestHeaders := h.archiveHeaders(codexHeadersToHTTP(attempt.Request.Headers))
+	if round.UpstreamAttempts == nil {
+		round.UpstreamAttempts = make(map[string]int)
+	}
+	key := attempt.Request.At.Format(time.RFC3339Nano) + " " + attempt.Request.Method + " " + attempt.Request.URL
+	index := round.UpstreamAttempts[key]
+	if index == 0 {
+		index = len(round.UpstreamAttempts) + 1
+		round.UpstreamAttempts[key] = index
+	}
 	requestInfo := upstreamDebugInfo{
+		Attempt: index,
 		RoundID: round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
 		Method: attempt.Request.Method, URL: attempt.Request.URL, BodyBytes: attempt.Request.BodyBytes, Headers: requestHeaders,
+	}
+	if round.FullContent() && len(attempt.Request.Body) > 0 {
+		body := h.codexArchiveBody(attempt.Request.Body)
+		name := fmt.Sprintf("upstream_request_%03d.body.json", index)
+		if err := h.writeArchiveResponse(round, name, body); err != nil {
+			log.Printf("archive Codex upstream body: %v", err)
+		} else {
+			requestInfo.BodyPath = name
+		}
+		if err := h.writeArchiveResponse(round, "upstream_request_body.json", body); err != nil {
+			log.Printf("archive Codex upstream body snapshot: %v", err)
+		}
+	}
+	if err := round.WriteJSON(fmt.Sprintf("upstream_request_%03d.json", index), requestInfo); err != nil {
+		log.Printf("archive Codex attempt request: %v", err)
 	}
 	if err := round.WriteJSON("upstream_request.json", requestInfo); err != nil {
 		log.Printf("archive Codex upstream request metadata: %v", err)
@@ -244,6 +287,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	responseHeaders := h.archiveHeaders(codexHeadersToHTTP(attempt.Response.Headers))
 	responseInfo := upstreamResponseDebugInfo{
+		Attempt: index,
 		RoundID: round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
 		Status: attempt.Response.Status, DurationMS: attempt.Response.DurationMS,
 		ContentType: http.Header(responseHeaders).Get("Content-Type"), ContentLength: attempt.Response.ContentLength,
@@ -251,12 +295,55 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	if attemptErr != nil {
 		responseInfo.Error = attemptErr.Error()
+		if failure, ok := codexresponses.AsFailure(attemptErr); ok {
+			responseInfo.FailureClass = string(failure.Kind)
+			responseInfo.RetryAfterSeconds = failure.RetryAfterSeconds
+			responseInfo.UpstreamErrorCode = failure.UpstreamCode
+		}
+	}
+	if err := round.WriteJSON(fmt.Sprintf("upstream_response_%03d.json", index), responseInfo); err != nil {
+		log.Printf("archive Codex attempt response: %v", err)
 	}
 	if err := round.WriteJSON("upstream_response.json", responseInfo); err != nil {
 		log.Printf("archive Codex upstream response metadata: %v", err)
 	}
 	h.debugfRound(round, r, "round=%06d Codex upstream response provider=%s status=%d duration=%dms content_type=%q content_length=%d error=%q headers=%s",
 		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))))
+}
+
+// The callback stays within proxyapi; only value observations cross EventHub.
+func (h *Handler) codexAttemptObserver(round *archive.Round, r *http.Request, provider string) func(codexresponses.HTTPAttempt, error) {
+	if round == nil {
+		return nil
+	}
+	return func(attempt codexresponses.HTTPAttempt, err error) {
+		h.archiveCodexUpstreamAttempt(round, r, provider, attempt, err)
+	}
+}
+
+func (h *Handler) codexArchiveBody(body []byte) []byte {
+	if h.archiveUnredactedHeaders() {
+		return body
+	}
+	var value map[string]json.RawMessage
+	if json.Unmarshal(body, &value) != nil {
+		return body
+	}
+	var metadata map[string]json.RawMessage
+	if json.Unmarshal(value["client_metadata"], &metadata) != nil {
+		return body
+	}
+	for _, key := range []string{"session_id", "thread_id", "installation_id", "window_id", "turn_id", "root_turn_id", "x-codex-installation-id", "x-codex-window-id", "x-codex-turn-metadata"} {
+		if _, present := metadata[key]; present {
+			metadata[key] = json.RawMessage(`"<redacted>"`)
+		}
+	}
+	value["client_metadata"], _ = json.Marshal(metadata)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 func codexHeadersToHTTP(headers []codexresponses.Header) http.Header {

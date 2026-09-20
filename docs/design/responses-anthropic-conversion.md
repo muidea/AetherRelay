@@ -652,6 +652,14 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 每条证据至少包含请求字段摘要、响应事件类型、最终状态、耗时、usage 和不支持字段；不得将 API key 或完整正文写入证据。
 
+## 2026-09-20 运行验证收口合同
+
+- `claude-owner/001203` 的工具结果包含布尔 `is_error: false`。转换必须接受省略、false、true；true 的错误状态以目标 `function_call_output.output` 中的 JSON 字符串 `{ "error": true, "output": "..." }` 表达，不向 Codex 对象传递 Anthropic 字段。字符串与纯文本块结果转换为文本，未知块拒绝而不是作为协议 JSON 偷渡。
+- 转换失败必须给出有界特性与安全字段路径，不回显工具参数、结果或调用 ID；本地拒绝不产生虚假的上游请求记录。
+- Responses `keepalive` 是非业务心跳，不推进完成状态、不生成下游业务块；未知事件仍拒绝。转换异常不得误记为客户端写入失败。
+- 最终 Codex 出站正文在上游 owner 完成身份注入后观测，仅 `archive_interactions && archive_full_content` 时携带并归档。沿用 header 保真开关和正文附件摘要策略，不改变线上请求。逐次 HTTP 尝试分别归档，保留最终快照用于现有排障入口。
+- 验收覆盖首轮、并行工具调用、工具成功/失败结果续轮、心跳、终止事件、正文开关及逐 attempt 归档；线上全链路结论必须等待重新部署验证。
+
 ## 30. 灰度、熔断与回滚
 
 转换能力默认关闭，只有 exact model 的当前 upstream endpoint 配置固定 profile 时才开启。Provider endpoint 热更新会原子重建有效目录，因此 `/v1/models` 与请求路由使用同一代模板匹配结果。灰度期间监控：

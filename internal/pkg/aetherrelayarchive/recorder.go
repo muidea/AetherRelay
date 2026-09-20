@@ -55,6 +55,12 @@ type Round struct {
 	// sensitive input.
 	IgnoredFeatures     []string
 	UnsupportedFeatures []string
+	ConversionErrorPath string
+	FailureClass        string
+	Retryable           *bool
+	RetryAfterSeconds   int
+	// UpstreamAttempts deduplicates handshake and terminal observations.
+	UpstreamAttempts map[string]int
 	// UpstreamDuration 是本次上游 HTTP 请求（含首包探测）的耗时，仅供
 	// usage 结算使用；完整 metadata 当前仍保留总请求耗时。
 	UpstreamDuration         time.Duration
@@ -245,6 +251,10 @@ type Metadata struct {
 	ConversionLevel      int      `json:"conversion_level,omitempty"`
 	IgnoredFeatures      []string `json:"ignored_features,omitempty"`
 	UnsupportedFeatures  []string `json:"unsupported_features,omitempty"`
+	ConversionErrorPath  string   `json:"conversion_error_path,omitempty"`
+	FailureClass         string   `json:"failure_class,omitempty"`
+	Retryable            *bool    `json:"retryable,omitempty"`
+	RetryAfterSeconds    int      `json:"retry_after_seconds,omitempty"`
 	ConversionDurationMS int64    `json:"conversion_duration_ms,omitempty"`
 	ConversionDegraded   bool     `json:"conversion_degraded,omitempty"`
 	// TurnStateFallback 为 nil 时省略：只有产生了上游结果的 round 才会留下明确的

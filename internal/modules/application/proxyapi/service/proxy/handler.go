@@ -1273,6 +1273,16 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 			failure.RetryAfterSeconds = apiErr.RetryAfterSeconds
 		}
 	}
+	if round != nil {
+		if apiErr.Code == ErrorCodeConversionUnsupported {
+			round.ConversionErrorPath = apiErr.Param
+		}
+		if failure != nil {
+			round.FailureClass = failure.FailureClass
+			round.Retryable = failure.Retryable
+			round.RetryAfterSeconds = failure.RetryAfterSeconds
+		}
+	}
 	h.recordAndPrintFail(round, r, provider, model, stream, status, duration, usage, failure)
 	h.writeArchiveMetadata(round, provider, model, stream, status, duration, usage, "response.json", msg, "", outcomeFromStreamFail(failure, status))
 }
@@ -1389,7 +1399,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			if round != nil && len(turnMetadataIgnored) > 0 {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 			}
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Model: rawModel, Body: codexBody, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, rawModel, rawBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata})
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: rawModel, Body: codexBody, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, rawModel, rawBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
@@ -2955,6 +2965,11 @@ func (h *Handler) recordAndPrint(round *archive.Round, r *http.Request, provider
 }
 
 func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, fail *streamFail) {
+	if round != nil && fail != nil {
+		round.FailureClass = fail.FailureClass
+		round.Retryable = fail.Retryable
+		round.RetryAfterSeconds = fail.RetryAfterSeconds
+	}
 	outcome := outcomeFromStreamFail(fail, status)
 	if status == 0 && outcome == string(streamKindClientCanceled) {
 		status = 499
@@ -3088,6 +3103,10 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		}
 		meta.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
 		meta.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
+		meta.ConversionErrorPath = round.ConversionErrorPath
+		meta.FailureClass = round.FailureClass
+		meta.Retryable = round.Retryable
+		meta.RetryAfterSeconds = round.RetryAfterSeconds
 		meta.ConversionDurationMS = round.ConversionDuration.Milliseconds()
 		meta.ConversionDegraded = round.ConversionDegraded
 		meta.FirstEventDurationMS = round.FirstEventDuration.Milliseconds()

@@ -65,7 +65,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
 	diagnostics := codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	userAgent, originator := codexConvertedClientIdentityWithDiagnostics(r.Header, &diagnostics)
-	request := codexresponses.Request{Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
+	request := codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
 	request.Diagnostics = diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {
@@ -117,17 +117,17 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		}
 		events, err := mapper([]byte(payload), state)
 		if err != nil {
-			return err
+			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
 		encoded, err := encodeConversionSSE(events, true)
 		if err != nil {
-			return err
+			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
 		if len(encoded) == 0 {
 			return nil
 		}
 		if archive.Len()+len(encoded) > maxConversionSSEBytes {
-			return fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes)
+			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes))
 		}
 		if !streamStarted {
 			prepareSSEHeaders(w.Header())

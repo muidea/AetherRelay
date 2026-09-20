@@ -3,6 +3,7 @@ package biz
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -83,6 +84,12 @@ func (g *codexStreamGuard) observe(data []byte) bool {
 	g.bytes += int64(len(data))
 	line := bytes.TrimSpace(data)
 	if !bytes.HasPrefix(line, []byte("data:")) || len(bytes.TrimSpace(line[5:])) == 0 {
+		return false
+	}
+	var event struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(line[5:]), &event) == nil && event.Type == "keepalive" {
 		return false
 	}
 	first := g.events == 0

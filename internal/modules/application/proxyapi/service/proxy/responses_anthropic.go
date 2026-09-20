@@ -1028,7 +1028,12 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 		contentRaw := m["content"]
 		content, blocks, err := anthropicMessageContentToResponses(contentRaw, role, registry)
 		if err != nil {
-			return nil, nil, fmt.Errorf("messages[%d].content: %w", i, err)
+			path := fmt.Sprintf("messages[%d].content", i)
+			var located *conversionLocationError
+			if errors.As(err, &located) {
+				path = fmt.Sprintf("messages[%d].%s", i, located.Path)
+			}
+			return nil, nil, &conversionLocationError{Path: path, Err: err}
 		}
 		if role == "system" {
 			instructions += content
@@ -1152,7 +1157,17 @@ func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thin
 	return []string{"thinking"}, nil
 }
 
-func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry) (string, []map[string]any, error) {
+func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry) (textOut string, itemsOut []map[string]any, resultErr error) {
+	blockIndex := -1
+	defer func() {
+		if resultErr != nil && blockIndex >= 0 {
+			path := fmt.Sprintf("content[%d]", blockIndex)
+			if resultErr.Error() == "tool_result.is_error" {
+				path += ".is_error"
+			}
+			resultErr = &conversionLocationError{Path: path, Err: resultErr}
+		}
+	}()
 	if text, ok := raw.(string); ok {
 		return text, nil, nil
 	}
@@ -1162,7 +1177,8 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 	}
 	var text strings.Builder
 	items := make([]map[string]any, 0)
-	for _, rawBlock := range blocks {
+	for i, rawBlock := range blocks {
+		blockIndex = i
 		block, ok := rawBlock.(map[string]any)
 		if !ok {
 			return "", nil, fmt.Errorf("content block must be object")
@@ -1458,13 +1474,24 @@ func anthropicToolBlockToResponses(block map[string]any) (map[string]any, error)
 		}
 		return map[string]any{"type": "function_call", "call_id": id, "name": name, "arguments": string(encoded)}, nil
 	case "tool_result":
-		if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "tool_use_id": {}, "content": {}}); err != nil {
-			return nil, err
+		if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "tool_use_id": {}, "content": {}, "is_error": {}}); err != nil {
+			return nil, fmt.Errorf("tool_result.%w", err)
 		}
 		id, _ := block["tool_use_id"].(string)
-		content, _ := block["content"].(string)
-		if content == "" {
-			if encoded, err := json.Marshal(block["content"]); err == nil && string(encoded) != "null" {
+		content, err := anthropicToolResultText(block["content"])
+		if err != nil {
+			return nil, err
+		}
+		if raw, exists := block["is_error"]; exists {
+			failed, ok := raw.(bool)
+			if !ok {
+				return nil, fmt.Errorf("tool_result.is_error")
+			}
+			if failed {
+				encoded, _ := json.Marshal(struct {
+					Error  bool   `json:"error"`
+					Output string `json:"output"`
+				}{true, content})
 				content = string(encoded)
 			}
 		}
@@ -1478,6 +1505,35 @@ func anthropicToolBlockToResponses(block map[string]any) (map[string]any, error)
 	default:
 		return nil, fmt.Errorf("unsupported Anthropic tool block %q", typ)
 	}
+}
+
+func anthropicToolResultText(raw any) (string, error) {
+	if raw == nil {
+		return "", nil
+	}
+	if value, ok := raw.(string); ok {
+		return value, nil
+	}
+	blocks, ok := raw.([]any)
+	if !ok {
+		return "", fmt.Errorf("tool_result.content")
+	}
+	texts := make([]string, 0, len(blocks))
+	for i, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]any)
+		if !ok || block["type"] != "text" {
+			return "", fmt.Errorf("tool_result.content[%d].type", i)
+		}
+		if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "text": {}}); err != nil {
+			return "", fmt.Errorf("tool_result.content[%d].%w", i, err)
+		}
+		value, ok := block["text"].(string)
+		if !ok {
+			return "", fmt.Errorf("tool_result.content[%d].text", i)
+		}
+		texts = append(texts, value)
+	}
+	return strings.Join(texts, "\n"), nil
 }
 
 func validateConversionToolSchema(schema map[string]any) error {
@@ -1549,7 +1605,12 @@ func validateConversionTree(value any, label string) error {
 // field that is not explicitly modeled by the adapter is rejected instead of
 // being silently dropped and changing request semantics.
 func rejectConversionFields(body map[string]any, allowed map[string]struct{}) error {
+	keys := make([]string, 0, len(body))
 	for key := range body {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		if _, ok := allowed[key]; !ok {
 			return fmt.Errorf("%s", key)
 		}
@@ -1835,6 +1896,8 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 	typ, _ := event["type"].(string)
 	out := []map[string]any{}
 	switch typ {
+	case "keepalive":
+		return nil, nil
 	case "response.created", "response.in_progress":
 		if state.Started {
 			return out, nil

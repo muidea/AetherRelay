@@ -61,7 +61,8 @@ type codexRequestProfile struct {
 	fingerprint   events.CodexFingerprint
 	// archiveUnredacted is CP-OBS-009: it decides whether the archived attempt
 	// observation keeps credential headers verbatim. The zero value redacts.
-	archiveUnredacted bool
+	archiveUnredacted  bool
+	archiveFullContent bool
 	// clientIdentity is CP-HDR-003/004: the downstream client's bounded identity.
 	// Any empty or rejected field makes the whole pair use the fallback profile.
 	clientIdentity events.ClientIdentity

@@ -23,6 +23,7 @@ type HTTPRequestObservation struct {
 	Method    string
 	URL       string
 	BodyBytes int
+	Body      []byte
 	Headers   []Header
 }
 
@@ -98,6 +99,9 @@ type TurnMetadata struct {
 }
 
 type Request struct {
+	// ObserveAttempt is local to proxyapi; never forwarded through EventHub.
+	ObserveAttempt func(HTTPAttempt, error)
+
 	Diagnostics    Diagnostics
 	AccountAttempt int
 	Model          string
@@ -201,6 +205,7 @@ const (
 	KindNetwork             ErrorKind = "network"
 	KindUpstream            ErrorKind = "upstream"
 	KindProtocol            ErrorKind = "protocol"
+	KindConversion          ErrorKind = "conversion"
 	KindClientWrite         ErrorKind = "client_write"
 	KindClientCanceled      ErrorKind = "client_canceled"
 )

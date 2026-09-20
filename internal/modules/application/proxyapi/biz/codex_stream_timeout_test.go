@@ -41,6 +41,7 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 		{name: "lifetime", want: codexresponses.KindStreamLifetime, noFeedback: true},
 		{name: "cancel", want: codexresponses.KindClientCanceled, noFeedback: true},
 		{name: "write", want: codexresponses.KindClientWrite, noFeedback: true},
+		{name: "conversion", want: codexresponses.KindConversion, noFeedback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hub := event.NewHub(24)
@@ -130,6 +131,9 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 				if tc.name == "write" {
 					return errors.New("client disconnected")
 				}
+				if tc.name == "conversion" {
+					return codexresponses.NewFailure(codexresponses.KindConversion, 0, errors.New("unsupported stream event"))
+				}
 				return nil
 			})
 			failure, _ := codexresponses.AsFailure(err)
@@ -207,6 +211,9 @@ func TestCodexStreamCommentsDoNotExtendDeadline(t *testing.T) {
 				select {
 				case <-ticker.C:
 					g.observe([]byte(": keepalive\n\n"))
+					if g.observe([]byte("data: {\"type\":\"keepalive\"}\n")) {
+						t.Fatal("heartbeat counted as first event")
+					}
 				case <-ctx.Done():
 					f, _ := codexresponses.AsFailure(context.Cause(ctx))
 					if f == nil || f.Kind != want {
