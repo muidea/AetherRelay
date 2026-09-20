@@ -344,6 +344,9 @@ func (h *Handler) handleAnthropicToResponses(w http.ResponseWriter, r *http.Requ
 	}
 	conversionStart := time.Now()
 	converted, usage, ignored, err := convertOpenAIResponsesToAnthropicWithCapability(body, model, capability)
+	if err == nil {
+		converted, err = applyAnthropicStops(converted, anthropicStops(r))
+	}
 	if round != nil {
 		round.SetConversionDuration(time.Since(conversionStart))
 	}
@@ -362,7 +365,7 @@ func (h *Handler) handleAnthropicToResponses(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *Handler) handleAnthropicToResponsesStream(w http.ResponseWriter, r *http.Request, resp *http.Response, round *archive.Round, start time.Time, provider, model string, capability config.ConversionCapability) error {
-	return h.handleConvertedSSE(w, r, resp, round, start, provider, model, responsesEventToAnthropicWithCapability(capability))
+	return h.handleConvertedSSE(w, r, resp, round, start, provider, model, withAnthropicStopMapper(responsesEventToAnthropicWithCapability(capability), anthropicStops(r)))
 }
 
 func (h *Handler) handleConvertedSSE(w http.ResponseWriter, r *http.Request, resp *http.Response, round *archive.Round, start time.Time, provider, model string, mapper conversionSSEMapper) error {
@@ -1004,13 +1007,20 @@ func buildResponsesFromAnthropic(body map[string]any, model string, stream bool)
 }
 
 func buildResponsesFromAnthropicWithCapability(body map[string]any, model string, stream bool, capability config.ConversionCapability) ([]byte, []string, error) {
+	stops, err := parseAnthropicStops(body)
+	if err != nil {
+		return nil, nil, err
+	}
 	body, annotations, projectionErr := projectAnthropicAnnotations(body)
 	if projectionErr != nil {
 		return nil, nil, projectionErr
 	}
+	if len(stops) > 0 {
+		annotations = append(annotations, "stop_sequences")
+	}
 	if err := rejectConversionFields(body, map[string]struct{}{
 		"model": {}, "messages": {}, "max_tokens": {}, "system": {}, "stream": {},
-		"temperature": {}, "top_p": {}, "tools": {}, "tool_choice": {}, "thinking": {}, "output_config": {},
+		"temperature": {}, "top_p": {}, "tools": {}, "tool_choice": {}, "thinking": {}, "output_config": {}, "stop_sequences": {},
 	}); err != nil {
 		return nil, nil, err
 	}

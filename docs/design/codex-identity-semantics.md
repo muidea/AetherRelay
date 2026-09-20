@@ -6,9 +6,11 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `13.1.0` 工作树（2026-09-20）
+> 实现基线：AetherRelay `13.2.0` 工作树（2026-09-20）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
+
+13.2.0 仅补齐 Anthropic 停止序列的本地输出控制及本地拒绝观测，不改变本文的身份、缓存、UA/Originator 或账号选择规则。停止序列不作为跨协议字段发送给 Codex；客户端 Sonnet 映射缺失也不能通过修改上游身份或隐式模型别名解决，配置与验证记录见[转换设计](responses-anthropic-conversion.md)。
 
 本文是首要维护合同中 `CP-VER-006` 与 `CP-HDR-024` 的规范性说明。凡修改下列任一行为，必须在**同一提交**中同步更新本文、首要维护合同的版本/规则、对应自动化测试和实施追踪表：
 

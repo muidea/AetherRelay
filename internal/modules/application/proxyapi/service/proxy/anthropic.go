@@ -120,6 +120,7 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if selectedPlan.Mode == TransportModeAnthropicToResponses {
+		r = withAnthropicStops(r, body)
 		markConversionDegraded(round, selected.DegradedFeatures)
 		if resp.StatusCode >= http.StatusBadRequest {
 			h.writeConversionUpstreamError(w, r, resp, round, start, selectedPlan, providerName, model, stream)
@@ -213,6 +214,10 @@ func conversionAPIError(plan TransportPlan, err error) APIError {
 	var located *conversionLocationError
 	if errors.As(err, &located) {
 		path = located.Path
+	}
+	if path == "" && feature != "unsupported_feature" && err.Error() == feature {
+		// Top-level rejected fields have no nested location wrapper.
+		path = feature
 	}
 	msg := err.Error()
 	if feature != "" {

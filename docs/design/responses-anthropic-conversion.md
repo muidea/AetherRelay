@@ -63,6 +63,7 @@ Level 3 在 Level 2 基础上增加 function tool 定义、`function_call`/`tool
 | `temperature` | `temperature` | 目标模型支持时映射 |
 | `top_p` | `top_p` | 目标模型支持时映射 |
 | `stream` | `stream` | 进入对应流式转换器 |
+| 无原生等价字段 | `stop_sequences` | Anthropic→Responses/Codex 有界本地输出控制，显式降级；不进入上游正文，真实 usage 不改写，详见 13.2.0 收口 |
 | `reasoning` | `thinking` | 显式 `effort=none` 映射 `thinking.type=disabled`；其他值按方向适配器映射到固定目标 effort；不转换客户端具体 effort |
 | `tools` | `tools` | Level 3 仅支持 function 定义，流式工具事件拒绝 |
 | `tool_choice` | `tool_choice` | Level 3 映射 auto/required/none 与指定 function |
@@ -429,7 +430,7 @@ client_canceled
 | 双向文本 SSE | 状态机、首事件/空闲超时、双方向 Handler 级取消、EOF/截断、下游写失败、输出上限、多 text block、终止校验和失败唯一结算已实现 | 真实上游流式测试与归档证据 |
 | 双向 function tools | 非流式 function 定义/call/result、request-local 闭合生命周期、角色约束、双向 HTTP round-trip、字段白名单、schema/参数/result 预算已实现 | 多轮跨请求 session 状态、并行工具和真实 Provider 评测 |
 | reasoning 跨协议适配 | 仅允许显式 adapter；请求控制映射、推理输出省略、SSE 状态和降级审计已实现 | 绑定真实 Provider 灰度证据后再扩大模型声明 |
-| 严格字段拒绝 | 顶层未知字段、并行工具控制、metadata/service tier、stop_sequences、provider-specific tool 字段在转换前拒绝 | 若新增字段，必须先加入目标协议等价映射和回归测试 |
+| 严格字段拒绝 | 顶层未知字段、并行工具控制、metadata/service tier、provider-specific tool 字段在转换前拒绝；stop_sequences 按 13.2.0 有界本地控制处理 | 若新增字段，必须先加入目标协议映射或显式降级合同和回归测试 |
 | 转换观测 | archive、usage、Recent Calls 与 Prometheus 已记录有界的 mode/level/protocol/status/duration/degraded/estimated/feature；首次完成门闩防止 conversion 指标重复结算 | 仍需绑定真实 Provider 灰度证据和告警阈值 |
 
 在这些项目完成前，现有 `supported_endpoints` 不得因为存在模型级 reasoning 能力而自动增加跨协议端点。
@@ -661,6 +662,39 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 - 验收覆盖首轮、并行工具调用、工具成功/失败结果续轮、心跳、终止事件、正文开关及逐 attempt 归档；线上全链路结论必须等待重新部署验证。
 
 ## 30. 灰度、熔断与回滚
+
+### 2026-09-20 剩余问题收口（13.2.0）
+
+部署 f3bc470 后截至 001416 的快照为 29 个完成请求：16 成功、4 个 model_not_found、9 个 stop_sequences 本地转换拒绝；该快照未出现新增 503/504。成功轮次的转换观测、真实 usage/cache 明细、身份稳定及 end_turn 已验证。以下代码变更仍须重新部署验证，不能用离线测试代替线上证据。
+
+#### 停止序列
+
+- 仅 Anthropic→Responses/Codex 路径新增本地输出控制。原生 Anthropic 和现有 Chat 路径不改写。允许省略或空数组；非空数组最多 16 个非空 UTF-8 字符串，每项最多 256 字节。null、类型错误、空字符串及超限在上游调用前拒绝，错误路径定位到字段/数组项。
+- `stop_sequences` 不进入上游 Responses/Codex JSON。非空声明进入 ignored_features，并标记 conversion_degraded，表示上游原生停止能力被本地输出控制替代，而不是静默忽略。配置能力声明不能使上游自动支持此字段。
+- 只匹配可见 text 内容，不扫描 reasoning、工具 JSON 参数、工具结果或元数据。非流式按 content 顺序处理；流式在当前 text block 内跨 delta 匹配，保留可能构成停止串的后缀，块结束时原样释放未命中后缀。不跨独立 content block 匹配。
+- 首个完整匹配生效：按结束位置最早者选择，同一结束位置按请求数组顺序决定。匹配串及之后输出不交给客户端；返回 stop_reason=stop_sequence、stop_sequence=实际命中的串。命中之后不下发新的工具块，未命中时保持原终止原因。该匹配规则不依赖网络分片。
+- 命中不伪造上游 completed，也不提前取消生成；继续校验/读取上游终态以取得真实计费 usage，完整保留缓存明细。上游生成可能继续消耗时间和费用，输出 token 数可以大于客户端可见文本。本地 matcher 后缀有界，SSE 输入累计最多 64 MiB，原有取消、超时和错误处理继续生效；命中后上游失败/缺少终态仍为失败，不能改成成功。
+- 验收覆盖分片、Unicode、重叠停止串、空数组/非法项、未命中后缀、工具参数不误截断、命中后的工具不泄漏、真实 usage、响应归档、上游终态失败以及两种 provider 路径的流式/非流式接线。
+
+#### 本地错误观测
+
+APIError.Code 必须进入 usage 和 metadata，model_not_found、conversion_unsupported 不退化为 error/conversion；outcome 仍为粗粒度分类。已有显式的细分失败码（例如 first_event_timeout）优先保留。路由选择之前的失败仍记录实际 Operation、ClientEndpoint、ClientProtocol，不伪造未发生的上游请求或响应。可准确识别的顶层字段及已定位的嵌套字段记录 conversion_error_path。
+
+#### 客户端与部署配置
+
+现场 Claude Code 配置已设置 ANTHROPIC_MODEL、Opus/Haiku 映射和子代理默认模型，但只设置 Sonnet 的 SUPPORTED_CAPABILITIES，缺少 Sonnet 模型映射。应在客户端 settings.json 的 env 中补齐下面这一项（合并，不能替换整个文件）：
+
+```json
+"ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.6-sol"
+```
+
+能力声明不等于模型映射，主模型也不是对所有模型选择的全局改写；显式模型选择/恢复会话仍需复测。具体哪个内部功能发起 Sonnet/stop 请求尚未确定，不能仅凭 autoCompactEnabled/precomputeCompactionEnabled 将其归因于压缩。模型目录仍采用精确查找，不把未知 Claude 模型静默映射到 GPT。
+
+线上原显式 stream_first_event_timeout_seconds=90 会覆盖默认 180；模板已为 180，无须重复调整默认值。代码不自动覆盖用户配置，不因 effort=max 自动放宽超时，也不关闭压缩。
+
+2026-09-20 经用户要求已刷新配置：本地 `/home/rangh/.claude/settings.json` 的 env 补齐 `ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.6-sol`；`root@x600.muidea.com:1212` 的 `/home/workspace/deploy/config/config.yaml` 将首事件超时从 90 调整为 180 秒，空闲超时保持 300 秒，其余字段不变。远端原配置备份为同目录 `config.yaml.bak-20260920-first-event-180`，写入后校验哈希一致。未重启或重新部署服务；文件更新不代表运行实例已采用新值，仍需用户重新部署并复验，Claude Code 也需重新启动后确认实际模型选择。
+
+后续所有相关代码、配置或验证结论变更须同步刷新本节与 Codex 维护合同；上述客户端/部署配置及新停止序列行为均列为上线复验项。
 
 ### 2026-09-20 后续日志收口（13.1.0）
 

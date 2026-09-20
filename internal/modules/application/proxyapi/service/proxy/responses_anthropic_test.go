@@ -708,9 +708,9 @@ func TestResponsesAnthropicRejectsUnmodelledFields(t *testing.T) {
 	}
 	if _, err := buildResponsesFromAnthropic(map[string]any{
 		"messages":       []any{map[string]any{"role": "user", "content": "hello"}},
-		"stop_sequences": []any{"DONE"},
+		"stop_sequences": []any{""},
 	}, "gpt-test", false); err == nil {
-		t.Fatal("expected Anthropic stop_sequences to be rejected")
+		t.Fatal("expected invalid Anthropic stop_sequences to be rejected")
 	}
 }
 

@@ -47,6 +47,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
 		return
 	}
+	r = withAnthropicStops(r, body)
 	normalized, normalizedBody, ignored, err := normalizeCodexRequest(responsesBody, false)
 	if err != nil {
 		round.SetConversionDuration(time.Since(conversionStart))
@@ -87,6 +88,9 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		round.SetTurnStateFallback(codexresponses.TurnStateFallback(result.TurnStateSource))
 		conversionStart = time.Now()
 		converted, usage, degradedResponse, convertErr := convertOpenAIResponsesToAnthropicWithCapability(result.Body, model, capability)
+		if convertErr == nil {
+			converted, convertErr = applyAnthropicStops(converted, anthropicStops(r))
+		}
 		round.SetConversionDuration(round.ConversionDuration + time.Since(conversionStart))
 		if convertErr != nil {
 			h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
@@ -108,7 +112,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request, started time.Time, plan TransportPlan, model string, request codexresponses.Request, capability config.ConversionCapability) {
 	round := archiveRoundFromContext(r.Context())
 	state := &textConversionStreamState{}
-	mapper := responsesEventToAnthropicWithCapability(capability)
+	mapper := withAnthropicStopMapper(responsesEventToAnthropicWithCapability(capability), anthropicStops(r))
 	var archive bytes.Buffer
 	streamStarted := false
 	startStream := func(info codexresponses.StreamStart) error {

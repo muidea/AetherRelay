@@ -1231,6 +1231,17 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	if apiErr.Model == "" {
 		apiErr.Model = model
 	}
+	if round != nil {
+		if round.Operation == "" && r != nil {
+			round.Operation = RouteLabel(r)
+		}
+		if round.ClientEndpoint == "" {
+			round.ClientEndpoint = apiErr.ClientEndpoint
+		}
+		if round.ClientProtocol == "" {
+			round.ClientProtocol = apiErr.ClientProtocol
+		}
+	}
 	writeClientProtocolError(w, status, apiErr.ClientProtocol, apiErr)
 	var body []byte
 	if strings.EqualFold(apiErr.ClientProtocol, ClientProtocolAnthropic) {
@@ -1268,6 +1279,9 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 		failure = failures[0]
 	}
 	if failure != nil {
+		if failure.ErrorCode == "" && apiErr.Code != "" {
+			failure.ErrorCode = apiErr.Code
+		}
 		if failure.FailureClass == "" {
 			failure.FailureClass = apiErr.FailureClass
 		}
