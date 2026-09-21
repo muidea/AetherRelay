@@ -69,8 +69,8 @@ func TestObservationPresenceAcrossStores(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if dash.Summary.CachedInputTokensKnown || dash.Summary.CacheCreationInputTokensKnown {
-				t.Fatal("partial observations presented as complete")
+			if !dash.Summary.CachedInputTokensKnown || !dash.Summary.CacheCreationInputTokensKnown || dash.Summary.CacheInputTokens != 100 {
+				t.Fatal("unknown observations polluted eligible cache sample")
 			}
 		})
 	}

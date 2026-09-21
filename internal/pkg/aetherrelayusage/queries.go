@@ -212,11 +212,11 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
-    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
+    coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 WHERE ` + where
 	var sum Summary
@@ -247,11 +247,11 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
-    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
+    coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 WHERE ` + where + `
 GROUP BY usage_date
@@ -292,11 +292,11 @@ SELECT
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
     max(started_at) AS last_used_at,
-    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
-    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
+    coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 WHERE ` + where + `
 GROUP BY api_key_id
@@ -502,11 +502,11 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
-    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
+    coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 GROUP BY api_key_id`
 	rows, err := s.db.QueryContext(ctx, q)

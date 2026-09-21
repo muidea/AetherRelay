@@ -223,9 +223,6 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 	var sum Summary
 	dailyMap := map[string]*DailyBucket{}
 	keyMap := map[string]*KeySummary{}
-	var summaryCacheSamples int64
-	dailyCacheSamples := map[string]int64{}
-	keyCacheSamples := map[string]int64{}
 
 	for _, e := range s.events {
 		if !matchEvent(e, filter, from, to) {
@@ -237,12 +234,15 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		sum.TotalTokens += e.TotalTokens
 		if e.Outcome == "success" {
 			sum.SuccessRequests++
-			summaryCacheSamples++
-			sum.CacheInputTokens += e.InputTokens
-			sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (summaryCacheSamples == 1 || sum.CachedInputTokensKnown)
-			sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (summaryCacheSamples == 1 || sum.CacheCreationInputTokensKnown)
-			sum.CachedInputTokens += e.CachedInputTokens
-			sum.CacheCreationInputTokens += e.CacheCreationInputTokens
+			if e.CachedInputTokensKnown {
+				sum.CacheInputTokens += e.InputTokens
+				sum.CachedInputTokens += e.CachedInputTokens
+				sum.CachedInputTokensKnown = true
+			}
+			if e.CacheCreationInputTokensKnown {
+				sum.CacheCreationInputTokens += e.CacheCreationInputTokens
+				sum.CacheCreationInputTokensKnown = true
+			}
 		} else if e.State == StateCompleted {
 			sum.FailedRequests++
 		}
@@ -258,12 +258,15 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		b.OutputTokens += e.OutputTokens
 		b.TotalTokens += e.TotalTokens
 		if e.Outcome == "success" {
-			dailyCacheSamples[day]++
-			b.CacheInputTokens += e.InputTokens
-			b.CachedInputTokensKnown = e.CachedInputTokensKnown && (dailyCacheSamples[day] == 1 || b.CachedInputTokensKnown)
-			b.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (dailyCacheSamples[day] == 1 || b.CacheCreationInputTokensKnown)
-			b.CachedInputTokens += e.CachedInputTokens
-			b.CacheCreationInputTokens += e.CacheCreationInputTokens
+			if e.CachedInputTokensKnown {
+				b.CacheInputTokens += e.InputTokens
+				b.CachedInputTokens += e.CachedInputTokens
+				b.CachedInputTokensKnown = true
+			}
+			if e.CacheCreationInputTokensKnown {
+				b.CacheCreationInputTokens += e.CacheCreationInputTokens
+				b.CacheCreationInputTokensKnown = true
+			}
 		}
 
 		k, ok := keyMap[e.APIKeyID]
@@ -277,12 +280,15 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		k.TotalTokens += e.TotalTokens
 		if e.Outcome == "success" {
 			k.SuccessRequests++
-			keyCacheSamples[e.APIKeyID]++
-			k.CacheInputTokens += e.InputTokens
-			k.CachedInputTokensKnown = e.CachedInputTokensKnown && (keyCacheSamples[e.APIKeyID] == 1 || k.CachedInputTokensKnown)
-			k.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (keyCacheSamples[e.APIKeyID] == 1 || k.CacheCreationInputTokensKnown)
-			k.CachedInputTokens += e.CachedInputTokens
-			k.CacheCreationInputTokens += e.CacheCreationInputTokens
+			if e.CachedInputTokensKnown {
+				k.CacheInputTokens += e.InputTokens
+				k.CachedInputTokens += e.CachedInputTokens
+				k.CachedInputTokensKnown = true
+			}
+			if e.CacheCreationInputTokensKnown {
+				k.CacheCreationInputTokens += e.CacheCreationInputTokens
+				k.CacheCreationInputTokensKnown = true
+			}
 		} else if e.State == StateCompleted {
 			k.FailedRequests++
 		}
@@ -513,7 +519,6 @@ func (s *MemoryStore) AllTimeByKey(_ context.Context) (map[string]Summary, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]Summary)
-	cacheSamples := make(map[string]int64)
 	for _, e := range s.events {
 		sum := out[e.APIKeyID]
 		sum.Requests++
@@ -522,12 +527,15 @@ func (s *MemoryStore) AllTimeByKey(_ context.Context) (map[string]Summary, error
 		sum.TotalTokens += e.TotalTokens
 		if e.Outcome == "success" {
 			sum.SuccessRequests++
-			cacheSamples[e.APIKeyID]++
-			sum.CacheInputTokens += e.InputTokens
-			sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (cacheSamples[e.APIKeyID] == 1 || sum.CachedInputTokensKnown)
-			sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (cacheSamples[e.APIKeyID] == 1 || sum.CacheCreationInputTokensKnown)
-			sum.CachedInputTokens += e.CachedInputTokens
-			sum.CacheCreationInputTokens += e.CacheCreationInputTokens
+			if e.CachedInputTokensKnown {
+				sum.CacheInputTokens += e.InputTokens
+				sum.CachedInputTokens += e.CachedInputTokens
+				sum.CachedInputTokensKnown = true
+			}
+			if e.CacheCreationInputTokensKnown {
+				sum.CacheCreationInputTokens += e.CacheCreationInputTokens
+				sum.CacheCreationInputTokensKnown = true
+			}
 		} else if e.State == StateCompleted {
 			sum.FailedRequests++
 		}
