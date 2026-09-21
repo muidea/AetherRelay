@@ -9,20 +9,21 @@ import (
 
 // 稳定错误码(面向 WorkOrch / 客户端合同)。
 const (
-	ErrorCodeModelRequired         = "model_required"
-	ErrorCodeModelNotFound         = "model_not_found"
-	ErrorCodeRouteContractInvalid  = "route_contract_invalid"
-	ErrorCodeProviderUnavailable   = "provider_unavailable"
-	ErrorCodeUpstreamAuthRequired  = "upstream_authentication_required"
-	ErrorCodeMultipleProviders     = "multiple_providers"
-	ErrorCodeInvalidRequest        = "invalid_request"
-	ErrorCodeEndpointUnsupported   = "endpoint_unsupported"
-	ErrorCodeConversionUnsupported = "conversion_unsupported"
-	ErrorCodeAuthenticationFailed  = "authentication_failed"
-	ErrorCodeRequestTooLarge       = "request_too_large"
-	ErrorCodeProxyInternalError    = "proxy_internal_error"
-	ErrorCodeUpstreamUnavailable   = "upstream_unavailable"
-	ErrorCodeUsageStoreUnavailable = "usage_store_unavailable"
+	ErrorCodeModelRequired           = "model_required"
+	ErrorCodeModelNotFound           = "model_not_found"
+	ErrorCodeRouteContractInvalid    = "route_contract_invalid"
+	ErrorCodeProviderUnavailable     = "provider_unavailable"
+	ErrorCodeUpstreamAuthRequired    = "upstream_authentication_required"
+	ErrorCodeMultipleProviders       = "multiple_providers"
+	ErrorCodeInvalidRequest          = "invalid_request"
+	ErrorCodeEndpointUnsupported     = "endpoint_unsupported"
+	ErrorCodeConversionUnsupported   = "conversion_unsupported"
+	ErrorCodeConversionLimitExceeded = "conversion_limit_exceeded"
+	ErrorCodeAuthenticationFailed    = "authentication_failed"
+	ErrorCodeRequestTooLarge         = "request_too_large"
+	ErrorCodeProxyInternalError      = "proxy_internal_error"
+	ErrorCodeUpstreamUnavailable     = "upstream_unavailable"
+	ErrorCodeUsageStoreUnavailable   = "usage_store_unavailable"
 )
 
 // APIErrorResponse 是 OpenAI-compatible 错误 envelope。
@@ -44,6 +45,9 @@ type AnthropicError struct {
 // APIError 描述稳定错误合同;不得包含 API Key、Authorization 或上游敏感体。
 // 可选上下文字段用于客户端与 WorkOrch 诊断,均不泄露 secret。
 type APIError struct {
+	LimitKind           string   `json:"limit_kind,omitempty"`
+	Limit               int      `json:"limit,omitempty"`
+	Actual              int      `json:"actual,omitempty"`
 	RetryAfterSeconds   int      `json:"-"`
 	Retryable           *bool    `json:"retryable,omitempty"`
 	Code                string   `json:"code"`
@@ -104,7 +108,7 @@ func openAIErrorType(code string) string {
 func anthropicErrorType(code string) string {
 	switch code {
 	case ErrorCodeRequestTooLarge, ErrorCodeInvalidRequest, ErrorCodeModelRequired, ErrorCodeModelNotFound,
-		ErrorCodeEndpointUnsupported, ErrorCodeConversionUnsupported,
+		ErrorCodeEndpointUnsupported, ErrorCodeConversionUnsupported, ErrorCodeConversionLimitExceeded,
 		ErrorCodeAuthenticationFailed:
 		return "invalid_request_error"
 	case ErrorCodeUpstreamAuthRequired:

@@ -67,7 +67,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 ## Typed Error 与 Envelope
 
-- 稳定 code：`model_required`、`model_not_found`、`endpoint_unsupported`、`conversion_unsupported`、`invalid_request`(400)、`authentication_failed`(401)、`request_too_large`(413)、`route_contract_invalid`、`proxy_internal_error`(500)、`provider_unavailable`(503)、`upstream_unavailable`(502，唯一访问上游的 code)。
+- 稳定 code：`model_required`、`model_not_found`、`endpoint_unsupported`、`conversion_unsupported`、`conversion_limit_exceeded`、`invalid_request`(400)、`authentication_failed`(401)、`request_too_large`(413)、`route_contract_invalid`、`proxy_internal_error`(500)、`provider_unavailable`(503)、`upstream_unavailable`(502，唯一访问上游的 code)。`conversion_limit_exceeded` 为本地结构预算拒绝，保留 param/limit_kind/actual/limit 和 retryable=false；Anthropic envelope 将对应事实放入 message，不伪报 unsupported_feature。
 - envelope 按入站协议输出：OpenAI 带独立 `code`；Anthropic 用 `{"type":"error"}` 且同一 code 前缀写入 message。
 - 所有本地拒绝一律走 typed encoder（禁用 `http.Error`）；错误不泄露 API Key、Authorization 或带凭据 URL。
 

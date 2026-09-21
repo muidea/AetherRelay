@@ -1293,7 +1293,7 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 		}
 	}
 	if round != nil {
-		if apiErr.Code == ErrorCodeConversionUnsupported {
+		if apiErr.Code == ErrorCodeConversionUnsupported || apiErr.Code == ErrorCodeConversionLimitExceeded {
 			round.ConversionErrorPath = apiErr.Param
 		}
 		if failure != nil {

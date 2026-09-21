@@ -209,6 +209,16 @@ func (e *conversionLocationError) Error() string { return e.Path + ": " + e.Err.
 func (e *conversionLocationError) Unwrap() error { return e.Err }
 
 func conversionAPIError(plan TransportPlan, err error) APIError {
+	var limit *conversionLimitError
+	if errors.As(err, &limit) {
+		retryable := false
+		return APIError{
+			Code: ErrorCodeConversionLimitExceeded, Message: limit.Error(),
+			Param: limit.Path, LimitKind: limit.Kind, Limit: limit.Limit, Actual: limit.Actual,
+			Retryable: &retryable, Model: plan.ModelID, ClientEndpoint: plan.ClientEndpoint,
+			ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol,
+		}
+	}
 	feature := conversionFeatureFromError(err)
 	path := ""
 	var located *conversionLocationError

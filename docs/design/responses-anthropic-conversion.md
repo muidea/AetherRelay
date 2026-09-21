@@ -601,7 +601,7 @@ conversion_processing_timeout
 tool_result_wait_timeout
 ```
 
-Level 3 function tools 还施加独立预算：工具 schema 最大 256 KiB、schema 嵌套深度 32、单个 tool 参数/结果最大 1 MiB、工具定义最多 128 个、输入/content block 最多 256 个；超限在访问上游前返回 `conversion_unsupported`，不依赖通用请求体上限。请求结束时仍未解析的 call、未知或重复 result，以及与 Anthropic message role 不匹配的 tool block 同样必须在访问上游前拒绝。
+Level 3 function tools 还施加独立预算：工具 schema 最大 256 KiB、schema 嵌套深度 32、单个 tool 参数/结果最大 1 MiB、工具定义最多 128 个；消息与内容块的独立预算及结构超限错误按 13.3.0 执行，不能把工具参数 JSON 对象计作协议内容块。已有工具专用预算拒绝继续使用 `conversion_unsupported`；所有限制均在访问上游前执行，不依赖通用请求体上限。请求结束时仍未解析的 call、未知或重复 result，以及与 Anthropic message role 不匹配的 tool block 同样必须在访问上游前拒绝。
 
 非流式转换若上游返回 `text/event-stream` 会立即以 `upstream_protocol_error` 结束，并关闭响应体；不会把 SSE 当作 JSON 缓冲等待 EOF。普通 JSON 响应读取同样受上游 body idle timeout 与客户端取消控制。
 
@@ -662,6 +662,20 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 - 验收覆盖首轮、并行工具调用、工具成功/失败结果续轮、心跳、终止事件、正文开关及逐 attempt 归档；线上全链路结论必须等待重新部署验证。
 
 ## 30. 灰度、熔断与回滚
+
+### 2026-09-21 消息树预算收口（13.3.0）
+
+线上 d5f3309 于北京时间 09:01:38 启动；09:09:32–09:09:52 的 001454/001455/001456 均为 gpt-5.6-luna、52 条消息，清理已知注解后消息树分别含 262/263/264 个对象，最大数组长度 52、深度 6。001456 含 143 个直接内容块、4 个工具结果内文本块、65 个工具参数对象。旧校验将所有对象共用 256 个 content blocks 额度，产生 messages exceeds 256 content blocks，又被错误转换覆盖为 unsupported_feature。这些请求无 stop_sequences、无上游尝试；不是模型不存在、超时或上游拒绝。远端文件首事件超时已核对为 180 秒，但这些本地失败不构成超时或停止序列功能的线上验收。
+
+本轮规则适用于 Anthropic→Responses/Codex 及共享校验的 Responses→Anthropic：
+
+- 顶层 messages/input 项数最多 256，与内容块数独立；消息外壳不再占用内容块额度。
+- 消息内协议 content 数组的块累计最多 256；Anthropic tool_result.content 数组也计入，防止嵌套协议块绕过限制。system 数组另有 256 块上限。纯文本字符串仍受正文/现有工具字节限制，不伪造为对象数。
+- 不进入 tool_use.input 或 Responses function arguments/output 的业务结构计数内容块。业务数据中同名 type/content/input 键不能被当成协议字段；不截断或丢弃工具参数来绕过限制。
+- 整棵 messages/input 树使用独立的深度 32 和节点 65536 预算。节点包含对象、数组及标量，防止移除业务数组 256 项限制后失去资源保护。递归预算在首次越界停止，actual 是当时已观察的深度/节点数，不声称是完整请求总量。工具参数/结果 1 MiB、schema 256 KiB/深度 32、工具定义 128 的原有专用预算不放宽。
+- 上述消息数、协议块数、整树深度/节点预算超限返回 HTTP 400、code=conversion_limit_exceeded、retryable=false。OpenAI envelope 包含 param/limit_kind/actual/limit；Anthropic envelope 保持 invalid_request_error，并在 message 中保留相同安全事实。usage/metadata 的 error_code 同步，outcome=limit_exceeded；conversion_error_path 保留路径，原始错误说明保留数值，不往 unsupported_features 添加伪能力，不创建上游档案或触发账号惩罚。路径仅由适配器生成，不输出工具参数键值。
+
+回归使用合成而非客户正文，重建 52 条消息、262/263/264 个对象的三种结构，确认调用上游且工具参数无损；另测消息/内容块边界、超过 256 项的合法业务数组、嵌套 tool_result、深度与节点资源上限，以及错误响应、usage 与归档一致性。新规则仍须部署后用真实会话复验；无需修改客户端或线上配置模板。后续相关行为变化须同提交更新本节、维护合同及测试。
 
 ### 2026-09-20 剩余问题收口（13.2.0）
 

@@ -729,9 +729,6 @@ func responsesInputMessages(input any) ([]map[string]any, string, error) {
 	if err := normalizeCodexAgentMessages(items); err != nil {
 		return nil, "", err
 	}
-	if len(items) > maxConversionContentBlocks {
-		return nil, "", fmt.Errorf("input exceeds %d content blocks", maxConversionContentBlocks)
-	}
 	if err := validateConversionTree(items, "input"); err != nil {
 		return nil, "", err
 	}
@@ -1028,9 +1025,6 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 	if !ok || len(msgs) == 0 {
 		return nil, nil, fmt.Errorf("messages")
 	}
-	if len(msgs) > maxConversionContentBlocks {
-		return nil, nil, fmt.Errorf("messages exceeds %d content blocks", maxConversionContentBlocks)
-	}
 	if err := validateConversionTree(msgs, "messages"); err != nil {
 		return nil, nil, err
 	}
@@ -1309,7 +1303,7 @@ func anthropicSystemText(raw any) (string, error) {
 		return "", fmt.Errorf("system")
 	}
 	if len(parts) > maxConversionContentBlocks {
-		return "", fmt.Errorf("system exceeds %d content blocks", maxConversionContentBlocks)
+		return "", &conversionLimitError{Path: "system", Kind: "content_blocks", Limit: maxConversionContentBlocks, Actual: len(parts)}
 	}
 	var out strings.Builder
 	for _, item := range parts {
@@ -1590,39 +1584,6 @@ func validateConversionToolSchema(schema map[string]any) error {
 		return nil
 	}
 	return walk(schema, 0)
-}
-
-func validateConversionTree(value any, label string) error {
-	blocks := 0
-	var walk func(any, int) error
-	walk = func(node any, depth int) error {
-		if depth > maxConversionSchemaDepth {
-			return fmt.Errorf("%s exceeds depth %d", label, maxConversionSchemaDepth)
-		}
-		switch v := node.(type) {
-		case map[string]any:
-			blocks++
-			if blocks > maxConversionContentBlocks {
-				return fmt.Errorf("%s exceeds %d content blocks", label, maxConversionContentBlocks)
-			}
-			for _, child := range v {
-				if err := walk(child, depth+1); err != nil {
-					return err
-				}
-			}
-		case []any:
-			if len(v) > maxConversionContentBlocks {
-				return fmt.Errorf("%s exceeds %d content blocks", label, maxConversionContentBlocks)
-			}
-			for _, child := range v {
-				if err := walk(child, depth+1); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	return walk(value, 0)
 }
 
 // rejectConversionFields keeps protocol conversion fail-closed. Any API
