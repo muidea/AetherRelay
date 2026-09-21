@@ -35,7 +35,7 @@ func TestCacheStatistics(t *testing.T) {
 				if err := store.Start(ctx, StartRecord{EventID: rec.id, APIKeyID: rec.key, StartedAt: at, Provider: rec.provider, Model: rec.model}); err != nil {
 					t.Fatal(err)
 				}
-				if err := store.Complete(ctx, CompleteRecord{EventID: rec.id, CompletedAt: at.Add(time.Second), InputTokens: rec.input, OutputTokens: 20, CachedInputTokens: rec.cached, CacheCreationInputTokens: rec.creation, HTTPStatus: 200, Outcome: rec.outcome, Estimated: rec.estimated}); err != nil {
+				if err := store.Complete(ctx, CompleteRecord{EventID: rec.id, CompletedAt: at.Add(time.Second), InputTokens: rec.input, OutputTokens: 20, CachedInputTokens: rec.cached, CacheCreationInputTokens: rec.creation, CachedInputTokensKnown: true, CacheCreationInputTokensKnown: true, HTTPStatus: 200, Outcome: rec.outcome, Estimated: rec.estimated}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -44,19 +44,20 @@ func TestCacheStatistics(t *testing.T) {
 			}
 			exact := false
 			for _, tc := range []struct {
-				name                    string
-				filter                  UsageFilter
-				input, cached, creation int64
+				name                                string
+				filter                              UsageFilter
+				input, cacheInput, cached, creation int64
+				cacheRate                           float64
 			}{
-				{"all", UsageFilter{}, 1300, 250, 60},
-				{"key", UsageFilter{APIKeyID: "key-a"}, 1000, 100, 30},
-				{"provider", UsageFilter{Provider: "p"}, 1000, 100, 30},
-				{"model", UsageFilter{Model: "m"}, 1000, 100, 30},
-				{"outcome", UsageFilter{Outcome: "upstream_failed"}, 300, 150, 30},
-				{"exact", UsageFilter{Estimated: &exact}, 1000, 100, 30},
-				{"time", UsageFilter{To: from.AddDate(0, 0, 1)}, 1000, 100, 30},
-				{"empty", UsageFilter{Provider: "missing"}, 0, 0, 0},
-				{"zero", UsageFilter{APIKeyID: "key-zero"}, 0, 0, 0},
+				{"all", UsageFilter{}, 1300, 1000, 100, 30, 0.1},
+				{"key", UsageFilter{APIKeyID: "key-a"}, 1000, 1000, 100, 30, 0.1},
+				{"provider", UsageFilter{Provider: "p"}, 1000, 1000, 100, 30, 0.1},
+				{"model", UsageFilter{Model: "m"}, 1000, 1000, 100, 30, 0.1},
+				{"outcome", UsageFilter{Outcome: "upstream_failed"}, 300, 0, 0, 0, 0},
+				{"exact", UsageFilter{Estimated: &exact}, 1000, 1000, 100, 30, 0.1},
+				{"time", UsageFilter{To: from.AddDate(0, 0, 1)}, 1000, 1000, 100, 30, 0.1},
+				{"empty", UsageFilter{Provider: "missing"}, 0, 0, 0, 0, 0},
+				{"zero", UsageFilter{APIKeyID: "key-zero"}, 0, 0, 0, 0, 0},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					f := tc.filter
@@ -71,25 +72,25 @@ func TestCacheStatistics(t *testing.T) {
 							t.Fatal(err)
 						}
 						s := dash.Summary
-						if s.InputTokens != tc.input || s.CachedInputTokens != tc.cached || s.CacheCreationInputTokens != tc.creation {
+						if s.InputTokens != tc.input || s.CacheInputTokens != tc.cacheInput || s.CachedInputTokens != tc.cached || s.CacheCreationInputTokens != tc.creation {
 							t.Fatalf("summary=%+v", s)
 						}
-						assertCacheRate(t, s.CacheHitRate, tc.cached, tc.input)
+						if s.CacheHitRate != tc.cacheRate {
+							t.Fatalf("cache rate=%v, want %v", s.CacheHitRate, tc.cacheRate)
+						}
 						var dailyCached, dailyCreation, keyCached, keyCreation int64
 						for _, b := range dash.Daily {
-							assertCacheRate(t, b.CacheHitRate, b.CachedInputTokens, b.InputTokens)
 							dailyCached += b.CachedInputTokens
 							dailyCreation += b.CacheCreationInputTokens
 						}
 						for _, k := range dash.ByAPIKey {
-							assertCacheRate(t, k.CacheHitRate, k.CachedInputTokens, k.InputTokens)
 							keyCached += k.CachedInputTokens
 							keyCreation += k.CacheCreationInputTokens
 						}
 						if dailyCached != tc.cached || keyCached != tc.cached || dailyCreation != tc.creation || keyCreation != tc.creation {
 							t.Fatalf("cache aggregates disagree: %+v", dash)
 						}
-						if tc.name == "all" && (len(dash.Daily) != 4 || dash.Daily[1].CacheHitRate != 0 || dash.Daily[0].CacheHitRate != 0.1 || dash.Daily[2].CacheHitRate != 0.5) {
+						if tc.name == "all" && (len(dash.Daily) != 4 || dash.Daily[1].CacheHitRate != 0 || dash.Daily[0].CacheHitRate != 0.1 || dash.Daily[2].CacheHitRate != 0) {
 							t.Fatalf("daily=%+v", dash.Daily)
 						}
 					}
@@ -109,10 +110,17 @@ func TestCacheStatistics(t *testing.T) {
 			if len(page.Events) != 5 {
 				t.Fatalf("events=%+v", page)
 			}
+			failedDetailPreserved := false
 			for _, e := range page.Events {
 				assertCacheRate(t, e.CacheHitRate, e.CachedInputTokens, e.InputTokens)
+				if e.EventID == "c" && e.CachedInputTokens == 150 && e.CacheCreationInputTokens == 30 {
+					failedDetailPreserved = true
+				}
 			}
-			if err := store.Complete(ctx, CompleteRecord{EventID: "pending", CompletedAt: from.Add(time.Second), InputTokens: 100, CachedInputTokens: 100, HTTPStatus: 200, Outcome: "success"}); err != nil {
+			if !failedDetailPreserved {
+				t.Fatalf("failed event detail was changed: %+v", page.Events)
+			}
+			if err := store.Complete(ctx, CompleteRecord{EventID: "pending", CompletedAt: from.Add(time.Second), InputTokens: 100, CachedInputTokens: 100, CachedInputTokensKnown: true, CacheCreationInputTokensKnown: true, HTTPStatus: 200, Outcome: "success"}); err != nil {
 				t.Fatal(err)
 			}
 			if s, ok := store.(*DuckDBStore); ok {
@@ -128,10 +136,10 @@ func TestCacheStatistics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if dash.Summary.CachedInputTokens != 350 {
+			if dash.Summary.CachedInputTokens != 200 {
 				t.Fatalf("stale cache statistics: %+v", dash.Summary)
 			}
-			assertCacheRate(t, dash.Summary.CacheHitRate, 350, 1400)
+			assertCacheRate(t, dash.Summary.CacheHitRate, 200, 1100)
 		})
 	}
 }

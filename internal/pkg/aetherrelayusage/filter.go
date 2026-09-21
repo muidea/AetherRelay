@@ -94,15 +94,15 @@ func ValidateEventFilter(f *EventFilter) error {
 }
 
 func fillSummaryRates(s *Summary) {
-	s.CacheHitRate = cacheHitRate(s.CachedInputTokens, s.InputTokens)
+	s.CacheHitRate = cacheHitRate(s.CachedInputTokens, s.CacheInputTokens)
 	if s.Requests > 0 {
 		s.AvgTokensPerReq = float64(s.TotalTokens) / float64(s.Requests)
 		s.SuccessRate = float64(s.SuccessRequests) / float64(s.Requests)
 	}
 }
 
-// cacheHitRate follows the existing log/Prometheus token ratio, not the fraction
-// of requests with a cache hit. Aggregate tokens before computing this rate.
+// cacheHitRate is a token ratio, not the fraction of requests with a cache hit.
+// Aggregate callers select the eligible sample before computing this rate.
 func cacheHitRate(cached, input int64) float64 {
 	if input <= 0 {
 		return 0

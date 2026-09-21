@@ -223,21 +223,26 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 	var sum Summary
 	dailyMap := map[string]*DailyBucket{}
 	keyMap := map[string]*KeySummary{}
+	var summaryCacheSamples int64
+	dailyCacheSamples := map[string]int64{}
+	keyCacheSamples := map[string]int64{}
 
 	for _, e := range s.events {
 		if !matchEvent(e, filter, from, to) {
 			continue
 		}
 		sum.Requests++
-		sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (sum.Requests == 1 || sum.CachedInputTokensKnown)
-		sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (sum.Requests == 1 || sum.CacheCreationInputTokensKnown)
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
 		sum.TotalTokens += e.TotalTokens
-		sum.CachedInputTokens += e.CachedInputTokens
-		sum.CacheCreationInputTokens += e.CacheCreationInputTokens
 		if e.Outcome == "success" {
 			sum.SuccessRequests++
+			summaryCacheSamples++
+			sum.CacheInputTokens += e.InputTokens
+			sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (summaryCacheSamples == 1 || sum.CachedInputTokensKnown)
+			sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (summaryCacheSamples == 1 || sum.CacheCreationInputTokensKnown)
+			sum.CachedInputTokens += e.CachedInputTokens
+			sum.CacheCreationInputTokens += e.CacheCreationInputTokens
 		} else if e.State == StateCompleted {
 			sum.FailedRequests++
 		}
@@ -249,13 +254,17 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			dailyMap[day] = b
 		}
 		b.Requests++
-		b.CachedInputTokensKnown = e.CachedInputTokensKnown && (b.Requests == 1 || b.CachedInputTokensKnown)
-		b.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (b.Requests == 1 || b.CacheCreationInputTokensKnown)
 		b.InputTokens += e.InputTokens
 		b.OutputTokens += e.OutputTokens
 		b.TotalTokens += e.TotalTokens
-		b.CachedInputTokens += e.CachedInputTokens
-		b.CacheCreationInputTokens += e.CacheCreationInputTokens
+		if e.Outcome == "success" {
+			dailyCacheSamples[day]++
+			b.CacheInputTokens += e.InputTokens
+			b.CachedInputTokensKnown = e.CachedInputTokensKnown && (dailyCacheSamples[day] == 1 || b.CachedInputTokensKnown)
+			b.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (dailyCacheSamples[day] == 1 || b.CacheCreationInputTokensKnown)
+			b.CachedInputTokens += e.CachedInputTokens
+			b.CacheCreationInputTokens += e.CacheCreationInputTokens
+		}
 
 		k, ok := keyMap[e.APIKeyID]
 		if !ok {
@@ -263,15 +272,17 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			keyMap[e.APIKeyID] = k
 		}
 		k.Requests++
-		k.CachedInputTokensKnown = e.CachedInputTokensKnown && (k.Requests == 1 || k.CachedInputTokensKnown)
-		k.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (k.Requests == 1 || k.CacheCreationInputTokensKnown)
 		k.InputTokens += e.InputTokens
 		k.OutputTokens += e.OutputTokens
 		k.TotalTokens += e.TotalTokens
-		k.CachedInputTokens += e.CachedInputTokens
-		k.CacheCreationInputTokens += e.CacheCreationInputTokens
 		if e.Outcome == "success" {
 			k.SuccessRequests++
+			keyCacheSamples[e.APIKeyID]++
+			k.CacheInputTokens += e.InputTokens
+			k.CachedInputTokensKnown = e.CachedInputTokensKnown && (keyCacheSamples[e.APIKeyID] == 1 || k.CachedInputTokensKnown)
+			k.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (keyCacheSamples[e.APIKeyID] == 1 || k.CacheCreationInputTokensKnown)
+			k.CachedInputTokens += e.CachedInputTokens
+			k.CacheCreationInputTokens += e.CacheCreationInputTokens
 		} else if e.State == StateCompleted {
 			k.FailedRequests++
 		}
@@ -284,7 +295,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 
 	var daily []DailyBucket
 	for _, b := range dailyMap {
-		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.InputTokens)
+		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.CacheInputTokens)
 		daily = append(daily, *b)
 	}
 	sort.Slice(daily, func(i, j int) bool { return daily[i].Date < daily[j].Date })
@@ -294,7 +305,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 
 	var byKey []KeySummary
 	for _, k := range keyMap {
-		k.CacheHitRate = cacheHitRate(k.CachedInputTokens, k.InputTokens)
+		k.CacheHitRate = cacheHitRate(k.CachedInputTokens, k.CacheInputTokens)
 		byKey = append(byKey, *k)
 	}
 	sort.Slice(byKey, func(i, j int) bool {
@@ -502,18 +513,21 @@ func (s *MemoryStore) AllTimeByKey(_ context.Context) (map[string]Summary, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]Summary)
+	cacheSamples := make(map[string]int64)
 	for _, e := range s.events {
 		sum := out[e.APIKeyID]
 		sum.Requests++
-		sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (sum.Requests == 1 || sum.CachedInputTokensKnown)
-		sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (sum.Requests == 1 || sum.CacheCreationInputTokensKnown)
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
 		sum.TotalTokens += e.TotalTokens
-		sum.CachedInputTokens += e.CachedInputTokens
-		sum.CacheCreationInputTokens += e.CacheCreationInputTokens
 		if e.Outcome == "success" {
 			sum.SuccessRequests++
+			cacheSamples[e.APIKeyID]++
+			sum.CacheInputTokens += e.InputTokens
+			sum.CachedInputTokensKnown = e.CachedInputTokensKnown && (cacheSamples[e.APIKeyID] == 1 || sum.CachedInputTokensKnown)
+			sum.CacheCreationInputTokensKnown = e.CacheCreationInputTokensKnown && (cacheSamples[e.APIKeyID] == 1 || sum.CacheCreationInputTokensKnown)
+			sum.CachedInputTokens += e.CachedInputTokens
+			sum.CacheCreationInputTokens += e.CacheCreationInputTokens
 		} else if e.State == StateCompleted {
 			sum.FailedRequests++
 		}

@@ -93,6 +93,7 @@ type Summary struct {
 	CacheCreationInputTokensKnown bool    `json:"cache_creation_input_tokens_known"`
 	CachedInputTokens             int64   `json:"cached_input_tokens"`
 	CacheCreationInputTokens      int64   `json:"cache_creation_input_tokens"`
+	CacheInputTokens              int64   `json:"cache_input_tokens"`
 	CacheHitRate                  float64 `json:"cache_hit_rate"`
 	Requests                      int64   `json:"requests"`
 	SuccessRequests               int64   `json:"success_requests"`
@@ -110,6 +111,7 @@ type DailyBucket struct {
 	CacheCreationInputTokensKnown bool    `json:"cache_creation_input_tokens_known"`
 	CachedInputTokens             int64   `json:"cached_input_tokens"`
 	CacheCreationInputTokens      int64   `json:"cache_creation_input_tokens"`
+	CacheInputTokens              int64   `json:"cache_input_tokens"`
 	CacheHitRate                  float64 `json:"cache_hit_rate"`
 	Date                          string  `json:"date"`
 	Requests                      int64   `json:"requests"`
@@ -124,6 +126,7 @@ type KeySummary struct {
 	CacheCreationInputTokensKnown bool       `json:"cache_creation_input_tokens_known"`
 	CachedInputTokens             int64      `json:"cached_input_tokens"`
 	CacheCreationInputTokens      int64      `json:"cache_creation_input_tokens"`
+	CacheInputTokens              int64      `json:"cache_input_tokens"`
 	CacheHitRate                  float64    `json:"cache_hit_rate"`
 	APIKeyID                      string     `json:"api_key_id"`
 	Status                        string     `json:"status,omitempty"`

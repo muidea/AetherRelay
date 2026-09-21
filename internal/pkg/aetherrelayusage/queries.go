@@ -212,9 +212,11 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 WHERE ` + where
 	var sum Summary
@@ -225,6 +227,7 @@ WHERE ` + where
 		&sum.InputTokens,
 		&sum.OutputTokens,
 		&sum.TotalTokens,
+		&sum.CacheInputTokens,
 		&sum.CachedInputTokens,
 		&sum.CacheCreationInputTokens,
 		&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
@@ -244,9 +247,11 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 WHERE ` + where + `
 GROUP BY usage_date
@@ -260,10 +265,10 @@ ORDER BY usage_date`
 	var out []DailyBucket
 	for rows.Next() {
 		var b DailyBucket
-		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown); err != nil {
+		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CacheInputTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown); err != nil {
 			return nil, ErrStoreUnavailable
 		}
-		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.InputTokens)
+		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.CacheInputTokens)
 		// 规范化日期字符串。
 		if len(b.Date) > 10 {
 			b.Date = b.Date[:10]
@@ -287,9 +292,11 @@ SELECT
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
     max(started_at) AS last_used_at,
-    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 WHERE ` + where + `
 GROUP BY api_key_id
@@ -313,6 +320,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			&k.OutputTokens,
 			&k.TotalTokens,
 			&last,
+			&k.CacheInputTokens,
 			&k.CachedInputTokens,
 			&k.CacheCreationInputTokens,
 			&k.CachedInputTokensKnown, &k.CacheCreationInputTokensKnown,
@@ -323,7 +331,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			t := last.Time.UTC()
 			k.LastUsedAt = &t
 		}
-		k.CacheHitRate = cacheHitRate(k.CachedInputTokens, k.InputTokens)
+		k.CacheHitRate = cacheHitRate(k.CachedInputTokens, k.CacheInputTokens)
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
@@ -494,9 +502,11 @@ SELECT
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
     coalesce(sum(total_tokens), 0) AS total_tokens,
-    coalesce(sum(cached_input_tokens), 0) AS cached_input_tokens,
-    coalesce(sum(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
-    coalesce(bool_and(coalesce(cached_input_tokens_known, false)), false), coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)), false)
+    coalesce(sum(input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_input_tokens,
+    coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cached_input_tokens,
+    coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success'), 0) AS cache_creation_input_tokens,
+    coalesce(bool_and(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
+    coalesce(bool_and(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
 FROM usage_events
 GROUP BY api_key_id`
 	rows, err := s.db.QueryContext(ctx, q)
@@ -517,6 +527,7 @@ GROUP BY api_key_id`
 			&sum.InputTokens,
 			&sum.OutputTokens,
 			&sum.TotalTokens,
+			&sum.CacheInputTokens,
 			&sum.CachedInputTokens,
 			&sum.CacheCreationInputTokens,
 			&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,

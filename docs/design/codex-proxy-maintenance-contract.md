@@ -471,7 +471,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
 
-`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率仍为累计读取 / 累计输入；缓存读写分别携带 `*_known` 标志，显式零为已知、缺失或非法为未知；聚合存在未知样本时标为不完整，不将缺失显示成零命中，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态，以及事件结算与 dashboard 汇总。
+`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率为成功请求的累计读取 / 成功请求的累计输入；缓存读写分别携带 `*_known` 标志，显式零为已知、缺失或非法为未知。失败、超时、转换拒绝和未完成事件保留原始明细但不参与缓存聚合；成功请求中存在未知样本时仍标为不完整，不将缺失显示成零命中，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态、异常事件保留但聚合剔除，以及事件结算与 dashboard 汇总。
 
 `CP-OBS-010` Codex HTTP Responses/compact 的最终出站正文必须取自 `codexupstream` 完成 `client_metadata` 注入后的发送字节，不得用入站正文或转换中间态冒充。仅 `archive_interactions && archive_full_content` 启用时，owner 通过 typed observation 携带正文，proxyapi 沿用附件摘要策略落盘。代理注入的 `client_metadata` 身份及内嵌 turn metadata 默认脱敏；显式 `archive_unredacted_headers` 开启时同步保真，业务文本/工具参数不按同名字段误删。普通日志永不输出正文。每个 HTTP 尝试独立编号归档；握手和终态更新同一尝试，账号切换与刷新重试不得覆盖先前尝试。无上游请求的本地拒绝只记录转换错误，不创建伪上游记录。本规则不宣称覆盖 WebSocket 帧与 ChatGPT Web 多阶段请求。
 

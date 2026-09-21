@@ -76,6 +76,68 @@ func TestObservationPresenceAcrossStores(t *testing.T) {
 	}
 }
 
+func TestCacheAggregationExcludesFailedObservationsButPreservesDetails(t *testing.T) {
+	for _, backend := range []string{"memory", "duckdb"} {
+		t.Run(backend, func(t *testing.T) {
+			var store Store = NewMemoryStore()
+			if backend == "duckdb" {
+				store = openTestStore(t)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			ctx := context.Background()
+			at := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+			for _, rec := range []struct {
+				id, outcome             string
+				input, cached, creation int64
+				httpStatus              int
+				known                   bool
+			}{
+				{id: "success", outcome: "success", input: 100, cached: 80, creation: 0, httpStatus: 200, known: true},
+				{id: "timeout", outcome: "first_event_timeout", input: 25, cached: 0, creation: 0, httpStatus: 504, known: false},
+			} {
+				if err := store.Start(ctx, StartRecord{EventID: rec.id, APIKeyID: "key", StartedAt: at}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Complete(ctx, CompleteRecord{
+					EventID: rec.id, CompletedAt: at.Add(time.Second), Outcome: rec.outcome,
+					HTTPStatus:  rec.httpStatus,
+					InputTokens: rec.input, CachedInputTokens: rec.cached, CacheCreationInputTokens: rec.creation,
+					CachedInputTokensKnown: rec.known, CacheCreationInputTokensKnown: rec.known,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			dash, err := store.Dashboard(ctx, UsageFilter{AllTime: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dash.Summary.Requests != 2 || dash.Summary.FailedRequests != 1 || dash.Summary.InputTokens != 125 {
+				t.Fatalf("request accounting changed: %+v", dash.Summary)
+			}
+			if dash.Summary.CacheInputTokens != 100 || dash.Summary.CachedInputTokens != 80 || dash.Summary.CacheCreationInputTokens != 0 || !dash.Summary.CachedInputTokensKnown || !dash.Summary.CacheCreationInputTokensKnown || dash.Summary.CacheHitRate != 0.8 {
+				t.Fatalf("failed observation polluted cache aggregation: %+v", dash.Summary)
+			}
+
+			page, err := store.Events(ctx, EventFilter{UsageFilter: UsageFilter{AllTime: true}, PageSize: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var failed *Event
+			for i := range page.Events {
+				if page.Events[i].EventID == "timeout" {
+					failed = &page.Events[i]
+					break
+				}
+			}
+			if failed == nil || failed.InputTokens != 25 || failed.CachedInputTokens != 0 || failed.CacheCreationInputTokens != 0 || failed.CachedInputTokensKnown || failed.CacheCreationInputTokensKnown {
+				t.Fatalf("failed event detail was not preserved: %+v", page.Events)
+			}
+		})
+	}
+}
+
 func TestObservationColumnsPreserveExistingDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "existing.duckdb")
 	db, err := sql.Open("duckdb", path)
