@@ -2,9 +2,14 @@ package proxy
 
 import "fmt"
 
+// 转换结构预算。三项互相独立:顶层项数、协议内容块、system 数组块各自计量。
+// 内容块预算按线上长会话实测放宽(2026-09-22 rounds 253/276,累计 259),
+// 其余预算不随之放宽。
 const (
-	maxConversionMessages  = 256
-	maxConversionTreeNodes = 65536
+	maxConversionMessages      = 256
+	maxConversionContentBlocks = 512
+	maxConversionSystemBlocks  = 256
+	maxConversionTreeNodes     = 65536
 )
 
 // Paths and kinds originate exclusively in adapter code, never in business

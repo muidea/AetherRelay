@@ -542,7 +542,7 @@ Anthropic Messages 端点返回 Anthropic-compatible envelope：
 | `model_required` / `invalid_request` / `request_too_large` | 请求不合法 | 修正请求，不自动重试 |
 | `model_not_found` / `endpoint_unsupported` | 当前目录或端点不匹配 | 立即刷新 `/v1/models` 后重新选择 |
 | `conversion_unsupported` | 请求语义超出转换合同 | 移除字段、改用明确的 native 合同或更换模型；不要原样重试 |
-| `conversion_limit_exceeded` | 消息/内容块数量或消息树资源预算超限（400） | 根据路径、actual/limit 缩减或压缩历史；retryable=false，不要原样重试；不是模型缺少能力 |
+| `conversion_limit_exceeded` | 消息/内容块数量或消息树资源预算超限（400）：消息/输入项 ≤256、协议内容块 ≤512、system 数组 ≤256、树深度 ≤32、节点 ≤65536 | 根据路径、actual/limit 缩减或压缩历史；retryable=false，不要原样重试；不是模型缺少能力 |
 | `route_contract_invalid` | 服务端路由合同错误 | 停止重试并告警运维 |
 | `provider_unavailable` | 当前无健康候选 | 优先遵循 `Retry-After`；`failure_class=accounts_cooling` 时等待后重试，`accounts_busy` 时短暂随机退避；仅在无恢复提示且目录可能变化时刷新模型目录 |
 | `upstream_unavailable` | 上游连接、超时或协议失败 | 有界指数退避；保证业务操作幂等 |

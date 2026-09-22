@@ -611,7 +611,7 @@ conversion_processing_timeout
 tool_result_wait_timeout
 ```
 
-Level 3 function tools 还施加独立预算：工具 schema 最大 256 KiB、schema 嵌套深度 32、单个 tool 参数/结果最大 1 MiB、工具定义最多 128 个；消息与内容块的独立预算及结构超限错误按 13.3.0 执行，不能把工具参数 JSON 对象计作协议内容块。已有工具专用预算拒绝继续使用 `conversion_unsupported`；所有限制均在访问上游前执行，不依赖通用请求体上限。请求结束时仍未解析的 call、未知或重复 result，以及与 Anthropic message role 不匹配的 tool block 同样必须在访问上游前拒绝。
+Level 3 function tools 还施加独立预算：工具 schema 最大 256 KiB、schema 嵌套深度 32、单个 tool 参数/结果最大 1 MiB、工具定义最多 128 个；消息与内容块的独立预算及结构超限错误按 13.5.0 执行（协议内容块 512，消息/输入项与 system 各 256），不能把工具参数 JSON 对象计作协议内容块。已有工具专用预算拒绝继续使用 `conversion_unsupported`；所有限制均在访问上游前执行，不依赖通用请求体上限。请求结束时仍未解析的 call、未知或重复 result，以及与 Anthropic message role 不匹配的 tool block 同样必须在访问上游前拒绝。
 
 非流式转换若上游返回 `text/event-stream` 会立即以 `upstream_protocol_error` 结束，并关闭响应体；不会把 SSE 当作 JSON 缓冲等待 EOF。普通 JSON 响应读取同样受上游 body idle timeout 与客户端取消控制。
 
@@ -673,6 +673,17 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 ## 30. 灰度、熔断与回滚
 
+### 2026-09-22 内容块预算放宽（13.5.0）
+
+线上 rounds 253/276（2026-09-22 10:46:37Z / 10:57:09Z）记录同一个 Claude CLI 会话（`X-Claude-Code-Session-Id=14fef19c…`、`claude-cli/2.1.278`）在 `messages[98].content` 处累计 259 个协议内容块，被 13.3.0 的 256 预算在 17ms 内本地拒绝：body 约 737 KB、`input/output/total_tokens` 全为 0、`outcome=limit_exceeded`、`error_code=conversion_limit_exceeded`、`retryable=false`，无上游尝试与账号惩罚。同一会话约 10.5 分钟后原样重试（body 相差 227 字节）复现同一数值，说明这是长工具会话的真实结构，不是计数错误。
+
+- 消息内协议 `content` 数组的块累计上限由 256 提升到 512；Anthropic `tool_result.content` 嵌套数组继续计入，`tool_use.input` 与 Responses function arguments/output 等业务 JSON 继续不计入。
+- 顶层 messages/input 项数 256、Anthropic `system` 数组块 256、整树深度 32 与节点 65536、工具 schema 256 KiB / 单项参数结果 1 MiB / 工具定义 128 全部保持不变；三者不再共用同一常量，`system` 与 Chat 路径的消息条数不再随内容块预算变化。
+- 超限行为不变：HTTP 400、`code=conversion_limit_exceeded`、`retryable=false`，不访问上游、不重试、不惩罚账号，也不为通过校验裁剪历史或工具结果。
+- 整树节点预算仍是外层上限：极大业务数组或极深结构会先报 `limit_kind=tree_nodes`，排障时按 `limit_kind` 区分内容块与整树资源超限。
+
+回归覆盖：99 条消息累计 259 块放行（`messages` 与 `input` 两个方向）、512/513 边界、跨消息累计越界、嵌套 `tool_result.content`、`system` 256 通过 / 257 拒绝、Chat→Responses 消息条数 256 通过 / 257 拒绝，以及 handler 层「达到上限调用上游、越过上限不触上游」。新边界须部署后用真实会话复验。
+
 ### 2026-09-21 消息树预算收口（13.3.0）
 
 线上 d5f3309 于北京时间 09:01:38 启动；09:09:32–09:09:52 的 001454/001455/001456 均为 gpt-5.6-luna、52 条消息，清理已知注解后消息树分别含 262/263/264 个对象，最大数组长度 52、深度 6。001456 含 143 个直接内容块、4 个工具结果内文本块、65 个工具参数对象。旧校验将所有对象共用 256 个 content blocks 额度，产生 messages exceeds 256 content blocks，又被错误转换覆盖为 unsupported_feature。这些请求无 stop_sequences、无上游尝试；不是模型不存在、超时或上游拒绝。远端文件首事件超时已核对为 180 秒，但这些本地失败不构成超时或停止序列功能的线上验收。
@@ -680,7 +691,7 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 本轮规则适用于 Anthropic→Responses/Codex 及共享校验的 Responses→Anthropic：
 
 - 顶层 messages/input 项数最多 256，与内容块数独立；消息外壳不再占用内容块额度。
-- 消息内协议 content 数组的块累计最多 256；Anthropic tool_result.content 数组也计入，防止嵌套协议块绕过限制。system 数组另有 256 块上限。纯文本字符串仍受正文/现有工具字节限制，不伪造为对象数。
+- 消息内协议 content 数组的块累计最多 256；Anthropic tool_result.content 数组也计入，防止嵌套协议块绕过限制。system 数组另有 256 块上限。纯文本字符串仍受正文/现有工具字节限制，不伪造为对象数。（13.5.0 已将协议内容块上限提升到 512，其余数值不变，见上一节。）
 - 不进入 tool_use.input 或 Responses function arguments/output 的业务结构计数内容块。业务数据中同名 type/content/input 键不能被当成协议字段；不截断或丢弃工具参数来绕过限制。
 - 整棵 messages/input 树使用独立的深度 32 和节点 65536 预算。节点包含对象、数组及标量，防止移除业务数组 256 项限制后失去资源保护。递归预算在首次越界停止，actual 是当时已观察的深度/节点数，不声称是完整请求总量。工具参数/结果 1 MiB、schema 256 KiB/深度 32、工具定义 128 的原有专用预算不放宽。
 - 上述消息数、协议块数、整树深度/节点预算超限返回 HTTP 400、code=conversion_limit_exceeded、retryable=false。OpenAI envelope 包含 param/limit_kind/actual/limit；Anthropic envelope 保持 invalid_request_error，并在 message 中保留相同安全事实。usage/metadata 的 error_code 同步，outcome=limit_exceeded；conversion_error_path 保留路径，原始错误说明保留数值，不往 unsupported_features 添加伪能力，不创建上游档案或触发账号惩罚。路径仅由适配器生成，不输出工具参数键值。

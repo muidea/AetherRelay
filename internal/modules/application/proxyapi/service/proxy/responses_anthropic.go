@@ -75,7 +75,6 @@ const (
 	maxConversionToolSchemaBytes   = 256 << 10
 	maxConversionToolArgumentBytes = 1 << 20
 	maxConversionSchemaDepth       = 32
-	maxConversionContentBlocks     = 256
 	maxConversionTools             = 128
 )
 
@@ -1332,8 +1331,8 @@ func anthropicSystemText(raw any) (string, error) {
 		}
 		return "", fmt.Errorf("system")
 	}
-	if len(parts) > maxConversionContentBlocks {
-		return "", &conversionLimitError{Path: "system", Kind: "content_blocks", Limit: maxConversionContentBlocks, Actual: len(parts)}
+	if len(parts) > maxConversionSystemBlocks {
+		return "", &conversionLimitError{Path: "system", Kind: "content_blocks", Limit: maxConversionSystemBlocks, Actual: len(parts)}
 	}
 	var out strings.Builder
 	for _, item := range parts {

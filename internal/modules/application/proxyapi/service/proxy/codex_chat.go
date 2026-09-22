@@ -113,7 +113,7 @@ func buildCodexResponsesFromChat(body map[string]any, model string) ([]byte, err
 		return nil, err
 	}
 	messages, ok := body["messages"].([]any)
-	if !ok || len(messages) == 0 || len(messages) > maxConversionContentBlocks {
+	if !ok || len(messages) == 0 || len(messages) > maxConversionMessages {
 		return nil, fmt.Errorf("messages")
 	}
 	input := make([]any, 0, len(messages))

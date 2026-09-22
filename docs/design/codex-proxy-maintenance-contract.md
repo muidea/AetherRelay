@@ -1,8 +1,8 @@
 # Codex 反向代理首要维护合同
 
-2026-09-22 补充：首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
+2026-09-22 补充：协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`13.4.0`
+> 合同版本：`13.5.0`
 >
 > 状态：`active`
 >
@@ -11,6 +11,8 @@
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`13.5.0` 放宽协议内容块预算以适配长会话：消息内协议 `content` 数组的块累计上限由 256 提升到 512；顶层 messages/input 项数 256、Anthropic `system` 数组块 256、整树深度 32 与节点 65536、工具 schema/参数/结果字节预算全部保持不变，三者不再共用一个数值。依据为 2026-09-22 10:46/10:57Z 的线上记录：同一 Claude CLI 会话（`14fef19c…`）在 `messages[98].content` 处累计 259 块被 17ms 本地拒绝（rounds 253/276，body 约 737 KB，无上游尝试）；该形态高于旧值、低于新值，属真实长会话而非计数错误。超限仍在访问上游前返回 `conversion_limit_exceeded`（retryable=false，不重试、不惩罚账号），不自动裁剪历史或工具结果；本次不改变身份、缓存、路由与候选顺序，不新增配置开关，按 MINOR 发布。
 
 `13.4.0` 收口 2026-09-22 线上核对暴露的两处口径缺陷，属缺陷收口而非新增默认行为，按 MINOR 发布。其一，内部用量口径统一为“输入 Token 含缓存”：Anthropic 上游的 `input_tokens` 与 `cache_read_input_tokens`、`cache_creation_input_tokens` 在解析层相加后才进入 tokenUsage，缓存使用率因此恒在 `[0,1]`，`total_tokens` 反映真实提示词规模；向 Anthropic 协议输出（原生归档响应与 Responses→Anthropic 转换）时按同一口径反向扣除，线上报文形态与既有减法实现对称。其二，准入仅被新鲜额度窗口阻塞时同样必须返回向上取整的 `Retry-After`，未知恢复时间仍不编造。历史归档与历史聚合数据不回溯改写，本轮不改变身份、路由、候选顺序与重试边界。
 
@@ -223,6 +225,8 @@
 `CP-REQ-035` function/custom/namespace 中显式提供的工具参数 Schema 必须在账号选择前递归规范化。null 或非法根参数回退为 `type=object,properties={}`；未声明 parameters 的 custom/namespace 工具保持未声明。object 或包含 object 的联合 type 必须包含 properties。递归删除 `$schema`、`$id` 等只描述 Schema 方言、但会被 Codex 上游拒绝的关键字；只在 Schema 关键字位置删除包含不支持 Unicode property escape 的 `pattern` 或 `patternProperties` 项，不能修改 description/default/enum 中同名用户数据。分支不少于 8 的纯、唯一 const oneOf/anyOf 可以等价改为 enum；混合约束、重复语义值、已有非等价 enum 必须保持不变。规范化必须保留大整数原文、特殊属性名、递归 namespace 工具并保持幂等。
 
 `CP-REQ-036` Codex body 归一化的**最终编码必须保字节**：不得把 `<`、`>`、`&` 转义成对应的 `\uXXXX` 序列。原生客户端（Rust/serde）发送的是原文，转义形式会让每个请求体按出现次数膨胀 5 字节，并使归档 `body_bytes` 与客户端不再可比；数字必须按 `decodeCodexJSON` 的 `UseNumber` 语义保持原始字面量（含超出 float64 精度的大整数），字符串内容不得重排或改写。归一化声明的结构变更（补齐 `instructions`/`store`/`stream`、删除 drop-compatible 字段、重建 `client_metadata` 等）不受本规则约束。顶层与嵌套对象的键序按字典序收敛是**已声明行为**，不属差异，也不得作为字段差异上报。验收必须覆盖：`<`/`>`/`&` 原文保留、大整数原文保留、声明过的结构补齐仍然生效。
+
+`CP-REQ-037` 跨协议转换的结构预算必须在账号选择前独立施加，不依赖入站 body 上限，也不得相互借用同一个数值：顶层 messages/input 项数最多 256（Chat→Responses 的顶层消息条数同样使用该预算），消息内协议 `content` 数组的块累计最多 512（Anthropic `tool_result.content` 数组计入；`tool_use.input`、Responses function arguments/output 等业务 JSON 不计入），Anthropic `system` 数组最多 256 块，整棵消息树最多深度 32 与 65536 节点。任一项超限返回 HTTP 400 `conversion_limit_exceeded`，携带安全字段路径、`limit_kind`、`actual`、`limit`，`retryable=false`：不访问上游、不重试、不惩罚账号，也不得为通过校验而裁剪历史、删除工具结果或截断正文。工具 schema 256 KiB、单项参数/结果 1 MiB、工具定义 128 的专用预算独立保留。
 
 ## 6. 上游身份与 Header 合同
 
@@ -605,6 +609,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | --- | --- | --- | --- | --- |
 | 跨协议缓存用量归一与缓存使用率 | CP-OBS-007 | implemented（本地）；线上待复验 | `proxyapi/service/proxy/usage.go`, `proxyapi/service/proxy/anthropic.go`, `proxyapi/service/proxy/stream_archive.go`, `proxyapi/service/proxy/responses_anthropic.go` | `anthropic_cache_usage_test.go`, `cache_write_usage_test.go`, `aetherrelayusage/cache_statistics_test.go` |
 | 额度窗口阻塞的 Retry-After | CP-FAIL-019 | implemented（本地）；线上待复验 | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/admission_retry_test.go`, `codexaccountpool/biz/admission_retry_test.go` |
+
+`13.5.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 转换结构预算拆分与内容块放宽到 512 | CP-REQ-037 | implemented（本地）；线上待部署复验 | `proxyapi/service/proxy/conversion_limits.go`, `proxyapi/service/proxy/responses_anthropic.go`, `proxyapi/service/proxy/codex_chat.go` | `proxyapi/service/proxy/conversion_limits_test.go` |
 
 
 `5.0.0` 新增实施追踪：

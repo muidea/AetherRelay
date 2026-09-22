@@ -120,7 +120,7 @@ func TestConversionLimitsAreIndependent(t *testing.T) {
 		if err := validateConversionTree(items, label); err != nil {
 			t.Fatal(err)
 		}
-		assertConversionLimit(t, validateConversionTree(append(items, items[0]), label), "messages", 257, 256)
+		assertConversionLimit(t, validateConversionTree(append(items, items[0]), label), "messages", maxConversionMessages+1, maxConversionMessages)
 	}
 	blocks := make([]any, maxConversionContentBlocks)
 	for i := range blocks {
@@ -131,8 +131,8 @@ func TestConversionLimitsAreIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	items[0].(map[string]any)["content"] = append(blocks, blocks[0])
-	assertConversionLimit(t, validateConversionTree(items, "messages"), "content_blocks", 257, 256)
-	// Business arrays can exceed 256; their nodes have a separate total budget.
+	assertConversionLimit(t, validateConversionTree(items, "messages"), "content_blocks", maxConversionContentBlocks+1, maxConversionContentBlocks)
+	// Business arrays can exceed the content-block budget; their nodes have a separate total budget.
 	items = []any{map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "input": make([]any, 300)}}}}
 	if err := validateConversionTree(items, "messages"); err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestConversionLimitsAreIndependent(t *testing.T) {
 	assertConversionLimit(t, validateConversionTree(deep, "messages"), "depth", 33, 32)
 	// Nested tool_result content is protocol content, not arbitrary business JSON.
 	items = []any{map[string]any{"content": []any{map[string]any{"type": "tool_result", "content": blocks}}}}
-	assertConversionLimit(t, validateConversionTree(items, "messages"), "content_blocks", 257, 256)
+	assertConversionLimit(t, validateConversionTree(items, "messages"), "content_blocks", maxConversionContentBlocks+1, maxConversionContentBlocks)
 }
 
 func assertConversionLimit(t *testing.T, err error, kind string, actual, limit int) {
@@ -192,5 +192,114 @@ func TestConversionLimitRecordedBeforeUpstream(t *testing.T) {
 	}
 	if meta.ErrorCode != ErrorCodeConversionLimitExceeded || meta.ConversionErrorPath != "messages" || meta.UpstreamStatus != 0 {
 		t.Fatalf("metadata=%+v", meta)
+	}
+}
+
+// 线上 rounds 253/276 的形态:99 条消息累计 259 个协议内容块。旧预算 256 拒绝,
+// 新预算 512 必须放行,这是本次放宽的回归锚点。
+func TestContentBlockBudgetAdmitsObservedSessionShape(t *testing.T) {
+	for _, label := range []string{"messages", "input"} {
+		items := make([]any, 99)
+		blocks := 0
+		for i := range items {
+			n := 2
+			if i < 61 {
+				n = 3
+			}
+			content := make([]any, n)
+			for j := range content {
+				content[j] = map[string]any{"type": "text", "text": "synthetic"}
+			}
+			role := "user"
+			if i%2 == 1 {
+				role = "assistant"
+			}
+			items[i] = map[string]any{"role": role, "content": content}
+			blocks += n
+		}
+		if blocks != 259 {
+			t.Fatalf("fixture blocks=%d", blocks)
+		}
+		if err := validateConversionTree(items, label); err != nil {
+			t.Fatalf("%s: 259 content blocks must be admitted: %v", label, err)
+		}
+	}
+}
+
+// 内容块预算在整条消息集上累计,不是逐条判定。
+func TestContentBlocksAccumulateAcrossMessages(t *testing.T) {
+	message := func(n int) map[string]any {
+		content := make([]any, n)
+		for i := range content {
+			content[i] = map[string]any{"type": "text", "text": "x"}
+		}
+		return map[string]any{"role": "user", "content": content}
+	}
+	half := maxConversionContentBlocks / 2
+	items := []any{message(half), message(half)}
+	if err := validateConversionTree(items, "messages"); err != nil {
+		t.Fatalf("cumulative blocks at the limit must be admitted: %v", err)
+	}
+	items[1] = message(half + 2)
+	assertConversionLimit(t, validateConversionTree(items, "messages"), "content_blocks", maxConversionContentBlocks+2, maxConversionContentBlocks)
+}
+
+// system 数组保留独立预算,不随协议内容块放宽一起变化。
+func TestSystemContentBlocksBudgetIsIndependent(t *testing.T) {
+	parts := make([]any, maxConversionSystemBlocks)
+	for i := range parts {
+		parts[i] = map[string]any{"type": "text", "text": "x"}
+	}
+	if _, err := anthropicSystemText(parts); err != nil {
+		t.Fatalf("system at its own limit must be admitted: %v", err)
+	}
+	parts = append(parts, map[string]any{"type": "text", "text": "x"})
+	_, err := anthropicSystemText(parts)
+	assertConversionLimit(t, err, "content_blocks", maxConversionSystemBlocks+1, maxConversionSystemBlocks)
+}
+
+// Chat→Responses 的顶层消息条数走消息预算,不随协议内容块放宽。
+func TestChatMessageBudgetStaysAtMessageLimit(t *testing.T) {
+	messages := make([]any, maxConversionMessages)
+	for i := range messages {
+		messages[i] = map[string]any{"role": "user", "content": "hello"}
+	}
+	if _, err := buildCodexResponsesFromChat(map[string]any{"model": "gpt-5.2-codex", "messages": messages}, "gpt-5.2-codex"); err != nil {
+		t.Fatalf("chat history at the message limit must be admitted: %v", err)
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": "hello"})
+	if _, err := buildCodexResponsesFromChat(map[string]any{"model": "gpt-5.2-codex", "messages": messages}, "gpt-5.2-codex"); err == nil {
+		t.Fatal("chat history above the message limit must be rejected")
+	}
+}
+
+// 边界在 handler 层同样成立:达到上限调用上游,越过上限本地拒绝且不触上游。
+func TestContentBlockBudgetBoundaryReachesUpstream(t *testing.T) {
+	calls := 0
+	h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+		calls++
+		return codexresponses.Result{Body: []byte(`{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)}, nil
+	}})
+	content := make([]any, maxConversionContentBlocks)
+	for i := range content {
+		content[i] = map[string]any{"type": "text", "text": "x"}
+	}
+	post := func(items []any) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]any{"model": "gpt-5.2-codex", "messages": items})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
+		r.Header.Set("Authorization", "Bearer test-client-key")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := post([]any{map[string]any{"role": "user", "content": content}}); w.Code != 200 || calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+	}
+	over := post([]any{map[string]any{"role": "user", "content": append(content, map[string]any{"type": "text", "text": "x"})}})
+	if over.Code != 400 || calls != 1 || !strings.Contains(over.Body.String(), "actual=513, limit=512") || strings.Contains(over.Body.String(), "unsupported_feature") {
+		t.Fatalf("status=%d calls=%d body=%s", over.Code, calls, over.Body.String())
 	}
 }

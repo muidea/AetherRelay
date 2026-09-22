@@ -29,3 +29,4 @@ usage.csv.bak.*
 
 # Local tooling and OS metadata
 .DS_Store
+/.claude/
