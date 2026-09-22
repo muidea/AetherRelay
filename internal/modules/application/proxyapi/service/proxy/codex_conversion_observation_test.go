@@ -33,7 +33,7 @@ func TestCodexConversionObservationWithoutArchive(t *testing.T) {
 				t.Cleanup(func() { _ = store.Close() })
 				attempt := codexArchiveTestAttempt()
 				attempt.Response.TransferEncoding = "chunked"
-				result := `{"id":"resp_done","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":100,"output_tokens":5` + tc.details + `}}`
+				result := `{"id":"resp_done","status":"completed","output":[{"type":"reasoning","id":"rs_test","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":100,"output_tokens":5` + tc.details + `}}`
 				keys := []string{}
 				observe := func(req codexresponses.Request) {
 					var body map[string]any

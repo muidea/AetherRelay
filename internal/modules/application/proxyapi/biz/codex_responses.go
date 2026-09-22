@@ -1068,12 +1068,14 @@ func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success
 	if strings.TrimSpace(id) == "" || (!success && (class == string(codexresponses.KindClientCanceled) || class == string(codexresponses.KindClientWrite) || class == string(codexresponses.KindStreamLifetime) || class == string(codexresponses.KindConversion))) {
 		return
 	}
+	availabilityNeutral := !success && class == string(codexresponses.KindFirstEventTimeout) && !quotaExhausted
 	if class == string(codexresponses.KindFirstEventTimeout) || class == string(codexresponses.KindIdleTimeout) {
 		class = accevents.ErrorTimeout
 	}
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
 		AccountID: id, Model: model, Success: success, ErrorClass: class, RetryAfterSeconds: retryAfter,
 		QuotaExhausted: quotaExhausted, QuotaResetAt: quotaResetAt,
+		AvailabilityNeutral: availabilityNeutral,
 	})).Get()
 }
 

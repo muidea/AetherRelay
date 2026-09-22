@@ -1101,6 +1101,32 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 	}
 	thinking, hasThinking := body["thinking"]
 	outputConfig, hasOutputConfig := body["output_config"]
+	if hasOutputConfig {
+		object, ok := outputConfig.(map[string]any)
+		if !ok {
+			return nil, nil, fmt.Errorf("output_config")
+		}
+		remaining := make(map[string]any, len(object))
+		for key, value := range object {
+			remaining[key] = value
+		}
+		if raw, present := remaining["format"]; present {
+			format, ok := raw.(map[string]any)
+			if !capability.StructuredOutput || !ok || format["type"] != "json_schema" {
+				return nil, nil, fmt.Errorf("output_config.format")
+			}
+			if err := rejectConversionFields(format, map[string]struct{}{"type": {}, "schema": {}}); err != nil {
+				return nil, nil, fmt.Errorf("output_config.format.%w", err)
+			}
+			schema, ok := format["schema"].(map[string]any)
+			if !ok {
+				return nil, nil, fmt.Errorf("output_config.format.schema")
+			}
+			out["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "response", "strict": true, "schema": schema}}
+			delete(remaining, "format")
+		}
+		outputConfig, hasOutputConfig = remaining, len(remaining) > 0
+	}
 	ignored, err := applyAnthropicThinkingAdapter(out, thinking, hasThinking, outputConfig, hasOutputConfig, capability)
 	if err != nil {
 		return nil, nil, err
@@ -1139,10 +1165,11 @@ func disableResponsesReasoningForOmittedAnthropicThinking(source map[string]any,
 
 func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thinkingPresent bool, rawOutputConfig any, outputConfigPresent bool, capability config.ConversionCapability) ([]string, error) {
 	if !thinkingPresent {
-		if outputConfigPresent {
-			return nil, fmt.Errorf("output_config")
+		if !outputConfigPresent {
+			return nil, nil
 		}
-		return nil, nil
+		// Explicit effort can request reasoning without an Anthropic thinking block.
+		rawThinking = map[string]any{"type": "adaptive"}
 	}
 	if !capability.Reasoning || capability.ReasoningAdapter != config.ReasoningAdapterAnthropicToResponsesEffort || capability.ReasoningTargetEffort == "" {
 		return nil, fmt.Errorf("thinking")
@@ -1172,7 +1199,10 @@ func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thin
 		}
 	}
 	request["reasoning"] = map[string]any{"effort": capability.ReasoningTargetEffort}
-	return []string{"thinking"}, nil
+	if thinkingPresent {
+		return []string{"thinking"}, nil
+	}
+	return nil, nil
 }
 
 func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry) (textOut string, itemsOut []map[string]any, resultErr error) {
@@ -1597,7 +1627,7 @@ func rejectConversionFields(body map[string]any, allowed map[string]struct{}) er
 	sort.Strings(keys)
 	for _, key := range keys {
 		if _, ok := allowed[key]; !ok {
-			return fmt.Errorf("%s", key)
+			return &conversionLocationError{Path: key, Err: fmt.Errorf("unsupported request field")}
 		}
 	}
 	return nil

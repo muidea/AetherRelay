@@ -224,6 +224,9 @@ func conversionAPIError(plan TransportPlan, err error) APIError {
 	var located *conversionLocationError
 	if errors.As(err, &located) {
 		path = located.Path
+		if feature == "unsupported_feature" {
+			feature = path
+		}
 	}
 	if path == "" && feature != "unsupported_feature" && err.Error() == feature {
 		// Top-level rejected fields have no nested location wrapper.

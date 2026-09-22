@@ -1,5 +1,13 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-09-22 运行日志收口
+
+- Codex 响应侧 reasoning 的处理独立于请求侧 thinking：按已有降级合同省略并记录 reasoning_output，保留正文、工具和 usage，不因客户端未声明 thinking 而拒绝整个响应。
+- Codex 接入将 output_config.format 的 json_schema 映射为 Responses text.format，保留 schema，补齐 name 和 strict。独立 effort 必须按目标模型声明校验，不静默降级到其他值。
+- 本地响应转换失败使用 conversion_response_error 并记录 conversion outcome，不记入上游故障率。字段拒绝携带字段位置；内容块数量上限仍保留。
+- Anthropic 流已提交后遇到失败发送 error 事件，不发送成功 message_stop；归档保留该错误终态。
+- 首事件超时保留504与重试提示，账号反馈为 availability-neutral，不触发 provider 熔断。账号级限流、额度耗尽及真实网络/上游失败继续按各自规则处理。
+
 本文定义 AetherRelay 对 OpenAI Responses API 与 Anthropic Messages API 的双向协议转换边界。设计目标是提供可验证的纯文本兼容子集，并对无法保持语义的字段显式拒绝；不把两个协议包装成字段名称相似的“无损互换”。
 
 参考规范：

@@ -46,6 +46,12 @@ func TestCodexTimeoutSettlementRetainsPhaseAndHTTPFacts(t *testing.T) {
 			if w.Code != status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
+			if kind == codexresponses.KindIdleTimeout && (!strings.Contains(w.Body.String(), "event: error") || strings.Contains(w.Body.String(), "event: message_stop")) {
+				t.Fatalf("missing error terminal: %s", w.Body.String())
+			}
+			if kind == codexresponses.KindFirstEventTimeout && streamFailFromCodex(codexresponses.NewFailure(kind, 5, nil)).CountUpstream {
+				t.Fatal("request first-event timeout must not trip provider circuit")
+			}
 			events := usageEvents(t, h.usageStore)
 			if len(events) != 1 {
 				t.Fatalf("events=%v", events)

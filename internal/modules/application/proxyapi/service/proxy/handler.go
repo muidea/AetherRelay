@@ -2866,6 +2866,8 @@ func (h *Handler) resolveTransportPlans(r *http.Request, model string) ([]Transp
 		if !earliestRetry.IsZero() {
 			failure.RetryAfterSeconds = int(math.Ceil(earliestRetry.Sub(now).Seconds()))
 			failure.FailureClass = "circuit_open"
+			retryable := true
+			failure.Retryable = &retryable
 		}
 		return nil, failure
 	}

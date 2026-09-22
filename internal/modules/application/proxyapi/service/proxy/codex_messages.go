@@ -21,7 +21,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	plan.ConversionLevel = 2
 	h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), stream)
 	conversionStart := time.Now()
-	capability := config.ConversionCapability{Level: 2, Text: true, Tools: true, Streaming: true, Continuation: true}
+	capability := config.ConversionCapability{Level: 2, Text: true, Tools: true, Streaming: true, Continuation: true, StructuredOutput: true}
 	var err error
 	capability, err = anthropicTargetReasoning(body, h.currentConfig().ModelMetadata[model], capability)
 	if err != nil {
@@ -73,6 +73,9 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	round.SetConversionDuration(time.Since(conversionStart))
+	// Codex may emit reasoning even when the client did not request thinking.
+	// Response projection records its omission independently of request adaptation.
+	capability.Reasoning = true
 	diagnostics := codexresponses.ParseDiagnostics(r.Header.Get("X-Codex-Turn-Metadata"))
 	userAgent, originator := codexConvertedClientIdentityWithDiagnostics(r.Header, &diagnostics)
 	request := codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
@@ -93,7 +96,8 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		}
 		round.SetConversionDuration(round.ConversionDuration + time.Since(conversionStart))
 		if convertErr != nil {
-			h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, "upstream_protocol_error: "+convertErr.Error())
+			failure := newStreamFailWithCode(streamKindConversion, "conversion_response_error", "Codex response conversion failed", convertErr, false)
+			h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, APIError{Code: "conversion_response_error", Message: failure.Message}, failure)
 			return
 		}
 		markConversionDegraded(round, degradedResponse)
@@ -175,6 +179,18 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		failure := conversionStreamFailure(err)
+		if r.Context().Err() == nil && failure.Kind != streamKindClientWrite {
+			// The HTTP status is already committed. Deliver an Anthropic error
+			// terminal instead of silently closing an unfinished message.
+			terminal := []byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream did not complete\"}}\n\n")
+			if _, writeErr := w.Write(terminal); writeErr == nil {
+				archive.Write(terminal)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
+			}
+		}
 		h.recordAndPrintFail(round, r, plan.RouteOwner, model, true, http.StatusOK, duration, usage, failure)
 		h.writeArchiveMetadata(round, plan.RouteOwner, model, true, http.StatusOK, duration, usage, "response.sse", err.Error(), "", outcomeFromStreamFail(failure, http.StatusOK))
 		return

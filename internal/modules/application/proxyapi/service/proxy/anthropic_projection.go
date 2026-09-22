@@ -120,7 +120,10 @@ func anthropicEmbeddedSession(body map[string]any) string {
 
 func anthropicTargetReasoning(body map[string]any, metadata config.ModelMetadata, capability config.ConversionCapability) (config.ConversionCapability, error) {
 	if _, present := body["thinking"]; !present {
-		return capability, nil
+		output, _ := body["output_config"].(map[string]any)
+		if _, hasEffort := output["effort"]; !hasEffort {
+			return capability, nil
+		}
 	}
 	if !metadata.ReasoningDeclared || !metadata.ReasoningSupported {
 		return capability, fmt.Errorf("thinking")

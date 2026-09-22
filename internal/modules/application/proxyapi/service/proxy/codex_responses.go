@@ -542,7 +542,7 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 	case codexresponses.KindStreamLifetime:
 		kind = streamKind("stream_lifetime_timeout")
 	case codexresponses.KindFirstEventTimeout:
-		kind, countUpstream = streamKindFirstEventTimeout, true
+		kind = streamKindFirstEventTimeout
 	case codexresponses.KindIdleTimeout:
 		kind, countUpstream = streamKindIdleTimeout, true
 	case codexresponses.KindClientCanceled:
