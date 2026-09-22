@@ -2,15 +2,17 @@
 
 2026-09-22 补充：首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`13.3.0`
+> 合同版本：`13.4.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-21
+> 生效日期：2026-09-22
 >
-> 参考基线：AetherRelay `b902537`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+> 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`13.4.0` 收口 2026-09-22 线上核对暴露的两处口径缺陷，属缺陷收口而非新增默认行为，按 MINOR 发布。其一，内部用量口径统一为“输入 Token 含缓存”：Anthropic 上游的 `input_tokens` 与 `cache_read_input_tokens`、`cache_creation_input_tokens` 在解析层相加后才进入 tokenUsage，缓存使用率因此恒在 `[0,1]`，`total_tokens` 反映真实提示词规模；向 Anthropic 协议输出（原生归档响应与 Responses→Anthropic 转换）时按同一口径反向扣除，线上报文形态与既有减法实现对称。其二，准入仅被新鲜额度窗口阻塞时同样必须返回向上取整的 `Retry-After`，未知恢复时间仍不编造。历史归档与历史聚合数据不回溯改写，本轮不改变身份、路由、候选顺序与重试边界。
 
 `13.3.0` 根据部署 d5f3309 后 001454–001456 的转换拒绝拆分结构预算：消息/输入项最多 256、协议内容块累计最多 256，工具参数业务对象不计作内容块；整棵消息树另受深度 32 与节点 65536 的资源保护。结构预算超限使用 conversion_limit_exceeded，保留安全字段路径、预算类型、实际值和限制值，禁止包装成 unsupported_feature；不访问上游、不重试、不惩罚账号。详细规则与线上/离线证据见转换设计 13.3.0。本次不改变身份、缓存和 provider 路由，不新增配置开关。
 
@@ -421,7 +423,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-FAIL-018` 结构化 `error.code=model_not_found` 的 HTTP 404 或 Responses failed/error 终态必须单独分类；普通 404、错误消息中的同名文本及参数错误不属于该类别。仅记录账号 × exact model 的 5 分钟冷却，不改变账号状态、quota 或 compact/WS 能力；过期自动恢复准入，显式替换凭据清除旧观察，目录刷新不能提前解除实际失败观察。HTTP Responses/compact 在未输出、无 `previous_response_id`、无非空 turn-state 时允许保持同模型最多尝试 3 个不同账号；禁止模型替换、同账号循环及输出后重放。耗尽保留最后真实上游错误。该窄例外优先于 `CP-COMPACT-005` 的普通 404 规则；WS 只分类和记录，不扩展 `CP-WS-012` 的迁移边界。
 
-`CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。首事件超时只附 5 秒 Retry-After，因其表明单次上游流静默而不是账号凭据失效；账号 owner 仍只按 exact model 与 credential-wide 事实计算冷却。
+`CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。账号冷区必须同时计入两类可恢复事实：账号/model 级冷却条目与新鲜额度快照中 `limit_reached` 窗口的 `reset_at`，同一账号内取全部阻塞条件的最晚解除时间，再跨账号取最早者作为等待提示；仅被额度窗口阻塞（无冷却条目）时同样必须给出 `Retry-After`，额度阻塞期限不得超过快照 `expires_at`；缺失或非法的 `reset_at` 归一为未知，但按现有准入规则在快照过期时解除该快照的阻塞，不回落到其它窗口的较早重置时间。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。首事件超时只附 5 秒 Retry-After，因其表明单次上游流静默而不是账号凭据失效；账号 owner 仍只按 exact model 与 credential-wide 事实计算冷却。
 
 `CP-FAIL-020` OAuth refresh 的永久失败必须由账号 owner 持久化为 `credential_permanently_invalid`，立即停止该凭据参与路由，直到显式重新认证或 refresh 成功清除。它不阻止账号用量、额度的独立后台刷新，也不能等同于管理员手动 disabled。最后已知模型 membership 可在过期后继续保留为只读终态路由元数据，使重启、目录刷新和热重载后仍能返回可操作错误，但不得据此向失效凭据发送推理请求。若 exact model 的全部可调度凭据均处于该终态，HTTP 返回 503、`type=authentication_error`、`code=upstream_authentication_required`、`retryable=false`；WebSocket 返回同 code/type/retryable；Anthropic envelope 返回 `authentication_error` 并在 message 中携带稳定 code。并发槽占满返回 `accounts_busy`，冷却返回 `accounts_cooling` 和可计算的 Retry-After，其余本地准入失败保持 `provider_unavailable`。管理投影只显示布尔终态和安全错误类别，不暴露 token 或原始 OAuth 响应。
 
@@ -473,7 +475,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
 
-`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。缓存使用率为成功请求的累计读取 / 成功请求的累计输入；缓存读写分别携带 `*_known` 标志，显式零为已知、缺失或非法为未知。失败、超时、转换拒绝和未完成事件保留原始明细但不参与缓存聚合；成功请求中的未知字段分别剔除，使用率分母仅取读取已知的成功请求；聚合标志表示是否存在有效样本，不将缺失显示成零命中，不自动回填历史数据。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态、异常事件保留但聚合剔除，以及事件结算与 dashboard 汇总。
+`CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。各协议在解析层统一归一到“输入 Token 含缓存读取与创建”的内部口径：Anthropic 报文的 `input_tokens` 本就不含缓存读取/创建，必须先与 `cache_read_input_tokens`、`cache_creation_input_tokens` 相加后才进入内部用量，由此得到的 `total_tokens` 反映真实提示词规模；归一化后的缓存读写仍是输入的可选子集，Anthropic 来源的缓存使用率因此在构造上恒在 `[0,1]`；其它协议仍以上游自报值为准，统计层不重写、不截断、也不为掩盖异常而上限截断（上游自报缓存读取大于总输入时按原值保留，作为上游异常供排障）。按 Anthropic 协议输出（原生归档响应、Responses→Anthropic 转换）时必须按同一口径反向扣除后再落盘/投影，保持与上游一致的报文形态，不得对下游重复计费。归一化对同一份 usage 只生效一次，重复终态或 message_delta 重复上报不得累加。缓存使用率为成功请求的累计读取 / 成功请求的累计输入；缓存读写分别携带 `*_known` 标志，显式零为已知、缺失或非法为未知。失败、超时、转换拒绝和未完成事件保留原始明细但不参与缓存聚合；成功请求中的未知字段分别剔除，使用率分母仅取读取已知的成功请求；聚合标志表示是否存在有效样本，不将缺失显示成零命中，不自动回填历史数据，历史归档与历史聚合不因口径修正而改写。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态、异常事件保留但聚合剔除，以及事件结算与 dashboard 汇总。
 
 `CP-OBS-010` Codex HTTP Responses/compact 的最终出站正文必须取自 `codexupstream` 完成 `client_metadata` 注入后的发送字节，不得用入站正文或转换中间态冒充。仅 `archive_interactions && archive_full_content` 启用时，owner 通过 typed observation 携带正文，proxyapi 沿用附件摘要策略落盘。代理注入的 `client_metadata` 身份及内嵌 turn metadata 默认脱敏；显式 `archive_unredacted_headers` 开启时同步保真，业务文本/工具参数不按同名字段误删。普通日志永不输出正文。每个 HTTP 尝试独立编号归档；握手和终态更新同一尝试，账号切换与刷新重试不得覆盖先前尝试。无上游请求的本地拒绝只记录转换错误，不创建伪上游记录。本规则不宣称覆盖 WebSocket 帧与 ChatGPT Web 多阶段请求。
 
@@ -591,11 +593,19 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
 | Codex 流独立超时与取消回收 | CP-STREAM-013 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/biz.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `codexupstream/biz/stream_cancel_test.go`, `aetherrelayconfig/codex_stream_timeout_test.go` |
-| 准入等待提示与健康隔离 | CP-FAIL-019 | implemented | `codexaccountpool/internal/store/model_availability.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/handler.go`, `aetherrelaymetrics/registry.go` | `codexaccountpool/biz/admission_retry_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/service/proxy/codex_health_test.go`, `aetherrelaymetrics/admission_health_test.go` |
+| 准入等待提示与健康隔离 | CP-FAIL-019 | implemented | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/handler.go`, `aetherrelaymetrics/registry.go` | `codexaccountpool/biz/admission_retry_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/service/proxy/codex_health_test.go`, `aetherrelaymetrics/admission_health_test.go` |
 | 流停止诊断及原因保真 | CP-OBS-008 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_stream_timeout_test.go`（含清理延迟超过总时限仍保留原网络故障） |
 | 输出后断流不冷却账号 | CP-STREAM-017 | implemented | `proxyapi/biz/codex_responses.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/responses_anthropic.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `proxyapi/service/proxy/codex_responses_test.go`, `proxyapi/service/proxy/responses_anthropic_test.go` |
 
 以上为离线回归证据；真实上游与部署后的长流恢复按 CP-DOD-006 单独验证。
+
+`13.4.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 跨协议缓存用量归一与缓存使用率 | CP-OBS-007 | implemented（本地）；线上待复验 | `proxyapi/service/proxy/usage.go`, `proxyapi/service/proxy/anthropic.go`, `proxyapi/service/proxy/stream_archive.go`, `proxyapi/service/proxy/responses_anthropic.go` | `anthropic_cache_usage_test.go`, `cache_write_usage_test.go`, `aetherrelayusage/cache_statistics_test.go` |
+| 额度窗口阻塞的 Retry-After | CP-FAIL-019 | implemented（本地）；线上待复验 | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/admission_retry_test.go`, `codexaccountpool/biz/admission_retry_test.go` |
+
 
 `5.0.0` 新增实施追踪：
 

@@ -750,12 +750,9 @@ func convertAnthropicResponse(body []byte, fallbackModel string) ([]byte, tokenU
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		Usage struct {
-			InputTokens              int `json:"input_tokens"`
-			OutputTokens             int `json:"output_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		} `json:"usage"`
+		// Parsed as a generic object so field presence stays observable:
+		// CP-OBS-007 distinguishes an explicit zero from a missing counter.
+		Usage map[string]any `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, tokenUsage{}, err
@@ -778,12 +775,10 @@ func convertAnthropicResponse(body []byte, fallbackModel string) ([]byte, tokenU
 	if model == "" {
 		model = fallbackModel
 	}
-	usage := tokenUsage{
-		PromptTokens:             payload.Usage.InputTokens,
-		CompletionTokens:         payload.Usage.OutputTokens,
-		CachedInputTokens:        payload.Usage.CacheReadInputTokens,
-		CacheCreationInputTokens: payload.Usage.CacheCreationInputTokens,
-		Known:                    payload.Usage.InputTokens > 0 || payload.Usage.OutputTokens > 0,
+	// Shared Anthropic parser: cache-inclusive input, known flags preserved.
+	usage, usageKnown := anthropicUsage(payload.Usage)
+	if !usageKnown {
+		usage = tokenUsage{}
 	}
 	response := map[string]any{
 		"id":      firstNonEmpty(payload.ID, "chatcmpl-anthropic"),
@@ -818,10 +813,7 @@ func convertOpenAIChatToAnthropicResponse(body []byte, fallbackModel string) ([]
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
+		Usage map[string]any `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, tokenUsage{}, err
@@ -851,10 +843,12 @@ func convertOpenAIChatToAnthropicResponse(body []byte, fallbackModel string) ([]
 	if model == "" {
 		model = fallbackModel
 	}
-	usage := tokenUsage{
-		PromptTokens:     payload.Usage.PromptTokens,
-		CompletionTokens: payload.Usage.CompletionTokens,
-		Known:            payload.Usage.PromptTokens > 0 || payload.Usage.CompletionTokens > 0,
+	// OpenAI already counts the prompt cache inside prompt_tokens, so the parse
+	// keeps the cache-inclusive input while exposing the reads and writes as
+	// known subsets (CP-OBS-007). The Anthropic projection subtracts them again.
+	usage, usageKnown := usageFromMap(payload.Usage)
+	if !usageKnown {
+		usage = tokenUsage{}
 	}
 	response := map[string]any{
 		"id":          firstNonEmpty(payload.ID, "msg_openai"),
@@ -863,10 +857,7 @@ func convertOpenAIChatToAnthropicResponse(body []byte, fallbackModel string) ([]
 		"model":       model,
 		"content":     []any{map[string]any{"type": "text", "text": content}},
 		"stop_reason": stopReason,
-		"usage": map[string]any{
-			"input_tokens":  usage.PromptTokens,
-			"output_tokens": usage.CompletionTokens,
-		},
+		"usage":       anthropicUsageFields(usage),
 	}
 	encoded, err := json.Marshal(response)
 	return encoded, usage, err
@@ -1318,18 +1309,7 @@ func anthropicStreamEvents(payload string, id, model *string, usage *tokenUsage,
 			}
 		}
 	case "message_delta":
-		if parsed, ok := anthropicUsage(event["usage"]); ok {
-			usage.CompletionTokens = parsed.CompletionTokens
-			if parsed.CachedInputTokensKnown {
-				usage.CachedInputTokens = parsed.CachedInputTokens
-				usage.CachedInputTokensKnown = parsed.CachedInputTokensKnown
-			}
-			if parsed.CacheCreationInputTokensKnown {
-				usage.CacheCreationInputTokens = parsed.CacheCreationInputTokens
-				usage.CacheCreationInputTokensKnown = parsed.CacheCreationInputTokensKnown
-			}
-			usage.Known = true
-		}
+		mergeAnthropicUsage(usage, event["usage"])
 		if delta, ok := event["delta"].(map[string]any); ok {
 			if reason, ok := delta["stop_reason"].(string); ok && reason != "" {
 				if reason == "tool_use" || reason == "tool_calls" {
@@ -1346,6 +1326,16 @@ func anthropicStreamEvents(payload string, id, model *string, usage *tokenUsage,
 	return nil, nil
 }
 
+// anthropicUsage parses an Anthropic usage object (message_start, message_delta,
+// non-stream response) and normalizes it into the internal convention.
+//
+// CP-OBS-007: Anthropic reports input_tokens WITHOUT the prompt tokens it read
+// from or wrote to a cache, while every other protocol and the internal
+// accounting treat input tokens as the full prompt with cache reads as a known
+// subset. Folding both cache counters into the input here keeps the cache usage
+// rate (cached / input) inside [0,1], makes total_tokens the real prompt size,
+// and keeps the OpenAI-shaped projection correct. The Anthropic wire shape is
+// restored on output by anthropicUsagePayload / anthropicUsageFields.
 func anthropicUsage(value any) (tokenUsage, bool) {
 	raw, ok := value.(map[string]any)
 	if !ok {
@@ -1355,7 +1345,50 @@ func anthropicUsage(value any) (tokenUsage, bool) {
 	usage.PromptTokens, _ = numberAsInt(raw["input_tokens"])
 	usage.CompletionTokens, _ = numberAsInt(raw["output_tokens"])
 	applyUsageDetails(&usage, raw)
+	foldCacheIntoAnthropicInput(&usage)
 	return usage, true
+}
+
+// mergeAnthropicUsage replaces present cumulative counters without losing
+// fields omitted from a partial stream update.
+func mergeAnthropicUsage(usage *tokenUsage, value any) {
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	// Delta counters are cumulative, not increments. Restore the uncached
+	// input before replacing present fields, then normalize exactly once.
+	input := usage.PromptTokens
+	if usage.CachedInputTokensKnown {
+		input -= usage.CachedInputTokens
+	}
+	if usage.CacheCreationInputTokensKnown {
+		input -= usage.CacheCreationInputTokens
+	}
+	if n, valid := cacheTokenCount(raw["input_tokens"]); valid {
+		input = n
+	}
+	if n, valid := cacheTokenCount(raw["output_tokens"]); valid {
+		usage.CompletionTokens = n
+	}
+	usage.PromptTokens = input
+	applyUsageDetails(usage, raw)
+	foldCacheIntoAnthropicInput(usage)
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage.Known = true
+}
+
+// foldCacheIntoAnthropicInput adds cache counters exactly once per raw usage.
+func foldCacheIntoAnthropicInput(usage *tokenUsage) {
+	if usage == nil {
+		return
+	}
+	if usage.CachedInputTokensKnown {
+		usage.PromptTokens += usage.CachedInputTokens
+	}
+	if usage.CacheCreationInputTokensKnown {
+		usage.PromptTokens += usage.CacheCreationInputTokens
+	}
 }
 
 func openAIStreamChunk(id, model string, created int64, choices []any, usage tokenUsage) []byte {

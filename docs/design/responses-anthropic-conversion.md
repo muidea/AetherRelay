@@ -2,6 +2,8 @@
 
 ## 2026-09-22 运行日志收口
 
+流式 usage 按字段合并累计值：`message_delta` 中出现的输入、输出和缓存计数替换旧值，缺失字段保留；合并后重新计算含缓存输入总量。重复事件不累加，缓存计数晚到或修正时同步更新统计分母和归档报文，显式零仍是已知值。
+
 - Codex 响应侧 reasoning 的处理独立于请求侧 thinking：按已有降级合同省略并记录 reasoning_output，保留正文、工具和 usage，不因客户端未声明 thinking 而拒绝整个响应。
 - Codex 接入将 output_config.format 的 json_schema 映射为 Responses text.format，保留 schema，补齐 name 和 strict。独立 effort 必须按目标模型声明校验，不静默降级到其他值。
 - 本地响应转换失败使用 conversion_response_error 并记录 conversion outcome，不记入上游故障率。字段拒绝携带字段位置；内容块数量上限仍保留。
@@ -733,7 +735,7 @@ APIError.Code 必须进入 usage 和 metadata，model_not_found、conversion_uns
 - Codex 的 Messages/Chat 有界转换等级为 2；记录本地请求/响应转换处理耗时，不包含上游等待和客户端写入。毫秒取整后 0 合法，不显示为空。重复设置传输计划不能清除已经发生的降级；请求与响应的省略项合并。
 - 上游 owner 提供每次 HTTP 尝试的值类型观测，ProxyAPI 负责归档与用量结算。最终尝试的 status、实际 Content-Type、Content-Length、Transfer-Encoding 和响应头耗时贯通 EventHub、usage_events、metadata.json 与管理页。不能用下游 SSE Content-Type 补造上游缺失头；长度未知用存在性区分，明确 0 必须保留。最终尝试无响应时清除前一尝试的头统计，逐尝试档案仍保留。
 - 总耗时覆盖整个请求，响应头耗时只指最终尝试，首事件耗时仍指首业务事件，不把 keepalive 算入。转换/上游统计不依赖交互归档开关。metadata.event_id 与实际用量 Event ID 对齐，request_id 仍独立。
-- Codex Responses 非流式及 SSE 终态保留缓存读取/创建明细和字段存在性。管理缓存统计只聚合成功请求，并使用这些成功请求的上游原始总输入作为使用率分母；失败、超时、转换拒绝和未完成事件继续保留原始记录，但不参与缓存读取、创建、完整性或使用率聚合。Anthropic 响应的 input_tokens 扣除明确报告的缓存读写，另列 cache_read_input_tokens/cache_creation_input_tokens，避免双计数。成功请求中的缺失字段按读取、创建分别剔除，使用率分母仅取读取已知样本；无有效样本展示未提供，历史数据不猜测回填。CSV 导出在原列尾部追加两项 `*_known`，避免导出后重新混淆未知与零。
+- Codex Responses 非流式及 SSE 终态保留缓存读取/创建明细和字段存在性。管理缓存统计只聚合成功请求，并使用这些成功请求的上游原始总输入作为使用率分母；失败、超时、转换拒绝和未完成事件继续保留原始记录，但不参与缓存读取、创建、完整性或使用率聚合。Anthropic 上游报文的 input_tokens 不含缓存读取/创建，解析时先与 cache_read_input_tokens/cache_creation_input_tokens 相加再进入内部用量，因此“上游原始总输入”指该归一化后的输入，使用率恒在 0–100%；反向按 Anthropic 协议输出（原生归档响应、Responses→Anthropic 转换）时再扣除明确报告的缓存读写并另列两个缓存字段，两个方向对称，避免双计数。成功请求中的缺失字段按读取、创建分别剔除，使用率分母仅取读取已知样本；无有效样本展示未提供，历史数据不猜测回填。CSV 导出在原列尾部追加两项 `*_known`，避免导出后重新混淆未知与零。
 - 默认 Claude cache identity 按身份语义基准 13.0.0 执行；不恢复源协议 metadata/cache_control，不改变 UA/Originator、Installation、Session/Thread 或 Turn-State 投影，不承诺实际命中。
 
 本地验收覆盖工具结果续传至 end_turn、缓存缺失/显式零/非零、重试最终响应归属、无归档统计、数据库存在性及管理页显示。上线仍需重新验证真实 end_turn、跨轮 cache identity 和上游实际缓存命中，不能以离线测试替代运行证据。

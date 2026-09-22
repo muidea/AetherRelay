@@ -276,7 +276,12 @@ func (a *anthropicRawStreamAccumulator) TrackSSELine(line []byte) {
 			}
 		}
 	case "message_delta":
-		if usage, ok := anthropicUsage(event["usage"]); ok {
+		if _, ok := event["usage"].(map[string]any); ok {
+			usage := tokenUsage{PromptTokens: a.InputTokens, CompletionTokens: a.OutputTokens,
+				CachedInputTokens: a.CachedInputTokens, CachedInputTokensKnown: a.CachedInputTokensKnown,
+				CacheCreationInputTokens: a.CacheCreationInputTokens, CacheCreationInputTokensKnown: a.CacheCreationInputTokensKnown}
+			mergeAnthropicUsage(&usage, event["usage"])
+			a.InputTokens = usage.PromptTokens
 			a.OutputTokens = usage.CompletionTokens
 			if usage.CachedInputTokensKnown || usage.CachedInputTokens > 0 {
 				a.CachedInputTokens = usage.CachedInputTokens
@@ -331,17 +336,27 @@ func (a *anthropicRawStreamAccumulator) ResponseJSON(usage tokenUsage) ([]byte, 
 	return json.MarshalIndent(response, "", "  ")
 }
 
+// anthropicUsagePayload restores the Anthropic wire shape from the internal
+// cache-inclusive usage: input_tokens excludes the separately cached counters
+// again, so the archived message stays faithful to the upstream numbers and no
+// cache token is counted twice downstream. CP-OBS-007.
 func anthropicUsagePayload(usage tokenUsage) map[string]any {
+	input := usage.PromptTokens
 	payload := map[string]any{
-		"input_tokens":  usage.PromptTokens,
 		"output_tokens": usage.CompletionTokens,
 	}
 	if usage.CachedInputTokensKnown || usage.CachedInputTokens > 0 {
 		payload["cache_read_input_tokens"] = usage.CachedInputTokens
+		input -= usage.CachedInputTokens
 	}
 	if usage.CacheCreationInputTokensKnown || usage.CacheCreationInputTokens > 0 {
 		payload["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
+		input -= usage.CacheCreationInputTokens
 	}
+	if input < 0 {
+		input = 0
+	}
+	payload["input_tokens"] = input
 	return payload
 }
 

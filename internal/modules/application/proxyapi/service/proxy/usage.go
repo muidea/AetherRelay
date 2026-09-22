@@ -67,11 +67,9 @@ func usageFromRawResponse(provider config.Provider, responseBody []byte, request
 		return tokenUsage{}
 	}
 	if provider.Protocol == "anthropic" {
-		if usageValue, ok := payload["usage"].(map[string]any); ok {
-			usage := tokenUsage{Known: true}
-			usage.PromptTokens, _ = numberAsInt(usageValue["input_tokens"])
-			usage.CompletionTokens, _ = numberAsInt(usageValue["output_tokens"])
-			applyUsageDetails(&usage, usageValue)
+		// One authoritative Anthropic parser: it normalizes the cache counters
+		// into the input total (CP-OBS-007) instead of trusting input_tokens.
+		if usage, ok := anthropicUsage(payload["usage"]); ok {
 			return usage
 		}
 	}

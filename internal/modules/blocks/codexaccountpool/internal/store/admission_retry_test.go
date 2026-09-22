@@ -40,6 +40,90 @@ func TestAdmissionRetryUsesExactModelAndLatestAccountCooldown(t *testing.T) {
 	}
 }
 
+func TestAdmissionRetryCoversQuotaWindowOnlyCooling(t *testing.T) {
+	// CP-FAIL-019: a fresh limit-reached window blocks admission without creating
+	// a cooldown entry. The retry hint must come from the latest reset_at of
+	// the blocking windows, stay later than any cooldown of the same account, and
+	// never be invented when the reset time is unknown or already stale.
+	now := time.Now().UTC()
+	newAccount := func(id string) *account {
+		return &account{ID: id, Status: events.StatusNormal, AccessToken: "test", ModelSnapshot: &events.AccountModelSnapshot{
+			Models: []events.AccountModelEntry{{ID: "gpt-test"}}, ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		}, Cooldowns: map[string]cooldown{}}
+	}
+	quota := func(resetAt string, expiresIn time.Duration) *events.AccountUsageSnapshot {
+		return &events.AccountUsageSnapshot{
+			ObservedAt: now.Format(time.RFC3339),
+			ExpiresAt:  now.Add(expiresIn).Format(time.RFC3339),
+			Windows:    []events.UsageWindow{{ID: "primary", LimitReached: true, ResetAt: resetAt}},
+		}
+	}
+	s := &Store{items: map[string]*account{"a": newAccount("a"), "b": newAccount("b")}}
+	s.items["a"].UsageSnapshot = quota(now.Add(40*time.Second).Format(time.RFC3339), 5*time.Minute)
+	s.items["b"].UsageSnapshot = quota(now.Add(9*time.Second).Format(time.RFC3339), 5*time.Minute)
+	got := s.unavailableResult("gpt-test", nil, nil, events.TransportResponses, now)
+	if got.UnavailableReason != "accounts_cooling" || got.RetryAfterSeconds != 9 {
+		t.Fatalf("quota-window denial=%+v", got)
+	}
+	// Within one account the blocks are a union: a shorter cooldown must not
+	// advertise a recovery the window still blocks.
+	s.items["a"].Cooldowns["gpt-test"] = cooldown{Until: now.Add(30 * time.Second), ErrorClass: events.ErrorRateLimit}
+	if got := s.unavailableResult("gpt-test", map[string]struct{}{"b": {}}, nil, events.TransportResponses, now); got.RetryAfterSeconds != 40 {
+		t.Fatalf("union of cooldown and window=%+v", got)
+	}
+	// A cooldown that outlives the window still wins.
+	s.items["a"].Cooldowns["gpt-test"] = cooldown{Until: now.Add(time.Minute), ErrorClass: events.ErrorRateLimit}
+	if got := s.unavailableResult("gpt-test", map[string]struct{}{"b": {}}, nil, events.TransportResponses, now); got.RetryAfterSeconds != 60 {
+		t.Fatalf("later cooldown=%+v", got)
+	}
+	// Unknown resets block until snapshot expiry; elapsed resets do not block.
+	s.items["a"].Cooldowns = map[string]cooldown{}
+	s.items["b"].UsageSnapshot = quota("", time.Minute)
+	s.items["a"].UsageSnapshot = quota(now.Add(-time.Minute).Format(time.RFC3339), time.Minute)
+	if got := s.unavailableResult("gpt-test", nil, nil, events.TransportResponses, now); got.UnavailableReason != "accounts_cooling" || got.RetryAfterSeconds != 60 {
+		t.Fatalf("unknown reset=%+v", got)
+	}
+	// A stale snapshot stops blocking, so the account is simply untouched.
+	s.items["b"].UsageSnapshot = quota(now.Add(9*time.Second).Format(time.RFC3339), -time.Minute)
+	if got := s.unavailableResult("gpt-test", nil, nil, events.TransportResponses, now); got.UnavailableReason != "no_eligible_account" || got.RetryAfterSeconds != 0 {
+		t.Fatalf("stale snapshot=%+v", got)
+	}
+}
+
+func TestQuotaRecoveryMatchesAdmission(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name   string
+		resets []string
+		want   time.Duration
+	}{
+		{"multiple windows", []string{now.Add(10 * time.Second).Format(time.RFC3339), now.Add(60 * time.Second).Format(time.RFC3339)}, 60 * time.Second},
+		{"snapshot expires first", []string{now.Add(5 * time.Hour).Format(time.RFC3339)}, 2 * time.Minute},
+		{"unknown window", []string{"", now.Add(10 * time.Second).Format(time.RFC3339)}, 2 * time.Minute},
+		{"malformed reset normalizes to unknown", []string{"invalid"}, 2 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &account{UsageSnapshot: &events.AccountUsageSnapshot{ExpiresAt: now.Add(2 * time.Minute).Format(time.RFC3339)}}
+			for _, reset := range tc.resets {
+				item.UsageSnapshot.Windows = append(item.UsageSnapshot.Windows, events.UsageWindow{ID: "window-" + reset, LimitReached: true, ResetAt: reset})
+			}
+			got, ok := usageLimitResetAt(item, now)
+			if tc.want == 0 {
+				if ok || usageLimitCooling(item, now) {
+					t.Fatal("unexpected block")
+				}
+				return
+			}
+			if !ok || !got.Equal(now.Add(tc.want)) {
+				t.Fatalf("recovery=%v known=%v", got, ok)
+			}
+			if !usageLimitCooling(item, got.Add(-time.Nanosecond)) || usageLimitCooling(item, got) {
+				t.Fatal("recovery differs from admission")
+			}
+		})
+	}
+}
+
 func TestAdmissionDistinguishesBusyCoolingAndPermanentCredentials(t *testing.T) {
 	now := time.Now().UTC()
 	newAccount := func(id string) *account {

@@ -50,15 +50,27 @@ func (s *Store) unavailableResult(model string, excluded, busy map[string]struct
 			continue
 		}
 		hasCooling = true
+		// CP-FAIL-019: the blocking facts of one account are a union, so that
+		// account recovers at the latest of them; the hint handed to the client
+		// is the earliest recovery among accounts.
 		// Keep sub-second precision; management's RFC3339 projection truncates it.
-		var until time.Time
+		var blocked time.Time
 		for key, entry := range item.Cooldowns {
-			if (key == "" || key == strings.TrimSpace(model)) && entry.Until.After(until) {
-				until = entry.Until
+			if (key == "" || key == strings.TrimSpace(model)) && entry.Until.After(blocked) {
+				blocked = entry.Until
 			}
 		}
-		if until.After(now) && (earliest.IsZero() || until.Before(earliest)) {
-			earliest = until
+		// A quota window blocks without leaving a cooldown entry, so without
+		// folding its reset here the client would be told to retry immediately
+		// and would spin against the same exhausted account.
+		if resetAt, ok := usageLimitResetAt(item, now); ok && resetAt.After(blocked) {
+			blocked = resetAt
+		}
+		if !blocked.After(now) {
+			continue
+		}
+		if earliest.IsZero() || blocked.Before(earliest) {
+			earliest = blocked
 		}
 	}
 	switch {

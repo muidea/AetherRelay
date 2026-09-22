@@ -209,7 +209,7 @@ Prometheus 指标均以 `aetherrelay_` 为前缀：
 使用统计页同时展示缓存使用率、缓存读取 / 创建 Token、每日使用率趋势、API Key 缓存汇总和每次调用的缓存使用率。`/admin/api/usage/dashboard` 的 `summary`、`daily`、`by_api_key` 均返回成功请求口径的 `cache_input_tokens`、`cached_input_tokens`、`cache_creation_input_tokens`、`cache_hit_rate`；明细接口仍按单次原始记录返回 `cache_hit_rate`。
 
 - 聚合缓存口径为 `cache_hit_rate = sum(cached_input_tokens) / sum(input_tokens)`，分子与分母都只取 `outcome=success` 的请求；先累计 Token 再计算比例，不平均单次请求的百分比，也不是有缓存的请求数占比。
-- 缓存创建 Token 单独展示，不计入使用率分子；输入 Token 沿用现有上游记账值，不在统计层重写或截断比例。不同上游的输入统计口径可能不同，可按 Provider / Model 筛选比较。
+- 缓存创建 Token 单独展示，不计入使用率分子。输入 Token 统一为“含缓存读取与创建”的口径：Anthropic 上游的 `input_tokens` 本就不含缓存读取/创建，网关在解析上游用量时先相加再记账，因此 Anthropic 协议请求的缓存使用率不会超过 100%，跨 Provider / Model 的输入分母也可直接比较；按 Anthropic 协议输出（原生归档响应、Responses→Anthropic 转换）时按同一口径反向扣除，报文形态与上游保持一致。其它协议仍按上游自报值展示，统计层不重写、不截断，也不为掩盖上游异常而做上限截断；历史数据不因口径修正而改写：升级前的 Anthropic 事件仍保留旧分母，跨升级时点的聚合窗口会混合两种口径，排障时按部署时间切分即可。
 - 缓存读取是逐次请求命中的累计 Token，不是缓存容量。Responses 的 `usage.input_tokens_details.cached_tokens` 计入读取量，`cache_write_tokens` 计入创建量；普通响应、SSE 和 compact 使用同一缓存字段解析。继续兼容 `cache_creation_input_tokens` / `input_tokens_details.cache_creation_tokens`，但有效的 `cache_write_tokens`（包括显式 `0`）优先，不能将别名相加或用“输入减读取”推算创建量。上游未报告写入时保留现有 `0` 口径；显示 `0` 不代表缓存没有生效，也不据此回填历史数据。
 - 所有缓存统计遵循当前时间和维度筛选，但只让成功请求参与缓存读取、创建、字段完整性和使用率聚合。失败、超时、转换拒绝及未完成事件仍完整保留在调用次数、成功/失败统计、原始事件、CSV 和交互归档中，便于排障；它们即使带有局部或估算 Token，也不会污染缓存统计。成功请求中的未知缓存字段按读取、创建分别剔除；使用率分母仅包含读取字段已知的成功请求。聚合标志表示存在有效样本；无有效样本仍显示未提供，不推测为零。默认同时包含精确与估算数据，可切换为“仅精确”。
 - 输入 Token 为 0 时接口比例返回 `0`，页面显示 `—`（无分母）；有输入但无缓存时显示 `0%`。字段由已有 DuckDB 明细聚合，无需数据库迁移或回填。

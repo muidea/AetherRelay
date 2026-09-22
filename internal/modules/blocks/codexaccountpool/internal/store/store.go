@@ -1135,6 +1135,34 @@ func usageLimitCooling(item *account, now time.Time) bool {
 	return false
 }
 
+// usageLimitResetAt follows admission: all blocking windows must reset, but
+// expired quota knowledge no longer blocks. An unknown reset therefore blocks
+// until snapshot expiry; malformed resets follow usageLimitCooling's predicate.
+func usageLimitResetAt(item *account, now time.Time) (time.Time, bool) {
+	snapshot, fresh := freshUsageSnapshot(item, now)
+	if !fresh {
+		return time.Time{}, false
+	}
+	expiresAt, _ := time.Parse(time.RFC3339, snapshot.ExpiresAt)
+	var latest time.Time
+	for _, window := range snapshot.Windows {
+		if !window.LimitReached || (window.ResetAt != "" && !resetAfter(window.ResetAt, now)) {
+			continue
+		}
+		resetAt, err := time.Parse(time.RFC3339, strings.TrimSpace(window.ResetAt))
+		if err != nil || resetAt.After(expiresAt) {
+			resetAt = expiresAt
+		}
+		if resetAt.After(latest) {
+			latest = resetAt
+		}
+	}
+	if latest.IsZero() {
+		return time.Time{}, false
+	}
+	return latest.UTC(), true
+}
+
 // freshUsageSnapshot is the single definition of "we have current quota
 // knowledge": CP-CAP-005, CP-SCHED-011 and the usage refresh scheduler must agree
 // on it, otherwise admission, ordering and polling would drift apart.

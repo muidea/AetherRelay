@@ -357,8 +357,18 @@ func TestAnthropicBufferedConversion(t *testing.T) {
 	if got := payload["object"]; got != "chat.completion" {
 		t.Fatalf("object = %v", got)
 	}
+	// CP-OBS-007: the Anthropic input_tokens excludes the cache counters, so the
+	// OpenAI-shaped projection must report the cache-inclusive prompt.
+	usage, _ := payload["usage"].(map[string]any)
+	if usage["prompt_tokens"] != float64(18) || usage["total_tokens"] != float64(22) {
+		t.Fatalf("converted usage = %v", usage)
+	}
+	details, _ := usage["prompt_tokens_details"].(map[string]any)
+	if details["cached_tokens"] != float64(5) {
+		t.Fatalf("converted usage details = %v", usage)
+	}
 	records := readUsageFromStore(t, handler)
-	if got := csvField(t, records, 1, "input_tokens"); got != "11" {
+	if got := csvField(t, records, 1, "input_tokens"); got != "18" {
 		t.Fatalf("input tokens = %s", got)
 	}
 	if got := csvField(t, records, 1, "output_tokens"); got != "4" {
@@ -370,7 +380,7 @@ func TestAnthropicBufferedConversion(t *testing.T) {
 	if got := csvField(t, records, 1, "cache_creation_input_tokens"); got != "2" {
 		t.Fatalf("cache creation input tokens = %s", got)
 	}
-	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.4545" {
+	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.2778" {
 		t.Fatalf("cache hit rate = %s", got)
 	}
 }
@@ -1079,18 +1089,25 @@ func TestAnthropicRawStreamRecordsCacheUsage(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	records := readUsageFromStore(t, handler)
+	// CP-OBS-007: input tokens carry the cache reads and creations, so the rate
+	// stays a fraction of the real prompt instead of the raw upstream counter.
+	if got := csvField(t, records, 1, "input_tokens"); got != "31" {
+		t.Fatalf("input tokens = %s", got)
+	}
 	if got := csvField(t, records, 1, "cached_input_tokens"); got != "8" {
 		t.Fatalf("cached input tokens = %s", got)
 	}
 	if got := csvField(t, records, 1, "cache_creation_input_tokens"); got != "3" {
 		t.Fatalf("cache creation input tokens = %s", got)
 	}
-	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.4000" {
+	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.2581" {
 		t.Fatalf("cache hit rate = %s", got)
 	}
+	// The archived Anthropic message keeps the upstream wire shape: no double count.
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"input_tokens": 20,`)
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"cache_read_input_tokens": 8`)
-	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"cache_hit_rate": 0.4`)
+	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"cache_hit_rate": 0.2580645`)
 }
 
 func TestDisabledProviderIsSkippedForModelSelection(t *testing.T) {
