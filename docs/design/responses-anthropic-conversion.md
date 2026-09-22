@@ -673,6 +673,17 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 ## 30. 灰度、熔断与回滚
 
+### 2026-09-22 前缀缓存可复用性度量（13.6.0）
+
+线上核对（2026-09-22 rounds 524-528，`claude-owner` + `codexoauth` + `gpt-5.6-luna`，mode `anthropic_to_codex_responses · L2 degraded`）显示同一 Claude Code 会话的 `cached_input_tokens` 恒为 **17920**（=140×128，上游按 128 token 块计量），而 `input_tokens` 从 29552 涨到 67119：`cache_hit_rate = cached_input_tokens / input_tokens`，因此使用率从 60.6% 被稀释到 26.7%。该使用者入站 body 在同 session 内反复涨落（137 KB→131 KB→147 KB→150 KB→242 KB→282 KB→293 KB→139 KB→303 KB），即主线程与子代理等多分支共用 session id、交替发起，不是逐轮追加；上游前缀缓存只能复用与已缓存内容一致的前缀，分支交替于是退化为各分支共有的公共头。
+
+本地合成度量把「网关是否逐轮引入变化」与「客户端形态的可复用长度」分开：同一合成会话跑过真实转换路径（含 `prompt_cache_key` 注入）后测量——逐轮追加时上一轮完整提示词仍是下一轮提示词的前缀（5589 → 7885 字节），`prompt_cache_key` 与 `instructions`/工具定义逐轮不变；同 session 多分支交替时，与另一分支最近一次请求只剩公共头（3310 字节，本分支上一轮为 5597 字节）；客户端不声明 `X-Claude-Code-Session-Id` 时键逐请求变化（`374bb27b…` → `8c433e6c…`），命中必然为 0。
+
+- 结论：命中退化为公共头属**客户端提示词形态**，不是网关转换缺陷；网关侧唯一会打到零命中的情况是客户端未声明会话身份。
+- 度量按逻辑提示词（`instructions` + 工具定义 + 逐条 `input` 项）比较，而非请求体原始字节：会话数组按字典序排在 `instructions`/`tools` 之前，追加一项即造成其后字节位移（原始字节前缀 2377 对逻辑前缀 5589 字节），该序列化行为由 `CP-REQ-036` 声明。
+- 归档未开全文（`full_content_enabled=false`），线上侧没有逐字节实证；分支交替结论来自 body 大小涨落、命中台阶与诊断字段（`prompt_cache_key_source=generated`、`turn_state_source=session`、`account_attempt=1`）。
+- 回归覆盖：`proxyapi/service/proxy/conversion_prefix_cache_test.go` 的三个子测试。本条为测试固化，无部署动作；`13.5.0` 的内容块放宽仍需部署后复验。
+
 ### 2026-09-22 内容块预算放宽（13.5.0）
 
 线上 rounds 253/276（2026-09-22 10:46:37Z / 10:57:09Z）记录同一个 Claude CLI 会话（`X-Claude-Code-Session-Id=14fef19c…`、`claude-cli/2.1.278`）在 `messages[98].content` 处累计 259 个协议内容块，被 13.3.0 的 256 预算在 17ms 内本地拒绝：body 约 737 KB、`input/output/total_tokens` 全为 0、`outcome=limit_exceeded`、`error_code=conversion_limit_exceeded`、`retryable=false`，无上游尝试与账号惩罚。同一会话约 10.5 分钟后原样重试（body 相差 227 字节）复现同一数值，说明这是长工具会话的真实结构，不是计数错误。

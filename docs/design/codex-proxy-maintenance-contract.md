@@ -1,8 +1,8 @@
 # Codex 反向代理首要维护合同
 
-2026-09-22 补充：协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
+2026-09-22 补充：跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`13.5.0`
+> 合同版本：`13.6.0`
 >
 > 状态：`active`
 >
@@ -11,6 +11,8 @@
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`13.6.0` 固化跨协议转换的前缀缓存约束并补齐度量证据，属规则固化而非行为变更：不改变运行路径、键派生、路由与报文形态，无部署动作。依据为 2026-09-22 的线上核对与本地合成复现：同一 Claude Code 会话（`7346ae4a…`，rounds 524-528）的 `cached_input_tokens` 恒为 17920（=140×128），而 `input_tokens` 从 29552 涨到 67119；该会话的入站 body 在同 session 内反复涨落（137 KB→131 KB→147 KB→150 KB→242 KB→282 KB→293 KB→139 KB→303 KB），即多分支交替而非逐轮追加，故可复用的只有各分支共有的公共头。本地把「单分支逐轮追加」与「同 session 多分支交替」两组会话跑过真实转换路径后测得：逐轮追加时上一轮完整提示词仍是下一轮提示词的前缀（5589 → 7885 字节）、`prompt_cache_key` 与 `instructions`/工具定义逐轮不变，即网关不逐轮引入变化；分支交替时与另一分支最近一次请求只剩公共头（3310 字节，本分支上一轮为 5597 字节），复现线上台阶；客户端不声明会话身份时键逐请求变化（`374bb27b…` → `8c433e6c…`），命中必然为 0。同一请求体的原始字节前缀短于逻辑提示词前缀（2377 对 5589 字节），原因是会话数组按字典序排在 `instructions`/`tools` 之前、追加一项即造成其后字节位移，属 `CP-REQ-036` 的已声明序列化行为，不得据此判定缓存失效。
 
 `13.5.0` 放宽协议内容块预算以适配长会话：消息内协议 `content` 数组的块累计上限由 256 提升到 512；顶层 messages/input 项数 256、Anthropic `system` 数组块 256、整树深度 32 与节点 65536、工具 schema/参数/结果字节预算全部保持不变，三者不再共用一个数值。依据为 2026-09-22 10:46/10:57Z 的线上记录：同一 Claude CLI 会话（`14fef19c…`）在 `messages[98].content` 处累计 259 块被 17ms 本地拒绝（rounds 253/276，body 约 737 KB，无上游尝试）；该形态高于旧值、低于新值，属真实长会话而非计数错误。超限仍在访问上游前返回 `conversion_limit_exceeded`（retryable=false，不重试、不惩罚账号），不自动裁剪历史或工具结果；本次不改变身份、缓存、路由与候选顺序，不新增配置开关，按 MINOR 发布。
 
@@ -227,6 +229,8 @@
 `CP-REQ-036` Codex body 归一化的**最终编码必须保字节**：不得把 `<`、`>`、`&` 转义成对应的 `\uXXXX` 序列。原生客户端（Rust/serde）发送的是原文，转义形式会让每个请求体按出现次数膨胀 5 字节，并使归档 `body_bytes` 与客户端不再可比；数字必须按 `decodeCodexJSON` 的 `UseNumber` 语义保持原始字面量（含超出 float64 精度的大整数），字符串内容不得重排或改写。归一化声明的结构变更（补齐 `instructions`/`store`/`stream`、删除 drop-compatible 字段、重建 `client_metadata` 等）不受本规则约束。顶层与嵌套对象的键序按字典序收敛是**已声明行为**，不属差异，也不得作为字段差异上报。验收必须覆盖：`<`/`>`/`&` 原文保留、大整数原文保留、声明过的结构补齐仍然生效。
 
 `CP-REQ-037` 跨协议转换的结构预算必须在账号选择前独立施加，不依赖入站 body 上限，也不得相互借用同一个数值：顶层 messages/input 项数最多 256（Chat→Responses 的顶层消息条数同样使用该预算），消息内协议 `content` 数组的块累计最多 512（Anthropic `tool_result.content` 数组计入；`tool_use.input`、Responses function arguments/output 等业务 JSON 不计入），Anthropic `system` 数组最多 256 块，整棵消息树最多深度 32 与 65536 节点。任一项超限返回 HTTP 400 `conversion_limit_exceeded`，携带安全字段路径、`limit_kind`、`actual`、`limit`，`retryable=false`：不访问上游、不重试、不惩罚账号，也不得为通过校验而裁剪历史、删除工具结果或截断正文。工具 schema 256 KiB、单项参数/结果 1 MiB、工具定义 128 的专用预算独立保留。
+
+`CP-REQ-038` 跨协议转换不得破坏上游隐式前缀缓存，该性质必须可测：同一会话逐轮追加时，上一轮转换产物的**逻辑提示词**（`instructions` + 工具定义 + 逐条 `input` 项，按模型看到的顺序展开）必须是下一轮提示词的前缀，`instructions` 与工具定义逐轮字节不变，`prompt_cache_key` 必须按会话稳定派生（由客户端 Key、模型与会话信号命名空间化）。按 `CP-REQ-036` 的字典序序列化会让会话数组排在 `instructions`/`tools` 之前，追加一项即造成其后字节位移；该字节级位移是已声明行为，**不表示可复用前缀缩短**，不得据此判定缓存失效或重排键序。客户端未声明会话身份时键逐请求变化、上游必然零命中，这属于客户端形态而非网关缺陷；网关不得为提升命中而伪造会话身份、裁剪历史或改写工具定义。验收必须覆盖：同会话逐轮追加时上一轮完整提示词仍为下一轮前缀、会话键稳定、`instructions`/工具定义不变、多分支交替时只剩公共头、无会话身份时键确实变化。
 
 ## 6. 上游身份与 Header 合同
 
@@ -609,6 +613,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | --- | --- | --- | --- | --- |
 | 跨协议缓存用量归一与缓存使用率 | CP-OBS-007 | implemented（本地）；线上待复验 | `proxyapi/service/proxy/usage.go`, `proxyapi/service/proxy/anthropic.go`, `proxyapi/service/proxy/stream_archive.go`, `proxyapi/service/proxy/responses_anthropic.go` | `anthropic_cache_usage_test.go`, `cache_write_usage_test.go`, `aetherrelayusage/cache_statistics_test.go` |
 | 额度窗口阻塞的 Retry-After | CP-FAIL-019 | implemented（本地）；线上待复验 | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/admission_retry_test.go`, `codexaccountpool/biz/admission_retry_test.go` |
+
+`13.6.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 转换前缀可复用性与会话缓存键稳定 | CP-REQ-038 | implemented（本地） | `proxyapi/service/proxy/codex_compat.go`, `proxyapi/service/proxy/codex_messages.go` | `proxyapi/service/proxy/conversion_prefix_cache_test.go` |
 
 `13.5.0` 新增实施追踪：
 
