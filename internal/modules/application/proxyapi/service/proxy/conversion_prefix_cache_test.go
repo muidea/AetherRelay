@@ -226,22 +226,31 @@ func TestConvertedPrefixReuseAcrossTurns(t *testing.T) {
 			head, head/4, estimatedBlocks(head), len(a1.render()), len(a1.render())/4)
 	})
 
-	// 没有会话身份时键逐请求变化:提示词即使逐轮追加,上游也无法命中任何缓存。
-	// Claude Code 之外的 Anthropic 协议客户端若不声明会话,命中率即为 0。
-	t.Run("missing_session_identity_varies_cache_key", func(t *testing.T) {
+	// 没有会话身份时键由稳定前缀指纹兜底:同一对话逐轮追加共享缓存身份,
+	// 前缀被改写或换了对话才换键。否则键逐请求变化,上游命中必然为 0。
+	t.Run("missing_session_identity_falls_back_to_stable_prefix", func(t *testing.T) {
 		messages := append(append([]any{}, base...), cacheToolRound(1, 2048)...)
 		first := parseConvertedPrompt(t, convertedCodexBody(t, "", messages))
 		second := parseConvertedPrompt(t, convertedCodexBody(t, "", append(messages, cacheToolRound(2, 2048)...)))
 		if first.cacheKey == "" || second.cacheKey == "" {
 			t.Fatal("转换产物必须带 prompt_cache_key")
 		}
-		if first.cacheKey == second.cacheKey {
-			t.Fatalf("无会话身份时缓存键不应复用: %q", first.cacheKey)
+		if first.cacheKey != second.cacheKey {
+			t.Fatalf("同一对话逐轮追加必须共享缓存身份: %q → %q", first.cacheKey, second.cacheKey)
 		}
 		prior, rendered := first.render(), second.render()
 		if got := commonPrefixLen(prior, rendered); got != len(prior) {
 			t.Fatalf("提示词本身仍应逐轮追加: %d/%d", got, len(prior))
 		}
-		t.Logf("提示词可复用 %d 字节(≈%d tokens),但键 %q → %q 已变化,上游不会命中", len(prior), len(prior)/4, first.cacheKey, second.cacheKey)
+		other := parseConvertedPrompt(t, convertedCodexBody(t, "", append([]any{cacheUserMessage("another conversation")}, cacheToolRound(1, 2048)...)))
+		if other.cacheKey == first.cacheKey {
+			t.Fatalf("不同对话不得共享缓存身份: %q", other.cacheKey)
+		}
+		rewritten := append([]any{}, messages...)
+		rewritten[0] = cacheUserMessage("rewritten opening")
+		if rewrittenPrompt := parseConvertedPrompt(t, convertedCodexBody(t, "", rewritten)); rewrittenPrompt.cacheKey == first.cacheKey {
+			t.Fatalf("前缀被改写后必须换键: %q", rewrittenPrompt.cacheKey)
+		}
+		t.Logf("无会话身份时键 %q 按稳定前缀派生:逐轮追加复用,换对话或改写前缀即换键", first.cacheKey)
 	})
 }

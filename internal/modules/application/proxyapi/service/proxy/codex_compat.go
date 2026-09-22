@@ -1628,6 +1628,9 @@ func codexSessionHash(r *http.Request, model string, body map[string]any) string
 
 // codexPromptCacheHash namespaces validated Claude sessions independently of
 // account routing. Neither the raw session nor the selected account is a key.
+// 客户端未声明任何会话身份时不能落到 requestScope:那会让 prompt_cache_key
+// 逐请求变化,上游前缀缓存必然零命中。此处改用对话锚点兜底,使同一对话的逐轮
+// 请求共享缓存身份;开场被改写或换了对话时锚点随之变化,退化为不命中而不误命中。
 func codexPromptCacheHash(r *http.Request, model string, body map[string]any) string {
 	if r != nil && r.URL != nil && strings.TrimRight(r.URL.Path, "/") == "/v1/messages" {
 		session := strings.TrimSpace(r.Header.Get("X-Claude-Code-Session-Id"))
@@ -1641,6 +1644,12 @@ func codexPromptCacheHash(r *http.Request, model string, body map[string]any) st
 		if valid {
 			identity := clientauth.ClientIdentityFromContext(r.Context())
 			return aetherrelaycodex.StableUUID("aetherrelay:claude-cache:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + session)
+		}
+	}
+	if codexSessionSignal(r, body, false) == "" {
+		if anchor := conversationAnchorHash(body); anchor != "" {
+			identity := clientauth.ClientIdentityFromContext(r.Context())
+			return aetherrelaycodex.StableUUID("aetherrelay:anchor-cache:v1\x00" + identity.KeyID + "\x00" + strings.TrimSpace(model) + "\x00" + anchor)
 		}
 	}
 	return codexSessionDigest(r, model, body, false)

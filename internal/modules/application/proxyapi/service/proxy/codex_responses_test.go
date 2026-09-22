@@ -948,6 +948,30 @@ func TestClaudeCodeSessionIdentityNamespaces(t *testing.T) {
 	}
 }
 
+// CP-REQ-039: 客户端未声明会话身份时,缓存身份由稳定前缀派生而不是逐请求变化。
+func TestPromptCacheHashFallsBackToStablePrefix(t *testing.T) {
+	body := func(opening string, extra int) map[string]any {
+		items := make([]any, 0, extra+1)
+		items = append(items, map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": opening}}})
+		for i := 0; i < extra; i++ {
+			items = append(items, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": fmt.Sprintf("turn %d", i)}}})
+		}
+		return map[string]any{"model": "gpt-test", "messages": items}
+	}
+	requestA := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	requestB := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	appended := codexPromptCacheHash(requestA, "gpt-test", body("opening", 3))
+	if got := codexPromptCacheHash(requestB, "gpt-test", body("opening", 4)); got != appended {
+		t.Fatalf("同一对话逐轮追加必须共享缓存身份: %q → %q", appended, got)
+	}
+	if other := codexPromptCacheHash(requestA, "gpt-test", body("other opening", 3)); other == appended {
+		t.Fatalf("不同对话不得共享缓存身份: %q", other)
+	}
+	if other := codexPromptCacheHash(requestA, "gpt-test", map[string]any{"model": "gpt-test"}); other == "" {
+		t.Fatal("无法取指纹时必须保留既有回退,而不是空键")
+	}
+}
+
 func TestCodexRequestDropsOverlongEncryptedReasoningItem(t *testing.T) {
 	longID := "rs_" + strings.Repeat("a", codexInputItemIDLimit)
 	raw := []byte(`{"model":"gpt-test","input":[{"type":"reasoning","id":"` + longID + `","encrypted_content":"sealed","summary":[]},{"type":"message","id":"user-1","role":"user","content":"continue"}]}`)

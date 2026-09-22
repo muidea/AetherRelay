@@ -84,6 +84,58 @@ func firstNBytes(b []byte, n int) []byte {
 	return out
 }
 
+// conversationAnchorHash 用「system 段 + 首条消息」给对话取锚点:客户端未声明
+// 会话身份时,缓存身份只能从内容派生。逐轮追加不变的是 system 文本与开场消息,
+// 因此它同时满足两个要求——同一对话逐轮稳定(缓存可命中),不同对话(开场不同)
+// 不共享(不互相冲掉缓存行)。整份 system 文本都参与哈希而不做字节截断:
+// system 普遍长于任何小截断,截断会让共享系统提示词的不同对话撞成同一个键。
+// 两段都没有时返回空串,由调用方保留既有回退。
+func conversationAnchorHash(payload map[string]any) string {
+	hash := sha256.New()
+	hasAnchor := false
+	writeSystem := func(text string) {
+		if text == "" {
+			return
+		}
+		hash.Write([]byte("system:"))
+		hash.Write([]byte(text))
+		hash.Write([]byte{'\n'})
+		hasAnchor = true
+	}
+	switch system := payload["system"].(type) {
+	case string:
+		writeSystem(system)
+	case []any:
+		for _, item := range system {
+			if block, ok := item.(map[string]any); ok {
+				text, _ := block["text"].(string)
+				writeSystem(text)
+			}
+		}
+	}
+	if text, ok := payload["instructions"].(string); ok {
+		writeSystem(text)
+	}
+	for _, key := range []string{"messages", "input"} {
+		items, ok := payload[key].([]any)
+		if !ok || len(items) == 0 {
+			continue
+		}
+		entry, err := json.Marshal(items[0])
+		if err != nil {
+			return ""
+		}
+		hash.Write([]byte("first:"))
+		hash.Write(entry)
+		hasAnchor = true
+		break
+	}
+	if !hasAnchor {
+		return ""
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 // FingerprintDriftTracker 跟踪最近 N 次请求的 stable prefix hash,
 // 命中连续漂移时记一个 stable_prefix_drift 事件。
 //

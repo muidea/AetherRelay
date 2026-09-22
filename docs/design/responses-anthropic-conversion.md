@@ -673,6 +673,15 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 ## 30. 灰度、熔断与回滚
 
+### 2026-09-22 无会话身份的缓存身份兜底（13.7.0）
+
+未声明 `X-Claude-Code-Session-Id` 等会话信号的客户端，此前 `prompt_cache_key` 落到逐请求的 requestScope 随机值：键每轮变化，上游前缀缓存必然零命中，与提示词形态无关（本地子测试实测两轮得到两个不同 UUID）。现改由**对话锚点**派生：`system` 段（Anthropic `system` 数组文本或 Responses `instructions`，整段参与哈希、不做字节截断）+ 首条消息的 SHA-256，按客户端 Key 与模型命名空间化。
+
+- 同一对话逐轮追加 → 键不变；换对话（开场不同）或开场被改写 → 换键；两段都取不到 → 保留既有回退且非空。
+- Claude Code（带会话头）与声明了会话/线程信号的 Codex 客户端派生完全不变，既有会话的上游缓存身份不重建。
+- 线上近 12h 内 codexoauth 有 6 轮 `cached=0`，可能属这类流量；部署后可用同样的「无会话头」请求复验，预期从 0 变为公共头级命中，命中量取决于该客户端前缀是否逐轮稳定。
+- 回归覆盖：`TestPromptCacheHashFallsBackToStablePrefix` 与 `conversion_prefix_cache_test.go` 的无会话子测试。
+
 ### 2026-09-22 前缀缓存可复用性度量（13.6.0）
 
 线上核对（2026-09-22 rounds 524-528，`claude-owner` + `codexoauth` + `gpt-5.6-luna`，mode `anthropic_to_codex_responses · L2 degraded`）显示同一 Claude Code 会话的 `cached_input_tokens` 恒为 **17920**（=140×128，上游按 128 token 块计量），而 `input_tokens` 从 29552 涨到 67119：`cache_hit_rate = cached_input_tokens / input_tokens`，因此使用率从 60.6% 被稀释到 26.7%。该使用者入站 body 在同 session 内反复涨落（137 KB→131 KB→147 KB→150 KB→242 KB→282 KB→293 KB→139 KB→303 KB），即主线程与子代理等多分支共用 session id、交替发起，不是逐轮追加；上游前缀缓存只能复用与已缓存内容一致的前缀，分支交替于是退化为各分支共有的公共头。
