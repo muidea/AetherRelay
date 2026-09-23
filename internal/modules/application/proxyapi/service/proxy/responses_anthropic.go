@@ -1003,6 +1003,12 @@ func buildResponsesFromAnthropic(body map[string]any, model string, stream bool)
 }
 
 func buildResponsesFromAnthropicWithCapability(body map[string]any, model string, stream bool, capability config.ConversionCapability) ([]byte, []string, error) {
+	return buildResponsesFromAnthropicWithHistoryProjection(body, model, stream, capability, nil)
+}
+
+// A non-nil projection is reserved for package-local experiments. Production
+// callers retain the live-verified merged mapping via the wrapper above.
+func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model string, stream bool, capability config.ConversionCapability, projectSystem func(string) map[string]any) ([]byte, []string, error) {
 	stops, err := parseAnthropicStops(body)
 	if err != nil {
 		return nil, nil, err
@@ -1055,7 +1061,11 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 		// Restore the Codex OAuth mapping verified in production. Historical
 		// system input items failed live validation; retain all text for now.
 		if role == "system" {
-			instructions += content
+			if projectSystem == nil {
+				instructions += content
+			} else if content != "" {
+				input = append(input, projectSystem(content))
+			}
 			continue
 		}
 		if role != "user" && role != "assistant" {

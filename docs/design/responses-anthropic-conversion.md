@@ -1,5 +1,32 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-09-23 隔离候选与分层验收
+
+生产默认继续使用回退后的历史 system 合并映射。`test/001367–001369` 的小请求验证只证明协议可调用；指令冲突样本返回 AMBER 而非 SAPPHIRE，不能以 200/success 宣称语义通过，28–96 输入 Token 的零缓存也不作为缓存缺陷证据。
+
+候选构造仅在 `conversion_cache_experiment_test.go` 中：`system` / `developer` 使用结构化 `input_text`，保留历史位置与文本；`developer` 是待验证的优先级映射，不宣称与原 system 语义等价。生产 builder 的历史消息投影参数固定为 nil；测试通过包内实例注入调用同一转换实现，无配置、环境变量或请求头能在生产选择候选。缓存键、工具集合、账号策略与统计口径均不改。
+
+验收分层：
+
+1. 普通离线测试验证真实 `/v1/messages` handler、候选输入前缀不变、工具配对、原数据不变；模拟终态不构成上游接受证据。
+2. 显式 live 测试先重复普通请求、指令冲突、后续指令覆盖和工具历史场景。HTTP 200 必须同时具有 message_start/message_stop 且无错误事件；输出必须符合预期。失败立即停止，不自动回退或改写重试。
+3. 前两层通过后，发送长合成前缀及四轮增量历史，分别记录输入、缓存读取和 known 标志。未知缓存、短样本、失败流不参与效果判定。零命中保留为已知零，不算“通过优化”；需对照 merged 与候选的匹配样本，不承诺固定命中率。
+
+live 工具使用测试 executor：合成 Anthropic 请求先进入本地真实 handler，再将实际转换产物经指定 relay 的原生 `/v1/responses` 端口交给 Codex OAuth，最后由本地 handler 投影回 Anthropic。这是额外一跳的隔离实验，不是生产 claude-owner 会话回放；relay 的身份收敛和账号选择仍可能影响缓存。上线前必须按 run_id 核对最终出站归档及 provider/model，不将工具的成功退出视为自动上线批准。
+
+示例（先建立 SSH loopback 隧道；Key 只通过环境注入，不写入命令示例或仓库）：
+
+```bash
+ssh -N -p 1212 -L 18080:127.0.0.1:8080 root@x600.muidea.com
+# 另一终端，预先安全设置 AETHERRELAY_CACHE_API_KEY
+AETHERRELAY_CACHE_LIVE=1 \
+AETHERRELAY_CACHE_BASE_URL=http://127.0.0.1:18080 \
+AETHERRELAY_CACHE_CANDIDATE=merged \
+go test ./internal/modules/application/proxyapi/service/proxy -run '^TestLiveAnthropicCacheExperiment$' -count=1 -v
+```
+
+候选可分别指定 `system` 或 `developer`。未知模式直接拒绝；只允许 HTTPS 或本机 loopback，不跟随重定向，不打印 Key、响应原文或凭据。每次最多 12 个请求，单次 45 秒超时，只使用合成内容，长样本会产生实际 Token 用量。普通 `go test` 跳过 live 测试。
+
 ## 2026-09-23 历史 system 消息与缓存前缀
 
 **线上验证失败，历史角色优化已撤回。** `001275/001276` 在 input 含 16 条 system 消息时被 Codex OAuth 返回 HTTP 400；此前 `001274` 使用合并指令映射成功。缺少当时的原始错误正文，不能断定是角色还是排列约束。标准 Responses 文档与模拟上游测试不构成 Codex OAuth 的接受证据。恢复历史 system 文本依次拼入 instructions 的旧映射，保留全部文本及工具配对，暂时接受前缀变化；不自动切换 developer/user，不对任意 400 改写重试。新的保序映射须单独完成真实端点验证后启用。

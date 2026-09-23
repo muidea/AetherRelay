@@ -58,7 +58,10 @@ type Handler struct {
 	chatGPTImageContent   chatgptimage.ContentReader
 	imageURLSigningKey    []byte
 	codexResponses        codexresponses.Executor
-	codexWebsockets       atomic.Int64
+	// Package-private injection for isolated conversion experiments only.
+	// No config/header/env binding; nil always selects the production mapping.
+	anthropicResponsesBuilder func(map[string]any, string, bool, config.ConversionCapability) ([]byte, []string, error)
+	codexWebsockets           atomic.Int64
 }
 
 func (h *Handler) currentClient() *http.Client {

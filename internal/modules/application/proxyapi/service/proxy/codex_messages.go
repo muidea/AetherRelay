@@ -42,7 +42,11 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 			r.Header.Set("X-Claude-Code-Session-Id", session)
 		}
 	}
-	responsesBody, degraded, err := buildResponsesFromAnthropicWithCapability(body, model, stream, capability)
+	builder := h.anthropicResponsesBuilder
+	if builder == nil {
+		builder = buildResponsesFromAnthropicWithCapability
+	}
+	responsesBody, degraded, err := builder(body, model, stream, capability)
 	if err != nil {
 		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
