@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -81,6 +82,11 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	request := codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: model, Body: normalized, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, body), TurnState: turnState, SessionScope: codexTurnStateScopeDigest(r, model, body), PromptCacheKeySource: cacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
 	request.Diagnostics = diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
+	if slog.Default().Enabled(r.Context(), slog.LevelDebug) {
+		attrs := codexConversionCacheSummary(normalized)
+		attrs = append(attrs, slog.String("request_id", request.Diagnostics.RequestID), slog.String("model", model), slog.String("prompt_cache_key_source", string(cacheKeySource)))
+		slog.LogAttrs(r.Context(), slog.LevelDebug, "Codex conversion cache summary", attrs...)
+	}
 	if !stream {
 		result, execErr := h.codexResponses.CompleteCodexResponses(r.Context(), request)
 		if execErr != nil {

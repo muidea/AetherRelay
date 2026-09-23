@@ -1,5 +1,21 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-09-23 历史 system 消息与缓存前缀
+
+`claude-owner → gpt-6-luna` 的连续归档显示：预算 system 消息被拼入顶层 instructions 后，缓存读取多次停在 17920；指令不变时可恢复到约 97%。同一缓存键也存在不同工具/指令组合，不能将模型级汇总视为单一对话的缓存效果。
+
+- 顶层 `system` 仍映射为 `instructions`；已兼容的历史 `messages[].role=system` 文本消息按原位置映射为 Responses `input` 中的 `type=message, role=system`，不再前移或合并进 instructions。此为网关兼容扩展，不宣称 Anthropic 原生消息角色包含 system。
+- 保留完整预算及其它文本，不识别特定 XML 标记后删除，不降为 user，不更改工具调用/结果配对。非文本 system 块继续显式拒绝。
+- [OpenAI Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)支持用兼容的消息项保留历史系统指令。离线回归覆盖真实 handler 转换和规范化；Codex OAuth 实际接受及缓存改善仍需部署后验证，不能以离线测试保证命中率。
+- 缓存键和账号路由规则保持不变。Debug 日志 `Codex conversion cache summary` 包含 request_id/model、instructions_digest、tools_digest、prompt_cache_key_digest、prompt_cache_key_source、input_items、history_system_messages，仅为转换侧结构摘要；不输出正文或原始身份，不作为路由键，也不推断分支身份。
+- Live 验证限定 `claude-owner → gpt-6-luna`，按工具/指令摘要和已有客户端身份分组，对照连续调用；工具变更、新分支、上游缓存状态引起的未命中不得伪装为成功命中。
+
+## 2026-09-23 模型能力配置核对
+
+同批目录确认 `gpt-6-sol`：默认推理档位 `medium`，支持 `[low, medium, high, xhigh, max, ultra]`，上下文窗口 272000 / 最大 872000。本地配置、模板及 x600 配置同步补齐，未推测输出上限，运行结果待重新加载配置后验证。
+
+`claude-owner/001005` 的 `gpt-6-luna` 请求携带 `thinking.type=adaptive` 和 `output_config.effort=max`，因线上缺少该精确模型的推理元数据而在本地拒绝。依据 Codex 0.155.1 模型目录缓存（2026-09-23T02:00:14Z），配置模板与 x600 配置补充 `reasoning_supported=true`、默认 `medium`、档位 `[low, medium, high, xhigh, max]`，以及目录声明的上下文窗口 272000 / 最大 872000；未推测输出上限。此次仅刷新配置文件，未重启服务，运行生效及上游成功仍需 live 验证。
+
 ## 2026-09-22 运行日志收口
 
 流式 usage 按字段合并累计值：`message_delta` 中出现的输入、输出和缓存计数替换旧值，缺失字段保留；合并后重新计算含缓存输入总量。重复事件不累加，缓存计数晚到或修正时同步更新统计分母和归档报文，显式零仍是已知值。
