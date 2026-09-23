@@ -2,11 +2,15 @@
 
 ## 2026-09-23 历史 system 消息与缓存前缀
 
+**线上验证失败，历史角色优化已撤回。** `001275/001276` 在 input 含 16 条 system 消息时被 Codex OAuth 返回 HTTP 400；此前 `001274` 使用合并指令映射成功。缺少当时的原始错误正文，不能断定是角色还是排列约束。标准 Responses 文档与模拟上游测试不构成 Codex OAuth 的接受证据。恢复历史 system 文本依次拼入 instructions 的旧映射，保留全部文本及工具配对，暂时接受前缀变化；不自动切换 developer/user，不对任意 400 改写重试。新的保序映射须单独完成真实端点验证后启用。
+
 `claude-owner → gpt-6-luna` 的连续归档显示：预算 system 消息被拼入顶层 instructions 后，缓存读取多次停在 17920；指令不变时可恢复到约 97%。同一缓存键也存在不同工具/指令组合，不能将模型级汇总视为单一对话的缓存效果。
 
-- 顶层 `system` 仍映射为 `instructions`；已兼容的历史 `messages[].role=system` 文本消息按原位置映射为 Responses `input` 中的 `type=message, role=system`，不再前移或合并进 instructions。此为网关兼容扩展，不宣称 Anthropic 原生消息角色包含 system。
-- 保留完整预算及其它文本，不识别特定 XML 标记后删除，不降为 user，不更改工具调用/结果配对。非文本 system 块继续显式拒绝。
-- [OpenAI Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)支持用兼容的消息项保留历史系统指令。离线回归覆盖真实 handler 转换和规范化；Codex OAuth 实际接受及缓存改善仍需部署后验证，不能以离线测试保证命中率。
+- 当前顶层 `system` 与历史 `messages[].role=system` 文本均按旧映射形成 `instructions`；保留原始请求用于排障。历史 system 为网关兼容扩展，不宣称 Anthropic 原生消息角色包含 system。
+- 保留完整预算及其它文本，不识别特定 XML 标记后删除，不降为 user，不更改工具调用/结果配对。非文本 system 块继续显式拒绝。撤回映射后不宣称保留历史 system 的位置或稳定顶层指令。
+- [OpenAI Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)支持用兼容的消息项保留历史系统指令，但本次 Codex OAuth 实测未通过；回归测试改为保护恢复后的映射，不以模拟端点成功替代线上验证。
+
+错误观测：Codex HTTP complete/start/compact 的非 2xx 响应记录安全的 type/code/param/message，并识别字符串 error/detail；元数据保留 error_body_format、error_body_truncated、error_body_read_failed。仅完整正文归档开启时写入逐尝试 `upstream_response_NNN.error.body.txt`；默认是明确标记 redacted 的安全投影，显式不脱敏时保留最多 64 KiB 原文。未知结构/HTML 不在普通日志输出；读失败和截断不可伪装为完整正文。WS 握手和成功 HTTP 内的 SSE 错误仍沿用现有安全错误通道，不宣称此次覆盖其原始正文。
 - 缓存键和账号路由规则保持不变。Debug 日志 `Codex conversion cache summary` 包含 request_id/model、instructions_digest、tools_digest、prompt_cache_key_digest、prompt_cache_key_source、input_items、history_system_messages，仅为转换侧结构摘要；不输出正文或原始身份，不作为路由键，也不推断分支身份。
 - Live 验证限定 `claude-owner → gpt-6-luna`，按工具/指令摘要和已有客户端身份分组，对照连续调用；工具变更、新分支、上游缓存状态引起的未命中不得伪装为成功命中。
 

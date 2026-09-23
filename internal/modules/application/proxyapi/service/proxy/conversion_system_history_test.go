@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestCodexHistoricalSystemPreservesPrefixAndToolOrder(t *testing.T) {
+func TestCodexHistoricalSystemRestoresCompatibleMapping(t *testing.T) {
 	messages := []any{cacheUserMessage("start")}
 	var previous convertedPrompt
 	for turn := 1; turn <= 3; turn++ {
@@ -24,11 +24,11 @@ func TestCodexHistoricalSystemPreservesPrefixAndToolOrder(t *testing.T) {
 			t.Fatal("conversion not deterministic")
 		}
 		current := parseConvertedPrompt(t, raw)
-		if strings.Contains(current.instructions, "total_tokens") {
-			t.Fatal("history hoisted into instructions")
+		if strings.Count(current.instructions, "<total_tokens>900 tokens left</total_tokens> Keep tool results intact.") != turn {
+			t.Fatal("historical instruction text lost")
 		}
 		if turn > 1 {
-			if current.instructions != previous.instructions || current.cacheKey != previous.cacheKey || !reflect.DeepEqual(current.tools, previous.tools) {
+			if current.cacheKey != previous.cacheKey || !reflect.DeepEqual(current.tools, previous.tools) {
 				t.Fatal("stable fields changed")
 			}
 			if !reflect.DeepEqual(current.items[:len(previous.items)], previous.items) {
@@ -43,11 +43,13 @@ func TestCodexHistoricalSystemPreservesPrefixAndToolOrder(t *testing.T) {
 			}
 			items = append(items, item)
 		}
-		base := 1 + (turn-1)*4
-		if items[base]["role"] != "system" || items[base]["content"] != "<total_tokens>900 tokens left</total_tokens> Keep tool results intact." {
-			t.Fatal("system role/content/position lost")
+		for _, item := range items {
+			if item["role"] == "system" {
+				t.Fatal("unverified system role sent upstream")
+			}
 		}
-		if items[base+1]["role"] != "user" || items[base+2]["type"] != "function_call" || items[base+3]["type"] != "function_call_output" || items[base+2]["call_id"] != items[base+3]["call_id"] {
+		base := 1 + (turn-1)*3
+		if items[base]["role"] != "user" || items[base+1]["type"] != "function_call" || items[base+2]["type"] != "function_call_output" || items[base+1]["call_id"] != items[base+2]["call_id"] {
 			t.Fatal("tool chain order lost")
 		}
 		previous = current
@@ -77,7 +79,7 @@ func TestHistoricalSystemBetweenToolCallAndResult(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Instructions != "" || len(body.Input) != 4 || body.Input[1]["type"] != "function_call" || body.Input[2]["role"] != "system" || body.Input[2]["content"] != "Keep the pending tool result." || body.Input[3]["type"] != "function_call_output" || body.Input[1]["call_id"] != body.Input[3]["call_id"] {
+	if body.Instructions != "Keep the pending tool result." || len(body.Input) != 3 || body.Input[1]["type"] != "function_call" || body.Input[2]["type"] != "function_call_output" || body.Input[1]["call_id"] != body.Input[2]["call_id"] {
 		t.Fatalf("incorrect transcript: %s", raw)
 	}
 }

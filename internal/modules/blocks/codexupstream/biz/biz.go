@@ -126,7 +126,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, observation, retryAfter, safeError := readErrorObservation(response)
+		body, observation, retryAfter, safeError := readArchivedErrorObservation(response, &attempt, profile)
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
@@ -445,7 +445,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, observation, retryAfter, safeError := readErrorObservation(response)
+		body, observation, retryAfter, safeError := readArchivedErrorObservation(response, &attempt, profile)
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
@@ -478,7 +478,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, observation, retryAfter, safeError := readErrorObservation(response)
+		body, observation, retryAfter, safeError := readArchivedErrorObservation(response, &attempt, profile)
 		_ = response.Body.Close()
 		result.Set(events.StartResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
@@ -1618,6 +1618,17 @@ func readErrorObservationParts(headers headerGetter, bodyReader io.Reader) ([]by
 }
 
 func safeUpstreamError(body []byte) events.SafeError {
+	// Some OAuth rejections use a top-level detail or string error rather than
+	// the standard nested error object. Do not expose arbitrary JSON fields.
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) == nil {
+		for _, key := range []string{"error", "detail"} {
+			var message string
+			if json.Unmarshal(envelope[key], &message) == nil && message != "" {
+				return events.SafeError{Message: safeErrorText(message, 512)}
+			}
+		}
+	}
 	var payload struct {
 		Error struct {
 			Type    string          `json:"type"`

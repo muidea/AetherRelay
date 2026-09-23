@@ -28,7 +28,11 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
-	TransferEncoding string
+	ErrorBody           []byte // Bounded archive-only payload, never ordinary logging.
+	ErrorBodyFormat     string
+	ErrorBodyTruncated  bool
+	ErrorBodyReadFailed bool
+	TransferEncoding    string
 
 	Observed      bool
 	At            time.Time

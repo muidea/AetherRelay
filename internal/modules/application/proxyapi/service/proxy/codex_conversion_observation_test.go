@@ -173,6 +173,41 @@ func TestConvertedArchiveMatchesUsageEvent(t *testing.T) {
 	}
 }
 
+func TestConverted400ArchivesErrorEvidence(t *testing.T) {
+	attempt := codexArchiveTestAttempt()
+	attempt.Response.Status = 400
+	attempt.Response.ErrorBody = []byte(`{"detail":"Invalid input role"}`)
+	attempt.Response.ErrorBodyFormat = "json"
+	failure := codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("rejected"))
+	failure.HTTPStatus = 400
+	failure.UpstreamType = "invalid_request_error"
+	failure.UpstreamParam = "input[1].role"
+	failure.UpstreamMessage = "Invalid input role"
+	failure.Attempt = attempt
+	calls := 0
+	h, dir := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{complete: func(_ context.Context, req codexresponses.Request) (codexresponses.Result, error) {
+		calls++
+		req.ObserveAttempt(attempt, failure)
+		return codexresponses.Result{}, failure
+	}})
+	var recorderErr error
+	h.interactionRecorder, recorderErr = archive.NewRecorderOptions(dir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true, FullContent: true})
+	if recorderErr != nil {
+		t.Fatal(recorderErr)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(claudeToolContinuation))
+	r.Header.Set("Authorization", "Bearer test-client-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if calls != 1 || w.Code != 400 || !strings.Contains(w.Body.String(), "Invalid input role") {
+		t.Fatalf("calls=%d status=%d body=%s", calls, w.Code, w.Body.String())
+	}
+	base := filepath.Join(dir, "test-client", "000001")
+	assertFileContains(t, filepath.Join(base, "upstream_response.json"), `"upstream_error_param": "input[1].role"`)
+	assertFileContains(t, filepath.Join(base, "upstream_response.json"), `"error_body_format": "json"`)
+	assertFileContains(t, filepath.Join(base, "upstream_response_001.error.body.txt"), "Invalid input role")
+}
+
 func TestCacheCounterPresenceValidation(t *testing.T) {
 	for _, tc := range []struct {
 		raw   string

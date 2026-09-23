@@ -48,21 +48,28 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
-	TransferEncoding  string              `json:"transfer_encoding,omitempty"`
-	FailureClass      string              `json:"failure_class,omitempty"`
-	RetryAfterSeconds int                 `json:"retry_after_seconds,omitempty"`
-	UpstreamErrorCode string              `json:"upstream_error_code,omitempty"`
-	Attempt           int                 `json:"attempt,omitempty"`
-	RoundID           int                 `json:"round_id"`
-	At                time.Time           `json:"at"`
-	Provider          string              `json:"provider"`
-	Protocol          string              `json:"protocol"`
-	Status            int                 `json:"status"`
-	DurationMS        int64               `json:"duration_ms"`
-	ContentType       string              `json:"content_type,omitempty"`
-	ContentLength     int64               `json:"content_length"`
-	Headers           map[string][]string `json:"headers,omitempty"`
-	Error             string              `json:"error,omitempty"`
+	ErrorBodyPath        string              `json:"error_body_path,omitempty"`
+	ErrorBodyFormat      string              `json:"error_body_format,omitempty"`
+	ErrorBodyTruncated   bool                `json:"error_body_truncated,omitempty"`
+	ErrorBodyReadFailed  bool                `json:"error_body_read_failed,omitempty"`
+	UpstreamErrorType    string              `json:"upstream_error_type,omitempty"`
+	UpstreamErrorParam   string              `json:"upstream_error_param,omitempty"`
+	UpstreamErrorMessage string              `json:"upstream_error_message,omitempty"`
+	TransferEncoding     string              `json:"transfer_encoding,omitempty"`
+	FailureClass         string              `json:"failure_class,omitempty"`
+	RetryAfterSeconds    int                 `json:"retry_after_seconds,omitempty"`
+	UpstreamErrorCode    string              `json:"upstream_error_code,omitempty"`
+	Attempt              int                 `json:"attempt,omitempty"`
+	RoundID              int                 `json:"round_id"`
+	At                   time.Time           `json:"at"`
+	Provider             string              `json:"provider"`
+	Protocol             string              `json:"protocol"`
+	Status               int                 `json:"status"`
+	DurationMS           int64               `json:"duration_ms"`
+	ContentType          string              `json:"content_type,omitempty"`
+	ContentLength        int64               `json:"content_length"`
+	Headers              map[string][]string `json:"headers,omitempty"`
+	Error                string              `json:"error,omitempty"`
 }
 
 func (h *Handler) debugfRound(round *archive.Round, r *http.Request, format string, args ...any) {
@@ -323,6 +330,18 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 			responseInfo.FailureClass = string(failure.Kind)
 			responseInfo.RetryAfterSeconds = failure.RetryAfterSeconds
 			responseInfo.UpstreamErrorCode = failure.UpstreamCode
+			responseInfo.UpstreamErrorType = failure.UpstreamType
+			responseInfo.UpstreamErrorParam = failure.UpstreamParam
+			responseInfo.UpstreamErrorMessage = failure.UpstreamMessage
+		}
+	}
+	responseInfo.ErrorBodyFormat = attempt.Response.ErrorBodyFormat
+	responseInfo.ErrorBodyTruncated = attempt.Response.ErrorBodyTruncated
+	responseInfo.ErrorBodyReadFailed = attempt.Response.ErrorBodyReadFailed
+	if round.FullContent() && len(attempt.Response.ErrorBody) > 0 {
+		name := fmt.Sprintf("upstream_response_%03d.error.body.txt", index)
+		if err := h.writeArchiveResponse(round, name, attempt.Response.ErrorBody); err == nil {
+			responseInfo.ErrorBodyPath = name
 		}
 	}
 	encoded, encodeErr := json.Marshal(responseInfo)

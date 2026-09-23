@@ -1052,9 +1052,13 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 			}
 			return nil, nil, &conversionLocationError{Path: path, Err: err}
 		}
-		// Keep transcript instructions at their original position and priority.
-		// Hoisting them rewrites the stable prefix whenever history grows.
-		if role != "user" && role != "assistant" && role != "system" {
+		// Restore the Codex OAuth mapping verified in production. Historical
+		// system input items failed live validation; retain all text for now.
+		if role == "system" {
+			instructions += content
+			continue
+		}
+		if role != "user" && role != "assistant" {
 			return nil, nil, fmt.Errorf("messages[%d].role", i)
 		}
 		if content != "" {

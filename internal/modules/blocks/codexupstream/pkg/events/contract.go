@@ -45,7 +45,11 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
-	TransferEncoding string
+	ErrorBody           []byte // Bounded archive-only payload, never ordinary logging.
+	ErrorBodyFormat     string
+	ErrorBodyTruncated  bool
+	ErrorBodyReadFailed bool
+	TransferEncoding    string
 
 	Observed      bool
 	At            time.Time
@@ -92,7 +96,8 @@ type RateLimitObservation struct {
 }
 
 // SafeError is the bounded, redacted projection of a structured upstream
-// client error. Raw response bodies never cross the codexupstream boundary.
+// client error. Raw errors only cross in HTTPResponseObservation.ErrorBody
+// when full-content and unredacted archival are explicitly enabled.
 type SafeError struct {
 	Type    string
 	Code    string

@@ -1108,6 +1108,8 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			Body: bytes.Clone(attempt.Request.Body), BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
 		},
 		Response: codexresponses.HTTPResponseObservation{
+			ErrorBody: bytes.Clone(attempt.Response.ErrorBody), ErrorBodyFormat: attempt.Response.ErrorBodyFormat,
+			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,
 			TransferEncoding: attempt.Response.TransferEncoding,
 			Observed:         attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
 			ContentLength: attempt.Response.ContentLength, DurationMS: attempt.Response.DurationMS,
