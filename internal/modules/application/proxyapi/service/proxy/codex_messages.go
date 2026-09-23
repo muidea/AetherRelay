@@ -44,7 +44,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	}
 	builder := h.anthropicResponsesBuilder
 	if builder == nil {
-		builder = buildResponsesFromAnthropicWithCapability
+		builder = buildCodexResponsesFromAnthropicWithCapability
 	}
 	responsesBody, degraded, err := builder(body, model, stream, capability)
 	if err != nil {

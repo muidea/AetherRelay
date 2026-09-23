@@ -1006,8 +1006,17 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 	return buildResponsesFromAnthropicWithHistoryProjection(body, model, stream, capability, nil)
 }
 
-// A non-nil projection is reserved for package-local experiments. Production
-// callers retain the live-verified merged mapping via the wrapper above.
+func buildCodexResponsesFromAnthropicWithCapability(body map[string]any, model string, stream bool, capability config.ConversionCapability) ([]byte, []string, error) {
+	return buildResponsesFromAnthropicWithHistoryProjection(body, model, stream, capability, historicalSystemDeveloperMessage)
+}
+
+// Historical system messages are a Claude Code transcript extension. Keep their
+// text and position without changing the stable top-level instructions.
+func historicalSystemDeveloperMessage(text string) map[string]any {
+	return map[string]any{"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text", "text": text}}}
+}
+
+// A nil projection retains the old merged mapping for isolated comparison.
 func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model string, stream bool, capability config.ConversionCapability, projectSystem func(string) map[string]any) ([]byte, []string, error) {
 	stops, err := parseAnthropicStops(body)
 	if err != nil {
@@ -1058,8 +1067,9 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 			}
 			return nil, nil, &conversionLocationError{Path: path, Err: err}
 		}
-		// Restore the Codex OAuth mapping verified in production. Historical
-		// system input items failed live validation; retain all text for now.
+		// Preserve historical instruction order. A previous plain system item
+		// failed Codex OAuth validation; structured developer items passed the
+		// isolated protocol, priority, tool-order and cache probes.
 		if role == "system" {
 			if projectSystem == nil {
 				instructions += content

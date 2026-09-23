@@ -1,16 +1,16 @@
 # Codex 反向代理首要维护合同
 
-2026-09-23 验收补充：缓存候选仅通过包内测试实例注入，不开放生产开关，默认继续使用已恢复映射。协议成功、语义通过、缓存改善必须分别验证；短输入零缓存不能作为缺陷依据，HTTP 200 或模拟上游通过不能替代真实语义验收。live 实验须使用合成 Anthropic 请求进入真实 `/v1/messages` handler，披露测试 relay 额外一跳，核对最终出站归档后再讨论上线；详见双向转换设计的隔离候选章节。
+2026-09-23 历史 system 收口：`claude-owner/001622–001642` 证明动态历史文本拼入顶层 instructions 会将长会话缓存读取压在 17920，指令不变时恢复到 70144/71607。结构化 developer 项保序映射在真实 Codex OAuth 上通过普通、优先级、后续覆盖和工具历史语义样本，并在长合成会话读取 5888/6213 及后续缓存；最终出站归档 `test/001683–001697` 已核对。生产仅在 Anthropic→Codex 路径将历史 `messages[].role=system` 映射为原位 developer 项，顶层 system 仍形成稳定 instructions。部署后按 `claude-owner` 同分支复验大上下文效果；实验账号、额外一跳和 6k 输入样本不能充当生产 70k 会话的命中率保证。协议、语义、缓存分别核对，详见双向转换设计。
 
-2026-09-23 线上验证修正：历史 system 保序映射在 Codex OAuth 实测返回 400，当前恢复将历史文本合并 instructions 的已验证映射，保留全部内容但暂不保证前缀稳定。不得将标准 Responses 文档或模拟上游通过视为 Codex OAuth 接受证据，不以 developer/user 替换或自动重试掩盖拒绝。完整错误正文按现有归档/脱敏开关受控记录，限长 64 KiB，保留格式、截断、读取失败状态与安全错误字段。缓存键、账号隔离及诊断摘要保留。新映射须按《Responses 与 Anthropic 双向转换设计》先完成真实端点验证。
+2026-09-23 历史回退记录：此前 plain system 历史项在 Codex OAuth 返回 400，曾恢复合并 instructions 的映射；本次通过另一种结构化 developer 项完成真实端点验收。不可将标准 Responses 文档或模拟上游通过视为 Codex OAuth 接受证据，不以 user 替换或自动重试掩盖拒绝。完整错误正文按现有归档/脱敏开关受控记录，限长 64 KiB，保留格式、截断、读取失败状态与安全错误字段。缓存键、账号隔离及诊断摘要保留。
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`13.7.0`
+> 合同版本：`13.8.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-22
+> 生效日期：2026-09-23
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
@@ -18,7 +18,7 @@
 
 `13.7.0` 让「未声明会话身份」的客户端也能吃到上游前缀缓存。此前这类请求的 `prompt_cache_key` 落到逐请求的 requestScope 随机值，键每轮变化，命中必然为 0——与其提示词形态无关，属网关侧成因。现在改用对话锚点派生：`system` 段（Anthropic `system` 数组文本或 Responses `instructions`）+ 首条消息的 SHA-256，按客户端 Key 与模型命名空间化；同一对话逐轮追加共享键，换对话或改写开场即换键，两段都取不到时保留既有回退。已声明 `X-Claude-Code-Session-Id` 的 Claude Code 会话与声明了会话/线程信号的客户端派生方式完全不变，既有会话的上游缓存身份不重建；无信号客户端的键由随机值变为锚点值，属首次建立稳定身份，按 MINOR 发布。命中率本身仍由客户端提示词形态决定（见 `13.6.0`），本条只消除网关侧「必然零命中」的成因，不改变路由、账号与重试语义。
 
-`13.6.0` 固化跨协议转换的前缀缓存约束并补齐度量证据，属规则固化而非行为变更：不改变运行路径、键派生、路由与报文形态，无部署动作。依据为 2026-09-22 的线上核对与本地合成复现：同一 Claude Code 会话（`7346ae4a…`，rounds 524-528）的 `cached_input_tokens` 恒为 17920（=140×128），而 `input_tokens` 从 29552 涨到 67119；该会话的入站 body 在同 session 内反复涨落（137 KB→131 KB→147 KB→150 KB→242 KB→282 KB→293 KB→139 KB→303 KB），即多分支交替而非逐轮追加，故可复用的只有各分支共有的公共头。本地把「单分支逐轮追加」与「同 session 多分支交替」两组会话跑过真实转换路径后测得：逐轮追加时上一轮完整提示词仍是下一轮提示词的前缀（5589 → 7885 字节）、`prompt_cache_key` 与 `instructions`/工具定义逐轮不变，即网关不逐轮引入变化；分支交替时与另一分支最近一次请求只剩公共头（3310 字节，本分支上一轮为 5597 字节），复现线上台阶；客户端不声明会话身份时键逐请求变化（`374bb27b…` → `8c433e6c…`），命中必然为 0。同一请求体的原始字节前缀短于逻辑提示词前缀（2377 对 5589 字节），原因是会话数组按字典序排在 `instructions`/`tools` 之前、追加一项即造成其后字节位移，属 `CP-REQ-036` 的已声明序列化行为，不得据此判定缓存失效。
+`13.6.0` 是 2026-09-22 的历史度量：同一 Claude Code 会话（`7346ae4a…`，rounds 524-528）的 `cached_input_tokens` 恒为 17920，而输入从 29552 涨到 67119；入站 body 在同 session 内反复涨落，说明存在多分支交替。本地未包含历史 system 增量的合成会话测得逐轮追加时前缀、`prompt_cache_key`、`instructions` 和工具定义稳定。该结论只适用于当时覆盖的输入形态；本次 `13.8.0` 的真实出站归档进一步发现历史 system 合并指令也会造成网关侧前缀变化。同一请求体的原始字节前缀短于逻辑提示词前缀，原因是会话数组按字典序排在 `instructions`/`tools` 之前，不能据此判定缓存失效。
 
 `13.5.0` 放宽协议内容块预算以适配长会话：消息内协议 `content` 数组的块累计上限由 256 提升到 512；顶层 messages/input 项数 256、Anthropic `system` 数组块 256、整树深度 32 与节点 65536、工具 schema/参数/结果字节预算全部保持不变，三者不再共用一个数值。依据为 2026-09-22 10:46/10:57Z 的线上记录：同一 Claude CLI 会话（`14fef19c…`）在 `messages[98].content` 处累计 259 块被 17ms 本地拒绝（rounds 253/276，body 约 737 KB，无上游尝试）；该形态高于旧值、低于新值，属真实长会话而非计数错误。超限仍在访问上游前返回 `conversion_limit_exceeded`（retryable=false，不重试、不惩罚账号），不自动裁剪历史或工具结果；本次不改变身份、缓存、路由与候选顺序，不新增配置开关，按 MINOR 发布。
 
@@ -200,7 +200,7 @@
 | 图片/file/computer use | 原生 `input_image` pass；file/computer/image-generation bridge reject（`CP-REQ-031` 已标识 delegation 历史锚点除外） | 默认 reject | `CP-REQ-019` |
 | multi-agent `agent_message` | 原生 Codex pass；Responses→Anthropic 规范为 user `message`，字符串 `encrypted_content` part 规范为 `input_text` | 原生 Codex pass | `CP-REQ-032` |
 
-`CP-REQ-020` system message 必须无损提升到 `instructions`。只有能证明文本语义已完整保留的转换入口，才可以从 `input` 删除被提升项；原生 Responses 默认保留为 developer message。
+`CP-REQ-020` 原生 Responses 的 system message 必须无损提升到 `instructions`。只有能证明文本语义已完整保留的转换入口，才可以从 `input` 删除被提升项；原生 Responses 默认保留为 developer message。Anthropic→Codex 兼容扩展中的历史 `messages[].role=system` 单独按原位映射为结构化 developer 消息，顶层 `system` 仍进入 `instructions`；不得将历史文本静默删除、降为 user 或改变工具配对。
 
 `CP-REQ-021` HTTP 完整历史中的工具调用与 tool output 必须成对；原生持久 WS 的后续 turn 可以只包含引用上一 turn pending call 的 output。两种路径都不能删除或改写续链需要的 `call_id`、reference 或 encrypted reasoning。只有满足 `CP-REQ-031`、且不存在任何续链锚点的 Codex 初始 bootstrap 不属于工具续链。
 
@@ -236,7 +236,7 @@
 
 `CP-REQ-037` 跨协议转换的结构预算必须在账号选择前独立施加，不依赖入站 body 上限，也不得相互借用同一个数值：顶层 messages/input 项数最多 256（Chat→Responses 的顶层消息条数同样使用该预算），消息内协议 `content` 数组的块累计最多 512（Anthropic `tool_result.content` 数组计入；`tool_use.input`、Responses function arguments/output 等业务 JSON 不计入），Anthropic `system` 数组最多 256 块，整棵消息树最多深度 32 与 65536 节点。任一项超限返回 HTTP 400 `conversion_limit_exceeded`，携带安全字段路径、`limit_kind`、`actual`、`limit`，`retryable=false`：不访问上游、不重试、不惩罚账号，也不得为通过校验而裁剪历史、删除工具结果或截断正文。工具 schema 256 KiB、单项参数/结果 1 MiB、工具定义 128 的专用预算独立保留。
 
-`CP-REQ-038` 跨协议转换不得破坏上游隐式前缀缓存，该性质必须可测：同一会话逐轮追加时，上一轮转换产物的**逻辑提示词**（`instructions` + 工具定义 + 逐条 `input` 项，按模型看到的顺序展开）必须是下一轮提示词的前缀，`instructions` 与工具定义逐轮字节不变，`prompt_cache_key` 必须按会话稳定派生（由客户端 Key、模型与会话信号命名空间化）。按 `CP-REQ-036` 的字典序序列化会让会话数组排在 `instructions`/`tools` 之前，追加一项即造成其后字节位移；该字节级位移是已声明行为，**不表示可复用前缀缩短**，不得据此判定缓存失效或重排键序。客户端未声明会话身份时键逐请求变化、上游必然零命中，这属于客户端形态而非网关缺陷；网关不得为提升命中而伪造会话身份、裁剪历史或改写工具定义。验收必须覆盖：同会话逐轮追加时上一轮完整提示词仍为下一轮前缀、会话键稳定、`instructions`/工具定义不变、多分支交替时只剩公共头、无会话身份时键确实变化。
+`CP-REQ-038` 跨协议转换不得破坏上游隐式前缀缓存，该性质必须可测：同一会话逐轮追加时，上一轮转换产物的**逻辑提示词**（`instructions` + 工具定义 + 逐条 `input` 项，按模型看到的顺序展开）必须是下一轮提示词的前缀，`instructions` 与工具定义逐轮字节不变，`prompt_cache_key` 必须按会话或 `CP-REQ-039` 的对话锚点稳定派生。按 `CP-REQ-036` 的字典序序列化会让会话数组排在 `instructions`/`tools` 之前，追加一项即造成其后字节位移；该字节级位移是已声明行为，**不表示可复用前缀缩短**，不得据此判定缓存失效或重排键序。网关不得为提升命中而伪造会话身份、裁剪历史或改写工具定义。验收必须覆盖：同会话逐轮追加时上一轮完整提示词仍为下一轮前缀、会话键稳定、`instructions`/工具定义不变、历史 system 以原位 developer 项追加、多分支交替时只剩公共头，以及无会话信号时稳定对话锚点的派生。
 
 `CP-REQ-039` 客户端未声明会话身份时，`prompt_cache_key` 不得落到逐请求变化的 requestScope（那会让上游前缀缓存必然零命中），必须由内容派生稳定身份：以「`system` 段（Anthropic `system` 数组文本或 Responses `instructions`）+ 首条消息」的 SHA-256 作为对话锚点，并按客户端 Key 与模型命名空间化。同一对话逐轮追加必须得到相同键，不同对话或开场被改写必须换键；锚点两段都取不到时保留既有回退且不得为空。声明了 `X-Claude-Code-Session-Id` 或其它会话/线程信号时沿用各自既有派生，不得因本规则改变既有会话的键与出站身份。验收必须覆盖：同对话逐轮追加键不变、不同对话键不同、开场改写后键变化、无锚点时可回退。
 

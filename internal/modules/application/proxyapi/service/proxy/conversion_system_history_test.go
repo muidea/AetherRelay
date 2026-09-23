@@ -6,9 +6,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
-func TestCodexHistoricalSystemRestoresCompatibleMapping(t *testing.T) {
+func TestCodexHistoricalSystemPreservesOrderAndStableInstructions(t *testing.T) {
 	messages := []any{cacheUserMessage("start")}
 	var previous convertedPrompt
 	for turn := 1; turn <= 3; turn++ {
@@ -24,8 +26,11 @@ func TestCodexHistoricalSystemRestoresCompatibleMapping(t *testing.T) {
 			t.Fatal("conversion not deterministic")
 		}
 		current := parseConvertedPrompt(t, raw)
-		if strings.Count(current.instructions, "<total_tokens>900 tokens left</total_tokens> Keep tool results intact.") != turn {
-			t.Fatal("historical instruction text lost")
+		if current.instructions == "" || strings.Contains(current.instructions, "<total_tokens>") {
+			t.Fatal("historical system changed top-level instructions")
+		}
+		if current.instructions != previous.instructions && turn > 1 {
+			t.Fatal("top-level instructions changed with history")
 		}
 		if turn > 1 {
 			if current.cacheKey != previous.cacheKey || !reflect.DeepEqual(current.tools, previous.tools) {
@@ -43,12 +48,21 @@ func TestCodexHistoricalSystemRestoresCompatibleMapping(t *testing.T) {
 			}
 			items = append(items, item)
 		}
-		for _, item := range items {
-			if item["role"] == "system" {
-				t.Fatal("unverified system role sent upstream")
+		for i := 0; i < turn; i++ {
+			item := items[1+i*4]
+			if item["role"] != "developer" || item["type"] != "message" {
+				t.Fatal("historical system role or order lost")
+			}
+			content, ok := item["content"].([]any)
+			if !ok || len(content) != 1 {
+				t.Fatal("historical system content lost")
+			}
+			block, ok := content[0].(map[string]any)
+			if !ok || block["type"] != "input_text" || block["text"] != "<total_tokens>900 tokens left</total_tokens> Keep tool results intact." {
+				t.Fatal("historical system text changed")
 			}
 		}
-		base := 1 + (turn-1)*3
+		base := 2 + (turn-1)*4
 		if items[base]["role"] != "user" || items[base+1]["type"] != "function_call" || items[base+2]["type"] != "function_call_output" || items[base+1]["call_id"] != items[base+2]["call_id"] {
 			t.Fatal("tool chain order lost")
 		}
@@ -68,7 +82,7 @@ func TestHistoricalSystemRejectsNonText(t *testing.T) {
 func TestHistoricalSystemBetweenToolCallAndResult(t *testing.T) {
 	messages := cacheToolRound(1, 32)
 	messages = append(messages[:2:2], append([]any{map[string]any{"role": "system", "content": "Keep the pending tool result."}}, messages[2:]...)...)
-	raw, err := buildResponsesFromAnthropic(map[string]any{"messages": messages}, "model", false)
+	raw, _, err := buildCodexResponsesFromAnthropicWithCapability(map[string]any{"messages": messages}, "model", false, config.ConversionCapability{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +93,27 @@ func TestHistoricalSystemBetweenToolCallAndResult(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Instructions != "Keep the pending tool result." || len(body.Input) != 3 || body.Input[1]["type"] != "function_call" || body.Input[2]["type"] != "function_call_output" || body.Input[1]["call_id"] != body.Input[2]["call_id"] {
+	if body.Instructions != "" || len(body.Input) != 4 || body.Input[1]["type"] != "function_call" || body.Input[2]["role"] != "developer" || body.Input[3]["type"] != "function_call_output" || body.Input[1]["call_id"] != body.Input[3]["call_id"] {
 		t.Fatalf("incorrect transcript: %s", raw)
+	}
+}
+
+func TestGenericResponsesHistoricalSystemMappingUnchanged(t *testing.T) {
+	raw, _, err := buildResponsesFromAnthropicWithCapability(map[string]any{
+		"system": "stable", "messages": []any{map[string]any{"role": "user", "content": "hello"}, map[string]any{"role": "system", "content": " dynamic"}},
+	}, "model", false, config.ConversionCapability{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Instructions string           `json:"instructions"`
+		Input        []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Instructions != "stable dynamic" || len(body.Input) != 1 || body.Input[0]["role"] != "user" {
+		t.Fatal("non-Codex Responses mapping changed")
 	}
 }
 

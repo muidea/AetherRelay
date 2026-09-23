@@ -26,7 +26,9 @@ func experimentProjection(mode string) (func(string) map[string]any, error) {
 	switch mode {
 	case "merged":
 		return nil, nil
-	case "system", "developer":
+	case "developer":
+		return historicalSystemDeveloperMessage, nil
+	case "system":
 		return func(text string) map[string]any {
 			return map[string]any{"type": "message", "role": mode, "content": []any{map[string]any{"type": "input_text", "text": text}}}
 		}, nil

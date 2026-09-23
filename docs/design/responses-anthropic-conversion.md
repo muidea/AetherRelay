@@ -1,18 +1,22 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
-## 2026-09-23 隔离候选与分层验收
+## 2026-09-23 历史 system 保序映射验收与收口
 
-生产默认继续使用回退后的历史 system 合并映射。`test/001367–001369` 的小请求验证只证明协议可调用；指令冲突样本返回 AMBER 而非 SAPPHIRE，不能以 200/success 宣称语义通过，28–96 输入 Token 的零缓存也不作为缓存缺陷证据。
+`claude-owner/001622、001628、001631` 的历史 system 从 12 增至 14 条，顶层 `instructions` 从 18037 增至 18135 字符；三次均只读取 17920 缓存 Token。`001631 → 001642` 的 `instructions`、工具、缓存键不变且历史 `input` 继续追加，缓存读取升至 70144/71607（约 98%）。另一组无工具、固定指令的约 31k 请求稳定读取 30464 Token，不能混作同一分支的优化效果。
 
-候选构造仅在 `conversion_cache_experiment_test.go` 中：`system` / `developer` 使用结构化 `input_text`，保留历史位置与文本；`developer` 是待验证的优先级映射，不宣称与原 system 语义等价。生产 builder 的历史消息投影参数固定为 nil；测试通过包内实例注入调用同一转换实现，无配置、环境变量或请求头能在生产选择候选。缓存键、工具集合、账号策略与统计口径均不改。
+生产 `anthropic_to_codex_responses` 将入站顶层 `system` 保留为稳定 `instructions`，把每条 `messages[].role=system` 历史文本按原位置映射为结构化 `developer` / `input_text` 消息。保留完整文本、工具调用与结果配对；不识别或删除预算 XML，不降为 user。非文本历史 system 仍显式拒绝。缓存键、工具集合、账号策略、统计口径及其它协议路径不变。`developer` 是 Codex OAuth 上实测通过的本次映射；不宣称任意 system/developer 语义天然等价。
+
+真实验收使用原有合成 Anthropic `/v1/messages` 测试入口，经 x600 relay 的 `/v1/responses` 到达 `codexoauth → gpt-6-luna`。`test/001683–001697` 共 12 次，最终出站归档确认历史项均为结构化 developer、顶层指令稳定。普通、冲突优先级、后续指令覆盖、工具历史四类语义样本各重复两次，均完整返回预期文本；长前缀四轮输入 6182→6275，缓存读取 0→5888→5888→5888，后三轮约 94%–95%。本地真实 handler 与远端最终出站证据均已核对。该实验使用 `test` Key、额外一跳和合成内容；`claude-owner` 的 70k 工具会话部署后仍须复验，不能将 6k 样本命中率直接外推。
+
+`test/001367–001369` 的旧小请求只证明协议可调用；旧合并映射的冲突样本返回 AMBER 而非 SAPPHIRE。本次按语义结果放行候选，不以 HTTP 200 或短请求零缓存判断效果。
 
 验收分层：
 
 1. 普通离线测试验证真实 `/v1/messages` handler、候选输入前缀不变、工具配对、原数据不变；模拟终态不构成上游接受证据。
 2. 显式 live 测试先重复普通请求、指令冲突、后续指令覆盖和工具历史场景。HTTP 200 必须同时具有 message_start/message_stop 且无错误事件；输出必须符合预期。失败立即停止，不自动回退或改写重试。
-3. 前两层通过后，发送长合成前缀及四轮增量历史，分别记录输入、缓存读取和 known 标志。未知缓存、短样本、失败流不参与效果判定。零命中保留为已知零，不算“通过优化”；需对照 merged 与候选的匹配样本，不承诺固定命中率。
+3. 前两层通过后，发送长合成前缀及四轮增量历史，分别记录输入、缓存读取和 known 标志。未知缓存、短样本、失败流不参与效果判定。零命中保留为已知零；部署后按 `claude-owner` 同工具/指令分支继续核对，不承诺固定命中率。
 
-live 工具使用测试 executor：合成 Anthropic 请求先进入本地真实 handler，再将实际转换产物经指定 relay 的原生 `/v1/responses` 端口交给 Codex OAuth，最后由本地 handler 投影回 Anthropic。这是额外一跳的隔离实验，不是生产 claude-owner 会话回放；relay 的身份收敛和账号选择仍可能影响缓存。上线前必须按 run_id 核对最终出站归档及 provider/model，不将工具的成功退出视为自动上线批准。
+live 工具使用测试 executor：合成 Anthropic 请求先进入本地真实 handler，再将实际转换产物经指定 relay 的原生 `/v1/responses` 端口交给 Codex OAuth，最后由本地 handler 投影回 Anthropic。这是额外一跳的隔离实验，不是生产 claude-owner 会话回放；relay 的身份收敛和账号选择仍可能影响缓存。每次须按 run_id 核对最终出站归档及 provider/model。
 
 示例（先建立 SSH loopback 隧道；Key 只通过环境注入，不写入命令示例或仓库）：
 
@@ -21,21 +25,20 @@ ssh -N -p 1212 -L 18080:127.0.0.1:8080 root@x600.muidea.com
 # 另一终端，预先安全设置 AETHERRELAY_CACHE_API_KEY
 AETHERRELAY_CACHE_LIVE=1 \
 AETHERRELAY_CACHE_BASE_URL=http://127.0.0.1:18080 \
-AETHERRELAY_CACHE_CANDIDATE=merged \
+AETHERRELAY_CACHE_CANDIDATE=developer \
 go test ./internal/modules/application/proxyapi/service/proxy -run '^TestLiveAnthropicCacheExperiment$' -count=1 -v
 ```
 
-候选可分别指定 `system` 或 `developer`。未知模式直接拒绝；只允许 HTTPS 或本机 loopback，不跟随重定向，不打印 Key、响应原文或凭据。每次最多 12 个请求，单次 45 秒超时，只使用合成内容，长样本会产生实际 Token 用量。普通 `go test` 跳过 live 测试。
+实验可分别指定 `merged`（旧合并映射）、`system`（未验证）或 `developer`（当前生产映射）。未知模式直接拒绝；只允许 HTTPS 或本机 loopback，不跟随重定向，不打印 Key、响应原文或凭据。每次最多 12 个请求，单次 45 秒超时，只使用合成内容，长样本会产生实际 Token 用量。普通 `go test` 跳过 live 测试。
 
 ## 2026-09-23 历史 system 消息与缓存前缀
 
-**线上验证失败，历史角色优化已撤回。** `001275/001276` 在 input 含 16 条 system 消息时被 Codex OAuth 返回 HTTP 400；此前 `001274` 使用合并指令映射成功。缺少当时的原始错误正文，不能断定是角色还是排列约束。标准 Responses 文档与模拟上游测试不构成 Codex OAuth 的接受证据。恢复历史 system 文本依次拼入 instructions 的旧映射，保留全部文本及工具配对，暂时接受前缀变化；不自动切换 developer/user，不对任意 400 改写重试。新的保序映射须单独完成真实端点验证后启用。
+**历史回退记录，已由上节新验收取代。** `001275/001276` 在 input 含 16 条 system 消息时被 Codex OAuth 返回 HTTP 400；此前 `001274` 使用合并指令映射成功。缺少当时的原始错误正文，不能断定是角色还是排列约束。当时将历史文本恢复拼入 instructions，保留内容但使前缀变化。本次采用经过独立验证的结构化 developer 项，不复用失败的 system 项格式，也不对 400 自动改写重试。
 
 `claude-owner → gpt-6-luna` 的连续归档显示：预算 system 消息被拼入顶层 instructions 后，缓存读取多次停在 17920；指令不变时可恢复到约 97%。同一缓存键也存在不同工具/指令组合，不能将模型级汇总视为单一对话的缓存效果。
 
-- 当前顶层 `system` 与历史 `messages[].role=system` 文本均按旧映射形成 `instructions`；保留原始请求用于排障。历史 system 为网关兼容扩展，不宣称 Anthropic 原生消息角色包含 system。
-- 保留完整预算及其它文本，不识别特定 XML 标记后删除，不降为 user，不更改工具调用/结果配对。非文本 system 块继续显式拒绝。撤回映射后不宣称保留历史 system 的位置或稳定顶层指令。
-- [OpenAI Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)支持用兼容的消息项保留历史系统指令，但本次 Codex OAuth 实测未通过；回归测试改为保护恢复后的映射，不以模拟端点成功替代线上验证。
+- 顶层 `system` 形成 `instructions`；历史 `messages[].role=system` 是网关兼容扩展，按原位形成 developer 项。保留原始请求用于排障，不宣称 Anthropic 原生消息角色包含 system。
+- [OpenAI Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)支持用兼容消息项保存历史，但具体映射以上述 Codex OAuth 实测为准；回归测试保护历史文本、顺序、工具配对及稳定前缀。
 
 错误观测：Codex HTTP complete/start/compact 的非 2xx 响应记录安全的 type/code/param/message，并识别字符串 error/detail；元数据保留 error_body_format、error_body_truncated、error_body_read_failed。仅完整正文归档开启时写入逐尝试 `upstream_response_NNN.error.body.txt`；默认是明确标记 redacted 的安全投影，显式不脱敏时保留最多 64 KiB 原文。未知结构/HTML 不在普通日志输出；读失败和截断不可伪装为完整正文。WS 握手和成功 HTTP 内的 SSE 错误仍沿用现有安全错误通道，不宣称此次覆盖其原始正文。
 - 缓存键和账号路由规则保持不变。Debug 日志 `Codex conversion cache summary` 包含 request_id/model、instructions_digest、tools_digest、prompt_cache_key_digest、prompt_cache_key_source、input_items、history_system_messages，仅为转换侧结构摘要；不输出正文或原始身份，不作为路由键，也不推断分支身份。
@@ -735,7 +738,7 @@ Level 2 流式失败使用稳定分类：`client_canceled`、`idle_timeout`、`l
 
 本地合成度量把「网关是否逐轮引入变化」与「客户端形态的可复用长度」分开：同一合成会话跑过真实转换路径（含 `prompt_cache_key` 注入）后测量——逐轮追加时上一轮完整提示词仍是下一轮提示词的前缀（5589 → 7885 字节），`prompt_cache_key` 与 `instructions`/工具定义逐轮不变；同 session 多分支交替时，与另一分支最近一次请求只剩公共头（3310 字节，本分支上一轮为 5597 字节）；客户端不声明 `X-Claude-Code-Session-Id` 时键逐请求变化（`374bb27b…` → `8c433e6c…`），命中必然为 0。
 
-- 结论：命中退化为公共头属**客户端提示词形态**，不是网关转换缺陷；网关侧唯一会打到零命中的情况是客户端未声明会话身份。
+- 当时结论仅适用于不含新增历史 system 的合成样本；`13.8.0` 的真实归档另证实动态历史 system 被合并至顶层 instructions 也是网关侧缓存断点，已按本文顶部的保序映射收口。无会话信号的逐请求随机缓存键已由 `13.7.0` 对话锚点规则收口。
 - 度量按逻辑提示词（`instructions` + 工具定义 + 逐条 `input` 项）比较，而非请求体原始字节：会话数组按字典序排在 `instructions`/`tools` 之前，追加一项即造成其后字节位移（原始字节前缀 2377 对逻辑前缀 5589 字节），该序列化行为由 `CP-REQ-036` 声明。
 - 归档未开全文（`full_content_enabled=false`），线上侧没有逐字节实证；分支交替结论来自 body 大小涨落、命中台阶与诊断字段（`prompt_cache_key_source=generated`、`turn_state_source=session`、`account_attempt=1`）。
 - 回归覆盖：`proxyapi/service/proxy/conversion_prefix_cache_test.go` 的三个子测试。本条为测试固化，无部署动作；`13.5.0` 的内容块放宽仍需部署后复验。
