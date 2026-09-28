@@ -609,16 +609,19 @@ func TestFirstEventTimeoutDefaultAndExplicitOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.StreamFirstEventTimeout != 180*time.Second {
+	if cfg.StreamFirstEventTimeout != 300*time.Second {
 		t.Fatalf("default=%s", cfg.StreamFirstEventTimeout)
 	}
-	for _, seconds := range []string{"90", "0"} {
+	for _, seconds := range []string{"90", "180", "0"} {
 		t.Setenv("AETHERRELAY_STREAM_FIRST_EVENT_TIMEOUT_SECONDS", seconds)
 		cfg, err = Load("")
 		if err != nil {
 			t.Fatal(err)
 		}
 		want := 90 * time.Second
+		if seconds == "180" {
+			want = 180 * time.Second
+		}
 		if seconds == "0" {
 			want = 0
 		}

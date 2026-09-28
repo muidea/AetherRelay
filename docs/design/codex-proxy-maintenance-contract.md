@@ -333,7 +333,7 @@
 
 `CP-STREAM-012` `response.web_search_call.searching/completed` 及携带真实 action 或 completed 状态的 `web_search_call` 必须作为搜索输出证据；仅 in_progress 或空工具骨架仍可缓冲。该证据在 SSE、非流式 SSE 汇聚、WS 中一致；已交付搜索进度/调用后禁止自动重放。搜索结束不等于整次 Responses 结束，仍必须等待完整 `response.completed/incomplete`，缺失终态按截断失败记录。搜索调用与消息引用不得在汇聚或历史续接中被覆盖、丢弃。
 
-`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 180 秒；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得单独触发提交客户端响应。首个业务 data 前的 SSE 字段必须有界暂存，并在业务事件到达后按原顺序交付。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
+`CP-STREAM-013` Codex HTTP 流及复用该流的 Chat/Messages adapter 不受非流式 `server.request_timeout_seconds` 总时限截断。使用 `server.stream_first_event_timeout_seconds` 限制输出前等待，默认 300 秒，显式 90/180/0 配置仍优先；使用 `server.stream_idle_timeout_seconds` 限制业务输出后的事件空闲；有效 SSE data 重置空闲计时，空行/注释不续期，也不得单独触发提交客户端响应。首个业务 data 前的 SSE 字段必须有界暂存，并在业务事件到达后按原顺序交付。首事件超时保留请求失败事实，但不进入 Provider/模型健康失败计数和熔断；流中空闲超时仍保留健康失败语义。`codex_oauth.stream_max_duration_seconds` 是独立可选单次上游流总时限，默认 0（关闭）。终止、取消和超时必须关闭上游 body、取消 reader 并释放 lease。最大时长到期不得切号重放；首事件/空闲超时仍服从输出前回退边界。
 
 `CP-STREAM-014` `response.incomplete` 在本 turn 没有非空文本、reasoning、工具参数增量或 output item，`response.output` 也为空，并且 `response.usage.output_tokens` 明确为整数 0 时，是上游静默失败。HTTP 非流式与未提交业务输出的 SSE 必须按 upstream failure 切号；WebSocket 必须返回明确失败并废弃连接；Chat/Anthropic adapter 不得生成正常 stop。缺少 usage、非零 token 或存在任一输出证据时仍按 `CP-STREAM-007` 处理。
 

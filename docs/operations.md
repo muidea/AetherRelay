@@ -279,6 +279,12 @@ Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时
 
 ## 首事件超时收口（13.1.0）
 
-新默认及 config.example.yaml 的 `server.stream_first_event_timeout_seconds` 为 180，原配置显式 90 不会被覆盖；远端 x600 当前仍为 90，本轮代码修改不远程修改配置或重启服务。部署验证时按需将此项调整为 180，保留 `stream_idle_timeout_seconds: 300`。不要用改 request_timeout 代替首事件预算，也不要把 safety buffering 当作自动免超时依据。
+默认及 config.example.yaml 的 `server.stream_first_event_timeout_seconds` 为 300 秒，原配置显式 90/180/0 不会被覆盖；升级已有实例时需要显式调整配置。保留 `stream_idle_timeout_seconds: 300`。不要用改 request_timeout 代替首事件预算，也不要把 safety buffering 当作自动免超时依据。
+
+2026-09-28 核对 x600 留存的 714 条 Codex 请求归档：500 条成功流式请求中，gpt-5.6-luna 首事件最高 179.730 秒，另有 32 次首事件超时；gpt-6-astra 成功首事件最高 83.296 秒，但 Anthropic 转换 + max 路径只有 1 条成功样本，不能证明延长预算必定解决续轮阻塞。300 秒作为扩大等待窗口的有界调整，仍需上线后观测。比较首事件耗时，不用总请求时长判断首事件预算是否不足。
+
+`first_event_timeout` 保留 HTTP 504、usage、归档和请求指标，但不进入 Provider/模型健康失败计数，也不触发或延长熔断。流中 `idle_timeout` 与真实上游失败仍保留健康失败和熔断语义。此前 002512–002514 连续三次首事件超时经请求健康统计开启 30 秒熔断，002515 在熔断期返回 503（`failure_class=circuit_open`、`Retry-After: 24`）；仅设置 `CountUpstream=false` 不能阻止独立的请求健康计数路径。
+
+同日已将 x600 `/home/workspace/deploy/config/config.yaml` 的首事件超时从 180 写为 300 秒，备份为 `config.yaml.bak-20260928-103500-first-event-300`。仅修改配置文件不会自动更新运行实例；需要部署包含健康计数修复的新代码并重新加载配置后，才同时具备 300 秒预算和首事件超时不熔断的行为。
 
 日志应分别保留上游 HTTP 200、下游 HTTP 504 与 first_event_timeout；metadata.error_code 和用量一致。首事件超时与 idle_timeout 分开显示，新统计不回填历史分类。首事件前的响应头即归档；同一请求的重复观测不再重复写正文，相同响应不重复记录，终态失败仍更新。13.0.0 的配置模板“无需改动”仅指该次缓存/观测补全，13.1.0 已更新首事件预算模板。

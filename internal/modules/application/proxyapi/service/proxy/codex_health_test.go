@@ -62,7 +62,7 @@ func TestCodexAdmissionAndLocalFailuresDoNotOpenProviderCircuit(t *testing.T) {
 	registry := metrics.NewRegistry()
 	h := &Handler{metricsRegistry: metricsport.AsPort(registry)}
 	registry.RecordRequestPlan("codexoauth", "gpt-test", "responses", 502, time.Second, "upstream_failed", "", "", "", "")
-	for _, kind := range []codexresponses.ErrorKind{codexresponses.KindProviderUnavailable, codexresponses.KindStreamLifetime, codexresponses.KindClientCanceled, codexresponses.KindClientWrite} {
+	for _, kind := range []codexresponses.ErrorKind{codexresponses.KindProviderUnavailable, codexresponses.KindFirstEventTimeout, codexresponses.KindStreamLifetime, codexresponses.KindClientCanceled, codexresponses.KindClientWrite} {
 		for range 4 {
 			f := codexresponses.NewFailure(kind, 0, nil)
 			if kind == codexresponses.KindProviderUnavailable {

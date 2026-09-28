@@ -489,6 +489,10 @@ func shouldTrackProviderHealth(status int, outcome string) bool {
 	// CP-FAIL-019: local admission/policy/client failures are still request
 	// metrics, but must not manufacture upstream circuit observations.
 	switch outcome {
+	case "first_event_timeout":
+		// The first-event budget is request-local. Slow reasoning or upstream
+		// buffering does not establish that the entire Provider is unavailable.
+		return false
 	case "provider_unavailable", "stream_lifetime_timeout", "client_canceled", "client_write":
 		return false
 	}
@@ -499,7 +503,7 @@ func shouldTrackProviderHealth(status int, outcome string) bool {
 		return true
 	}
 	switch outcome {
-	case "upstream_failed", "upstream_truncated", "first_event_timeout", "idle_timeout", "protocol", "endpoint_drift":
+	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol", "endpoint_drift":
 		return true
 	default:
 		return false
@@ -507,11 +511,14 @@ func shouldTrackProviderHealth(status int, outcome string) bool {
 }
 
 func retryableHealthFailure(status int, outcome string) bool {
+	if outcome == "first_event_timeout" {
+		return false
+	}
 	if status == 408 || status == 429 || status >= 500 || status <= 0 {
 		return true
 	}
 	switch outcome {
-	case "upstream_failed", "upstream_truncated", "first_event_timeout", "idle_timeout", "protocol":
+	case "upstream_failed", "upstream_truncated", "idle_timeout", "protocol":
 		return true
 	default:
 		return false

@@ -14,7 +14,34 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	metrics "aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 )
+
+func TestCodexRepeatedFirstEventTimeoutDoesNotBlockNextRequest(t *testing.T) {
+	attempts := 0
+	h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, _ func(codexresponses.StreamStart) error, _ func([]byte) error) error {
+		attempts++
+		return codexresponses.NewFailure(codexresponses.KindFirstEventTimeout, 5, nil)
+	}})
+	registry := metrics.NewRegistry()
+	h.metricsRegistry = metricsport.AsPort(registry)
+	for i := range 5 {
+		r := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.2-codex","stream":true,"messages":[{"role":"user","content":"test"}]}`))
+		r.Header.Set("Authorization", "Bearer test-client-key")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusGatewayTimeout {
+			t.Fatalf("request %d blocked after timeouts: status=%d body=%s", i+1, w.Code, w.Body.String())
+		}
+	}
+	if attempts != 5 {
+		t.Fatalf("upstream attempts=%d, want 5", attempts)
+	}
+	if events := usageEvents(t, h.usageStore); len(events) != 5 {
+		t.Fatalf("timeout usage events=%d, want 5", len(events))
+	}
+}
 
 func TestCodexTimeoutSettlementRetainsPhaseAndHTTPFacts(t *testing.T) {
 	for _, kind := range []codexresponses.ErrorKind{codexresponses.KindFirstEventTimeout, codexresponses.KindIdleTimeout} {
