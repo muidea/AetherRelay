@@ -175,7 +175,7 @@ func TestConversionLimitRecordedBeforeUpstream(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer test-client-key")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "actual=257, limit=256") || strings.Contains(w.Body.String(), "unsupported_feature") {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), fmt.Sprintf("actual=%d, limit=%d", maxConversionMessages+1, maxConversionMessages)) || strings.Contains(w.Body.String(), "unsupported_feature") {
 		t.Fatalf("response=%s", w.Body.String())
 	}
 	events := usageEvents(t, h.usageStore)
@@ -192,6 +192,118 @@ func TestConversionLimitRecordedBeforeUpstream(t *testing.T) {
 	}
 	if meta.ErrorCode != ErrorCodeConversionLimitExceeded || meta.ConversionErrorPath != "messages" || meta.UpstreamStatus != 0 {
 		t.Fatalf("metadata=%+v", meta)
+	}
+}
+
+// Reproduce claude-owner/000170: 257 messages, 106 paired calls, 5 image
+// results, and 234 protocol content blocks, without production content.
+func TestObserved257MessageHistoryReachesExecutor(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			messages := make([]any, 45, 257)
+			for i := range messages {
+				var content any = fmt.Sprintf("history-%d", i)
+				if i < 17 {
+					content = []any{map[string]any{"type": "text", "text": content}}
+				}
+				messages[i] = map[string]any{"role": "user", "content": content}
+			}
+			for i := range 106 {
+				id := fmt.Sprintf("call_%d", i)
+				var output any = fmt.Sprintf("result-%d", i)
+				if i < 5 {
+					output = []any{toolResultImageBlock()}
+				}
+				messages = append(messages,
+					map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": id, "name": "Read", "input": map[string]any{"index": i}}}},
+					map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": output}}})
+			}
+			calls := 0
+			check := func(req codexresponses.Request) {
+				calls++
+				var body map[string]any
+				if err := json.Unmarshal(req.Body, &body); err != nil {
+					t.Fatal(err)
+				}
+				items := body["input"].([]any)
+				if len(items) != 257 {
+					t.Fatalf("history truncated: items=%d", len(items))
+				}
+				for i := range 106 {
+					call := items[45+2*i].(map[string]any)
+					output := items[46+2*i].(map[string]any)
+					id := fmt.Sprintf("call_%d", i)
+					if call["type"] != "function_call" || call["call_id"] != id || call["arguments"] != fmt.Sprintf(`{"index":%d}`, i) || output["type"] != "function_call_output" || output["call_id"] != id {
+						t.Fatalf("tool history changed at call %d", i)
+					}
+					if i < 5 {
+						parts := output["output"].([]any)
+						if len(parts) != 1 || parts[0].(map[string]any)["image_url"] != "data:image/png;base64,"+toolResultPNG {
+							t.Fatalf("image result changed at call %d", i)
+						}
+					} else if output["output"] != fmt.Sprintf("result-%d", i) {
+						t.Fatalf("text result changed at call %d", i)
+					}
+				}
+			}
+			h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{
+				complete: func(_ context.Context, req codexresponses.Request) (codexresponses.Result, error) {
+					check(req)
+					return codexresponses.Result{Body: []byte(`{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)}, nil
+				},
+				stream: func(_ context.Context, req codexresponses.Request, start func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+					check(req)
+					if err := start(codexresponses.StreamStart{}); err != nil {
+						return err
+					}
+					if err := emit([]byte(`data: {"type":"response.created","response":{"id":"r","model":"gpt-5.2-codex"}}`)); err != nil {
+						return err
+					}
+					return emit([]byte(`data: {"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`))
+				},
+			})
+			raw, _ := json.Marshal(map[string]any{"model": "gpt-5.2-codex", "stream": stream, "messages": messages})
+			r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(raw)))
+			r.Header.Set("Authorization", "Bearer test-client-key")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 || calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestMessageBudgetBoundaryReachesUpstream(t *testing.T) {
+	calls := 0
+	h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{complete: func(_ context.Context, req codexresponses.Request) (codexresponses.Result, error) {
+		calls++
+		var body map[string]any
+		if err := json.Unmarshal(req.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body["input"].([]any)) != maxConversionMessages {
+			t.Fatal("history at the boundary was truncated")
+		}
+		return codexresponses.Result{Body: []byte(`{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)}, nil
+	}})
+	items := make([]any, maxConversionMessages)
+	for i := range items {
+		items[i] = map[string]any{"role": "user", "content": "history"}
+	}
+	post := func(items []any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(map[string]any{"model": "gpt-5.2-codex", "messages": items})
+		r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(raw)))
+		r.Header.Set("Authorization", "Bearer test-client-key")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := post(items); w.Code != 200 || calls != 1 {
+		t.Fatalf("boundary rejected: status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+	}
+	if w := post(append(items, items[0])); w.Code != 400 || calls != 1 || !strings.Contains(w.Body.String(), fmt.Sprintf("actual=%d, limit=%d", maxConversionMessages+1, maxConversionMessages)) {
+		t.Fatalf("over-limit admission: status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
 	}
 }
 

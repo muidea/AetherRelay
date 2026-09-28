@@ -661,7 +661,7 @@ conversion_processing_timeout
 tool_result_wait_timeout
 ```
 
-Level 3 function tools 还施加独立预算：工具 schema 最大 256 KiB、schema 嵌套深度 32、单个 tool 参数/结果最大 1 MiB、工具定义最多 128 个；消息与内容块的独立预算及结构超限错误按 13.5.0 执行（协议内容块 512，消息/输入项与 system 各 256），不能把工具参数 JSON 对象计作协议内容块。已有工具专用预算拒绝继续使用 `conversion_unsupported`；所有限制均在访问上游前执行，不依赖通用请求体上限。请求结束时仍未解析的 call、未知或重复 result，以及与 Anthropic message role 不匹配的 tool block 同样必须在访问上游前拒绝。
+Level 3 function tools 还施加独立预算：工具 schema 最大 256 KiB、schema 嵌套深度 32、单个 tool 参数/结果最大 1 MiB、工具定义最多 128 个；消息与内容块的独立预算及结构超限错误按 13.10.0 执行（协议内容块 512，消息/输入项 1024，system 256），不能把工具参数 JSON 对象计作协议内容块。已有工具专用预算拒绝继续使用 `conversion_unsupported`；所有限制均在访问上游前执行，不依赖通用请求体上限。请求结束时仍未解析的 call、未知或重复 result，以及与 Anthropic message role 不匹配的 tool block 同样必须在访问上游前拒绝。
 
 非流式转换若上游返回 `text/event-stream` 会立即以 `upstream_protocol_error` 结束，并关闭响应体；不会把 SSE 当作 JSON 缓冲等待 EOF。普通 JSON 响应读取同样受上游 body idle timeout 与客户端取消控制。
 
@@ -847,3 +847,12 @@ Codex Messages 入口现在将工具结果内的内联 Base64 图片保留在同
 ### 同日独立核对：accounts_cooling 503
 
 Event `3c884ecf9e39774d289d6e5d63444a11` 对应 `work-office/000131`，北京时间 11:32:45 被本地账号准入拒绝，`accounts_cooling`、`retryable=true`、`Retry-After=1`，未创建上游请求。原因是 11:32:15 的 `000117` 收到真实上游 HTTP 503（JSON detail 为 `Unable to verify Daybreak Blue access. Please try again.`），执行器记录 upstream 失败，账号池按现有临时故障规则为该账号/模型冷却 30 秒；中间请求的等待提示从 29 秒递减到 1 秒，没有因准入失败延长冷却。11:32:47 的 `000132` 在同一账号、相同入站正文和相同最终出站正文下重新发起，11:32:55 成功完成。该事件来自上游访问校验的临时失败，不是图片转换拒绝、首事件预算或 Provider 熔断；metadata 省略项也未阻止相同请求恢复。此次核对不修改账号冷却、身份投影或上游访问校验规则。
+
+
+### 2026-09-28：长会话消息预算（13.10.0）
+
+x600 部署 `46bc7f4` 后，`claude-owner/000168`、`000169` 的 251、254 条消息均成功；`000170`（Event `10d6c4455f9026deb1ae706236844474`，05:36:00Z）增长到 257 条后在 43ms 内被本地转换拒绝，未访问上游。失败请求约 1 MB，含 234 个协议内容块、2287 个树节点、深度 7，属于连续工具会话正常增长，只有顶层消息数超过原 256 上限。前两轮也提供了工具结果内图片转换已在线生效的成功记录。
+
+顶层 messages/input 项数上限独立提高到 1024，Chat→Responses 同样使用该预算。协议内容块仍为 512、system 数组仍为 256，深度 32、树节点 65536、工具 schema/参数/结果预算保持不变。完整转换全部历史和工具结果，不通过删除消息绕过限制；超过新上限仍在账号选择和上游调用前返回 400 `conversion_limit_exceeded`，不重试、不惩罚账号。该限制为代码常量，无配置项需要同步调整。
+
+合成回归复现 257 条消息、106 对工具调用/结果、5 个图片结果及 234 个协议内容块，分别验证流式和非流式 handler 将全部历史、call ID、参数与图片交给 executor；另验证 1024 条通过、1025 条拒绝且不访问上游。原有内容块、system、深度和节点预算测试继续执行。此轮上限变更的线上验收仍待部署复验。
