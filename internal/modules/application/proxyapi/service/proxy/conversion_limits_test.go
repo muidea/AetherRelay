@@ -308,7 +308,7 @@ func TestMessageBudgetBoundaryReachesUpstream(t *testing.T) {
 }
 
 // 线上 rounds 253/276 的形态:99 条消息累计 259 个协议内容块。旧预算 256 拒绝,
-// 新预算 512 必须放行,这是本次放宽的回归锚点。
+// 13.5.0 的预算 512 已放行,保留此前回归锚点。
 func TestContentBlockBudgetAdmitsObservedSessionShape(t *testing.T) {
 	for _, label := range []string{"messages", "input"} {
 		items := make([]any, 99)
@@ -335,6 +335,105 @@ func TestContentBlockBudgetAdmitsObservedSessionShape(t *testing.T) {
 		if err := validateConversionTree(items, label); err != nil {
 			t.Fatalf("%s: 259 content blocks must be admitted: %v", label, err)
 		}
+	}
+}
+
+// Structural reproduction of claude-owner/000910: 662 messages and 514
+// blocks, with 254 complete tool pairs, without production content.
+func TestObserved514BlockHistoryReachesExecutor(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			messages := make([]any, 154, 662)
+			for i := range messages {
+				var content any = fmt.Sprintf("history-%d", i)
+				if i < 6 {
+					content = []any{map[string]any{"type": "text", "text": content}}
+				}
+				messages[i] = map[string]any{"role": "user", "content": content}
+			}
+			for i := range 254 {
+				id := fmt.Sprintf("call_%d", i)
+				messages = append(messages,
+					map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": id, "name": "Read", "input": map[string]any{"index": i}}}},
+					map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": fmt.Sprintf("result-%d", i)}}})
+			}
+			calls := 0
+			check := func(req codexresponses.Request) {
+				calls++
+				var body map[string]any
+				if err := json.Unmarshal(req.Body, &body); err != nil {
+					t.Fatal(err)
+				}
+				items := body["input"].([]any)
+				if len(items) != 662 {
+					t.Fatalf("history truncated: items=%d", len(items))
+				}
+				for i := range 254 {
+					call := items[154+2*i].(map[string]any)
+					output := items[155+2*i].(map[string]any)
+					id := fmt.Sprintf("call_%d", i)
+					if call["type"] != "function_call" || call["call_id"] != id || call["arguments"] != fmt.Sprintf(`{"index":%d}`, i) || output["type"] != "function_call_output" || output["call_id"] != id || output["output"] != fmt.Sprintf("result-%d", i) {
+						t.Fatalf("tool history changed at call %d", i)
+					}
+				}
+			}
+			h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{
+				complete: func(_ context.Context, req codexresponses.Request) (codexresponses.Result, error) {
+					check(req)
+					return codexresponses.Result{Body: []byte(`{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)}, nil
+				},
+				stream: func(_ context.Context, req codexresponses.Request, start func(codexresponses.StreamStart) error, emit func([]byte) error) error {
+					check(req)
+					if err := start(codexresponses.StreamStart{}); err != nil {
+						return err
+					}
+					if err := emit([]byte(`data: {"type":"response.created","response":{"id":"r","model":"gpt-5.2-codex"}}`)); err != nil {
+						return err
+					}
+					return emit([]byte(`data: {"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`))
+				},
+			})
+			raw, err := json.Marshal(map[string]any{"model": "gpt-5.2-codex", "stream": stream, "messages": messages})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(raw)))
+			r.Header.Set("Authorization", "Bearer test-client-key")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 || calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+			}
+		})
+	}
+}
+
+// 消息与内容块预算同时达到上限时仍可转换，嵌套结果独立累计。
+func TestMessageAndContentBudgetsAdmitCombinedBoundary(t *testing.T) {
+	for _, label := range []string{"messages", "input"} {
+		t.Run(label, func(t *testing.T) {
+			items := make([]any, maxConversionMessages)
+			for i := range items {
+				items[i] = map[string]any{"role": "user", "content": []any{
+					map[string]any{"type": "text", "text": "a"},
+					map[string]any{"type": "text", "text": "b"},
+					map[string]any{"type": "text", "text": "c"},
+					map[string]any{"type": "text", "text": "d"},
+				}}
+			}
+			if err := validateConversionTree(items, label); err != nil {
+				t.Fatalf("combined boundary rejected: %v", err)
+			}
+			last := items[len(items)-1].(map[string]any)
+			var extra any = map[string]any{"type": "text", "text": "over"}
+			if label == "messages" {
+				parts := last["content"].([]any)
+				parts[3] = map[string]any{"type": "tool_result", "tool_use_id": "call", "content": []any{extra}}
+			} else {
+				last["content"] = append(last["content"].([]any), extra)
+			}
+			assertConversionLimit(t, validateConversionTree(items, label), "content_blocks", maxConversionContentBlocks+1, maxConversionContentBlocks)
+		})
 	}
 }
 
@@ -411,7 +510,7 @@ func TestContentBlockBudgetBoundaryReachesUpstream(t *testing.T) {
 		t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
 	}
 	over := post([]any{map[string]any{"role": "user", "content": append(content, map[string]any{"type": "text", "text": "x"})}})
-	if over.Code != 400 || calls != 1 || !strings.Contains(over.Body.String(), "actual=513, limit=512") || strings.Contains(over.Body.String(), "unsupported_feature") {
+	if over.Code != 400 || calls != 1 || !strings.Contains(over.Body.String(), fmt.Sprintf("actual=%d, limit=%d", maxConversionContentBlocks+1, maxConversionContentBlocks)) || strings.Contains(over.Body.String(), "unsupported_feature") {
 		t.Fatalf("status=%d calls=%d body=%s", over.Code, calls, over.Body.String())
 	}
 }

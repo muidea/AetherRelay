@@ -3,12 +3,12 @@ package proxy
 import "fmt"
 
 // 转换结构预算。三项互相独立:顶层项数、协议内容块、system 数组块各自计量。
-// 内容块预算按线上长会话实测放宽(2026-09-22 rounds 253/276,累计 259),
-// 其余预算不随之放宽。
+// 内容块预算按线上长会话实测放宽(2026-09-28 round 910,累计 514),
+// 为 1024 条消息中的文本、工具调用及嵌套结果保留空间,其余预算独立。
 // 顶层项数按 2026-09-28 round 170 的 257 条正常工具历史独立放宽。
 const (
 	maxConversionMessages      = 1024
-	maxConversionContentBlocks = 512
+	maxConversionContentBlocks = 4096
 	maxConversionSystemBlocks  = 256
 	maxConversionTreeNodes     = 65536
 )
