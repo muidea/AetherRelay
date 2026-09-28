@@ -208,6 +208,11 @@ type conversionLocationError struct {
 func (e *conversionLocationError) Error() string { return e.Path + ": " + e.Err.Error() }
 func (e *conversionLocationError) Unwrap() error { return e.Err }
 
+// Keep a bounded capability name independent of nested field paths.
+type conversionUnsupportedFeatureError struct{ Feature string }
+
+func (e *conversionUnsupportedFeatureError) Error() string { return e.Feature }
+
 func conversionAPIError(plan TransportPlan, err error) APIError {
 	var limit *conversionLimitError
 	if errors.As(err, &limit) {
@@ -260,6 +265,10 @@ func conversionAPIError(plan TransportPlan, err error) APIError {
 func conversionFeatureFromError(err error) string {
 	if err == nil {
 		return ""
+	}
+	var unsupported *conversionUnsupportedFeatureError
+	if errors.As(err, &unsupported) {
+		return unsupported.Feature
 	}
 	msg := err.Error()
 	for _, prefix := range []string{"metadata.", "cache_control", "output_config."} {

@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`13.8.0`
+> 合同版本：`13.9.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-23
+> 生效日期：2026-09-28
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`13.9.0` 根据 x600 `claude-owner/000116`、`000141` 的 Read 工具 PNG 结果补齐 Codex Messages 工具结果内图片投影：同一 call ID 的 `function_call_output.output` 使用有序 `input_text/input_image` 数组，纯文本结果仍保持字符串映射。保持 1 MiB 单项结果预算，拒绝 URL/document/audio 来源和通用 Provider 未声明的图片能力；错误 feature 和路径定位到嵌套 content/source，HTTP、usage、归档同源。协议依据为 Codex 官方内容数组定义，合成 handler 回归不能替代真实 Codex 端点接受证据，部署后仍需线上复验。新增兼容能力，按 MINOR 记录。
 
 `13.7.0` 让「未声明会话身份」的客户端也能吃到上游前缀缓存。此前这类请求的 `prompt_cache_key` 落到逐请求的 requestScope 随机值，键每轮变化，命中必然为 0——与其提示词形态无关，属网关侧成因。现在改用对话锚点派生：`system` 段（Anthropic `system` 数组文本或 Responses `instructions`）+ 首条消息的 SHA-256，按客户端 Key 与模型命名空间化；同一对话逐轮追加共享键，换对话或改写开场即换键，两段都取不到时保留既有回退。已声明 `X-Claude-Code-Session-Id` 的 Claude Code 会话与声明了会话/线程信号的客户端派生方式完全不变，既有会话的上游缓存身份不重建；无信号客户端的键由随机值变为锚点值，属首次建立稳定身份，按 MINOR 发布。命中率本身仍由客户端提示词形态决定（见 `13.6.0`），本条只消除网关侧「必然零命中」的成因，不改变路由、账号与重试语义。
 
@@ -495,7 +497,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-010` Codex HTTP Responses/compact 的最终出站正文必须取自 `codexupstream` 完成 `client_metadata` 注入后的发送字节，不得用入站正文或转换中间态冒充。仅 `archive_interactions && archive_full_content` 启用时，owner 通过 typed observation 携带正文，proxyapi 沿用附件摘要策略落盘。代理注入的 `client_metadata` 身份及内嵌 turn metadata 默认脱敏；显式 `archive_unredacted_headers` 开启时同步保真，业务文本/工具参数不按同名字段误删。普通日志永不输出正文。每个 HTTP 尝试独立编号归档；握手和终态更新同一尝试，账号切换与刷新重试不得覆盖先前尝试。无上游请求的本地拒绝只记录转换错误，不创建伪上游记录。本规则不宣称覆盖 WebSocket 帧与 ChatGPT Web 多阶段请求。
 
-`CP-OBS-011` 转换失败须保留安全字段路径及有界 feature；流转换异常记为 `conversion`，不得冒充客户端写入失败，不触发账号冷却。JSON `keepalive` 与 SSE 注释均不是业务输出，不完成请求、不续业务空闲/首事件超时；未知业务事件继续拒绝。账号冷却等准入失败的 `failure_class/retryable/retry_after_seconds` 必须同时进入运行记录和 round 元数据。
+`CP-OBS-011` 转换失败须保留安全字段路径及有界 feature；Codex Messages 入口允许 `tool_result.content` 中的内联 Base64 PNG/JPEG/GIF/WebP 图片，按原顺序映射为 `function_call_output.output` 内的 `input_text/input_image` 内容数组，保留 call ID 和错误结果标记。纯文本工具结果保持字符串投影；通用 Provider 转换、普通消息图片和 document/URL 来源继续遵循既有能力边界。图片必须校验 Base64、媒体类型和单项结果 1 MiB 总编码预算；拒绝时定位到嵌套 content/source 字段，feature 区分 `tool_result.image` 与 `tool_result.content.type`，不得笼统声称不支持所有 tool_result。流转换异常记为 `conversion`，不得冒充客户端写入失败，不触发账号冷却。JSON `keepalive` 与 SSE 注释均不是业务输出，不完成请求、不续业务空闲/首事件超时；未知业务事件继续拒绝。账号冷却等准入失败的 `failure_class/retryable/retry_after_seconds` 必须同时进入运行记录和 round 元数据。
 
 ## 12. 运行时与组件边界
 

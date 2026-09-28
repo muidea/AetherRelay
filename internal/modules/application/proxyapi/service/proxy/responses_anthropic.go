@@ -1007,6 +1007,9 @@ func buildResponsesFromAnthropicWithCapability(body map[string]any, model string
 }
 
 func buildCodexResponsesFromAnthropicWithCapability(body map[string]any, model string, stream bool, capability config.ConversionCapability) ([]byte, []string, error) {
+	// Codex tool results accept content arrays. This does not enable images
+	// in ordinary messages or change generic Provider conversion profiles.
+	capability.Images = true
 	return buildResponsesFromAnthropicWithHistoryProjection(body, model, stream, capability, historicalSystemDeveloperMessage)
 }
 
@@ -1058,7 +1061,7 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 		}
 		role, _ := m["role"].(string)
 		contentRaw := m["content"]
-		content, blocks, err := anthropicMessageContentToResponses(contentRaw, role, registry)
+		content, blocks, err := anthropicMessageContentToResponses(contentRaw, role, registry, capability.Images)
 		if err != nil {
 			path := fmt.Sprintf("messages[%d].content", i)
 			var located *conversionLocationError
@@ -1226,13 +1229,18 @@ func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thin
 	return nil, nil
 }
 
-func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry) (textOut string, itemsOut []map[string]any, resultErr error) {
+func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry, toolResultImages bool) (textOut string, itemsOut []map[string]any, resultErr error) {
 	blockIndex := -1
 	defer func() {
 		if resultErr != nil && blockIndex >= 0 {
 			path := fmt.Sprintf("content[%d]", blockIndex)
 			if resultErr.Error() == "tool_result.is_error" {
 				path += ".is_error"
+			} else {
+				var located *conversionLocationError
+				if errors.As(resultErr, &located) {
+					path += "." + located.Path
+				}
 			}
 			resultErr = &conversionLocationError{Path: path, Err: resultErr}
 		}
@@ -1279,7 +1287,7 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 			if role != "user" {
 				return "", nil, fmt.Errorf("tool_result requires user role")
 			}
-			mapped, err := anthropicToolBlockToResponses(block)
+			mapped, err := anthropicToolBlockToResponsesWithImages(block, toolResultImages)
 			if err != nil {
 				return "", nil, err
 			}
@@ -1522,6 +1530,10 @@ func stringifyToolOutput(raw any) (string, error) {
 }
 
 func anthropicToolBlockToResponses(block map[string]any) (map[string]any, error) {
+	return anthropicToolBlockToResponsesWithImages(block, false)
+}
+
+func anthropicToolBlockToResponsesWithImages(block map[string]any, images bool) (map[string]any, error) {
 	typ, _ := block["type"].(string)
 	switch typ {
 	case "tool_use":
@@ -1547,7 +1559,7 @@ func anthropicToolBlockToResponses(block map[string]any) (map[string]any, error)
 			return nil, fmt.Errorf("tool_result.%w", err)
 		}
 		id, _ := block["tool_use_id"].(string)
-		content, err := anthropicToolResultText(block["content"])
+		content, err := anthropicToolResultOutput(block["content"], images)
 		if err != nil {
 			return nil, err
 		}
@@ -1557,17 +1569,31 @@ func anthropicToolBlockToResponses(block map[string]any) (map[string]any, error)
 				return nil, fmt.Errorf("tool_result.is_error")
 			}
 			if failed {
-				encoded, _ := json.Marshal(struct {
-					Error  bool   `json:"error"`
-					Output string `json:"output"`
-				}{true, content})
-				content = string(encoded)
+				if parts, ok := content.([]map[string]any); ok {
+					content = append([]map[string]any{{"type": "input_text", "text": `{"error":true}`}}, parts...)
+				} else {
+					encoded, _ := json.Marshal(struct {
+						Error  bool `json:"error"`
+						Output any  `json:"output"`
+					}{true, content})
+					content = string(encoded)
+				}
 			}
 		}
 		if id == "" {
 			return nil, fmt.Errorf("tool_result.tool_use_id")
 		}
-		if len(content) > maxConversionToolArgumentBytes {
+		contentBytes := 0
+		if text, ok := content.(string); ok {
+			contentBytes = len(text)
+		} else {
+			encoded, err := json.Marshal(content)
+			if err != nil {
+				return nil, err
+			}
+			contentBytes = len(encoded)
+		}
+		if contentBytes > maxConversionToolArgumentBytes {
 			return nil, fmt.Errorf("tool result exceeds %d bytes", maxConversionToolArgumentBytes)
 		}
 		return map[string]any{"type": "function_call_output", "call_id": id, "output": content}, nil

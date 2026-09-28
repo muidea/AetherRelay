@@ -832,3 +832,18 @@ APIError.Code 必须进入 usage 和 metadata，model_not_found、conversion_uns
 - client cancellation rate。
 
 超过阈值时移除对应 model+endpoint profile 或将 Provider 切回原生 endpoint；其他提供相同 model+endpoint 的 Provider 会使用同一模板，因此模板回滚是模型端点级操作。若无 native 候选则明确返回 `conversion_unsupported`。配置回滚必须恢复旧 runtime snapshot、旧 `/v1/models` 能力输出和旧路由候选，不能只回滚 YAML 文件。
+
+
+### 2026-09-28：Codex 工具结果内图片
+
+x600 `claude-owner/000116`（Event `c882d76a…`）及 `000141`（Event `bedf047b…`）均在 `messages[198].content[0]` 返回 400 `conversion_unsupported`，无上游尝试。请求共有 200 条消息，`messages[197]` 为 Read 工具调用，下一条匹配工具结果的 `content[0]` 是约 128 KB Base64 PNG。触发点是工具结果只允许文本，非消息数量、首事件超时、模型故障或工具 call ID 缺失。
+
+Codex Messages 入口现在将工具结果内的内联 Base64 图片保留在同一 `function_call_output.output` 内容数组，文本为 `input_text`，图片为 `input_image` + data URL；顺序和 call ID 不变。协议依据为 [Codex 官方 FunctionCallOutputBody](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/models.rs)：output 支持文本或内容数组。纯文本结果仍拼接为原有字符串，失败纯文本结果保留原有 JSON 错误封装；失败图片结果在原内容数组前添加 `input_text` 错误标记，不把图片转为普通文本或移到无关联的 user 消息。
+
+只放行 PNG/JPEG/GIF/WebP 的 Base64 来源，校验编码及 MIME 与内容头一致；URL 来源不由代理抓取，document/audio 和普通消息图片不借本次变更开放。原有单项工具结果 1 MiB 预算覆盖混合内容的完整 JSON 编码，不放宽消息/协议内容块/深度/节点预算，也不开放通用 Provider 转换 profile。无效图片返回有界 `tool_result.image` 和完整 `messages[i].content[j].content[k].source.*` 路径；其它不支持的嵌套内容返回 `tool_result.content.type`，HTTP、usage、归档一致，不输出图片正文或 URL 值。
+
+回归使用合成 200 条消息，覆盖流式/非流式实际 handler 到 executor 的调用、内容顺序、错误结果标记、源请求不变、通用转换拒绝、无效 Base64/MIME/URL/document 的错误路径和归档/用量事实，以及混合结果总字节上限。线上仍需部署后复验。
+
+### 同日独立核对：accounts_cooling 503
+
+Event `3c884ecf9e39774d289d6e5d63444a11` 对应 `work-office/000131`，北京时间 11:32:45 被本地账号准入拒绝，`accounts_cooling`、`retryable=true`、`Retry-After=1`，未创建上游请求。原因是 11:32:15 的 `000117` 收到真实上游 HTTP 503（JSON detail 为 `Unable to verify Daybreak Blue access. Please try again.`），执行器记录 upstream 失败，账号池按现有临时故障规则为该账号/模型冷却 30 秒；中间请求的等待提示从 29 秒递减到 1 秒，没有因准入失败延长冷却。11:32:47 的 `000132` 在同一账号、相同入站正文和相同最终出站正文下重新发起，11:32:55 成功完成。该事件来自上游访问校验的临时失败，不是图片转换拒绝、首事件预算或 Provider 熔断；metadata 省略项也未阻止相同请求恢复。此次核对不修改账号冷却、身份投影或上游访问校验规则。
