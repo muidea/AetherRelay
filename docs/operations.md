@@ -269,6 +269,10 @@ Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时
 
 账号池 503 的 `accounts_cooling` 与 `Retry-After` 表示暂时冷却，不等于新一次上游故障；`no_eligible_account` 或 `accounts_busy_or_excluded` 需结合账号模型、状态和并发占用检查。准入拒绝、客户端取消/写失败和本地最大流时长不会追加 Provider 熔断样本。已有熔断到期后允许恢复请求，真实成功才清零连续失败；HTTP 200 的流仍须以合法终态确认成功。
 
+Codex HTTP/SSE/compact 失败日志新增 `transport_reason`，逐 attempt 的上游响应归档也记录同名字段。按 `request_id`、`account_attempt` 与 round 对照：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`unknown`；空值表示没有传输失败观测。该字段只表示结构化错误链提供的证据，不指明故障发生在代理还是目标端；TLS 未提供可识别类型时也可能为 unknown，不凭文本猜测。关闭交互归档仍输出逐次 WARN 日志。错误分类和冷却仍以原有 error_class 为准，不能把诊断原因作为新的重试或调度策略。
+
+2026-09-29 x600 Event `ae8d95028c58c470c6116c8852d79bdf` 对应 `claude-owner/005588`：09:29:55.664Z 前次 `005586` 发生上游 network 失败，触发 30 秒模型级冷却；09:30:25.382Z 重试在冷却到期前被本地拒绝，`Retry-After=1` 为剩余不足一秒向上取整，没有新的上游请求。09:31:29 起的 `005589` 及 09:35:12 起的 `005591` 均重新准入但再次 network 失败，不能把建议等待时间当作网络恢复保证。四次入站正文哈希相同。旧日志只保留泛化 network，不能回溯确认 DNS、连接或 TLS 原因；本次新增诊断仍需部署后观测，不代表网络故障已修复。
+
 ## 2026-09-20 转换观测升级说明
 
 13.0.0 不新增配置开关，配置模板无需改动。交互归档及 content/脱敏开关仍仅控制归档行为，不再决定转换和上游用量观测是否可见。

@@ -29,6 +29,9 @@ func readArchivedErrorObservation(response *http.Response, attempt *events.HTTPA
 	}
 	attempt.Response.ErrorBodyTruncated = truncated
 	attempt.Response.ErrorBodyReadFailed = err != nil
+	if err != nil {
+		attempt.Response.TransportReason = transportReason(err)
+	}
 	if profile.archiveFullContent {
 		if profile.archiveUnredacted {
 			attempt.Response.ErrorBody = bytes.Clone(body)

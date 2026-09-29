@@ -23,6 +23,7 @@ import (
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	fhttp "github.com/bogdanfinn/fhttp"
 	wsclient "github.com/bogdanfinn/websocket"
 	"github.com/google/uuid"
@@ -50,6 +51,7 @@ const (
 )
 
 type streamUpdate struct {
+	transportReason   transport.Reason
 	data              []byte
 	done              bool
 	errorClass        events.ErrorClass
@@ -132,6 +134,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 	}
 	payload, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
+		attempt.Response.TransportReason = completedTransportReason(class, err)
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
@@ -451,6 +454,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 	}
 	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
 	if err != nil {
+		attempt.Response.TransportReason = completedTransportReason(class, err)
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
@@ -529,7 +533,7 @@ func (s *Upstream) handlePull(ev event.Event, result event.Result) {
 		if update.done {
 			s.removeStream(cmd.StreamID)
 		}
-		result.Set(events.PullResult{Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit, SafeError: update.safeError}, nil)
+		result.Set(events.PullResult{TransportReason: update.transportReason, Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit, SafeError: update.safeError}, nil)
 	case <-time.After(timeout):
 		result.Set(events.PullResult{}, nil)
 	case <-ev.Context().Done():
@@ -643,10 +647,10 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol})
+				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol, transportReason: transport.EOF})
 				return
 			}
-			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyTransport(err)})
+			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyTransport(err), transportReason: transportReason(err)})
 			return
 		}
 	}
@@ -709,6 +713,7 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	response, err := client.Do(req)
 	if err != nil {
 		attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
+		attempt.Response.TransportReason = transportReason(err)
 		return nil, attempt, classifyTransport(err), 0, err
 	}
 	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
@@ -1263,7 +1268,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response ended without response.completed")
+				return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response ended without response.completed: %w", err)
 			}
 			return nil, classifyTransport(err), events.RateLimitObservation{}, events.SafeError{}, err
 		}

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
 type Header struct{ Name, Value string }
@@ -28,7 +30,8 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
-	ErrorBody           []byte // Bounded archive-only payload, never ordinary logging.
+	TransportReason     transport.Reason // CP-OBS-012: bounded diagnostic, never raw error text.
+	ErrorBody           []byte           // Bounded archive-only payload, never ordinary logging.
 	ErrorBodyFormat     string
 	ErrorBodyTruncated  bool
 	ErrorBodyReadFailed bool

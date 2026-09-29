@@ -16,6 +16,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
 type requestDebugInfo struct {
@@ -48,6 +49,7 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	TransportReason      transport.Reason    `json:"transport_reason,omitempty"`
 	ErrorBodyPath        string              `json:"error_body_path,omitempty"`
 	ErrorBodyFormat      string              `json:"error_body_format,omitempty"`
 	ErrorBodyTruncated   bool                `json:"error_body_truncated,omitempty"`
@@ -318,6 +320,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	responseInfo := upstreamResponseDebugInfo{
 		TransferEncoding: attempt.Response.TransferEncoding,
+		TransportReason:  attempt.Response.TransportReason.Safe(),
 		Attempt:          index,
 		RoundID:          round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
 		Status: attempt.Response.Status, DurationMS: attempt.Response.DurationMS,
@@ -367,8 +370,8 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	if written {
 		round.UpstreamResponseDigests[index] = digest
 	}
-	h.debugfRound(round, r, "round=%06d Codex upstream response provider=%s status=%d duration=%dms content_type=%q content_length=%d error=%q headers=%s",
-		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))))
+	h.debugfRound(round, r, "round=%06d Codex upstream response provider=%s status=%d duration=%dms content_type=%q content_length=%d error=%q transport_reason=%q headers=%s",
+		round.ID, providerName, responseInfo.Status, responseInfo.DurationMS, responseInfo.ContentType, responseInfo.ContentLength, responseInfo.Error, responseInfo.TransportReason, headerSummary(sanitizeHeaders(codexHeadersToHTTP(attempt.Response.Headers))))
 }
 
 // The callback stays within proxyapi; only value observations cross EventHub.

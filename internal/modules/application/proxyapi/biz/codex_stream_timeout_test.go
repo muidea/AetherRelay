@@ -16,6 +16,7 @@ import (
 	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -66,7 +67,7 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			up := event.NewSimpleObserver(upcommon.UnitID, hub)
 			up.Subscribe(upevents.TopicStart, func(ev event.Event, result event.Result) {
 				if tc.name == "network_before_output" {
-					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorNetwork}, nil)
+					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorNetwork, Attempt: upevents.HTTPAttempt{Request: upevents.HTTPRequestObservation{At: time.Now(), URL: "https://example.test/responses"}, Response: upevents.HTTPResponseObservation{TransportReason: transport.ConnectionRefused}}}, nil)
 					return
 				}
 				if tc.name == "headers" {
@@ -75,7 +76,7 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 					return
 				}
 				start := upevents.StartResult{StreamID: "stream"}
-				if tc.name == "first" {
+				if tc.name == "first" || tc.name == "cleanup_delay" {
 					start.Attempt = upevents.HTTPAttempt{Request: upevents.HTTPRequestObservation{At: time.Now(), Method: "POST", URL: "https://example.test/responses"}, Response: upevents.HTTPResponseObservation{Observed: true, Status: 200, ContentLength: -1}}
 				}
 				result.Set(start, nil)
@@ -87,7 +88,11 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 					if tc.name == "rate_limit_after_output" {
 						class = upevents.ErrorRateLimit
 					}
-					result.Set(upevents.PullResult{Done: true, ErrorClass: class}, nil)
+					reason := transport.Reason("")
+					if tc.name == "cleanup_delay" {
+						reason = transport.ConnectionReset
+					}
+					result.Set(upevents.PullResult{Done: true, ErrorClass: class, TransportReason: reason}, nil)
 					return
 				}
 				if tc.name == "first" || (tc.name == "idle" && n > 1) {
@@ -129,7 +134,11 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			var firstEvent time.Duration
+			var finalReason transport.Reason
 			err := proxy.StreamCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), ObserveAttempt: func(attempt codexresponses.HTTPAttempt, err error) {
+				if err != nil {
+					finalReason = attempt.Response.TransportReason
+				}
 				if err == nil && attempt.Response.Observed && attempt.Response.Status == 200 {
 					headersObserved.Store(true)
 				}
@@ -151,6 +160,18 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			failure, _ := codexresponses.AsFailure(err)
 			if (tc.want == "" && err != nil) || (tc.want != "" && (failure == nil || failure.Kind != tc.want)) {
 				t.Fatalf("failure=%+v want=%s", failure, tc.want)
+			}
+			if tc.name == "network_before_output" || tc.name == "cleanup_delay" {
+				wantReason := transport.ConnectionRefused
+				if tc.name == "cleanup_delay" {
+					wantReason = transport.ConnectionReset
+				}
+				if failure.Attempt.Response.TransportReason != wantReason || finalReason != wantReason {
+					t.Fatalf("reason=%q observed=%q want=%q", failure.Attempt.Response.TransportReason, finalReason, wantReason)
+				}
+				if tc.name == "cleanup_delay" && (!failure.Attempt.Response.Observed || failure.Attempt.Response.Status != 200) {
+					t.Fatal("lost observed HTTP 200")
+				}
 			}
 			if tc.name == "progress" && firstEvent <= 0 {
 				t.Fatalf("first event duration=%s", firstEvent)

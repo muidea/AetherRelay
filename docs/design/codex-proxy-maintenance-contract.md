@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`13.11.0`
+> 合同版本：`13.12.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-28
+> 生效日期：2026-09-29
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`13.12.0` 根据 x600 Event `ae8d95028c58c470c6116c8852d79bdf` 的账号冷却排查补齐 Codex HTTP/SSE/compact 传输原因诊断。前一请求 network 失败触发 30 秒模型级冷却，目标请求在剩余不足 1 秒时本地返回 503；后续重试仍网络失败。新增有界 `transport_reason`，由上游 owner 从错误链提取，经 typed observation/result 进入逐 attempt 日志与上游响应归档；不传原始错误文字、代理地址或凭据。保留原有错误分类、冷却、重试、客户端 envelope 和成功终态规则，历史记录不回填。验收覆盖握手失败、响应体读取失败、SSE 断流、未知原因脱敏、归档关闭时日志、归档终态幂等更新以及既有冷却规则；本地验证不能证明线上网络故障已恢复。按 MINOR 记录。
 
 `13.11.0` 根据 x600 `claude-owner/000909–000910` 的连续工具会话，将协议内容块累计预算由 512 提高到 4096，为 1024 条消息内的文本、工具调用和嵌套结果保留空间。上一轮 659 条消息、512 块成功，本轮 662 条、514 块在第 513 块处本地拒绝；树节点 5442、深度 7 均未超限。完整保留历史和工具关联，system 256、深度 32、节点 65536 及工具字节预算不变；继续累计嵌套 tool_result.content，不通过更改计数规则或裁剪历史放行。回归覆盖实际结构、4096/4097 边界及消息/内容块同时达到上限，不新增配置开关，按 MINOR 记录。
 
@@ -495,6 +497,8 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-003` 指标和日志只记录有界错误类别，不记录上游正文、token、代理凭据、原始 session 或完整 account ID。
 
+`CP-OBS-012` Codex HTTP/SSE/compact 的传输失败必须由 `codexupstream` owner 提取有界 `transport_reason`：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`unknown`。只依据结构化错误链识别，不从原始错误字符串猜测；未识别错误与非法投影值归为 `unknown`，无传输失败时字段为空/省略。typed attempt/result 向 proxyapi 传递安全枚举，逐次失败与流终止日志关联 request_id/account_attempt，`upstream_response[_NNN].json` 按同一 attempt 记录该字段；关闭归档仍有失败日志。握手与流终态更新不得丢失原因或伪造上游响应；合法终态后的正常 EOF 不记为失败。该诊断不参与错误分类、冷却、健康、重试或客户端错误 envelope，不持久化原始错误、代理地址、凭据、账号身份和会话值。
+
 `CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
 
 `CP-OBS-007` Responses 用量的 `input_tokens_details.cached_tokens` 映射到缓存读取，`input_tokens_details.cache_write_tokens` 映射到缓存创建；HTTP 非流式、SSE 终态和 compact 共享缓存解析。保留历史 creation 别名兼容，有效标准写入字段（包括零）优先，不叠加别名或重复终态，不从输入减读取推测写入。各协议在解析层统一归一到“输入 Token 含缓存读取与创建”的内部口径：Anthropic 报文的 `input_tokens` 本就不含缓存读取/创建，必须先与 `cache_read_input_tokens`、`cache_creation_input_tokens` 相加后才进入内部用量，由此得到的 `total_tokens` 反映真实提示词规模；归一化后的缓存读写仍是输入的可选子集，Anthropic 来源的缓存使用率因此在构造上恒在 `[0,1]`；其它协议仍以上游自报值为准，统计层不重写、不截断、也不为掩盖异常而上限截断（上游自报缓存读取大于总输入时按原值保留，作为上游异常供排障）。按 Anthropic 协议输出（原生归档响应、Responses→Anthropic 转换）时必须按同一口径反向扣除后再落盘/投影，保持与上游一致的报文形态，不得对下游重复计费。归一化对同一份 usage 只生效一次，重复终态或 message_delta 重复上报不得累加。缓存使用率为成功请求的累计读取 / 成功请求的累计输入；缓存读写分别携带 `*_known` 标志，显式零为已知、缺失或非法为未知。失败、超时、转换拒绝和未完成事件保留原始明细但不参与缓存聚合；成功请求中的未知字段分别剔除，使用率分母仅取读取已知的成功请求；聚合标志表示是否存在有效样本，不将缺失显示成零命中，不自动回填历史数据，历史归档与历史聚合不因口径修正而改写。验收必须包含非零写入、显式零、缺失/非法字段、别名优先级、失败/不完整终态、异常事件保留但聚合剔除，以及事件结算与 dashboard 汇总。
@@ -536,6 +540,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`13.12.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现 | 验收 |
+| --- | --- | --- | --- | --- |
+| 有界传输原因与逐次失败关联 | CP-OBS-012 / CP-OBS-003 | implemented（本地）；线上待部署复验 | `codexupstream/biz/transport_diagnostics.go`, `codexupstream/pkg/events`, `aetherrelaytransport/diagnostics.go`, `proxyapi/biz/codex_diagnostics.go`, `proxyapi/service/proxy/debug.go` | `codexupstream/biz/transport_diagnostics_test.go`, `proxyapi/biz/codex_diagnostics_test.go`, `codex_stream_timeout_test.go`, `proxyapi/service/proxy/transport_diagnostics_test.go` |
 
 `12.2.0` 新增实施追踪：
 

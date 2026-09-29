@@ -150,6 +150,7 @@ func logCodexStreamAttempt(request codexresponses.Request, failure *codexrespons
 	totalDurationMS := time.Since(g.started).Milliseconds()
 	slog.Warn("Codex stream stopped", "request_id", request.Diagnostics.RequestID,
 		"account_attempt", request.AccountAttempt, "phase", phase, "error_class", failure.Kind,
+		"transport_reason", failure.Attempt.Response.TransportReason.Safe(),
 		"duration_ms", totalDurationMS,
 		"first_event_duration_ms", durationMilliseconds(g.started, g.firstEvent),
 		"total_duration_ms", totalDurationMS, "event_count", g.events,

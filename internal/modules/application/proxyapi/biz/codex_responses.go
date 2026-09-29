@@ -951,7 +951,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 				// event they describe.
 				if update.Done {
 					if update.ErrorClass != "" {
-						return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
+						return codexStreamFailure(update, observedAttempt)
 					}
 					return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream ended before first business event"))
 				}
@@ -989,11 +989,19 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
-				return failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
+				return codexStreamFailure(update, observedAttempt)
 			}
 			return nil
 		}
 	}
+}
+
+// Preserve response headers and their duration when a stream reader fails later.
+func codexStreamFailure(update upevents.PullResult, attempt codexresponses.HTTPAttempt) *codexresponses.Failure {
+	failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
+	failure.Attempt = attempt
+	failure.Attempt.Response.TransportReason = update.TransportReason.Safe()
+	return failure
 }
 
 func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, headers []upevents.Header) {
@@ -1111,6 +1119,7 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			ErrorBody: bytes.Clone(attempt.Response.ErrorBody), ErrorBodyFormat: attempt.Response.ErrorBodyFormat,
 			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,
 			TransferEncoding: attempt.Response.TransferEncoding,
+			TransportReason:  attempt.Response.TransportReason.Safe(),
 			Observed:         attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
 			ContentLength: attempt.Response.ContentLength, DurationMS: attempt.Response.DurationMS,
 			Headers: toCodexHeaders(attempt.Response.Headers),

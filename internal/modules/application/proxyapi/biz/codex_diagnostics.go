@@ -41,7 +41,7 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 		if failure.Attempt.Response.Observed {
 			status = failure.Attempt.Response.Status
 		}
-		attrs = append(attrs, "error_class", string(failure.Kind), "upstream_error_code", failure.UpstreamCode, "upstream_status", status)
+		attrs = append(attrs, "error_class", string(failure.Kind), "upstream_error_code", failure.UpstreamCode, "upstream_status", status, "transport_reason", failure.Attempt.Response.TransportReason.Safe())
 		slog.Warn("Codex attempt failed", attrs...)
 	} else {
 		slog.Debug("Codex attempt completed", attrs...)
