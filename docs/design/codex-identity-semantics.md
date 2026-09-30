@@ -181,15 +181,16 @@ Turn 是一次逻辑交互，生命周期短于 Session，但不必等于一次 
 
 `User-Agent` 与 `Originator` 是客户端实现身份，不属于 Installation、Session 或 Thread，但在 `scoped` 模式下必须与账号的其它上游投影保持稳定。两者必须作为同一次请求观察到的原子 profile 处理，禁止从不同请求分别挑选再拼接。
 
-- `off`：推理请求保持合法原始值逐请求透传；没有下游请求上下文的账号域调用使用内置 profile。
+- `off`：推理请求仅透传合法 codex-tui 原子身份；没有下游请求上下文的账号域调用使用内置 profile。
 - `scoped`：账号实际被选中时观察候选，并为该账号选择一个稳定 profile；推理、refresh、模型发现和用量查询共用它。
-- 选择顺序：已验证 family 中 `codex-tui` 优先于 `codex_exec`；同 family 只向严格更高版本提升；同版本保留当前平台文本。
-- 当前只验证严格三段版本：`codex-tui 0.154.0..0.155.0` 与 `codex_exec 0.153.4`。未知 family、family/Originator/版本自述不一致、同版本其它平台和超出已验证范围的候选不改变账号状态。
+- 选择顺序：仅允许 `codex-tui` family；同 family 只向严格更高版本提升；同版本保留当前平台文本。
+- 版本采用严格三段格式，最低基线为 `codex-tui 0.154.0`；不设静态版本上限，合法高版本自动参与选择，同 family 严格单调晋升。未知 family、family/Originator/版本自述不一致、同版本其它平台、低于基线或格式非法的候选不改变账号状态。模型发现的 `client_version` 与选中的原子 profile 一致；必须实际观察到新客户端请求才会提升，不能由同步动作猜测版本。
+- `codex_exec` 及其它工具不具有候选资格，加载时清除其存量 profile。内置 fallback 使用既有真实流量的 codex-tui 0.155.0 原子身份；`off` 的出站身份也只允许合法 codex-tui，非法/其它工具整组回落。
 - profile 加密持久化，不进入管理视图、普通凭据导出或日志；OAuth 重认证保留，显式将槽位替换为另一账号凭据时清除。
 
-“合法原始值”是原子组概念：两个字段必须同时存在、长度有界且不含控制字符；任一字段缺失或非法时整组回落内置 profile，不能把客户端字段与内置字段拼接。非 Codex family 的完整安全组合不会成为 scoped 候选，scoped 账号尚无已选 profile 时也不会透传它；仅显式 `off` 保留这种完整组合。身份不具候选资格本身不构成业务请求错误。
+“合法原始值”是原子组概念：两个字段必须同时存在、长度有界且不含控制字符；任一字段缺失或非法时整组回落内置 profile，不能把客户端字段与内置字段拼接。非 Codex family 的完整安全组合不会成为 scoped 候选，scoped 账号尚无已选 profile 时也不会透传它；显式 `off` 也整组回落为内置 codex-tui profile。身份不具候选资格本身不构成业务请求错误。
 
-这是一种“来源于客户端的稳定选择”，不是固定伪造值，也不是把多个客户端的所有字段合并。验证上限或 family 顺序变化属于协议决策，必须同步修改合同、测试与本文。
+这是一种“来源于客户端的稳定选择”，不是固定伪造值，也不是把多个客户端的所有字段合并。最低版本、family 准入或版本选择规则变化属于协议决策，必须同步修改合同、测试与本文。
 
 ## 3. Turn Metadata 字段分层
 
@@ -292,7 +293,7 @@ Upstream Window       = Upstream Thread + ":" + ClientWindowNumber
 
 转换后的正文统一通过 Codex normalizer；目标层负责补齐 instructions、stream=true、store=false、缓存身份和每次尝试的 client_metadata，账号层负责鉴权、账号头及 Session/Thread/Window/Turn 投影。Installation 只在 scoped 下发送；Turn-State 依现有来源和回填规则处理，不能为凑齐字段编造。Anthropic-Version/Beta、X-Stainless-*、X-Claude-* 和 metadata.user_id、cache_control、thinking/output_config 的源协议形态不进入上游协议封装。消息文本、工具 schema/参数中的同名业务字段不属于协议头或封装，不得误删。
 
-账号选择发生前，当前请求携带原始 `User-Agent`/`Originator` 候选，但候选只有在账号实际入选后才可影响该账号。首次有效候选建立 profile；之后按 family 优先级和版本单调晋升。failover 时每个实际尝试的账号独立观察同一客户端候选，未被选中的账号不得被预热。
+账号选择发生前，当前请求携带原始 `User-Agent`/`Originator` 候选，但候选只有在账号实际入选后才可影响该账号。首次有效候选建立 profile；之后仅在 codex-tui family 内按版本单调晋升。failover 时每个实际尝试的账号独立观察同一客户端候选，未被选中的账号不得被预热。
 
 选择结果是账号物理投影的一部分，而不是 LogicalConversation 的一部分。因此多个下游 CLI 使用同一账号时仍保留各自 Session/Thread 隔离，但上游看到稳定的账号级客户端实现身份；不同账号可因各自观察历史而使用不同 profile。
 

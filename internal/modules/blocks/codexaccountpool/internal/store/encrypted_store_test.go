@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 	"aetherrelay/internal/pkg/aetherrelaycredential"
 )
 
@@ -24,6 +25,42 @@ func encryptedTestCodec(t *testing.T) *aetherrelaycredential.Codec {
 func TestOpenRequiresCredentialCodec(t *testing.T) {
 	if _, err := Open(filepath.Join(t.TempDir(), "aetherrelay.duckdb"), "256MB", 1, nil); err == nil {
 		t.Fatal("store accepted a missing credential codec")
+	}
+}
+
+// CP-HDR-025: removed tool identities are cleared from encrypted state on load.
+func TestEncryptedAccountLoadClearsCodexExecProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
+	codec := encryptedTestCodec(t)
+	store, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.Import([]events.CredentialInput{ReadOnlyCredential()}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.order[0]
+	store.items[id].ClientIdentityProfile = &codexidentity.ObservedProfile{
+		UserAgent:  "codex_exec/0.159.2 (Ubuntu; x86_64) terminal (codex_exec; 0.159.2)",
+		Originator: "codex_exec", Family: "codex_exec", Version: "0.159.2",
+	}
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		restored, err := Open(path, "256MB", 1, codec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if restored.items[id].ClientIdentityProfile != nil {
+			t.Fatal("removed codex_exec profile survived encrypted state reload")
+		}
+		if err := restored.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -71,7 +108,7 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	}
 	id := store.order[0]
 	seed := store.items[id].FingerprintSeed
-	observedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	observedUserAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
 	if !promoteClientIdentityProfile(store.items[id], events.ClientIdentityCandidate{UserAgent: observedUserAgent, Originator: "codex-tui"}) {
 		t.Fatal("valid observed identity was not selected")
 	}
@@ -100,7 +137,7 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	if restored.items[id].FingerprintSeed != seed {
 		t.Fatalf("fingerprint seed changed across restart: before=%q after=%q", seed, restored.items[id].FingerprintSeed)
 	}
-	if profile := restored.items[id].ClientIdentityProfile; profile == nil || profile.UserAgent != observedUserAgent || profile.Version != "0.155.0" {
+	if profile := restored.items[id].ClientIdentityProfile; profile == nil || profile.UserAgent != observedUserAgent || profile.Version != "0.159.2" {
 		t.Fatalf("observed client identity changed across restart: %+v", profile)
 	}
 }

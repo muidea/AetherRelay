@@ -88,7 +88,7 @@ func TestCodexModelsManifestFiltersExtendedReasoningForLegacyClients(t *testing.
 	if len(legacy.Models) != 1 || !reflect.DeepEqual(legacy.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}}) || legacy.Models[0].DefaultReasoningLevel != "medium" {
 		t.Fatalf("legacy manifest=%#v", legacy.Models)
 	}
-	for _, version := range []string{"0.144.0", "v0.149.1", "unparseable", ""} {
+	for _, version := range []string{"0.144.0", "v0.149.1", "0.159.2", "1.0.0", "unparseable", ""} {
 		modern := buildCodexModelsManifest(snapshot, clientaccess.All(), version)
 		if len(modern.Models) != 1 || !reflect.DeepEqual(modern.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}, {Effort: "max"}, {Effort: "ultra"}}) {
 			t.Fatalf("modern version=%q manifest=%#v", version, modern.Models)

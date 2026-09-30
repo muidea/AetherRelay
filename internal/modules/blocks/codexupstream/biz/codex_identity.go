@@ -8,6 +8,7 @@ import (
 
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	aetherrelaycodex "aetherrelay/internal/pkg/aetherrelaycodex"
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 )
 
 const (
@@ -50,7 +51,8 @@ func (p codexRequestProfile) requestOriginator() string {
 func (p codexRequestProfile) requestClientIdentity() (string, string, bool) {
 	userAgent := codexClientIdentityValue(p.clientIdentity.UserAgent, maxClientUserAgentBytes)
 	originator := codexClientIdentityValue(p.clientIdentity.Originator, maxClientOriginatorBytes)
-	return userAgent, originator, userAgent != "" && originator != ""
+	_, valid := codexidentity.ParseObserved(userAgent, originator)
+	return userAgent, originator, valid
 }
 
 type codexRequestProfile struct {

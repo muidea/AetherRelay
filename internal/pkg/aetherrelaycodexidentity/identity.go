@@ -18,9 +18,9 @@ type Profile struct {
 }
 
 var current = Profile{
-	ClientVersion: "0.153.4",
-	UserAgent:     "codex_exec/0.153.4 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex_exec; 0.153.4)",
-	Originator:    "codex_exec",
+	ClientVersion: "0.155.0",
+	UserAgent:     "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)",
+	Originator:    "codex-tui",
 	WebsocketBeta: "responses_websockets=2026-02-06",
 }
 
@@ -74,9 +74,9 @@ func ValidObservationReason(reason ObservationReason) bool {
 type observedVersion struct{ major, minor, patch int }
 
 // ParseObserved accepts only bounded, internally consistent client profiles
-// whose family and version have been verified against the current wire
-// contract. Unknown clients can still use the proxy but cannot mutate an
-// account-scoped identity profile.
+// whose supported family and minimum version satisfy the current wire
+// contract. Newer versions are accepted automatically. Unknown clients can still
+// use the proxy but cannot mutate an account-scoped identity profile.
 func ParseObserved(userAgent, originator string) (ObservedProfile, bool) {
 	profile, reason := ClassifyObserved(userAgent, originator)
 	return profile, reason == ObservationVerified
@@ -111,7 +111,7 @@ func ClassifyObserved(userAgent, originator string) (ObservedProfile, Observatio
 		return ObservedProfile{}, ObservationInvalidFormat
 	}
 	family, versionText := first[:separator], first[separator+1:]
-	if familyRank(family) == 0 {
+	if family != "codex-tui" {
 		return ObservedProfile{}, ObservationUnsupportedFamily
 	}
 	if originator != family {
@@ -124,16 +124,15 @@ func ClassifyObserved(userAgent, originator string) (ObservedProfile, Observatio
 	if !ok {
 		return ObservedProfile{}, ObservationInvalidFormat
 	}
-	minimum, maximum, supportedFamily := familyVersionRange(family)
-	if !supportedFamily || compareObservedVersion(version, minimum) < 0 || compareObservedVersion(version, maximum) > 0 {
+	minimum := observedVersion{major: 0, minor: 154, patch: 0}
+	if compareObservedVersion(version, minimum) < 0 {
 		return ObservedProfile{}, ObservationUnsupportedVersion
 	}
 	return ObservedProfile{UserAgent: userAgent, Originator: originator, Family: family, Version: versionText}, ObservationVerified
 }
 
-// PromoteObserved returns a new candidate only when it belongs to a preferred
-// verified family or has a strictly newer compatible version in the same
-// family. Equal versions keep the persisted platform/profile, preventing
+// PromoteObserved accepts only codex-tui candidates with a strictly newer
+// version. Equal versions keep the persisted platform/profile, preventing
 // clients on different platforms from making the account identity oscillate.
 func PromoteObserved(currentProfile, candidate ObservedProfile) (ObservedProfile, bool) {
 	candidate, validCandidate := ParseObserved(candidate.UserAgent, candidate.Originator)
@@ -144,42 +143,12 @@ func PromoteObserved(currentProfile, candidate ObservedProfile) (ObservedProfile
 	if !validCurrent {
 		return candidate, true
 	}
-	currentRank, candidateRank := familyRank(currentProfile.Family), familyRank(candidate.Family)
-	if candidateRank > currentRank {
-		return candidate, true
-	}
-	if candidateRank < currentRank || candidate.Family != currentProfile.Family {
-		return currentProfile, false
-	}
 	currentVersion, _ := parseObservedVersion(currentProfile.Version)
 	candidateVersion, _ := parseObservedVersion(candidate.Version)
 	if compareObservedVersion(candidateVersion, currentVersion) > 0 {
 		return candidate, true
 	}
 	return currentProfile, false
-}
-
-func familyRank(value string) int {
-	switch value {
-	case "codex-tui":
-		return 2
-	case "codex_exec":
-		return 1
-	default:
-		return 0
-	}
-}
-
-func familyVersionRange(value string) (observedVersion, observedVersion, bool) {
-	switch value {
-	case "codex-tui":
-		return observedVersion{major: 0, minor: 154, patch: 0}, observedVersion{major: 0, minor: 155, patch: 0}, true
-	case "codex_exec":
-		version := observedVersion{major: 0, minor: 153, patch: 4}
-		return version, version, true
-	default:
-		return observedVersion{}, observedVersion{}, false
-	}
 }
 
 func parseObservedVersion(value string) (observedVersion, bool) {

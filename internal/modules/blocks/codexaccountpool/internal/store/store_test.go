@@ -178,25 +178,40 @@ func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T)
 		t.Fatalf("put model snapshot ok=%v err=%v", ok, err)
 	}
 	work := events.ClientIdentityCandidate{UserAgent: "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)", Originator: "codex-tui"}
-	test := events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"}
+	test := events.ClientIdentityCandidate{UserAgent: "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)", Originator: "codex-tui"}
 
 	acquired, err := store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, work)
 	if err != nil || acquired.ClientIdentity.UserAgent != work.UserAgent || acquired.ClientIdentity.Version != "0.154.0" {
 		t.Fatalf("initial identity=%+v err=%v", acquired.ClientIdentity, err)
 	}
 	acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, test)
-	if err != nil || acquired.ClientIdentity.UserAgent != test.UserAgent || acquired.ClientIdentity.Version != "0.155.0" {
+	if err != nil || acquired.ClientIdentity.UserAgent != test.UserAgent || acquired.ClientIdentity.Version != "0.159.2" {
 		t.Fatalf("promoted identity=%+v err=%v", acquired.ClientIdentity, err)
 	}
 	for _, candidate := range []events.ClientIdentityCandidate{
 		work,
-		{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.155.0)", Originator: "codex-tui"},
-		{UserAgent: "codex-tui/0.156.0 (Ubuntu 24.4.0; x86_64) unknown (codex-tui; 0.156.0)", Originator: "codex-tui"},
+		{UserAgent: "claude-cli/99.0.0 (Ubuntu; x86_64) terminal (claude-cli; 99.0.0)", Originator: "claude-cli"},
+		{UserAgent: "opencode/99.0.0 (Ubuntu; x86_64) terminal (opencode; 99.0.0)", Originator: "codex-tui"},
+		{UserAgent: "codex-tui/99.0.0 (Ubuntu; x86_64) terminal (codex-tui; 99.0.0)", Originator: "claude-cli"},
+		{UserAgent: "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.159.2)", Originator: "codex-tui"},
+		{UserAgent: "codex-tui/0.158.0 (Ubuntu 24.4.0; x86_64) unknown (codex-tui; 0.158.0)", Originator: "codex-tui"},
 	} {
 		acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, candidate)
 		if err != nil || acquired.ClientIdentity.UserAgent != test.UserAgent {
 			t.Fatalf("identity was replaced by candidate=%+v: selected=%+v err=%v", candidate, acquired.ClientIdentity, err)
 		}
+	}
+
+	discovery := store.ListDiscoveryCandidates([]string{id}).Candidates
+	if len(discovery) != 1 || discovery[0].ClientIdentity.Version != "0.159.2" || discovery[0].ClientIdentity.UserAgent != test.UserAgent {
+		t.Fatalf("discovery lost promoted identity: %+v", discovery)
+	}
+	usage := store.ListUsageCandidates([]string{id}).Candidates
+	if len(usage) != 1 || usage[0].ClientIdentity != discovery[0].ClientIdentity {
+		t.Fatalf("usage lost promoted identity: %+v", usage)
+	}
+	if profile := store.ClientIdentityProfile(id); profile != discovery[0].ClientIdentity {
+		t.Fatalf("refresh lost promoted identity: %+v", profile)
 	}
 
 	off := events.FingerprintModeOff

@@ -22,6 +22,7 @@ import (
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
+	aetherrelaycodexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	fhttp "github.com/bogdanfinn/fhttp"
@@ -778,13 +779,15 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string, ident
 		return nil, events.ErrorProtocol, err
 	}
 	requestURL := modelsURL
-	if version := strings.TrimSpace(identity.Version); version != "" {
-		if parsed, parseErr := url.Parse(requestURL); parseErr == nil {
-			query := parsed.Query()
-			query.Set("client_version", version)
-			parsed.RawQuery = query.Encode()
-			requestURL = parsed.String()
-		}
+	version := currentIdentity.ClientVersion
+	if observed, valid := aetherrelaycodexidentity.ParseObserved(identity.UserAgent, identity.Originator); valid {
+		version = observed.Version
+	}
+	if parsed, parseErr := url.Parse(requestURL); parseErr == nil {
+		query := parsed.Query()
+		query.Set("client_version", version)
+		parsed.RawQuery = query.Encode()
+		requestURL = parsed.String()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {

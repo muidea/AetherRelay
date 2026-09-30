@@ -126,14 +126,14 @@ type TurnMetadata struct {
 }
 
 // ClientIdentity is the bounded downstream identity of CP-HDR-003/004. The
-// receiver normalizes both fields and falls back to the versioned profile
-// whenever one is empty, oversized, or contains control characters.
+// receiver accepts only a valid atomic codex-tui pair and otherwise falls back
+// to the versioned profile, including for identities from other tools.
 type ClientIdentity struct {
 	UserAgent  string
 	Originator string
 	// Version is populated only for a validated account-scoped observed profile.
-	// It lets account-domain endpoints align their explicit client_version query
-	// with the exact UA/originator pair selected by the account pool.
+	// This is a derived hint; model discovery revalidates the atomic pair and
+	// extracts its version rather than trusting this field independently.
 	Version string
 }
 

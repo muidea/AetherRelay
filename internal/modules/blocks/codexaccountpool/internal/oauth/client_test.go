@@ -39,7 +39,7 @@ func TestRefreshUsesCurrentCodexJSONContract(t *testing.T) {
 }
 
 func TestRefreshUsesSelectedAccountClientIdentity(t *testing.T) {
-	userAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	userAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") != userAgent || r.Header.Get("Originator") != "codex-tui" || r.Header.Get("Version") != "" {
 			t.Fatalf("selected credential identity headers=%v", r.Header)

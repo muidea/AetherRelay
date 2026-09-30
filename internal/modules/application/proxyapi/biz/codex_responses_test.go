@@ -364,8 +364,8 @@ func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 
 func TestResolvedCodexClientIdentityUsesScopedSelectionAndOffPassthrough(t *testing.T) {
 	rawUserAgent := "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
-	selectedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
-	profile := accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.155.0"}
+	selectedUserAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
+	profile := accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}
 	// Cross-protocol adapters deliberately send no source identity candidate.
 	for _, mode := range []string{accevents.FingerprintModeScoped, accevents.FingerprintModeOff} {
 		converted := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: mode, ClientIdentity: profile}, "", "")
@@ -425,7 +425,7 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	acquires := 0
 	rawUserAgent := "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
-	selectedUserAgent := "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)"
+	selectedUserAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
 	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
 		acquires++
 		if command := ev.Data().(accevents.AcquireCommand); command.ClientIdentity.UserAgent != rawUserAgent || command.ClientIdentity.Originator != "codex-tui" {
@@ -435,7 +435,7 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: rawUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.154.0"}}, nil)
 			return
 		}
-		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.155.0"}}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
 	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })

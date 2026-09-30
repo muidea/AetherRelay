@@ -686,7 +686,7 @@ func TestPerformKeepsCredentialHeadersWhenArchiveIsUnredacted(t *testing.T) {
 // CP-HDR-003/004: the inference path reuses the downstream client's bounded
 // identity and falls back to the versioned profile for anything rejected.
 func TestPerformReusesClientIdentity(t *testing.T) {
-	const clientAgent = "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
+	const clientAgent = "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.159.2)"
 	seen := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen <- r.Header.Clone()
@@ -715,6 +715,16 @@ func TestPerformReusesClientIdentity(t *testing.T) {
 		},
 		"partial pair": {
 			identity:     events.ClientIdentity{UserAgent: clientAgent},
+			wantAgent:    currentIdentity.UserAgent,
+			wantOriginat: currentIdentity.Originator,
+		},
+		"removed codex_exec": {
+			identity:     events.ClientIdentity{UserAgent: "codex_exec/99.0.0 (Ubuntu; x86_64) terminal (codex_exec; 99.0.0)", Originator: "codex_exec"},
+			wantAgent:    currentIdentity.UserAgent,
+			wantOriginat: currentIdentity.Originator,
+		},
+		"other tool": {
+			identity:     events.ClientIdentity{UserAgent: "claude-cli/99.0.0 (Ubuntu; x86_64) terminal (claude-cli; 99.0.0)", Originator: "claude-cli"},
 			wantAgent:    currentIdentity.UserAgent,
 			wantOriginat: currentIdentity.Originator,
 		},
@@ -1087,7 +1097,7 @@ func TestCodexWindowNumberTravelsToCarriers(t *testing.T) {
 }
 
 func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
-	selected := events.ClientIdentity{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui", Version: "0.155.0"}
+	selected := events.ClientIdentity{UserAgent: "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)", Originator: "codex-tui", Version: "0.159.2"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Query().Get("client_version") != selected.Version {
 			t.Fatalf("request=%s %s", r.Method, r.URL.String())
@@ -1115,8 +1125,43 @@ func TestListModelsUsesAccountHeadersAndProjectsSafeModelIDs(t *testing.T) {
 	}
 }
 
+// CP-HDR-021/025: the query version comes from the accepted atomic identity,
+// never a detached version field from another tool.
+func TestListModelsRejectsUnrelatedVersionInformation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		identity events.ClientIdentity
+		version  string
+	}{
+		{"codex-tui", events.ClientIdentity{UserAgent: "codex-tui/0.159.2 (Ubuntu; x86_64) terminal (codex-tui; 0.159.2)", Originator: "codex-tui", Version: "99.0.0"}, "0.159.2"},
+		{"codex_exec", events.ClientIdentity{UserAgent: "codex_exec/99.0.0 (Ubuntu; x86_64) terminal (codex_exec; 99.0.0)", Originator: "codex_exec", Version: "99.0.0"}, currentIdentity.ClientVersion},
+		{"other tool", events.ClientIdentity{UserAgent: "opencode/99.0.0", Originator: "opencode", Version: "99.0.0"}, currentIdentity.ClientVersion},
+		{"version only", events.ClientIdentity{Version: "99.0.0"}, currentIdentity.ClientVersion},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("client_version") != test.version {
+					t.Errorf("model query used unrelated version: %s", r.URL.RawQuery)
+				}
+				if r.Header.Get("Originator") != "codex-tui" {
+					t.Errorf("other tool identity leaked to model discovery")
+				}
+				_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-6.1-sol"}]}`))
+			}))
+			defer server.Close()
+			previousURL := modelsURL
+			modelsURL = server.URL + "?client_version=" + currentIdentity.ClientVersion
+			defer func() { modelsURL = previousURL }()
+			models, class, err := listModels(context.Background(), "access-token", "account-header", "", test.identity)
+			if err != nil || class != "" || len(models) != 1 || models[0].ID != "gpt-6.1-sol" {
+				t.Fatalf("model discovery failed: models=%+v class=%s err=%v", models, class, err)
+			}
+		})
+	}
+}
+
 func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
-	selected := events.ClientIdentity{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui", Version: "0.155.0"}
+	selected := events.ClientIdentity{UserAgent: "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)", Originator: "codex-tui", Version: "0.159.2"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/usage" {
 			t.Fatalf("request=%s %s", r.Method, r.URL.String())

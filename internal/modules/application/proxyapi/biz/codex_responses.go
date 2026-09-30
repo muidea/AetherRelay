@@ -17,6 +17,7 @@ import (
 	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
+	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 	"github.com/muidea/magicCommon/event"
 )
 
@@ -777,7 +778,7 @@ func resolvedCodexClientIdentity(account accevents.AcquireResult, userAgent, ori
 		}
 		return upevents.ClientIdentity{}
 	}
-	if strings.TrimSpace(userAgent) == "" || strings.TrimSpace(originator) == "" {
+	if _, valid := codexidentity.ParseObserved(userAgent, originator); !valid {
 		return upevents.ClientIdentity{}
 	}
 	return upevents.ClientIdentity{UserAgent: userAgent, Originator: originator}
