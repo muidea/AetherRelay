@@ -27,12 +27,13 @@ model_metadata:
 - metadata 条目不会让模型进入 `/v1/models`，不会建立路由，也不要求当前存在匹配模型；模型以后被配置或发现时会自动获得对应 metadata。
 - `context_window_tokens`、`max_context_window_tokens` 与 `max_output_tokens` 都是可选元数据；省略或为 `0` 表示未知或不适用。前两者分别表示客户端默认上下文窗口和服务端允许的最大上下文窗口；二者都显式大于 `0` 时，最大值不得小于默认值。`max_output_tokens` 与 `context_window_tokens` 都显式大于 `0` 时，最大输出必须小于默认上下文窗口。
 
-当前容量元数据（GPT-6/GPT-5.6/GPT-5.5/GPT-5.4-mini 使用 Codex 客户端预算）：
+当前容量元数据（GPT-6.1/GPT-6/GPT-5.6/GPT-5.5/GPT-5.4-mini 使用 Codex 客户端预算）：
 
 | Exact model ID | Default context | Max context | Max output |
 | --- | ---: | ---: | ---: |
 | `deepseek-v4-flash` / `DeepSeek-V4-Flash` | 1,000,000 | 未声明 | 29,000 |
 | `gpt-6-astra` | 272,000 | 872,000 | 128,000 |
+| `gpt-6.1-sol` | 272,000 | 872,000 | 128,000 |
 | `gpt-5.6-luna` / `gpt-5.6-sol` / `gpt-5.6-terra` | 272,000 | 872,000 | 128,000 |
 | `gpt-5.4-mini` | 272,000 | 272,000 | 128,000 |
 | `gpt-5.4` | 1,050,000 | 未声明 | 128,000 |
@@ -48,6 +49,8 @@ model_metadata:
 GPT 系列的客户端预算来自本机 Codex `0.153.4` 于 2026-09-07 获取的能力快照。它与公共 API 标称窗口不同：[GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra)、[GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)、[Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)、[Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) 和 [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) 的公共 API 页面标称 1,050,000，而 [GPT-5.4-mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini) 为 400,000。这里不据此提高 OAuth 通道配额；API-only 部署可按已确认的上游限制显式覆盖 metadata。`max_output_tokens` 是模型能力上限，不保证在每个输入长度下仍有同等剩余输出空间。
 
 这里的 GPT-6 精确 ID 是 `gpt-6-astra`；不创建 `gpt-6` 别名或把请求模型自动改写为 Astra。静态能力声明不证明账号有模型访问权限，也不能修复上游 `model_not_found`。旧部署须同步自己的 `model_metadata`（安装新二进制不会覆盖现有 YAML），重启或通过管理页保存后核对 `/v1/models` 与 `/v1/models?client_version=0.153.4`；不要覆盖已有 Provider、凭据或非目标模型配置。
+
+2026-09-30 补充 `gpt-6.1-sol`：上下文 272,000 / 872,000、默认 reasoning `low`、档位 `[low, medium, high, xhigh, max, ultra]` 和图片输入来自本机 Codex `0.159.2` 于 `2026-09-30T01:58:33Z` 获取的模型快照；128,000 最大输出和原生 Responses tools 来自 [OpenAI 官方模型说明](https://developers.openai.com/api/docs/models/gpt-6.1-sol)。公共 API 声明的默认 effort 为 `medium`、档位不含 `ultra`、窗口为 1,050,000，不能用来替换 Codex 通道口径。当前证据只确认这一 GPT-6.1 exact ID；不推测其它系列 ID。本次仅登记 YAML 元数据，不添加转换模板或 Codex 可信 manifest profile，也不据本机发现结果宣称 x600 账号已有访问权限。
 
 | 字段 | 层级 | 枚举 |
 | --- | --- | --- |

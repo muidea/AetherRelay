@@ -271,6 +271,8 @@ Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时
 
 Codex HTTP/SSE/compact 失败日志新增 `transport_reason`，逐 attempt 的上游响应归档也记录同名字段。按 `request_id`、`account_attempt` 与 round 对照：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`unknown`；空值表示没有传输失败观测。该字段只表示结构化错误链提供的证据，不指明故障发生在代理还是目标端；TLS 未提供可识别类型时也可能为 unknown，不凭文本猜测。关闭交互归档仍输出逐次 WARN 日志。错误分类和冷却仍以原有 error_class 为准，不能把诊断原因作为新的重试或调度策略。
 
+2026-09-30 已在 x600 `/home/workspace/deploy/config/config.yaml` 的 `model_metadata` 补充 `gpt-6.1-sol`，与配置模板一致：272,000 / 872,000 上下文、128,000 最大输出、默认 `low`、reasoning 档位到 `ultra`、原生 Responses tools 与图片输入。来源及 API/Codex 差异见[配置参考](configuration.md)。原配置备份为同目录 `config.yaml.bak-20260930-022632-gpt61-sol`；修改前后解析对比确认其它模型和配置未变。目标元数据规范化 SHA-256 为 `df33c0dbe9ebf85c5bf50dbf919b43756e4a2b1c5e1d682a0e95f63a0ca74c1f`。本次仅更新配置文件，未重新加载运行实例；需重启或通过管理页保存后核对实际目录与账号模型发现，文件更新不证明在线访问成功。
+
 2026-09-29 x600 Event `ae8d95028c58c470c6116c8852d79bdf` 对应 `claude-owner/005588`：09:29:55.664Z 前次 `005586` 发生上游 network 失败，触发 30 秒模型级冷却；09:30:25.382Z 重试在冷却到期前被本地拒绝，`Retry-After=1` 为剩余不足一秒向上取整，没有新的上游请求。09:31:29 起的 `005589` 及 09:35:12 起的 `005591` 均重新准入但再次 network 失败，不能把建议等待时间当作网络恢复保证。四次入站正文哈希相同。旧日志只保留泛化 network，不能回溯确认 DNS、连接或 TLS 原因；本次新增诊断仍需部署后观测，不代表网络故障已修复。
 
 ## 2026-09-20 转换观测升级说明
