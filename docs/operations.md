@@ -224,6 +224,24 @@ CSV 仅用于导出当前用量，不提供旧 CSV 导入。交互归档默认�
 
 不要直接复制正在写入的 DuckDB 文件。建议流程：停止接收新请求、等待当前写入完成、执行 checkpoint、复制 `state.database`，并将需要保留的 `state.dir/interactions/`、`state.dir/images/` 与 `state.dir/image_thumbnails/` 一并复制，随后恢复服务。数据库与整个 `state.dir` 必须由同一个实例独占。
 
+### DuckDB WAL 回放失败
+
+2026-10-08 x600 在加载 `aetherrelay.duckdb.wal` 时出现 `GetDefaultDatabase with no default database set`，容器循环退出，尚未接收业务请求。用 DuckDB v1.5.4 复现：对带 `length(outcome)` CHECK 的用量表执行 `ALTER TABLE ... ADD COLUMN` 后异常退出，重开文件触发同一断言。这与上游 [WAL 回放问题](https://github.com/duckdb/duckdb/issues/21490) 属于相同错误族；现场的具体回放栈为 `ReplayAlter → SetDefault → BindCheckConstraint`。
+
+启动时直接创建完整新表，已有观测列不再执行 `ADD COLUMN IF NOT EXISTS`；旧布局只添加实际缺失列，每次添加后执行 checkpoint。该收口减少不必要的 catalog WAL，不能保证底层 DuckDB 在迁移过程中的任意断电窗口均无故障。回归测试覆盖新库、已有库、旧布局升级后的异常退出和重开，验证已提交事件仍在。
+
+出现上述回放失败时，先停止服务及所有写入者，保留数据库与 `.wal` 成对备份。使用包含恢复子命令的同版本驱动构建执行：
+
+```bash
+./AetherRelay admin recover-state --database /path/to/aetherrelay.duckdb
+```
+
+命令要求数据库和 WAL 均为非空普通文件，在同目录生成权限为 `0700` 的 `*.recovery-backup-*`，保存原始两个文件（`0600`）并核对 SHA-256。随后在已初始化的内存数据库中 ATTACH 原库，完整回放 WAL，再执行 checkpoint；最后通过普通打开路径重开，核对所有 main schema 表的行数及聚合行指纹。只输出备份位置和表行数，不输出行内容或凭据。恢复失败保留备份并返回非零，不自动删除 WAL、不创建空库、不自动回滚覆盖原文件。确认恢复成功后再启动服务，并核对健康检查和业务调用。
+
+容器可先 `docker compose stop aetherrelay`，再用相同镜像和数据挂载执行 `docker compose run --rm --no-deps aetherrelay AetherRelay admin recover-state --database /var/lib/aetherrelay/aetherrelay.duckdb`；恢复成功后 `docker compose up -d aetherrelay`。镜像必须包含该子命令。文件锁仍是最后一道保护，不能用它替代停止写入；备份目录包含敏感运行状态，应与主数据一起受控保管。
+
+现场验收（2026-10-08）：原库与 WAL 已保存在 x600 `/home/workspace/deploy/recovery-20261008/original/`，替换前文件另保存在 `before-restore/`；原文件 SHA-256 在替换前再次确认不变。真实副本用恢复命令完整回放并校验各表行数与聚合行指纹，包括 48,622 条用量事件、32 条加密文档、8 条客户端 Key 元数据与 14 条 Provider access 关系。恢复文件传回后再次核对 SHA-256，在停止容器期间替换数据库并移走已回放的原 WAL 至备份。20:29（北京时间）现有 `1985354` 容器重新启动，健康检查 200、重启次数 0；20:30 最小 `gpt-6.1-sol` Responses 非流式请求 round `034054` 返回 200、`outcome=success`，耗时 2.476 秒。数据库恢复已完成，本次迁移防复发代码尚未部署；这一次最小成功请求不能证明长流或持续并发均已恢复。
+
 ## Provider live probe
 
 Probe 不会在服务启动时运行，可用于验证某个已配置 Provider 的 direct endpoint：

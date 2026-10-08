@@ -159,6 +159,7 @@ func TestObservationColumnsPreserveExistingDatabase(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	removeObservationColumnsForLegacyFixture(t, db)
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -173,5 +174,32 @@ func TestObservationColumnsPreserveExistingDatabase(t *testing.T) {
 	}
 	if len(page.Events) != 1 || page.Events[0].InputTokens != 100 || page.Events[0].CachedInputTokensKnown || page.Events[0].CacheCreationInputTokensKnown {
 		t.Fatalf("history changed: %+v", page)
+	}
+}
+
+func removeObservationColumnsForLegacyFixture(t *testing.T, db *sql.DB) {
+	t.Helper()
+	// DuckDB rejects DROP COLUMN on indexed tables, even when the index does not
+	// reference that column. Restore the original indexes after the fixture edit.
+	for _, index := range []string{"idx_usage_events_started_at", "idx_usage_events_key_time", "idx_usage_events_date_key", "idx_usage_events_provider_model"} {
+		if _, err := db.Exec("DROP INDEX " + index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, column := range []string{"cached_input_tokens_known", "cache_creation_input_tokens_known"} {
+		if _, err := db.Exec("ALTER TABLE usage_events DROP COLUMN " + column); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = createSchema(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

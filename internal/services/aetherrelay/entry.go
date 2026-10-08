@@ -29,6 +29,7 @@ func Run(version string) int {
 		fmt.Fprintln(out, "  AetherRelay [-config <config.yaml>]")
 		fmt.Fprintln(out, "  AetherRelay admin password-hash")
 		fmt.Fprintln(out, "  AetherRelay admin set-credentials --username <username> [--config <config.yaml>]")
+		fmt.Fprintln(out, "  AetherRelay admin recover-state --database <database.duckdb>")
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "Service options:")
 		flag.PrintDefaults()

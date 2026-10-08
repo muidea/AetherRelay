@@ -10,7 +10,6 @@ import (
 )
 
 // tryAdminSubcommand 处理受限的 admin 子命令。
-// 当前仅支持: AetherRelay admin password-hash
 // 成功处理后返回 (code, true);未匹配时返回 (0, false) 以继续主服务。
 func tryAdminSubcommand(args []string) (int, bool) {
 	if len(args) == 0 || args[0] != "admin" {
@@ -33,6 +32,8 @@ func tryAdminSubcommand(args []string) (int, bool) {
 		return runAdminPasswordHash(), true
 	case "set-credentials":
 		return runAdminSetCredentials(args[2:]), true
+	case "recover-state":
+		return runAdminRecoverState(args[2:]), true
 	default:
 		fmt.Fprintf(os.Stderr, "unknown admin subcommand %q\n", args[1])
 		printAdminCommandUsage()
@@ -46,6 +47,8 @@ func printAdminCommandUsage() {
 	fmt.Fprintln(os.Stderr, "      Interactively generate an Argon2id password hash.")
 	fmt.Fprintln(os.Stderr, "  AetherRelay admin set-credentials --username <username> [--config <config.yaml>]")
 	fmt.Fprintln(os.Stderr, "      Create or reset Admin login credentials and enable Admin authentication.")
+	fmt.Fprintln(os.Stderr, "  AetherRelay admin recover-state --database <database.duckdb>")
+	fmt.Fprintln(os.Stderr, "      Offline WAL recovery with a complete backup; stop the service first.")
 }
 
 // runAdminPasswordHash 从交互式 TTY 两次读取密码(关闭回显),

@@ -35,12 +35,26 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
 	}
-	// DuckDB cannot reliably commit multiple ALTERs on a persisted indexed table
-	// in one transaction. Each additive step is independently atomic/idempotent;
-	// interruption is safe to resume and never rewrites existing usage or keys.
+	// Existing columns must not be ALTERed again: DuckDB can emit catalog changes
+	// even for ADD COLUMN IF NOT EXISTS, leaving a WAL that fails crash recovery
+	// when the table also contains function-based CHECK constraints.
 	for _, column := range []string{"cached_input_tokens_known", "cache_creation_input_tokens_known"} {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS "+column+" BOOLEAN DEFAULT FALSE"); err != nil {
+		var present int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
+WHERE table_catalog = current_database() AND table_schema = 'main'
+AND table_name = 'usage_events' AND column_name = ?`, column).Scan(&present); err != nil {
+			return fmt.Errorf("inspect usage observation column: %w", err)
+		}
+		if present > 0 {
+			continue
+		}
+		// Legacy additions remain separate transactions because DuckDB cannot
+		// reliably commit multiple ALTERs on an indexed table in one transaction.
+		if _, err := db.ExecContext(ctx, "ALTER TABLE usage_events ADD COLUMN "+column+" BOOLEAN DEFAULT FALSE"); err != nil {
 			return fmt.Errorf("add usage observation column: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, "CHECKPOINT"); err != nil {
+			return fmt.Errorf("checkpoint usage observation migration: %w", err)
 		}
 	}
 	return nil
@@ -81,6 +95,8 @@ func createSchema(ctx context.Context, tx *sql.Tx) error {
     total_tokens                BIGINT NOT NULL DEFAULT 0,
     cached_input_tokens         BIGINT NOT NULL DEFAULT 0,
     cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0,
+    cached_input_tokens_known    BOOLEAN DEFAULT FALSE,
+    cache_creation_input_tokens_known BOOLEAN DEFAULT FALSE,
 
     http_status                 INTEGER,
     outcome                     VARCHAR,

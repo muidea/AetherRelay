@@ -6,7 +6,7 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`14.1.1`
+> 合同版本：`14.1.2`
 >
 > 状态：`active`
 >
@@ -15,6 +15,8 @@
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`14.1.2` 收口 x600 镜像 `1985354` 的共享数据库启动故障：Codex 注册错误已消失，但配置 Block 打开 DuckDB 时因 WAL `ReplayAlter → SetDefault → BindCheckConstraint` 触发缺失 default database 的内部断言，容器循环退出。固定 DuckDB v1.5.4 在真实副本和最小崩溃样本复现。用量新表直接包含两个缓存观测 presence 列，已有列不重复 ALTER，旧表只对实际缺失列独立添加并 checkpoint；不改写历史观测含义。增加显式离线 `admin recover-state`：先保存并校验原库/WAL 副本，在已初始化内存库中 ATTACH 完整回放，checkpoint 后由普通路径重开并核对各表行数与聚合行指纹，不丢弃 WAL、不自动创建空库。测试覆盖正常/旧布局的异常退出重开及 WAL 中新增记录恢复；操作流程见[备份与维护](../operations.md#duckdb-wal-回放失败)。本地代码收口与生产数据库恢复分别验收，新代码仍须独立部署。按 PATCH 记录。
 
 `14.1.1` 修复 2026-10-08 x600 镜像 `3cb2b16` 的 Codex upstream 注册失败：Block 的 `BeginShutdown(context.Context)` 必须无返回值，符合 magicCommon `v1.5.21` 的 `ShutdownStarter`；`Quiesce` 仍返回排空错误。错误签名使模块未注册，rounds `034043/034045/034047/034049` 在进入上游 HTTP 前立即返回 502，随后 `034044/034046` 为 `accounts_cooling`、`034048` 为 `circuit_open` 503。注册改用 `module.MustRegister`，必需模块注册失败直接中止启动；增加生命周期接口编译断言与 framework 注册、Setup、Run、事件投递、停止准入、Quiesce、重复 Teardown 验收，并纳入 Codex 合同检查脚本。此前 biz 层测试不能覆盖此启动缺口。按 PATCH 记录，本地验收通过不代表 x600 已部署修复。
 
@@ -697,6 +699,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | 指纹收敛 | CP-FP-001..005 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `encrypted_store_test.go`, `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
 | 必需 upstream 注册与生命周期 | CP-SCHED-001 | implemented（本地）；部署待复验 | `codexupstream/module.go`, `scripts/check-codex-contract.sh` | `codexupstream/module_test.go` |
+| 共享存储异常退出与 WAL 恢复 | CP-OBS-007 | implemented（本地）；新代码部署待复验 | `aetherrelayusage/schema.go`, `aetherrelaystate/recovery.go`, `aetherrelay/admin_recovery.go` | `schema_crash_test.go`, `recovery_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 永久鉴权失败终态 | CP-FAIL-020 | implemented | `codexaccountpool/internal/store/store.go`, `codexaccountpool/internal/store/model_availability.go`, `proxyapi/biz/codex_responses.go`, `proxy/codex_responses.go`, `proxy/codex_websocket.go` | `codexaccountpool/internal/store/store_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/biz/codex_responses_test.go`, `proxy/codex_health_test.go`, `proxy/codex_websocket_test.go` |
 | 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
