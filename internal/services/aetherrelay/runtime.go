@@ -72,10 +72,13 @@ func startGateway() error {
 	return nil
 }
 
-func (r *Runtime) Shutdown(ctx context.Context) {
+func (r *Runtime) Shutdown(ctx context.Context) error {
 	if r != nil && r.application != nil {
-		r.application.Shutdown(ctx)
+		if err := r.application.ShutdownChecked(ctx); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func waitGateway(ctx context.Context) error {

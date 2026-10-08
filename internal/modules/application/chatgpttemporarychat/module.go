@@ -6,12 +6,13 @@ import (
 	"context"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
+	plugincommon "github.com/muidea/magicCommon/framework/plugin/common"
 	"github.com/muidea/magicCommon/framework/plugin/module"
 	"github.com/muidea/magicCommon/task"
 )
 
 func init() {
-	module.Register(New())
+	module.MustRegister(New())
 }
 
 type TemporaryChat struct {
@@ -44,5 +45,13 @@ func (s *TemporaryChat) Run(ctx context.Context) *cd.Error {
 func (s *TemporaryChat) Teardown(ctx context.Context) {
 	if s.bizPtr != nil {
 		s.bizPtr.Teardown(ctx)
+	}
+}
+
+var _ plugincommon.ShutdownStarter = (*TemporaryChat)(nil)
+
+func (s *TemporaryChat) BeginShutdown(ctx context.Context) {
+	if s.bizPtr != nil {
+		s.bizPtr.BeginShutdown(ctx)
 	}
 }

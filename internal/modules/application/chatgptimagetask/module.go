@@ -6,12 +6,13 @@ import (
 	"context"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
+	plugincommon "github.com/muidea/magicCommon/framework/plugin/common"
 	"github.com/muidea/magicCommon/framework/plugin/module"
 	"github.com/muidea/magicCommon/task"
 )
 
 func init() {
-	module.Register(New())
+	module.MustRegister(New())
 }
 
 type ImageTask struct {
@@ -44,5 +45,13 @@ func (s *ImageTask) Run(ctx context.Context) *cd.Error {
 func (s *ImageTask) Teardown(ctx context.Context) {
 	if s.bizPtr != nil {
 		s.bizPtr.Teardown(ctx)
+	}
+}
+
+var _ plugincommon.ShutdownStarter = (*ImageTask)(nil)
+
+func (s *ImageTask) BeginShutdown(ctx context.Context) {
+	if s.bizPtr != nil {
+		s.bizPtr.BeginShutdown(ctx)
 	}
 }

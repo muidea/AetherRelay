@@ -5,9 +5,9 @@
 
 The DuckDB driver conforms to the built-in `database/sql` interface.
 
-**Current DuckDB version: `v1.5.4`.**
+**Current DuckDB version: `v1.5.6`.**
 
-The first duckdb-go tag with that version is `v2.10504.0`.
+The first duckdb-go tag with that version is `v2.10506.0`.
 
 Starting with DuckDB `v1.5.0`, the duckdb-go version encodes the DuckDB version in its second semver component.
 The format is `v2.MAJOR_MINOR_PATCH.x`, e.g., DuckDB `v1.5.0` maps to duckdb-go `v2.10500.x`.
@@ -16,11 +16,14 @@ Previous DuckDB versions:
 
 | DuckDB   | duckdb-go    |
 |----------|--------------|
+| `v1.5.6` | `v2.10506.0` |
+| `v1.5.5` | `v2.10505.0` |
 | `v1.5.4` | `v2.10504.0` |
 | `v1.5.3` | `v2.10503.1` |
 | `v1.5.2` | `v2.10502.0` |
 | `v1.5.1` | `v2.10501.0` |
 | `v1.5.0` | `v2.10500.0` |
+| `v1.4.5` | `v2.5.6`     |
 | `v1.4.4` | `v2.5.5`     |
 | `v1.4.3` | `v2.5.4`     |
 | `v1.4.2` | `v2.5.2`     |
@@ -81,6 +84,7 @@ The license is unchanged: the migrated repository keeps the original MIT license
 > [!WARNING]
 > Starting with `v2.0.0`, duckdb-go supports DuckDB `v1.2.0` and upward.
 > Moving to `v2` includes the following list of breaking changes.
+> Later `v2` releases add to the list; those entries say so.
 
 #### Dropping pre-built FreeBSD support
 
@@ -104,6 +108,17 @@ It is now possible to scan into `any`, or directly into duckdb-go's `Composite` 
 as shown in the [JSON example](https://github.com/duckdb/duckdb-go/blob/main/examples/json/main.go).
 Scanning directly into `string` or `[]byte` is no longer possible.
 A workaround is casting to `::VARCHAR` or `::BLOB` in DuckDB if you do not need to scan the result into a JSON interface.
+
+#### JSON type writing changes
+
+This change landed after `v2.0.0`, so it also affects upgrades between `v2` releases.
+
+`SetChunkValue` and `SetRowValue` previously wrote to a `JSON` column by storing the value verbatim,
+because DuckDB stores `JSON` as `VARCHAR` and the two were indistinguishable on the write path.
+They now marshal the value with `encoding/json`, matching what `DataChunk.SetValue` has always done.
+
+This changes what a `string` or a `[]byte` writes: a `string` becomes a JSON string (`hello` is stored as `"hello"`),
+and a `[]byte` becomes a base64-encoded JSON string. Use `json.RawMessage` to write a pre-serialized JSON document.
 
 ## Installation
 
@@ -456,13 +471,14 @@ Additionally, automatic extension loading is enabled.
 
 Prepare normal releases from `main`. For LTS releases that stay on DuckDB 1.4 Andium, use the `v1.4-andium` branch.
 
-1. Create a new branch.
-2. Update `duckdb-go-bindings` via `go get github.com/duckdb/duckdb-go-bindings@latest`.
-3. Run `go mod tidy`.
-4. Update `DUCKDB_VERSION` in `Makefile`.
-5. Update the latest version in `README.md`.
-6. Commit and PR changes.
-7. Push a new tagged release, `v2.MAJOR_MINOR_PATCH.x`, e.g. `v2.10500.0` for DuckDB 1.5.0.
+1. Release the new DuckDB version in [duckdb-go-bindings](https://github.com/duckdb/duckdb-go-bindings#releasing-a-new-duckdb-version).
+2. Create a new branch.
+3. Update `duckdb-go-bindings` via `go get github.com/duckdb/duckdb-go-bindings@latest`.
+4. Run `go mod tidy`.
+5. Update `DUCKDB_VERSION` in `Makefile`.
+6. Update the latest version and the version table in `README.md`.
+7. Commit and PR changes. Link the bindings release in the PR description.
+8. After the PR is merged, push a new tagged release, `v2.MAJOR_MINOR_PATCH.x`, e.g. `v2.10500.0` for DuckDB 1.5.0, and publish a GitHub release for the tag.
 
 ```
 git tag <tagname>

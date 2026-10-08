@@ -85,18 +85,20 @@ func New(hub event.Hub, background task.BackgroundRoutine) (*ConfigRuntime, *cd.
 
 func (s *ConfigRuntime) Run(context.Context) *cd.Error { return nil }
 
-func (s *ConfigRuntime) Teardown(context.Context) {
+func (s *ConfigRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(configevents.TopicBootstrap)
 	s.UnsubscribeFunc(configevents.TopicActivate)
 	s.UnsubscribeFunc(configevents.TopicReplaceProviders)
 	s.mu.Lock()
-	s.bootstrap = configevents.Bootstrap{}
-	s.managedProviders = false
+	defer s.mu.Unlock()
 	if s.providers != nil {
-		_ = s.providers.Close()
+		if err := s.providers.CloseContext(ctx); err != nil {
+			panic(cd.NewError(cd.Unexpected, "close provider state: "+err.Error()))
+		}
 		s.providers = nil
 	}
-	s.mu.Unlock()
+	s.bootstrap = configevents.Bootstrap{}
+	s.managedProviders = false
 }
 
 func (s *ConfigRuntime) handleReplaceProviders(ev event.Event, result event.Result) {

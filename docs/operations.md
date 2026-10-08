@@ -242,6 +242,20 @@ CSV 仅用于导出当前用量，不提供旧 CSV 导入。交互归档默认�
 
 现场验收（2026-10-08）：原库与 WAL 已保存在 x600 `/home/workspace/deploy/recovery-20261008/original/`，替换前文件另保存在 `before-restore/`；原文件 SHA-256 在替换前再次确认不变。真实副本用恢复命令完整回放并校验各表行数与聚合行指纹，包括 48,622 条用量事件、32 条加密文档、8 条客户端 Key 元数据与 14 条 Provider access 关系。恢复文件传回后再次核对 SHA-256，在停止容器期间替换数据库并移走已回放的原 WAL 至备份。20:29（北京时间）现有 `1985354` 容器重新启动，健康检查 200、重启次数 0；20:30 最小 `gpt-6.1-sol` Responses 非流式请求 round `034054` 返回 200、`outcome=success`，耗时 2.476 秒。数据库恢复已完成，本次迁移防复发代码尚未部署；这一次最小成功请求不能证明长流或持续并发均已恢复。
 
+### 停机与发布屏障
+
+主进程在正常信号、启动失败和运行失败后都等待 `ShutdownChecked`。每次排空使用独立的 30 秒 context，未完成则保留剩余 owner 并每秒重试；只有请求、后台任务、EventHub 和数据库全部释放才记录 `AetherRelay shutdown completed`。HTTP Initiator 在 BeginShutdown 停止接入，在 Quiesce 等待已接收请求；超时不释放路由及依赖。用量和共享状态最后一个 owner 在 checkpoint 成功后才关闭数据库；checkpoint 失败保留句柄供重试。`database/sql` 的底层 Close 错误无法重试，后续调用保留失败回执，不误报成功。
+
+仓库 Compose 与部署脚本生成的 Compose 均使用 `stop_grace_period: 120s`。部署脚本在 `up` 前显式停止旧容器，检查退出状态、OOM 状态以及从该容器当前 StartedAt 起的停机完成记录；检查失败保留旧容器和数据库并中止发布。退出码 0 本身不是数据库安全关闭的证明。直接 `docker compose up -d` 不具备脚本的回执检查，升级使用 `scripts/deploy-docker.sh`。首次从没有完成记录的旧版本切换时，脚本会中止：停止所有写入后成对备份数据库/WAL，使用目标镜像执行离线 checkpoint（存在故障 WAL 时使用恢复命令）并验证普通打开，再由运维显式切换镜像；不添加跳过校验的发布参数。
+
+后续 schema 变更使用独立离线迁移及备份、checkpoint、重开验证，业务启动继续只支持最终 schema。异常断电或 SIGKILL 仍需 WAL 与备份恢复能力；不能通过删除 WAL 强行恢复。
+
+2026-10-08 第二次现场核对：Docker 在 20:49:49 向旧 `1985354` 容器发送 SIGTERM，20:49:59 记录 `Container failed to exit within 10s of signal 15 - using the force` 并发送 SIGKILL；事件同时报告退出码 0。紧接着 `1de0829` 在配置 Block 打开数据库时回放旧 ALTER WAL 失败。证据保存在 x600 `/home/workspace/deploy/recovery-20261008-final/{deploy-events.txt,docker-journal.txt,before.log}`。旧容器已删除，无法进一步从其应用日志确定卡住的具体排空阶段；强制终止及旧 DDL WAL 留存已得到验证。代码核对发现临时聊天 purgeLoop 注册为长期 BackgroundRoutine 任务，停止信号原先只在 Teardown 发送，而框架先等待后台任务退出再执行 Teardown，构成等待循环。维护任务/聊天回合、图片任务及账号刷新现已在 BeginShutdown 取消，保留数据库及 EventHub 直到真实排空。入口回归加载与生产相同的全部组件，并显式启用临时聊天维护任务。
+
+20:56 使用运行镜像 `1de0829` 的 `admin recover-state` 恢复成功。成对原件备份在 `/home/workspace/deploy/data/aetherrelay.duckdb.recovery-backup-927207541/`；恢复前后校验包括 48,720 条用量事件、32 条加密文档、8 条 Key 元数据、14 条 Provider access 关系和 3 条图片记录。恢复后健康检查 200、重启次数 0，真实流式 round `034152` 返回 200，耗时 3.947 秒；本轮最终核对恢复后 161 条已结算业务请求均为 200，容器保持 healthy、重启次数 0。此次恢复运行的仍是 `1de0829`，后续停机改动尚未部署。
+
+DuckDB 更新评估：官方稳定版 [DuckDB 1.5.6](https://github.com/duckdb/duckdb/releases/tag/v1.5.6) 对应 [Go 驱动 v2.10506.0](https://github.com/duckdb/duckdb-go/releases/tag/v2.10506.0)。该版对历史故障副本的普通打开仍产生 `GetDefaultDatabase with no default database set`，不能宣称升级消除了此断言。驱动及 bindings 同步更新到稳定版以采用已有修复（包括中断重试等待及时退出）；离线恢复与停机屏障仍为必要措施。新驱动构建的恢复命令已对本次 48,720 条用量记录的真实副本完成 WAL 回放、checkpoint 和全表行数/聚合行指纹校验，普通打开路径重新验证成功。
+
 ## Provider live probe
 
 Probe 不会在服务启动时运行，可用于验证某个已配置 Provider 的 direct endpoint：

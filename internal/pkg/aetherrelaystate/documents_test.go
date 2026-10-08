@@ -2,6 +2,7 @@ package aetherrelaystate
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"os"
@@ -145,5 +146,44 @@ func TestApplySecureDocumentsUpdatesOnlyExplicitDelta(t *testing.T) {
 	if err := documents.ApplySecureDocuments("accounts",
 		[]SecureDocumentRow{{ID: "same", Payload: []byte("value")}}, []string{"same"}); err == nil {
 		t.Fatal("accepted one document in both update and delete sets")
+	}
+}
+
+func TestLastOwnerCheckpointFailureRetainsReference(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.duckdb")
+	first, err := Open(path, "128MB", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := Open(path, "128MB", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer last.Close()
+	if err := first.ReplaceSecureDocuments("test", []SecureDocumentRow{{ID: "kept", Payload: []byte("sealed")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := last.CloseContext(ctx); err == nil {
+		t.Fatal("canceled checkpoint reported success")
+	}
+	if last.closed || last.shared.references != 1 || sharedDatabases[path] != last.shared {
+		t.Fatal("failed checkpoint released shared owner")
+	}
+	if err := last.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, "128MB", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	rows, err := reopened.LoadSecureDocuments("test")
+	if err != nil || len(rows) != 1 || rows[0].ID != "kept" {
+		t.Fatalf("rows=%v err=%v", rows, err)
 	}
 }

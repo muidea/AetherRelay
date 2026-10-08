@@ -2,6 +2,7 @@ package biz
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,5 +93,42 @@ func TestNewRuntimeCanonicalizesBuiltinLocalScope(t *testing.T) {
 	record := records[config.BuiltinClientAPIKeyID]
 	if record.Hash != "" || !record.Enabled || record.RevokedAt != nil || record.LastRotatedAt != nil || record.ProviderAccess.Mode != clientaccess.ModeAll || len(record.ProviderAccess.ProviderIDs) != 0 {
 		t.Fatalf("built-in scope was not canonicalized: %#v", record)
+	}
+}
+
+// A failure receipt must preserve ownership until a later successful attempt.
+type failingCloseStore struct {
+	usage.Store
+	checkpointErr error
+	closeErr      error
+	closes        int
+}
+
+func (s *failingCloseStore) Checkpoint(context.Context) error { return s.checkpointErr }
+func (s *failingCloseStore) Close() error                     { s.closes++; return s.closeErr }
+
+func TestRuntimeCloseRetainsStoreOnFailure(t *testing.T) {
+	store := &failingCloseStore{checkpointErr: fmt.Errorf("checkpoint failed")}
+	runtime := &Runtime{store: store}
+	if err := runtime.Close(context.Background()); err == nil {
+		t.Fatal("checkpoint failure swallowed")
+	}
+	if runtime.Store() != store || store.closes != 0 {
+		t.Fatal("store released after checkpoint failure")
+	}
+	store.checkpointErr = nil
+	store.closeErr = fmt.Errorf("close failed")
+	if err := runtime.Close(context.Background()); err == nil {
+		t.Fatal("close failure swallowed")
+	}
+	if runtime.Store() != store {
+		t.Fatal("store released after close failure")
+	}
+	store.closeErr = nil
+	if err := runtime.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Store() != nil {
+		t.Fatal("successful close retained store")
 	}
 }

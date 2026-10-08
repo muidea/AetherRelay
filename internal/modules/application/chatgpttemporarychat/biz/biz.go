@@ -150,29 +150,29 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func (s *TemporaryChat) Run(context.Context) *cd.Error { return nil }
 
-func (s *TemporaryChat) Teardown(context.Context) {
-	for _, topic := range s.topics {
-		s.UnsubscribeFunc(topic)
-	}
+// Stop accepted workers before BackgroundRoutine waits for them. No database
+// or EventHub dependency is released in this phase.
+func (s *TemporaryChat) BeginShutdown(context.Context) {
 	s.turnMu.Lock()
 	s.stopping = true
-	streamIDs := make([]string, 0, len(s.turns))
 	requestCancels := make([]context.CancelFunc, 0, len(s.turns))
 	for _, turn := range s.turns {
-		if turn.streamID != "" {
-			streamIDs = append(streamIDs, turn.streamID)
-		}
+		turn.cancelRequested = true
 		if turn.requestCancel != nil {
 			requestCancels = append(requestCancels, turn.requestCancel)
 		}
 	}
 	s.turnMu.Unlock()
 	s.stopOnce.Do(func() { close(s.stopCh) })
-	for _, streamID := range streamIDs {
-		s.cancelUpstream(streamID)
-	}
 	for _, cancel := range requestCancels {
 		cancel()
+	}
+}
+
+func (s *TemporaryChat) Teardown(ctx context.Context) {
+	s.BeginShutdown(ctx)
+	for _, topic := range s.topics {
+		s.UnsubscribeFunc(topic)
 	}
 	// Stream workers must publish their interrupted terminal state before the
 	// DuckDB handle is closed. This prevents shutdown races and nil stores.
@@ -185,7 +185,9 @@ func (s *TemporaryChat) Teardown(context.Context) {
 		if _, err := s.store.InterruptStreaming(); err != nil {
 			slog.Warn("temporary chat interrupt on teardown failed", "error_class", "store")
 		}
-		_ = s.store.Close()
+		if err := s.store.CloseContext(ctx); err != nil {
+			panic(cd.NewError(cd.Unexpected, "close durable store: "+err.Error()))
+		}
 	}
 	s.store = nil
 }

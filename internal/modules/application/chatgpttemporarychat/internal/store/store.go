@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -56,6 +57,13 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.docs.Close()
+}
+
+func (s *Store) CloseContext(ctx context.Context) error {
+	if s == nil || s.docs == nil {
+		return nil
+	}
+	return s.docs.CloseContext(ctx)
 }
 
 func (s *Store) CreateConversation(ownerID, model, thinkingEffort, systemPrompt, provider string, accountIDs ...string) (events.ConversationView, error) {

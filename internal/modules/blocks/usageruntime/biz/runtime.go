@@ -2,7 +2,7 @@ package biz
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"time"
 
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
@@ -35,15 +35,22 @@ func (r *Runtime) Store() usage.Store {
 	return r.store
 }
 
-func (r *Runtime) Close(ctx context.Context) {
+func (r *Runtime) Close(ctx context.Context) error {
 	if r == nil || r.store == nil {
-		return
+		return nil
 	}
-	checkpointCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	if err := r.store.Checkpoint(checkpointCtx); err != nil {
-		slog.Error("usage store checkpoint failed", slog.Any("error", err))
+	if closer, ok := r.store.(interface{ CloseContext(context.Context) error }); ok {
+		if err := closer.CloseContext(ctx); err != nil {
+			return fmt.Errorf("close usage store: %w", err)
+		}
+	} else {
+		if err := r.store.Checkpoint(ctx); err != nil {
+			return fmt.Errorf("checkpoint usage store: %w", err)
+		}
+		if err := r.store.Close(); err != nil {
+			return fmt.Errorf("close usage store: %w", err)
+		}
 	}
-	cancel()
-	_ = r.store.Close()
 	r.store = nil
+	return nil
 }

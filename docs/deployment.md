@@ -358,3 +358,9 @@ docker image inspect ghcr.io/muidea/aetherrelay:latest --format '{{index .RepoDi
 | 修改账号定时刷新间隔后不生效 | 刷新定时器在启动期创建，修改后必须重启进程 |
 
 更多运行期问题排查见[运维与发布](operations.md)。
+
+### 数据库停机验收
+
+发布前使用部署脚本排空旧实例：显式等待 120 秒、检查退出/OOM 状态，并要求本次运行记录 `AetherRelay shutdown completed`，然后才创建新容器。失败时停止发布，保留数据库和 WAL。直接 Compose 更新不会执行这项回执检查。应用每次排空预算为 30 秒，失败会保留资源并重试；120 秒是容器的外层等待期限，应按实际排空耗时调整。
+
+首次升级没有停机完成记录的旧版本，需要停止所有写入，备份数据库与 WAL，离线 checkpoint 并验证重开（遇到回放断言时执行 `admin recover-state`），之后显式部署新镜像。数据库沿用当前最终 schema；结构升级通过独立离线迁移完成。现场证据和恢复过程见[运维记录](operations.md#停机与发布屏障)。

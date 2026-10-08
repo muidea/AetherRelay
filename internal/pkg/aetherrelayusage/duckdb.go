@@ -30,11 +30,12 @@ var (
 // DuckDBStore 是基于进程内嵌 DuckDB 的用量权威实现。
 // 写入经单一 mutex 串行;读取可并发但受连接池限制。
 type DuckDBStore struct {
-	db     *sql.DB
-	path   string
-	cfg    config.UsageStoreConfig
-	write  sync.Mutex
-	closed atomic.Bool
+	db       *sql.DB
+	path     string
+	cfg      config.UsageStoreConfig
+	write    sync.Mutex
+	closed   atomic.Bool
+	closeErr error // guarded by write; database/sql cannot retry a failed driver Close
 	// healthy 为 1 表示写入路径可用;失败降级为 0,成功写入可恢复。
 	healthy   atomic.Int32
 	recovered atomic.Int64
@@ -391,21 +392,30 @@ func (s *DuckDBStore) Checkpoint(ctx context.Context) error {
 	return nil
 }
 
-// Close 先 checkpoint 再关闭连接。
+// Close checkpoints before closing. A failed checkpoint leaves the store open.
 func (s *DuckDBStore) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.CloseContext(ctx)
+}
+
+func (s *DuckDBStore) CloseContext(ctx context.Context) error {
 	if s == nil {
-		return nil
-	}
-	if s.closed.Swap(true) {
 		return nil
 	}
 	s.write.Lock()
 	defer s.write.Unlock()
-	_, _ = s.db.Exec(`CHECKPOINT`)
-	if err := s.db.Close(); err != nil {
-		return err
+	if s.closed.Load() {
+		return s.closeErr
 	}
-	return nil
+	if _, err := s.db.ExecContext(ctx, `CHECKPOINT`); err != nil {
+		return fmt.Errorf("checkpoint usage database: %w", err)
+	}
+	// sql.DB.Close permanently closes the pool even when a driver reports an
+	// error. Preserve that error on subsequent calls instead of claiming success.
+	s.closeErr = s.db.Close()
+	s.closed.Store(true)
+	return s.closeErr
 }
 
 func nullString(s string) any {

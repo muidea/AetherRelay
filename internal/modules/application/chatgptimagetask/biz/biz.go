@@ -36,6 +36,7 @@ type ImageTask struct {
 	runMu      sync.Mutex
 	running    map[string]*taskRun
 	activeRuns map[*taskRun]string
+	stopping   bool
 }
 
 type taskRun struct{ cancel context.CancelFunc }
@@ -79,21 +80,27 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func (s *ImageTask) Run(context.Context) *cd.Error { return nil }
 
-func (s *ImageTask) Teardown(context.Context) {
+func (s *ImageTask) BeginShutdown(context.Context) {
 	s.runMu.Lock()
+	s.stopping = true
 	for _, run := range s.running {
 		run.cancel()
 	}
 	for run := range s.activeRuns {
 		run.cancel()
 	}
-	s.running = map[string]*taskRun{}
 	s.runMu.Unlock()
+}
+
+func (s *ImageTask) Teardown(ctx context.Context) {
+	s.BeginShutdown(ctx)
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
 	if s.store != nil {
-		_ = s.store.Close()
+		if err := s.store.CloseContext(ctx); err != nil {
+			panic(cd.NewError(cd.Unexpected, "close durable store: "+err.Error()))
+		}
 	}
 	s.store = nil
 }
@@ -348,6 +355,13 @@ func (s *ImageTask) startTask(ownerID, taskID string, execute func(context.Conte
 	run := &taskRun{cancel: cancel}
 	key := imageTaskRunKey(ownerID, taskID)
 	s.runMu.Lock()
+	if s.stopping {
+		s.runMu.Unlock()
+		cancel()
+		s.store.MarkError(ownerID, taskID, "image task interrupted by process shutdown", "")
+		return
+	}
+
 	if previous := s.running[key]; previous != nil {
 		previous.cancel()
 	}

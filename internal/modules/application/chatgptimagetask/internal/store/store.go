@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -200,6 +201,13 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.documents.Close()
+}
+
+func (s *Store) CloseContext(ctx context.Context) error {
+	if s == nil || s.documents == nil {
+		return nil
+	}
+	return s.documents.CloseContext(ctx)
 }
 
 func (s *Store) recoverUnfinishedLocked() bool {

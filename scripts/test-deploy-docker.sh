@@ -12,9 +12,25 @@ set -euo pipefail
 
 if [[ "${1:-}" == "compose" ]]; then
   printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG:?}"
+  if [[ " $* " == *" ps -a -q aetherrelay "* ]]; then
+    if [[ "${FAKE_DOCKER_EXISTING:-}" == "1" ]]; then echo old-container; fi
+    exit 0
+  fi
   if [[ "${FAKE_DOCKER_HEALTH_FAIL:-}" == "1" && " $* " == *" exec -T aetherrelay curl "* ]]; then
     exit 1
   fi
+  exit 0
+fi
+if [[ "${1:-}" == "stop" ]]; then
+  printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG:?}"
+  exit 0
+fi
+if [[ "${1:-}" == "inspect" ]]; then
+  if [[ " $* " == *"StartedAt"* ]]; then echo 2026-10-08T12:00:00Z; else echo "exited ${FAKE_DOCKER_EXIT:-0} false"; fi
+  exit 0
+fi
+if [[ "${1:-}" == "logs" ]]; then
+  if [[ "${FAKE_DOCKER_MISSING_RECEIPT:-}" != "1" ]]; then echo 'level=INFO msg="AetherRelay shutdown completed"'; fi
   exit 0
 fi
 if [[ "${1:-}" == "pull" ]]; then
@@ -143,3 +159,23 @@ if grep -Fq '部署完成' "$TMP/output-health-fail"; then
   echo "failed deployment still reported completion" >&2
   exit 1
 fi
+
+# A successful Docker stop may still have involved SIGKILL. Require the receipt,
+# and preserve the old container on missing receipt or nonzero exit.
+for failure in receipt exit; do
+  : >"$FAKE_DOCKER_LOG"
+  export FAKE_DOCKER_EXISTING=1 FAKE_DOCKER_MISSING_RECEIPT=0 FAKE_DOCKER_EXIT=0
+  if [[ "$failure" == receipt ]]; then FAKE_DOCKER_MISSING_RECEIPT=1; else FAKE_DOCKER_EXIT=137; fi
+  if PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" --dir "$TMP/deploy" --skip-admin >"$TMP/stop-$failure" 2>&1; then
+    echo "unsafe stop allowed rollout: $failure" >&2; exit 1
+  fi
+  if grep -Eq '^compose .* up -d$' "$FAKE_DOCKER_LOG"; then echo "unsafe stop recreated container" >&2; exit 1; fi
+done
+export FAKE_DOCKER_MISSING_RECEIPT=0 FAKE_DOCKER_EXIT=0
+: >"$FAKE_DOCKER_LOG"
+PATH="$TMP/bin:$PATH" "$ROOT/scripts/deploy-docker.sh" --dir "$TMP/deploy" --skip-admin >"$TMP/stop-success" 2>&1
+grep -Fq 'stop --time 120 old-container' "$FAKE_DOCKER_LOG"
+grep -Fq 'stop_grace_period: 120s' "$compose"
+stop_line="$(grep -n '^stop ' "$FAKE_DOCKER_LOG" | cut -d: -f1)"
+up_line="$(grep -n '^compose .* up -d$' "$FAKE_DOCKER_LOG" | cut -d: -f1)"
+[[ "$stop_line" -lt "$up_line" ]]

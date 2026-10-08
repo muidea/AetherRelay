@@ -3,6 +3,7 @@
 package aetherrelaystate
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -123,9 +124,10 @@ type WebSearchHistoryRow struct {
 // Documents is a narrow state database handle. It intentionally exposes no
 // catch-all document-key API: each business owner writes only its own table.
 type Documents struct {
-	shared *sharedDatabase
-	mu     sync.Mutex
-	close  sync.Once
+	shared   *sharedDatabase
+	mu       sync.Mutex
+	closed   bool // guarded by sharedDatabasesMu
+	closeErr error
 }
 
 type sharedDatabase struct {
@@ -133,6 +135,7 @@ type sharedDatabase struct {
 	memoryLimit string
 	threads     int
 	references  int
+	closeErr    error
 }
 
 var (
@@ -152,6 +155,9 @@ func Open(path, memoryLimit string, threads int) (*Documents, error) {
 	sharedDatabasesMu.Lock()
 	defer sharedDatabasesMu.Unlock()
 	if existing := sharedDatabases[path]; existing != nil {
+		if existing.closeErr != nil {
+			return nil, fmt.Errorf("state database close failed: %w", existing.closeErr)
+		}
 		if existing.memoryLimit != memoryLimit || existing.threads != threads {
 			return nil, fmt.Errorf("state database %q is already open with different resource settings", path)
 		}
@@ -487,25 +493,42 @@ position = excluded.position, payload = excluded.payload, updated_at = excluded.
 }
 
 func (s *Documents) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.CloseContext(ctx)
+}
+
+func (s *Documents) CloseContext(ctx context.Context) error {
 	if s == nil || s.shared == nil {
 		return nil
 	}
-	var err error
-	s.close.Do(func() {
-		sharedDatabasesMu.Lock()
-		defer sharedDatabasesMu.Unlock()
-		s.shared.references--
-		if s.shared.references == 0 {
-			for path, candidate := range sharedDatabases {
-				if candidate == s.shared {
-					delete(sharedDatabases, path)
-					break
-				}
-			}
-			err = s.shared.db.Close()
+	sharedDatabasesMu.Lock()
+	defer sharedDatabasesMu.Unlock()
+	if s.closed {
+		return s.closeErr
+	}
+	if s.shared.references == 1 {
+		if _, err := s.shared.db.ExecContext(ctx, "CHECKPOINT"); err != nil {
+			return fmt.Errorf("checkpoint shared state database: %w", err)
 		}
-	})
-	return err
+		s.closeErr = s.shared.db.Close()
+		s.closed = true
+		if s.closeErr != nil {
+			// A driver Close error is terminal for sql.DB. Retain the failure
+			// receipt and registry entry; repeated Close must not report success.
+			s.shared.closeErr = s.closeErr
+			return s.closeErr
+		}
+		for path, candidate := range sharedDatabases {
+			if candidate == s.shared {
+				delete(sharedDatabases, path)
+				break
+			}
+		}
+	}
+	s.shared.references--
+	s.closed = true
+	return nil
 }
 
 func (s *Documents) LoadImageTasks() ([]ImageTaskRow, error) {

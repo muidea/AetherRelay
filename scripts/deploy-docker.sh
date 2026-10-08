@@ -253,6 +253,7 @@ services:
   aetherrelay:
     image: \${AETHERRELAY_IMAGE:-$IMAGE}
     restart: unless-stopped
+    stop_grace_period: 120s
     ports:
       - "$BIND"
     environment:
@@ -273,6 +274,21 @@ if [[ -w "$DEPLOY_DIR" ]]; then
 fi
 
 # 6. 使用已拉取且用于生成配置的同一份本地镜像启动并等待就绪
+# Explicitly stop before Compose can remove/recreate the old container. Exit
+# code alone is insufficient: Docker can report 0 at the SIGKILL boundary.
+existing_containers="$("${COMPOSE[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps -a -q aetherrelay)"
+for container_id in $existing_containers; do
+  started_at="$("$DOCKER" inspect --format '{{.State.StartedAt}}' "$container_id")"
+  echo "==> 排空旧容器: $container_id"
+  "$DOCKER" stop --time 120 "$container_id" >/dev/null
+  stop_state="$("$DOCKER" inspect --format '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}' "$container_id")"
+  [[ "$stop_state" == "exited 0 false" ]] || die "旧容器未正常退出 ($stop_state)；保留容器与数据库，停止发布"
+  if ! "$DOCKER" logs --since "$started_at" "$container_id" 2>&1 \
+    | grep -E 'msg="AetherRelay shutdown completed"|"msg"[[:space:]]*:[[:space:]]*"AetherRelay shutdown completed"' >/dev/null; then
+    die "旧容器缺少本次运行的停机完成记录；保留现场，先离线验证数据库，再继续发布"
+  fi
+done
+
 echo "==> 启动容器"
 "${COMPOSE[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d
 

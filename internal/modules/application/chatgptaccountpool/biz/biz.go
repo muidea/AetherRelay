@@ -365,17 +365,23 @@ func (s *Account) Run(ctx context.Context) *cd.Error {
 	return nil
 }
 
-func (s *Account) Teardown(context.Context) {
+func (s *Account) BeginShutdown(context.Context) {
+	s.stopping.Store(true)
+	s.shutdown()
+}
+
+func (s *Account) Teardown(ctx context.Context) {
 	// BackgroundRoutine does not wait for individual tasks before module
 	// teardown. Keep the store alive until task closures release Account, and
 	// make those tasks exit without further upstream or persistence work.
-	s.stopping.Store(true)
-	s.shutdown()
+	s.BeginShutdown(ctx)
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
 	if s.store != nil {
-		_ = s.store.Close()
+		if err := s.store.CloseContext(ctx); err != nil {
+			panic(cd.NewError(cd.Unexpected, "close durable store: "+err.Error()))
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ services:
     image: ${AETHERRELAY_IMAGE:-ghcr.io/muidea/aetherrelay:latest}
     # For local image development, replace image with: build: .
     restart: unless-stopped
+    stop_grace_period: 120s
     ports:
       # Keep the data plane local by default. Put a TLS reverse proxy in front
       # or change this binding only after reviewing the access-control notes.

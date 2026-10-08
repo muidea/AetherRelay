@@ -48,6 +48,8 @@ func Run(version string) int {
 	runtime := NewRuntime(configevents.Bootstrap{Config: cfg, ConfigPath: resolvedConfigPath, Version: version, StartedAt: time.Now().UTC()})
 	serviceCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Cleanup also runs after partial startup failure and panic.
+	defer shutdownUntilComplete(runtime.Shutdown, 30*time.Second, time.Second)
 	if err := runtime.Startup(serviceCtx); err != nil {
 		slog.Error("startup AetherRelay service", slog.Any("error", err))
 		return 1
@@ -76,8 +78,21 @@ func Run(version string) int {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	runtime.Shutdown(ctx)
 	return exitCode
+}
+
+// Each attempt has an independent budget. Never turn an incomplete drain into
+// permission to exit or release the remaining database owners.
+func shutdownUntilComplete(shutdown func(context.Context) error, budget, retryDelay time.Duration) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		err := shutdown(ctx)
+		cancel()
+		if err == nil {
+			slog.Info("AetherRelay shutdown completed")
+			return
+		}
+		slog.Error("AetherRelay shutdown incomplete; retaining resources and retrying", slog.Any("error", err))
+		time.Sleep(retryDelay)
+	}
 }

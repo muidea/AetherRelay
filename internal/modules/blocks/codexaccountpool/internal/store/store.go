@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -134,6 +135,18 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.documents.Close()
+}
+
+func (s *Store) CloseContext(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.documents == nil {
+		return nil
+	}
+	return s.documents.CloseContext(ctx)
 }
 
 func (s *Store) load() error {

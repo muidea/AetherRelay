@@ -86,7 +86,10 @@ func (s *UsageRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(usageevents.TopicClientKeyAccess)
 	s.UnsubscribeFunc(usageevents.TopicClientKeyRefs)
 	if s.runtime != nil {
-		s.runtime.Close(ctx)
+		if err := s.runtime.Close(ctx); err != nil {
+			// Framework catches this error and retains the owner for retry.
+			panic(cd.NewError(cd.Unexpected, err.Error()))
+		}
 	}
 	s.runtime = nil
 }

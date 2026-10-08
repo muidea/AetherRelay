@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -146,6 +147,13 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.documents.Close()
+}
+
+func (s *Store) CloseContext(ctx context.Context) error {
+	if s == nil || s.documents == nil {
+		return nil
+	}
+	return s.documents.CloseContext(ctx)
 }
 
 func (s *Store) Save(payload []byte, baseURL string, scopes ...string) (events.SaveResult, error) {

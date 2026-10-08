@@ -8,12 +8,13 @@ import (
 	"aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
+	plugincommon "github.com/muidea/magicCommon/framework/plugin/common"
 	"github.com/muidea/magicCommon/framework/plugin/module"
 	"github.com/muidea/magicCommon/task"
 )
 
 func init() {
-	module.Register(New())
+	module.MustRegister(New())
 }
 
 type AccountPool struct {
@@ -48,4 +49,12 @@ func (s *AccountPool) Teardown(ctx context.Context) {
 		s.bizPtr.Teardown(ctx)
 	}
 	s.bizPtr = nil
+}
+
+var _ plugincommon.ShutdownStarter = (*AccountPool)(nil)
+
+func (s *AccountPool) BeginShutdown(ctx context.Context) {
+	if s.bizPtr != nil {
+		s.bizPtr.BeginShutdown(ctx)
+	}
 }

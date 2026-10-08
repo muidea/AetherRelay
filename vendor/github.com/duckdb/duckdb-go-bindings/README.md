@@ -50,6 +50,24 @@ Older versions require platform-specific imports (e.g., `github.com/duckdb/duckd
 | v1.2.1         | v0.1.13 | v0.1.8  | v0.1.8  | v0.1.8  |
 | v1.2.0         | v0.1.10 | v0.1.5  | v0.1.5  | v0.1.5  |
 
+## Installation
+
+Simply import the module in your Go project:
+
+```go
+import "github.com/duckdb/duckdb-go-bindings"
+```
+
+The module includes pre-built static libraries for all supported platforms:
+
+- darwin-amd64
+- darwin-arm64
+- linux-amd64
+- linux-arm64
+- windows-amd64
+
+Platform detection and linking is handled automatically through cgo directives. `CGO_ENABLED=1` is required, and your system needs a C compiler.
+
 ## Local Development
 
 To develop locally, copy the workspace template file:
@@ -59,6 +77,14 @@ cp go.work.dev go.work
 ```
 
 This sets up Go workspaces to use the local lib/\* submodules instead of fetching from the module proxy.
+
+## Nightly artifact validation
+
+The `Nightly` workflow accepts a full DuckDB commit SHA and downloads the
+matching Linux, macOS, and Windows artifacts from DuckDB's staging endpoint. It
+compiles the bindings against the artifact header, summarizes the resulting
+header diff, exercises both static and dynamic linking, verifies the linked
+source ID, and installs and loads `httpfs` from a clean extension directory.
 
 ## Releasing a new DuckDB version
 
@@ -84,24 +110,6 @@ The script handles:
 - Tagging and pushing root module
 
 Run it again after merging the deps PR to complete the release.
-
-## Installation
-
-Simply import the module in your Go project:
-
-```go
-import "github.com/duckdb/duckdb-go-bindings"
-```
-
-The module includes pre-built static libraries for all supported platforms:
-
-- darwin-amd64
-- darwin-arm64
-- linux-amd64
-- linux-arm64
-- windows-amd64
-
-Platform detection and linking is handled automatically through cgo directives. `CGO_ENABLED=1` is required, and your system needs a C compiler.
 
 ## Build Configuration
 

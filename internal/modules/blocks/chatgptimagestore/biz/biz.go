@@ -74,12 +74,14 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func (s *ImageStore) Run(context.Context) *cd.Error { return nil }
 
-func (s *ImageStore) Teardown(context.Context) {
+func (s *ImageStore) Teardown(ctx context.Context) {
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
 	if s.store != nil {
-		_ = s.store.Close()
+		if err := s.store.CloseContext(ctx); err != nil {
+			panic(cd.NewError(cd.Unexpected, "close durable store: "+err.Error()))
+		}
 	}
 	s.store = nil
 }
