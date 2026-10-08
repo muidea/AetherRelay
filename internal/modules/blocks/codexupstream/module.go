@@ -8,13 +8,19 @@ import (
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
+	plugincommon "github.com/muidea/magicCommon/framework/plugin/common"
 	"github.com/muidea/magicCommon/framework/plugin/module"
 	"github.com/muidea/magicCommon/task"
 )
 
-func init() { module.Register(New()) }
+func init() { module.MustRegister(New()) }
 
 type Block struct{ bizPtr *biz.Upstream }
+
+var (
+	_ plugincommon.ShutdownStarter = (*Block)(nil)
+	_ plugincommon.Quiescer        = (*Block)(nil)
+)
 
 func New() *Block            { return &Block{} }
 func (s *Block) ID() string  { return common.UnitID }
@@ -36,11 +42,12 @@ func (s *Block) Teardown(ctx context.Context) {
 	s.bizPtr = nil
 }
 
-func (s *Block) BeginShutdown(ctx context.Context) *cd.Error {
+func (s *Block) BeginShutdown(ctx context.Context) {
 	if s.bizPtr != nil {
-		return s.bizPtr.BeginShutdown(ctx)
+		if err := s.bizPtr.BeginShutdown(ctx); err != nil {
+			panic(err)
+		}
 	}
-	return nil
 }
 func (s *Block) Quiesce(ctx context.Context) *cd.Error {
 	if s.bizPtr != nil {

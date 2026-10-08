@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`14.0.0`
+> 合同版本：`14.1.1`
 >
 > 状态：`active`
 >
-> 生效日期：2026-09-30
+> 生效日期：2026-10-08
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`14.1.1` 修复 2026-10-08 x600 镜像 `3cb2b16` 的 Codex upstream 注册失败：Block 的 `BeginShutdown(context.Context)` 必须无返回值，符合 magicCommon `v1.5.21` 的 `ShutdownStarter`；`Quiesce` 仍返回排空错误。错误签名使模块未注册，rounds `034043/034045/034047/034049` 在进入上游 HTTP 前立即返回 502，随后 `034044/034046` 为 `accounts_cooling`、`034048` 为 `circuit_open` 503。注册改用 `module.MustRegister`，必需模块注册失败直接中止启动；增加生命周期接口编译断言与 framework 注册、Setup、Run、事件投递、停止准入、Quiesce、重复 Teardown 验收，并纳入 Codex 合同检查脚本。此前 biz 层测试不能覆盖此启动缺口。按 PATCH 记录，本地验收通过不代表 x600 已部署修复。
 
 `14.1.0` 根据 2026-10-08 x600 rounds `033698–033720` 收口 Codex upstream 调度：旧镜像 `a837076` 的同步 Complete 在 Block 默认串行 lane 中读取完整响应，造成其它 Start/Pull/Cancel 等待数分钟；`033714` 排队约 245 秒后实际约 11 秒完成。magicCommon 升级至 `v1.5.21`，由 upstream owner 声明请求 lane、stream 读取/取消 lane、WebSocket 读取/写入/关闭 lane；独立网络操作并发，同对象读取/写入保持各自顺序，控制命令不等待阻塞读取。并发命令及流/会话注册表各上限 64，容量拒绝为本地准入错误，不处罚账号或 Provider。BeginShutdown 取消在途网络与读任务，Quiesce 等真实排空，超时保留资源等待重试。请求 deadline 优先于取消后的底层 read 错误，客户端/停机取消保持中性，真实网络/上游失败仍按既有冷却规则反馈。新增 `queue_wait_ms`、`read_observed`、读取耗时、上游首事件/事件数/字节数及客户端首交付耗时；上游读取计数在语义缓冲前记录，区分上游有输出与客户端未收到数据，不归档原始传输错误。共享 Base 对新版必需订阅错误 fail-fast，异步任务拒绝返回调用方并清理已登记状态。回归覆盖慢 Complete 并发流、取消、过期排队、容量控制、超时、停机与中性反馈；本地验证不能证明生产上游故障已经恢复。按 MINOR 记录，待部署复验。
 
@@ -694,6 +696,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | compact | CP-EP-003, CP-COMPACT-* | implemented | `proxy/codex_responses.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/codex_compact.go`, `codexaccountpool/internal/store/store.go` | `codex_responses_test.go`, `proxyapi/biz/codex_responses_test.go`, `store_test.go`, `biz_test.go` |
 | 指纹收敛 | CP-FP-001..005 | implemented | `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_identity.go`, `codexupstream/biz/codex_identity.go` | `store_test.go`, `encrypted_store_test.go`, `codex_responses_test.go`, `biz_test.go` |
 | session 粘性与并发槽 | CP-SCHED-* | implemented | `codexaccountpool/biz/biz.go` | `codexaccountpool/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go` |
+| 必需 upstream 注册与生命周期 | CP-SCHED-001 | implemented（本地）；部署待复验 | `codexupstream/module.go`, `scripts/check-codex-contract.sh` | `codexupstream/module_test.go` |
 | 扩展 failover | CP-FAIL-004..014 | implemented | `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_responses_test.go` |
 | 永久鉴权失败终态 | CP-FAIL-020 | implemented | `codexaccountpool/internal/store/store.go`, `codexaccountpool/internal/store/model_availability.go`, `proxyapi/biz/codex_responses.go`, `proxy/codex_responses.go`, `proxy/codex_websocket.go` | `codexaccountpool/internal/store/store_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/biz/codex_responses_test.go`, `proxy/codex_health_test.go`, `proxy/codex_websocket_test.go` |
 | 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
@@ -769,6 +772,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 ### CP-SCHED-001：Codex upstream 调度与观测
 
+- 必需 Codex upstream Block 使用 `module.MustRegister`，注册失败不得只记录日志后继续对外服务。生命周期签名以当前 vendored framework 接口为准，并通过编译断言和 framework 注册至事件投递的验收检查；`BeginShutdown(context.Context)` 无返回值，`Quiesce(context.Context)` 返回真实排空错误。
 - 所有跨 owner 的 Codex upstream command 使用 `pkg/events.BindCommandLane`；长 Complete/Compact、握手、模型发现和额度查询各有独立执行 lane。Stream Pull 按 stream ID 排序，Cancel 使用独立控制 lane；WebSocket 读、写、关闭分流，同一会话写入仍保序。不得绕过 EventHub 直接注入 upstream 实现。
 - owner 限制并发 command 与 stream/WebSocket 注册表大小；取消/关闭不受普通容量限制。过期且尚未执行的事件不得随后访问上游。取消不是已执行任务完成的回执，停机必须等待实际结束。
 - 只有上游执行的 timeout/network/upstream 等故障才能参与既有账号反馈；本地容量拒绝、排队过期、客户端与停机取消保持中性。HTTP 503 `failure_class=local_capacity|queue_timeout` 携带可重试提示，真实上游 503 不改写成本地错误。
