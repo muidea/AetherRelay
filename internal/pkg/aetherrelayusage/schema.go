@@ -7,8 +7,8 @@ import (
 )
 
 // initializeSchema creates the final usage schema and verifies every column
-// used by the runtime. Only additive observation flags extend the current
-// schema; incompatible historical layouts fail without resetting their data.
+// used by the runtime. Existing databases must already match the final schema;
+// incompatible layouts fail without migrating or resetting their data.
 func initializeSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -34,28 +34,6 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
-	}
-	// Existing columns must not be ALTERed again: DuckDB can emit catalog changes
-	// even for ADD COLUMN IF NOT EXISTS, leaving a WAL that fails crash recovery
-	// when the table also contains function-based CHECK constraints.
-	for _, column := range []string{"cached_input_tokens_known", "cache_creation_input_tokens_known"} {
-		var present int
-		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
-WHERE table_catalog = current_database() AND table_schema = 'main'
-AND table_name = 'usage_events' AND column_name = ?`, column).Scan(&present); err != nil {
-			return fmt.Errorf("inspect usage observation column: %w", err)
-		}
-		if present > 0 {
-			continue
-		}
-		// Legacy additions remain separate transactions because DuckDB cannot
-		// reliably commit multiple ALTERs on an indexed table in one transaction.
-		if _, err := db.ExecContext(ctx, "ALTER TABLE usage_events ADD COLUMN "+column+" BOOLEAN DEFAULT FALSE"); err != nil {
-			return fmt.Errorf("add usage observation column: %w", err)
-		}
-		if _, err := db.ExecContext(ctx, "CHECKPOINT"); err != nil {
-			return fmt.Errorf("checkpoint usage observation migration: %w", err)
-		}
 	}
 	return nil
 }
@@ -161,6 +139,7 @@ upstream_protocol, upstream_endpoint, conversion_mode, conversion_level,
 conversion_duration_ms, conversion_degraded, ignored_features, unsupported_features,
 upstream_status, upstream_content_type, upstream_content_length, upstream_transfer_encoding,
 input_tokens, output_tokens, total_tokens, cached_input_tokens, cache_creation_input_tokens,
+cached_input_tokens_known, cache_creation_input_tokens_known,
 http_status, outcome, error_code, failure_class, retryable, retry_after_seconds,
 duration_ms, first_event_duration_ms, upstream_duration_ms, stream, estimated, state
 FROM usage_events LIMIT 0`,

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -138,7 +139,7 @@ func TestCacheAggregationExcludesFailedObservationsButPreservesDetails(t *testin
 	}
 }
 
-func TestObservationColumnsPreserveExistingDatabase(t *testing.T) {
+func TestFinalSchemaPreservesExistingObservations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "existing.duckdb")
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
@@ -149,17 +150,16 @@ func TestObservationColumnsPreserveExistingDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The base schema is the immediately preceding layout, including its indexes.
+	// Existing final-schema data must be reused without rewriting observations.
 	if err = createSchema(ctx, tx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(`INSERT INTO usage_events(event_id,api_key_id,started_at,completed_at,usage_date,input_tokens,total_tokens,http_status,outcome,state) VALUES ('old','key',now(),now(),current_date,100,100,200,'success','completed')`); err != nil {
+	if _, err = tx.Exec(`INSERT INTO usage_events(event_id,api_key_id,started_at,completed_at,usage_date,input_tokens,total_tokens,http_status,outcome,state,cached_input_tokens_known,cache_creation_input_tokens_known) VALUES ('old','key',now(),now(),current_date,100,100,200,'success','completed',TRUE,FALSE)`); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	removeObservationColumnsForLegacyFixture(t, db)
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +172,43 @@ func TestObservationColumnsPreserveExistingDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Events) != 1 || page.Events[0].InputTokens != 100 || page.Events[0].CachedInputTokensKnown || page.Events[0].CacheCreationInputTokensKnown {
+	if len(page.Events) != 1 || page.Events[0].InputTokens != 100 || !page.Events[0].CachedInputTokensKnown || page.Events[0].CacheCreationInputTokensKnown {
 		t.Fatalf("history changed: %+v", page)
+	}
+}
+
+func TestFinalSchemaRejectsMissingObservationColumnsWithoutChangingData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.duckdb")
+	store, err := OpenDuckDB(testCfg(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.db.Exec(`INSERT INTO usage_events(event_id,api_key_id,started_at,usage_date,state)
+VALUES ('historic','key',now(),current_date,'started')`); err != nil {
+		t.Fatal(err)
+	}
+	removeObservationColumnsForLegacyFixture(t, store.db)
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := OpenDuckDB(testCfg(path)); err == nil {
+		reopened.Close()
+		t.Fatal("missing observation columns must reject startup")
+	} else if !strings.Contains(err.Error(), "does not match the final schema") {
+		t.Fatalf("unexpected schema error: %v", err)
+	}
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err = db.QueryRow("SELECT count(*) FROM usage_events WHERE event_id='historic' AND state='started'").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("historic event changed: count=%d err=%v", count, err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM information_schema.columns
+WHERE table_name='usage_events' AND column_name IN ('cached_input_tokens_known','cache_creation_input_tokens_known')`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("legacy columns were migrated: count=%d err=%v", count, err)
 	}
 }
 

@@ -228,7 +228,7 @@ CSV 仅用于导出当前用量，不提供旧 CSV 导入。交互归档默认�
 
 2026-10-08 x600 在加载 `aetherrelay.duckdb.wal` 时出现 `GetDefaultDatabase with no default database set`，容器循环退出，尚未接收业务请求。用 DuckDB v1.5.4 复现：对带 `length(outcome)` CHECK 的用量表执行 `ALTER TABLE ... ADD COLUMN` 后异常退出，重开文件触发同一断言。这与上游 [WAL 回放问题](https://github.com/duckdb/duckdb/issues/21490) 属于相同错误族；现场的具体回放栈为 `ReplayAlter → SetDefault → BindCheckConstraint`。
 
-启动时直接创建完整新表，已有观测列不再执行 `ADD COLUMN IF NOT EXISTS`；旧布局只添加实际缺失列，每次添加后执行 checkpoint。该收口减少不必要的 catalog WAL，不能保证底层 DuckDB 在迁移过程中的任意断电窗口均无故障。回归测试覆盖新库、已有库、旧布局升级后的异常退出和重开，验证已提交事件仍在。
+启动时只创建最终 schema 的新表或校验已有表，包括 `cached_input_tokens_known` 与 `cache_creation_input_tokens_known`；运行期不再执行 ALTER、补列或升级迁移。现有最终 schema 数据库直接复用，不需要重建或导出导入，历史观测标志原值保留。缺少必需字段的旧布局明确启动失败并保留数据，不自动重置。回归测试覆盖新库、已有最终库的异常退出和重开，以及旧布局拒绝后原始行和字段布局保持不变。离线 WAL 恢复命令用于完整回放已提交操作，不升级 schema。
 
 出现上述回放失败时，先停止服务及所有写入者，保留数据库与 `.wal` 成对备份。使用包含恢复子命令的同版本驱动构建执行：
 
