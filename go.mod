@@ -13,14 +13,14 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.12
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/muidea/magicCommon v1.5.11
+	github.com/muidea/magicCommon v1.5.21
 	github.com/muidea/magicEngine v1.5.1
 	github.com/openai/openai-go v1.12.0
 	github.com/tiktoken-go/tokenizer v0.7.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
-	golang.org/x/crypto v0.47.0
-	golang.org/x/net v0.49.0
-	golang.org/x/sys v0.40.0
+	golang.org/x/crypto v0.55.0
+	golang.org/x/net v0.57.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -62,11 +62,11 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
-	golang.org/x/mod v0.32.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260116145544-c6413dc483f5 // indirect
-	golang.org/x/text v0.33.0 // indirect
-	golang.org/x/tools v0.41.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
+	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/tools v0.48.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gopkg.in/alexcesaro/quotedprintable.v3 v3.0.0-20150716171945-2caba252f4dc // indirect
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df // indirect

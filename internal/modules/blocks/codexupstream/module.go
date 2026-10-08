@@ -35,3 +35,16 @@ func (s *Block) Teardown(ctx context.Context) {
 	}
 	s.bizPtr = nil
 }
+
+func (s *Block) BeginShutdown(ctx context.Context) *cd.Error {
+	if s.bizPtr != nil {
+		return s.bizPtr.BeginShutdown(ctx)
+	}
+	return nil
+}
+func (s *Block) Quiesce(ctx context.Context) *cd.Error {
+	if s.bizPtr != nil {
+		return s.bizPtr.Quiesce(ctx)
+	}
+	return nil
+}

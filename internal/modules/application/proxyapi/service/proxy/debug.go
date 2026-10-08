@@ -36,42 +36,49 @@ type requestDebugInfo struct {
 }
 
 type upstreamDebugInfo struct {
-	Attempt   int                 `json:"attempt,omitempty"`
-	BodyPath  string              `json:"body_path,omitempty"`
-	RoundID   int                 `json:"round_id"`
-	At        time.Time           `json:"at"`
-	Provider  string              `json:"provider"`
-	Protocol  string              `json:"protocol"`
-	Method    string              `json:"method"`
-	URL       string              `json:"url"`
-	BodyBytes int                 `json:"body_bytes"`
-	Headers   map[string][]string `json:"headers"`
+	QueueWaitMS int64               `json:"queue_wait_ms,omitempty"`
+	Attempt     int                 `json:"attempt,omitempty"`
+	BodyPath    string              `json:"body_path,omitempty"`
+	RoundID     int                 `json:"round_id"`
+	At          time.Time           `json:"at"`
+	Provider    string              `json:"provider"`
+	Protocol    string              `json:"protocol"`
+	Method      string              `json:"method"`
+	URL         string              `json:"url"`
+	BodyBytes   int                 `json:"body_bytes"`
+	Headers     map[string][]string `json:"headers"`
 }
 
 type upstreamResponseDebugInfo struct {
-	TransportReason      transport.Reason    `json:"transport_reason,omitempty"`
-	ErrorBodyPath        string              `json:"error_body_path,omitempty"`
-	ErrorBodyFormat      string              `json:"error_body_format,omitempty"`
-	ErrorBodyTruncated   bool                `json:"error_body_truncated,omitempty"`
-	ErrorBodyReadFailed  bool                `json:"error_body_read_failed,omitempty"`
-	UpstreamErrorType    string              `json:"upstream_error_type,omitempty"`
-	UpstreamErrorParam   string              `json:"upstream_error_param,omitempty"`
-	UpstreamErrorMessage string              `json:"upstream_error_message,omitempty"`
-	TransferEncoding     string              `json:"transfer_encoding,omitempty"`
-	FailureClass         string              `json:"failure_class,omitempty"`
-	RetryAfterSeconds    int                 `json:"retry_after_seconds,omitempty"`
-	UpstreamErrorCode    string              `json:"upstream_error_code,omitempty"`
-	Attempt              int                 `json:"attempt,omitempty"`
-	RoundID              int                 `json:"round_id"`
-	At                   time.Time           `json:"at"`
-	Provider             string              `json:"provider"`
-	Protocol             string              `json:"protocol"`
-	Status               int                 `json:"status"`
-	DurationMS           int64               `json:"duration_ms"`
-	ContentType          string              `json:"content_type,omitempty"`
-	ContentLength        int64               `json:"content_length"`
-	Headers              map[string][]string `json:"headers,omitempty"`
-	Error                string              `json:"error,omitempty"`
+	FirstClientEventDurationMS int64               `json:"first_client_event_duration_ms,omitempty"`
+	ReadObserved               bool                `json:"read_observed,omitempty"`
+	ReadDurationMS             int64               `json:"read_duration_ms,omitempty"`
+	FirstEventDurationMS       int64               `json:"first_upstream_event_duration_ms,omitempty"`
+	EventCount                 int64               `json:"upstream_event_count,omitempty"`
+	WireBytes                  int64               `json:"upstream_wire_bytes,omitempty"`
+	TransportReason            transport.Reason    `json:"transport_reason,omitempty"`
+	ErrorBodyPath              string              `json:"error_body_path,omitempty"`
+	ErrorBodyFormat            string              `json:"error_body_format,omitempty"`
+	ErrorBodyTruncated         bool                `json:"error_body_truncated,omitempty"`
+	ErrorBodyReadFailed        bool                `json:"error_body_read_failed,omitempty"`
+	UpstreamErrorType          string              `json:"upstream_error_type,omitempty"`
+	UpstreamErrorParam         string              `json:"upstream_error_param,omitempty"`
+	UpstreamErrorMessage       string              `json:"upstream_error_message,omitempty"`
+	TransferEncoding           string              `json:"transfer_encoding,omitempty"`
+	FailureClass               string              `json:"failure_class,omitempty"`
+	RetryAfterSeconds          int                 `json:"retry_after_seconds,omitempty"`
+	UpstreamErrorCode          string              `json:"upstream_error_code,omitempty"`
+	Attempt                    int                 `json:"attempt,omitempty"`
+	RoundID                    int                 `json:"round_id"`
+	At                         time.Time           `json:"at"`
+	Provider                   string              `json:"provider"`
+	Protocol                   string              `json:"protocol"`
+	Status                     int                 `json:"status"`
+	DurationMS                 int64               `json:"duration_ms"`
+	ContentType                string              `json:"content_type,omitempty"`
+	ContentLength              int64               `json:"content_length"`
+	Headers                    map[string][]string `json:"headers,omitempty"`
+	Error                      string              `json:"error,omitempty"`
 }
 
 func (h *Handler) debugfRound(round *archive.Round, r *http.Request, format string, args ...any) {
@@ -281,8 +288,9 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	if newAttempt {
 		requestInfo := upstreamDebugInfo{
-			Attempt: index,
-			RoundID: round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
+			QueueWaitMS: attempt.Request.QueueWaitMS,
+			Attempt:     index,
+			RoundID:     round.ID, At: requestAt, Provider: providerName, Protocol: "codexoauth",
 			Method: attempt.Request.Method, URL: attempt.Request.URL, BodyBytes: attempt.Request.BodyBytes, Headers: requestHeaders,
 		}
 		if round.FullContent() && len(attempt.Request.Body) > 0 {
@@ -319,10 +327,15 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		round.SetUpstreamHeaders(0, "", -1, "", 0)
 	}
 	responseInfo := upstreamResponseDebugInfo{
-		TransferEncoding: attempt.Response.TransferEncoding,
-		TransportReason:  attempt.Response.TransportReason.Safe(),
-		Attempt:          index,
-		RoundID:          round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
+		FirstClientEventDurationMS: attempt.Response.FirstClientEventDurationMS, ReadObserved: attempt.Response.ReadObserved,
+		ReadDurationMS:       attempt.Response.ReadDurationMS,
+		FirstEventDurationMS: attempt.Response.FirstEventDurationMS,
+		EventCount:           attempt.Response.EventCount,
+		WireBytes:            attempt.Response.WireBytes,
+		TransferEncoding:     attempt.Response.TransferEncoding,
+		TransportReason:      attempt.Response.TransportReason.Safe(),
+		Attempt:              index,
+		RoundID:              round.ID, At: responseAt, Provider: providerName, Protocol: "codexoauth",
 		Status: attempt.Response.Status, DurationMS: attempt.Response.DurationMS,
 		ContentType: http.Header(responseHeaders).Get("Content-Type"), ContentLength: attempt.Response.ContentLength,
 		Headers: responseHeaders,

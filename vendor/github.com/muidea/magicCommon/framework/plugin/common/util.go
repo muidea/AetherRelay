@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 
 	"log/slog"
@@ -25,6 +26,13 @@ type Weighted interface {
 	Weight() int
 }
 
+// TeardownWeighted optionally decouples dependency-safe startup ordering from
+// shutdown quiescence ordering. Plugins that do not implement it retain the
+// historical reverse-Weight teardown order.
+type TeardownWeighted interface {
+	TeardownWeight() int
+}
+
 type Setupper interface {
 	Setup(context.Context, event.Hub, task.BackgroundRoutine) *cd.Error
 }
@@ -38,9 +46,12 @@ type identifier interface {
 }
 
 type PluginMgr struct {
-	typeName   string
-	entityList []any
-	mu         sync.RWMutex
+	typeName     string
+	entityList   []any
+	mu           sync.RWMutex
+	setupStarted bool
+	activeList   []any
+	released     map[any]bool
 }
 
 func NewPluginMgr(typeName string) *PluginMgr {
@@ -89,6 +100,20 @@ func (s *PluginMgr) getWeight(ptr any) (weight int, err error) {
 
 	weight = int(values[0].Int())
 	return weight, nil
+}
+
+func (s *PluginMgr) getTeardownWeight(ptr any) (weight int, err error) {
+	if typed, ok := ptr.(TeardownWeighted); ok {
+		defer func() {
+			if info := recover(); info != nil {
+				slog.Error("panic in getTeardownWeight", "recover", info)
+				weight = DefaultWeight
+				err = fmt.Errorf("panic invoking TeardownWeight")
+			}
+		}()
+		return typed.TeardownWeight(), nil
+	}
+	return s.getWeight(ptr)
 }
 
 func (s *PluginMgr) getID(ptr any) (id string, err error) {
@@ -161,6 +186,16 @@ func (s *PluginMgr) validPlugin(ptr any) error {
 	}
 	if err := validateTeardownMethod(vType); err != nil {
 		return err
+	}
+	if _, exists := vType.MethodByName("BeginShutdown"); exists {
+		if _, ok := ptr.(ShutdownStarter); !ok {
+			return fmt.Errorf("BeginShutdown must have signature BeginShutdown(context.Context)")
+		}
+	}
+	if _, exists := vType.MethodByName("Quiesce"); exists {
+		if _, ok := ptr.(Quiescer); !ok {
+			return fmt.Errorf("Quiesce must have signature Quiesce(context.Context) *def.Error")
+		}
 	}
 
 	return nil
@@ -333,10 +368,20 @@ func (s *PluginMgr) Setup(ctx context.Context, eventHub event.Hub, backgroundRou
 	entityList := append([]any(nil), s.entityList...)
 	s.mu.RUnlock()
 
-	setupList := []any{}
+	s.mu.Lock()
+	if s.setupStarted && len(s.activeList) > len(s.released) {
+		s.mu.Unlock()
+		return cd.NewError(cd.InvalidOperation, "previous plugin lifecycle has not been released")
+	}
+	s.setupStarted, s.activeList, s.released = true, nil, map[any]bool{}
+	s.mu.Unlock()
 	for _, val := range entityList {
-		setupCalled := false
-		err, setupCalled = s.invokeSetup(val, ctx, eventHub, backgroundRoutine)
+		// Include the failing owner: Setup may have acquired partial resources.
+		// Cleanup belongs to the process-wide barrier, not this manager alone.
+		s.mu.Lock()
+		s.activeList = append(s.activeList, val)
+		s.mu.Unlock()
+		err, _ = s.invokeSetup(val, ctx, eventHub, backgroundRoutine)
 		if err != nil {
 			idVal, idErr := s.getID(val)
 			if idErr != nil {
@@ -344,11 +389,7 @@ func (s *PluginMgr) Setup(ctx context.Context, eventHub event.Hub, backgroundRou
 			} else {
 				slog.Error("invoke setup failed", "type", s.typeName, "id", idVal, "error", err)
 			}
-			s.rollbackSetup(ctx, setupList)
 			return
-		}
-		if setupCalled {
-			setupList = append(setupList, val)
 		}
 	}
 
@@ -382,16 +423,48 @@ func (s *PluginMgr) Run(ctx context.Context) (err *cd.Error) {
 }
 
 func (s *PluginMgr) Teardown(ctx context.Context) {
+	if err := s.TeardownChecked(ctx); err != nil {
+		slog.Error("plugin teardown incomplete", "type", s.typeName, "error", err)
+	}
+}
+
+func (s *PluginMgr) TeardownChecked(ctx context.Context) *cd.Error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	s.mu.RLock()
-	entityList := append([]any(nil), s.entityList...)
-	s.mu.RUnlock()
+	if err := s.BeginShutdown(ctx); err != nil {
+		return err
+	}
+	if err := s.Quiesce(ctx); err != nil {
+		return err
+	}
+	entityList := s.shutdownSnapshot()
 
-	totalSize := len(entityList)
-	for idx := range entityList {
-		val := entityList[totalSize-idx-1]
+	type teardownEntry struct {
+		value  any
+		weight int
+	}
+	entries := make([]teardownEntry, 0, len(entityList))
+	for idx := len(entityList) - 1; idx >= 0; idx-- {
+		val := entityList[idx]
+		weight, weightErr := s.getTeardownWeight(val)
+		if weightErr != nil {
+			idVal, idErr := s.getID(val)
+			if idErr != nil {
+				slog.Error("get teardown weight failed, get ID error", "type", s.typeName, "error", idErr)
+			} else {
+				slog.Error("get teardown weight failed", "type", s.typeName, "id", idVal, "error", weightErr)
+			}
+			return cd.NewError(cd.Unexpected, "plugin teardown ordering is unavailable")
+		}
+		entries = append(entries, teardownEntry{value: val, weight: weight})
+	}
+	sort.SliceStable(entries, func(left, right int) bool {
+		return entries[left].weight > entries[right].weight
+	})
+
+	for _, entry := range entries {
+		val := entry.value
 		err := s.invokeTeardown(val, ctx)
 		if err != nil {
 			idVal, idErr := s.getID(val)
@@ -400,15 +473,23 @@ func (s *PluginMgr) Teardown(ctx context.Context) {
 			} else {
 				slog.Error("invoke teardown failed", "type", s.typeName, "id", idVal, "error", err)
 			}
+			return err
 		}
+		s.mu.Lock()
+		if s.released == nil {
+			s.released = map[any]bool{}
+		}
+		s.released[val] = true
+		s.mu.Unlock()
 
 		//slog.Info("invoke teardown success", "type", s.typeName, "id", idVal)
 	}
+	return nil
 }
 
 func (s *PluginMgr) invokeSetup(ptr any, ctx context.Context, eventHub event.Hub, backgroundRoutine task.BackgroundRoutine) (*cd.Error, bool) {
 	if typed, ok := ptr.(Setupper); ok {
-		return typed.Setup(ctx, eventHub, backgroundRoutine), true
+		return guardShutdown(func() *cd.Error { return typed.Setup(ctx, eventHub, backgroundRoutine) }), true
 	}
 
 	err := system.InvokeEntityFunc(ptr, setupTag, ctx, eventHub, backgroundRoutine)
@@ -420,7 +501,7 @@ func (s *PluginMgr) invokeSetup(ptr any, ctx context.Context, eventHub event.Hub
 
 func (s *PluginMgr) invokeRun(ptr any, ctx context.Context) *cd.Error {
 	if typed, ok := ptr.(Plugin); ok {
-		return typed.Run(ctx)
+		return guardShutdown(func() *cd.Error { return typed.Run(ctx) })
 	}
 
 	err := system.InvokeEntityFunc(ptr, runTag, ctx)
@@ -432,8 +513,7 @@ func (s *PluginMgr) invokeRun(ptr any, ctx context.Context) *cd.Error {
 
 func (s *PluginMgr) invokeTeardown(ptr any, ctx context.Context) *cd.Error {
 	if typed, ok := ptr.(Teardowner); ok {
-		typed.Teardown(ctx)
-		return nil
+		return guardShutdown(func() *cd.Error { typed.Teardown(ctx); return nil })
 	}
 
 	err := system.InvokeEntityFunc(ptr, teardownTag, ctx)
@@ -441,19 +521,4 @@ func (s *PluginMgr) invokeTeardown(ptr any, ctx context.Context) *cd.Error {
 		return nil
 	}
 	return err
-}
-
-func (s *PluginMgr) rollbackSetup(ctx context.Context, setupList []any) {
-	for idx := len(setupList) - 1; idx >= 0; idx-- {
-		val := setupList[idx]
-		err := s.invokeTeardown(val, ctx)
-		if err != nil {
-			idVal, idErr := s.getID(val)
-			if idErr != nil {
-				slog.Error("rollback teardown failed, get ID error", "type", s.typeName, "error", idErr)
-			} else {
-				slog.Error("rollback teardown failed", "type", s.typeName, "id", idVal, "error", err)
-			}
-		}
-	}
 }

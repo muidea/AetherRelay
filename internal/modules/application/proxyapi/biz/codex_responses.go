@@ -18,6 +18,7 @@ import (
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
+	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 )
 
@@ -48,15 +49,15 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		}
 		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 		turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
-		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
+		value, sendErr := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
 			BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
 			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(),
 			ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
-		})).Get()
+		}))).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
-			return codexresponses.WebsocketOpenResult{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket unavailable"))
+			return codexresponses.WebsocketOpenResult{}, codexCommandFailure(ctx, sendErr)
 		}
 		opened, ok := value.(upevents.WSOpenResult)
 		if !ok {
@@ -112,10 +113,14 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		s.codexWebsockets[sessionID] = binding
 	}
 	s.mu.Unlock()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload, Fingerprint: codexFingerprintForTurn(binding.fingerprint)})).Get()
+	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload, Fingerprint: codexFingerprintForTurn(binding.fingerprint)}))).Get()
 	if err != nil {
-		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorUpstream)
-		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket send failed"))
+		return codexCommandFailure(ctx, err)
+	}
+	if sent, ok := value.(upevents.WSSendResult); ok && sent.ErrorClass != "" {
+		failure := failureFromUpstream(sent.ErrorClass, 0, upevents.RateLimitObservation{}, 0)
+		s.recordCodexWebsocketTurn(ctx, sessionID, false, string(failure.Kind))
+		return failure
 	}
 	if sent, ok := value.(upevents.WSSendResult); !ok || !sent.Sent {
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
@@ -125,10 +130,9 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 }
 
 func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codexresponses.WebsocketUpdate, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicWSPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSPullCommand{SessionID: sessionID, TimeoutMillis: 1000})).Get()
+	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSPullCommand{SessionID: sessionID, TimeoutMillis: 1000}))).Get()
 	if err != nil {
-		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorUpstream)
-		return codexresponses.WebsocketUpdate{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex websocket pull failed"))
+		return codexresponses.WebsocketUpdate{}, codexCommandFailure(ctx, err)
 	}
 	update, ok := value.(upevents.WSPullResult)
 	if !ok {
@@ -181,7 +185,7 @@ func (s *Proxy) CloseCodexWebsocket(ctx context.Context, sessionID string) {
 	binding, found := s.codexWebsockets[sessionID]
 	delete(s.codexWebsockets, sessionID)
 	s.mu.Unlock()
-	_, _ = s.SendEvent(event.NewEventWithContext(upevents.TopicWSClose, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.WSCloseCommand{SessionID: sessionID})).Get()
+	_, _ = s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSClose, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.WSCloseCommand{SessionID: sessionID}))).Get()
 	if found {
 		s.releaseCodexAccount(ctx, binding.leaseID)
 	}
@@ -497,15 +501,15 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 		turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 		request.TurnStateSource = turnStateSource
-		value, sendErr := s.SendEvent(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
+		value, sendErr := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicCompact, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompactCommand{
 			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy,
 			Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
 			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent,
 			ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
-		})).Get()
+		}))).Get()
 		if sendErr != nil {
 			s.releaseCodexAccount(ctx, account.LeaseID)
-			return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex compact upstream unavailable"))
+			return codexresponses.Result{}, codexCommandFailure(ctx, sendErr)
 		}
 		request.AccountAttempt = len(tried) + 1
 		completed, ok := value.(upevents.CompactResult)
@@ -833,14 +837,28 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 			}
 		}
 	}()
+	parent := ctx
 	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
 	defer cancel()
+	defer func() {
+		if failure == nil {
+			return
+		}
+		if parent.Err() != nil {
+			previous := failure
+			failure, _ = codexresponses.AsFailure(clientFailure(parent.Err()))
+			failure.Attempt = previous.Attempt
+			failure.TurnStateSource = previous.TurnStateSource
+		} else if ctx.Err() == context.DeadlineExceeded && failure.Attempt.Request.URL != "" {
+			failure.Kind = codexresponses.KindTimeout
+		}
+	}()
 	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 	request.TurnStateSource = turnStateSource
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
+	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)}))).Get()
 	if err != nil {
-		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream unavailable"))
+		return codexresponses.Result{}, codexCommandFailure(ctx, err)
 	}
 	completed, ok := value.(upevents.CompleteResult)
 	if !ok {
@@ -875,14 +893,26 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		// not turn an earlier transport fault into a local lifetime timeout.
 		guard.close()
 		if streamID != "" {
-			_, _ = s.SendEvent(event.NewEventWithContext(upevents.TopicCancel, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.CancelCommand{StreamID: streamID})).Get()
+			value, _ := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicCancel, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.CancelCommand{StreamID: streamID}))).Get()
+			if canceled, ok := value.(upevents.CancelResult); ok {
+				mergeCodexStreamProgress(&observedAttempt, canceled.Progress)
+			}
 		}
 		failure, _ := codexresponses.AsFailure(resultErr)
 		if failure != nil && failure.Attempt.Request.URL == "" {
 			failure.Attempt = observedAttempt
 		}
 		if failure != nil {
+			mergeCodexStreamProgress(&failure.Attempt, upevents.HTTPResponseObservation{ReadObserved: observedAttempt.Response.ReadObserved,
+				ReadDurationMS:       observedAttempt.Response.ReadDurationMS,
+				FirstEventDurationMS: observedAttempt.Response.FirstEventDurationMS,
+				EventCount:           observedAttempt.Response.EventCount,
+				WireBytes:            observedAttempt.Response.WireBytes})
 			failure.TurnStateSource = request.TurnStateSource
+		}
+		observedAttempt.Response.FirstClientEventDurationMS = guard.deliveryDuration()
+		if failure != nil {
+			failure.Attempt.Response.FirstClientEventDurationMS = observedAttempt.Response.FirstClientEventDurationMS
 		}
 		logCodexStreamAttempt(request, failure, phase, guard)
 		if request.ObserveAttempt != nil {
@@ -901,9 +931,9 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			failure.TurnStateSource = turnStateSource
 		}
 	}()
-	value, err := s.SendEvent(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)})).Get()
+	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)}))).Get()
 	if err != nil {
-		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream unavailable"))
+		return codexCommandFailure(ctx, err)
 	}
 	startedUpstream, ok := value.(upevents.StartResult)
 	if !ok {
@@ -920,10 +950,9 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		failure.Attempt = toCodexHTTPAttempt(startedUpstream.Attempt)
 		return failure
 	}
-	attempt := observedAttempt
 	defer func() {
 		if failure, ok := codexresponses.AsFailure(resultErr); ok && failure.Attempt.Request.URL == "" {
-			failure.Attempt = attempt
+			failure.Attempt = observedAttempt
 		}
 	}()
 	s.mergeCodexUsageHeaders(ctx, account.AccountID, startedUpstream.Headers)
@@ -936,14 +965,15 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 	preludeBytes := 0
 	for {
 		phase = "pull"
-		value, pullErr := s.SendEvent(event.NewEventWithContext(upevents.TopicPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.PullCommand{StreamID: startedUpstream.StreamID, TimeoutMillis: 1000})).Get()
+		value, pullErr := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicPull, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.PullCommand{StreamID: startedUpstream.StreamID, TimeoutMillis: 1000}))).Get()
 		if pullErr != nil {
-			return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex stream pull failed"))
+			return codexCommandFailure(ctx, pullErr)
 		}
 		update, ok := value.(upevents.PullResult)
 		if !ok {
 			return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream update"))
 		}
+		mergeCodexStreamProgress(&observedAttempt, update.Progress)
 		if len(update.Data) > 0 {
 			firstBusinessEvent := guard.observe(update.Data)
 			if !clientStarted && !firstBusinessEvent {
@@ -966,7 +996,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			phase = "emit"
 			if !clientStarted {
 				if started != nil {
-					if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: guard.firstEventDuration(), Attempt: attempt, TurnStateSource: turnStateSource}); err != nil {
+					if err := started(codexresponses.StreamStart{Headers: toCodexHeaders(startedUpstream.Headers), FirstEventDuration: guard.firstEventDuration(), Attempt: observedAttempt, TurnStateSource: turnStateSource}); err != nil {
 						return clientFailure(err)
 					}
 				}
@@ -985,6 +1015,9 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			if emit != nil {
 				if err := emit(update.Data); err != nil {
 					return clientFailure(err)
+				}
+				if firstBusinessEvent {
+					guard.delivered()
 				}
 			}
 		}
@@ -1074,7 +1107,7 @@ func refreshFailureClass(result accevents.RefreshTokenResult) string {
 }
 
 func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success bool, class string, retryAfter int, quotaExhausted bool, quotaResetAt string) {
-	if strings.TrimSpace(id) == "" || (!success && (class == string(codexresponses.KindClientCanceled) || class == string(codexresponses.KindClientWrite) || class == string(codexresponses.KindStreamLifetime) || class == string(codexresponses.KindConversion))) {
+	if strings.TrimSpace(id) == "" || (!success && (class == string(codexresponses.KindProviderUnavailable) || class == string(codexresponses.KindClientCanceled) || class == string(codexresponses.KindClientWrite) || class == string(codexresponses.KindStreamLifetime) || class == string(codexresponses.KindConversion))) {
 		return
 	}
 	availabilityNeutral := !success && class == string(codexresponses.KindFirstEventTimeout) && !quotaExhausted
@@ -1113,15 +1146,20 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt {
 	return codexresponses.HTTPAttempt{
 		Request: codexresponses.HTTPRequestObservation{
-			At: attempt.Request.At, Method: attempt.Request.Method, URL: attempt.Request.URL,
+			QueueWaitMS: attempt.Request.QueueWaitMS, At: attempt.Request.At, Method: attempt.Request.Method, URL: attempt.Request.URL,
 			Body: bytes.Clone(attempt.Request.Body), BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
 		},
 		Response: codexresponses.HTTPResponseObservation{
 			ErrorBody: bytes.Clone(attempt.Response.ErrorBody), ErrorBodyFormat: attempt.Response.ErrorBodyFormat,
 			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,
-			TransferEncoding: attempt.Response.TransferEncoding,
-			TransportReason:  attempt.Response.TransportReason.Safe(),
-			Observed:         attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
+			TransferEncoding:     attempt.Response.TransferEncoding,
+			ReadObserved:         attempt.Response.ReadObserved,
+			ReadDurationMS:       attempt.Response.ReadDurationMS,
+			FirstEventDurationMS: attempt.Response.FirstEventDurationMS,
+			EventCount:           attempt.Response.EventCount,
+			WireBytes:            attempt.Response.WireBytes,
+			TransportReason:      attempt.Response.TransportReason.Safe(),
+			Observed:             attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
 			ContentLength: attempt.Response.ContentLength, DurationMS: attempt.Response.DurationMS,
 			Headers: toCodexHeaders(attempt.Response.Headers),
 		},
@@ -1131,6 +1169,8 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int, safeErrors ...upevents.SafeError) *codexresponses.Failure {
 	var failure *codexresponses.Failure
 	switch class {
+	case upevents.ErrorCanceled:
+		failure = codexresponses.NewFailure(codexresponses.KindClientCanceled, 0, fmt.Errorf("Codex request canceled"))
 	case upevents.ErrorModelNotFound:
 		failure = codexresponses.NewFailure(codexresponses.KindModelNotFound, 0, fmt.Errorf("Codex upstream model is unavailable for the selected account"))
 	case upevents.ErrorInvalidRequest:
@@ -1187,4 +1227,33 @@ func codexRequestContext(ctx context.Context, timeout time.Duration) (context.Co
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+// A rejected/expired command with no upstream result is local admission failure,
+// not evidence against the credential or provider.
+func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure {
+	if ctx.Err() == context.Canceled {
+		failure, _ := codexresponses.AsFailure(clientFailure(ctx.Err()))
+		return failure
+	}
+	var commandErr *cd.Error
+	if ctx.Err() == nil && (!errors.As(err, &commandErr) || (commandErr.Code != cd.ResourceExhausted && commandErr.Code != cd.Timeout && commandErr.Code != cd.InvalidOperation)) {
+		return codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream command failed"))
+	}
+	failure := codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 1, fmt.Errorf("Codex upstream command admission unavailable"))
+	failure.UnavailableReason = "local_capacity"
+	if ctx.Err() == context.DeadlineExceeded {
+		failure.UnavailableReason = "queue_timeout"
+	}
+	retryable := true
+	failure.Retryable = &retryable
+	return failure
+}
+
+func mergeCodexStreamProgress(attempt *codexresponses.HTTPAttempt, progress upevents.HTTPResponseObservation) {
+	attempt.Response.ReadObserved = attempt.Response.ReadObserved || progress.ReadObserved
+	attempt.Response.ReadDurationMS = max(attempt.Response.ReadDurationMS, progress.ReadDurationMS)
+	attempt.Response.FirstEventDurationMS = max(attempt.Response.FirstEventDurationMS, progress.FirstEventDurationMS)
+	attempt.Response.EventCount = max(attempt.Response.EventCount, progress.EventCount)
+	attempt.Response.WireBytes = max(attempt.Response.WireBytes, progress.WireBytes)
 }

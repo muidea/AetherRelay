@@ -37,22 +37,28 @@ type HTTPAttempt struct {
 }
 
 type HTTPRequestObservation struct {
-	At        time.Time
-	Method    string
-	URL       string
-	BodyBytes int
+	QueueWaitMS int64
+	At          time.Time
+	Method      string
+	URL         string
+	BodyBytes   int
 	// Body is the final wire payload; present only with ArchiveFullContent.
 	Body    []byte
 	Headers []Header
 }
 
 type HTTPResponseObservation struct {
-	TransportReason     transport.Reason // CP-OBS-012: bounded diagnostic, never raw error text.
-	ErrorBody           []byte           // Bounded archive-only payload, never ordinary logging.
-	ErrorBodyFormat     string
-	ErrorBodyTruncated  bool
-	ErrorBodyReadFailed bool
-	TransferEncoding    string
+	ReadObserved         bool
+	ReadDurationMS       int64
+	FirstEventDurationMS int64
+	EventCount           int64
+	WireBytes            int64
+	TransportReason      transport.Reason // CP-OBS-012: bounded diagnostic, never raw error text.
+	ErrorBody            []byte           // Bounded archive-only payload, never ordinary logging.
+	ErrorBodyFormat      string
+	ErrorBodyTruncated   bool
+	ErrorBodyReadFailed  bool
+	TransferEncoding     string
 
 	Observed      bool
 	At            time.Time
@@ -83,6 +89,7 @@ const (
 	ErrorInvalidToken   ErrorClass = "invalid_token"
 	ErrorRateLimit      ErrorClass = "rate_limit"
 	ErrorTimeout        ErrorClass = "timeout"
+	ErrorCanceled       ErrorClass = "canceled"
 	ErrorNetwork        ErrorClass = "network"
 	ErrorUpstream       ErrorClass = "upstream"
 	ErrorProtocol       ErrorClass = "protocol"
@@ -246,6 +253,7 @@ type PullCommand struct {
 	TimeoutMillis int
 }
 type PullResult struct {
+	Progress          HTTPResponseObservation
 	TransportReason   transport.Reason
 	Data              []byte
 	Done              bool
@@ -256,7 +264,10 @@ type PullResult struct {
 }
 
 type CancelCommand struct{ StreamID string }
-type CancelResult struct{ Cancelled bool }
+type CancelResult struct {
+	Cancelled bool
+	Progress  HTTPResponseObservation
+}
 
 type WSOpenCommand struct {
 	AccessToken     string
@@ -294,7 +305,10 @@ type WSSendCommand struct {
 	Payload     []byte
 	Fingerprint CodexFingerprint
 }
-type WSSendResult struct{ Sent bool }
+type WSSendResult struct {
+	Sent       bool
+	ErrorClass ErrorClass
+}
 
 type WSPullCommand struct {
 	SessionID     string

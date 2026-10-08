@@ -21,21 +21,28 @@ type HTTPAttempt struct {
 }
 
 type HTTPRequestObservation struct {
-	At        time.Time
-	Method    string
-	URL       string
-	BodyBytes int
-	Body      []byte
-	Headers   []Header
+	QueueWaitMS int64
+	At          time.Time
+	Method      string
+	URL         string
+	BodyBytes   int
+	Body        []byte
+	Headers     []Header
 }
 
 type HTTPResponseObservation struct {
-	TransportReason     transport.Reason // CP-OBS-012: bounded diagnostic, never raw error text.
-	ErrorBody           []byte           // Bounded archive-only payload, never ordinary logging.
-	ErrorBodyFormat     string
-	ErrorBodyTruncated  bool
-	ErrorBodyReadFailed bool
-	TransferEncoding    string
+	FirstClientEventDurationMS int64
+	ReadObserved               bool
+	ReadDurationMS             int64
+	FirstEventDurationMS       int64
+	EventCount                 int64
+	WireBytes                  int64
+	TransportReason            transport.Reason // CP-OBS-012: bounded diagnostic, never raw error text.
+	ErrorBody                  []byte           // Bounded archive-only payload, never ordinary logging.
+	ErrorBodyFormat            string
+	ErrorBodyTruncated         bool
+	ErrorBodyReadFailed        bool
+	TransferEncoding           string
 
 	Observed      bool
 	At            time.Time

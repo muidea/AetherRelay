@@ -16,6 +16,8 @@
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
+`14.1.0` 根据 2026-10-08 x600 rounds `033698–033720` 收口 Codex upstream 调度：旧镜像 `a837076` 的同步 Complete 在 Block 默认串行 lane 中读取完整响应，造成其它 Start/Pull/Cancel 等待数分钟；`033714` 排队约 245 秒后实际约 11 秒完成。magicCommon 升级至 `v1.5.21`，由 upstream owner 声明请求 lane、stream 读取/取消 lane、WebSocket 读取/写入/关闭 lane；独立网络操作并发，同对象读取/写入保持各自顺序，控制命令不等待阻塞读取。并发命令及流/会话注册表各上限 64，容量拒绝为本地准入错误，不处罚账号或 Provider。BeginShutdown 取消在途网络与读任务，Quiesce 等真实排空，超时保留资源等待重试。请求 deadline 优先于取消后的底层 read 错误，客户端/停机取消保持中性，真实网络/上游失败仍按既有冷却规则反馈。新增 `queue_wait_ms`、`read_observed`、读取耗时、上游首事件/事件数/字节数及客户端首交付耗时；上游读取计数在语义缓冲前记录，区分上游有输出与客户端未收到数据，不归档原始传输错误。共享 Base 对新版必需订阅错误 fail-fast，异步任务拒绝返回调用方并清理已登记状态。回归覆盖慢 Complete 并发流、取消、过期排队、容量控制、超时、停机与中性反馈；本地验证不能证明生产上游故障已经恢复。按 MINOR 记录，待部署复验。
+
 `14.0.0` 移除客户端来源 profile 的静态版本上限：仅 `codex-tui` family 的严格三段版本达到最低基线后自动接纳更高版本，同 family 严格单调晋升，并将完整原子 profile 用于推理、refresh、模型发现和用量查询。最低基线为 `codex-tui 0.154.0`，同版本平台稳定性和字段安全校验不变。剔除 `codex_exec` 及其它工具的候选资格，加载时清除存量非 codex-tui profile；所有模式的出站客户端身份都只允许合法 codex-tui，否则整组回落。内置 fallback 改为既有真实流量观察到的 `codex-tui/0.155.0 ... gnome-terminal` 原子身份，不推测高版本。现场同账号对照：模型发现 `client_version=0.155.0` 返回 9 个模型且无 `gpt-6.1-sol`，仅改为 `0.159.2` 即返回 10 个模型并包含它，两次均为 HTTP 200。核对推理（HTTP/SSE、compact、WebSocket）、模型发现、额度查询、OAuth 刷新及账号加密恢复均复用同一 profile authority，无其它客户端版本上限；manifest 的扩展 reasoning 使用最低版本比较，本已允许未来版本。验收覆盖未来三段版本接纳、非法格式/低于基线拒绝、单调晋升、加密恢复及新版本模型目录查询；部署与线上账号再次观察新客户端须独立完成。改变默认身份并删除 codex_exec 接纳能力，按 MAJOR 记录。
 
 `13.13.0` 在配置模板和 x600 模型能力配置补充 exact `gpt-6.1-sol` 元数据：Codex 默认/最大上下文 272,000 / 872,000，默认 reasoning `low`，档位 `low|medium|high|xhigh|max|ultra`，原生 Responses tools 与图片输入；最大输出 128,000 来自官方 API 模型说明。Codex 口径依据本机 `0.159.2` 于 2026-09-30T01:58:33Z 获取的快照，公共 API 的 1,050,000 窗口、medium 默认及无 ultra 档位单独记录。本次不扩展可信 manifest profile 或转换模板；metadata 不建立模型成员资格，x600 访问权限与运行生效须独立核对。远端修改先备份，仅变更目标 metadata，不覆盖其它配置；文件更新不等于运行实例已重新加载。按 MINOR 记录。
@@ -763,3 +765,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 - `CP-WS-002` profile 来源：CLIProxyAPI `f43aad76` 的 `internal/runtime/executor/codex_websockets_connection.go`，验证 beta 值 `responses_websockets=2026-02-06`；测试只使用脱敏本地 WebSocket server。
 - 最新配置判定来源：OpenAI Docs `https://developers.openai.com/codex/config-reference/`，其中 `model_providers.<id>.base_url` 定义为模型 Provider API base URL，`chatgpt_base_url` 定义为 ChatGPT login flow base URL override。
+
+
+### CP-SCHED-001：Codex upstream 调度与观测
+
+- 所有跨 owner 的 Codex upstream command 使用 `pkg/events.BindCommandLane`；长 Complete/Compact、握手、模型发现和额度查询各有独立执行 lane。Stream Pull 按 stream ID 排序，Cancel 使用独立控制 lane；WebSocket 读、写、关闭分流，同一会话写入仍保序。不得绕过 EventHub 直接注入 upstream 实现。
+- owner 限制并发 command 与 stream/WebSocket 注册表大小；取消/关闭不受普通容量限制。过期且尚未执行的事件不得随后访问上游。取消不是已执行任务完成的回执，停机必须等待实际结束。
+- 只有上游执行的 timeout/network/upstream 等故障才能参与既有账号反馈；本地容量拒绝、排队过期、客户端与停机取消保持中性。HTTP 503 `failure_class=local_capacity|queue_timeout` 携带可重试提示，真实上游 503 不改写成本地错误。
+- `queue_wait_ms` 是投递至 handler 进入的等待；响应 `duration_ms` 保持响应头耗时。`read_duration_ms` 与 `first_upstream_event_duration_ms` 从开始读取响应体计时；`upstream_event_count`/`upstream_wire_bytes` 在语义缓冲和客户端消费之前累计，keepalive 不计业务事件。`read_observed` 区分未建立读取与读取后零业务事件。`first_client_event_duration_ms` 从流 attempt 开始至第一个业务事件成功交付回调返回，不代表客户端应用已消费。
+- 历史归档不回填；归档关闭时仍输出有界失败诊断。不得输出账号、凭据、代理 URL、上下文正文或原始错误文本。

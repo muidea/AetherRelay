@@ -62,8 +62,12 @@ type streamUpdate struct {
 }
 
 type responseStream struct {
-	cancel  context.CancelFunc
-	updates chan streamUpdate
+	cancel       context.CancelFunc
+	updates      chan streamUpdate
+	progressMu   sync.Mutex
+	progress     events.HTTPResponseObservation
+	readStarted  time.Time
+	readFinished time.Time
 }
 
 type websocketUpdate struct {
@@ -88,22 +92,25 @@ type Upstream struct {
 	streams    map[string]*responseStream
 	websockets map[string]*websocketSession
 	stopping   bool
+	active     map[string]context.CancelFunc
+	workWG     sync.WaitGroup
+	drained    chan struct{}
 }
 
 func New(hub event.Hub, background task.BackgroundRoutine) *Upstream {
-	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}, websockets: map[string]*websocketSession{}}
+	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}, websockets: map[string]*websocketSession{}, active: map[string]context.CancelFunc{}}
 	b.topics = []string{events.TopicComplete, events.TopicCompact, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicWSOpen, events.TopicWSSend, events.TopicWSPull, events.TopicWSClose, events.TopicListModels, events.TopicGetUsage}
-	b.SubscribeFunc(events.TopicComplete, b.handleComplete)
-	b.SubscribeFunc(events.TopicCompact, b.handleCompact)
-	b.SubscribeFunc(events.TopicStart, b.handleStart)
-	b.SubscribeFunc(events.TopicPull, b.handlePull)
-	b.SubscribeFunc(events.TopicCancel, b.handleCancel)
-	b.SubscribeFunc(events.TopicWSOpen, b.handleWSOpen)
-	b.SubscribeFunc(events.TopicWSSend, b.handleWSSend)
-	b.SubscribeFunc(events.TopicWSPull, b.handleWSPull)
-	b.SubscribeFunc(events.TopicWSClose, b.handleWSClose)
-	b.SubscribeFunc(events.TopicListModels, b.handleListModels)
-	b.SubscribeFunc(events.TopicGetUsage, b.handleGetUsage)
+	b.SubscribeFunc(events.TopicComplete, b.commandHandler(b.handleComplete))
+	b.SubscribeFunc(events.TopicCompact, b.commandHandler(b.handleCompact))
+	b.SubscribeFunc(events.TopicStart, b.commandHandler(b.handleStart))
+	b.SubscribeFunc(events.TopicPull, b.commandHandler(b.handlePull))
+	b.SubscribeFunc(events.TopicCancel, b.commandHandler(b.handleCancel))
+	b.SubscribeFunc(events.TopicWSOpen, b.commandHandler(b.handleWSOpen))
+	b.SubscribeFunc(events.TopicWSSend, b.commandHandler(b.handleWSSend))
+	b.SubscribeFunc(events.TopicWSPull, b.commandHandler(b.handleWSPull))
+	b.SubscribeFunc(events.TopicWSClose, b.commandHandler(b.handleWSClose))
+	b.SubscribeFunc(events.TopicListModels, b.commandHandler(b.handleListModels))
+	b.SubscribeFunc(events.TopicGetUsage, b.commandHandler(b.handleGetUsage))
 	return b
 }
 
@@ -133,7 +140,7 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	payload, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
+	payload, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes, &attempt.Response)
 	if err != nil {
 		attempt.Response.TransportReason = completedTransportReason(class, err)
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
@@ -148,22 +155,47 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 }
 
 func (s *Upstream) Run(context.Context) *cd.Error { return nil }
-func (s *Upstream) Teardown(context.Context) {
+func (s *Upstream) BeginShutdown(context.Context) *cd.Error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.stopping = true
+	for _, cancel := range s.active {
+		cancel()
+	}
 	for _, session := range s.websockets {
 		session.cancel()
 		_ = session.conn.Close()
 	}
-	s.websockets = map[string]*websocketSession{}
+	for _, stream := range s.streams {
+		stream.cancel()
+	}
+	return nil
+}
+func (s *Upstream) Quiesce(ctx context.Context) *cd.Error {
+	s.BeginShutdown(ctx)
+	s.mu.Lock()
+	if s.drained == nil {
+		s.drained = make(chan struct{})
+		go func() { s.workWG.Wait(); close(s.drained) }()
+	}
+	done := s.drained
 	s.mu.Unlock()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return cd.NewError(cd.Timeout, "Codex upstream has not drained")
+	}
+}
+func (s *Upstream) Teardown(ctx context.Context) {
+	if err := s.Quiesce(ctx); err != nil {
+		panic(err)
+	}
 	for _, topic := range s.topics {
 		s.UnsubscribeFunc(topic)
 	}
 	s.mu.Lock()
-	for _, stream := range s.streams {
-		stream.cancel()
-	}
+	s.websockets = map[string]*websocketSession{}
 	s.streams = map[string]*responseStream{}
 	s.mu.Unlock()
 }
@@ -181,7 +213,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	stopping := s.stopping
 	s.mu.Unlock()
 	if stopping {
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex upstream is stopping"))
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex upstream local capacity unavailable"))
 		return
 	}
 	dialer, err := newWebsocketDialer(cmd.Proxy)
@@ -202,7 +234,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		headers.Set("ChatGPT-Account-ID", accountID)
 	}
 	requestAt := time.Now()
-	attempt := events.HTTPAttempt{Request: events.HTTPRequestObservation{At: requestAt, Method: http.MethodGet, URL: responsesWebsocketURL, Headers: safeFHTTPHeaders(headers, profile.archiveUnredacted)}}
+	attempt := events.HTTPAttempt{Request: events.HTTPRequestObservation{QueueWaitMS: dispatchQueueWait(ev.Context()).Milliseconds(), At: requestAt, Method: http.MethodGet, URL: responsesWebsocketURL, Headers: safeFHTTPHeaders(headers, profile.archiveUnredacted)}}
 	conn, response, err := dialer.DialContext(ev.Context(), responsesWebsocketURL, headers)
 	attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 	if err != nil {
@@ -221,7 +253,7 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 				_ = response.Body.Close()
 			}
 		}
-		class := classifyTransport(err)
+		class := classifyRequestTransport(ev.Context(), err)
 		if status > 0 {
 			class = errorClassWithBody(status, responseBody, observation)
 		}
@@ -245,18 +277,20 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 	sessionID := uuid.NewString()
 	session := &websocketSession{conn: conn, cancel: cancel, updates: make(chan websocketUpdate, 64)}
 	s.mu.Lock()
-	if s.stopping {
+	if s.stopping || len(s.streams)+len(s.websockets) >= maxConcurrentCommands {
 		s.mu.Unlock()
 		cancel()
 		_ = conn.Close()
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex upstream is stopping"))
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex upstream local capacity unavailable"))
 		return
 	}
+	s.workWG.Add(1)
 	s.websockets[sessionID] = session
 	s.mu.Unlock()
-	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runWebsocket(ctx, sessionID, session) }); err != nil {
+	if err := s.BackgroundRoutine().AsyncFunction(func() { defer s.workWG.Done(); s.runWebsocket(ctx, sessionID, session) }); err != nil {
+		s.workWG.Done()
 		s.closeWebsocket(sessionID)
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket reader unavailable"))
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex websocket reader unavailable"))
 		return
 	}
 	result.Set(events.WSOpenResult{SessionID: sessionID, Headers: responseHeader, Attempt: attempt}, nil)
@@ -297,7 +331,7 @@ func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
 	err := session.conn.WriteMessage(wsclient.TextMessage, payload)
 	session.writeMu.Unlock()
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex websocket write failed"))
+		result.Set(events.WSSendResult{ErrorClass: classifyRequestTransport(ev.Context(), err)}, nil)
 		return
 	}
 	result.Set(events.WSSendResult{Sent: true}, nil)
@@ -453,7 +487,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes)
+	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes, &attempt.Response)
 	if err != nil {
 		attempt.Response.TransportReason = completedTransportReason(class, err)
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
@@ -492,15 +526,24 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 	// The EventHub command is synchronous and may finish before its SSE reader.
 	// Keep request values, but let explicit Pull/Cancel own stream lifetime.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ev.Context()))
-	stream := &responseStream{cancel: func() { cancel(); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64)}
+	stream := &responseStream{cancel: func() { cancel(); cancelCommand(ev.Context()); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64), readStarted: time.Now()}
 	s.mu.Lock()
+	if s.stopping || len(s.streams)+len(s.websockets) >= maxConcurrentCommands {
+		s.mu.Unlock()
+		stream.cancel()
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex stream local capacity unavailable"))
+		return
+	}
+	s.workWG.Add(1)
 	s.streams[streamID] = stream
 	s.mu.Unlock()
-	if err := s.BackgroundRoutine().AsyncFunction(func() { s.runStream(ctx, streamID, stream, response.Body, cmd.MaxLineBytes) }); err != nil {
+	transferCommand(ev.Context())
+	if err := s.BackgroundRoutine().AsyncFunction(func() { defer s.workWG.Done(); s.runStream(ctx, streamID, stream, response.Body, cmd.MaxLineBytes) }); err != nil {
+		s.workWG.Done()
 		s.removeStream(streamID)
 		cancel()
 		_ = response.Body.Close()
-		result.Set(nil, cd.NewError(cd.Unexpected, "Codex stream task unavailable"))
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex stream task unavailable"))
 		return
 	}
 	result.Set(events.StartResult{StreamID: streamID, Headers: responseHeaders(response.Header), Attempt: attempt}, nil)
@@ -528,15 +571,15 @@ func (s *Upstream) handlePull(ev event.Event, result event.Result) {
 	case update, ok := <-stream.updates:
 		if !ok {
 			s.removeStream(cmd.StreamID)
-			result.Set(events.PullResult{Done: true}, nil)
+			result.Set(events.PullResult{Progress: stream.observation(), Done: true}, nil)
 			return
 		}
 		if update.done {
 			s.removeStream(cmd.StreamID)
 		}
-		result.Set(events.PullResult{TransportReason: update.transportReason, Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit, SafeError: update.safeError}, nil)
+		result.Set(events.PullResult{Progress: stream.observation(), TransportReason: update.transportReason, Data: update.data, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit, SafeError: update.safeError}, nil)
 	case <-time.After(timeout):
-		result.Set(events.PullResult{}, nil)
+		result.Set(events.PullResult{Progress: stream.observation()}, nil)
 	case <-ev.Context().Done():
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex stream pull canceled"))
 	}
@@ -551,8 +594,13 @@ func (s *Upstream) handleCancel(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex stream cancel command"))
 		return
 	}
+	stream := s.stream(cmd.StreamID)
+	var progress events.HTTPResponseObservation
+	if stream != nil {
+		progress = stream.observation()
+	}
 	canceled := s.removeStream(cmd.StreamID)
-	result.Set(events.CancelResult{Cancelled: canceled}, nil)
+	result.Set(events.CancelResult{Progress: progress, Cancelled: canceled}, nil)
 }
 
 // handleListModels projects the account-scoped Codex model endpoint into a
@@ -597,6 +645,7 @@ func (s *Upstream) handleGetUsage(ev event.Event, result event.Result) {
 func (s *Upstream) runStream(ctx context.Context, streamID string, stream *responseStream, body io.ReadCloser, maxLine int64) {
 	defer body.Close()
 	defer close(stream.updates)
+	defer stream.finish()
 	reader := bufio.NewReader(body)
 	semanticOutput := false
 	generatedOutput := false
@@ -604,6 +653,7 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 	pendingBytes := 0
 	for {
 		line, err := readLine(reader, maxLine)
+		stream.observe(line)
 		if len(line) > 0 {
 			for _, expanded := range expandCodexSSELine(line) {
 				semantic, emptyCompleted := codexStreamSemanticsWithOutput(expanded, semanticOutput, generatedOutput)
@@ -706,7 +756,7 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	}
 	requestAt := time.Now()
 	attempt.Request = events.HTTPRequestObservation{
-		At: requestAt, Method: req.Method, URL: req.URL.String(), BodyBytes: len(body), Headers: safeHTTPHeaders(req.Header, profile.archiveUnredacted),
+		QueueWaitMS: dispatchQueueWait(ctx).Milliseconds(), At: requestAt, Method: req.Method, URL: req.URL.String(), BodyBytes: len(body), Headers: safeHTTPHeaders(req.Header, profile.archiveUnredacted),
 	}
 	if profile.archiveFullContent {
 		attempt.Request.Body = bytes.Clone(body)
@@ -715,7 +765,7 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	if err != nil {
 		attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 		attempt.Response.TransportReason = transportReason(err)
-		return nil, attempt, classifyTransport(err), 0, err
+		return nil, attempt, classifyRequestTransport(ctx, err), 0, err
 	}
 	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
 	return response, attempt, "", retryAfterSeconds(response.Header), nil
@@ -1161,17 +1211,29 @@ func forceStream(body []byte) ([]byte, error) {
 	return json.Marshal(values)
 }
 
-func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.ErrorClass, events.RateLimitObservation, events.SafeError, error) {
+func completedResponse(response *http.Response, maxBytes int64, observations ...*events.HTTPResponseObservation) ([]byte, events.ErrorClass, events.RateLimitObservation, events.SafeError, error) {
 	if response == nil || response.Body == nil {
 		return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response body is unavailable")
+	}
+	readStarted := time.Now()
+	var observation *events.HTTPResponseObservation
+	if len(observations) > 0 {
+		observation = observations[0]
+	}
+	if observation != nil {
+		observation.ReadObserved = true
+		defer func() { observation.ReadDurationMS = time.Since(readStarted).Milliseconds() }()
 	}
 	if maxBytes <= 0 {
 		maxBytes = 32 << 20
 	}
 	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
 		payload, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
+		if observation != nil {
+			observation.WireBytes = int64(len(payload))
+		}
 		if err != nil {
-			return nil, classifyTransport(err), events.RateLimitObservation{}, events.SafeError{}, err
+			return nil, classifyResponseTransport(response, err), events.RateLimitObservation{}, events.SafeError{}, err
 		}
 		if int64(len(payload)) > maxBytes {
 			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
@@ -1181,6 +1243,10 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 		}
 		if err := json.Unmarshal(payload, &object); err != nil || object.Object != "response" {
 			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("invalid native Codex response object")
+		}
+		if observation != nil {
+			observation.EventCount = 1
+			observation.FirstEventDurationMS = time.Since(readStarted).Milliseconds()
 		}
 		if aetherrelaycodex.EmptyIncompleteResponse(payload) {
 			return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
@@ -1195,6 +1261,16 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 	outputEvidence := false
 	for {
 		line, err := readLine(reader, 1<<20)
+		if observation != nil {
+			observation.WireBytes += int64(len(line))
+			if count := businessEventCount(line); count > 0 {
+				first := observation.EventCount == 0
+				observation.EventCount += count
+				if first {
+					observation.FirstEventDurationMS = time.Since(readStarted).Milliseconds()
+				}
+			}
+		}
 		if len(line) > 0 {
 			trimmed := strings.TrimSpace(string(line))
 			if strings.HasPrefix(trimmed, "data:") {
@@ -1273,7 +1349,7 @@ func completedResponse(response *http.Response, maxBytes int64) ([]byte, events.
 			if errors.Is(err, io.EOF) {
 				return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response ended without response.completed: %w", err)
 			}
-			return nil, classifyTransport(err), events.RateLimitObservation{}, events.SafeError{}, err
+			return nil, classifyResponseTransport(response, err), events.RateLimitObservation{}, events.SafeError{}, err
 		}
 	}
 }

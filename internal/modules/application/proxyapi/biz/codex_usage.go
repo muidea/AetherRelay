@@ -184,12 +184,12 @@ func nextCodexUsageRefreshAt(accountID string, now time.Time, interval time.Dura
 func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCandidate) (codexupevents.GetUsageResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
-	value, err := s.SendEvent(event.NewEventWithContext(codexupevents.TopicGetUsage, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.GetUsageCommand{
+	value, err := s.SendEvent(codexupevents.BindCommandLane(event.NewEventWithContext(codexupevents.TopicGetUsage, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.GetUsageCommand{
 		AccessToken:     candidate.AccessToken,
 		AccountIDHeader: candidate.AccountIDHeader,
 		Proxy:           candidate.Proxy,
 		ClientIdentity:  toUpstreamAccountClientIdentity(candidate.ClientIdentity),
-	})).Get()
+	}))).Get()
 	if err != nil {
 		return codexupevents.GetUsageResult{}, err
 	}

@@ -137,10 +137,14 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	b.SubscribeFunc(events.TopicGetImage, b.handleGetImage)
 	b.SubscribeFunc(events.TopicGetAttachment, b.handleGetAttachment)
 	b.purgeWG.Add(1)
-	b.AsyncTask(func() {
+	if err := b.AsyncTask(func() {
 		defer b.purgeWG.Done()
 		b.purgeLoop()
-	})
+	}); err != nil {
+		b.purgeWG.Done()
+		b.Teardown(context.Background())
+		return nil, cd.NewError(cd.ResourceExhausted, "temporary chat maintenance unavailable")
+	}
 	return b, nil
 }
 
@@ -380,10 +384,19 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 	s.turns[turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID)] = runtime
 	s.turnWG.Add(1)
 	s.turnMu.Unlock()
-	s.AsyncTask(func() {
+	if err := s.AsyncTask(func() {
 		defer s.turnWG.Done()
 		s.runFeatureTurn(requestCtx, runtime, messages, started.ThinkingEffort)
-	})
+	}); err != nil {
+		s.turnWG.Done()
+		cancel()
+		s.turnMu.Lock()
+		delete(s.turns, turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID))
+		s.turnMu.Unlock()
+		_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", true, "interrupted", "task admission unavailable")
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "temporary chat task unavailable"))
+		return
+	}
 	result.Set(events.StartTurnResult{
 		TurnID:           started.TurnID,
 		Conversation:     started.Conversation,
@@ -506,10 +519,20 @@ func (s *TemporaryChat) startLegacyTurn(cmd events.StartTurnCommand, started sto
 	s.turns[turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID)] = runtime
 	s.turnWG.Add(1)
 	s.turnMu.Unlock()
-	s.AsyncTask(func() {
+	if err := s.AsyncTask(func() {
 		defer s.turnWG.Done()
 		s.runTurn(runtime, started.AccountID)
-	})
+	}); err != nil {
+		s.turnWG.Done()
+		s.cancelUpstream(streamID)
+		s.turnMu.Lock()
+		delete(s.turns, turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID))
+		s.turnMu.Unlock()
+		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, true, true, "interrupted", "task admission unavailable")
+		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusServiceUnavailable, "process_interrupted", "process_interrupted", startedAt, true)
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "temporary chat task unavailable"))
+		return
+	}
 	result.Set(events.StartTurnResult{TurnID: started.TurnID, Conversation: started.Conversation, UserMessage: started.UserMessage, AssistantMessage: started.AssistantMessage}, nil)
 }
 

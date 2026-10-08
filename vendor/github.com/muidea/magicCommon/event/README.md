@@ -59,7 +59,7 @@ type Result interface {
 
 ```go
 type Observer interface {
-    ID() string                    // 观察者ID
+    ID() string                    // 观察者唯一订阅身份
     Notify(event Event, result Result) // 事件通知回调
 }
 ```
@@ -68,11 +68,11 @@ type Observer interface {
 
 ```go
 type Hub interface {
-    Subscribe(eventID string, observer Observer)   // 订阅事件
-    Unsubscribe(eventID string, observer Observer) // 取消订阅
+    Subscribe(eventID string, observer Observer) *cd.Error   // 订阅事件
+    Unsubscribe(eventID string, observer Observer) *cd.Error // 取消订阅
     Post(event Event)                              // 异步发送事件（无返回）
     Send(event Event) Result                       // 同步发送事件（有返回）
-    Terminate()                                    // 终止事件中心
+    Terminate(ctx context.Context)                 // 终止事件中心，未完成时记录错误
 }
 ```
 
@@ -81,12 +81,22 @@ type Hub interface {
 ```go
 type SimpleObserver interface {
     Observer
-    Subscribe(eventID string, observerFunc ObserverFunc) // 订阅事件（函数回调）
-    Unsubscribe(eventID string)                          // 取消订阅
+    Subscribe(eventID string, observerFunc ObserverFunc) *cd.Error // 订阅事件（函数回调）
+    Unsubscribe(eventID string) *cd.Error                          // 取消订阅
 }
 ```
 
 ## 核心实现
+
+### 订阅完成与失败
+
+- `Subscribe` / `Unsubscribe` 必须检查返回值。控制队列的入队等待窗口为 10ms；到期时再做一次非阻塞探测，当前可入队则接受，否则返回 `ResourceExhausted`。这不是严格的 wall-clock 截止，也不增加等待窗口。拒绝的操作没有入队，不会在稍后执行；错误表示 admission 到期时队列不可用，不证明队列持续满载。Hub 开始关闭后返回 `InvalidOperation`。
+- 一旦入队，调用等待实际处理完成，回执不设丢弃超时，也不经过业务执行池的容量等待。`nil` 表示本次变更已经完成，不仅是“已提交”。
+- `SimpleObserver` 将本地回调更新与 Hub 回执串行化，失败不修改本地状态；取消失败可以重试。重复注册本地回调返回 `Duplicated`，重复取消已不存在的回调成功返回。
+- Observer 的 `ID()` / destination matcher 必须稳定、无副作用，不得阻塞或重新进入 Hub；自定义 ID 方法 panic 会返回错误，不会杀死订阅控制 worker。
+- 注册表读取与匹配缓存发布在同一读事务内，避免订阅变更后旧结果重新覆盖缓存。
+- 取消订阅不是在途 handler 的排空回执：已经选取或执行的通知仍可能完成。释放 owner 资源前仍需按生命周期协议停止输入并排空。
+- 组件共享 Base Biz 的无返回值订阅方法属于必需订阅：错误立即中断构造/生命周期，由 framework guard 转为 Setup/Teardown 错误，不再静默继续。需要自行恢复的 Biz 应直接检查 Hub/SimpleObserver 返回值。
 
 ### Values 类型
 
@@ -128,12 +138,15 @@ func (s Values) GetBool(key string) bool
 
 **运行语义**：
 - `Post()` 是异步投递，如果内部 channel 在超时窗口内无法接收，当前实现会记录告警并放弃这次投递，而不是无限阻塞调用方。
-- `Send()` 是同步投递，如果内部 channel 在超时窗口内无法接收，会返回超时结果。
+- `Send()` 是同步投递，入队等待超时或尚未执行时的 context 取消会返回错误，取消成功的 handler 不再执行；已经开始执行的 handler 必须等实际返回，不因 deadline 到期脱离调用方。
 - `Send()` 和 `Post()` 都按 `LaneKey()` 做顺序调度；同一个 lane 内严格顺序，不同 lane 之间允许并行。
 - `LaneKey()` 默认等于 `Destination()`，因此旧代码在不显式设置 lane 时行为保持不变。
-- `Terminate()` 是幂等且并发安全的；关闭阶段如果内部执行器在等待窗口内没有排空，会记录告警而不是无限等待。
+- 同一同步调用链可重入仍活跃的祖先 lane；独立调用链形成循环依赖会被拒绝，不并发执行同一 lane 的 handler。Post 始终排队且不继承祖先权限。
+- `Terminate(ctx)` 是检查式 `TerminateChecked(ctx)` 的日志入口；关闭拒绝新根调用，在途 handler 仍可完成同一 Hub 内的同步依赖。超时保留 handler 和尚未完成的工作，调用方可重试；使用 Background context 则等待实际完成。需要结果的调用方通过 `event.DrainingHub` 获取检查式回执。
 - 事件匹配缓存按 `eventID + destination` 维度缓存，避免不同 destination 间误复用观察者列表。
-- 默认应用关闭路径现在会先让 service 结束，再关闭 `BackgroundRoutine`，最后调用 `EventHub.Terminate()`，避免 hub 在 service 已经退出后继续接收新工作。
+- 默认应用关闭先完成 service 的准入关闭与 Quiesce，再确认后台队列、timer 和事件排空，最后执行插件最终清理及 Hub 检查式关闭。独立调用 Drain 前须先由 owner 停止外部生产者；Drain 本身不禁止新事件。
+- 事件订阅模式只与 `Event.ID()` 匹配；观察者的 destination matcher 只与 `Event.Destination()` 匹配。
+- `Observer.ID()` 只作为订阅去重和取消订阅的唯一身份，绝不作为已显式配置 matcher 的替代值。
 - 观察者匹配仍按 `destination` 完成，`lane` 只决定调度顺序域，不参与 observer 路由。
 - `lane` 建议使用有界 key，不要把每次请求的随机 ID 直接作为 lane，避免长期累积过多内部 channel。
 
@@ -150,9 +163,11 @@ func (s Values) GetBool(key string) bool
 type ObserverFunc func(Event, Result)
 
 observer := NewSimpleObserver("my-observer", hub)
-observer.Subscribe("/user/+", func(event Event, result Result) {
+if err := observer.Subscribe("/user/+", func(event Event, result Result) {
     // 处理事件
-})
+}); err != nil {
+    return err
+}
 ```
 
 如果需要把“观察者逻辑名称”和“destination 匹配模式”分开，可以使用：
@@ -164,6 +179,14 @@ observer := NewSimpleObserverWithMatchID(
     hub,
 )
 ```
+
+这里的两个参数具有独立且不可互换的语义：
+
+- `id` 是观察者的唯一订阅身份，由 `Observer.ID()` 返回，Hub 仅使用它完成同一事件模式下的订阅去重和取消订阅。
+- `matchID` 是 destination 匹配模式，仅用于匹配 `Event.Destination()`；为空时回退为 `id`，以保持 `NewSimpleObserver` 的默认行为。
+- 多个观察者可以共享同一个 `matchID`，但必须使用不同的 `id`。它们会分别收到匹配事件，也可以互不影响地取消订阅。
+
+因此，禁止将 destination matcher 用作观察者身份。新增 Observer 实现时，如果需要独立的 destination 路由规则，应实现内部可识别的 `MatchID() string` 合同；未实现时 Hub 才会使用 `Observer.ID()` 作为默认 matcher。
 
 ## 工厂函数
 
@@ -285,7 +308,10 @@ func main() {
     handler := &MyHandler{id: "handler-1"}
     
     // 订阅事件
-    hub.Subscribe("/user/create", handler)
+    if err := hub.Subscribe("/user/create", handler); err != nil {
+        fmt.Println("Subscribe failed:", err)
+        return
+    }
     
     // 创建事件
     header := event.NewValues()
@@ -321,7 +347,7 @@ func main() {
     observer := event.NewSimpleObserver("my-observer", hub)
     
     // 订阅事件（函数回调）
-    observer.Subscribe("/order/+", func(ev event.Event, re event.Result) {
+    if err := observer.Subscribe("/order/+", func(ev event.Event, re event.Result) {
         fmt.Printf("Order event: %s\n", ev.ID())
         
         // 获取订单ID（路径参数）
@@ -331,7 +357,10 @@ func main() {
         if re != nil {
             re.Set(map[string]string{"status": "processed"}, nil)
         }
-    })
+    }); err != nil {
+        fmt.Println("Subscribe failed:", err)
+        return
+    }
     
     // 发送事件
     ev := event.NewEvent("/order/12345", "payment-service", "my-observer", 

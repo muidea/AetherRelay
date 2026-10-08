@@ -357,7 +357,7 @@ func (s *ImageTask) startTask(ownerID, taskID string, execute func(context.Conte
 	s.activeRuns[run] = ownerID
 	s.running[key] = run
 	s.runMu.Unlock()
-	s.AsyncTask(func() {
+	if err := s.AsyncTask(func() {
 		defer func() {
 			cancel()
 			s.runMu.Lock()
@@ -371,7 +371,17 @@ func (s *ImageTask) startTask(ownerID, taskID string, execute func(context.Conte
 			return
 		}
 		execute(ctx)
-	})
+	}); err != nil {
+		cancel()
+		s.runMu.Lock()
+		delete(s.activeRuns, run)
+		if s.running[key] == run {
+			delete(s.running, key)
+		}
+		s.runMu.Unlock()
+		s.store.MarkError(ownerID, taskID, "image task admission unavailable", "")
+	}
+
 }
 
 func (s *ImageTask) cancelTask(ownerID, taskID string) {

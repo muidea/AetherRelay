@@ -81,22 +81,41 @@ type Result interface {
 }
 
 type Observer interface {
+	// ID returns the observer's unique subscription identity. The hub uses it
+	// only for subscription de-duplication and independent unsubscription.
 	ID() string
 	Notify(event Event, result Result)
 }
 
+// destinationMatcher is an optional internal routing contract. It keeps an
+// observer's destination pattern independent from its subscription identity.
+type destinationMatcher interface {
+	MatchID() string
+}
+
 type SimpleObserver interface {
 	Observer
-	Subscribe(eventID string, observerFunc ObserverFunc)
-	Unsubscribe(eventID string)
+	Subscribe(eventID string, observerFunc ObserverFunc) *cd.Error
+	Unsubscribe(eventID string) *cd.Error
 }
 
 type Hub interface {
-	Subscribe(eventID string, observer Observer)
-	Unsubscribe(eventID string, observer Observer)
+	// Subscription errors mean no change was applied. Once admitted, the call
+	// waits for actual completion; acknowledgement is never discarded.
+	Subscribe(eventID string, observer Observer) *cd.Error
+	Unsubscribe(eventID string, observer Observer) *cd.Error
 	Post(event Event)
 	Send(event Event) Result
 	Terminate(ctx context.Context)
+}
+
+// DrainingHub exposes checked runtime completion. Owners must stop external
+// producers before Drain; TerminateChecked additionally rejects new roots but
+// lets already executing handlers finish their synchronous dependencies.
+type DrainingHub interface {
+	Hub
+	Drain(context.Context) *cd.Error
+	TerminateChecked(context.Context) *cd.Error
 }
 
 // HubOption Hub 配置项，用于控制内部缓冲和并发策略
@@ -197,17 +216,28 @@ const (
 	laneEnqueueOK laneEnqueueResult = iota
 	laneEnqueueClosed
 	laneEnqueueTimeout
+	laneEnqueueCanceled
 )
 
 type laneActionChannel struct {
 	key        string
 	ch         actionChannel
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	closed     bool
 	lastActive atomic.Int64
 }
 
 type laneExecutionContextKey struct{}
+
+// A synchronous dispatch may revisit an active ancestor lane (A -> B -> A).
+// Frames expire when their handler returns; retained contexts cannot bypass
+// serialization later, nor can a context from another Hub authorize reentry.
+type laneExecutionFrame struct {
+	hub    *hubImpl
+	key    string
+	parent *laneExecutionFrame
+	active atomic.Bool
+}
 
 type laneContextEvent struct {
 	Event
@@ -262,7 +292,10 @@ func NewHubWithOptions(capacitySize int, opts ...HubOption) Hub {
 		perLaneChanSize:       hubOpts.perLaneChanSize,
 		laneIdleTimeout:       hubOpts.laneIdleTimeout,
 		eventMatchCache:       map[string]ObserverList{},
+		idle:                  make(chan struct{}),
 	}
+	close(hub.idle)
+	hub.workers.Add(1)
 	go hub.run()
 	return hub
 }
@@ -271,7 +304,7 @@ func NewSimpleObserver(id string, hub Hub) SimpleObserver {
 	return &simpleObserver{id: id, matchID: id, eventHub: hub, eventID2ObserverFunc: ID2ObserverFuncMap{}}
 }
 
-// NewSimpleObserverWithMatchID 允许将观察者的逻辑标识与 destination 匹配模式分离。
+// NewSimpleObserverWithMatchID 允许将观察者的唯一订阅标识与 destination 匹配模式分离。
 func NewSimpleObserverWithMatchID(id, matchID string, hub Hub) SimpleObserver {
 	if matchID == "" {
 		matchID = id
@@ -371,7 +404,6 @@ const (
 	unsubscribe = 2
 	post        = 3
 	send        = 4
-	terminate   = 5
 )
 
 type action interface {
@@ -381,7 +413,7 @@ type action interface {
 type subscribeData struct {
 	eventID  string
 	observer Observer
-	result   chan bool
+	result   chan *cd.Error
 }
 
 func (s *subscribeData) Code() int {
@@ -405,19 +437,11 @@ func (s *postData) Code() int {
 type sendData struct {
 	event  Event
 	result chan Result
+	state  atomic.Int32 // 0: queued, 1: executing, 2: canceled before execution
 }
 
 func (s *sendData) Code() int {
 	return send
-}
-
-type terminateData struct {
-	waitGroup *sync.WaitGroup
-	result    chan bool
-}
-
-func (s *terminateData) Code() int {
-	return terminate
 }
 
 func (s actionChannel) run(hubPtr *hubImpl) {
@@ -434,6 +458,7 @@ func (s actionChannel) run(hubPtr *hubImpl) {
 }
 
 func (s *laneActionChannel) run(hubPtr *hubImpl) {
+	defer hubPtr.workers.Done()
 	if hubPtr.laneIdleTimeout <= 0 {
 		for {
 			actionData, actionOK := <-s.ch
@@ -491,7 +516,15 @@ type hubImpl struct {
 	// 仅作为加速读路径使用，订阅关系变更时整体失效
 	eventMatchCache map[string]ObserverList
 
-	terminateFlag atomic.Bool
+	terminateFlag     atomic.Bool
+	operationsMu      sync.Mutex
+	operations        int
+	idle              chan struct{}
+	terminationActive bool
+	channelsClosed    bool
+	workers           sync.WaitGroup
+	waitsMu           sync.Mutex
+	waits             map[string]map[string]int
 }
 
 func newLaneActionChannel(key string, size int) *laneActionChannel {
@@ -512,14 +545,20 @@ func (s *laneActionChannel) touch() {
 }
 
 func (s *laneActionChannel) enqueue(actionData action, timeout time.Duration) laneEnqueueResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.enqueueContext(context.Background(), actionData, timeout)
+}
+
+func (s *laneActionChannel) enqueueContext(ctx context.Context, actionData action, timeout time.Duration) laneEnqueueResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	if s.closed {
 		return laneEnqueueClosed
 	}
 
 	select {
+	case <-ctx.Done():
+		return laneEnqueueCanceled
 	case s.ch <- actionData:
 		s.touch()
 		return laneEnqueueOK
@@ -578,24 +617,33 @@ func eventLaneKey(ev Event) string {
 	return ev.Destination()
 }
 
-func eventWithLaneContext(ev Event) Event {
-	if ev == nil {
-		return nil
+func (s *hubImpl) eventWithLaneContext(ev Event, inherit bool) (Event, func()) {
+	frame := &laneExecutionFrame{hub: s, key: eventLaneKey(ev)}
+	if inherit {
+		frame.parent, _ = ev.Context().Value(laneExecutionContextKey{}).(*laneExecutionFrame)
 	}
-
+	frame.active.Store(true)
 	return &laneContextEvent{
 		Event: ev,
-		ctx:   context.WithValue(ev.Context(), laneExecutionContextKey{}, eventLaneKey(ev)),
-	}
+		ctx:   context.WithValue(ev.Context(), laneExecutionContextKey{}, frame),
+	}, func() { frame.active.Store(false) }
 }
 
-func isReentrantLaneExecution(ev Event, laneKey string) bool {
+func (s *hubImpl) isReentrantLaneExecution(ev Event, laneKey string) bool {
 	if ev == nil || laneKey == "" {
 		return false
 	}
 
-	currentLaneKey, ok := ev.Context().Value(laneExecutionContextKey{}).(string)
-	return ok && currentLaneKey == laneKey
+	frame, _ := ev.Context().Value(laneExecutionContextKey{}).(*laneExecutionFrame)
+	for ; frame != nil; frame = frame.parent {
+		if frame.hub != s || !frame.active.Load() {
+			return false
+		}
+		if frame.key == laneKey {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *hubImpl) getOrCreateLaneActionChannel(laneKey string) *laneActionChannel {
@@ -608,6 +656,7 @@ func (s *hubImpl) getOrCreateLaneActionChannel(laneKey string) *laneActionChanne
 	}
 
 	channelVal = newLaneActionChannel(laneKey, s.perLaneChanSize)
+	s.workers.Add(1)
 	go channelVal.run(s)
 	s.laneKey2ActionChannel[laneKey] = channelVal
 	return channelVal
@@ -619,46 +668,31 @@ func (s *hubImpl) handleAction(actionData action) bool {
 	switch actionData.Code() {
 	case subscribe:
 		data := actionData.(*subscribeData)
-		s.subscribeInternal(data.eventID, data.observer)
-		select {
-		case data.result <- true:
-			// 成功发送
-		case <-time.After(10 * time.Millisecond):
-			slog.Warn("timeout sending subscribe result")
-		}
+		data.result <- s.applySubscription(data.eventID, data.observer, true)
 	case unsubscribe:
 		data := actionData.(*unsubscribeData)
-		s.unsubscribeInternal(data.eventID, data.observer)
-		select {
-		case data.result <- true:
-			// 成功发送
-		case <-time.After(10 * time.Millisecond):
-			slog.Warn("timeout sending unsubscribe result")
-		}
+		data.result <- s.applySubscription(data.eventID, data.observer, false)
 	case post:
+		defer s.endOperation()
 		data := actionData.(*postData)
-		s.postInternal(eventWithLaneContext(data.event))
+		ev, finish := s.eventWithLaneContext(data.event, false)
+		defer finish()
+		s.postInternal(ev)
 	case send:
+		defer s.endOperation()
 		data := actionData.(*sendData)
-		eventWithContext := eventWithLaneContext(data.event)
+		if !data.state.CompareAndSwap(0, 1) {
+			return false
+		}
+		eventWithContext, finish := s.eventWithLaneContext(data.event, true)
+		defer finish()
 		result := NewResult(data.event.ID(), data.event.Source(), data.event.Destination())
-		s.sendInternal(eventWithContext, result)
-		select {
-		case data.result <- result:
-			// 成功发送
-		case <-time.After(100 * time.Millisecond):
-			slog.Warn("timeout sending result")
+		if eventWithContext.Context().Err() != nil {
+			result.Set(nil, cd.NewError(cd.Timeout, "event context expired before dispatch"))
+		} else {
+			s.sendInternal(eventWithContext, result)
 		}
-	case terminate:
-		data := actionData.(*terminateData)
-		data.waitGroup.Done()
-		select {
-		case data.result <- true:
-			// 成功发送
-		default:
-			// 非阻塞发送，避免在 channel 关闭时 panic
-		}
-		return true
+		data.result <- result
 	default:
 		slog.Error("unknown action code", "code", actionData.Code())
 	}
@@ -666,70 +700,96 @@ func (s *hubImpl) handleAction(actionData action) bool {
 	return false
 }
 
-func (s *hubImpl) Subscribe(eventID string, observer Observer) {
-	if s.terminateFlag.Load() {
-		return
-	}
-
-	replay := make(chan bool, 1)
-	s.Run(func() {
-		select {
-		case s.hubActionChannel <- &subscribeData{eventID: eventID, observer: observer, result: replay}:
-			// 成功发送
-		case <-time.After(10 * time.Millisecond):
-			// 超时，跳过发送，避免长期阻塞调用方
-			replay <- false
-		}
-	})
-	<-replay
-	close(replay)
+func (s *hubImpl) Subscribe(eventID string, observer Observer) *cd.Error {
+	return s.changeSubscription(eventID, observer, true)
 }
 
-func (s *hubImpl) Unsubscribe(eventID string, observer Observer) {
-	if s.terminateFlag.Load() {
-		return
+func (s *hubImpl) Unsubscribe(eventID string, observer Observer) *cd.Error {
+	return s.changeSubscription(eventID, observer, false)
+}
+
+func (s *hubImpl) changeSubscription(eventID string, observer Observer, add bool) *cd.Error {
+	if eventID == "" || observer == nil {
+		return cd.NewError(cd.IllegalParam, "event ID and observer are required")
 	}
+	if !s.beginOperation(context.TODO()) {
+		return cd.NewError(cd.InvalidOperation, "event hub is stopping")
+	}
+	defer s.endOperation()
 
-	replay := make(chan bool, 1)
+	result := make(chan *cd.Error, 1)
+	data := &subscribeData{eventID: eventID, observer: observer, result: result}
+	var request action = data
+	if !add {
+		request = (*unsubscribeData)(data)
+	}
+	// Admission must not first block on Execute's worker capacity. A rejected
+	// request is never queued and therefore cannot mutate subscriptions later.
+	timer := time.NewTimer(10 * time.Millisecond)
+	defer timer.Stop()
+	if !s.admitSubscription(request, timer.C) {
+		return cd.NewError(cd.ResourceExhausted, "event hub subscription admission timed out: control queue unavailable")
+	}
+	return <-result
+}
 
-	s.Run(func() {
-		select {
-		case s.hubActionChannel <- &unsubscribeData{eventID: eventID, observer: observer, result: replay}:
-			// 成功发送
-		case <-time.After(10 * time.Millisecond):
-			// 超时，跳过发送，避免长期阻塞调用方
-			replay <- false
+func (s *hubImpl) admitSubscription(request action, deadline <-chan time.Time) bool {
+	select {
+	case s.hubActionChannel <- request:
+		return true
+	case <-deadline:
+		// 到期与可入队可能同时就绪；最后只做即时探测，不延长等待或安排迟到发送。
+		return s.tryAdmitSubscription(request)
+	}
+}
+
+func (s *hubImpl) tryAdmitSubscription(request action) bool {
+	select {
+	case s.hubActionChannel <- request:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *hubImpl) applySubscription(eventID string, observer Observer, add bool) (err *cd.Error) {
+	// An invalid custom observer must not kill the control worker or strand
+	// callers. Registry mutation happens only after all ID comparisons succeed.
+	defer func() {
+		if value := recover(); value != nil {
+			err = cd.NewError(cd.Unexpected, fmt.Sprintf("event subscription failed: %v", value))
 		}
-	})
-	<-replay
-	close(replay)
+	}()
+	if observer.ID() == "" {
+		return cd.NewError(cd.IllegalParam, "observer ID is required")
+	}
+	if add {
+		s.subscribeInternal(eventID, observer)
+	} else {
+		s.unsubscribeInternal(eventID, observer)
+	}
+	return nil
 }
 
 func (s *hubImpl) Post(ev Event) {
-	if s.terminateFlag.Load() {
+	if ev == nil || !s.beginOperation(ev.Context()) {
 		return
 	}
-	if ev == nil {
-		return
-	}
+	queued := false
+	defer func() {
+		if !queued {
+			s.endOperation()
+		}
+	}()
 
 	laneKey := eventLaneKey(ev)
-	if isReentrantLaneExecution(ev, laneKey) {
-		s.postInternal(eventWithLaneContext(ev))
-		return
-	}
-
 	actionData := &postData{event: ev}
 	for {
 		laneChannel := s.getOrCreateLaneActionChannel(laneKey)
 
-		// 再次检查 terminateFlag，防止竞态条件
-		if s.terminateFlag.Load() {
-			return
-		}
-
 		switch laneChannel.enqueue(actionData, 100*time.Millisecond) {
 		case laneEnqueueOK:
+			queued = true
 			return
 		case laneEnqueueClosed:
 			continue
@@ -741,112 +801,126 @@ func (s *hubImpl) Post(ev Event) {
 }
 
 func (s *hubImpl) Send(ev Event) (ret Result) {
-	if s.terminateFlag.Load() {
-		return
-	}
 	if ev == nil {
 		result := NewResult("", "", "")
 		result.Set(nil, cd.NewError(cd.IllegalParam, "event is nil"))
 		return result
 	}
+	if ev.Context().Err() != nil {
+		result := NewResult(ev.ID(), ev.Source(), ev.Destination())
+		result.Set(nil, cd.NewError(cd.Timeout, "event context is canceled"))
+		return result
+	}
+	if !s.beginOperation(ev.Context()) {
+		return nil
+	}
+	queued := false
+	defer func() {
+		if !queued {
+			s.endOperation()
+		}
+	}()
 
 	replay := make(chan Result, 1)
-	defer close(replay)
 
 	laneKey := eventLaneKey(ev)
-	if isReentrantLaneExecution(ev, laneKey) {
-		eventWithContext := eventWithLaneContext(ev)
+	if s.isReentrantLaneExecution(ev, laneKey) {
+		eventWithContext, finish := s.eventWithLaneContext(ev, true)
+		defer finish()
 		result := NewResult(ev.ID(), ev.Source(), ev.Destination())
 		s.sendInternal(eventWithContext, result)
 		ret = result
 		return
 	}
+	finishWait, err := s.beginLaneWait(ev, laneKey)
+	if err != nil {
+		result := NewResult(ev.ID(), ev.Source(), ev.Destination())
+		result.Set(nil, err)
+		return result
+	}
+	defer finishWait()
 
 	actionData := &sendData{event: ev, result: replay}
 	for {
 		laneChannel := s.getOrCreateLaneActionChannel(laneKey)
 
-		// 再次检查 terminateFlag，防止竞态条件
-		if s.terminateFlag.Load() {
-			return
-		}
-
-		switch laneChannel.enqueue(actionData, 100*time.Millisecond) {
+		switch laneChannel.enqueueContext(ev.Context(), actionData, 100*time.Millisecond) {
 		case laneEnqueueOK:
-			ret = <-replay
-			return
+			queued = true
+			select {
+			case ret = <-replay:
+				return
+			case <-ev.Context().Done():
+				if actionData.state.CompareAndSwap(0, 2) {
+					result := NewResult(ev.ID(), ev.Source(), ev.Destination())
+					result.Set(nil, cd.NewError(cd.Timeout, "event canceled before dispatch"))
+					return result
+				}
+				// Execution won the race. Only its real completion can release
+				// the caller's resources, even when the handler ignores cancel.
+				return <-replay
+			}
 		case laneEnqueueClosed:
 			continue
-		case laneEnqueueTimeout:
-			slog.Warn("timeout sending data to channel")
+		case laneEnqueueTimeout, laneEnqueueCanceled:
 			timeoutResult := NewResult(ev.ID(), ev.Source(), ev.Destination())
-			timeoutResult.Set(nil, cd.NewError(cd.Timeout, "send timeout"))
-			replay <- timeoutResult
-			ret = <-replay
-			return
+			timeoutResult.Set(nil, cd.NewError(cd.Timeout, "event admission timed out or was canceled"))
+			return timeoutResult
 		}
 	}
 }
 
 func (s *hubImpl) Terminate(ctx context.Context) {
+	if err := s.TerminateChecked(ctx); err != nil {
+		slog.Warn("hub shutdown incomplete; handlers retained", "error", err)
+	}
+}
+
+func (s *hubImpl) TerminateChecked(ctx context.Context) *cd.Error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !s.terminateFlag.CompareAndSwap(false, true) {
-		return
+	s.operationsMu.Lock()
+	if s.terminationActive {
+		s.operationsMu.Unlock()
+		return cd.NewError(cd.InvalidOperation, "hub shutdown is in progress")
 	}
+	s.terminationActive = true
+	s.terminateFlag.Store(true)
+	s.operationsMu.Unlock()
+	defer func() { s.operationsMu.Lock(); s.terminationActive = false; s.operationsMu.Unlock() }()
 
-	var waitGroup sync.WaitGroup
-	actionData := &terminateData{result: make(chan bool, 1), waitGroup: &waitGroup}
-
-	s.laneKey2ChannelLock.RLock()
-	laneChannels := make([]*laneActionChannel, 0, len(s.laneKey2ActionChannel))
-	for _, val := range s.laneKey2ActionChannel {
-		laneChannels = append(laneChannels, val)
+	if err := s.Drain(ctx); err != nil {
+		return err
 	}
-	s.laneKey2ChannelLock.RUnlock()
-
-	// 先发送终止信号到所有 lane channel。终止不再使用无界等待，
-	// 调用方传入的 shutdown context 是唯一等待预算。
-	for _, val := range laneChannels {
-		waitGroup.Add(1)
-		switch val.enqueue(actionData, 100*time.Millisecond) {
-		case laneEnqueueOK:
-			// 成功发送
-		default:
-			waitGroup.Done()
-		}
-	}
-
-	waitGroup.Add(1)
-	select {
-	case s.hubActionChannel <- actionData:
-		// 成功发送
-	case <-ctx.Done():
-		waitGroup.Done()
-	}
-
-	if !waitGroupContext(&waitGroup, ctx) {
-		slog.Warn("hub action channels did not terminate before context done", "err", ctx.Err())
-	}
-
-	// 等待所有 Execute.Run 提交的任务完成
 	if !s.WaitContext(ctx) {
-		slog.Warn("hub execute tasks did not drain before context done", "err", ctx.Err())
+		return cd.NewError(cd.Timeout, "hub control tasks are still running")
 	}
 
-	// 等待所有 goroutine 完成处理
-	s.laneKey2ChannelLock.Lock()
-	laneChannels = []*laneActionChannel{}
-	for _, val := range s.laneKey2ActionChannel {
-		laneChannels = append(laneChannels, val)
+	if !s.channelsClosed {
+		s.laneKey2ChannelLock.Lock()
+		laneChannels := make([]*laneActionChannel, 0, len(s.laneKey2ActionChannel))
+		for _, val := range s.laneKey2ActionChannel {
+			laneChannels = append(laneChannels, val)
+		}
+		s.laneKey2ActionChannel = LaneKey2ActionChannelMap{}
+		s.laneKey2ChannelLock.Unlock()
+		for _, val := range laneChannels {
+			val.close()
+		}
+		close(s.hubActionChannel)
+		s.channelsClosed = true
 	}
-	s.laneKey2ActionChannel = LaneKey2ActionChannelMap{}
-	s.laneKey2ChannelLock.Unlock()
-	for _, val := range laneChannels {
-		val.close()
+	if !waitGroupContext(&s.workers, ctx) {
+		return cd.NewError(cd.Timeout, "hub workers are still stopping")
 	}
+	s.event2ObserverlLock.Lock()
 	s.event2Observer = ID2ObserverMap{}
+	s.event2ObserverlLock.Unlock()
+	s.eventMatchCacheLock.Lock()
+	s.eventMatchCache = map[string]ObserverList{}
+	s.eventMatchCacheLock.Unlock()
+	return nil
 }
 
 func waitGroupContext(waitGroup *sync.WaitGroup, ctx context.Context) bool {
@@ -865,9 +939,8 @@ func waitGroupContext(waitGroup *sync.WaitGroup, ctx context.Context) bool {
 }
 
 func (s *hubImpl) run() {
+	defer s.workers.Done()
 	s.hubActionChannel.run(s)
-
-	close(s.hubActionChannel)
 }
 
 func (s *hubImpl) subscribeInternal(eventID string, observer Observer) {
@@ -926,15 +999,7 @@ func (s *hubImpl) unsubscribeInternal(eventID string, observer Observer) {
 }
 
 func (s *hubImpl) postInternal(ev Event) {
-	matchList := make(ObserverList, 0, 4)
-	cacheKey := matchCacheKey(ev.ID(), ev.Destination())
-	if cached, ok := s.getCachedObservers(cacheKey); ok {
-		matchList = append(matchList, cached...)
-	} else {
-		tmpMatch := s.findMatchingObservers(ev)
-		matchList = append(matchList, tmpMatch...)
-		s.setCachedObservers(cacheKey, tmpMatch)
-	}
+	matchList := s.matchingObservers(ev)
 
 	for _, sv := range matchList {
 		notificationEvent(sv, ev, nil)
@@ -942,26 +1007,29 @@ func (s *hubImpl) postInternal(ev Event) {
 }
 
 func (s *hubImpl) sendInternal(ev Event, re Result) {
-	matchList := make(ObserverList, 0, 4)
-	finalFlag := false
-	cacheKey := matchCacheKey(ev.ID(), ev.Destination())
-	if cached, ok := s.getCachedObservers(cacheKey); ok {
-		matchList = append(matchList, cached...)
-		finalFlag = len(cached) > 0
-	} else {
-		tmpMatch := s.findMatchingObservers(ev)
-		matchList = append(matchList, tmpMatch...)
-		finalFlag = len(tmpMatch) > 0
-		s.setCachedObservers(cacheKey, tmpMatch)
-	}
+	matchList := s.matchingObservers(ev)
 
 	for _, sv := range matchList {
 		notificationEvent(sv, ev, re)
 	}
 
-	if !finalFlag && re != nil {
+	if len(matchList) == 0 && re != nil {
 		re.Set(nil, cd.NewError(cd.Unexpected, fmt.Sprintf("missing observer, event:[id-%v, source-%s, destination-%s]", ev.ID(), ev.Source(), ev.Destination())))
 	}
+}
+
+func (s *hubImpl) matchingObservers(ev Event) ObserverList {
+	// Keep registry lookup and cache publication in the same read transaction.
+	// Otherwise an old lookup can repopulate the cache after invalidation.
+	s.event2ObserverlLock.RLock()
+	defer s.event2ObserverlLock.RUnlock()
+	key := matchCacheKey(ev.ID(), ev.Destination())
+	if cached, ok := s.getCachedObservers(key); ok {
+		return cached
+	}
+	matched := s.findMatchingObservers(ev)
+	s.setCachedObservers(key, matched)
+	return matched
 }
 
 func matchCacheKey(eventID, destination string) string {
@@ -997,13 +1065,10 @@ func (s *hubImpl) setCachedObservers(cacheKey string, observers ObserverList) {
 func (s *hubImpl) findMatchingObservers(ev Event) ObserverList {
 	matchList := make(ObserverList, 0, 4)
 
-	s.event2ObserverlLock.RLock()
-	defer s.event2ObserverlLock.RUnlock()
-
 	for key, value := range s.event2Observer {
 		if MatchValue(key, ev.ID()) {
 			for _, sv := range value {
-				if matchDestination(ev.Destination(), sv.ID()) {
+				if matchDestination(ev.Destination(), observerMatchID(sv)) {
 					matchList = append(matchList, sv)
 				}
 			}
@@ -1013,8 +1078,18 @@ func (s *hubImpl) findMatchingObservers(ev Event) ObserverList {
 	return matchList
 }
 
-func matchDestination(destination, observerID string) bool {
-	return MatchValue(destination, observerID) || MatchValue(observerID, destination)
+func matchDestination(destination, matchID string) bool {
+	return MatchValue(destination, matchID) || MatchValue(matchID, destination)
+}
+
+func observerMatchID(observer Observer) string {
+	if matcher, ok := observer.(destinationMatcher); ok {
+		if matchID := matcher.MatchID(); matchID != "" {
+			return matchID
+		}
+	}
+
+	return observer.ID()
 }
 
 type simpleObserver struct {
@@ -1025,12 +1100,14 @@ type simpleObserver struct {
 	eventIDLock          sync.RWMutex
 }
 
-func (s *simpleObserver) ID() string {
-	if s.matchID != "" {
-		return s.matchID
-	}
+var _ destinationMatcher = (*simpleObserver)(nil)
 
+func (s *simpleObserver) ID() string {
 	return s.id
+}
+
+func (s *simpleObserver) MatchID() string {
+	return s.matchID
 }
 
 func (s *simpleObserver) Notify(ev Event, re Result) {
@@ -1065,44 +1142,33 @@ func (s *simpleObserver) Notify(ev Event, re Result) {
 	}
 }
 
-func (s *simpleObserver) Subscribe(eventID string, observerFunc ObserverFunc) {
-	okFlag := false
-	func() {
-		s.eventIDLock.Lock()
-		defer s.eventIDLock.Unlock()
-
-		_, ok := s.eventID2ObserverFunc[eventID]
-		if ok {
-			slog.Warn("duplicate eventID", "value", eventID)
-			return
-		}
-
-		s.eventID2ObserverFunc[eventID] = observerFunc
-		okFlag = true
-	}()
-
-	if okFlag {
-		s.eventHub.Subscribe(eventID, s)
+func (s *simpleObserver) Subscribe(eventID string, observerFunc ObserverFunc) *cd.Error {
+	if eventID == "" || observerFunc == nil || s.eventHub == nil {
+		return cd.NewError(cd.IllegalParam, "event ID, handler and hub are required")
 	}
+	// Serialize local changes with Hub completion. Notify cannot observe a
+	// partially registered handler, and failed operations leave state retryable.
+	s.eventIDLock.Lock()
+	defer s.eventIDLock.Unlock()
+	if _, exists := s.eventID2ObserverFunc[eventID]; exists {
+		return cd.NewError(cd.Duplicated, "event handler is already subscribed")
+	}
+	if err := s.eventHub.Subscribe(eventID, s); err != nil {
+		return err
+	}
+	s.eventID2ObserverFunc[eventID] = observerFunc
+	return nil
 }
 
-func (s *simpleObserver) Unsubscribe(eventID string) {
-	okFlag := false
-	func() {
-		s.eventIDLock.Lock()
-		defer s.eventIDLock.Unlock()
-
-		_, ok := s.eventID2ObserverFunc[eventID]
-		if !ok {
-			slog.Warn("not exist eventID", "value", eventID)
-			return
-		}
-
-		delete(s.eventID2ObserverFunc, eventID)
-		okFlag = true
-	}()
-
-	if okFlag {
-		s.eventHub.Unsubscribe(eventID, s)
+func (s *simpleObserver) Unsubscribe(eventID string) *cd.Error {
+	s.eventIDLock.Lock()
+	defer s.eventIDLock.Unlock()
+	if _, exists := s.eventID2ObserverFunc[eventID]; !exists {
+		return nil
 	}
+	if err := s.eventHub.Unsubscribe(eventID, s); err != nil {
+		return err
+	}
+	delete(s.eventID2ObserverFunc, eventID)
+	return nil
 }

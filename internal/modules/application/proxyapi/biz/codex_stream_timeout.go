@@ -23,6 +23,7 @@ type codexStreamGuard struct {
 	kind                           codexresponses.ErrorKind
 	closed                         bool
 	started, firstEvent, lastEvent time.Time
+	firstDelivery                  time.Time
 	events, bytes                  int64
 }
 
@@ -153,6 +154,10 @@ func logCodexStreamAttempt(request codexresponses.Request, failure *codexrespons
 		"transport_reason", failure.Attempt.Response.TransportReason.Safe(),
 		"duration_ms", totalDurationMS,
 		"first_event_duration_ms", durationMilliseconds(g.started, g.firstEvent),
+		"first_client_event_duration_ms", durationMilliseconds(g.started, g.firstDelivery),
+		"upstream_event_count", failure.Attempt.Response.EventCount,
+		"upstream_wire_bytes", failure.Attempt.Response.WireBytes,
+		"first_upstream_event_duration_ms", failure.Attempt.Response.FirstEventDurationMS,
 		"total_duration_ms", totalDurationMS, "event_count", g.events,
 		"stream_bytes", g.bytes, "last_event_at", g.lastEvent)
 }
@@ -162,4 +167,17 @@ func durationMilliseconds(started, ended time.Time) int64 {
 		return 0
 	}
 	return ended.Sub(started).Milliseconds()
+}
+
+func (g *codexStreamGuard) delivered() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.firstDelivery.IsZero() {
+		g.firstDelivery = time.Now()
+	}
+}
+func (g *codexStreamGuard) deliveryDuration() int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return durationMilliseconds(g.started, g.firstDelivery)
 }

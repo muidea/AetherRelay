@@ -51,19 +51,27 @@ func (s *Base) BackgroundRoutine() task.BackgroundRoutine {
 }
 
 func (s *Base) Subscribe(eventID string, observer event.Observer) {
-	s.eventHub.Subscribe(eventID, observer)
+	if err := s.eventHub.Subscribe(eventID, observer); err != nil {
+		panic(err)
+	}
 }
 
 func (s *Base) Unsubscribe(eventID string, observer event.Observer) {
-	s.eventHub.Unsubscribe(eventID, observer)
+	if err := s.eventHub.Unsubscribe(eventID, observer); err != nil {
+		panic(err)
+	}
 }
 
 func (s *Base) SubscribeFunc(eventID string, observerFunc event.ObserverFunc) {
-	s.simpleObserver.Subscribe(eventID, observerFunc)
+	if err := s.simpleObserver.Subscribe(eventID, observerFunc); err != nil {
+		panic(err)
+	}
 }
 
 func (s *Base) UnsubscribeFunc(eventID string) {
-	s.simpleObserver.Unsubscribe(eventID)
+	if err := s.simpleObserver.Unsubscribe(eventID); err != nil {
+		panic(err)
+	}
 }
 
 func (s *Base) PostEvent(event event.Event) {
@@ -77,15 +85,19 @@ func (s *Base) SendEvent(event event.Event) event.Result {
 func (s *Base) SyncTask(funcPtr func()) {
 	taskPtr := &routineTask{funcPtr: funcPtr}
 
-	s.backgroundRoutine.SyncTask(taskPtr)
+	if err := s.backgroundRoutine.SyncTask(taskPtr); err != nil {
+		panic(err)
+	}
 }
 
-func (s *Base) AsyncTask(funcPtr func()) {
+func (s *Base) AsyncTask(funcPtr func()) error {
 	taskPtr := &routineTask{funcPtr: funcPtr}
-	s.backgroundRoutine.AsyncTask(taskPtr)
+	return s.backgroundRoutine.AsyncTask(taskPtr)
 }
 
 func (s *Base) Timer(ctx context.Context, intervalValue time.Duration, offsetValue time.Duration, funcPtr func()) {
 	taskPtr := &routineTask{funcPtr: funcPtr}
-	s.backgroundRoutine.Timer(ctx, taskPtr, intervalValue, offsetValue)
+	if err := s.backgroundRoutine.Timer(ctx, taskPtr, intervalValue, offsetValue); err != nil {
+		panic(err)
+	}
 }

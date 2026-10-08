@@ -411,12 +411,12 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 func (s *Proxy) listCodexModels(ctx context.Context, candidate codexevents.DiscoveryCandidate) (codexupevents.ListModelsResult, codexupevents.ErrorClass, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
-	value, eventErr := s.SendEvent(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{
+	value, eventErr := s.SendEvent(codexupevents.BindCommandLane(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{
 		AccessToken:     candidate.AccessToken,
 		AccountIDHeader: candidate.AccountIDHeader,
 		Proxy:           candidate.Proxy,
 		ClientIdentity:  toUpstreamAccountClientIdentity(candidate.ClientIdentity),
-	})).Get()
+	}))).Get()
 	listed, ok := value.(codexupevents.ListModelsResult)
 	if !ok {
 		if eventErr != nil {

@@ -369,7 +369,14 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 	s.streamMu.Lock()
 	s.streams[streamID] = stream
 	s.streamMu.Unlock()
-	s.AsyncTask(func() { s.runTextStream(ctx, streamID, stream, cmd) })
+	if err := s.AsyncTask(func() { s.runTextStream(ctx, streamID, stream, cmd) }); err != nil {
+		cancel()
+		s.streamMu.Lock()
+		delete(s.streams, streamID)
+		s.streamMu.Unlock()
+		result.Set(nil, cd.NewError(cd.ResourceExhausted, "text stream task unavailable"))
+		return
+	}
 	result.Set(events.StartTextResult{StreamID: streamID}, nil)
 }
 
