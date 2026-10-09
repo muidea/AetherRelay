@@ -19,7 +19,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'renderUsageEventTable', 'loadEvents', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -78,12 +78,12 @@ test('dashboard, chart, key table and events render server cache statistics', as
   assert.match(elements.keyTable.innerHTML, /class="usage-key-table"/);
   assert.match(elements.keyTable.innerHTML, />10%</);
   assert.match(elements.eventTable.innerHTML, /class="usage-event-table"/);
-  assert.match(elements.eventTable.innerHTML, /title="codex_oauth_responses"/);
+  assert.doesNotMatch(elements.eventTable.innerHTML, /codex_oauth_responses/);
   assert.match(elements.eventTable.innerHTML, /title="provider_unavailable"/);
   assert.match(elements.eventTable.innerHTML, /title="in\/out\/total: 1,000\/20\/1,020"/);
-  assert.match(elements.eventTable.innerHTML, />未发起<\/td>/);
-  assert.match(elements.eventTable.innerHTML, /<th>耗时\(s\)<\/th>/);
-  assert.match(elements.eventTable.innerHTML, /title="0.108">0.108<\/td>/);
+  assert.doesNotMatch(elements.eventTable.innerHTML, /<th[^>]*>上游响应头<\/th>/);
+  assert.match(elements.eventTable.innerHTML, /<th scope="col">耗时\(s\)<\/th>/);
+  assert.match(elements.eventTable.innerHTML, /title="0.108"><div[^>]*>0.108<\/div>/);
   assert.match(elements.eventTable.innerHTML, />10%</);
   c.showUsageEvent(event);
   assert.match(elements.usageEventDetail.innerHTML, /缓存使用率<\/dt><dd>10%/);
@@ -100,12 +100,37 @@ test('dashboard, chart, key table and events render server cache statistics', as
   assert.doesNotMatch(elements.chartCacheRate.innerHTML, /<unsafe>/);
 });
 
-test('usage tables reserve stable widths and clip long cells', () => {
-  assert.match(html, /\.usage-key-table\{min-width:1020px\}/);
-  assert.match(html, /\.usage-event-table\{min-width:1220px\}/);
-  assert.match(html, /\.usage-key-table th,.usage-key-table td,.usage-event-table th,.usage-event-table td\{overflow:hidden;text-overflow:ellipsis;white-space:nowrap\}/);
-  assert.match(html, /@media\(max-width:1100px\)\{\.usage-event-table\{min-width:880px\}/);
-  assert.match(html, /@media\(max-width:760px\)\{\.usage-event-table,.usage-key-table\{min-width:0\}/);
+test('usage event list keeps complete values and diagnostic fields in the dialog', () => {
+  const {context:c,elements}=harness();
+  const event={event_id:'0123456789abcdef',started_at:'2026-10-09T07:00:00Z',api_key_id:'a-very-long-key-name',model:'a-very-long-model-name',provider:'codexoauth',operation:'responses',input_tokens:202648,output_tokens:1231,total_tokens:203879,tps:123456.78,http_status:502,outcome:'upstream_failed',conversion_mode:'anthropic_to_codex_responses',upstream_status:200};
+  const table=c.renderUsageEventTable([event]);
+  const headers=[...table.matchAll(/<th scope="col">([^<]*)<\/th>/g)].map(m=>m[1]);
+  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','TPS','最终状态','耗时(s)']);
+  assert.equal((table.match(/data-label=/g)||[]).length,9);
+  for(const value of [event.api_key_id,event.model,event.operation,'202,648','1,231','203,879','123456.78','upstream_failed'])assert.ok(table.includes(value),value);
+  assert.doesNotMatch(table,/text-overflow:ellipsis|0123456789abcdef|anthropic_to_codex_responses/);
+  assert.match(table,/tabindex="0"/);
+  c.showUsageEvent(event);
+  assert.match(elements.usageEventDetail.innerHTML,/Event ID<\/dt><dd>0123456789abcdef/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换模式<\/dt><dd>anthropic_to_codex_responses/);
+  assert.match(elements.usageEventDetail.innerHTML,/上游 HTTP 状态<\/dt><dd>200/);
+  assert.ok(c.renderUsageEventTable([{...event,api_key_id:'<script>bad</script>'}]).includes('&lt;script&gt;bad&lt;/script&gt;'));
+});
+
+test('usage events remain keyboard accessible after loading', async () => {
+  const {context:c,elements}=harness();
+  const row={dataset:{event:'0'}};
+  c.document.querySelectorAll=()=>[row];
+  const event={event_id:'keyboard-event',http_status:200};
+  c.request=async()=>({events:[event]});
+  await c.loadEvents(true);
+  let opened=0,prevented=0;
+  elements.usageEventDialog={showModal(){opened++}};
+  for(const key of ['Enter',' ','Escape'])row.onkeydown({key,preventDefault(){prevented++}});
+  row.onclick();
+  assert.equal(opened,3);
+  assert.equal(prevented,2);
+  assert.match(elements.usageEventDetail.innerHTML,/keyboard-event/);
 });
 
 test('upstream column distinguishes admission rejection from missing response', () => {
