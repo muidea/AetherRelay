@@ -68,7 +68,9 @@ test('dashboard, chart, key table and events render server cache statistics', as
   c.request = async url => url.includes('/dashboard?')
     ? {summary: usage, daily: [{...usage, date: '2026-09-01'}], by_api_key: [event]}
     : {events: [event]};
+  c.$('keyTable').className='loading';
   await c.loadUsage();
+  assert.equal(elements.keyTable.className, '');
   assert.equal(elements.uCacheRate.textContent, '10%');
   assert.equal(elements.uCacheTokens.textContent, '100 / 30');
   assert.match(elements.uCacheRate.title, /100.*1,000.*30/);
