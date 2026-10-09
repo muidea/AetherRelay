@@ -952,6 +952,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 				FirstOutputAt:        observedAttempt.Response.FirstOutputAt,
 				GenerationDuration:   observedAttempt.Response.GenerationDuration,
 				GenerationPartial:    observedAttempt.Response.GenerationPartial,
+				GenerationBuffered:   observedAttempt.Response.GenerationBuffered,
 				LastEventAt:          observedAttempt.Response.LastEventAt,
 				LastEventDurationMS:  observedAttempt.Response.LastEventDurationMS,
 				TerminalEvent:        observedAttempt.Response.TerminalEvent,
@@ -1212,6 +1213,7 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			FirstOutputAt:        attempt.Response.FirstOutputAt,
 			GenerationDuration:   attempt.Response.GenerationDuration,
 			GenerationPartial:    attempt.Response.GenerationPartial,
+			GenerationBuffered:   attempt.Response.GenerationBuffered,
 			LastEventAt:          attempt.Response.LastEventAt,
 			LastEventDurationMS:  attempt.Response.LastEventDurationMS,
 			TerminalEvent:        attempt.Response.TerminalEvent,
@@ -1312,6 +1314,7 @@ func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure
 }
 
 func mergeCodexStreamProgress(attempt *codexresponses.HTTPAttempt, progress upevents.HTTPResponseObservation) {
+	attempt.Response.GenerationBuffered = attempt.Response.GenerationBuffered || progress.GenerationBuffered
 	if !progress.FirstOutputAt.IsZero() {
 		attempt.Response.FirstOutputAt, attempt.Response.GenerationDuration, attempt.Response.GenerationPartial = progress.FirstOutputAt, progress.GenerationDuration, progress.GenerationPartial
 	}

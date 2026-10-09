@@ -231,7 +231,7 @@ WHERE ` + where
 		&sum.CachedInputTokens,
 		&sum.CacheCreationInputTokens,
 		&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
-		&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSOutputTokens, &sum.TPSGenerationDurationMS,
+		&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSBufferedSamples, &sum.TPSOutputTokens, &sum.TPSGenerationDurationMS,
 	)
 	if err != nil {
 		return Summary{}, ErrStoreUnavailable
@@ -253,8 +253,8 @@ SELECT
     coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
     coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
     coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)
-FROM usage_events
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + generationAggregates + `
+FROM ` + generationEvents + `
 WHERE ` + where + `
 GROUP BY usage_date
 ORDER BY usage_date`
@@ -267,9 +267,11 @@ ORDER BY usage_date`
 	var out []DailyBucket
 	for rows.Next() {
 		var b DailyBucket
-		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CacheInputTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown); err != nil {
+		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CacheInputTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown,
+			&b.TPSSamples, &b.TPSEstimatedSamples, &b.TPSPartialSamples, &b.TPSBufferedSamples, &b.TPSOutputTokens, &b.TPSGenerationDurationMS); err != nil {
 			return nil, ErrStoreUnavailable
 		}
+		b.TPSStats.finish()
 		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.CacheInputTokens)
 		// 规范化日期字符串。
 		if len(b.Date) > 10 {
@@ -326,7 +328,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			&k.CachedInputTokens,
 			&k.CacheCreationInputTokens,
 			&k.CachedInputTokensKnown, &k.CacheCreationInputTokensKnown,
-			&k.TPSSamples, &k.TPSEstimatedSamples, &k.TPSPartialSamples, &k.TPSOutputTokens, &k.TPSGenerationDurationMS,
+			&k.TPSSamples, &k.TPSEstimatedSamples, &k.TPSPartialSamples, &k.TPSBufferedSamples, &k.TPSOutputTokens, &k.TPSGenerationDurationMS,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}
@@ -394,7 +396,7 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
-    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false)
+    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered
 FROM ` + generationEvents + `
 WHERE ` + where + `
 ORDER BY started_at DESC, event_id DESC
@@ -412,7 +414,7 @@ LIMIT ?`
 		var e Event
 		var firstOutputAt sql.NullTime
 		var generationNS sql.NullInt64
-		var partial bool
+		var partial, buffered bool
 		var completedAt sql.NullTime
 		var httpStatus sql.NullInt64
 		var durationMS, firstEventMS, upstreamMS, retryAfter sql.NullInt64
@@ -435,12 +437,12 @@ LIMIT ?`
 			&httpStatus, &e.Outcome, &e.ErrorCode,
 			&e.FailureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &contentLength, &e.UpstreamTransferEncoding,
-			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial,
+			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
 		}
 		if firstOutputAt.Valid && generationNS.Valid {
-			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial)
+			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial, buffered)
 		}
 		e.UpstreamContentLengthKnown = contentLength.Valid
 		e.UpstreamContentLength = contentLength.Int64
@@ -541,7 +543,7 @@ GROUP BY api_key_id`
 			&sum.CachedInputTokens,
 			&sum.CacheCreationInputTokens,
 			&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
-			&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSOutputTokens, &sum.TPSGenerationDurationMS,
+			&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSBufferedSamples, &sum.TPSOutputTokens, &sum.TPSGenerationDurationMS,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}

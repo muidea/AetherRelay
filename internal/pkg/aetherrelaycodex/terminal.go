@@ -17,13 +17,14 @@ func MeaningfulOutputEvent(payload []byte) bool {
 		Text      json.RawMessage `json:"text"`
 		Summary   json.RawMessage `json:"summary"`
 		Arguments json.RawMessage `json:"arguments"`
+		Input     json.RawMessage `json:"input"`
 		Part      json.RawMessage `json:"part"`
 	}
 	if json.Unmarshal(payload, &event) != nil {
 		return false
 	}
 	switch event.Type {
-	case "response.output_text.delta", "response.reasoning.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta":
+	case "response.output_text.delta", "response.reasoning.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		return rawSemantic(event.Delta)
 	case "response.output_text.done", "response.reasoning_text.done", "response.reasoning_summary_text.done":
 		return rawSemantic(event.Text)
@@ -31,6 +32,8 @@ func MeaningfulOutputEvent(payload []byte) bool {
 		return rawSemantic(event.Text) || rawSemantic(event.Summary)
 	case "response.function_call_arguments.done":
 		return rawSemantic(event.Arguments)
+	case "response.custom_tool_call_input.done":
+		return rawSemantic(event.Input)
 	case "response.content_part.added", "response.content_part.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
 		return contentPartHasText(event.Part)
 	default:

@@ -33,6 +33,7 @@ type HTTPRequestObservation struct {
 type HTTPResponseObservation struct {
 	FirstOutputAt              time.Time
 	GenerationDuration         time.Duration
+	GenerationBuffered         bool
 	GenerationPartial          bool
 	LastEventAt                time.Time
 	LastEventDurationMS        int64

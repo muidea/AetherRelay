@@ -34,7 +34,7 @@ func TestCodexGenerationSettlementWithoutArchive(t *testing.T) {
 			if observer == nil {
 				t.Fatal("archive-off dropped observer")
 			}
-			observer(codexresponses.HTTPAttempt{Response: codexresponses.HTTPResponseObservation{FirstOutputAt: at.Add(20 * time.Second), GenerationDuration: 10 * time.Second}}, nil)
+			observer(codexresponses.HTTPAttempt{Response: codexresponses.HTTPResponseObservation{FirstOutputAt: at.Add(20 * time.Second), GenerationDuration: 10 * time.Second, GenerationBuffered: true}}, nil)
 			tok, ok := usageFromRaw([]byte(raw))
 			if !ok {
 				t.Fatal("parse usage")
@@ -48,7 +48,7 @@ func TestCodexGenerationSettlementWithoutArchive(t *testing.T) {
 			}
 			e := page.Events[0]
 			if tok.OutputTokensKnown {
-				if e.TPS == nil || *e.TPS != float64(tok.CompletionTokens)/10 || e.GenerationDurationMS != 10000 {
+				if e.TPS == nil || *e.TPS != float64(tok.CompletionTokens)/10 || e.GenerationDurationMS != 10000 || !e.GenerationBuffered {
 					t.Fatal(e)
 				}
 			} else if e.TPS != nil {
@@ -63,8 +63,9 @@ func TestGenerationRetryResetAndReadFailure(t *testing.T) {
 	at := time.Now().Add(-time.Second)
 	completion.generation.Output(at)
 	completion.generationObserved.FirstOutputAt = at
+	completion.generationObserved.Buffered = true
 	resetGeneration(ctx)
-	if s := completion.generation.Snapshot(time.Now()); !s.FirstOutputAt.IsZero() || !completion.generationObserved.FirstOutputAt.IsZero() {
+	if s := completion.generation.Snapshot(time.Now()); !s.FirstOutputAt.IsZero() || !completion.generationObserved.FirstOutputAt.IsZero() || completion.generationObserved.Buffered {
 		t.Fatal("previous attempt timing leaked")
 	}
 	observeGenerationSSE(ctx, []byte(`data: {"choices":[{"delta":{"content":"hi"}}]}`), nil)

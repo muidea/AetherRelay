@@ -230,6 +230,9 @@ func (s *DuckDBStore) DeleteClientAPIKey(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_generation_buffering WHERE event_id IN (SELECT event_id FROM usage_events WHERE api_key_id=?)`, id); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_generation WHERE event_id IN (SELECT event_id FROM usage_events WHERE api_key_id=?)`, id); err != nil {
 		return err
 	}

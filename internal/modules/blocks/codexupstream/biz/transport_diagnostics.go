@@ -11,6 +11,7 @@ import (
 
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
+	"golang.org/x/net/http2"
 )
 
 // transportReason projects error types only. Error strings can contain proxy
@@ -24,6 +25,28 @@ func transportReason(err error) transport.Reason {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return transport.Timeout
+	}
+	if errors.Is(err, errSSELineLimit) {
+		return transport.SSELineLimit
+	}
+	var stream http2.StreamError
+	if errors.As(err, &stream) {
+		switch stream.Code {
+		case http2.ErrCodeCancel:
+			return transport.HTTP2StreamCancel
+		case http2.ErrCodeRefusedStream:
+			return transport.HTTP2RefusedStream
+		default:
+			return transport.HTTP2Stream
+		}
+	}
+	var goAway http2.GoAwayError
+	if errors.As(err, &goAway) {
+		return transport.HTTP2GoAway
+	}
+	var connection http2.ConnectionError
+	if errors.As(err, &connection) {
+		return transport.HTTP2Connection
 	}
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
@@ -63,7 +86,7 @@ func transportReason(err error) transport.Reason {
 
 // Protocol/business errors from completedResponse are not transport failures.
 func completedTransportReason(class events.ErrorClass, err error) transport.Reason {
-	if class == events.ErrorNetwork || class == events.ErrorTimeout || class == events.ErrorCanceled || errors.Is(err, io.EOF) {
+	if class == events.ErrorNetwork || class == events.ErrorTimeout || class == events.ErrorCanceled || errors.Is(err, io.EOF) || errors.Is(err, errSSELineLimit) {
 		return transportReason(err)
 	}
 	return ""

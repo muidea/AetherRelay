@@ -65,3 +65,16 @@ func TestEmptyIncompleteNativeResponse(t *testing.T) {
 		t.Fatal("non-integer zero was accepted")
 	}
 }
+
+func TestCustomToolOutputRejectsSkeletonAndEmptyInput(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"response.custom_tool_call_input.delta","delta":""}`,
+		`{"type":"response.custom_tool_call_input.done","input":""}`,
+		`{"type":"response.custom_tool_call_input.done"}`,
+		`{"type":"response.output_item.added","item":{"type":"custom_tool_call","input":""}}`,
+	} {
+		if MeaningfulOutputEvent([]byte(payload)) {
+			t.Fatal("metadata/empty input started generation", payload)
+		}
+	}
+}

@@ -51,7 +51,21 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary := body["summary"].(map[string]any)
-	for _, row := range []map[string]any{summary, body["by_api_key"].([]any)[0].(map[string]any)} {
+	rows := []map[string]any{summary, body["by_api_key"].([]any)[0].(map[string]any)}
+	var foundDay bool
+	for _, value := range body["daily"].([]any) {
+		day := value.(map[string]any)
+		if day["date"] == now.Format("2006-01-02") {
+			rows = append(rows, day)
+			foundDay = true
+		} else if day["tps"] != nil || day["tps_samples"] != float64(0) {
+			t.Fatalf("empty day has TPS: %v", day)
+		}
+	}
+	if !foundDay {
+		t.Fatal("daily TPS bucket missing")
+	}
+	for _, row := range rows {
 		if row["tps"] != float64(10) || row["tps_samples"] != float64(1) {
 			t.Fatalf("TPS statistics=%v", row)
 		}

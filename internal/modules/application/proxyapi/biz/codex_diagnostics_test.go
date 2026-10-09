@@ -40,7 +40,7 @@ func TestAttemptDiagnosticKeepsObservedHTTPStatus(t *testing.T) {
 func TestTransportReasonLogsWithoutArchiveOrPrivateText(t *testing.T) {
 	previous := slog.Default()
 	defer slog.SetDefault(previous)
-	for _, reason := range []transport.Reason{transport.ConnectionReset, "private-proxy:private-password", ""} {
+	for _, reason := range []transport.Reason{transport.ConnectionReset, transport.HTTP2Stream, transport.HTTP2StreamCancel, transport.HTTP2RefusedStream, transport.HTTP2GoAway, transport.HTTP2Connection, transport.SSELineLimit, "private-proxy:private-password", ""} {
 		var output bytes.Buffer
 		slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
 		failure := codexresponses.NewFailure(codexresponses.KindNetwork, 0, nil)

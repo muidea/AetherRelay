@@ -827,8 +827,10 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 			if !completion.generationObserved.FirstOutputAt.IsZero() {
 				sample = completion.generationObserved
 			}
+			buffered := sample.Buffered || completion.generationObserved.Buffered
 			completion.generationMu.Unlock()
 			rec.FirstOutputAt, rec.GenerationDuration, rec.GenerationPartial = sample.FirstOutputAt, sample.Duration, sample.Partial || outcome != "success"
+			rec.GenerationBuffered = buffered
 		}
 		rec.OutputTokensKnown = tok.OutputTokensKnown || (tok.Estimated && tok.Known && tok.CompletionTokens > 0)
 	}

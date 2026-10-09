@@ -51,6 +51,7 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	GenerationBuffered         bool                `json:"generation_buffered,omitempty"`
 	LastEventAt                time.Time           `json:"last_upstream_event_at,omitempty"`
 	LastEventDurationMS        int64               `json:"last_upstream_event_duration_ms,omitempty"`
 	TerminalEvent              string              `json:"upstream_terminal_event,omitempty"`
@@ -263,7 +264,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	if r != nil {
 		if completion := usageCompletionFromContext(r.Context()); completion != nil {
 			completion.generationMu.Lock()
-			completion.generationObserved = generation.Sample{FirstOutputAt: attempt.Response.FirstOutputAt, Duration: attempt.Response.GenerationDuration, Partial: attempt.Response.GenerationPartial}
+			completion.generationObserved = generation.Sample{FirstOutputAt: attempt.Response.FirstOutputAt, Duration: attempt.Response.GenerationDuration, Partial: attempt.Response.GenerationPartial, Buffered: attempt.Response.GenerationBuffered}
 			completion.generationMu.Unlock()
 		}
 	}
@@ -338,6 +339,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		round.SetUpstreamHeaders(0, "", -1, "", 0)
 	}
 	responseInfo := upstreamResponseDebugInfo{
+		GenerationBuffered:         attempt.Response.GenerationBuffered,
 		FirstClientEventDurationMS: attempt.Response.FirstClientEventDurationMS, ReadObserved: attempt.Response.ReadObserved,
 		LastEventAt:          attempt.Response.LastEventAt,
 		LastEventDurationMS:  attempt.Response.LastEventDurationMS,

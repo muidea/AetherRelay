@@ -36,6 +36,7 @@ type CompleteRecord struct {
 	OutputTokensKnown             bool
 	FirstOutputAt                 time.Time
 	GenerationDuration            time.Duration
+	GenerationBuffered            bool
 	GenerationPartial             bool
 	CachedInputTokensKnown        bool
 	CacheCreationInputTokensKnown bool
@@ -112,6 +113,7 @@ type Summary struct {
 
 // DailyBucket 是按 UTC 日期的趋势点。
 type DailyBucket struct {
+	TPSStats
 	CachedInputTokensKnown        bool    `json:"cached_input_tokens_known"`
 	CacheCreationInputTokensKnown bool    `json:"cache_creation_input_tokens_known"`
 	CachedInputTokens             int64   `json:"cached_input_tokens"`

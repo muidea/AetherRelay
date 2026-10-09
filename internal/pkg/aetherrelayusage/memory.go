@@ -255,6 +255,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			b = &DailyBucket{Date: day}
 			dailyMap[day] = b
 		}
+		b.TPSStats.add(*e)
 		b.Requests++
 		b.InputTokens += e.InputTokens
 		b.OutputTokens += e.OutputTokens

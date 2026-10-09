@@ -15,6 +15,7 @@ type Sample struct {
 	FirstOutputAt time.Time
 	Duration      time.Duration
 	Partial       bool
+	Buffered      bool // Explicit upstream buffering signal; false does not prove no buffering.
 }
 
 type Clock struct {
@@ -59,7 +60,7 @@ func (c *Clock) Snapshot(at time.Time) Sample {
 	if duration <= 0 {
 		return Sample{}
 	}
-	return Sample{c.first, duration, partial || c.partial}
+	return Sample{FirstOutputAt: c.first, Duration: duration, Partial: partial || c.partial}
 }
 
 // ObserveSSE ignores metadata, role-only events and heartbeats. All documents in

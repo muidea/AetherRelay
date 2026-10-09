@@ -35,6 +35,8 @@ import (
 	"golang.org/x/net/http2"
 )
 
+var errSSELineLimit = errors.New("Codex SSE line exceeds limit")
+
 var responsesURL = "https://chatgpt.com/backend-api/codex/responses"
 
 var responsesWebsocketURL = "wss://chatgpt.com/backend-api/codex/responses"
@@ -528,7 +530,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 	// The EventHub command is synchronous and may finish before its SSE reader.
 	// Keep request values, but let explicit Pull/Cancel own stream lifetime.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ev.Context()))
-	stream := &responseStream{cancel: func() { cancel(); cancelCommand(ev.Context()); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64), readStarted: time.Now()}
+	stream := &responseStream{cancel: func() { cancel(); cancelCommand(ev.Context()); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64), readStarted: time.Now(), progress: events.HTTPResponseObservation{GenerationBuffered: attempt.Response.GenerationBuffered}}
 	s.mu.Lock()
 	if s.stopping || len(s.streams)+len(s.websockets) >= maxConcurrentCommands {
 		s.mu.Unlock()
@@ -775,10 +777,26 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 
 func observedHTTPResponse[H ~map[string][]string](status int, contentLength int64, transferEncoding []string, headers H, requestAt time.Time, unredacted bool) events.HTTPResponseObservation {
 	return events.HTTPResponseObservation{
-		Observed: true, At: time.Now(), Status: status, ContentLength: contentLength,
+		GenerationBuffered: upstreamBufferingEnabled(headers),
+		Observed:           true, At: time.Now(), Status: status, ContentLength: contentLength,
 		TransferEncoding: strings.Join(transferEncoding, ", "),
 		DurationMS:       time.Since(requestAt).Milliseconds(), Headers: safeHeaders(headers, unredacted),
 	}
+}
+
+// Absence of the signal does not prove that upstream delivery was unbuffered.
+func upstreamBufferingEnabled[H ~map[string][]string](headers H) bool {
+	for key, values := range headers {
+		if !strings.EqualFold(key, "X-Codex-Safety-Buffering-Enabled") {
+			continue
+		}
+		for _, value := range values {
+			if strings.EqualFold(strings.TrimSpace(value), "true") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func safeHTTPHeaders(headers http.Header, unredacted bool) []events.Header {
@@ -1593,7 +1611,7 @@ func readLine(reader *bufio.Reader, limit int64) ([]byte, error) {
 		part, err := reader.ReadSlice('\n')
 		if len(part) > 0 {
 			if int64(len(out)+len(part)) > limit {
-				return nil, fmt.Errorf("Codex SSE line exceeds limit")
+				return nil, errSSELineLimit
 			}
 			out = append(out, part...)
 		}
@@ -1993,6 +2011,9 @@ func classifyStatus(status int) events.ErrorClass {
 	return events.ErrorUpstream
 }
 func classifyTransport(err error) events.ErrorClass {
+	if errors.Is(err, errSSELineLimit) {
+		return events.ErrorProtocol
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return events.ErrorTimeout
 	}

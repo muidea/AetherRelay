@@ -22,9 +22,9 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 			at := time.Now().Add(-time.Hour)
 			records := []CompleteRecord{
 				{EventID: "a", OutputTokens: 100, OutputTokensKnown: true, FirstOutputAt: at.Add(time.Second), GenerationDuration: 10 * time.Second},
-				{EventID: "b", OutputTokens: 900, OutputTokensKnown: true, FirstOutputAt: at.Add(time.Second), GenerationDuration: 30 * time.Second, Estimated: true, GenerationPartial: true},
+				{EventID: "b", OutputTokens: 900, OutputTokensKnown: true, FirstOutputAt: at.Add(time.Second), GenerationDuration: 30 * time.Second, Estimated: true, GenerationPartial: true, GenerationBuffered: true},
 				{EventID: "legacy", OutputTokens: 5000, OutputTokensKnown: true},
-				{EventID: "missing-usage", FirstOutputAt: at.Add(time.Second), GenerationDuration: time.Second},
+				{EventID: "missing-usage", GenerationBuffered: true, FirstOutputAt: at.Add(time.Second), GenerationDuration: time.Second},
 				{EventID: "zero-duration", OutputTokens: 500, OutputTokensKnown: true, FirstOutputAt: at.Add(time.Second)},
 			}
 			for _, r := range records {
@@ -44,7 +44,7 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 			}
 			check := func(stats TPSStats) {
 				t.Helper()
-				if stats.TPS == nil || *stats.TPS != 25 || stats.TPSSamples != 2 || stats.TPSOutputTokens != 1000 || stats.TPSGenerationDurationMS != 40000 || stats.TPSEstimatedSamples != 1 || stats.TPSPartialSamples != 1 {
+				if stats.TPS == nil || *stats.TPS != 25 || stats.TPSSamples != 2 || stats.TPSOutputTokens != 1000 || stats.TPSGenerationDurationMS != 40000 || stats.TPSEstimatedSamples != 1 || stats.TPSPartialSamples != 1 || stats.TPSBufferedSamples != 1 {
 					t.Fatalf("stats=%+v", stats)
 				}
 			}
@@ -53,6 +53,10 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 				t.Fatal(d)
 			}
 			check(d.ByAPIKey[0].TPSStats)
+			if len(d.Daily) != 1 {
+				t.Fatal(d.Daily)
+			}
+			check(d.Daily[0].TPSStats)
 			if d.Summary.OutputTokens != 6500 || d.Summary.Requests != 5 {
 				t.Fatal("ordinary usage totals changed", d.Summary)
 			}
@@ -66,7 +70,7 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if filtered.Summary.TPS == nil || *filtered.Summary.TPS != 30 || filtered.Summary.TPSSamples != 1 {
+			if filtered.Summary.TPS == nil || *filtered.Summary.TPS != 30 || filtered.Summary.TPSSamples != 1 || filtered.Summary.TPSBufferedSamples != 1 {
 				t.Fatal(filtered)
 			}
 			empty, err := s.Dashboard(ctx, UsageFilter{AllTime: true, APIKeyID: "absent"})
@@ -80,15 +84,15 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 			for _, e := range page.Events {
 				switch e.EventID {
 				case "a":
-					if e.TPS == nil || *e.TPS != 10 || e.FirstOutputAt == nil || e.GenerationDurationMS != 10000 {
+					if e.TPS == nil || *e.TPS != 10 || e.FirstOutputAt == nil || e.GenerationDurationMS != 10000 || e.GenerationBuffered {
 						t.Fatal(e)
 					}
 				case "b":
-					if e.TPS == nil || *e.TPS != 30 || !e.GenerationPartial {
+					if e.TPS == nil || *e.TPS != 30 || !e.GenerationPartial || !e.GenerationBuffered {
 						t.Fatal(e)
 					}
 				default:
-					if e.TPS != nil {
+					if e.TPS != nil || e.GenerationBuffered {
 						t.Fatal("unknown sample assigned TPS", e)
 					}
 				}
@@ -101,20 +105,26 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 			if err != nil || len(rows) != 6 {
 				t.Fatal(rows, err)
 			}
-			column := -1
+			column, bufferedColumn := -1, -1
 			for i, name := range rows[0] {
+				if name == "generation_buffered" {
+					bufferedColumn = i
+				}
 				if name == "tps" {
 					column = i
 				}
 			}
-			if column < 0 {
+			if column < 0 || bufferedColumn < 0 {
 				t.Fatal(rows)
 			}
 			for _, row := range rows[1:] {
-				if row[0] == "a" && row[column] != "10" {
+				if row[0] == "a" && (row[column] != "10" || row[bufferedColumn] != "false") {
 					t.Fatal(row)
 				}
-				if row[0] == "legacy" && row[column] != "" {
+				if row[0] == "b" && row[bufferedColumn] != "true" {
+					t.Fatal(row)
+				}
+				if row[0] == "legacy" && (row[column] != "" || row[bufferedColumn] != "") {
 					t.Fatal(row)
 				}
 			}
@@ -156,7 +166,7 @@ func TestGenerationSurvivesExistingDatabaseReopen(t *testing.T) {
 	if err := s.Start(ctx, StartRecord{EventID: "new", APIKeyID: "key", StartedAt: at}); err != nil {
 		t.Fatal(err)
 	}
-	r := CompleteRecord{EventID: "new", HTTPStatus: 200, Outcome: "success", OutputTokens: 25, OutputTokensKnown: true, FirstOutputAt: at, GenerationDuration: time.Second}
+	r := CompleteRecord{EventID: "new", HTTPStatus: 200, Outcome: "success", OutputTokens: 25, OutputTokensKnown: true, FirstOutputAt: at, GenerationDuration: time.Second, GenerationBuffered: true}
 	if err := s.Complete(ctx, r); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +179,7 @@ func TestGenerationSurvivesExistingDatabaseReopen(t *testing.T) {
 	}
 	defer s.Close()
 	d, err := s.Dashboard(ctx, UsageFilter{AllTime: true})
-	if err != nil || d.Summary.Requests != 2 || d.Summary.OutputTokens != 125 || d.Summary.TPS == nil || *d.Summary.TPS != 25 || d.Summary.TPSSamples != 1 {
+	if err != nil || d.Summary.Requests != 2 || d.Summary.OutputTokens != 125 || d.Summary.TPS == nil || *d.Summary.TPS != 25 || d.Summary.TPSSamples != 1 || d.Summary.TPSBufferedSamples != 1 {
 		t.Fatal(d, err)
 	}
 	if err := s.EnsureClientAPIKey(ctx, "key", at); err != nil {
@@ -179,7 +189,7 @@ func TestGenerationSurvivesExistingDatabaseReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := s.db.QueryRow(`SELECT count(*) FROM usage_generation`).Scan(&count); err != nil || count != 0 {
+	if err := s.db.QueryRow(`SELECT (SELECT count(*) FROM usage_generation) + (SELECT count(*) FROM usage_generation_buffering)`).Scan(&count); err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
 }
@@ -209,6 +219,9 @@ func TestTPSKnownZeroSubmillisecondAndKeyFiltering(t *testing.T) {
 				d, err := s.Dashboard(ctx, UsageFilter{AllTime: true, APIKeyID: key})
 				if err != nil || d.Summary.TPS == nil || *d.Summary.TPS != want || d.Summary.TPSSamples != 1 || len(d.ByAPIKey) != 1 || d.ByAPIKey[0].APIKeyID != key {
 					t.Fatal(d, err)
+				}
+				if len(d.Daily) != 1 || d.Daily[0].TPS == nil || *d.Daily[0].TPS != want || d.Daily[0].TPSSamples != 1 {
+					t.Fatal(d.Daily)
 				}
 			}
 		})

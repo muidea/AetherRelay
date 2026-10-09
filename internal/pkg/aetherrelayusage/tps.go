@@ -11,15 +11,18 @@ type GenerationSample struct {
 	GenerationDurationNS int64      `json:"-"`
 	GenerationDurationMS float64    `json:"generation_duration_ms"`
 	TPS                  *float64   `json:"tps"`
+	GenerationBuffered   bool       `json:"generation_buffered"`
 	GenerationPartial    bool       `json:"generation_partial"`
 }
 
 // TPSStats uses exactly the same eligible sample set for both numerator and
-// denominator. It describes generation speed, not concurrent system throughput.
+// denominator. It describes observed output delivery, not concurrent system
+// throughput. Explicit upstream buffering is counted without rewriting timings.
 type TPSStats struct {
 	TPS                     *float64 `json:"tps"`
 	TPSSamples              int64    `json:"tps_samples"`
 	TPSEstimatedSamples     int64    `json:"tps_estimated_samples"`
+	TPSBufferedSamples      int64    `json:"tps_buffered_samples"`
 	TPSPartialSamples       int64    `json:"tps_partial_samples"`
 	TPSOutputTokens         int64    `json:"tps_output_tokens"`
 	TPSGenerationDurationMS float64  `json:"tps_generation_duration_ms"`
@@ -33,14 +36,14 @@ func generationSample(r CompleteRecord) GenerationSample {
 		return GenerationSample{}
 	}
 	at := r.FirstOutputAt.UTC()
-	return makeGenerationSample(at, int64(r.GenerationDuration), r.OutputTokens, r.GenerationPartial || r.Outcome != "success")
+	return makeGenerationSample(at, int64(r.GenerationDuration), r.OutputTokens, r.GenerationPartial || r.Outcome != "success", r.GenerationBuffered)
 }
-func makeGenerationSample(at time.Time, ns, tokens int64, partial bool) GenerationSample {
+func makeGenerationSample(at time.Time, ns, tokens int64, partial, buffered bool) GenerationSample {
 	if ns <= 0 || at.IsZero() {
 		return GenerationSample{}
 	}
 	tps := float64(tokens) / (float64(ns) / float64(time.Second))
-	return GenerationSample{FirstOutputAt: &at, GenerationDurationNS: ns, GenerationDurationMS: float64(ns) / float64(time.Millisecond), TPS: &tps, GenerationPartial: partial}
+	return GenerationSample{FirstOutputAt: &at, GenerationDurationNS: ns, GenerationDurationMS: float64(ns) / float64(time.Millisecond), TPS: &tps, GenerationPartial: partial, GenerationBuffered: buffered}
 }
 func (s *TPSStats) finish() {
 	if s.TPSSamples > 0 && s.TPSGenerationDurationMS > 0 {
@@ -53,6 +56,9 @@ func (s *TPSStats) add(e Event) {
 		return
 	}
 	s.TPSSamples++
+	if e.GenerationBuffered {
+		s.TPSBufferedSamples++
+	}
 	s.TPSOutputTokens += e.OutputTokens
 	s.TPSGenerationDurationMS += e.GenerationDurationMS
 	if e.Estimated {
@@ -65,19 +71,20 @@ func (s *TPSStats) add(e Event) {
 }
 
 // Keep filter/cursor columns unambiguous and preserve all ordinary event totals.
-const generationEvents = `(SELECT e.*, g.first_output_at, g.generation_duration_ns, g.partial AS generation_partial FROM usage_events e LEFT JOIN usage_generation g ON e.event_id=g.event_id) AS usage_events`
+const generationEvents = `(SELECT e.*, g.first_output_at, g.generation_duration_ns, g.partial AS generation_partial, b.event_id IS NOT NULL AS generation_buffered FROM usage_events e LEFT JOIN usage_generation g ON e.event_id=g.event_id LEFT JOIN usage_generation_buffering b ON e.event_id=b.event_id) AS usage_events`
 const generationAggregates = `,
  count(generation_duration_ns),
  count(generation_duration_ns) FILTER (WHERE estimated),
  count(generation_duration_ns) FILTER (WHERE generation_partial),
+ count(generation_duration_ns) FILTER (WHERE generation_buffered),
  coalesce(sum(output_tokens) FILTER (WHERE generation_duration_ns IS NOT NULL), 0),
  coalesce(sum(generation_duration_ns)::DOUBLE / 1000000, 0)`
 
 func generationCSV(s GenerationSample) []string {
 	if s.TPS == nil || s.FirstOutputAt == nil {
-		return []string{"", "", "", ""}
+		return []string{"", "", "", "", ""}
 	}
-	return []string{s.FirstOutputAt.Format(time.RFC3339Nano), strconv.FormatFloat(s.GenerationDurationMS, 'f', -1, 64), strconv.FormatFloat(*s.TPS, 'f', -1, 64), strconv.FormatBool(s.GenerationPartial)}
+	return []string{s.FirstOutputAt.Format(time.RFC3339Nano), strconv.FormatFloat(s.GenerationDurationMS, 'f', -1, 64), strconv.FormatFloat(*s.TPS, 'f', -1, 64), strconv.FormatBool(s.GenerationPartial), strconv.FormatBool(s.GenerationBuffered)}
 }
 
 func cloneGenerationSample(s GenerationSample) GenerationSample {

@@ -194,8 +194,10 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 ## 单次生成 TPS
 
-- 调用明细 TPS = 输出 Token / 生成耗时（秒）。生成耗时从首个实际文本、推理或工具参数输出计到上游结束，排除排队、响应头等待和首输出等待。`response.created`、role-only、心跳等元数据不启动计时。重试使用最终尝试的计时。转换流在读取结束、取消、超时和转换/客户端写入失败时冻结计时；ChatGPT Web 从上游 SSE 携带计时值，不计入账号结算或响应体清理耗时。
+- 调用明细 TPS = 输出 Token / 生成耗时（秒）。生成耗时从首个实际文本、推理或工具参数输出（包括自定义工具 `response.custom_tool_call_input.delta/done`）计到上游结束，排除排队、响应头等待和首输出等待。`response.created`、role-only、心跳等元数据不启动计时。重试使用最终尝试的计时。转换流在读取结束、取消、超时和转换/客户端写入失败时冻结计时；ChatGPT Web 从上游 SSE 携带计时值，不计入账号结算或响应体清理耗时。
 - 用量总览和 API Key 表按当前筛选范围聚合：有效样本的输出 Token 合计 / 同一批样本的生成耗时合计，按耗时加权；不是单次 TPS 的算术平均，也不是并发系统吞吐量。100 Token / 10 秒和 900 Token / 30 秒合计为 25 TPS。
-- 明细字段：`first_output_at`、`generation_duration_ms`、`tps`、`generation_partial`；聚合字段：`tps`、`tps_samples`、`tps_output_tokens`、`tps_generation_duration_ms`、`tps_estimated_samples`、`tps_partial_samples`。估算和部分输出样本明确标记；只有输入用量、缺失输出计数、无实际输出或无正生成耗时的调用不参与 TPS，`tps=null`，页面显示 `—`。已有 Token 合计不因 TPS 样本筛选改变。
+- TPS 趋势按 UTC 日期聚合，遵循相同的有效样本和耗时加权口径，并应用当前时间、API Key、Provider、Model、Outcome 和估算筛选。悬停展示当日 TPS、有效样本数及估算/部分输出/上游明确缓冲样本数；无样本日期显示 `—`，已知零 TPS 显示零值标记。
+- 明细字段：`first_output_at`、`generation_duration_ms`、`tps`、`generation_partial`、`generation_buffered`；聚合字段：`tps`、`tps_samples`、`tps_output_tokens`、`tps_generation_duration_ms`、`tps_estimated_samples`、`tps_partial_samples`、`tps_buffered_samples`。估算和部分输出样本明确标记；只有输入用量、缺失输出计数、无实际输出或无正生成耗时的调用不参与 TPS，`tps=null`，页面显示 `—`。已有 Token 合计不因 TPS 样本筛选改变。
 - 支持 HTTP OpenAI / Anthropic / Responses SSE、对应协议转换、Codex OAuth SSE（含缓冲成非流式下游响应的路径），以及 ChatGPT Web 流式和非流式文本。直接返回完整 JSON 的非流式上游无法观测生成起点，不用请求总耗时代替生成耗时。
-- 继续使用当前 DuckDB；新增 `usage_generation` 关联表，完成请求时与原明细在同一事务保存。不会对历史明细表执行 ALTER、重建或回填；历史记录保持未知 TPS。删除 API Key 用量时同步删除生成样本。CSV 在原列之后追加生成计时和 TPS 列。
+- 上游 `X-Codex-Safety-Buffering-Enabled: true` 明确表示缓冲时，明细标记 `generation_buffered=true`，总览、Key 和趋势统计同一批有效样本中的 `tps_buffered_samples`。保留观测值和加权聚合，并在页面提示缓冲交付可能导致高 TPS，不能直接代表模型生成速度；不以数值阈值猜测缓冲、不用包含 TTFT 的总耗时替代。标志为 false 仅表示没有记录到明确信号，不证明未缓冲；旧记录不推测或回填缓冲标志。
+- 继续使用当前 DuckDB；新增 `usage_generation` 与 `usage_generation_buffering` 关联表，完成请求时与原明细在同一事务保存。不会对历史明细表执行 ALTER、重建或回填；历史记录保持未知 TPS。删除 API Key 用量时同步删除生成样本。CSV 在原列之后追加生成计时和 TPS 列。

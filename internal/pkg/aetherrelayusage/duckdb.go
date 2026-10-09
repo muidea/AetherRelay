@@ -346,6 +346,12 @@ WHERE event_id = ?
 			return fmt.Errorf("%w: save generation: %v", ErrStoreUnavailable, err)
 		}
 	}
+	if validGeneration(rec) && rec.GenerationBuffered {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_generation_buffering (event_id) VALUES (?)`, rec.EventID); err != nil {
+			s.markDegraded()
+			return fmt.Errorf("%w: save generation buffering: %v", ErrStoreUnavailable, err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		s.markDegraded()
 		return fmt.Errorf("%w: commit completion: %v", ErrStoreUnavailable, err)

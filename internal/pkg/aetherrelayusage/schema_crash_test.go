@@ -10,7 +10,7 @@ import (
 )
 
 func TestSchemaStartupSurvivesUncleanExit(t *testing.T) {
-	for _, layout := range []string{"fresh", "existing", "existing_without_generation"} {
+	for _, layout := range []string{"fresh", "existing", "existing_without_generation", "existing_without_buffering"} {
 		t.Run(layout, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "usage.duckdb")
 			cmd := exec.Command(os.Args[0], "-test.run=^TestUsageSchemaCrashHelper$")
@@ -24,7 +24,7 @@ func TestSchemaStartupSurvivesUncleanExit(t *testing.T) {
 			}
 			defer store.Close()
 			dash, err := store.Dashboard(context.Background(), UsageFilter{AllTime: true})
-			if err != nil || dash.Summary.TPS == nil || *dash.Summary.TPS != 25 || dash.Summary.TPSSamples != 1 {
+			if err != nil || dash.Summary.TPS == nil || *dash.Summary.TPS != 25 || dash.Summary.TPSSamples != 1 || dash.Summary.TPSBufferedSamples != 1 {
 				t.Fatalf("generation WAL recovery: %+v %v", dash, err)
 			}
 			var count int
@@ -54,6 +54,11 @@ func TestUsageSchemaCrashHelper(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if layout == "existing_without_buffering" {
+			if _, err = db.Exec(`DROP TABLE usage_generation_buffering`); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err = db.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -78,6 +83,9 @@ VALUES ('generated','key',now()-INTERVAL 1 SECOND,now(),current_date,'completed'
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(`INSERT INTO usage_generation VALUES ('generated',now()-INTERVAL 1 SECOND,1000000000,false)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(`INSERT INTO usage_generation_buffering VALUES ('generated')`); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {

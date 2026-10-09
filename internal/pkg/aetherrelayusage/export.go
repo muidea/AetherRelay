@@ -51,7 +51,7 @@ var csvExportHeader = []string{
 	"state",
 	"cached_input_tokens_known",
 	"cache_creation_input_tokens_known",
-	"first_output_at", "generation_duration_ms", "tps", "generation_partial",
+	"first_output_at", "generation_duration_ms", "tps", "generation_partial", "generation_buffered",
 }
 
 // ExportCSV 按筛选条件流式写出 CSV。
@@ -90,7 +90,7 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state,
-    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false)
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered
 FROM ` + generationEvents + `
 WHERE ` + where + `
 ORDER BY started_at ASC, event_id ASC`
@@ -128,7 +128,7 @@ ORDER BY started_at ASC, event_id ASC`
 		)
 		var firstOutputAt sql.NullTime
 		var generationNS sql.NullInt64
-		var partial bool
+		var partial, buffered bool
 		if err := rows.Scan(
 			&eventID, &roundID, &startedAt, &completedAt,
 			&usageDate, &apiKeyID,
@@ -144,7 +144,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&failureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
-			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial,
+			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered,
 		); err != nil {
 			return ErrStoreUnavailable
 		}
@@ -222,7 +222,7 @@ ORDER BY started_at ASC, event_id ASC`
 		}
 		sample := GenerationSample{}
 		if firstOutputAt.Valid && generationNS.Valid {
-			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial)
+			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial, buffered)
 		}
 		row = append(row, generationCSV(sample)...)
 		if err := cw.Write(row); err != nil {

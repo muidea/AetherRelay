@@ -20,6 +20,7 @@ import (
 	"aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	"github.com/muidea/magicCommon/event"
+	"golang.org/x/net/http2"
 )
 
 func TestTransportReasonUsesErrorChainWithoutErrorText(t *testing.T) {
@@ -29,6 +30,12 @@ func TestTransportReasonUsesErrorChainWithoutErrorText(t *testing.T) {
 		want transport.Reason
 	}{
 		{"absent", nil, ""},
+		{"http2_stream", http2.StreamError{StreamID: 1, Code: http2.ErrCodeInternal, Cause: errors.New("private-upstream")}, transport.HTTP2Stream},
+		{"http2_cancel", http2.StreamError{Code: http2.ErrCodeCancel}, transport.HTTP2StreamCancel},
+		{"http2_refused", http2.StreamError{Code: http2.ErrCodeRefusedStream}, transport.HTTP2RefusedStream},
+		{"http2_goaway", http2.GoAwayError{LastStreamID: 1, ErrCode: http2.ErrCodeProtocol, DebugData: "private-credentials"}, transport.HTTP2GoAway},
+		{"http2_connection", http2.ConnectionError(http2.ErrCodeProtocol), transport.HTTP2Connection},
+		{"line_limit", errSSELineLimit, transport.SSELineLimit},
 		{"dns", &net.DNSError{Name: "private-host", Err: "private-error"}, transport.DNS},
 		{"dns_timeout", &net.DNSError{Name: "private-host", IsTimeout: true}, transport.DNS},
 		{"refused", syscall.ECONNREFUSED, transport.ConnectionRefused},
@@ -180,6 +187,9 @@ func TestStreamReadReasonCrossesPullContract(t *testing.T) {
 		reason transport.Reason
 	}{
 		{syscall.ECONNRESET, events.ErrorNetwork, transport.ConnectionReset},
+		{http2.StreamError{Code: http2.ErrCodeCancel, Cause: errors.New("private-cause")}, events.ErrorNetwork, transport.HTTP2StreamCancel},
+		{http2.GoAwayError{DebugData: "private-proxy"}, events.ErrorNetwork, transport.HTTP2GoAway},
+		{errSSELineLimit, events.ErrorProtocol, transport.SSELineLimit},
 		{io.EOF, events.ErrorProtocol, transport.EOF},
 		{errors.New("private-proxy credentials"), events.ErrorNetwork, transport.Unknown},
 	} {

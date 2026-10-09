@@ -7,6 +7,8 @@ import (
 
 func TestClockIgnoresTTFTAndFreezesAtTerminal(t *testing.T) {
 	for _, protocol := range []struct{ name, prelude, output, terminal string }{
+		{"custom_tool", `{"type":"response.output_item.added","item":{"type":"custom_tool_call","input":""}}`, `{"type":"response.custom_tool_call_input.delta","delta":"patch content"}`, `{"type":"response.completed"}`},
+		{"custom_tool_done", `{"type":"response.created"}`, `{"type":"response.custom_tool_call_input.done","input":"patch content"}`, `{"type":"response.completed"}`},
 		{"responses", `{"type":"response.created"}`, `{"type":"response.output_text.delta","delta":"hello"}`, `{"type":"response.completed"}`},
 		{"openai", `{"choices":[{"delta":{"role":"assistant"}}]}`, `{"choices":[{"delta":{"content":"hello"}}]}`, `[DONE]`},
 		{"anthropic", `{"type":"message_start"}`, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`, `{"type":"message_stop"}`},
@@ -36,6 +38,8 @@ func TestReasoningToolsAndPartialOutput(t *testing.T) {
 	for _, output := range []string{
 		`{"type":"response.reasoning_summary_text.delta","delta":"reason"}`,
 		`{"type":"response.function_call_arguments.delta","delta":"{}"}`,
+		`{"type":"response.custom_tool_call_input.delta","delta":"patch"}`,
+		`{"type":"response.custom_tool_call_input.done","input":"patch"}`,
 		`{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{}"}}]}}]}`,
 		`{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reason"}}`,
 		`{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`,

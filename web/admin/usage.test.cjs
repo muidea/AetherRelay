@@ -160,3 +160,51 @@ test('TPS renders weighted server values, unknown and known zero with sample pro
   assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\).*30\.00/);
   assert.match(elements.usageEventDetail.innerHTML,/生成耗时（秒）<\/dt><dd>30<\/dd>/);
 });
+
+test('TPS trend uses daily weighted values and distinguishes missing days from known zero', async () => {
+  const {context:c,elements}=harness();
+  assert.match(html,/TPS 趋势（Token\/s）.*id="chartTPS"/);
+  const daily=[
+    {date:'2026-10-08',tps:null,tps_samples:0,output_tokens:5000},
+    {date:'2026-10-09',tps:25,tps_samples:2,tps_output_tokens:1000,tps_generation_duration_ms:40000,tps_estimated_samples:1,tps_partial_samples:1,output_tokens:6000},
+    {date:'2026-10-10',tps:0,tps_samples:1},
+    {date:'2026-10-11',tps:null,tps_samples:0},
+  ];
+  c.request=async url=>url.includes('/dashboard?')?{summary:{},daily,by_api_key:[]}:{events:[]};
+  c.state.apiKeyFilter='key-a';
+  let requested='';
+  const request=c.request;
+  c.request=async url=>{requested+=url;return request(url)};
+  await c.loadUsage();
+  assert.match(requested,/api_key_id=key-a/);
+  const svg=elements.chartTPS.innerHTML;
+  assert.match(svg,/2026-10-09: 25\.00 Token\/s.*有效样本 2.*估算 1.*部分输出 1/);
+  assert.match(svg,/<rect[^>]+height="124"/);
+  assert.equal((svg.match(/<rect /g)||[]).length,1);
+  assert.equal((svg.match(/<text /g)||[]).length,2);
+  assert.match(svg,/<circle[^>]*><title>2026-10-10: 0\.00 Token\/s/);
+  assert.match(svg,/2026-10-08: — Token\/s/);
+  assert.doesNotMatch(svg,/NaN|Infinity/);
+  c.renderCharts([{date:'<unsafe>',tps:Infinity},{date:'bad',tps:-1}]);
+  assert.doesNotMatch(elements.chartTPS.innerHTML,/<unsafe>|NaN|Infinity|<rect /);
+  c.renderCharts([]);
+  assert.doesNotMatch(elements.chartTPS.innerHTML,/NaN|Infinity/);
+});
+
+
+test('buffered delivery stays visible in events, summary, keys and trends', async () => {
+ const {context:c,elements}=harness();
+ const stats={tps:127784.6,tps_samples:2,tps_buffered_samples:1};
+ const event={event_id:'buffered',api_key_id:'key',outcome:'success',http_status:200,tps:127784.6,generation_buffered:true,generation_partial:false};
+ c.request=async url=>url.includes('/dashboard?')?{summary:stats,by_api_key:[{...stats,api_key_id:'key'}],daily:[{...stats,date:'2026-10-09'}]}:{events:[event]};
+ await c.loadUsage();
+ assert.equal(elements.uTPS.textContent,'127784.60');
+ assert.match(elements.uTPS.title,/上游缓冲 1.*不能直接代表模型生成速度/);
+ assert.match(elements.keyTable.innerHTML,/上游缓冲 1/);
+ assert.match(elements.chartTPS.innerHTML,/上游缓冲 1.*不能直接代表模型生成速度/);
+ assert.match(elements.eventTable.innerHTML,/class="tag">buffered/);
+ assert.match(elements.eventTable.innerHTML,/上游明确缓冲/);
+ c.showUsageEvent(event);
+ assert.match(elements.usageEventDetail.innerHTML,/上游明确缓冲<\/dt><dd>true/);
+ assert.doesNotMatch(c.usageTPSHint({tps:10}),/上游明确缓冲/);
+});
