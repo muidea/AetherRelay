@@ -567,26 +567,49 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 	result.Set(events.OAuthFinishResult{Added: added > 0, Item: item}, nil)
 }
 
+// OAuth token rotation belongs to the account owner. A caller may stop waiting
+// without discarding the newly rotated credential or canceling other waiters.
 func (s *Account) refreshToken(ctx context.Context, accountID string) (events.RefreshTokenResult, error) {
 	if s.stopping.Load() {
 		return events.RefreshTokenResult{}, context.Canceled
 	}
-	s.refreshMu.Lock()
-	if flight := s.refreshes[accountID]; flight != nil {
-		s.refreshMu.Unlock()
-		<-flight.done
+	if ctx.Err() != nil {
+		return events.RefreshTokenResult{}, ctx.Err()
+	}
+	flight, created := s.beginRefresh(accountID)
+	if created {
+		if err := s.AsyncTaskContext(ctx, func() {
+			result, err := s.refreshTokenOnce(s.shutdownCtx, accountID)
+			s.finishRefresh(accountID, flight, result, err)
+		}); err != nil {
+			s.finishRefresh(accountID, flight, events.RefreshTokenResult{}, err)
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return events.RefreshTokenResult{}, ctx.Err()
+	case <-flight.done:
 		return flight.result, flight.err
+	}
+}
+
+func (s *Account) beginRefresh(accountID string) (*refreshFlight, bool) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if flight := s.refreshes[accountID]; flight != nil {
+		return flight, false
 	}
 	flight := &refreshFlight{done: make(chan struct{})}
 	s.refreshes[accountID] = flight
-	s.refreshMu.Unlock()
-	result, err := s.refreshTokenOnce(ctx, accountID)
+	return flight, true
+}
+
+func (s *Account) finishRefresh(accountID string, flight *refreshFlight, result events.RefreshTokenResult, err error) {
 	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 	flight.result, flight.err = result, err
 	delete(s.refreshes, accountID)
 	close(flight.done)
-	s.refreshMu.Unlock()
-	return result, err
 }
 
 func (s *Account) refreshTokenOnce(ctx context.Context, accountID string) (events.RefreshTokenResult, error) {
@@ -624,7 +647,13 @@ func (s *Account) refreshExpiring() {
 		if s.stopping.Load() {
 			return
 		}
-		_, _ = s.refreshToken(s.shutdownCtx, id)
+		// The timer already owns a managed worker. Execute new refreshes here
+		// instead of waiting for a nested task on a one-worker background pool.
+		flight, created := s.beginRefresh(id)
+		if created {
+			result, err := s.refreshTokenOnce(s.shutdownCtx, id)
+			s.finishRefresh(id, flight, result, err)
+		}
 	}
 }
 

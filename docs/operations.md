@@ -326,3 +326,13 @@ Codex HTTP/SSE/compact 失败日志新增 `transport_reason`，逐 attempt 的�
 同日已将 x600 `/home/workspace/deploy/config/config.yaml` 的首事件超时从 180 写为 300 秒，备份为 `config.yaml.bak-20260928-103500-first-event-300`。仅修改配置文件不会自动更新运行实例；需要部署包含健康计数修复的新代码并重新加载配置后，才同时具备 300 秒预算和首事件超时不熔断的行为。
 
 日志应分别保留上游 HTTP 200、下游 HTTP 504 与 first_event_timeout；metadata.error_code 和用量一致。首事件超时与 idle_timeout 分开显示，新统计不回填历史分类。首事件前的响应头即归档；同一请求的重复观测不再重复写正文，相同响应不重复记录，终态失败仍更新。13.0.0 的配置模板“无需改动”仅指该次缓存/观测补全，13.1.0 已更新首事件预算模板。
+
+### Nginx 超时与应用 499 的关联核查
+
+2026-10-09 x600 的 `claude-owner/035632–035635` 均为 `stream=false`，同一请求连续提交；上游在约 1.6–2.4 秒返回 200，并已读取约 1.1 万个事件。Nginx `/v1` 当时继承 `proxy_read_timeout 300s`，四次 access log 均为 504，error log 均为 `while reading response header from upstream`；关闭应用连接后，归档记录 499 `client_canceled`。客户端也声明 300 秒，不能仅凭应用上下文取消确定是哪一层先断开。
+
+排障必须按请求时间和事件 ID 对照应用归档、Nginx access/error log，分别查看上游响应头状态和应用最终状态。后台将 499 标记为“下游连接取消”；失败或处理中记录若总 token 全为零且两个缓存观测标记均为 false，则展示“未取得”，不将这组缺少终结用量的值解释为零消耗。此规则只改变明细展示，不回填数据库或改写聚合值。
+
+Codex 上游归档及安全诊断增加 `last_upstream_event_at`、`last_upstream_event_duration_ms`、`upstream_terminal_event`。最后事件时间仅由业务 data 更新，注释和 keepalive 不续期；终结类型只保留固定白名单。终结类型为空且已有事件，表示读取已开始但未观察到终结；结合读取错误原因判断 EOF、读取超时或连接重置。未知类型的网络错误保留 `unknown`，不得从错误文本猜测或打印原始网络错误及生成内容。
+
+API 代理关闭响应缓冲，以便 SSE 及时交付；`stream=false` 仍等待完整结果。Nginx read timeout 是相邻读取间隔，应用非流式超时是整个请求预算，不能混为同一时限。修改后运行 `nginx -t`，再平滑 reload；新应用预算逻辑及后台展示须部署对应服务版本后生效。此前 `035631` 的流式网络截断仍需部署后继续核对新诊断，不把代理配置调整宣称为上游网络故障已经修复。

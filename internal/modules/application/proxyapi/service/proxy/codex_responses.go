@@ -233,6 +233,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {
+		request.Deadline = h.codexCompletionDeadline(r, started)
 		response, err := executor.CompleteCodexResponses(r.Context(), request)
 		if err != nil {
 			h.writeCodexResponsesError(w, r, round, started, provider, model, false, err)
@@ -553,7 +554,13 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind = streamKindProtocol
 	case codexresponses.KindConversion:
 		kind = streamKindConversion
-	case codexresponses.KindRateLimit, codexresponses.KindInvalidToken, codexresponses.KindTimeout, codexresponses.KindNetwork, codexresponses.KindUpstream, codexresponses.KindEndpoint, codexresponses.KindModelNotFound:
+	case codexresponses.KindTimeout:
+		if failure.RequestBudgetExceeded {
+			kind = streamKindRequestTimeout
+		} else {
+			kind, countUpstream = streamKindUpstreamFailed, true
+		}
+	case codexresponses.KindRateLimit, codexresponses.KindInvalidToken, codexresponses.KindNetwork, codexresponses.KindUpstream, codexresponses.KindEndpoint, codexresponses.KindModelNotFound:
 		kind, countUpstream = streamKindUpstreamFailed, true
 	default:
 		kind = streamKindError

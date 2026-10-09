@@ -41,7 +41,7 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 		if failure.Attempt.Response.Observed {
 			status = failure.Attempt.Response.Status
 		}
-		attrs = append(attrs, "error_class", string(failure.Kind), "upstream_error_code", failure.UpstreamCode, "upstream_status", status, "transport_reason", failure.Attempt.Response.TransportReason.Safe(), "queue_wait_ms", failure.Attempt.Request.QueueWaitMS, "headers_duration_ms", failure.Attempt.Response.DurationMS, "read_observed", failure.Attempt.Response.ReadObserved, "read_duration_ms", failure.Attempt.Response.ReadDurationMS, "upstream_event_count", failure.Attempt.Response.EventCount, "upstream_wire_bytes", failure.Attempt.Response.WireBytes)
+		attrs = append(attrs, "error_class", string(failure.Kind), "upstream_error_code", failure.UpstreamCode, "upstream_status", status, "transport_reason", failure.Attempt.Response.TransportReason.Safe(), "queue_wait_ms", failure.Attempt.Request.QueueWaitMS, "headers_duration_ms", failure.Attempt.Response.DurationMS, "read_observed", failure.Attempt.Response.ReadObserved, "read_duration_ms", failure.Attempt.Response.ReadDurationMS, "upstream_event_count", failure.Attempt.Response.EventCount, "upstream_wire_bytes", failure.Attempt.Response.WireBytes, "last_upstream_event_at", failure.Attempt.Response.LastEventAt, "last_upstream_event_duration_ms", failure.Attempt.Response.LastEventDurationMS, "upstream_terminal_event", failure.Attempt.Response.TerminalEvent)
 		slog.Warn("Codex attempt failed", attrs...)
 	} else {
 		slog.Debug("Codex attempt completed", attrs...)

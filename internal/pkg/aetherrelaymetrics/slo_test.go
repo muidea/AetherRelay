@@ -270,7 +270,8 @@ func TestSLOWebhookPostsJSON(t *testing.T) {
 	var hits atomic.Int32
 	var gotEntered atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
+		// Publish completion after decoding so the polling assertion sees the payload.
+		defer hits.Add(1)
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s", r.Method)
 		}

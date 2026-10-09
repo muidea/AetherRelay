@@ -11,6 +11,8 @@ server:
   archive_unredacted_headers: false
   verbose_logging: true
   log_format: text
+  # 非流式总预算包括 Codex 账号准入/重试；Nginx API 等待建议 330s，客户端至少 360s。
+  # 客户端声明 X-Stainless-Timeout 时，Codex 非流式预算取更短时限并预留错误返回时间。
   request_timeout_seconds: 300
   stream_idle_timeout_seconds: 300
   # 首事件预算独立于流空闲超时，为长推理和上游 buffering 保留等待时间。

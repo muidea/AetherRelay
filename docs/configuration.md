@@ -104,7 +104,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `max_request_body_bytes` / `AETHERRELAY_MAX_REQUEST_BODY_BYTES` | 客户端请求体上限。 |
 | `max_upstream_response_bytes` / `AETHERRELAY_MAX_UPSTREAM_RESPONSE_BYTES` | 非流式上游响应上限。 |
 | `max_stream_bytes`、`max_sse_line_bytes` | 流式累计输出与单条 SSE 行上限。 |
-| `request_timeout_seconds` | 非流式总超时及通用 HTTP 流式等待响应头超时；Codex HTTP 流使用独立的首事件/空闲限制，不受此总时限截断。 |
+| `request_timeout_seconds` | 非流式总超时（Codex 包括账号准入、刷新和重试）及通用 HTTP 流式等待响应头超时；Codex HTTP 流使用独立的首事件/空闲限制，不受此总时限截断。 |
 | `stream_idle_timeout_seconds` | 连续未收到 SSE 数据的超时；`0` 禁用。 |
 | `stream_first_event_timeout_seconds` | HTTP 上游 SSE 首个可交付业务事件等待超时，默认 `300` 秒；用于防止上游只返回响应头或前置事件后长期无业务输出。显式配置（含 `180` 或关闭限制的 `0`）优先于默认值。 |
 | `upstream_body_idle_timeout_seconds` | 非流式上游响应体连续无新数据的超时，默认 `180` 秒；`0` 禁用。用于允许 DeepSeek 等推理模型在已返回响应头后持续生成较长时间，同时避免请求无限等待。 |
@@ -349,3 +349,13 @@ endpoint 下只允许选择固定 profile：`level1`、`level2`、`level2_reason
 这些档位来自 Codex 客户端快照，不与公共 API 的 reasoning 枚举混用；例如公共 GPT-5.6 支持 `none`，而 Codex Sol/Terra profile 另含 `ultra`。显式配置 `reasoning_supported=false`、限制 `reasoning_efforts` 或关闭 `native_responses_images` 时，manifest 必须服从配置；缺少 metadata 时，已知模型才使用可信 profile，未知 ID 继续保守回退。低于 `0.144.0` 的客户端仍过滤 `max` 和 `ultra`。
 
 能力元数据不等于新一轮真实账号 smoke。Sol、Terra、Astra、5.5 和 5.4-mini 不因这些字段获得新的跨协议转换模板；Luna 保留原有双向 Level 3 模板，原生图片输入声明不开放转换图片。固定 Codex OAuth 上游不接受客户端 `max_output_tokens` 字段，代理仍按兼容策略删除该字段并只记录字段名。
+
+### 非流式调用与外层代理时限
+
+Codex 的 `stream=false` 调用在上游 SSE 终结后才返回完整 JSON。上游响应头的 200 不代表客户端请求已经完成；等待期间 Nginx 尚未收到应用响应头。
+
+应用预算应小于外层代理和客户端的等待时限，并留出错误返回余量。默认应用预算为 300 秒，可配置 Nginx API 路由等待 330 秒、客户端总时限至少 360 秒。部署模板见 [`Nginx API 配置示例`](examples/nginx-api.conf)，应合并进现有 server，检查后平滑 reload。
+
+当客户端提供合法的 `X-Stainless-Timeout` 秒数时，Codex 非流式预算同时受该值限制，并预留该值的 5%，最多 5 秒用于错误返回。时限从 HTTP handler 接收请求起计算，不随切号重试重置；提示不能延长应用配置预算。无效、非正数及超过 24 小时的提示忽略。真实下游取消归类 `client_canceled`/499；应用总预算到期归类 `timeout`/504（outcome=`request_timeout`），停止重试、Provider 回退和账号故障反馈。HTTP 流式调用仍遵循独立首事件、空闲和可选总时限合同。
+
+OAuth 凭据轮换由账号 owner 的 BackgroundRoutine 管理并合并同账号刷新；请求预算限制等待，不取消其他等待者或丢弃已轮换凭据。周期维护在现有 worker 内执行新刷新，避免单 worker 下等待嵌套任务。

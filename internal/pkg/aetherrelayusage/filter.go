@@ -172,6 +172,7 @@ func KnownOutcomes() []string {
 		"client_canceled",
 		"idle_timeout",
 		"first_event_timeout",
+		"request_timeout",
 		"limit_exceeded",
 		"upstream_truncated",
 		"upstream_failed",

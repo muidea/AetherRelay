@@ -19,7 +19,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -125,4 +125,18 @@ test('usage durations are consistently displayed in seconds', () => {
   assert.equal(c.usageDurationSeconds(901316), '901.316');
   assert.equal(c.usageDurationSeconds(null), '—');
   assert.equal(c.usageDurationSeconds(-1), '—');
+});
+
+test('proxy cancellation and absent failed usage are not shown as successful zero usage', () => {
+ const {context:c,elements}=harness();
+ const e={http_status:499,outcome:'client_canceled',upstream_status:200,input_tokens:0,output_tokens:0,total_tokens:0,cached_input_tokens_known:false,cache_creation_input_tokens_known:false};
+ assert.match(c.eventStatusMeta(e).label,/499.*下游连接取消/);
+ assert.match(c.eventStatusMeta(e).title,/反向代理超时/);
+ assert.match(c.usageUpstreamMeta(e).title,/不代表请求最终完成/);
+ assert.equal(c.usageTokenValue(e,'input_tokens'),'未取得');
+ c.showUsageEvent(e);
+ assert.match(elements.usageEventDetail.innerHTML,/输入 Token<\/dt><dd>未取得/);
+ assert.equal(c.usageTokenValue({...e,outcome:'success'},'input_tokens'),'0');
+ assert.equal(c.usageTokenValue({...e,input_tokens:10},'input_tokens'),'10');
+ assert.equal(c.usageTokenValue({...e,cached_input_tokens_known:true},'input_tokens'),'0');
 });

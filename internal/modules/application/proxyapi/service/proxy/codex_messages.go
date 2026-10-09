@@ -92,6 +92,7 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		slog.LogAttrs(r.Context(), slog.LevelDebug, "Codex conversion cache summary", attrs...)
 	}
 	if !stream {
+		request.Deadline = h.codexCompletionDeadline(r, started)
 		result, execErr := h.codexResponses.CompleteCodexResponses(r.Context(), request)
 		if execErr != nil {
 			h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, false, execErr)

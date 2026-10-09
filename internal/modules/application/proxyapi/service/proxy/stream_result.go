@@ -8,13 +8,14 @@ import (
 )
 
 // streamKind 描述流式/请求结束后的业务结果，用于 metrics outcome。
-// 完整枚举: success | client_canceled | first_event_timeout | idle_timeout | limit_exceeded |
+// 完整枚举: success | client_canceled | request_timeout | first_event_timeout | idle_timeout | limit_exceeded |
 // upstream_truncated | upstream_failed | incomplete | client_write | conversion | protocol | error
 type streamKind string
 
 const (
 	streamKindSuccess           streamKind = "success"
 	streamKindClientCanceled    streamKind = "client_canceled"
+	streamKindRequestTimeout    streamKind = "request_timeout"
 	streamKindIdleTimeout       streamKind = "idle_timeout"
 	streamKindFirstEventTimeout streamKind = "first_event_timeout"
 	streamKindLimitExceeded     streamKind = "limit_exceeded"

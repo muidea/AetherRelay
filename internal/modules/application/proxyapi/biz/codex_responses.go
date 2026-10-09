@@ -381,13 +381,54 @@ func codexResponseObjectEmpty(raw json.RawMessage) bool {
 	return len(response.Output) == 0 && !rawJSONPresent(response.Usage) && !rawJSONPresent(response.Error)
 }
 
-func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+var errCodexRequestBudget = errors.New("Codex non-stream request deadline exceeded")
+
+func codexCompletionContextFailure(ctx context.Context) error {
+	if errors.Is(context.Cause(ctx), errCodexRequestBudget) {
+		failure := codexresponses.NewFailure(codexresponses.KindTimeout, 0, errCodexRequestBudget)
+		failure.RequestBudgetExceeded = true
+		retryable := false
+		failure.Retryable = &retryable
+		return failure
+	}
+	return clientFailure(ctx.Err())
+}
+
+func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexresponses.Request) (out codexresponses.Result, err error) {
+	parent := ctx
+	deadline := request.Deadline
+	if s.config.RequestTimeout > 0 {
+		configured := time.Now().Add(s.config.RequestTimeout)
+		if deadline.IsZero() || configured.Before(deadline) {
+			deadline = configured
+		}
+	}
+	if !deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadlineCause(ctx, deadline, errCodexRequestBudget)
+		defer cancel()
+	}
+	defer func() {
+		if err == nil || ctx.Err() == nil {
+			return
+		}
+		previous, _ := codexresponses.AsFailure(err)
+		if parent.Err() != nil {
+			err = clientFailure(parent.Err())
+		} else {
+			err = codexCompletionContextFailure(ctx)
+		}
+		if failure, ok := codexresponses.AsFailure(err); ok && previous != nil {
+			failure.Attempt = previous.Attempt
+			failure.TurnStateSource = previous.TurnStateSource
+		}
+	}()
 	freezeCodexTurnMetadata(&request.TurnMetadata)
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
 		if ctx.Err() != nil {
-			return codexresponses.Result{}, clientFailure(ctx.Err())
+			return codexresponses.Result{}, codexCompletionContextFailure(ctx)
 		}
 		account, err := s.acquireCodexAccountWithIdentity(ctx, request.Model, tried, request.SessionHash, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
 		if err != nil {
@@ -407,8 +448,12 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 			return out, nil
 		}
 		lastFailure = failure
+		if ctx.Err() != nil {
+			s.releaseCodexAccount(ctx, account.LeaseID)
+			return codexresponses.Result{}, failure
+		}
 		if failure.Kind == codexresponses.KindInvalidToken {
-			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
+			refreshed, refreshErr := s.refreshCodexAccountWithinBudget(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
 				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: account.ClientIdentity}, request)
 				if failure == nil {
@@ -417,6 +462,10 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 					return out, nil
 				}
 				lastFailure = failure
+			}
+			if ctx.Err() != nil {
+				s.releaseCodexAccount(ctx, account.LeaseID)
+				return codexresponses.Result{}, lastFailure
 			}
 			if refreshErr != nil {
 				s.releaseCodexAccount(ctx, account.LeaseID)
@@ -838,19 +887,15 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		}
 	}()
 	parent := ctx
-	ctx, cancel := codexRequestContext(ctx, s.config.RequestTimeout)
-	defer cancel()
 	defer func() {
 		if failure == nil {
 			return
 		}
 		if parent.Err() != nil {
 			previous := failure
-			failure, _ = codexresponses.AsFailure(clientFailure(parent.Err()))
+			failure, _ = codexresponses.AsFailure(codexCompletionContextFailure(parent))
 			failure.Attempt = previous.Attempt
 			failure.TurnStateSource = previous.TurnStateSource
-		} else if ctx.Err() == context.DeadlineExceeded && failure.Attempt.Request.URL != "" {
-			failure.Kind = codexresponses.KindTimeout
 		}
 	}()
 	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
@@ -904,6 +949,9 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if failure != nil {
 			mergeCodexStreamProgress(&failure.Attempt, upevents.HTTPResponseObservation{ReadObserved: observedAttempt.Response.ReadObserved,
+				LastEventAt:          observedAttempt.Response.LastEventAt,
+				LastEventDurationMS:  observedAttempt.Response.LastEventDurationMS,
+				TerminalEvent:        observedAttempt.Response.TerminalEvent,
 				ReadDurationMS:       observedAttempt.Response.ReadDurationMS,
 				FirstEventDurationMS: observedAttempt.Response.FirstEventDurationMS,
 				EventCount:           observedAttempt.Response.EventCount,
@@ -1080,7 +1128,11 @@ func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, he
 }
 
 func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RefreshTokenCommand{AccountID: id})).Get()
+	return s.refreshCodexAccountWithinBudget(context.WithoutCancel(ctx), id)
+}
+
+func (s *Proxy) refreshCodexAccountWithinBudget(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {
+	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshTokenCommand{AccountID: id})).Get()
 	result, ok := value.(accevents.RefreshTokenResult)
 	if !ok {
 		if err != nil {
@@ -1154,6 +1206,9 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,
 			TransferEncoding:     attempt.Response.TransferEncoding,
 			ReadObserved:         attempt.Response.ReadObserved,
+			LastEventAt:          attempt.Response.LastEventAt,
+			LastEventDurationMS:  attempt.Response.LastEventDurationMS,
+			TerminalEvent:        attempt.Response.TerminalEvent,
 			ReadDurationMS:       attempt.Response.ReadDurationMS,
 			FirstEventDurationMS: attempt.Response.FirstEventDurationMS,
 			EventCount:           attempt.Response.EventCount,
@@ -1252,6 +1307,13 @@ func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure
 
 func mergeCodexStreamProgress(attempt *codexresponses.HTTPAttempt, progress upevents.HTTPResponseObservation) {
 	attempt.Response.ReadObserved = attempt.Response.ReadObserved || progress.ReadObserved
+	if progress.LastEventAt.After(attempt.Response.LastEventAt) {
+		attempt.Response.LastEventAt = progress.LastEventAt
+		attempt.Response.LastEventDurationMS = progress.LastEventDurationMS
+	}
+	if progress.TerminalEvent != "" {
+		attempt.Response.TerminalEvent = progress.TerminalEvent
+	}
 	attempt.Response.ReadDurationMS = max(attempt.Response.ReadDurationMS, progress.ReadDurationMS)
 	attempt.Response.FirstEventDurationMS = max(attempt.Response.FirstEventDurationMS, progress.FirstEventDurationMS)
 	attempt.Response.EventCount = max(attempt.Response.EventCount, progress.EventCount)

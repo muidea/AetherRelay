@@ -364,3 +364,7 @@ docker image inspect ghcr.io/muidea/aetherrelay:latest --format '{{index .RepoDi
 发布前使用部署脚本排空旧实例：显式等待 120 秒、检查退出/OOM 状态，并要求本次运行记录 `AetherRelay shutdown completed`，然后才创建新容器。失败时停止发布，保留数据库和 WAL。直接 Compose 更新不会执行这项回执检查。应用每次排空预算为 30 秒，失败会保留资源并重试；120 秒是容器的外层等待期限，应按实际排空耗时调整。
 
 首次升级没有停机完成记录的旧版本，需要停止所有写入，备份数据库与 WAL，离线 checkpoint 并验证重开（遇到回放断言时执行 `admin recover-state`），之后显式部署新镜像。数据库沿用当前最终 schema；结构升级通过独立离线迁移完成。现场证据和恢复过程见[运维记录](operations.md#停机与发布屏障)。
+
+### API 反向代理
+
+已有 Nginx server 可采用 [`Nginx API 配置示例`](examples/nginx-api.conf) 的 `/v1` 配置：API 响应不缓冲，默认读取/发送等待为 330 秒。保留现有认证、转发头和其他 location。应用默认非流式预算为 300 秒，客户端应提供更长总等待时间；有更短客户端预算时，Codex 非流式调用根据 `X-Stainless-Timeout` 提前截止并预留错误返回时间。调整应用预算时同步检查所有外层代理与客户端。部署前检查 Nginx 配置，平滑 reload，不需要重启应用容器来调整 Nginx。

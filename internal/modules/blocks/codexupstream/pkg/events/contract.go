@@ -48,6 +48,9 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	LastEventAt          time.Time
+	LastEventDurationMS  int64
+	TerminalEvent        string // Allowlisted response terminal type; empty means not observed.
 	ReadObserved         bool
 	ReadDurationMS       int64
 	FirstEventDurationMS int64

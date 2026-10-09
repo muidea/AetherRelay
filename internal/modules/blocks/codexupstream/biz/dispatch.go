@@ -121,9 +121,14 @@ func (s *responseStream) observe(line []byte) {
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 	s.progress.WireBytes += int64(len(line))
+	if terminal := terminalEventType(line); terminal != "" {
+		s.progress.TerminalEvent = terminal
+	}
 	if count := businessEventCount(line); count > 0 {
 		first := s.progress.EventCount == 0
 		s.progress.EventCount += count
+		s.progress.LastEventAt = time.Now()
+		s.progress.LastEventDurationMS = s.progress.LastEventAt.Sub(s.readStarted).Milliseconds()
 		if first {
 			s.progress.FirstEventDurationMS = time.Since(s.readStarted).Milliseconds()
 		}
@@ -148,4 +153,30 @@ func (s *responseStream) finish() {
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 	s.readFinished = time.Now()
+}
+
+// Keep only terminal type names; payloads and error strings stay out of logs.
+func terminalEventType(line []byte) string {
+	line = bytes.TrimSpace(line)
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return ""
+	}
+	payload := bytes.TrimSpace(line[5:])
+	documents, repaired := splitCodexJSONDocuments(payload)
+	if !repaired {
+		documents = [][]byte{payload}
+	}
+	for _, document := range documents {
+		var value struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(document, &value) != nil {
+			continue
+		}
+		switch value.Type {
+		case "response.completed", "response.incomplete", "response.failed", "error":
+			return value.Type
+		}
+	}
+	return ""
 }

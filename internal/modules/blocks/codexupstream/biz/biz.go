@@ -701,7 +701,7 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol, transportReason: transport.EOF})
 				return
 			}
-			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyTransport(err), transportReason: transportReason(err)})
+			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyRequestTransport(ctx, err), transportReason: transportReason(err)})
 			return
 		}
 	}
@@ -1246,6 +1246,9 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 		}
 		if observation != nil {
 			observation.EventCount = 1
+			observation.LastEventAt = time.Now()
+			observation.LastEventDurationMS = observation.LastEventAt.Sub(readStarted).Milliseconds()
+			observation.TerminalEvent = "response"
 			observation.FirstEventDurationMS = time.Since(readStarted).Milliseconds()
 		}
 		if aetherrelaycodex.EmptyIncompleteResponse(payload) {
@@ -1263,9 +1266,14 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 		line, err := readLine(reader, 1<<20)
 		if observation != nil {
 			observation.WireBytes += int64(len(line))
+			if terminal := terminalEventType(line); terminal != "" {
+				observation.TerminalEvent = terminal
+			}
 			if count := businessEventCount(line); count > 0 {
 				first := observation.EventCount == 0
 				observation.EventCount += count
+				observation.LastEventAt = time.Now()
+				observation.LastEventDurationMS = observation.LastEventAt.Sub(readStarted).Milliseconds()
 				if first {
 					observation.FirstEventDurationMS = time.Since(readStarted).Milliseconds()
 				}

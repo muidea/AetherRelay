@@ -63,7 +63,7 @@ func transportReason(err error) transport.Reason {
 
 // Protocol/business errors from completedResponse are not transport failures.
 func completedTransportReason(class events.ErrorClass, err error) transport.Reason {
-	if class == events.ErrorNetwork || class == events.ErrorTimeout || errors.Is(err, io.EOF) {
+	if class == events.ErrorNetwork || class == events.ErrorTimeout || class == events.ErrorCanceled || errors.Is(err, io.EOF) {
 		return transportReason(err)
 	}
 	return ""

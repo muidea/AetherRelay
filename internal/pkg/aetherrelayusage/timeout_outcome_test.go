@@ -3,7 +3,7 @@ package usage
 import "testing"
 
 func TestTimeoutOutcomesAvailableToAdminFilters(t *testing.T) {
-	for _, want := range []string{"first_event_timeout", "idle_timeout"} {
+	for _, want := range []string{"first_event_timeout", "idle_timeout", "request_timeout"} {
 		found := false
 		for _, got := range KnownOutcomes() {
 			if got == want {

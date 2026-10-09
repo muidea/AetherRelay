@@ -95,6 +95,12 @@ func (s *Base) AsyncTask(funcPtr func()) error {
 	return s.backgroundRoutine.AsyncTask(taskPtr)
 }
 
+// AsyncTaskContext bounds admission; accepted work remains managed by the
+// shared routine and owns its cancellation independently of the submitting request.
+func (s *Base) AsyncTaskContext(ctx context.Context, funcPtr func()) error {
+	return s.backgroundRoutine.AsyncTaskContext(ctx, &routineTask{funcPtr: funcPtr})
+}
+
 func (s *Base) Timer(ctx context.Context, intervalValue time.Duration, offsetValue time.Duration, funcPtr func()) {
 	taskPtr := &routineTask{funcPtr: funcPtr}
 	if err := s.backgroundRoutine.Timer(ctx, taskPtr, intervalValue, offsetValue); err != nil {

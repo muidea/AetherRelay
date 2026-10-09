@@ -1421,10 +1421,17 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			if round != nil && len(turnMetadataIgnored) > 0 {
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 			}
-			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: rawModel, Body: codexBody, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, rawModel, rawBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata})
+			response, codexErr := h.codexResponses.CompleteCodexResponses(r.Context(), codexresponses.Request{Deadline: h.codexCompletionDeadline(r, start), ObserveAttempt: h.codexAttemptObserver(round, r, "codexoauth"), Model: rawModel, Body: codexBody, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, rawModel, rawBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, Diagnostics: features.Diagnostics, SessionScope: codexTurnStateScopeDigest(r, rawModel, rawBody), PromptCacheKeySource: features.PromptCacheKeySource, ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata})
 			if codexErr == nil {
 				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
 				h.writeCodexOAuthCompleteSuccess(w, r, round, start, plan.RouteOwner, rawModel, rawBody, response)
+				return
+			}
+			deadline := h.codexCompletionDeadline(r, start)
+			failure, _ := codexresponses.AsFailure(codexErr)
+			if r.Context().Err() != nil || (failure != nil && failure.RequestBudgetExceeded) || (!deadline.IsZero() && !time.Now().Before(deadline)) {
+				h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderViewFor(plan.RouteOwner), false)
+				h.writeCodexResponsesError(w, r, round, start, plan.RouteOwner, rawModel, false, codexErr)
 				return
 			}
 			if failure, ok := codexresponses.AsFailure(codexErr); ok && (failure.Kind == codexresponses.KindInvalidRequest || failure.Kind == codexresponses.KindModelNotFound) {

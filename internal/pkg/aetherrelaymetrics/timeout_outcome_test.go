@@ -11,6 +11,9 @@ func TestTimeoutOutcomeKeepsHealthSemantics(t *testing.T) {
 		if shouldTrackProviderHealth(status, "first_event_timeout") || retryableHealthFailure(status, "first_event_timeout") {
 			t.Fatalf("first-event budget poisoned health: %d", status)
 		}
+		if shouldTrackProviderHealth(status, "request_timeout") || retryableHealthFailure(status, "request_timeout") {
+			t.Fatalf("request budget poisoned health: %d", status)
+		}
 		if !shouldTrackProviderHealth(status, "idle_timeout") || !retryableHealthFailure(status, "idle_timeout") {
 			t.Fatalf("idle timeout lost health semantics: %d", status)
 		}

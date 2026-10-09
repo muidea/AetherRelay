@@ -50,6 +50,9 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	LastEventAt                time.Time           `json:"last_upstream_event_at,omitempty"`
+	LastEventDurationMS        int64               `json:"last_upstream_event_duration_ms,omitempty"`
+	TerminalEvent              string              `json:"upstream_terminal_event,omitempty"`
 	FirstClientEventDurationMS int64               `json:"first_client_event_duration_ms,omitempty"`
 	ReadObserved               bool                `json:"read_observed,omitempty"`
 	ReadDurationMS             int64               `json:"read_duration_ms,omitempty"`
@@ -328,6 +331,9 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	}
 	responseInfo := upstreamResponseDebugInfo{
 		FirstClientEventDurationMS: attempt.Response.FirstClientEventDurationMS, ReadObserved: attempt.Response.ReadObserved,
+		LastEventAt:          attempt.Response.LastEventAt,
+		LastEventDurationMS:  attempt.Response.LastEventDurationMS,
+		TerminalEvent:        attempt.Response.TerminalEvent,
 		ReadDurationMS:       attempt.Response.ReadDurationMS,
 		FirstEventDurationMS: attempt.Response.FirstEventDurationMS,
 		EventCount:           attempt.Response.EventCount,

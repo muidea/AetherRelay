@@ -31,6 +31,9 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	LastEventAt                time.Time
+	LastEventDurationMS        int64
+	TerminalEvent              string // Allowlisted response terminal type; empty means not observed.
 	FirstClientEventDurationMS int64
 	ReadObserved               bool
 	ReadDurationMS             int64
@@ -115,6 +118,9 @@ type TurnMetadata struct {
 }
 
 type Request struct {
+	// Deadline bounds the whole buffered request, including admission and retries.
+	// It is computed by the HTTP adapter; it is never sent upstream.
+	Deadline time.Time
 	// ObserveAttempt is local to proxyapi; never forwarded through EventHub.
 	ObserveAttempt func(HTTPAttempt, error)
 
@@ -227,18 +233,20 @@ const (
 )
 
 type Failure struct {
-	Kind              ErrorKind
-	HTTPStatus        int
-	RetryAfterSeconds int
-	UnavailableReason string
-	Retryable         *bool
-	QuotaExhausted    bool
-	QuotaResetAt      string
-	UpstreamType      string
-	UpstreamCode      string
-	UpstreamParam     string
-	UpstreamMessage   string
-	Attempt           HTTPAttempt
+	// RequestBudgetExceeded distinguishes the local unary budget from an upstream timeout.
+	RequestBudgetExceeded bool
+	Kind                  ErrorKind
+	HTTPStatus            int
+	RetryAfterSeconds     int
+	UnavailableReason     string
+	Retryable             *bool
+	QuotaExhausted        bool
+	QuotaResetAt          string
+	UpstreamType          string
+	UpstreamCode          string
+	UpstreamParam         string
+	UpstreamMessage       string
+	Attempt               HTTPAttempt
 	// TurnStateSource is the provenance for the failed upstream attempt. It lets
 	// the archive retain its explicit true/false fallback state when an HTTP
 	// response was observed, without exposing the opaque header value.
