@@ -62,6 +62,7 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 
 	if !stream {
 		result, execErr := executor.Complete(r.Context(), request)
+		recordGeneration(r.Context(), result.Generation)
 		billingModel := firstNonEmpty(result.ActualModel, settleModel)
 		tok := estimateChatGPTTextUsage(request, result.Text)
 		if execErr != nil {
@@ -134,6 +135,7 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 		}
 		return nil
 	})
+	recordGeneration(r.Context(), result.Generation)
 	if result.ActualModel != "" {
 		actualModel = result.ActualModel
 	}

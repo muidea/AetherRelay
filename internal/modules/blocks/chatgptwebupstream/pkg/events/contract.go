@@ -2,6 +2,7 @@
 package events
 
 import (
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/chatattachment"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
@@ -153,6 +154,7 @@ type CompleteTextCommand struct {
 }
 
 type CompleteTextResult struct {
+	Generation         generation.Sample
 	ConversationID     string
 	AssistantMessageID string
 	ActualModel        string
@@ -211,6 +213,7 @@ type PullTextCommand struct {
 }
 
 type PullTextResult struct {
+	Generation         generation.Sample
 	Delta              string
 	Done               bool
 	ConversationID     string
@@ -221,4 +224,7 @@ type PullTextResult struct {
 }
 
 type CancelTextCommand struct{ StreamID string }
-type CancelTextResult struct{ Cancelled bool }
+type CancelTextResult struct {
+	Cancelled  bool
+	Generation generation.Sample
+}

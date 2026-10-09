@@ -245,7 +245,13 @@ func (s *DuckDBStore) Complete(ctx context.Context, rec CompleteRecord) error {
 	s.write.Lock()
 	defer s.write.Unlock()
 
-	res, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.markDegraded()
+		return fmt.Errorf("%w: begin completion: %v", ErrStoreUnavailable, err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
 UPDATE usage_events
 SET
     completed_at = ?,
@@ -334,6 +340,17 @@ WHERE event_id = ?
 		// 缺失或重复 Complete:不降级健康(业务一致性问题),但返回错误。
 		return ErrEventNotStarted
 	}
+	if validGeneration(rec) {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_generation (event_id, first_output_at, generation_duration_ns, partial) VALUES (?, ?, ?, ?)`, rec.EventID, rec.FirstOutputAt.UTC(), int64(rec.GenerationDuration), rec.GenerationPartial || rec.Outcome != "success"); err != nil {
+			s.markDegraded()
+			return fmt.Errorf("%w: save generation: %v", ErrStoreUnavailable, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.markDegraded()
+		return fmt.Errorf("%w: commit completion: %v", ErrStoreUnavailable, err)
+	}
+	s.cache.clear()
 	s.markHealthy()
 	return nil
 }

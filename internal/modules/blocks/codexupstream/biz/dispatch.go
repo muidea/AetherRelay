@@ -120,6 +120,7 @@ func businessEventCount(line []byte) int64 {
 func (s *responseStream) observe(line []byte) {
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
+	s.generation.ObserveSSE(line, time.Now())
 	s.progress.WireBytes += int64(len(line))
 	if terminal := terminalEventType(line); terminal != "" {
 		s.progress.TerminalEvent = terminal
@@ -138,6 +139,12 @@ func (s *responseStream) observation() events.HTTPResponseObservation {
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 	value := s.progress
+	at := s.readFinished
+	if at.IsZero() {
+		at = time.Now()
+	}
+	sample := s.generation.Snapshot(at)
+	value.FirstOutputAt, value.GenerationDuration, value.GenerationPartial = sample.FirstOutputAt, sample.Duration, sample.Partial
 	value.ReadObserved = !s.readStarted.IsZero()
 	if !s.readStarted.IsZero() {
 		finished := s.readFinished

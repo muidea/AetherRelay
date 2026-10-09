@@ -901,6 +901,7 @@ func (h *Handler) handleAnthropicStream(w http.ResponseWriter, r *http.Request, 
 
 	for {
 		line, err := readSSELine(reader, maxLine)
+		observeGenerationSSE(requestContext, line, err)
 		if len(line) > 0 {
 			resetStreamIdleTimer(idleTimer, h.cfg.StreamIdleTimeout)
 			upstreamBytes += int64(len(line))
@@ -976,7 +977,7 @@ func (h *Handler) handleAnthropicStream(w http.ResponseWriter, r *http.Request, 
 		usage.PromptTokens = estimatePromptTokens(requestBody)
 		usage.Estimated = true
 	}
-	if usage.CompletionTokens == 0 {
+	if usage.CompletionTokens == 0 && !usage.OutputTokensKnown {
 		usage.CompletionTokens = estimateTokens(content.String())
 		usage.Estimated = true
 	}
@@ -1078,6 +1079,7 @@ func (h *Handler) handleOpenAIToAnthropicStream(w http.ResponseWriter, r *http.R
 
 	for {
 		line, err := readSSELine(reader, maxLine)
+		observeGenerationSSE(requestContext, line, err)
 		if len(line) > 0 {
 			resetStreamIdleTimer(idleTimer, h.cfg.StreamIdleTimeout)
 			upstreamBytes += int64(len(line))
@@ -1119,6 +1121,7 @@ func (h *Handler) handleOpenAIToAnthropicStream(w http.ResponseWriter, r *http.R
 				}
 				if n, ok := numberAsInt(rawUsage["completion_tokens"]); ok {
 					usage.CompletionTokens = n
+					usage.OutputTokensKnown = true
 					usage.Known = true
 				}
 			}
@@ -1216,7 +1219,7 @@ func (h *Handler) handleOpenAIToAnthropicStream(w http.ResponseWriter, r *http.R
 		usage.PromptTokens = estimatePromptTokens(requestBody)
 		usage.Estimated = true
 	}
-	if usage.CompletionTokens == 0 {
+	if usage.CompletionTokens == 0 && !usage.OutputTokensKnown {
 		usage.CompletionTokens = estimateTokens(content.String())
 		usage.Estimated = true
 	}
@@ -1379,6 +1382,7 @@ func mergeAnthropicUsage(usage *tokenUsage, value any) {
 	}
 	if n, valid := cacheTokenCount(raw["output_tokens"]); valid {
 		usage.CompletionTokens = n
+		usage.OutputTokensKnown = true
 	}
 	usage.PromptTokens = input
 	applyUsageDetails(usage, raw)

@@ -88,7 +88,7 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy string
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_complete", "event_error_code", eventErr.Code, "has_partial_result", value != nil, "partial_result_type_match", isPartial)
 		out := chatgpttext.Result{}
 		if isPartial {
-			out = chatgpttext.Result{ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text}
+			out = chatgpttext.Result{ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text, Generation: partial.Generation}
 			if partial.ErrorClass != "" {
 				return out, mapUpstreamTextFailure(partial.ErrorClass, eventErr)
 			}
@@ -99,14 +99,14 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy string
 	if !ok {
 		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text completion result"))
 	}
-	out := chatgpttext.Result{ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text}
+	out := chatgpttext.Result{ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text, Generation: completed.Generation}
 	if completed.ErrorClass != "" {
 		return out, mapUpstreamTextFailure(completed.ErrorClass, fmt.Errorf("chatgpt text completion failed"))
 	}
 	return out, nil
 }
 
-func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, bool, error) {
+func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (result chatgpttext.Result, emitted bool, resultErr error) {
 	value, startErr := s.SendEvent(event.NewEventWithContext(upevents.TopicStartText, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartTextCommand{
 		AccessToken: token, Proxy: proxy, Model: request.Model, Messages: toUpstreamMessages(request.Messages), ThinkingEffort: request.ThinkingEffort,
 	})).Get()
@@ -118,10 +118,13 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, 
 	if !ok || started.StreamID == "" {
 		return chatgpttext.Result{}, false, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream result"))
 	}
-	defer s.SendEvent(event.NewEvent(upevents.TopicCancelText, s.ID(), upcommon.UnitID, nil, upevents.CancelTextCommand{StreamID: started.StreamID}))
-	var result chatgpttext.Result
+	defer func() {
+		value, _ := s.SendEvent(event.NewEventWithContext(upevents.TopicCancelText, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.CancelTextCommand{StreamID: started.StreamID})).Get()
+		if canceled, ok := value.(upevents.CancelTextResult); ok && !canceled.Generation.FirstOutputAt.IsZero() && resultErr != nil {
+			result.Generation = canceled.Generation
+		}
+	}()
 	var builder strings.Builder
-	emitted := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return result, emitted, mapContextError(err)
@@ -134,6 +137,9 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, 
 		update, ok := value.(upevents.PullTextResult)
 		if !ok {
 			return result, emitted, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream update"))
+		}
+		if !update.Generation.FirstOutputAt.IsZero() {
+			result.Generation = update.Generation
 		}
 		if update.ConversationID != "" {
 			result.ConversationID = update.ConversationID

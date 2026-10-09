@@ -12,6 +12,7 @@ import (
 	upclient "aetherrelay/internal/modules/blocks/chatgptwebupstream/internal/client"
 	"aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	events "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -29,11 +30,15 @@ type Upstream struct {
 }
 
 type textStream struct {
-	cancel  context.CancelFunc
-	updates chan textStreamUpdate
+	progressMu         sync.Mutex
+	generation         generation.Sample
+	generationFinished bool
+	cancel             context.CancelFunc
+	updates            chan textStreamUpdate
 }
 
 type textStreamUpdate struct {
+	generation         generation.Sample
 	delta              string
 	done               bool
 	conversationID     string
@@ -271,13 +276,17 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		class := classifyError(err)
 		slog.Warn("chatgpt web text completion failed", "error_class", class)
 		result.Set(events.CompleteTextResult{
+			Generation:         completed.Generation,
 			ConversationID:     completed.ConversationID,
 			AssistantMessageID: completed.AssistantMessageID,
+			ActualModel:        completed.ActualModel,
+			Text:               completed.Text,
 			ErrorClass:         class,
 		}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	result.Set(events.CompleteTextResult{
+		Generation:         completed.Generation,
 		ConversationID:     completed.ConversationID,
 		AssistantMessageID: completed.AssistantMessageID,
 		ActualModel:        completed.ActualModel,
@@ -395,15 +404,21 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 			ConversationID:  cmd.ConversationID,
 			ParentMessageID: cmd.ParentMessageID,
 		}, func(delta upclient.TextDelta) error {
+			stream.setGeneration(delta.Generation, false)
 			return s.publishTextUpdate(ctx, stream, textStreamUpdate{
+				generation:         delta.Generation,
 				delta:              delta.Text,
 				conversationID:     delta.ConversationID,
 				assistantMessageID: delta.AssistantMessageID,
 				actualModel:        delta.ActualModel,
 			})
+		}, func(sample generation.Sample) {
+			stream.setGeneration(sample, true)
 		})
 	}
+	stream.setGeneration(final.Generation, true)
 	update := textStreamUpdate{
+		generation:         stream.generationSnapshot(time.Now()),
 		done:               true,
 		conversationID:     final.ConversationID,
 		assistantMessageID: final.AssistantMessageID,
@@ -447,6 +462,7 @@ func (s *Upstream) handlePullText(ev event.Event, result event.Result) {
 	select {
 	case update := <-stream.updates:
 		out := events.PullTextResult{
+			Generation:         update.generation,
 			Delta:              update.delta,
 			Done:               update.done,
 			ConversationID:     update.conversationID,
@@ -473,7 +489,14 @@ func (s *Upstream) handleCancelText(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid cancel text command"))
 		return
 	}
-	result.Set(events.CancelTextResult{Cancelled: s.removeTextStream(cmd.StreamID, true)}, nil)
+	s.streamMu.Lock()
+	stream := s.streams[cmd.StreamID]
+	s.streamMu.Unlock()
+	var sample generation.Sample
+	if stream != nil {
+		sample = stream.generationSnapshot(time.Now())
+	}
+	result.Set(events.CancelTextResult{Generation: sample, Cancelled: s.removeTextStream(cmd.StreamID, true)}, nil)
 }
 
 func (s *Upstream) removeTextStream(streamID string, cancel bool) bool {
@@ -504,4 +527,30 @@ func classifyError(err error) events.ErrorClass {
 	default:
 		return events.ErrClassUpstream
 	}
+}
+
+func (s *textStream) setGeneration(sample generation.Sample, finished bool) {
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	if s.generationFinished {
+		return
+	}
+	if !sample.FirstOutputAt.IsZero() {
+		s.generation = sample
+	} else if finished && !s.generation.FirstOutputAt.IsZero() {
+		s.generation.Duration = time.Since(s.generation.FirstOutputAt)
+		s.generation.Partial = true
+	}
+	s.generationFinished = s.generationFinished || finished
+}
+
+func (s *textStream) generationSnapshot(at time.Time) generation.Sample {
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	sample := s.generation
+	if !s.generationFinished && !sample.FirstOutputAt.IsZero() {
+		sample.Duration = at.Sub(sample.FirstOutputAt)
+		sample.Partial = true
+	}
+	return sample
 }

@@ -8,7 +8,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	http "github.com/bogdanfinn/fhttp"
 )
 
@@ -169,3 +171,78 @@ func TestCompleteTextContinuationSendsAnchors(t *testing.T) {
 		t.Fatalf("expected single new user message, payload=%s", doer.conversationBody)
 	}
 }
+
+type generationTextDoer struct{ textDoer }
+
+func (d *generationTextDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path != "/backend-api/conversation" {
+		return d.textDoer.Do(request)
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		defer writer.Close()
+		io.WriteString(writer, "data: {\"conversation_id\":\"c\"}\n\n")
+		time.Sleep(30 * time.Millisecond)
+		io.WriteString(writer, "data: {\"conversation_id\":\"c\",\"message\":{\"id\":\"m\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"hello\"]}}}\n\n")
+		time.Sleep(10 * time.Millisecond)
+		io.WriteString(writer, "data: [DONE]\n\n")
+	}()
+	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: generationDelayedClose{ReadCloser: reader}}, nil
+}
+
+type generationDelayedClose struct{ io.ReadCloser }
+
+func (r generationDelayedClose) Close() error {
+	time.Sleep(50 * time.Millisecond)
+	return r.ReadCloser.Close()
+}
+
+func TestTextTimingStartsAtOutputAndEndsBeforeBodyClose(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", &generationTextDoer{})
+			request := TextRequest{Model: "gpt-5", Messages: []TextMessage{{Role: "user", Content: "hello"}}}
+			started := time.Now()
+			var result TextResult
+			var err error
+			var delta TextDelta
+			var frozen generation.Sample
+			var frozenAt time.Time
+			if stream {
+				result, err = client.StreamText(context.Background(), request, func(d TextDelta) error { delta = d; return nil }, func(sample generation.Sample) {
+					frozen, frozenAt = sample, time.Now()
+				})
+			} else {
+				result, err = client.CompleteText(context.Background(), request)
+			}
+			elapsed := time.Since(started)
+			if err != nil || !result.Done || result.Text != "hello" || result.Generation.FirstOutputAt.IsZero() || result.Generation.Partial || result.Generation.Duration <= 0 {
+				t.Fatal(result, err)
+			}
+			if result.Generation.FirstOutputAt.Sub(started) < 25*time.Millisecond || elapsed-result.Generation.Duration < 70*time.Millisecond {
+				t.Fatalf("metadata wait/body close entered generation: elapsed=%s sample=%+v", elapsed, result.Generation)
+			}
+			if stream && !delta.Generation.FirstOutputAt.Equal(result.Generation.FirstOutputAt) {
+				t.Fatal("delta/final timing mismatch")
+			}
+			if stream && (frozen != result.Generation || time.Since(frozenAt) < 45*time.Millisecond) {
+				t.Fatalf("owner timing arrived after body cleanup: frozen=%+v result=%+v", frozen, result.Generation)
+			}
+		})
+	}
+}
+func TestPartialTextReadFailurePreservesFrozenTiming(t *testing.T) {
+	prefix := "data: {\"conversation_id\":\"c\",\"message\":{\"id\":\"m\",\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"hello\"]}}}\n\n"
+	var frozen generation.Sample
+	result, err := parseTextSSEObserved(context.Background(), io.MultiReader(strings.NewReader(prefix), generationTextReadError{}), nil, func(sample generation.Sample) { frozen = sample })
+	if err == nil || result.Text != "hello" || result.Generation.FirstOutputAt.IsZero() || result.Generation.Duration <= 0 || !result.Generation.Partial {
+		t.Fatal(result, err)
+	}
+	if frozen != result.Generation {
+		t.Fatalf("read failure did not notify owner of frozen timing: %+v", frozen)
+	}
+}
+
+type generationTextReadError struct{}
+
+func (generationTextReadError) Read([]byte) (int, error) { return 0, fmt.Errorf("read failed") }

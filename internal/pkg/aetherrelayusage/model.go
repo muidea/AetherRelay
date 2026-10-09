@@ -33,6 +33,10 @@ type StartRecord struct {
 
 // CompleteRecord 是请求退出路径上的最终结算。
 type CompleteRecord struct {
+	OutputTokensKnown             bool
+	FirstOutputAt                 time.Time
+	GenerationDuration            time.Duration
+	GenerationPartial             bool
 	CachedInputTokensKnown        bool
 	CacheCreationInputTokensKnown bool
 	EventID                       string
@@ -89,6 +93,7 @@ type EventFilter struct {
 
 // Summary 是聚合统计口径。
 type Summary struct {
+	TPSStats
 	CachedInputTokensKnown        bool    `json:"cached_input_tokens_known"`
 	CacheCreationInputTokensKnown bool    `json:"cache_creation_input_tokens_known"`
 	CachedInputTokens             int64   `json:"cached_input_tokens"`
@@ -122,6 +127,7 @@ type DailyBucket struct {
 
 // KeySummary 是按 api_key_id 的汇总。
 type KeySummary struct {
+	TPSStats
 	CachedInputTokensKnown        bool       `json:"cached_input_tokens_known"`
 	CacheCreationInputTokensKnown bool       `json:"cache_creation_input_tokens_known"`
 	CachedInputTokens             int64      `json:"cached_input_tokens"`
@@ -175,6 +181,7 @@ type ScopeInfo struct {
 
 // Event 是一条安全明细(无正文/密钥)。
 type Event struct {
+	GenerationSample
 	CachedInputTokensKnown        bool       `json:"cached_input_tokens_known"`
 	CacheCreationInputTokensKnown bool       `json:"cache_creation_input_tokens_known"`
 	UpstreamContentLengthKnown    bool       `json:"upstream_content_length_known"`

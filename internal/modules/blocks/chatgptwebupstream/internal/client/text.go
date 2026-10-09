@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/chatattachment"
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ type TextRequest struct {
 // TextResult is the bounded final state collected from an upstream SSE
 // conversation. The response body never escapes the upstream owner.
 type TextResult struct {
+	Generation         generation.Sample
 	ConversationID     string
 	AssistantMessageID string
 	ActualModel        string
@@ -52,6 +54,7 @@ type TextResult struct {
 // TextDelta is an incremental assistant update derived from the Web SSE
 // message snapshots.
 type TextDelta struct {
+	Generation         generation.Sample
 	ConversationID     string
 	AssistantMessageID string
 	ActualModel        string
@@ -62,12 +65,13 @@ type TextDelta struct {
 // the text SSE into one non-streaming result. Its SSE parsing is intentionally
 // separate from the HTTP gateway so it can later back a streaming adapter.
 func (c *Client) CompleteText(ctx context.Context, request TextRequest) (TextResult, error) {
-	return c.StreamText(ctx, request, nil)
+	return c.StreamText(ctx, request, nil, nil)
 }
 
 // StreamText keeps all transport handles inside the upstream client while
-// exposing only bounded text deltas to its owner.
-func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(TextDelta) error) (TextResult, error) {
+// exposing bounded text deltas and a frozen generation sample to its owner.
+// finishGeneration runs before response-body cleanup, including on read failure.
+func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(TextDelta) error, finishGeneration func(generation.Sample)) (TextResult, error) {
 	if err := validateTextRequest(request); err != nil {
 		return TextResult{}, err
 	}
@@ -99,7 +103,7 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return TextResult{}, classifyStatusResponse("text_conversation", response.StatusCode, response.Body)
 	}
-	return parseTextSSE(ctx, io.LimitReader(response.Body, maxTextSSEBytes), emit)
+	return parseTextSSEObserved(ctx, io.LimitReader(response.Body, maxTextSSEBytes), emit, finishGeneration)
 }
 
 func (c *Client) newTextRequest(method, path string, body []byte, requirements Requirements) (*http.Request, error) {
@@ -316,7 +320,21 @@ func ParseTextSSE(ctx context.Context, reader io.Reader) (TextResult, error) {
 }
 
 func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) error) (TextResult, error) {
+	return parseTextSSEObserved(ctx, reader, emit, nil)
+}
+
+func parseTextSSEObserved(ctx context.Context, reader io.Reader, emit func(TextDelta) error, finishGeneration func(generation.Sample)) (out TextResult, resultErr error) {
 	result := TextResult{}
+	var clock generation.Clock
+	var firstOutputAt time.Time
+	defer func() {
+		at := time.Now()
+		clock.Stop(at)
+		out.Generation = clock.Snapshot(at)
+		if finishGeneration != nil {
+			finishGeneration(out.Generation)
+		}
+	}()
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxTextSSELineBytes)
 	dataLines := make([]string, 0, 2)
@@ -325,9 +343,11 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 		if len(dataLines) == 0 {
 			return
 		}
+		at := time.Now()
 		payload := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
 		if payload == "[DONE]" {
+			clock.Finish(at)
 			result.Done = true
 			return
 		}
@@ -351,9 +371,16 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 				if strings.HasPrefix(next, result.Text) {
 					delta = strings.TrimPrefix(next, result.Text)
 				}
+				if delta != "" {
+					clock.Output(at)
+					if firstOutputAt.IsZero() {
+						firstOutputAt = at
+					}
+				}
 				result.Text = next
 				if delta != "" && emit != nil {
 					emitErr = emit(TextDelta{
+						Generation:         generation.Sample{FirstOutputAt: firstOutputAt, Duration: at.Sub(firstOutputAt), Partial: true},
 						ConversationID:     result.ConversationID,
 						AssistantMessageID: result.AssistantMessageID,
 						ActualModel:        result.ActualModel,
@@ -366,14 +393,14 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return TextResult{}, ctx.Err()
+			return result, ctx.Err()
 		default:
 		}
 		line := scanner.Text()
 		if line == "" {
 			flush()
 			if emitErr != nil {
-				return TextResult{}, emitErr
+				return result, emitErr
 			}
 			if result.Done {
 				return finishTextResult(result)
@@ -385,11 +412,11 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return TextResult{}, fmt.Errorf("read text SSE: %w", err)
+		return result, fmt.Errorf("read text SSE: %w", err)
 	}
 	flush()
 	if emitErr != nil {
-		return TextResult{}, emitErr
+		return result, emitErr
 	}
 	return finishTextResult(result)
 }

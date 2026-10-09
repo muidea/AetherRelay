@@ -23,6 +23,7 @@ import (
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	aetherrelaycodexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	fhttp "github.com/bogdanfinn/fhttp"
@@ -62,6 +63,7 @@ type streamUpdate struct {
 }
 
 type responseStream struct {
+	generation   generation.Clock
 	cancel       context.CancelFunc
 	updates      chan streamUpdate
 	progressMu   sync.Mutex
@@ -1216,13 +1218,18 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 		return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response body is unavailable")
 	}
 	readStarted := time.Now()
+	var clock generation.Clock
 	var observation *events.HTTPResponseObservation
 	if len(observations) > 0 {
 		observation = observations[0]
 	}
 	if observation != nil {
 		observation.ReadObserved = true
-		defer func() { observation.ReadDurationMS = time.Since(readStarted).Milliseconds() }()
+		defer func() {
+			observation.ReadDurationMS = time.Since(readStarted).Milliseconds()
+			sample := clock.Snapshot(time.Now())
+			observation.FirstOutputAt, observation.GenerationDuration, observation.GenerationPartial = sample.FirstOutputAt, sample.Duration, sample.Partial
+		}()
 	}
 	if maxBytes <= 0 {
 		maxBytes = 32 << 20
@@ -1264,6 +1271,7 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 	outputEvidence := false
 	for {
 		line, err := readLine(reader, 1<<20)
+		clock.ObserveSSE(line, time.Now())
 		if observation != nil {
 			observation.WireBytes += int64(len(line))
 			if terminal := terminalEventType(line); terminal != "" {

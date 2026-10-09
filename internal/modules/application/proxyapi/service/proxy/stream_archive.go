@@ -183,6 +183,7 @@ func openAIUsagePayload(usage tokenUsage) map[string]any {
 }
 
 type anthropicRawStreamAccumulator struct {
+	OutputTokensKnown             bool
 	CachedInputTokensKnown        bool
 	CacheCreationInputTokensKnown bool
 	ID                            string
@@ -283,6 +284,7 @@ func (a *anthropicRawStreamAccumulator) TrackSSELine(line []byte) {
 			mergeAnthropicUsage(&usage, event["usage"])
 			a.InputTokens = usage.PromptTokens
 			a.OutputTokens = usage.CompletionTokens
+			a.OutputTokensKnown = a.OutputTokensKnown || usage.OutputTokensKnown
 			if usage.CachedInputTokensKnown || usage.CachedInputTokens > 0 {
 				a.CachedInputTokens = usage.CachedInputTokens
 				a.CachedInputTokensKnown = usage.CachedInputTokensKnown
@@ -304,6 +306,7 @@ func (a *anthropicRawStreamAccumulator) FinalizeUsage(requestBody map[string]any
 	usage := tokenUsage{
 		PromptTokens:                  a.InputTokens,
 		CompletionTokens:              a.OutputTokens,
+		OutputTokensKnown:             a.OutputTokensKnown,
 		CachedInputTokens:             a.CachedInputTokens,
 		CachedInputTokensKnown:        a.CachedInputTokensKnown,
 		CacheCreationInputTokensKnown: a.CacheCreationInputTokensKnown,
@@ -314,7 +317,7 @@ func (a *anthropicRawStreamAccumulator) FinalizeUsage(requestBody map[string]any
 		usage.PromptTokens = estimatePromptTokens(requestBody)
 		usage.Estimated = true
 	}
-	if usage.CompletionTokens == 0 {
+	if usage.CompletionTokens == 0 && !usage.OutputTokensKnown {
 		usage.CompletionTokens = estimateTokens(a.Content.String())
 		usage.Estimated = true
 	}

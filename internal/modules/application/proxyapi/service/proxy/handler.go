@@ -33,6 +33,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 	"aetherrelay/internal/pkg/aetherrelayusage"
@@ -132,6 +133,9 @@ type usageCompletionKey struct{}
 type internalFeatureIdentityKey struct{}
 
 type usageCompletion struct {
+	generation              generation.Clock
+	generationMu            sync.Mutex
+	generationObserved      generation.Sample
 	done                    atomic.Bool
 	firstEventDurationNanos atomic.Int64
 }
@@ -817,6 +821,16 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 	}
 	if r != nil {
 		rec.FirstEventDuration = firstEventDurationFromContext(r.Context())
+		if completion := usageCompletionFromContext(r.Context()); completion != nil {
+			sample := completion.generation.Snapshot(time.Now())
+			completion.generationMu.Lock()
+			if !completion.generationObserved.FirstOutputAt.IsZero() {
+				sample = completion.generationObserved
+			}
+			completion.generationMu.Unlock()
+			rec.FirstOutputAt, rec.GenerationDuration, rec.GenerationPartial = sample.FirstOutputAt, sample.Duration, sample.Partial || outcome != "success"
+		}
+		rec.OutputTokensKnown = tok.OutputTokensKnown || (tok.Estimated && tok.Known && tok.CompletionTokens > 0)
 	}
 	if round != nil {
 		rec.UpstreamProtocol = round.UpstreamProtocol
@@ -1813,6 +1827,7 @@ func (h *Handler) handleStreamResponse(w http.ResponseWriter, resp *http.Respons
 	proto := streamProtocolForPath(r.URL.Path)
 	for {
 		line, err := readSSELine(reader, maxLine)
+		observeGenerationSSE(requestContext, line, err)
 		if len(line) > 0 {
 			resetStreamIdleTimer(idleTimer, h.currentConfig().StreamIdleTimeout)
 			totalBytes += int64(len(line))
@@ -1927,6 +1942,7 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 	sawTerminal := false
 	for {
 		line, err := readSSELine(reader, maxLine)
+		observeGenerationSSE(requestContext, line, err)
 		if len(line) > 0 {
 			resetStreamIdleTimer(idleTimer, h.currentConfig().StreamIdleTimeout)
 			totalBytes += int64(len(line))
@@ -2459,6 +2475,7 @@ func recordRequestPlanMetric(reg metricsport.Port, plan TransportPlan, route str
 }
 
 func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool, path, rawQuery, method string) (upstreamResult, error) {
+	resetGeneration(r.Context())
 	// A caller may execute one candidate or the bounded safe native candidate
 	// chain. This helper itself owns only one upstream HTTP attempt.
 	ctx, cancel := h.upstreamContext(r.Context(), stream)

@@ -146,6 +146,7 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.Stream = rec.Stream
 	e.Estimated = rec.Estimated
 	e.State = StateCompleted
+	e.GenerationSample = generationSample(rec)
 	s.healthy.Store(1)
 	return nil
 }
@@ -228,6 +229,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 		if !matchEvent(e, filter, from, to) {
 			continue
 		}
+		sum.TPSStats.add(*e)
 		sum.Requests++
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens
@@ -274,6 +276,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			k = &KeySummary{APIKeyID: e.APIKeyID}
 			keyMap[e.APIKeyID] = k
 		}
+		k.TPSStats.add(*e)
 		k.Requests++
 		k.InputTokens += e.InputTokens
 		k.OutputTokens += e.OutputTokens
@@ -383,6 +386,7 @@ func (s *MemoryStore) Events(_ context.Context, filter EventFilter) (EventPage, 
 		}
 		// 复制一份避免外部修改。
 		cp := *e
+		cp.GenerationSample = cloneGenerationSample(e.GenerationSample)
 		list = append(list, &cp)
 	}
 	sort.Slice(list, func(i, j int) bool {
@@ -432,6 +436,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 	for _, e := range s.events {
 		if matchEvent(e, filter, from, to) {
 			cp := *e
+			cp.GenerationSample = cloneGenerationSample(e.GenerationSample)
 			list = append(list, &cp)
 		}
 	}
@@ -504,6 +509,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			strconv.FormatBool(e.CachedInputTokensKnown),
 			strconv.FormatBool(e.CacheCreationInputTokensKnown),
 		}
+		row = append(row, generationCSV(e.GenerationSample)...)
 		if err := cw.Write(row); err != nil {
 			return err
 		}
@@ -521,6 +527,7 @@ func (s *MemoryStore) AllTimeByKey(_ context.Context) (map[string]Summary, error
 	out := make(map[string]Summary)
 	for _, e := range s.events {
 		sum := out[e.APIKeyID]
+		sum.TPSStats.add(*e)
 		sum.Requests++
 		sum.InputTokens += e.InputTokens
 		sum.OutputTokens += e.OutputTokens

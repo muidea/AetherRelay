@@ -2,8 +2,11 @@ package biz
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
@@ -12,6 +15,7 @@ import (
 	basebiz "aetherrelay/internal/modules/base/biz"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -272,5 +276,88 @@ func TestStreamDoesNotRefreshAfterOutput(t *testing.T) {
 	})
 	if err == nil || result.Text != "partial" || len(emitted) != 1 || refreshes.Load() != 0 {
 		t.Fatalf("result=%+v err=%v emitted=%v refreshes=%d", result, err, emitted, refreshes.Load())
+	}
+}
+
+func TestChatGPTGenerationSurvivesProjectionAndAccountSettlement(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%v/failed=%v", stream, failed), func(t *testing.T) {
+				hub := event.NewHub(8)
+				background := task.NewBackgroundRoutine(8)
+				defer hub.Terminate(context.Background())
+				defer background.Shutdown(nil)
+				sample := generation.Sample{FirstOutputAt: time.Now().Add(-time.Second), Duration: 20 * time.Millisecond, Partial: failed}
+				accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+				accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
+					result.Set(accevents.AcquireTextTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account"}}, nil)
+				})
+				accounts.Subscribe(accevents.TopicRecordTextResult, func(_ event.Event, result event.Result) {
+					time.Sleep(30 * time.Millisecond)
+					result.Set(accevents.RecordTextResultResult{}, nil)
+				})
+				upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+				upstream.Subscribe(upevents.TopicCompleteText, func(_ event.Event, result event.Result) {
+					out := upevents.CompleteTextResult{Text: "hello", ActualModel: "actual", Generation: sample}
+					if failed {
+						out.ErrorClass = upevents.ErrClassUpstream
+						result.Set(out, cd.NewError(cd.Unexpected, "read failure"))
+					} else {
+						result.Set(out, nil)
+					}
+				})
+				upstream.Subscribe(upevents.TopicStartText, func(_ event.Event, result event.Result) {
+					result.Set(upevents.StartTextResult{StreamID: "stream"}, nil)
+				})
+				var pulls atomic.Int32
+				upstream.Subscribe(upevents.TopicPullText, func(_ event.Event, result event.Result) {
+					if pulls.Add(1) == 1 {
+						result.Set(upevents.PullTextResult{Delta: "hello", Generation: generation.Sample{FirstOutputAt: sample.FirstOutputAt, Partial: true}}, nil)
+						return
+					}
+					out := upevents.PullTextResult{Done: true, Generation: sample}
+					if failed {
+						out.ErrorClass = upevents.ErrClassUpstream
+					}
+					result.Set(out, nil)
+				})
+				upstream.Subscribe(upevents.TopicCancelText, func(_ event.Event, result event.Result) { result.Set(upevents.CancelTextResult{}, nil) })
+				proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+				request := chatgpttext.Request{Model: "model", Messages: []chatgpttext.Message{{Role: "user", Content: "hello"}}}
+				var out chatgpttext.Result
+				var err error
+				if stream {
+					out, err = proxy.Stream(context.Background(), request, func(chatgpttext.Delta) error { return nil })
+				} else {
+					out, err = proxy.Complete(context.Background(), request)
+				}
+				if (err != nil) != failed || out.Text != "hello" || out.Generation != sample {
+					t.Fatalf("result=%+v err=%v want=%+v", out, err, sample)
+				}
+			})
+		}
+	}
+}
+
+func TestChatGPTEmitFailureUsesCancelTimingBeforeAccountSettlement(t *testing.T) {
+	hub := event.NewHub(8)
+	background := task.NewBackgroundRoutine(8)
+	defer hub.Terminate(context.Background())
+	defer background.Shutdown(nil)
+	sample := generation.Sample{FirstOutputAt: time.Now().Add(-time.Second), Duration: 25 * time.Millisecond, Partial: true}
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicStartText, func(_ event.Event, result event.Result) {
+		result.Set(upevents.StartTextResult{StreamID: "stream"}, nil)
+	})
+	upstream.Subscribe(upevents.TopicPullText, func(_ event.Event, result event.Result) {
+		result.Set(upevents.PullTextResult{Delta: "hello", Generation: generation.Sample{FirstOutputAt: sample.FirstOutputAt, Partial: true}}, nil)
+	})
+	upstream.Subscribe(upevents.TopicCancelText, func(_ event.Event, result event.Result) {
+		result.Set(upevents.CancelTextResult{Cancelled: true, Generation: sample}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	out, emitted, err := proxy.streamChatGPTTextOnce(context.Background(), "token", "", chatgpttext.Request{Model: "model"}, func(chatgpttext.Delta) error { return errors.New("client write failed") })
+	if err == nil || !emitted || out.Text != "hello" || out.Generation != sample {
+		t.Fatal(out, emitted, err)
 	}
 }

@@ -60,6 +60,7 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 
 	if !stream {
 		result, execErr := executor.Complete(r.Context(), request)
+		recordGeneration(r.Context(), result.Generation)
 		billingModel := firstNonEmpty(result.ActualModel, model)
 		tok := estimateChatGPTTextUsage(request, result.Text)
 		if execErr != nil {
@@ -133,6 +134,7 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	result, execErr := executor.Stream(r.Context(), request, emit)
+	recordGeneration(r.Context(), result.Generation)
 	if result.ActualModel != "" {
 		actualModel = result.ActualModel
 	}

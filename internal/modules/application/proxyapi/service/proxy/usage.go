@@ -10,6 +10,7 @@ import (
 )
 
 type tokenUsage struct {
+	OutputTokensKnown             bool `json:"-"`
 	CachedInputTokensKnown        bool `json:"-"`
 	CacheCreationInputTokensKnown bool `json:"-"`
 	PromptTokens                  int  `json:"prompt_tokens"`
@@ -93,6 +94,12 @@ func usageFromRawResponse(provider config.Provider, responseBody []byte, request
 func applyUsageDetails(usage *tokenUsage, payload map[string]any) {
 	if usage == nil || payload == nil {
 		return
+	}
+	if _, ok := cacheTokenCount(payload["completion_tokens"]); ok {
+		usage.OutputTokensKnown = true
+	}
+	if _, ok := cacheTokenCount(payload["output_tokens"]); ok {
+		usage.OutputTokensKnown = true
 	}
 	if usage.PromptTokens == 0 {
 		usage.PromptTokens, _ = numberAsInt(payload["input_tokens"])

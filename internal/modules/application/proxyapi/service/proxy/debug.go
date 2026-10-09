@@ -16,6 +16,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
+	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
@@ -259,6 +260,13 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 // emitted by the codexupstream Block. The Block owns the transport and performs
 // first-pass redaction; the adapter sanitizes again before writing or logging.
 func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Request, providerName string, attempt codexresponses.HTTPAttempt, attemptErr error) {
+	if r != nil {
+		if completion := usageCompletionFromContext(r.Context()); completion != nil {
+			completion.generationMu.Lock()
+			completion.generationObserved = generation.Sample{FirstOutputAt: attempt.Response.FirstOutputAt, Duration: attempt.Response.GenerationDuration, Partial: attempt.Response.GenerationPartial}
+			completion.generationMu.Unlock()
+		}
+	}
 	if round == nil || strings.TrimSpace(attempt.Request.URL) == "" {
 		return
 	}
@@ -395,9 +403,6 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 
 // The callback stays within proxyapi; only value observations cross EventHub.
 func (h *Handler) codexAttemptObserver(round *archive.Round, r *http.Request, provider string) func(codexresponses.HTTPAttempt, error) {
-	if round == nil {
-		return nil
-	}
 	return func(attempt codexresponses.HTTPAttempt, err error) {
 		h.archiveCodexUpstreamAttempt(round, r, provider, attempt, err)
 	}

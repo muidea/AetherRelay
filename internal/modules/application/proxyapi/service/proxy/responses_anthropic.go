@@ -104,12 +104,14 @@ func serveConvertedSSEWithTimeouts(ctx context.Context, w http.ResponseWriter, i
 	reader.Buffer(make([]byte, 4096), 1<<20)
 	go func() {
 		for reader.Scan() {
+			observeGenerationSSE(ctx, reader.Bytes(), nil)
 			select {
 			case lineCh <- conversionSSELine{line: reader.Text()}:
 			case <-stopCh:
 				return
 			}
 		}
+		stopGeneration(ctx)
 		select {
 		case lineCh <- conversionSSELine{done: true, err: reader.Err()}:
 		case <-stopCh:
@@ -121,6 +123,7 @@ func serveConvertedSSEWithTimeouts(ctx context.Context, w http.ResponseWriter, i
 		}
 	}
 	defer func() {
+		stopGeneration(ctx)
 		close(stopCh)
 		closeInput()
 	}()
@@ -219,6 +222,7 @@ func convertSSEReader(input io.Reader, mapper conversionSSEMapper, state *textCo
 }
 
 func convertSSEReaderContext(ctx context.Context, input io.Reader, mapper conversionSSEMapper, state *textConversionStreamState, includeEventName bool) ([]byte, error) {
+	defer stopGeneration(ctx)
 	if input == nil || mapper == nil || state == nil {
 		return nil, fmt.Errorf("conversion SSE reader requires input, mapper and state")
 	}
@@ -227,6 +231,7 @@ func convertSSEReaderContext(ctx context.Context, input io.Reader, mapper conver
 	var output bytes.Buffer
 	sawTerminal := false
 	for scanner.Scan() {
+		observeGenerationSSE(ctx, scanner.Bytes(), nil)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -1918,6 +1923,7 @@ func anthropicEventToResponsesWithCapabilityState(payload []byte, state *textCon
 		}
 		if usage, ok := event["usage"].(map[string]any); ok {
 			state.OutputTokens = intNumber(usage["output_tokens"])
+			applyUsageDetails(&state.CacheUsage, usage)
 		}
 	case "message_stop":
 		if !state.Started {
@@ -2182,6 +2188,7 @@ func responsesEventToAnthropicWithCapabilityState(payload []byte, state *textCon
 			state.CacheUsage, _ = usageFromMap(usage)
 			state.InputTokens = intNumber(usage["input_tokens"])
 			state.OutputTokens = intNumber(usage["output_tokens"])
+			applyUsageDetails(&state.CacheUsage, usage)
 		}
 		state.Completed = true
 		stopReason, _ := responsesTerminationToAnthropic(status, incompleteReason, hasTools)

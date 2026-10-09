@@ -949,6 +949,9 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if failure != nil {
 			mergeCodexStreamProgress(&failure.Attempt, upevents.HTTPResponseObservation{ReadObserved: observedAttempt.Response.ReadObserved,
+				FirstOutputAt:        observedAttempt.Response.FirstOutputAt,
+				GenerationDuration:   observedAttempt.Response.GenerationDuration,
+				GenerationPartial:    observedAttempt.Response.GenerationPartial,
 				LastEventAt:          observedAttempt.Response.LastEventAt,
 				LastEventDurationMS:  observedAttempt.Response.LastEventDurationMS,
 				TerminalEvent:        observedAttempt.Response.TerminalEvent,
@@ -1206,6 +1209,9 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,
 			TransferEncoding:     attempt.Response.TransferEncoding,
 			ReadObserved:         attempt.Response.ReadObserved,
+			FirstOutputAt:        attempt.Response.FirstOutputAt,
+			GenerationDuration:   attempt.Response.GenerationDuration,
+			GenerationPartial:    attempt.Response.GenerationPartial,
 			LastEventAt:          attempt.Response.LastEventAt,
 			LastEventDurationMS:  attempt.Response.LastEventDurationMS,
 			TerminalEvent:        attempt.Response.TerminalEvent,
@@ -1306,6 +1312,9 @@ func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure
 }
 
 func mergeCodexStreamProgress(attempt *codexresponses.HTTPAttempt, progress upevents.HTTPResponseObservation) {
+	if !progress.FirstOutputAt.IsZero() {
+		attempt.Response.FirstOutputAt, attempt.Response.GenerationDuration, attempt.Response.GenerationPartial = progress.FirstOutputAt, progress.GenerationDuration, progress.GenerationPartial
+	}
 	attempt.Response.ReadObserved = attempt.Response.ReadObserved || progress.ReadObserved
 	if progress.LastEventAt.After(attempt.Response.LastEventAt) {
 		attempt.Response.LastEventAt = progress.LastEventAt

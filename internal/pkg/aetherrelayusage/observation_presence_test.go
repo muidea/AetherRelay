@@ -61,8 +61,14 @@ func TestObservationPresenceAcrossStores(t *testing.T) {
 				if err != nil || len(rows) != 2 {
 					t.Fatalf("CSV=%v err=%v", rows, err)
 				}
-				last := len(rows[0]) - 1
-				if rows[0][last] != "cache_creation_input_tokens_known" || rows[1][last] != strconv.FormatBool(known) || rows[1][last-1] != strconv.FormatBool(known) {
+				last := -1
+				for column, name := range rows[0] {
+					if name == "cache_creation_input_tokens_known" {
+						last = column
+						break
+					}
+				}
+				if last < 1 || rows[0][last] != "cache_creation_input_tokens_known" || rows[1][last] != strconv.FormatBool(known) || rows[1][last-1] != strconv.FormatBool(known) {
 					t.Fatalf("CSV presence lost: %v", rows)
 				}
 			}

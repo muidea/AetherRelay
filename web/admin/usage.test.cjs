@@ -19,7 +19,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'loadEvents', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -101,8 +101,8 @@ test('dashboard, chart, key table and events render server cache statistics', as
 });
 
 test('usage tables reserve stable widths and clip long cells', () => {
-  assert.match(html, /\.usage-key-table\{min-width:920px\}/);
-  assert.match(html, /\.usage-event-table\{min-width:1120px\}/);
+  assert.match(html, /\.usage-key-table\{min-width:1020px\}/);
+  assert.match(html, /\.usage-event-table\{min-width:1220px\}/);
   assert.match(html, /\.usage-key-table th,.usage-key-table td,.usage-event-table th,.usage-event-table td\{overflow:hidden;text-overflow:ellipsis;white-space:nowrap\}/);
   assert.match(html, /@media\(max-width:1100px\)\{\.usage-event-table\{min-width:880px\}/);
   assert.match(html, /@media\(max-width:760px\)\{\.usage-event-table,.usage-key-table\{min-width:0\}/);
@@ -139,4 +139,24 @@ test('proxy cancellation and absent failed usage are not shown as successful zer
  assert.equal(c.usageTokenValue({...e,outcome:'success'},'input_tokens'),'0');
  assert.equal(c.usageTokenValue({...e,input_tokens:10},'input_tokens'),'10');
  assert.equal(c.usageTokenValue({...e,cached_input_tokens_known:true},'input_tokens'),'0');
+});
+
+test('TPS renders weighted server values, unknown and known zero with sample provenance', async () => {
+  const {context:c,elements}=harness();
+  assert.equal(c.usageTPS({}), '—');
+  assert.equal(c.usageTPS({tps:null}), '—');
+  assert.equal(c.usageTPS({tps:0}), '0.00');
+  assert.equal(c.usageTPS({tps:25}), '25.00');
+  assert.equal(c.usageTPS({tps:Infinity}), '—');
+  const summary={tps:25,tps_samples:2,tps_estimated_samples:1,tps_partial_samples:1};
+  const event={tps:30,generation_partial:true,estimated:true,generation_duration_ms:30000,first_output_at:'2026-10-09T00:00:00Z',event_id:'b',api_key_id:'key',state:'completed',outcome:'success'};
+  c.request=async url=>url.includes('/dashboard?')?{summary,daily:[],by_api_key:[{...summary,api_key_id:'key'}]}:{events:[event]};
+  await c.loadUsage();
+  assert.equal(elements.uTPS.textContent,'25.00');
+  assert.match(elements.uTPS.title,/有效样本 2.*估算 1.*部分输出 1/);
+  assert.match(elements.keyTable.innerHTML,/>25\.00</);
+  assert.match(elements.eventTable.innerHTML,/30\.00.*partial/);
+  c.showUsageEvent(event);
+  assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\).*30\.00/);
+  assert.match(elements.usageEventDetail.innerHTML,/生成耗时（秒）<\/dt><dd>30<\/dd>/);
 });

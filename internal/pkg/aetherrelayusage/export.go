@@ -51,6 +51,7 @@ var csvExportHeader = []string{
 	"state",
 	"cached_input_tokens_known",
 	"cache_creation_input_tokens_known",
+	"first_output_at", "generation_duration_ms", "tps", "generation_partial",
 }
 
 // ExportCSV 按筛选条件流式写出 CSV。
@@ -89,8 +90,8 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state,
-    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false)
-FROM usage_events
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false)
+FROM ` + generationEvents + `
 WHERE ` + where + `
 ORDER BY started_at ASC, event_id ASC`
 
@@ -125,6 +126,9 @@ ORDER BY started_at ASC, event_id ASC`
 			conversionDegraded                                   bool
 			cachedKnown, creationKnown                           bool
 		)
+		var firstOutputAt sql.NullTime
+		var generationNS sql.NullInt64
+		var partial bool
 		if err := rows.Scan(
 			&eventID, &roundID, &startedAt, &completedAt,
 			&usageDate, &apiKeyID,
@@ -140,7 +144,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&failureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
-			&cachedKnown, &creationKnown,
+			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial,
 		); err != nil {
 			return ErrStoreUnavailable
 		}
@@ -216,6 +220,11 @@ ORDER BY started_at ASC, event_id ASC`
 			strconv.FormatBool(cachedKnown),
 			strconv.FormatBool(creationKnown),
 		}
+		sample := GenerationSample{}
+		if firstOutputAt.Valid && generationNS.Valid {
+			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial)
+		}
+		row = append(row, generationCSV(sample)...)
 		if err := cw.Write(row); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}

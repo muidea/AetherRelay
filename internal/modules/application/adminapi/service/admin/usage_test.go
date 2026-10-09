@@ -32,7 +32,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		Operation: "chat_completions", ClientEndpoint: "/v1/chat/completions", ClientProtocol: "openai",
 	})
 	_ = store.Complete(context.Background(), usage.CompleteRecord{
-		EventID: "e1", CompletedAt: now.Add(time.Second), Provider: "openai", Model: "gpt-4o",
+		EventID: "e1", OutputTokensKnown: true, FirstOutputAt: now.Add(500 * time.Millisecond), GenerationDuration: 500 * time.Millisecond, CompletedAt: now.Add(time.Second), Provider: "openai", Model: "gpt-4o",
 		InputTokens: 10, OutputTokens: 5, CachedInputTokens: 4, CacheCreationInputTokens: 2, HTTPStatus: 200, Outcome: "success",
 	})
 
@@ -52,6 +52,9 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	}
 	summary := body["summary"].(map[string]any)
 	for _, row := range []map[string]any{summary, body["by_api_key"].([]any)[0].(map[string]any)} {
+		if row["tps"] != float64(10) || row["tps_samples"] != float64(1) {
+			t.Fatalf("TPS statistics=%v", row)
+		}
 		if row["cached_input_tokens"] != float64(4) || row["cache_creation_input_tokens"] != float64(2) || row["cache_hit_rate"] != 0.4 {
 			t.Fatalf("cache statistics=%v", row)
 		}
@@ -83,7 +86,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Events) != 1 || page.Events[0].CacheHitRate != 0.4 {
+	if len(page.Events) != 1 || page.Events[0].CacheHitRate != 0.4 || page.Events[0].TPS == nil || *page.Events[0].TPS != 10 || page.Events[0].GenerationDurationMS != 500 {
 		t.Fatalf("event cache statistics=%+v", page)
 	}
 
