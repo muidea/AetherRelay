@@ -1201,19 +1201,43 @@ func TestCodexCompactNormalizesUnaryAndBridgesSSE(t *testing.T) {
 	}
 }
 
+type compactHeartbeatRecorder struct {
+	*httptest.ResponseRecorder
+	heartbeats int
+	ready      chan struct{}
+}
+
+func (w *compactHeartbeatRecorder) Write(body []byte) (int, error) {
+	n, err := w.ResponseRecorder.Write(body)
+	if bytes.Contains(body, []byte(": aetherrelay compact pending")) {
+		w.heartbeats++
+		if w.heartbeats == 2 {
+			close(w.ready)
+		}
+	}
+	return n, err
+}
+
 func TestCodexCompactStreamHeartbeatsAndFailsInBand(t *testing.T) {
 	previous := codexCompactHeartbeatInterval
 	codexCompactHeartbeatInterval = time.Millisecond
 	defer func() { codexCompactHeartbeatInterval = previous }()
-	executor := codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
-		time.Sleep(5 * time.Millisecond)
+	response := &compactHeartbeatRecorder{ResponseRecorder: httptest.NewRecorder(), ready: make(chan struct{})}
+	executor := codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
+		// Wait for actual delivery instead of assuming two scheduler ticks fit in 5ms.
+		select {
+		case <-response.ready:
+		case <-ctx.Done():
+			return codexresponses.Result{}, ctx.Err()
+		}
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindUpstream, http.StatusBadGateway, fmt.Errorf("upstream failed"))
 	}}
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewBufferString(`{"model":"gpt-5.2-codex","stream":true,"input":[{"type":"compaction_trigger"}]}`))
 	request.Header.Set("Authorization", "Bearer test-client-key")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
+	ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+	defer cancel()
+	handler.ServeHTTP(response, request.WithContext(ctx))
 	if response.Code != http.StatusOK || strings.Count(response.Body.String(), ": aetherrelay compact pending") < 2 || !strings.Contains(response.Body.String(), "event: response.failed") || strings.Contains(response.Body.String(), `"type":"error"`) {
 		t.Fatalf("CP-COMPACT-003 status=%d body=%s", response.Code, response.Body.String())
 	}

@@ -333,9 +333,11 @@
 
 ## 7. HTTP、SSE、compact 与 WebSocket
 
-`CP-STREAM-018` HTTP Codex 非流式请求必须共享一次总预算，覆盖账号准入、刷新、网络读取和全部重试。入站处理起点及合法 X-Stainless-Timeout 形成更短预算，预留 5%/最多 5 秒错误交付余量；应用配置不能被提示延长。预算到期返回 timeout/504（outcome=request_timeout），不切号、不切 Provider、不冷却账号；原始入站 context 取消仍是 client_canceled/499。上游已返回 200 或输出增量不等于 buffered 请求完成。流式首事件/空闲/总时限保持独立。OAuth 凭据轮换由账号 owner 的 BackgroundRoutine 管理并合并同账号刷新；请求预算限制等待，不取消其他等待者或丢弃已轮换凭据。周期维护在现有 worker 内执行新刷新，避免单 worker 下等待嵌套任务。
+`CP-STREAM-018` HTTP Codex 非流式请求必须共享一次总预算，覆盖账号准入、刷新、网络读取和全部重试。入站处理起点及合法 X-Stainless-Timeout 形成更短预算，预留 5%/最多 5 秒错误交付余量；应用配置不能被提示延长。预算到期返回 timeout/504（outcome=request_timeout，failure_class=request_budget_exceeded），不切号、不切 Provider、不冷却账号；原始入站 context 取消仍是 client_canceled/499。上游已返回 200 或输出增量不等于 buffered 请求完成。流式首事件/空闲/总时限保持独立。OAuth 凭据轮换由账号 owner 的 BackgroundRoutine 管理并合并同账号刷新；请求预算限制等待，不取消其他等待者或丢弃已轮换凭据。周期维护在现有 worker 内执行新刷新，避免单 worker 下等待嵌套任务。
 
-`CP-OBS-013` Codex HTTP 读取观察必须同时保留最后业务事件时间、相对读取起点耗时及白名单终结类型；没有终结时保留空值，EOF/超时/reset 使用类型化 transport reason。后台 499 展示为下游连接取消，并解释客户端及代理均可能是取消方；上游响应头状态与请求最终状态分别展示。失败/处理中全零且缓存观测均未知的明细显示未取得，不回填现有数据或推断消耗为零。
+`CP-OBS-014` 非流式 Codex Messages/Chat/Responses 执行前记录有效预算及来源（server/client/context/unbounded）、规范化请求字节数、输入项与工具计数、实际推理强度、客户端超时声明及完整规范化请求正文。按当前排障要求，预算诊断正文不脱敏、不截断，不依赖归档开关；认证 Header 不进入该日志。不通过提示文本推断压缩并改写执行参数。有效预算取应用配置、合法客户端声明（含交付余量）、入站 context 的最早截止时间；不能单独扩大服务端时限来绕过客户端时限。
+
+`CP-OBS-013` Codex HTTP 读取观察必须同时保留最后业务事件时间、相对读取起点耗时及白名单终结类型；没有终结时保留空值，EOF/超时/reset 使用类型化 transport reason。后台最终状态依据 outcome 与真实 HTTP 状态共同展示；HTTP 200 的 upstream_truncated/incomplete/其它失败不得显示成功，保留原 HTTP 状态和失败样式。499 展示为下游连接取消，并解释客户端及代理均可能是取消方；上游响应头状态与请求最终状态分别展示。失败/处理中全零且缓存观测均未知的明细显示未取得，不回填现有数据或推断消耗为零。
 
 `CP-STREAM-001` 非流式下游请求仍可使用上游 SSE；接受有语义输出的 `response.completed` 或合法 `response.incomplete` 中的 Response 对象作为结果。incomplete 必须保留 partial output、usage、status 和 incomplete_details；`CP-STREAM-014` 的空 incomplete 除外。
 
@@ -655,6 +657,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | 流停止诊断及原因保真 | CP-OBS-008 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_stream_timeout_test.go`（含清理延迟超过总时限仍保留原网络故障） |
 | 非流式总预算及下游取消 | CP-STREAM-018 | implemented | `proxyapi/biz/codex_responses.go`, `proxy/codex_completion_timeout.go`, `proxy/handler.go` | `proxyapi/biz/codex_completion_timeout_test.go`, `proxy/codex_completion_timeout_test.go` |
 | 最后业务事件及终结观察 | CP-OBS-013 | implemented | `codexupstream/biz/biz.go`, `codexupstream/biz/dispatch.go`, `proxy/debug.go`, `web/admin/index.html` | `codexupstream/biz/completion_observation_test.go`, `web/admin/usage.test.cjs` |
+| 非流式预算与请求规模诊断 | CP-OBS-014 | implemented（本地）；线上待部署复验 | `proxy/codex_completion_timeout.go`, `proxy/codex_messages.go`, `proxy/codex_chat.go`, `proxy/codex_responses.go` | `proxy/codex_completion_timeout_test.go` |
 | 输出后断流不冷却账号 | CP-STREAM-017 | implemented | `proxyapi/biz/codex_responses.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/responses_anthropic.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `proxyapi/service/proxy/codex_responses_test.go`, `proxyapi/service/proxy/responses_anthropic_test.go` |
 
 以上为离线回归证据；真实上游与部署后的长流恢复按 CP-DOD-006 单独验证。

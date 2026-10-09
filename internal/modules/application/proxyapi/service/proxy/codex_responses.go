@@ -233,7 +233,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 	request.Diagnostics = features.Diagnostics
 	request.Diagnostics.RequestID = requestIDFromContext(r.Context())
 	if !stream {
-		request.Deadline = h.codexCompletionDeadline(r, started)
+		h.prepareCodexCompletion(r, started, &request)
 		response, err := executor.CompleteCodexResponses(r.Context(), request)
 		if err != nil {
 			h.writeCodexResponsesError(w, r, round, started, provider, model, false, err)
@@ -446,6 +446,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		code = ErrorCodeUpstreamUnavailable
 	}
 	message := "Codex OAuth response failed: " + failure.ErrorCode
+	if failure.Kind == streamKindRequestTimeout {
+		message = "Codex response did not complete within the effective client/gateway request budget"
+	}
 	if codexFailure != nil && codexFailure.HTTPStatus > 0 {
 		message += fmt.Sprintf(" (upstream HTTP %d)", codexFailure.HTTPStatus)
 		if codexFailure.HTTPStatus >= 400 && codexFailure.HTTPStatus <= 599 {
@@ -464,9 +467,8 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 		errorType = codexFailure.UpstreamType
 		param = codexFailure.UpstreamParam
 	}
-	reason, retryAfter := "", 0
+	reason, retryAfter := failure.FailureClass, 0
 	if codexFailure != nil {
-		reason = codexFailure.UnavailableReason
 		retryable = codexFailure.Retryable
 		retryAfter = codexFailure.RetryAfterSeconds
 	}
@@ -567,6 +569,9 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 	}
 	result := newStreamFailWithCode(kind, string(failure.Kind), failure.Error(), failure, countUpstream)
 	result.FailureClass = failure.UnavailableReason
+	if failure.RequestBudgetExceeded {
+		result.FailureClass = "request_budget_exceeded"
+	}
 	result.Retryable = failure.Retryable
 	result.RetryAfterSeconds = failure.RetryAfterSeconds
 	return result

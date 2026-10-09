@@ -336,3 +336,22 @@ Codex HTTP/SSE/compact 失败日志新增 `transport_reason`，逐 attempt 的�
 Codex 上游归档及安全诊断增加 `last_upstream_event_at`、`last_upstream_event_duration_ms`、`upstream_terminal_event`。最后事件时间仅由业务 data 更新，注释和 keepalive 不续期；终结类型只保留固定白名单。终结类型为空且已有事件，表示读取已开始但未观察到终结；结合读取错误原因判断 EOF、读取超时或连接重置。未知类型的网络错误保留 `unknown`，不得从错误文本猜测或打印原始网络错误及生成内容。
 
 API 代理关闭响应缓冲，以便 SSE 及时交付；`stream=false` 仍等待完整结果。Nginx read timeout 是相邻读取间隔，应用非流式超时是整个请求预算，不能混为同一时限。修改后运行 `nginx -t`，再平滑 reload；新应用预算逻辑及后台展示须部署对应服务版本后生效。此前 `035631` 的流式网络截断仍需部署后继续核对新诊断，不把代理配置调整宣称为上游网络故障已经修复。
+
+### Messages 会话压缩与非流式总预算
+
+2026-10-09 x600 的 `claude-owner/036891`、`036898` 为非流式 Messages 请求，正文约 1.06 MB，含 196 条历史消息和 25 个工具，上游推理强度为 `high`。两次请求持续收到约 1 万、9000 个业务事件，但未观察到完成事件。客户端 `X-Stainless-Timeout: 300` 加上最多 5 秒错误交付余量，形成 295 秒有效预算，最终为 504 `request_timeout`。收到上游 200 或增量事件不能延长非流式总预算，也不能说明压缩已完成。
+
+本地总预算耗尽额外记录 `failure_class=request_budget_exceeded`，管理 API、usage、归档与请求日志保持一致；不冷却账号、不自动切号重试。上游传输超时仍保留原始上游失败分类。每次非流式 Messages、Chat 或 Responses 执行前记录 `Codex completion budget`：`request_budget_ms`、`request_budget_source`（`server/client/context/unbounded`）、规范化请求 `request_bytes`、`input_items`、`tool_count`、实际 `reasoning_effort`、客户端声明 `client_timeout` 和完整 `request_body`。预算诊断正文不脱敏、不截断，保留提示文本、工具 schema/参数及正文中的 metadata，便于直接核对实际出站请求；认证 Header 不写入该日志。该日志不受归档及归档脱敏开关控制；`unbounded` 的 0 不代表立即超时。
+
+若压缩任务确实需要更长等待，需同时协调客户端、网关及反向代理。例如客户端声明 `X-Stainless-Timeout: 600`，网关显式配置：
+
+```yaml
+server:
+  request_timeout_seconds: 600
+```
+
+该组合最多允许 595 秒，并继续服从更早的入站 context 截止时间；若客户端仍声明 300 秒，有效预算仍为 295 秒。非流式代理须留足返回错误的时间，例如对应 Nginx location 的 `proxy_read_timeout 650s`，并核对客户端实际超时与请求头一致。此示例是按需配置，不修改全局默认值或已经运行的服务。
+
+支持选择推理强度的 Messages 客户端可在目标模型声明支持 `medium` 时显式使用 `output_config: {effort: medium}`，并缩小待压缩的上下文；网关保留客户端选择，不通过提示文本猜测压缩请求或自动裁剪消息。`max_tokens` 经 Codex OAuth normalizer 作为不支持的兼容字段清理并记录降级，不能将调低它当作上游输出上限。支持流式的客户端可使用 `stream=true` 获得增量输出，非流式仍须等待终态；流式首事件、空闲和总时限是独立配置，不能保证压缩任务一定完成。
+
+管理页最终状态优先展示实际 outcome：HTTP 200 + `upstream_truncated` 为“200 输出中断”，`incomplete` 为“未完成”，其它失败同样不显示成功；504 `request_timeout` 为“请求超时”，503 `accounts_cooling` 为“账号冷却”。保留实际 HTTP 状态，不伪造新的响应码；历史数据不回填，旧记录可直接使用新展示规则。

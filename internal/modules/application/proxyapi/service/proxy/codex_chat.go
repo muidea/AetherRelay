@@ -80,7 +80,7 @@ func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, star
 		h.streamChatFromCodex(w, r, started, plan, model, request)
 		return
 	}
-	request.Deadline = h.codexCompletionDeadline(r, started)
+	h.prepareCodexCompletion(r, started, &request)
 	result, execErr := h.codexResponses.CompleteCodexResponses(r.Context(), request)
 	if execErr != nil {
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, false, execErr)

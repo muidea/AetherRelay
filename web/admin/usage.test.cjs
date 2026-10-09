@@ -148,6 +148,25 @@ test('upstream column distinguishes admission rejection from missing response', 
   assert.equal(c.usageUpstreamMeta({upstream_status: 429, upstream_content_type: 'application/json'}).label, '429 · application/json');
 });
 
+test('final status reflects the outcome after HTTP headers were committed', () => {
+ const {context:c}=harness();
+ const failed=['upstream_truncated','upstream_failed','incomplete','client_canceled','client_write','request_timeout','first_event_timeout','idle_timeout','stream_lifetime_timeout','conversion','protocol','error','unknown_future_failure','constructor','__proto__'];
+ for(const outcome of failed){
+  const result=c.eventStatusMeta({http_status:200,state:'completed',outcome});
+  assert.doesNotMatch(result.label,/成功/);
+  assert.notEqual(result.className,'status-2xx');
+  assert.match(result.label,/^200 /);
+ }
+ assert.match(c.eventStatusMeta({http_status:200,outcome:'upstream_truncated'}).label,/输出中断/);
+ assert.match(c.eventStatusMeta({http_status:200,outcome:'upstream_truncated'}).title,/不代表请求最终完成/);
+ assert.match(c.eventStatusMeta({http_status:504,outcome:'request_timeout'}).label,/504 请求超时/);
+ assert.match(c.eventStatusMeta({http_status:503,outcome:'provider_unavailable',failure_class:'accounts_cooling',retry_after_seconds:10}).title,/建议等待 10 秒/);
+ assert.match(c.eventStatusMeta({http_status:200,outcome:'success'}).label,/成功/);
+ assert.match(c.eventStatusMeta({http_status:200}).label,/成功/);
+ assert.equal(c.eventStatusMeta({state:'started'}).label,'待完成');
+ assert.doesNotMatch(c.eventStatusMeta({http_status:503,outcome:'success'}).label,/成功/);
+});
+
 test('usage durations are consistently displayed in seconds', () => {
   const {context: c} = harness();
   assert.equal(c.usageDurationSeconds(0), '0');
