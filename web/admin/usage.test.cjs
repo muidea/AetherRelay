@@ -104,9 +104,10 @@ test('usage event list keeps complete values and diagnostic fields in the dialog
   const {context:c,elements}=harness();
   const event={event_id:'0123456789abcdef',started_at:'2026-10-09T07:00:00Z',api_key_id:'a-very-long-key-name',model:'a-very-long-model-name',provider:'codexoauth',operation:'responses',input_tokens:202648,output_tokens:1231,total_tokens:203879,tps:123456.78,http_status:502,outcome:'upstream_failed',conversion_mode:'anthropic_to_codex_responses',upstream_status:200};
   const table=c.renderUsageEventTable([event]);
-  const headers=[...table.matchAll(/<th scope="col">([^<]*)<\/th>/g)].map(m=>m[1]);
+  const headers=[...table.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map(m=>m[1]);
   assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','TPS','最终状态','耗时(s)']);
   assert.equal((table.match(/data-label=/g)||[]).length,9);
+  assert.match(table,/<th scope="col" title="输入 Token \/ 输出 Token \/ 总 Token">Tokens<\/th>/);
   for(const value of [event.api_key_id,event.model,event.operation,'202,648','1,231','203,879','123456.78','upstream_failed'])assert.ok(table.includes(value),value);
   assert.doesNotMatch(table,/text-overflow:ellipsis|0123456789abcdef|anthropic_to_codex_responses/);
   assert.match(table,/tabindex="0"/);
@@ -123,7 +124,9 @@ test('usage events remain keyboard accessible after loading', async () => {
   c.document.querySelectorAll=()=>[row];
   const event={event_id:'keyboard-event',http_status:200};
   c.request=async()=>({events:[event]});
+  c.$('eventTable').className='loading';
   await c.loadEvents(true);
+  assert.equal(elements.eventTable.className,'');
   let opened=0,prevented=0;
   elements.usageEventDialog={showModal(){opened++}};
   for(const key of ['Enter',' ','Escape'])row.onkeydown({key,preventDefault(){prevented++}});
@@ -180,7 +183,8 @@ test('TPS renders weighted server values, unknown and known zero with sample pro
   assert.equal(elements.uTPS.textContent,'25.00');
   assert.match(elements.uTPS.title,/有效样本 2.*估算 1.*部分输出 1/);
   assert.match(elements.keyTable.innerHTML,/>25\.00</);
-  assert.match(elements.eventTable.innerHTML,/30\.00.*partial/);
+  assert.match(elements.eventTable.innerHTML,/>30\.00</);
+  assert.doesNotMatch(elements.eventTable.innerHTML,/>partial</);
   c.showUsageEvent(event);
   assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\).*30\.00/);
   assert.match(elements.usageEventDetail.innerHTML,/生成耗时（秒）<\/dt><dd>30<\/dd>/);
@@ -227,7 +231,7 @@ test('buffered delivery stays visible in events, summary, keys and trends', asyn
  assert.match(elements.uTPS.title,/上游缓冲 1.*不能直接代表模型生成速度/);
  assert.match(elements.keyTable.innerHTML,/上游缓冲 1/);
  assert.match(elements.chartTPS.innerHTML,/上游缓冲 1.*不能直接代表模型生成速度/);
- assert.match(elements.eventTable.innerHTML,/class="tag">buffered/);
+ assert.doesNotMatch(elements.eventTable.innerHTML,/>buffered</);
  assert.match(elements.eventTable.innerHTML,/上游明确缓冲/);
  c.showUsageEvent(event);
  assert.match(elements.usageEventDetail.innerHTML,/上游明确缓冲<\/dt><dd>true/);
