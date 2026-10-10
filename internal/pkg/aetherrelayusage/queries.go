@@ -216,8 +216,8 @@ SELECT
     coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
     coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
     coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + generationAggregates + `
-FROM ` + generationEvents + `
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + tpsAggregates + `
+FROM ` + tpsEvents + `
 WHERE ` + where
 	var sum Summary
 	err := s.db.QueryRowContext(ctx, q, args...).Scan(
@@ -231,7 +231,8 @@ WHERE ` + where
 		&sum.CachedInputTokens,
 		&sum.CacheCreationInputTokens,
 		&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
-		&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSBufferedSamples, &sum.TPSOutputTokens, &sum.TPSGenerationDurationMS,
+		&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSOutputTokens, &sum.TPSDurationMS,
+		&sum.ObservedTPSSamples, &sum.ObservedTPSEstimatedSamples, &sum.ObservedTPSPartialSamples, &sum.ObservedTPSBufferedSamples, &sum.ObservedTPSOutputTokens, &sum.ObservedTPSGenerationDurationMS,
 	)
 	if err != nil {
 		return Summary{}, ErrStoreUnavailable
@@ -253,8 +254,8 @@ SELECT
     coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
     coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
     coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + generationAggregates + `
-FROM ` + generationEvents + `
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + tpsAggregates + `
+FROM ` + tpsEvents + `
 WHERE ` + where + `
 GROUP BY usage_date
 ORDER BY usage_date`
@@ -268,7 +269,8 @@ ORDER BY usage_date`
 	for rows.Next() {
 		var b DailyBucket
 		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CacheInputTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown,
-			&b.TPSSamples, &b.TPSEstimatedSamples, &b.TPSPartialSamples, &b.TPSBufferedSamples, &b.TPSOutputTokens, &b.TPSGenerationDurationMS); err != nil {
+			&b.TPSSamples, &b.TPSEstimatedSamples, &b.TPSPartialSamples, &b.TPSOutputTokens, &b.TPSDurationMS,
+			&b.ObservedTPSSamples, &b.ObservedTPSEstimatedSamples, &b.ObservedTPSPartialSamples, &b.ObservedTPSBufferedSamples, &b.ObservedTPSOutputTokens, &b.ObservedTPSGenerationDurationMS); err != nil {
 			return nil, ErrStoreUnavailable
 		}
 		b.TPSStats.finish()
@@ -300,8 +302,8 @@ SELECT
     coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
     coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
     coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + generationAggregates + `
-FROM ` + generationEvents + `
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + tpsAggregates + `
+FROM ` + tpsEvents + `
 WHERE ` + where + `
 GROUP BY api_key_id
 ORDER BY total_tokens DESC, api_key_id ASC`
@@ -328,7 +330,8 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			&k.CachedInputTokens,
 			&k.CacheCreationInputTokens,
 			&k.CachedInputTokensKnown, &k.CacheCreationInputTokensKnown,
-			&k.TPSSamples, &k.TPSEstimatedSamples, &k.TPSPartialSamples, &k.TPSBufferedSamples, &k.TPSOutputTokens, &k.TPSGenerationDurationMS,
+			&k.TPSSamples, &k.TPSEstimatedSamples, &k.TPSPartialSamples, &k.TPSOutputTokens, &k.TPSDurationMS,
+			&k.ObservedTPSSamples, &k.ObservedTPSEstimatedSamples, &k.ObservedTPSPartialSamples, &k.ObservedTPSBufferedSamples, &k.ObservedTPSOutputTokens, &k.ObservedTPSGenerationDurationMS,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}
@@ -396,8 +399,8 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
-    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered
-FROM ` + generationEvents + `
+    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known
+FROM ` + tpsEvents + `
 WHERE ` + where + `
 ORDER BY started_at DESC, event_id DESC
 LIMIT ?`
@@ -437,12 +440,14 @@ LIMIT ?`
 			&httpStatus, &e.Outcome, &e.ErrorCode,
 			&e.FailureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &contentLength, &e.UpstreamTransferEncoding,
-			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered,
+			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered, &e.OutputTokensKnown,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
 		}
 		if firstOutputAt.Valid && generationNS.Valid {
+			known := e.OutputTokensKnown
 			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial, buffered)
+			e.OutputTokensKnown = known
 		}
 		e.UpstreamContentLengthKnown = contentLength.Valid
 		e.UpstreamContentLength = contentLength.Int64
@@ -480,6 +485,7 @@ LIMIT ?`
 		if strings.TrimSpace(unsupported) != "" && unsupported != "null" {
 			_ = json.Unmarshal([]byte(unsupported), &e.UnsupportedFeatures)
 		}
+		setE2ETPS(&e)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -518,8 +524,8 @@ SELECT
     coalesce(sum(cached_input_tokens) FILTER (WHERE outcome = 'success' AND cached_input_tokens_known), 0) AS cached_input_tokens,
     coalesce(sum(cache_creation_input_tokens) FILTER (WHERE outcome = 'success' AND cache_creation_input_tokens_known), 0) AS cache_creation_input_tokens,
     coalesce(bool_or(coalesce(cached_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false),
-    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + generationAggregates + `
-FROM ` + generationEvents + `
+    coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + tpsAggregates + `
+FROM ` + tpsEvents + `
 GROUP BY api_key_id`
 	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {
@@ -543,7 +549,8 @@ GROUP BY api_key_id`
 			&sum.CachedInputTokens,
 			&sum.CacheCreationInputTokens,
 			&sum.CachedInputTokensKnown, &sum.CacheCreationInputTokensKnown,
-			&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSBufferedSamples, &sum.TPSOutputTokens, &sum.TPSGenerationDurationMS,
+			&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSOutputTokens, &sum.TPSDurationMS,
+			&sum.ObservedTPSSamples, &sum.ObservedTPSEstimatedSamples, &sum.ObservedTPSPartialSamples, &sum.ObservedTPSBufferedSamples, &sum.ObservedTPSOutputTokens, &sum.ObservedTPSGenerationDurationMS,
 		); err != nil {
 			return nil, ErrStoreUnavailable
 		}

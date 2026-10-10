@@ -10,7 +10,7 @@ import (
 )
 
 func TestSchemaStartupSurvivesUncleanExit(t *testing.T) {
-	for _, layout := range []string{"fresh", "existing", "existing_without_generation", "existing_without_buffering"} {
+	for _, layout := range []string{"fresh", "existing", "existing_without_generation", "existing_without_buffering", "existing_without_output_observation"} {
 		t.Run(layout, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "usage.duckdb")
 			cmd := exec.Command(os.Args[0], "-test.run=^TestUsageSchemaCrashHelper$")
@@ -24,8 +24,11 @@ func TestSchemaStartupSurvivesUncleanExit(t *testing.T) {
 			}
 			defer store.Close()
 			dash, err := store.Dashboard(context.Background(), UsageFilter{AllTime: true})
-			if err != nil || dash.Summary.TPS == nil || *dash.Summary.TPS != 25 || dash.Summary.TPSSamples != 1 || dash.Summary.TPSBufferedSamples != 1 {
+			if err != nil || dash.Summary.ObservedTPS == nil || *dash.Summary.ObservedTPS != 25 || dash.Summary.ObservedTPSSamples != 1 || dash.Summary.ObservedTPSBufferedSamples != 1 {
 				t.Fatalf("generation WAL recovery: %+v %v", dash, err)
+			}
+			if dash.Summary.TPS == nil || *dash.Summary.TPS != 0 || dash.Summary.TPSSamples != 1 {
+				t.Fatalf("known-zero WAL recovery: %+v", dash)
 			}
 			var count int
 			if err = store.db.QueryRow("SELECT count(*) FROM usage_events WHERE event_id='committed'").Scan(&count); err != nil || count != 1 {
@@ -51,6 +54,11 @@ func TestUsageSchemaCrashHelper(t *testing.T) {
 		}
 		if layout == "existing_without_generation" {
 			if _, err = db.Exec(`DROP TABLE usage_generation`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if layout == "existing_without_output_observation" {
+			if _, err = db.Exec(`DROP TABLE usage_output_observation`); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -86,6 +94,13 @@ VALUES ('generated','key',now()-INTERVAL 1 SECOND,now(),current_date,'completed'
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(`INSERT INTO usage_generation_buffering VALUES ('generated')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(`INSERT INTO usage_events(event_id,api_key_id,started_at,completed_at,usage_date,state,http_status,outcome,output_tokens,total_tokens,duration_ms)
+ VALUES ('known-zero','key',now()-INTERVAL 1 SECOND,now(),current_date,'completed',200,'success',0,0,1000)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(`INSERT INTO usage_output_observation VALUES ('known-zero',true)`); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(); err != nil {

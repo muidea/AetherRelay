@@ -107,7 +107,7 @@ test('usage event list keeps complete values and diagnostic fields in the dialog
   const event={event_id:'0123456789abcdef',started_at:'2026-10-09T07:00:00Z',api_key_id:'a-very-long-key-name',model:'a-very-long-model-name',provider:'codexoauth',operation:'responses',input_tokens:202648,output_tokens:1231,total_tokens:203879,tps:123456.78,http_status:502,outcome:'upstream_failed',conversion_mode:'anthropic_to_codex_responses',upstream_status:200};
   const table=c.renderUsageEventTable([event]);
   const headers=[...table.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map(m=>m[1]);
-  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','TPS','最终状态','耗时(s)']);
+  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','E2E TPS','最终状态','耗时(s)']);
   assert.equal((table.match(/data-label=/g)||[]).length,9);
   assert.match(table,/<th scope="col" title="输入 Token \/ 输出 Token \/ 总 Token">Tokens<\/th>/);
   for(const value of [event.api_key_id,event.model,event.operation,'202,648','1,231','203,879','123456.78','upstream_failed'])assert.ok(table.includes(value),value);
@@ -208,7 +208,7 @@ test('TPS renders weighted server values, unknown and known zero with sample pro
   assert.doesNotMatch(elements.eventTable.innerHTML,/>partial</);
   c.showUsageEvent(event);
   assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\).*30\.00/);
-  assert.match(elements.usageEventDetail.innerHTML,/生成耗时（秒）<\/dt><dd>30<\/dd>/);
+  assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd>30<\/dd>/);
 });
 
 test('TPS trend uses daily weighted values and distinguishes missing days from known zero', async () => {
@@ -216,7 +216,7 @@ test('TPS trend uses daily weighted values and distinguishes missing days from k
   assert.match(html,/TPS 趋势（Token\/s）.*id="chartTPS"/);
   const daily=[
     {date:'2026-10-08',tps:null,tps_samples:0,output_tokens:5000},
-    {date:'2026-10-09',tps:25,tps_samples:2,tps_output_tokens:1000,tps_generation_duration_ms:40000,tps_estimated_samples:1,tps_partial_samples:1,output_tokens:6000},
+    {date:'2026-10-09',tps:25,tps_samples:2,tps_output_tokens:1000,tps_duration_ms:40000,tps_estimated_samples:1,tps_partial_samples:1,output_tokens:6000},
     {date:'2026-10-10',tps:0,tps_samples:1},
     {date:'2026-10-11',tps:null,tps_samples:0},
   ];
@@ -244,11 +244,11 @@ test('TPS trend uses daily weighted values and distinguishes missing days from k
 
 test('buffered delivery stays visible in events, summary, keys and trends', async () => {
  const {context:c,elements}=harness();
- const stats={tps:127784.6,tps_samples:2,tps_buffered_samples:1};
- const event={event_id:'buffered',api_key_id:'key',outcome:'success',http_status:200,tps:127784.6,generation_buffered:true,generation_partial:false};
+ const stats={tps:32.89,observed_tps:127784.6,tps_samples:2,observed_tps_buffered_samples:1};
+ const event={event_id:'buffered',api_key_id:'key',outcome:'success',http_status:200,tps:32.89,observed_tps:127784.6,generation_buffered:true,generation_partial:false};
  c.request=async url=>url.includes('/dashboard?')?{summary:stats,by_api_key:[{...stats,api_key_id:'key'}],daily:[{...stats,date:'2026-10-09'}]}:{events:[event]};
  await c.loadUsage();
- assert.equal(elements.uTPS.textContent,'127784.60');
+ assert.equal(elements.uTPS.textContent,'32.89');
  assert.match(elements.uTPS.title,/上游缓冲 1.*不能直接代表模型生成速度/);
  assert.match(elements.keyTable.innerHTML,/上游缓冲 1/);
  assert.match(elements.chartTPS.innerHTML,/上游缓冲 1.*不能直接代表模型生成速度/);
@@ -257,4 +257,30 @@ test('buffered delivery stays visible in events, summary, keys and trends', asyn
  c.showUsageEvent(event);
  assert.match(elements.usageEventDetail.innerHTML,/上游明确缓冲<\/dt><dd>true/);
  assert.doesNotMatch(c.usageTPSHint({tps:10}),/上游明确缓冲/);
+});
+
+
+test('E2E and buffered observed output rates are distinct in list and detail', () => {
+ const {context:c,elements}=harness();
+ const event={event_id:'x600-041517',outcome:'success',http_status:200,output_tokens:536,duration_ms:16296,tps:536/16.296,observed_tps:536/.093580012,generation_duration_ms:93.580012,generation_buffered:true,output_tokens_known:true};
+ const table=c.renderUsageEventTable([event]);
+ assert.match(table,/>E2E TPS</);
+ assert.match(table,/>32\.89</);
+ assert.doesNotMatch(table,/>5727\.72</);
+ c.showUsageEvent(event);
+ assert.match(elements.usageEventDetail.innerHTML,/E2E TPS \(Token\/s\)<\/dt><dd>32\.89/);
+ assert.match(elements.usageEventDetail.innerHTML,/观测输出 TPS \(Token\/s\)<\/dt><dd>5727\.72/);
+ assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd>0\.094/);
+ assert.match(c.usageTPSHint(event),/请求总耗时，含首输出等待/);
+ assert.equal(c.usageTPS({tps:null,observed_tps:5727.72}), '—');
+});
+
+
+test('known zero output on canceled requests remains observable', () => {
+ const {context:c}=harness();
+ const e={state:'completed',outcome:'client_canceled',input_tokens:0,output_tokens:0,total_tokens:0,cached_input_tokens_known:false,cache_creation_input_tokens_known:false,output_tokens_known:true,tps:0};
+ assert.equal(c.usageTokensUnavailable(e),false);
+ assert.equal(c.usageTokenValue(e,'output_tokens'),'0');
+ assert.equal(c.usageTPS(e),'0.00');
+ assert.match(c.usageTPSHint(e),/部分输出/);
 });

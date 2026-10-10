@@ -22,7 +22,7 @@ func TestBufferingTableAdditionPreservesExistingTiming(t *testing.T) {
 	if err := s.Complete(ctx, CompleteRecord{EventID: "old", HTTPStatus: 200, Outcome: "success", OutputTokens: 25, OutputTokensKnown: true, FirstOutputAt: at, GenerationDuration: time.Second}); err != nil {
 		t.Fatal(err)
 	}
-	// The deployed TPS version has timings but no buffering table.
+	// The deployed ObservedTPS version has timings but no buffering table.
 	if _, err := s.db.Exec(`DROP TABLE usage_generation_buffering`); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestBufferingTableAdditionPreservesExistingTiming(t *testing.T) {
 		t.Fatal(page, err)
 	}
 	e := page.Events[0]
-	if e.TPS == nil || *e.TPS != 25 || e.GenerationBuffered || e.OutputTokens != 25 {
+	if e.ObservedTPS == nil || *e.ObservedTPS != 25 || e.GenerationBuffered || e.OutputTokens != 25 {
 		t.Fatal(e)
 	}
 	var count int
@@ -78,7 +78,7 @@ func TestBufferingWriteFailureRollsBackEntireCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := s.Dashboard(ctx, UsageFilter{AllTime: true})
-	if err != nil || d.Summary.TPSBufferedSamples != 1 || d.Summary.TPS == nil || *d.Summary.TPS != 25 {
+	if err != nil || d.Summary.ObservedTPSBufferedSamples != 1 || d.Summary.ObservedTPS == nil || *d.Summary.ObservedTPS != 25 {
 		t.Fatal(d, err)
 	}
 }

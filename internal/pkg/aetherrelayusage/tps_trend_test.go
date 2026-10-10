@@ -55,16 +55,16 @@ func TestTPSTrendUTCDaysMissingSamplesAndFilters(t *testing.T) {
 				}
 			}
 			day := dashboard.Daily[1]
-			if day.TPS == nil || *day.TPS != 25 || day.TPSSamples != 2 || day.TPSOutputTokens != 1000 || day.TPSGenerationDurationMS != 40000 || day.TPSEstimatedSamples != 1 || day.TPSPartialSamples != 1 || day.OutputTokens != 6000 {
+			if day.ObservedTPS == nil || *day.ObservedTPS != 25 || day.ObservedTPSSamples != 2 || day.ObservedTPSOutputTokens != 1000 || day.ObservedTPSGenerationDurationMS != 40000 || day.ObservedTPSEstimatedSamples != 1 || day.ObservedTPSPartialSamples != 1 || day.OutputTokens != 6000 {
 				t.Fatalf("weighted day: %+v", day)
 			}
 			zero := dashboard.Daily[2]
-			if zero.TPS == nil || *zero.TPS != 0 || zero.TPSSamples != 1 || zero.TPSGenerationDurationMS != 1000 {
+			if zero.ObservedTPS == nil || *zero.ObservedTPS != 0 || zero.ObservedTPSSamples != 1 || zero.ObservedTPSGenerationDurationMS != 1000 {
 				t.Fatal("known zero lost", zero)
 			}
 			for _, i := range []int{0, 3} {
-				if day := dashboard.Daily[i]; day.TPS != nil || day.TPSSamples != 0 || day.TPSGenerationDurationMS != 0 {
-					t.Fatal("missing timing or empty day became zero TPS", day)
+				if day := dashboard.Daily[i]; day.ObservedTPS != nil || day.ObservedTPSSamples != 0 || day.ObservedTPSGenerationDurationMS != 0 {
+					t.Fatal("missing timing or empty day became zero ObservedTPS", day)
 				}
 			}
 			estimated := true
@@ -88,10 +88,10 @@ func TestTPSTrendUTCDaysMissingSamplesAndFilters(t *testing.T) {
 					}
 					day := filtered.Daily[1]
 					if test.known {
-						if day.TPS == nil || *day.TPS != test.want || day.TPSSamples != 1 {
+						if day.ObservedTPS == nil || *day.ObservedTPS != test.want || day.ObservedTPSSamples != 1 {
 							t.Fatal(day)
 						}
-					} else if day.TPS != nil || day.TPSSamples != 0 {
+					} else if day.ObservedTPS != nil || day.ObservedTPSSamples != 0 {
 						t.Fatal(day)
 					}
 				})

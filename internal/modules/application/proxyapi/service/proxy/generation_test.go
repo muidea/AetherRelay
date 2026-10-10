@@ -48,11 +48,11 @@ func TestCodexGenerationSettlementWithoutArchive(t *testing.T) {
 			}
 			e := page.Events[0]
 			if tok.OutputTokensKnown {
-				if e.TPS == nil || *e.TPS != float64(tok.CompletionTokens)/10 || e.GenerationDurationMS != 10000 || !e.GenerationBuffered {
+				if e.ObservedTPS == nil || *e.ObservedTPS != float64(tok.CompletionTokens)/10 || e.GenerationDurationMS != 10000 || !e.GenerationBuffered {
 					t.Fatal(e)
 				}
-			} else if e.TPS != nil {
-				t.Fatal("missing output usage polluted TPS", e)
+			} else if e.ObservedTPS != nil {
+				t.Fatal("missing output usage polluted ObservedTPS", e)
 			}
 		})
 	}
@@ -203,14 +203,14 @@ func TestChatGPTBothEndpointsAndModesUseFrozenUpstreamGeneration(t *testing.T) {
 						t.Fatal(page, err)
 					}
 					e := page.Events[0]
-					if e.TPS == nil || e.GenerationDurationMS != 20 || *e.TPS != float64(e.OutputTokens)/.02 || !e.Estimated || e.GenerationPartial != fail || e.OutputTokens <= 0 {
+					if e.ObservedTPS == nil || e.GenerationDurationMS != 20 || *e.ObservedTPS != float64(e.OutputTokens)/.02 || !e.Estimated || e.GenerationPartial != fail || e.OutputTokens <= 0 {
 						t.Fatalf("frozen sample lost: %+v; response=%s", e, writer.Body.String())
 					}
 					if fail && e.Outcome == "success" {
 						t.Fatal("partial failure recorded as success")
 					}
 					d, err := store.Dashboard(context.Background(), usage.UsageFilter{AllTime: true})
-					if err != nil || d.Summary.TPSSamples != 1 || len(d.ByAPIKey) != 1 || d.Summary.TPS == nil || *d.Summary.TPS != *e.TPS || d.ByAPIKey[0].TPS == nil || *d.ByAPIKey[0].TPS != *e.TPS {
+					if err != nil || d.Summary.ObservedTPSSamples != 1 || len(d.ByAPIKey) != 1 || d.Summary.ObservedTPS == nil || *d.Summary.ObservedTPS != *e.ObservedTPS || d.ByAPIKey[0].ObservedTPS == nil || *d.ByAPIKey[0].ObservedTPS != *e.ObservedTPS {
 						t.Fatal(d, err)
 					}
 				})

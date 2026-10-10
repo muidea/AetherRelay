@@ -32,7 +32,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		Operation: "chat_completions", ClientEndpoint: "/v1/chat/completions", ClientProtocol: "openai",
 	})
 	_ = store.Complete(context.Background(), usage.CompleteRecord{
-		EventID: "e1", OutputTokensKnown: true, FirstOutputAt: now.Add(500 * time.Millisecond), GenerationDuration: 500 * time.Millisecond, CompletedAt: now.Add(time.Second), Provider: "openai", Model: "gpt-4o",
+		EventID: "e1", OutputTokensKnown: true, FirstOutputAt: now.Add(500 * time.Millisecond), GenerationDuration: 500 * time.Millisecond, Duration: time.Second, CompletedAt: now.Add(time.Second), Provider: "openai", Model: "gpt-4o",
 		InputTokens: 10, OutputTokens: 5, CachedInputTokens: 4, CacheCreationInputTokens: 2, HTTPStatus: 200, Outcome: "success",
 	})
 
@@ -58,16 +58,16 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		if day["date"] == now.Format("2006-01-02") {
 			rows = append(rows, day)
 			foundDay = true
-		} else if day["tps"] != nil || day["tps_samples"] != float64(0) {
-			t.Fatalf("empty day has TPS: %v", day)
+		} else if day["tps"] != nil || day["tps_samples"] != float64(0) || day["observed_tps"] != nil || day["observed_tps_samples"] != float64(0) {
+			t.Fatalf("empty day has ObservedTPS: %v", day)
 		}
 	}
 	if !foundDay {
-		t.Fatal("daily TPS bucket missing")
+		t.Fatal("daily ObservedTPS bucket missing")
 	}
 	for _, row := range rows {
-		if row["tps"] != float64(10) || row["tps_samples"] != float64(1) {
-			t.Fatalf("TPS statistics=%v", row)
+		if row["tps"] != float64(5) || row["tps_samples"] != float64(1) || row["tps_duration_ms"] != float64(1000) || row["observed_tps"] != float64(10) || row["observed_tps_samples"] != float64(1) {
+			t.Fatalf("ObservedTPS statistics=%v", row)
 		}
 		if row["cached_input_tokens"] != float64(4) || row["cache_creation_input_tokens"] != float64(2) || row["cache_hit_rate"] != 0.4 {
 			t.Fatalf("cache statistics=%v", row)
@@ -100,7 +100,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Events) != 1 || page.Events[0].CacheHitRate != 0.4 || page.Events[0].TPS == nil || *page.Events[0].TPS != 10 || page.Events[0].GenerationDurationMS != 500 {
+	if len(page.Events) != 1 || page.Events[0].CacheHitRate != 0.4 || page.Events[0].TPS == nil || *page.Events[0].TPS != 5 || page.Events[0].ObservedTPS == nil || *page.Events[0].ObservedTPS != 10 || page.Events[0].GenerationDurationMS != 500 {
 		t.Fatalf("event cache statistics=%+v", page)
 	}
 

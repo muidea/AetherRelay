@@ -192,12 +192,11 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - ChatGPT Web 不提供通用 function/tool calling、工具循环、深度研究、网页插件；Codex 不提供网页会话与插件能力。
 - 单进程单工作区：`state.database` 不可多实例共享；账号定时刷新间隔修改后必须重启。
 
-## 单次生成 TPS
+## E2E TPS 与观测输出 TPS
 
-- 调用明细 TPS = 输出 Token / 生成耗时（秒）。生成耗时从首个实际文本、推理或工具参数输出（包括自定义工具 `response.custom_tool_call_input.delta/done`）计到上游结束，排除排队、响应头等待和首输出等待。`response.created`、role-only、心跳等元数据不启动计时。重试使用最终尝试的计时。转换流在读取结束、取消、超时和转换/客户端写入失败时冻结计时；ChatGPT Web 从上游 SSE 携带计时值，不计入账号结算或响应体清理耗时。
-- 用量总览和 API Key 表按当前筛选范围聚合：有效样本的输出 Token 合计 / 同一批样本的生成耗时合计，按耗时加权；不是单次 TPS 的算术平均，也不是并发系统吞吐量。100 Token / 10 秒和 900 Token / 30 秒合计为 25 TPS。
-- TPS 趋势按 UTC 日期聚合，遵循相同的有效样本和耗时加权口径，并应用当前时间、API Key、Provider、Model、Outcome 和估算筛选。悬停展示当日 TPS、有效样本数及估算/部分输出/上游明确缓冲样本数；无样本日期显示 `—`，已知零 TPS 显示零值标记。
-- 明细字段：`first_output_at`、`generation_duration_ms`、`tps`、`generation_partial`、`generation_buffered`；聚合字段：`tps`、`tps_samples`、`tps_output_tokens`、`tps_generation_duration_ms`、`tps_estimated_samples`、`tps_partial_samples`、`tps_buffered_samples`。估算和部分输出样本明确标记；只有输入用量、缺失输出计数、无实际输出或无正生成耗时的调用不参与 TPS，`tps=null`，页面显示 `—`。已有 Token 合计不因 TPS 样本筛选改变。
-- 支持 HTTP OpenAI / Anthropic / Responses SSE、对应协议转换、Codex OAuth SSE（含缓冲成非流式下游响应的路径），以及 ChatGPT Web 流式和非流式文本。直接返回完整 JSON 的非流式上游无法观测生成起点，不用请求总耗时代替生成耗时。
-- 上游 `X-Codex-Safety-Buffering-Enabled: true` 明确表示缓冲时，明细标记 `generation_buffered=true`，总览、Key 和趋势统计同一批有效样本中的 `tps_buffered_samples`。保留观测值和加权聚合，并在页面提示缓冲交付可能导致高 TPS，不能直接代表模型生成速度；不以数值阈值猜测缓冲、不用包含 TTFT 的总耗时替代。标志为 false 仅表示没有记录到明确信号，不证明未缓冲；旧记录不推测或回填缓冲标志。
-- 继续使用当前 DuckDB；新增 `usage_generation` 与 `usage_generation_buffering` 关联表，完成请求时与原明细在同一事务保存。不会对历史明细表执行 ALTER、重建或回填；历史记录保持未知 TPS。删除 API Key 用量时同步删除生成样本。CSV 在原列之后追加生成计时和 TPS 列。
+- 默认明细、总览、API Key 和趋势展示 `tps`（E2E TPS）= 输出 Token / 请求总耗时（秒），包含首输出等待、重试与请求处理耗时。分母使用与明细 `duration_ms` 相同的毫秒精度，可直接复算；这是请求级平均输出吞吐率，不是并发系统吞吐量。
+- 总览、Key、UTC 日期趋势分别使用同一批有效样本的输出 Token 合计 / 请求总耗时合计，并应用当前筛选条件。聚合字段为 `tps`、`tps_samples`、`tps_output_tokens`、`tps_duration_ms`、`tps_estimated_samples`、`tps_partial_samples`。失败、取消有已知输出及有效总耗时时保留样本，标记部分输出；缺失用量、非正耗时、未完成记录不参与。已知零输出为零，未知显示 `—`。普通 Token 合计不受 TPS 样本筛选影响。
+- `observed_tps` 独立保留网关观测输出交付速度：输出 Token / 首个实际文本、推理或工具参数输出至上游结束的耗时。详情展示 `first_output_at`、`generation_duration_ms`、`observed_tps`、`generation_partial`、`generation_buffered`；聚合使用 `observed_tps_*` 字段，分母为 `observed_tps_generation_duration_ms`。仍按最终尝试的输出计时，不将请求总耗时冒充生成计时。无有效输出计时则不可用；原计时采集、重试重置和取消冻结逻辑保持原定义。
+- Codex 上游明确的 `X-Codex-Safety-Buffering-Enabled: true` 保存在缓冲标记及 `observed_tps_buffered_samples` 中。缓冲后的集中交付可能产生极高的观测输出 TPS，不能作为模型生成速度；无明确信号也不能证明未缓冲。非流式下游可在上游 SSE 路径保留观测计时；完整 JSON 上游只有 E2E TPS。
+- `usage_output_observation` 关联表与请求完成在同一事务记录输出用量是否已知，支持已知零输出，删除 Key 用量时同步删除。已有记录的正输出计数或原生成样本可用于查询时复算；没有证据的历史零值保持未知。新增关联表不 ALTER、重建或回填历史明细。
+- API/CSV 的原 `tps` 字段改为 E2E 口径，原输出阶段值移至 `observed_tps`。CSV 保留原列位置，在末尾追加 `observed_tps` 与 `output_tokens_known`；外部消费方需同步字段含义。

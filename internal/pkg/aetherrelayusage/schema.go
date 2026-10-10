@@ -38,6 +38,9 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	if _, err := tx.ExecContext(ctx, `SELECT event_id FROM usage_generation_buffering LIMIT 0`); err != nil {
 		return fmt.Errorf("verify generation buffering schema: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `SELECT event_id, known FROM usage_output_observation LIMIT 0`); err != nil {
+		return fmt.Errorf("verify output observation schema: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
 	}
@@ -46,6 +49,7 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 
 func createSchema(ctx context.Context, tx *sql.Tx) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS usage_output_observation (event_id VARCHAR PRIMARY KEY, known BOOLEAN NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_generation_buffering (event_id VARCHAR PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS usage_generation (
     event_id VARCHAR PRIMARY KEY,

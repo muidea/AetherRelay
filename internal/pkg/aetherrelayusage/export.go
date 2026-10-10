@@ -51,7 +51,7 @@ var csvExportHeader = []string{
 	"state",
 	"cached_input_tokens_known",
 	"cache_creation_input_tokens_known",
-	"first_output_at", "generation_duration_ms", "tps", "generation_partial", "generation_buffered",
+	"first_output_at", "generation_duration_ms", "tps", "generation_partial", "generation_buffered", "observed_tps", "output_tokens_known",
 }
 
 // ExportCSV 按筛选条件流式写出 CSV。
@@ -90,8 +90,8 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state,
-    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered
-FROM ` + generationEvents + `
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known
+FROM ` + tpsEvents + `
 WHERE ` + where + `
 ORDER BY started_at ASC, event_id ASC`
 
@@ -128,7 +128,7 @@ ORDER BY started_at ASC, event_id ASC`
 		)
 		var firstOutputAt sql.NullTime
 		var generationNS sql.NullInt64
-		var partial, buffered bool
+		var partial, buffered, outputKnown bool
 		if err := rows.Scan(
 			&eventID, &roundID, &startedAt, &completedAt,
 			&usageDate, &apiKeyID,
@@ -144,7 +144,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&failureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
-			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered,
+			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered, &outputKnown,
 		); err != nil {
 			return ErrStoreUnavailable
 		}
@@ -224,7 +224,9 @@ ORDER BY started_at ASC, event_id ASC`
 		if firstOutputAt.Valid && generationNS.Valid {
 			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial, buffered)
 		}
-		row = append(row, generationCSV(sample)...)
+		sample.OutputTokensKnown = outputKnown
+		sample.TPS = outputRate(outputTok, float64(durationMS.Int64)/1000, state == StateCompleted && outputKnown)
+		row = append(row, tpsCSV(sample)...)
 		if err := cw.Write(row); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}

@@ -147,6 +147,8 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.Estimated = rec.Estimated
 	e.State = StateCompleted
 	e.GenerationSample = generationSample(rec)
+	e.OutputTokensKnown = rec.OutputTokensKnown || rec.OutputTokens > 0
+	setE2ETPS(e)
 	s.healthy.Store(1)
 	return nil
 }
@@ -510,7 +512,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			strconv.FormatBool(e.CachedInputTokensKnown),
 			strconv.FormatBool(e.CacheCreationInputTokensKnown),
 		}
-		row = append(row, generationCSV(e.GenerationSample)...)
+		row = append(row, tpsCSV(e.GenerationSample)...)
 		if err := cw.Write(row); err != nil {
 			return err
 		}

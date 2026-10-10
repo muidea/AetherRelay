@@ -340,6 +340,10 @@ WHERE event_id = ?
 		// 缺失或重复 Complete:不降级健康(业务一致性问题),但返回错误。
 		return ErrEventNotStarted
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO usage_output_observation (event_id, known) VALUES (?, ?)`, rec.EventID, rec.OutputTokensKnown || rec.OutputTokens > 0); err != nil {
+		s.markDegraded()
+		return fmt.Errorf("%w: save output observation: %v", ErrStoreUnavailable, err)
+	}
 	if validGeneration(rec) {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_generation (event_id, first_output_at, generation_duration_ns, partial) VALUES (?, ?, ?, ?)`, rec.EventID, rec.FirstOutputAt.UTC(), int64(rec.GenerationDuration), rec.GenerationPartial || rec.Outcome != "success"); err != nil {
 			s.markDegraded()
