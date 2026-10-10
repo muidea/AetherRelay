@@ -107,7 +107,7 @@ test('usage event list keeps complete values and diagnostic fields in the dialog
   const event={event_id:'0123456789abcdef',started_at:'2026-10-09T07:00:00Z',api_key_id:'a-very-long-key-name',model:'a-very-long-model-name',provider:'codexoauth',operation:'responses',input_tokens:202648,output_tokens:1231,total_tokens:203879,tps:123456.78,http_status:502,outcome:'upstream_failed',conversion_mode:'anthropic_to_codex_responses',upstream_status:200};
   const table=c.renderUsageEventTable([event]);
   const headers=[...table.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map(m=>m[1]);
-  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','E2E TPS','最终状态','耗时(s)']);
+  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','TPS','最终状态','耗时(s)']);
   assert.equal((table.match(/data-label=/g)||[]).length,9);
   assert.match(table,/<th scope="col" title="输入 Token \/ 输出 Token \/ 总 Token">Tokens<\/th>/);
   for(const value of [event.api_key_id,event.model,event.operation,'202,648','1,231','203,879','123456.78','upstream_failed'])assert.ok(table.includes(value),value);
@@ -264,11 +264,11 @@ test('E2E and buffered observed output rates are distinct in list and detail', (
  const {context:c,elements}=harness();
  const event={event_id:'x600-041517',outcome:'success',http_status:200,output_tokens:536,duration_ms:16296,tps:536/16.296,observed_tps:536/.093580012,generation_duration_ms:93.580012,generation_buffered:true,output_tokens_known:true};
  const table=c.renderUsageEventTable([event]);
- assert.match(table,/>E2E TPS</);
+ assert.match(table,/>TPS</);
  assert.match(table,/>32\.89</);
  assert.doesNotMatch(table,/>5727\.72</);
  c.showUsageEvent(event);
- assert.match(elements.usageEventDetail.innerHTML,/E2E TPS \(Token\/s\)<\/dt><dd>32\.89/);
+ assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\)<\/dt><dd>32\.89/);
  assert.match(elements.usageEventDetail.innerHTML,/观测输出 TPS \(Token\/s\)<\/dt><dd>5727\.72/);
  assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd>0\.094/);
  assert.match(c.usageTPSHint(event),/请求总耗时，含首输出等待/);
