@@ -37,6 +37,25 @@ type client struct {
 
 var _ metricsport.Port = client{}
 
+func (c client) BeginRequest() error { return c.requestActivity(true) }
+func (c client) EndRequest() error   { return c.requestActivity(false) }
+
+func (c client) requestActivity(started bool) error {
+	ev := event.NewEventWithContext(TopicRequestActivity, c.source, common.UnitID, event.NewHeader(), context.Background(), RequestActivityCommand{Started: started})
+	result, err := send(c.hub, ev, "metrics request activity")
+	if err != nil {
+		return err
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return getErr
+	}
+	if _, ok := data.(RequestActivityResult); !ok {
+		return fmt.Errorf("invalid metrics request activity response")
+	}
+	return nil
+}
+
 func (c client) ReserveModels(provider string, models []string) {
 	c.record(RecordCommand{Kind: ReserveModels, Provider: provider, Models: append([]string(nil), models...)})
 }

@@ -7,17 +7,23 @@ import (
 )
 
 const (
-	TopicAcquire        = "aetherrelay.metrics.command.acquire"
-	TopicRecord         = "aetherrelay.metrics.event.record"
-	TopicPrometheus     = "aetherrelay.metrics.command.prometheus"
-	TopicStats          = "aetherrelay.metrics.command.stats"
-	TopicProviderHealth = "aetherrelay.metrics.command.provider_health"
-	TopicProviderModel  = "aetherrelay.metrics.command.provider_model_health"
-	TopicResetHealth    = "aetherrelay.metrics.command.reset_provider_health"
+	TopicAcquire         = "aetherrelay.metrics.command.acquire"
+	TopicRequestActivity = "aetherrelay.metrics.command.request_activity"
+	TopicRecord          = "aetherrelay.metrics.event.record"
+	TopicPrometheus      = "aetherrelay.metrics.command.prometheus"
+	TopicStats           = "aetherrelay.metrics.command.stats"
+	TopicProviderHealth  = "aetherrelay.metrics.command.provider_health"
+	TopicProviderModel   = "aetherrelay.metrics.command.provider_model_health"
+	TopicResetHealth     = "aetherrelay.metrics.command.reset_provider_health"
 )
 
 type AcquireCommand struct{}
 type AcquireResult struct{}
+
+// RequestActivityCommand is synchronous so a snapshot observes acknowledged
+// starts and finishes without asynchronous notification loss or reordering.
+type RequestActivityCommand struct{ Started bool }
+type RequestActivityResult struct{}
 
 type RecordKind string
 

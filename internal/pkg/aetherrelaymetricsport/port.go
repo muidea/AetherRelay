@@ -9,6 +9,8 @@ import (
 )
 
 type Reporter interface {
+	BeginRequest() error
+	EndRequest() error
 	ReserveModels(provider string, models []string)
 	RecordClientUsage(apiKeyID string, input, output int)
 	RecordUsageStoreWriteError(phase string)

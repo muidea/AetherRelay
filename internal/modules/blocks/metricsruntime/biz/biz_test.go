@@ -2,11 +2,13 @@ package biz
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	metricscommon "aetherrelay/internal/modules/blocks/metricsruntime/pkg/common"
 	metricsevents "aetherrelay/internal/modules/blocks/metricsruntime/pkg/events"
+	metrics "aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 
 	"github.com/muidea/magicCommon/event"
@@ -29,4 +31,63 @@ func TestHandleRecordAcceptsPostWithoutResult(t *testing.T) {
 
 	// EventHub.Post invokes observers with result=nil; handlers must not reply.
 	biz.handleRecord(ev, nil)
+}
+
+func TestRequestActivityPortUpdatesSnapshotsSynchronously(t *testing.T) {
+	runtime, err := NewRuntime(context.Background(), configevents.Bootstrap{}, usage.NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	biz := &MetricsRuntime{runtime: runtime}
+	hub := event.NewHub(8)
+	defer hub.Terminate(context.Background())
+	observer := event.NewSimpleObserver(metricscommon.UnitID, hub)
+	for topic, handler := range map[string]func(event.Event, event.Result){
+		metricsevents.TopicAcquire:         biz.handleAcquire,
+		metricsevents.TopicRequestActivity: biz.handleRequestActivity,
+		metricsevents.TopicStats:           biz.handleStats,
+	} {
+		if err := observer.Subscribe(topic, handler); err != nil {
+			t.Fatal(err)
+		}
+	}
+	port, err := metricsevents.RequestPort(context.Background(), hub, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInflight := func(want int64) {
+		t.Helper()
+		data, err := port.StatsJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stats metrics.StatsJSON
+		if err := json.Unmarshal(data, &stats); err != nil {
+			t.Fatal(err)
+		}
+		if stats.Requests.Inflight != want {
+			t.Fatalf("inflight = %d, want %d", stats.Requests.Inflight, want)
+		}
+	}
+	assertInflight(0)
+	if err := port.BeginRequest(); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.BeginRequest(); err != nil {
+		t.Fatal(err)
+	}
+	assertInflight(2)
+	if err := port.EndRequest(); err != nil {
+		t.Fatal(err)
+	}
+	assertInflight(1)
+	if err := port.EndRequest(); err != nil {
+		t.Fatal(err)
+	}
+	assertInflight(0)
+	if err := port.EndRequest(); err == nil {
+		t.Fatal("unmatched finish must fail across EventHub")
+	}
+	assertInflight(0)
 }

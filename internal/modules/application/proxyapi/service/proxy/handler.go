@@ -575,6 +575,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Count the inbound request once, including validation and the complete
+	// stream lifetime. Every return and panic unwinds this deferred finish.
+	if h.metricsRegistry != nil {
+		if err := h.metricsRegistry.BeginRequest(); err != nil {
+			slog.Warn("begin request metric failed", "error", err)
+		} else {
+			defer func() {
+				if err := h.metricsRegistry.EndRequest(); err != nil {
+					slog.Warn("end request metric failed", "error", err)
+				}
+			}()
+		}
+	}
 	// 客户端身份解析:缺失、未知、禁用或冲突 Key 均返回 401(不计 usage)。
 	identity, internal := internalFeatureIdentity(r.Context())
 	finishClientRequest := func() {}

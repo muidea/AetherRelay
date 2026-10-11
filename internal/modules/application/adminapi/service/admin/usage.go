@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -37,6 +38,11 @@ func NewHandlerWithUsage(configPath string, runtime RuntimeConfig, store usage.S
 }
 
 func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
+	// Runtime metrics remain available independently of historical usage data.
+	if rel == "/api/usage/runtime" && r.Method == http.MethodGet {
+		h.usageRuntime(w, r)
+		return
+	}
 	if !((rel == "/api/usage/dashboard" || rel == "/api/usage/events" || rel == "/api/usage/filter-options") && r.Method == http.MethodGet) {
 		http.NotFound(w, r)
 		return
@@ -53,6 +59,27 @@ func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
 	case rel == "/api/usage/filter-options" && r.Method == http.MethodGet:
 		h.usageFilterOptions(w, r)
 	}
+}
+
+func (h *Handler) usageRuntime(w http.ResponseWriter, _ *http.Request) {
+	if h.metricsRegistry == nil {
+		writeError(w, http.StatusServiceUnavailable, "runtime metrics unavailable")
+		return
+	}
+	data, err := h.metricsRegistry.StatsJSON()
+	var snapshot struct {
+		Requests struct {
+			Inflight *int64 `json:"inflight"`
+		} `json:"requests"`
+	}
+	if err != nil || json.Unmarshal(data, &snapshot) != nil || snapshot.Requests.Inflight == nil || *snapshot.Requests.Inflight < 0 {
+		writeError(w, http.StatusServiceUnavailable, "runtime metrics unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Scope    string `json:"scope"`
+		Inflight int64  `json:"inflight"`
+	}{Scope: "process", Inflight: *snapshot.Requests.Inflight})
 }
 
 func (h *Handler) usageDashboard(w http.ResponseWriter, r *http.Request) {

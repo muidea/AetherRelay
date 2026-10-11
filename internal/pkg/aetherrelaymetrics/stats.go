@@ -78,6 +78,7 @@ const providerHealthWindow = 5 * time.Minute
 // StatsRequests 汇总请求计数。
 type StatsRequests struct {
 	Total      int64            `json:"total"`
+	Inflight   int64            `json:"inflight"`
 	ByProvider map[string]int64 `json:"by_provider"`
 	ByStatus   map[string]int64 `json:"by_status"`
 	ByOutcome  map[string]int64 `json:"by_outcome"`
@@ -118,6 +119,7 @@ func (r *Registry) StatsJSON() ([]byte, error) {
 
 func buildStatsLocked(r *Registry) StatsJSON {
 	requests := StatsRequests{
+		Inflight:   r.inflight,
 		ByProvider: map[string]int64{},
 		ByStatus:   map[string]int64{},
 		ByOutcome:  map[string]int64{},

@@ -31,6 +31,15 @@ ChatGPT Web 与 Codex OAuth 账号池始终启用。启动后通过管理台导�
 - `GET /healthz`
 - `GET /metrics`、`GET /stats`（默认仅本机可访问）
 
+当前并发通过 `/stats` 的 `requests.inflight` 和 `/metrics` 的
+`aetherrelay_requests_inflight` gauge 暴露，也随 `/stats/stream` 推送。
+它统计支持的代理业务请求从进入到结束的完整生命周期（含鉴权、校验和流式输出），
+一次请求内部的重试或 Provider 切换不重复计数；健康检查、管理接口和图片下载不计入。
+该指标为进程内实时值，重启后归零。
+Web 管理台「使用统计」显示当前并发，页面可见时每 2 秒通过管理员认证接口
+`GET /admin/api/usage/runtime` 刷新（路径跟随 `admin_base_path`）。该值为全局实时值，
+不受历史日期、Key、Provider 等筛选影响；读取失败时显示 `—`。
+
 客户端直接使用模型名，把请求地址指向网关即可：
 
 ```text

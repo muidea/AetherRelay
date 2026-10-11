@@ -19,6 +19,7 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 		return nil
 	}
 	r.mu.Lock()
+	inflight := r.inflight
 	snapshot := prometheusSnapshot{
 		requestCount:            copyRequestKeys(r.requestCount),
 		requestDurationSum:      copyFloatKeys(r.requestDurationSum),
@@ -47,6 +48,10 @@ func (r *Registry) WritePrometheus(w io.Writer) error {
 		usageHealthy:            r.usageHealthy,
 	}
 	r.mu.Unlock()
+
+	if _, err := fmt.Fprintf(w, "# HELP aetherrelay_requests_inflight Current inbound business requests, including active streams.\n# TYPE aetherrelay_requests_inflight gauge\naetherrelay_requests_inflight %d\n", inflight); err != nil {
+		return err
+	}
 
 	writeCounter(w, "aetherrelay_requests_total",
 		"Total number of LLM requests by provider, model, route, status, outcome, and TransportPlan labels.",

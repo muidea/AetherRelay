@@ -98,6 +98,7 @@
     .task-status-cancelled{color:#595959;background:#f5f5f5;border-color:#bfbfbf}.task-action-list{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.task-detail-results{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.task-detail-results img{width:112px;height:112px;object-fit:cover;border:1px solid var(--line);border-radius:6px;cursor:pointer}.task-detail-prompt,.task-detail-error{white-space:pre-wrap;word-break:break-word}.task-detail-error{color:var(--danger)}
     .account-menu{position:relative}.account-menu summary{list-style:none;cursor:pointer}.account-menu summary::-webkit-details-marker{display:none}.account-menu[open]{z-index:20}.account-menu-panel{position:absolute;right:0;top:calc(100% + 6px);min-width:190px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:var(--shadow);display:grid;gap:4px}.account-menu-panel .menu-label{padding:4px 8px;color:var(--muted);font-size:11px}.account-menu-panel .btn{width:100%;text-align:left;white-space:nowrap}.account-pool-card{overflow:visible}.account-pool-card #uaAccountTable{overflow:hidden;border-radius:0 0 var(--radius) var(--radius)}.unified-slot{display:grid;gap:8px;min-width:0;width:100%}.unified-slot-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.unified-slot-title{display:flex;align-items:center;gap:6px;font-weight:600}.unified-credential-toggle{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;white-space:nowrap}.unified-slot-primary{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;width:100%}.unified-slot-primary-value{font-size:14px;font-weight:400;color:var(--text)}.unified-slot-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;color:var(--muted);font-size:12px;width:100%}.unified-slot-meta>span{min-width:0}.unified-slot-meta>span:not(.tag){font-size:14px;color:var(--text)}.unified-slot .actions{gap:6px;flex-wrap:wrap;align-items:center;width:100%;padding-top:8px;border-top:1px solid var(--line)}.unified-slot .link-btn{padding:4px 8px;border:1px solid var(--line);border-radius:5px;background:#fff}.unified-slot .link-btn:hover{background:#f5f9ff;border-color:#91caff}.unified-usage{display:grid;gap:4px;width:100%}.unified-usage-head{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--text)}.unified-usage-head strong{font-weight:500;font-variant-numeric:tabular-nums}.unified-usage-meter{height:7px;overflow:hidden;border-radius:99px;background:#edf0f3}.unified-usage-meter i{display:block;height:100%;border-radius:inherit;background:var(--success);transition:width .2s ease}.unified-usage-meter.warning i{background:var(--warning)}.unified-usage-meter.exhausted i{background:var(--danger)}.unified-account-table{min-width:900px}.unified-account-table th,.unified-account-table td{padding:14px 16px;vertical-align:top;white-space:normal;overflow:visible}.unified-account-table th:nth-child(1){width:27%}.unified-account-table th:nth-child(2),.unified-account-table th:nth-child(3){width:36.5%}.unified-account-table td:first-child{border-right:1px solid var(--line)}.unified-account-table .unified-account-identity{min-width:0}.unified-account-table .unified-account-email{font-weight:600;line-height:1.4;overflow-wrap:anywhere;word-break:break-word}.unified-account-table .unified-account-ref{margin-top:5px;overflow-wrap:anywhere}.unified-account-table .account-refresh-state{margin-top:7px}.unified-account-table .unified-slot-meta>span{max-width:100%;overflow-wrap:anywhere}.unified-slot-empty{min-height:108px;display:flex;align-items:center;padding:12px;border:1px dashed var(--border);border-radius:7px;color:var(--muted);background:#fafafa;font-size:12px}
     @media(max-width:760px){.unified-account-table{min-width:760px}.unified-account-table th,.unified-account-table td{padding:10px}.unified-account-table th:nth-child(1){width:30%}.unified-account-table th:nth-child(2),.unified-account-table th:nth-child(3){width:35%}.unified-account-table .unified-slot-meta{grid-template-columns:1fr}.unified-account-table .unified-slot .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.unified-account-table .unified-slot .link-btn{text-align:center}}
+    .usage-card-label{position:relative;display:flex;align-items:center;gap:7px}.usage-tip{display:inline-flex;align-items:center;justify-content:center;flex:none;width:16px;height:16px;padding:0;border:1px solid #bfbfbf;border-radius:50%;background:transparent;color:#8c8c8c;font-family:inherit;font-size:11px;line-height:1;cursor:help}.usage-tip::after{content:attr(aria-label);position:absolute;left:0;top:calc(100% + 8px);z-index:20;box-sizing:border-box;width:100%;max-width:320px;padding:9px 11px;border-radius:6px;background:#262626;color:#fff;font-size:12px;font-weight:400;line-height:1.6;text-align:left;white-space:normal;box-shadow:0 3px 10px #0002;visibility:hidden;opacity:0;pointer-events:none}.usage-tip:hover::after,.usage-tip:focus::after{visibility:visible;opacity:1}.usage-tip:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
   </style>
 </head>
 <body>
@@ -165,21 +166,20 @@
         <div class="subtle" id="filterOptionsHint" style="margin:-8px 0 12px;min-height:18px"></div>
       </section>
       <section class="stats">
-        <div class="stat"><div class="stat-label">调用次数</div><div class="stat-value" id="uRequests" title="0">—</div></div>
-        <div class="stat"><div class="stat-label">总 Token</div><div class="stat-value" id="uTotal" title="0">—</div></div>
-        <div class="stat"><div class="stat-label">输入 / 输出</div><div class="stat-value" id="uIO" title="0">—</div></div>
-        <div class="stat"><div class="stat-label">成功率</div><div class="stat-value" id="uSuccess" title="0">—</div></div>
-        <div class="stat"><div class="stat-label">缓存使用率</div><div class="stat-value" id="uCacheRate">—</div></div>
-        <div class="stat"><div class="stat-label">TPS (Token/s)</div><div class="stat-value" id="uTPS">—</div></div>
-        <div class="stat"><div class="stat-label">缓存读取 / 创建 Token</div><div class="stat-value" id="uCacheTokens">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">调用次数<button type="button" class="usage-tip" aria-label="当前筛选范围内的请求数，含成功与失败。">?</button></div><div class="stat-value" id="uRequests">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">总 Token<button type="button" class="usage-tip" aria-label="当前筛选范围内的输入与输出 Token 合计。">?</button></div><div class="stat-value" id="uTotal">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">输入 / 输出 Token<button type="button" class="usage-tip" aria-label="当前筛选范围内的输入与输出 Token，分别显示。">?</button></div><div class="stat-value" id="uIO">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">成功率<button type="button" class="usage-tip" aria-label="成功请求数 / 请求总数；按最终结果判断。">?</button></div><div class="stat-value" id="uSuccess">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">缓存使用率<button type="button" class="usage-tip" aria-label="缓存读取 Token / 同批请求的输入 Token；仅统计缓存读取已知的成功请求。">?</button></div><div class="stat-value" id="uCacheRate">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">TPS (Token/s)<button type="button" class="usage-tip" aria-label="输出 Token 合计 / 请求总耗时合计（含首输出等待）；仅统计有效样本。">?</button></div><div class="stat-value" id="uTPS">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">缓存读取 / 创建 Token<button type="button" class="usage-tip" aria-label="成功请求中已报告的缓存读取与创建 Token，分别显示。">?</button></div><div class="stat-value" id="uCacheTokens">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">当前并发<button type="button" class="usage-tip" aria-label="全局正在处理的请求数（含流式请求），每 2 秒刷新；不受历史筛选影响。">?</button></div><div class="stat-value" id="uInflight">—</div></div>
       </section>
-      <p class="subtle">TPS = 输出 Token / 请求总耗时，包含首输出等待；总览、Key 与趋势按有效样本的输出 Token 合计 / 请求总耗时合计聚合。缺少输出用量或有效总耗时时显示 —。详情独立保留观测输出 TPS（首个实际输出至上游结束），上游缓冲可能使该值偏高，不能直接代表模型生成速度；无明确缓冲标记也不证明没有缓冲。</p>
-      <p class="subtle">缓存统计仅汇总成功请求中对应缓存字段已知的样本；失败、超时和转换拒绝仍保留在调用与明细中，但不参与缓存读取、创建、完整性及使用率计算。缓存使用率 = 读取已知的成功请求缓存读取 Token / 同一批请求的输入 Token；输入 Token 统一按含缓存读取与创建的口径记账，Anthropic 协议请求的比率不会超过 100%；无有效输入时显示 —。</p>
       <section class="charts">
-        <div class="card chart-card"><div class="chart-title">调用次数趋势</div><div id="chartRequests" class="chart-svg"></div></div>
-        <div class="card chart-card"><div class="chart-title">Token 趋势（输入/输出）</div><div id="chartTokens" class="chart-svg"></div></div>
-        <div class="card chart-card"><div class="chart-title">缓存使用率趋势（%）</div><div id="chartCacheRate" class="chart-svg"></div></div>
-        <div class="card chart-card"><div class="chart-title">TPS 趋势（Token/s）</div><div id="chartTPS" class="chart-svg"></div></div>
+        <div class="card chart-card"><div class="chart-title usage-card-label">调用次数趋势<button type="button" class="usage-tip" aria-label="按 UTC 日期汇总请求数，含成功与失败；应用当前筛选。">?</button></div><div id="chartRequests" class="chart-svg"></div></div>
+        <div class="card chart-card"><div class="chart-title usage-card-label">Token 趋势（输入/输出）<button type="button" class="usage-tip" aria-label="按 UTC 日期汇总输入与输出 Token；浅蓝为输入，深蓝为输出。">?</button></div><div id="chartTokens" class="chart-svg"></div></div>
+        <div class="card chart-card"><div class="chart-title usage-card-label">缓存使用率趋势（%）<button type="button" class="usage-tip" aria-label="按 UTC 日期计算缓存使用率；仅统计缓存读取已知的成功请求。">?</button></div><div id="chartCacheRate" class="chart-svg"></div></div>
+        <div class="card chart-card"><div class="chart-title usage-card-label">TPS 趋势（Token/s）<button type="button" class="usage-tip" aria-label="按 UTC 日期计算输出 Token 合计 / 请求总耗时合计；仅统计有效样本。">?</button></div><div id="chartTPS" class="chart-svg"></div></div>
       </section>
       <section class="card">
         <div class="toolbar"><span class="toolbar-title">API Key 使用量汇总</span><span class="toolbar-meta" id="keyMeta"></span></div>
@@ -681,7 +681,6 @@ const enUS={
   "TPS":"TPS","TPS (Token/s)":"TPS (Token/s)","观测输出 TPS (Token/s)":"Observed output TPS (Token/s)","观测输出阶段耗时（秒）":"Observed output duration (s)","输出用量已知":"Output usage known",
   "缓存使用率":"Cache usage rate","缓存读取 / 创建 Token":"Cache read / creation tokens","缓存读取 Token":"Cache read tokens","缓存创建 Token":"Cache creation tokens","输入 Token":"Input tokens","缓存使用率趋势（%）":"Cache usage rate trend (%)",
   "TPS 趋势（Token/s）":"TPS trend (tokens/s)",
-  "缓存统计仅汇总成功请求中对应缓存字段已知的样本；失败、超时和转换拒绝仍保留在调用与明细中，但不参与缓存读取、创建、完整性及使用率计算。缓存使用率 = 读取已知的成功请求缓存读取 Token / 同一批请求的输入 Token；输入 Token 统一按含缓存读取与创建的口径记账，Anthropic 协议请求的比率不会超过 100%；无有效输入时显示 —。":"Cache statistics include successful requests with the corresponding cache field reported. Failures, timeouts, and conversion rejections remain in request counts and event details, but are excluded from cache read, creation, completeness, and usage-rate calculations. Cache usage rate = cache read tokens from successful requests / input tokens from successful requests; input tokens always include cache reads and creations, so Anthropic-protocol rates never exceed 100%; no eligible input is shown as —.",
   "添加附件":"Add attachment","输入消息，可附加图片、PDF、TXT、Markdown 或 CSV。Enter 换行，Ctrl+Enter 发送":"Enter a message or attach an image, PDF, TXT, Markdown, or CSV file. Enter adds a line; Ctrl+Enter sends.","移除附件":"Remove attachment","联网搜索":"Web search","本轮强制使用 ChatGPT Web 联网搜索；不支持图片或文件附件。":"This turn forces ChatGPT Web search. Images and file attachments are unavailable.","联网搜索不支持图片或文件附件":"Web search does not support image or file attachments",
   "管理控制台":"Administration console","Provider 管理":"Providers","客户端 Key":"Client keys","使用统计":"Usage","账号池":"Account pools","功能集":"Features","系统信息":"System information","本地管理模式":"Local administration","退出登录":"Log out","显示语言":"Display language","简体中文":"Simplified Chinese",
   "新增 Provider":"Add provider","当前实例没有关联可写配置文件，只能查看 Provider。":"This instance has no writable configuration file; providers are read-only.","当前实例未配置凭据主密钥，Provider 安全存储不可写。":"No credential master key is configured; secure Provider storage is read-only.","Provider 总数":"Providers","已启用":"Enabled","官方":"Official","第三方":"Third party","Provider 列表":"Provider list","搜索名称 / 来源 / 模型":"Search name, source, or model","正在加载配置…":"Loading configuration…",
@@ -728,6 +727,22 @@ Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集
 Object.assign(enUS,{"刷新所选额度/凭据":"Refresh selected quota/credentials","同步图片额度和账号状态，必要时续期 OAuth 凭证":"Synchronize image quota and account status, renewing OAuth credentials when needed","强制续期 OAuth 凭证；成功后自动同步模型与上游用量":"Force-renew OAuth credentials, then synchronize models and upstream usage","凭据刷新完成：成功 {succeeded}，失败 {failed}；模型与用量同步已启动":"Credential refresh complete: {succeeded} succeeded, {failed} failed; model and usage synchronization started"});
 Object.assign(enUS,{"等待手工刷新":"Awaiting manual refresh","刷新失败时间：{failed}；下次重试：{retry}":"Refresh failed at {failed}; next retry {retry}","自动刷新失败 · 重试 {time}":"Automatic refresh failed · retry {time}","手工":"Manual","自动":"Automatic","上游":"Upstream","响应头":"Response headers","最近刷新：{last}；来源：{source}":"Last refreshed {last}; source: {source}","下次刷新 {time}":"Next refresh {time}","最近刷新 {time}":"Last refreshed {time}"});
 Object.assign(enUS,{"总耗时 {duration}":"Total duration {duration}"});
+Object.assign(enUS,{
+  "输入 / 输出 Token":"Input / output tokens","成功请求":"Successful requests",
+  "当前筛选范围内的请求数，含成功与失败。":"Requests matching the current filters, including successes and failures.",
+  "当前筛选范围内的输入与输出 Token 合计。":"Total input and output tokens matching the current filters.",
+  "当前筛选范围内的输入与输出 Token，分别显示。":"Input and output tokens matching the current filters, shown separately.",
+  "成功请求数 / 请求总数；按最终结果判断。":"Successful requests / total requests, based on the final outcome.",
+  "缓存读取 Token / 同批请求的输入 Token；仅统计缓存读取已知的成功请求。":"Cache read tokens / input tokens for the same successful requests with known cache reads.",
+  "输出 Token 合计 / 请求总耗时合计（含首输出等待）；仅统计有效样本。":"Total output tokens / total request duration, including the wait for first output; valid samples only.",
+  "成功请求中已报告的缓存读取与创建 Token，分别显示。":"Reported cache read and creation tokens from successful requests, shown separately.",
+  "全局正在处理的请求数（含流式请求），每 2 秒刷新；不受历史筛选影响。":"Active global requests, including streams; refreshes every 2s, independently of historical filters.",
+  "按 UTC 日期汇总请求数，含成功与失败；应用当前筛选。":"Daily requests in UTC, including successes and failures, matching the current filters.",
+  "按 UTC 日期汇总输入与输出 Token；浅蓝为输入，深蓝为输出。":"Daily input and output tokens in UTC; light blue is input, dark blue is output.",
+  "按 UTC 日期计算缓存使用率；仅统计缓存读取已知的成功请求。":"Daily cache usage rate in UTC, using successful requests with known cache reads.",
+  "按 UTC 日期计算输出 Token 合计 / 请求总耗时合计；仅统计有效样本。":"Daily total output tokens / total request duration in UTC; valid samples only."
+});
+Object.assign(enUS,{"当前并发":"Current concurrency","当前并发数据不可用":"Current concurrency unavailable"});
 Object.assign(enUS,{"可一次选择最多 20 个 JSON 文件；系统会合并预检后一次导入。选择集总计最大 1 MiB、最多 1000 个账号；每个文件可为 ChatGPT Web 导出的 JSON 数组或单条 JSON 对象。":"Choose up to 20 JSON files at once. They are merged, validated, and imported in one request. The complete selection is limited to 1 MiB and 1,000 accounts; each file may be a ChatGPT Web export array or a single credential object.","可一次选择最多 20 个 JSON 文件；无法读取、解析或缺少必要凭据的文件会整份忽略，其余文件合并为一次导入。选择集总计最大 1 MiB、最多 1000 个有效账号；每个文件可为 Codex OAuth 导出的 JSON 数组或单条 JSON 对象。":"Choose up to 20 JSON files at once. Files that cannot be read or parsed, or that lack required credentials, are ignored as a whole; the remaining files are merged into one import request. The complete selection is limited to 1 MiB and 1,000 valid accounts; each file may be a Codex OAuth export array or a single credential object.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组、{accounts:[...]}，也支持每行一个 access token；Codex OAuth 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, {accounts:[...]}, or one access token per line; Codex OAuth exports cannot be imported here.","文件与粘贴内容只能选择一种。支持单条 JSON 对象、JSON 数组或 {accounts:[...]}；ChatGPT Web 导出不可导入此处。":"Choose either a file or pasted content. Supports a single JSON object, JSON array, or {accounts:[...]}; ChatGPT Web exports cannot be imported here.","账号必须是单条对象或非空对象数组":"An account must be a single object or a non-empty object array.","tokens 必须是字符串数组":"tokens must be an array of strings.","账号必须是单条对象或非空数组":"An account must be a single object or a non-empty array.","账号 JSON 仅支持 token 字符串或含 access_token 的对象":"Account JSON accepts only token strings or objects containing access_token.","一次最多选择 20 个 JSON 文件":"Choose at most 20 JSON files at once.","选择的 JSON 文件合计不能超过 1 MiB":"The selected JSON files must not exceed 1 MiB in total.","导入请求不能超过 1 MiB":"The import request must not exceed 1 MiB.","单次最多导入 1000 个账号":"Import at most 1,000 accounts at once.","没有可导入的有效 Codex 凭据文件":"No valid Codex credential files are available for import."});
 Object.assign(enUS,{"Provider 权限":"Provider access","有效 Provider":"Effective providers","可用模型":"Available models","编辑权限":"Edit access","Provider 访问范围":"Provider access scope","指定 Provider":"Selected providers","仅允许勾选的上游":"Allow only selected upstreams","全部 Provider":"All providers","未来新增 Provider 也自动授权":"Automatically allow future providers","搜索 Provider":"Search providers","编辑 Provider 权限":"Edit provider access","客户端 Key":"Client key","有效模型":"Effective models","搜索模型 / Provider / 端点":"Search model, provider, or endpoint","支持端点":"Supported endpoints","上下文 / 最大输出":"Context / max output","正在加载有效模型…":"Loading effective models…","暂无可用模型":"No available models","当前不会发布模型":"Currently publishes no models","请至少选择一个 Provider":"Select at least one provider","Provider 权限已保存":"Provider access saved"});
 Object.assign(enUS,{"指纹收敛":"Fingerprint convergence","默认按下游会话隔离收敛；可显式关闭":"Scoped by downstream conversation by default; may be explicitly disabled.","作用域（默认）":"Scoped (default)","关闭":"Off","指纹":"Fingerprint","fingerprint_mode 必须是 off/scoped":"fingerprint_mode must be off/scoped","最大并发":"Max concurrency","单个账号允许同时占用的上游请求数（1–32）":"Maximum simultaneous upstream requests for this account (1–32).","最大并发必须是 1 到 32 之间的整数":"Max concurrency must be an integer between 1 and 32.","max_concurrency 必须是 1 到 32 之间的整数":"max_concurrency must be an integer between 1 and 32.","保存设置":"Save settings","取消修改":"Discard changes","Codex 账号设置已保存":"Codex account settings saved"});
@@ -2693,20 +2708,39 @@ async function loadFilterOptions(force=false){
     if(!state.filterOptionsWarned){state.filterOptionsWarned=true;toast(e.message||"筛选选项加载失败","error")}
   }
 }
+async function loadUsageRuntime(){
+  if(state.usageRuntimeBusy)return;
+  state.usageRuntimeBusy=true;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),5000);
+  try{
+    const data=await request(apiURL("/api/usage/runtime"),{signal:controller.signal});
+    if(data?.scope!=="process"||!Number.isSafeInteger(data.inflight)||data.inflight<0)throw new Error("invalid runtime metrics");
+    $("uInflight").textContent=formatNumber(data.inflight);
+    $("uInflight").title=usageCardHint("inflight",data);
+  }catch(e){
+    $("uInflight").textContent="—";
+    $("uInflight").title=t("当前并发数据不可用");
+  }finally{
+    clearTimeout(timeout);
+    state.usageRuntimeBusy=false;
+  }
+}
 async function loadUsage(resetEvents=true){
+  loadUsageRuntime();
   try{
     const data=await request(apiURL(`/api/usage/dashboard?${usageParams().toString()}`));
     state.usage=data;
     const s=data.summary||{};
-    $("uRequests").textContent=compact(s.requests);$("uRequests").title=String(s.requests||0);
-    $("uTotal").textContent=compact(s.total_tokens);$("uTotal").title=String(s.total_tokens||0);
-    $("uIO").textContent=`${compact(s.input_tokens)} / ${compact(s.output_tokens)}`;$("uIO").title=`in ${s.input_tokens||0} / out ${s.output_tokens||0}`;
+    $("uRequests").textContent=compact(s.requests);$("uRequests").title=usageCardHint("requests",s);
+    $("uTotal").textContent=compact(s.total_tokens);$("uTotal").title=usageCardHint("total",s);
+    $("uIO").textContent=`${compact(s.input_tokens)} / ${compact(s.output_tokens)}`;$("uIO").title=usageCardHint("io",s);
     const rate=s.success_rate!=null?(s.success_rate*100).toFixed(1)+"%":"—";
-    $("uSuccess").textContent=rate;$("uSuccess").title=`success ${s.success_requests||0} / ${s.requests||0}`;
-    $("uCacheRate").textContent=usageCacheRate(s);$("uCacheRate").title=usageCacheHint(s);
-    $("uCacheTokens").textContent=`${usageCacheTokens(s,"cached_input_tokens")} / ${usageCacheTokens(s,"cache_creation_input_tokens")}`;$("uCacheTokens").title=usageCacheHint(s);
+    $("uSuccess").textContent=rate;$("uSuccess").title=usageCardHint("success",s);
+    $("uCacheRate").textContent=usageCacheRate(s);$("uCacheRate").title=usageCardHint("cacheRate",s);
+    $("uCacheTokens").textContent=`${usageCacheTokens(s,"cached_input_tokens")} / ${usageCacheTokens(s,"cache_creation_input_tokens")}`;$("uCacheTokens").title=usageCardHint("cacheTokens",s);
     renderCharts(data.daily||[]);
-    $("uTPS").textContent=usageTPS(s);$("uTPS").title=usageTPSHint(s);
+    $("uTPS").textContent=usageTPS(s);$("uTPS").title=usageCardHint("tps",s);
     renderKeyTable(data.by_api_key||[]);
     if(resetEvents){state.events=[];state.cursor="";await loadEvents(true)}
   }catch(e){
@@ -2718,10 +2752,24 @@ async function loadUsage(resetEvents=true){
 function usageParams(){const p=new URLSearchParams();if(state.range!=="today")p.set("range",state.range);[["api_key_id",state.apiKeyFilter],["provider",state.providerFilter],["model",state.modelFilter],["outcome",state.outcomeFilter],["estimated",state.estimatedFilter],["from",state.from],["to",state.to]].forEach(([k,v])=>{if(v)p.set(k,v)});return p}
 function renderCharts(daily){
   const reqs=daily.map(d=>Number(d.requests)||0);const ins=daily.map(d=>Number(d.input_tokens)||0);const outs=daily.map(d=>Number(d.output_tokens)||0);const labels=daily.map(d=>(d.date||"").slice(5));
-  $("chartRequests").innerHTML=svgBars(reqs,labels,"#1677ff");
-  $("chartTokens").innerHTML=svgStacked(ins,outs,labels);
-  $("chartCacheRate").innerHTML=svgBars(daily.map(d=>Number(d.cache_hit_rate)*100||0),labels,"#52c41a",100,daily.map(d=>`${d.date}: ${usageCacheRate(d)} · ${usageCacheHint(d)}`));
-  $("chartTPS").innerHTML=svgBars(daily.map(d=>usageTPS(d)==="—"?null:d.tps),labels,"#722ed1",1,daily.map(d=>`${d.date}: ${usageTPS(d)} Token/s · ${usageTPSHint(d)}`));
+  const hints=kind=>daily.map(d=>`${d.date} · ${usageCardHint(kind,d).replaceAll("\n"," · ")}`);
+  $("chartRequests").innerHTML=svgBars(reqs,labels,"#1677ff",1,hints("requests"));
+  $("chartTokens").innerHTML=svgStacked(ins,outs,labels,hints("io"));
+  $("chartCacheRate").innerHTML=svgBars(daily.map(d=>usageCacheRate(d)==="—"?null:d.cache_hit_rate*100),labels,"#52c41a",100,hints("cacheRate"));
+  $("chartTPS").innerHTML=svgBars(daily.map(d=>usageTPS(d)==="—"?null:d.tps),labels,"#722ed1",1,hints("tps"));
+}
+function usageCardHint(kind,value){
+  const line=(label,data)=>`${t(label)}：${data}`;
+  switch(kind){
+    case "requests":return line("调用次数",formatNumber(value.requests));
+    case "total":return line("总 Token",formatNumber(value.total_tokens));
+    case "io":return [line("输入 Token",formatNumber(value.input_tokens)),line("输出 Token",formatNumber(value.output_tokens))].join("\n");
+    case "success":return [line("成功请求",formatNumber(value.success_requests)),line("调用次数",formatNumber(value.requests))].join("\n");
+    case "cacheRate":return line("缓存使用率",usageCacheRate(value));
+    case "cacheTokens":return [line("缓存读取 Token",usageCacheTokens(value,"cached_input_tokens")),line("缓存创建 Token",usageCacheTokens(value,"cache_creation_input_tokens"))].join("\n");
+    case "tps":return line("TPS",usageTPS(value)==="—"?"—":`${usageTPS(value)} Token/s`);
+    case "inflight":return line("当前并发",formatNumber(value.inflight));
+  }
 }
 function usageCacheRate(usage){if(usage?.cached_input_tokens_known===false)return "—";const input=usage?.cache_input_tokens??usage?.input_tokens;return Number(input)>0&&Number.isFinite(usage?.cache_hit_rate)?`${formatNumber(usage.cache_hit_rate*100,{maximumFractionDigits:1})}%`:"—"}
 function usageCacheTokens(usage,key){const value=usage?.[key];return usage?.[`${key}_known`]===false?(Number(value)>0?`${t("已报告")} ${formatNumber(value)} (${t("不完整")})`:t("未提供")):formatNumber(value)}
@@ -2730,7 +2778,19 @@ function usageTokensUnavailable(event){return (event?.state==="started"||event?.
 function usageTokenValue(event,key){return usageTokensUnavailable(event)?t("未取得"):formatNumber(event?.[key])}
 function usageDurationSeconds(value){if(value===null||value===undefined||value==="")return "—";const milliseconds=Number(value);return Number.isFinite(milliseconds)&&milliseconds>=0?formatNumber(milliseconds/1000,{maximumFractionDigits:3}):"—"}
 function svgBars(vals,labels,color,scale=1,titles=[]){const w=600,h=180,pad=28;const valid=v=>typeof v==="number"&&Number.isFinite(v)&&v>=0;const max=Math.max(1,scale,...vals.filter(valid));const n=Math.max(vals.length,1);const bw=(w-pad*2)/n;let bars="";vals.forEach((v,i)=>{const x=pad+i*bw+bw*0.15;const title=esc(titles[i]||`${labels[i]||""}: ${valid(v)?v:"—"}`);if(!valid(v)){bars+=`<text x="${x+bw*0.35}" y="${h-pad-6}" text-anchor="middle" fill="#8c8c8c">—<title>${title}</title></text>`;return}if(v===0){bars+=`<circle cx="${x+bw*0.35}" cy="${h-pad}" r="3" fill="${color}"><title>${title}</title></circle>`;return}const bh=(v/max)*(h-pad*2);const y=h-pad-bh;bars+=`<rect x="${x}" y="${y}" width="${bw*0.7}" height="${bh}" fill="${color}" rx="2"><title>${title}</title></rect>`});return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%">${bars}<line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#d9d9d9"/></svg>`}
-function svgStacked(ins,outs,labels){const w=600,h=180,pad=28;const totals=ins.map((v,i)=>v+(outs[i]||0));const max=Math.max(1,...totals);const n=Math.max(ins.length,1);const bw=(w-pad*2)/n;let bars="";ins.forEach((v,i)=>{const t=totals[i];const bh=(t/max)*(h-pad*2);const inH=t? (v/t)*bh:0;const outH=bh-inH;const x=pad+i*bw+bw*0.15;const y=h-pad-bh;bars+=`<rect x="${x}" y="${y+outH}" width="${bw*0.7}" height="${Math.max(inH,0)}" fill="#69b1ff"/><rect x="${x}" y="${y}" width="${bw*0.7}" height="${Math.max(outH,0)}" fill="#1677ff"><title>${labels[i]||""}: in ${v} / out ${outs[i]||0}</title></rect>`});return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%">${bars}<line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#d9d9d9"/></svg>`}
+function svgStacked(ins,outs,labels,titles=[]){
+  const w=600,h=180,pad=28,totals=ins.map((v,i)=>v+(outs[i]||0));
+  const max=Math.max(1,...totals),n=Math.max(ins.length,1),bw=(w-pad*2)/n;
+  let bars="";
+  ins.forEach((v,i)=>{
+    const total=totals[i],bh=(total/max)*(h-pad*2),inH=total?(v/total)*bh:0,outH=bh-inH;
+    const x=pad+i*bw+bw*0.15,y=h-pad-bh;
+    const title=esc(titles[i]||`${labels[i]||""} · ${usageCardHint("io",{input_tokens:v,output_tokens:outs[i]||0}).replaceAll("\n"," · ")}`);
+    if(total===0){bars+=`<circle cx="${x+bw*0.35}" cy="${h-pad}" r="3" fill="#69b1ff"><title>${title}</title></circle>`;return}
+    bars+=`<rect x="${x}" y="${y+outH}" width="${bw*0.7}" height="${Math.max(inH,0)}" fill="#69b1ff"><title>${title}</title></rect><rect x="${x}" y="${y}" width="${bw*0.7}" height="${Math.max(outH,0)}" fill="#1677ff"><title>${title}</title></rect>`;
+  });
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%">${bars}<line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#d9d9d9"/></svg>`;
+}
 function usageTPS(value){const n=value?.tps;return typeof n==="number"&&Number.isFinite(n)&&n>=0?n.toFixed(2):"—"}
 function usageTPSHint(value){if(usageTPS(value)==="—")return "缺少输出 Token 或有效请求总耗时";const observed=usageTPS({tps:value.observed_tps});if(value.tps_samples!=null)return `TPS：输出 Token 合计 / 请求总耗时合计；有效样本 ${value.tps_samples}；估算 ${value.tps_estimated_samples||0}；部分输出 ${value.tps_partial_samples||0}；观测输出 TPS ${observed}；上游缓冲 ${value.observed_tps_buffered_samples||0}${value.observed_tps_buffered_samples?"；观测输出 TPS 包含缓冲交付，不能直接代表模型生成速度":""}`;return `TPS：输出 Token / 请求总耗时，含首输出等待；${value.estimated?"估算 Token":"上游 Token"}；${value.generation_partial||value.outcome&&value.outcome!=="success"?"部分输出":"完整输出"}；观测输出 TPS ${observed}${value.generation_buffered?"；上游明确缓冲：观测输出 TPS 不能直接代表模型生成速度":""}`}
 
@@ -3782,6 +3842,7 @@ Promise.allSettled([initAuthSession(),loadAdminPreferences()]).finally(()=>{
   setTaskMode(state.cg.tasks.mode||"generation",false);
   showTab(boot.tab);
   state.usageTimer=setInterval(()=>{if(state.tab==="usage")loadUsage(false)},15000);
+  state.usageRuntimeTimer=setInterval(()=>{if(state.tab==="usage"&&!document.hidden)loadUsageRuntime()},2000);
 });
 
 

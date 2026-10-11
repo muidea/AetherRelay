@@ -11,7 +11,7 @@ const source = scripts.at(-1);
 function harness() {
   const elements = {};
   const context = vm.createContext({
-    state: {locale: 'zh-CN', range: 'today', events: []}, URLSearchParams,
+    state: {locale: 'zh-CN', range: 'today', events: []}, URLSearchParams, AbortController, setTimeout, clearTimeout,
     $: id => elements[id] ||= {showModal() {}},
     t: s => s, apiURL: s => s,
     formatDate: s => s,
@@ -19,7 +19,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsage', 'renderUsageEventTable', 'loadEvents', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'loadEvents', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -30,6 +30,49 @@ function harness() {
 
 test('all embedded scripts parse', () => {
   for (const script of scripts) new vm.Script(script);
+});
+
+test('current concurrency reads a separate live endpoint independently of historical filters', async () => {
+  const {context:c,elements}=harness();
+  c.state.range='30d';c.state.apiKeyFilter='other';c.state.providerFilter='other';
+  const urls=[];
+  c.request=async (url,options)=>{urls.push(url);assert.ok(options.signal);return {scope:'process',inflight:12};};
+  await c.loadUsageRuntime();
+  assert.deepEqual(urls,['/api/usage/runtime']);
+  assert.equal(elements.uInflight.textContent,'12');
+  assert.equal(elements.uInflight.title,'当前并发：12');
+  c.request=async()=>({scope:'process',inflight:0});
+  await c.loadUsageRuntime();
+  assert.equal(elements.uInflight.textContent,'0');
+});
+
+test('current concurrency clears stale values on failure or invalid data', async () => {
+  const {context:c,elements}=harness();
+  c.request=async()=>({scope:'process',inflight:5});
+  await c.loadUsageRuntime();
+  for(const value of [null,{}, {scope:'process',inflight:null}, {scope:'process',inflight:-1}, {scope:'process',inflight:1.5}, {scope:'process',inflight:'2'}]){
+    c.request=async()=>value;
+    await c.loadUsageRuntime();
+    assert.equal(elements.uInflight.textContent,'—');
+    assert.equal(elements.uInflight.title,'当前并发数据不可用');
+    assert.equal(c.state.usageRuntimeBusy,false);
+  }
+  c.request=async()=>{throw new Error('offline')};
+  await c.loadUsageRuntime();
+  assert.equal(elements.uInflight.textContent,'—');
+});
+
+test('current concurrency polling avoids overlapping requests', async () => {
+  const {context:c,elements}=harness();
+  let finish,calls=0;
+  c.request=()=>{calls++;return new Promise(resolve=>{finish=resolve})};
+  const pending=c.loadUsageRuntime();
+  await c.loadUsageRuntime();
+  assert.equal(calls,1);
+  finish({scope:'process',inflight:3});
+  await pending;
+  assert.equal(elements.uInflight.textContent,'3');
+  assert.equal(c.state.usageRuntimeBusy,false);
 });
 
 test('observation presence preserves unknown, known zero and partial totals', () => {
@@ -65,16 +108,18 @@ test('dashboard, chart, key table and events render server cache statistics', as
   const {context: c, elements} = harness();
   const usage = {input_tokens: 1000, output_tokens: 20, total_tokens: 1020, cached_input_tokens: 100, cache_creation_input_tokens: 30, cache_hit_rate: 0.1};
   const event = {...usage, api_key_id: 'key-a', event_id: 'event-a', provider: 'codexoauth', model: 'gpt-5.6-sol', operation: 'responses', conversion_mode: 'codex_oauth_responses', conversion_duration_ms: 17, first_event_duration_ms: 82, duration_ms: 108, upstream_duration_ms: 7, http_status: 503, outcome: 'provider_unavailable', failure_class: 'accounts_cooling', retryable: true, retry_after_seconds: 5};
-  c.request = async url => url.includes('/dashboard?')
+  c.request = async url => url==='/api/usage/runtime' ? {scope:'process',inflight:4} : url.includes('/dashboard?')
     ? {summary: usage, daily: [{...usage, date: '2026-09-01'}], by_api_key: [event]}
     : {events: [event]};
   c.$('keyTable').className='loading';
   await c.loadUsage();
+	assert.equal(elements.uInflight.textContent, '4');
   assert.equal(elements.keyTable.className, '');
   assert.equal(elements.uCacheRate.textContent, '10%');
   assert.equal(elements.uCacheTokens.textContent, '100 / 30');
-  assert.match(elements.uCacheRate.title, /100.*1,000.*30/);
-  assert.match(elements.chartCacheRate.innerHTML, /2026-09-01: 10%/);
+  assert.equal(elements.uCacheRate.title, '缓存使用率：10%');
+  assert.equal(elements.uCacheTokens.title, '缓存读取 Token：100\n缓存创建 Token：30');
+  assert.match(elements.chartCacheRate.innerHTML, /2026-09-01 · 缓存使用率：10%/);
   assert.match(elements.chartCacheRate.innerHTML, /height="12.4"/); // 10% of the fixed 100% scale
   assert.match(elements.keyTable.innerHTML, /100 \/ 30/);
   assert.match(elements.keyTable.innerHTML, /class="usage-key-table"/);
@@ -202,7 +247,7 @@ test('TPS renders weighted server values, unknown and known zero with sample pro
   c.request=async url=>url.includes('/dashboard?')?{summary,daily:[],by_api_key:[{...summary,api_key_id:'key'}]}:{events:[event]};
   await c.loadUsage();
   assert.equal(elements.uTPS.textContent,'25.00');
-  assert.match(elements.uTPS.title,/有效样本 2.*估算 1.*部分输出 1/);
+  assert.equal(elements.uTPS.title,'TPS：25.00 Token/s');
   assert.match(elements.keyTable.innerHTML,/>25\.00</);
   assert.match(elements.eventTable.innerHTML,/>30\.00</);
   assert.doesNotMatch(elements.eventTable.innerHTML,/>partial</);
@@ -228,12 +273,12 @@ test('TPS trend uses daily weighted values and distinguishes missing days from k
   await c.loadUsage();
   assert.match(requested,/api_key_id=key-a/);
   const svg=elements.chartTPS.innerHTML;
-  assert.match(svg,/2026-10-09: 25\.00 Token\/s.*有效样本 2.*估算 1.*部分输出 1/);
+  assert.match(svg,/2026-10-09 · TPS：25\.00 Token\/s/);
   assert.match(svg,/<rect[^>]+height="124"/);
   assert.equal((svg.match(/<rect /g)||[]).length,1);
   assert.equal((svg.match(/<text /g)||[]).length,2);
-  assert.match(svg,/<circle[^>]*><title>2026-10-10: 0\.00 Token\/s/);
-  assert.match(svg,/2026-10-08: — Token\/s/);
+  assert.match(svg,/<circle[^>]*><title>2026-10-10 · TPS：0\.00 Token\/s/);
+  assert.match(svg,/2026-10-08 · TPS：—/);
   assert.doesNotMatch(svg,/NaN|Infinity/);
   c.renderCharts([{date:'<unsafe>',tps:Infinity},{date:'bad',tps:-1}]);
   assert.doesNotMatch(elements.chartTPS.innerHTML,/<unsafe>|NaN|Infinity|<rect /);
@@ -242,16 +287,16 @@ test('TPS trend uses daily weighted values and distinguishes missing days from k
 });
 
 
-test('buffered delivery stays visible in events, summary, keys and trends', async () => {
+test('cards keep concise TPS values while buffered diagnostics remain in events and keys', async () => {
  const {context:c,elements}=harness();
  const stats={tps:32.89,observed_tps:127784.6,tps_samples:2,observed_tps_buffered_samples:1};
  const event={event_id:'buffered',api_key_id:'key',outcome:'success',http_status:200,tps:32.89,observed_tps:127784.6,generation_buffered:true,generation_partial:false};
  c.request=async url=>url.includes('/dashboard?')?{summary:stats,by_api_key:[{...stats,api_key_id:'key'}],daily:[{...stats,date:'2026-10-09'}]}:{events:[event]};
  await c.loadUsage();
  assert.equal(elements.uTPS.textContent,'32.89');
- assert.match(elements.uTPS.title,/上游缓冲 1.*不能直接代表模型生成速度/);
+ assert.equal(elements.uTPS.title,'TPS：32.89 Token/s');
  assert.match(elements.keyTable.innerHTML,/上游缓冲 1/);
- assert.match(elements.chartTPS.innerHTML,/上游缓冲 1.*不能直接代表模型生成速度/);
+ assert.match(elements.chartTPS.innerHTML,/2026-10-09 · TPS：32\.89 Token\/s/);
  assert.doesNotMatch(elements.eventTable.innerHTML,/>buffered</);
  assert.match(elements.eventTable.innerHTML,/上游明确缓冲/);
  c.showUsageEvent(event);

@@ -36,6 +36,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	}
 	biz.runtime = runtime
 	biz.SubscribeFunc(metricsevents.TopicAcquire, biz.handleAcquire)
+	biz.SubscribeFunc(metricsevents.TopicRequestActivity, biz.handleRequestActivity)
 	biz.SubscribeFunc(metricsevents.TopicRecord, biz.handleRecord)
 	biz.SubscribeFunc(metricsevents.TopicPrometheus, biz.handlePrometheus)
 	biz.SubscribeFunc(metricsevents.TopicStats, biz.handleStats)
@@ -57,6 +58,7 @@ func (s *MetricsRuntime) Run(context.Context) *cd.Error {
 
 func (s *MetricsRuntime) Teardown(context.Context) {
 	s.UnsubscribeFunc(metricsevents.TopicAcquire)
+	s.UnsubscribeFunc(metricsevents.TopicRequestActivity)
 	s.UnsubscribeFunc(metricsevents.TopicRecord)
 	s.UnsubscribeFunc(metricsevents.TopicPrometheus)
 	s.UnsubscribeFunc(metricsevents.TopicStats)
@@ -79,6 +81,29 @@ func (s *MetricsRuntime) handleAcquire(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(metricsevents.AcquireResult{}, nil)
+}
+
+func (s *MetricsRuntime) handleRequestActivity(ev event.Event, result event.Result) {
+	command, ok := ev.Data().(metricsevents.RequestActivityCommand)
+	if !ok {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid metrics request activity command"))
+		return
+	}
+	if s.runtime == nil || s.runtime.Registry() == nil {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "metrics block is not ready"))
+		return
+	}
+	var err error
+	if command.Started {
+		err = s.runtime.Registry().BeginRequest()
+	} else {
+		err = s.runtime.Registry().EndRequest()
+	}
+	if err != nil {
+		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(metricsevents.RequestActivityResult{}, nil)
 }
 
 // handleRecord only handles EventHub Post notifications; Post has no Result.

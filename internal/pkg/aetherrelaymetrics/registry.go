@@ -4,6 +4,7 @@
 package metrics
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -82,6 +83,7 @@ type latencyKey struct {
 type Registry struct {
 	mu        sync.Mutex
 	startedAt time.Time
+	inflight  int64
 
 	requestCount         map[requestKey]uint64
 	requestDurationSum   map[requestKey]float64
@@ -133,6 +135,31 @@ type Registry struct {
 	// slo 可选挂接:用于把 webhook 队列/投递指标暴露到 /metrics。
 	// 用 atomic.Pointer 避免与 metrics 记录路径争用同一把锁。
 	slo atomic.Pointer[SLOEvaluator]
+}
+
+// BeginRequest counts one inbound business request until EndRequest, including
+// the full streaming lifetime. Upstream retries do not change this gauge.
+func (r *Registry) BeginRequest() error {
+	if r == nil {
+		return fmt.Errorf("metrics registry is unavailable")
+	}
+	r.mu.Lock()
+	r.inflight++
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Registry) EndRequest() error {
+	if r == nil {
+		return fmt.Errorf("metrics registry is unavailable")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inflight == 0 {
+		return fmt.Errorf("no active request to finish")
+	}
+	r.inflight--
+	return nil
 }
 
 // NewRegistry 构造初始化的 Registry,启动时间设为当前时刻。
