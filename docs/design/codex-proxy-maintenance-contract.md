@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`15.1.0`
+> 合同版本：`16.0.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-10-09
+> 生效日期：2026-10-11
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`16.0.0` 调整新会话的账号选择（`CP-SCHED-012`）：可用绑定账号仍优先复用；同 transport 能力层级的其余候选依次按并发槽位占用比例、未过期会话绑定数、额度证据与轮转选择。空闲账号优先于占用中的账号，已完成一轮的会话仍计入绑定数；过期绑定在分配时清理。该变化调整默认候选顺序，按 MAJOR 维护合同；已有会话身份、账号并发上限、准入与重试边界保持原规则。实施与本地测试完成，线上待部署验收。
 
 `15.1.0` 收口非流式调用预算和代理取消诊断：Codex Complete 总预算覆盖账号准入、刷新及全部重试，HTTP 入站时限通过本地 port 传递；合法 X-Stainless-Timeout 限制预算并预留 5%/最多 5 秒交付余量。应用预算到期为 timeout/504，真实下游取消为 client_canceled/499；到期不切号、不回退、不惩罚账号。上游 200 只表示响应头，后台明细将 499 展示为下游连接取消，对失败全零且无缓存观测的记录展示未取得。补齐业务最后事件时间及白名单终结类型，不修改现有 DB schema。Nginx API 模板关闭响应缓冲，外层等待默认 330 秒；部署说明协调客户端预算。x600 四次应用 499 已与 Nginx 300 秒响应头超时/对外 504 一一对应，此前流式网络截断的根因仍待继续核查。
 
@@ -417,9 +419,11 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `5.0.1` 固化 `CP-SCHED-009`：首次选择、PreferredID/session 粘性及任何重试切号，必须在账号 owner 锁内用与 `CP-CAP-010` 管理投影相同的模型可用性判定重新检查。只 trim 首尾空白，模型 ID 大小写敏感、精确匹配；不得用目录并集、静态 profile、相似名称或别名替代账号自身的有效快照。模型缺失/未知、快照过期、账号不可用、模型或账号冷却、有效额度耗尽均不得选中；并发及 transport 约束只可进一步收紧。无候选立即失败，不放宽模型条件。验收覆盖三个 transport 的不支持/过期/冷却/粘性候选跳过、切号前状态变化和全部候选不可用。
 
-`CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority → 额度证据 → LRU/round-robin。
+`CP-SCHED-001` 调度顺序固定为：客户端 Provider access → exact model 能力 → 显式状态 → token 健康 → quota/cooldown → 并发槽 → session 粘性 → priority/transport 能力层级 → 并发槽位占用比例 → 未过期会话绑定数 → 额度证据 → LRU/round-robin。
 
-`CP-SCHED-011` 账号候选在 session 粘性与 `priority` 之后、最终轮转之前，必须先按「额度证据」排序：拥有新鲜用量快照、且不存在未到期 limit-reached 窗口的账号，优先于额度未知或快照已过期的账号。该规则只改变同优先级候选之间的排序，不改变准入结论——`CP-CAP-005` 仍然保证缺失或过期快照可以参与尝试，因此当全部候选都缺少新鲜额度证据时，选择结果与引入本规则前一致（继续按轮转）；粘性账号（`CP-SCHED-004`）仍然优先于本规则。依据：部署轮次 `work-office/000001` 观测到某 `free` 账号在其 30 天窗口已 100% 时仍被选中，随后该轮响应头才首次暴露耗尽事实，代价是一次长耗时请求；`interactions_old`/`interactions_new` 中没有更早的可归属观测，说明缺口位于「快照过期 + 尚未轮询」窗口。验收覆盖：新鲜有余量优先于未知/过期、全部未知时保持原有轮转、粘性账号仍然命中、未到期 limit-reached 快照仍被硬性排除。
+`CP-SCHED-011` 在 session 粘性、priority/transport 能力层级与 `CP-SCHED-012` 负载比较结果相同的候选间，优先选择具有新鲜额度余量证据的账号，再按轮转打平。缺失或过期的额度快照仍可参与选择（`CP-CAP-005`）；有效耗尽窗口仍是准入排除条件。全部候选额度未知且负载相同时保持原有轮转，已有会话绑定仍优先于额度排序。
+
+`CP-SCHED-012` 已有会话优先复用未过期、仍可用且未满载的绑定账号。新会话或绑定不可用时，在同 transport 能力层级内优先选择较低的「在途租约数 / 账号最大并发」，比例相同则优先选择未过期绑定会话数较少的账号；最后由额度证据与轮转打平。绑定数不占用并发槽位、不导致账号拒绝准入；一次会话的后续 turn 不重复增加绑定数，切号后只保留新绑定。绑定闲置一小时失效，分配前清理过期绑定；负载比较与租约登记必须持有同一调度锁。各账号绑定数须在新增、切号和到期时增量维护，过期清理通过到期索引只处理已到期绑定，不得在每次分配时遍历全部会话。续期必须更新同一索引项，每个绑定只保留一条到期记录，避免索引规模随 turn 数增长。
 
 `CP-SCHED-002` session 信号按优先级解析：标准化 session header、`conversation_id`、OpenCode/CodeBuddy 会话头、`client_metadata.session_id`（仅缺失时以 `thread_id` 作为会话兜底）、`prompt_cache_key`、WebSocket execution session。`/v1/messages` 的有效 `X-Claude-Code-Session-Id` 同时参与账号路由亲和与独立默认缓存身份派生；cache 命名空间按 Key ID + 模型 + 校验后会话隔离，不含上游账号、不透传原值，详见身份语义基准。显式不同的 `Thread-Id` / `X-Client-Request-Id` / `client_metadata.thread_id` 另行冻结为 LogicalThread，不改变账号亲和使用的 LogicalConversation。无显式信号时必须使用服务端生成、仅本次 HTTP/WS 建连请求有效的 nonce 生成请求域 session 与默认 cache identity；不得使用固定 `default`、客户端可控 `X-Request-ID` 或完整敏感正文作为持久化 key，也不得形成跨请求账号粘性。
 
@@ -562,6 +566,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`16.0.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 新会话分散、已有会话复用与增量绑定计数 | CP-SCHED-001, CP-SCHED-004, CP-SCHED-011..012 | implemented（本地）；线上待部署 | `codexaccountpool/biz/biz.go`, `codexaccountpool/biz/session_affinity.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/biz/scheduling_spread_test.go`, `codexaccountpool/biz/session_affinity_test.go`, `codexaccountpool/internal/store/scheduling_load_test.go` |
 
 `14.0.0` 新增实施追踪：
 

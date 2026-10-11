@@ -33,11 +33,6 @@ const (
 	defaultSessionAffinityTTL = time.Hour
 )
 
-type sessionBinding struct {
-	accountID string
-	expiresAt time.Time
-}
-
 type oauthSession struct {
 	verifier string
 	state    string
@@ -66,7 +61,9 @@ type Account struct {
 	oauthMu       sync.Mutex
 	oauthSessions map[string]oauthSession
 	scheduleMu    sync.Mutex
-	sessions      map[string]sessionBinding
+	sessions      map[string]*sessionBinding
+	sessionCounts map[string]int
+	sessionExpiry sessionExpiryHeap
 	leases        map[string]string
 	inflight      map[string]int
 	now           func() time.Time
@@ -93,7 +90,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery, oauthTimeout time.Duration) *Account {
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
-	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}, sessions: map[string]sessionBinding{}, leases: map[string]string{}, inflight: map[string]int{}, now: time.Now}
+	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}, sessions: map[string]*sessionBinding{}, sessionCounts: map[string]int{}, leases: map[string]string{}, inflight: map[string]int{}, now: time.Now}
 	if st == nil {
 		return b
 	}
@@ -141,7 +138,9 @@ func (s *Account) Teardown(ctx context.Context) {
 		s.UnsubscribeFunc(topic)
 	}
 	s.scheduleMu.Lock()
-	s.sessions = map[string]sessionBinding{}
+	s.sessions = map[string]*sessionBinding{}
+	s.sessionCounts = map[string]int{}
+	s.sessionExpiry = nil
 	s.leases = map[string]string{}
 	s.inflight = map[string]int{}
 	s.scheduleMu.Unlock()
@@ -232,16 +231,20 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 	s.scheduleMu.Lock()
 	defer s.scheduleMu.Unlock()
 	now := s.now().UTC()
+	s.expireSessionsLocked(now)
+	loads := make(map[string]store.SchedulingLoad)
+	for accountID, count := range s.sessionCounts {
+		loads[accountID] = store.SchedulingLoad{Sessions: count}
+	}
 	preferred := strings.TrimSpace(cmd.PreferredID)
 	if binding, ok := s.sessions[strings.TrimSpace(cmd.SessionHash)]; ok {
-		if binding.expiresAt.After(now) {
-			preferred = binding.accountID
-		} else {
-			delete(s.sessions, strings.TrimSpace(cmd.SessionHash))
-		}
+		preferred = binding.accountID
 	}
 	limits := s.store.ConcurrencyLimits()
 	for accountID, count := range s.inflight {
+		load := loads[accountID]
+		load.Inflight = count
+		loads[accountID] = load
 		limit := limits[accountID]
 		if limit <= 0 {
 			limit = events.DefaultMaxConcurrency
@@ -250,7 +253,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 			busy = append(busy, accountID)
 		}
 	}
-	item, err := s.store.AcquirePreferredTransportWithBusyIdentity(cmd.Model, exclude, busy, preferred, cmd.Transport, cmd.ClientIdentity)
+	item, err := s.store.AcquireScheduledTransport(cmd.Model, exclude, busy, preferred, cmd.Transport, cmd.ClientIdentity, loads)
 	if err != nil {
 		result.Set(item, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return
@@ -259,7 +262,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 	s.leases[leaseID] = item.AccountID
 	s.inflight[item.AccountID]++
 	if sessionHash := strings.TrimSpace(cmd.SessionHash); sessionHash != "" {
-		s.sessions[sessionHash] = sessionBinding{accountID: item.AccountID, expiresAt: now.Add(defaultSessionAffinityTTL)}
+		s.bindSessionLocked(sessionHash, item.AccountID, now.Add(defaultSessionAffinityTTL))
 	}
 	item.LeaseID = leaseID
 	result.Set(item, nil)

@@ -15,7 +15,7 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
-func newSchedulingAccount(t *testing.T) (*Account, event.Hub, []string) {
+func newSchedulingAccount(t testing.TB) (*Account, event.Hub, []string) {
 	t.Helper()
 	codec, err := aetherrelaycredential.New(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)))
 	if err != nil {
@@ -53,7 +53,7 @@ func newSchedulingAccount(t *testing.T) (*Account, event.Hub, []string) {
 	return account, hub, ids
 }
 
-func acquireForTest(t *testing.T, account *Account, cmd events.AcquireCommand) events.AcquireResult {
+func acquireForTest(t testing.TB, account *Account, cmd events.AcquireCommand) events.AcquireResult {
 	t.Helper()
 	result := event.NewResult(events.TopicAcquire, "test", account.ID())
 	account.handleAcquire(event.NewEvent(events.TopicAcquire, "test", account.ID(), nil, cmd), result)
@@ -68,7 +68,7 @@ func acquireForTest(t *testing.T, account *Account, cmd events.AcquireCommand) e
 	return acquired
 }
 
-func releaseForTest(t *testing.T, account *Account, leaseID string) events.ReleaseResult {
+func releaseForTest(t testing.TB, account *Account, leaseID string) events.ReleaseResult {
 	t.Helper()
 	result := event.NewResult(events.TopicRelease, "test", account.ID())
 	account.handleRelease(event.NewEvent(events.TopicRelease, "test", account.ID(), nil, events.ReleaseCommand{LeaseID: leaseID}), result)
@@ -156,7 +156,7 @@ func TestAcquireIgnoresExpiredOrIneligibleAffinity(t *testing.T) {
 	account.now = func() time.Time { return now }
 	first := acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", SessionHash: "expired"})
 	releaseForTest(t, account, first.LeaseID)
-	account.sessions["expired"] = sessionBinding{accountID: first.AccountID, expiresAt: now.Add(-time.Second)}
+	account.bindSessionLocked("expired", first.AccountID, now.Add(-time.Second))
 	next := acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", SessionHash: "expired", Exclude: []string{first.AccountID}})
 	if next.AccountID == first.AccountID {
 		t.Fatal("CP-SCHED-004: expired affinity was reused")
@@ -165,7 +165,7 @@ func TestAcquireIgnoresExpiredOrIneligibleAffinity(t *testing.T) {
 	if _, err := account.store.Update(first.AccountID, &status, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	account.sessions["disabled"] = sessionBinding{accountID: first.AccountID, expiresAt: now.Add(time.Hour)}
+	account.bindSessionLocked("disabled", first.AccountID, now.Add(time.Hour))
 	disabled := acquireForTest(t, account, events.AcquireCommand{Model: "gpt-test", SessionHash: "disabled"})
 	if disabled.AccountID == first.AccountID || disabled.AccountID == "" || len(ids) != 2 {
 		t.Fatalf("CP-SCHED-004: disabled affinity selected: %+v", disabled)

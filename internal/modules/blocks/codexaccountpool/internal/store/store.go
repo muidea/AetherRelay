@@ -683,6 +683,20 @@ func (s *Store) AcquirePreferredTransportWithBusy(model string, exclude, busy []
 }
 
 func (s *Store) AcquirePreferredTransportWithBusyIdentity(model string, exclude, busy []string, preferredID, transport string, candidate events.ClientIdentityCandidate) (events.AcquireResult, error) {
+	return s.AcquireScheduledTransport(model, exclude, busy, preferredID, transport, candidate, nil)
+}
+
+// SchedulingLoad is the account owner's process-local scheduling snapshot.
+// Sessions counts unexpired affinity bindings, even between active turns.
+type SchedulingLoad struct {
+	Inflight int
+	Sessions int
+}
+
+// AcquireScheduledTransport preserves eligible affinity first. Otherwise,
+// among accounts in the same transport tier, it prefers lower slot utilization,
+// then fewer bound sessions, fresh quota evidence, and finally rotation order.
+func (s *Store) AcquireScheduledTransport(model string, exclude, busy []string, preferredID, transport string, candidate events.ClientIdentityCandidate, loads map[string]SchedulingLoad) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	model = strings.TrimSpace(model)
@@ -708,37 +722,55 @@ func (s *Store) AcquirePreferredTransportWithBusyIdentity(model string, exclude,
 		}
 	}
 	for _, tier := range []int{1, 0} {
-		// CP-SCHED-011: among otherwise equal candidates, prefer one whose fresh
-		// usage snapshot still shows headroom. The second pass keeps the previous
-		// behaviour, so a candidate without fresh quota evidence stays selectable
-		// (CP-CAP-005) and a pool with no fresh evidence rotates exactly as before.
-		for _, requireHeadroom := range []bool{true, false} {
-			for offset := 0; offset < len(s.order); offset++ {
-				pos := (s.index + offset) % len(s.order)
-				item := s.items[s.order[pos]]
-				if !modelAvailability(item, model, now).Available || transportSupport(item, transport) != tier {
-					continue
-				}
-				if requireHeadroom && !freshQuotaHeadroom(item, now) {
-					continue
-				}
-				if _, found := excluded[item.ID]; found {
-					continue
-				}
-				if _, found := busySet[item.ID]; found {
-					continue
-				}
-				promoteClientIdentityProfile(item, candidate)
-				s.index = (pos + 1) % len(s.order)
-				item.LastUsedAt = now.Format(time.RFC3339)
-				if err := s.saveLocked(); err != nil {
-					return events.AcquireResult{}, err
-				}
-				return acquireResult(item), nil
+		var selected *account
+		selectedPos := 0
+		for offset := 0; offset < len(s.order); offset++ {
+			pos := (s.index + offset) % len(s.order)
+			item := s.items[s.order[pos]]
+			if !modelAvailability(item, model, now).Available || transportSupport(item, transport) != tier {
+				continue
 			}
+			if _, found := excluded[item.ID]; found {
+				continue
+			}
+			if _, found := busySet[item.ID]; found {
+				continue
+			}
+			if selected == nil || preferSchedulingCandidate(item, selected, loads, now) {
+				selected, selectedPos = item, pos
+			}
+		}
+		if selected != nil {
+			promoteClientIdentityProfile(selected, candidate)
+			s.index = (selectedPos + 1) % len(s.order)
+			selected.LastUsedAt = now.Format(time.RFC3339)
+			if err := s.saveLocked(); err != nil {
+				return events.AcquireResult{}, err
+			}
+			return acquireResult(selected), nil
 		}
 	}
 	return s.unavailableResult(model, excluded, busySet, transport, now), fmt.Errorf("no eligible Codex OAuth account")
+}
+
+func preferSchedulingCandidate(candidate, selected *account, loads map[string]SchedulingLoad, now time.Time) bool {
+	a, b := loads[candidate.ID], loads[selected.ID]
+	aLimit, bLimit := candidate.MaxConcurrency, selected.MaxConcurrency
+	if !validMaxConcurrency(aLimit) {
+		aLimit = events.DefaultMaxConcurrency
+	}
+	if !validMaxConcurrency(bLimit) {
+		bLimit = events.DefaultMaxConcurrency
+	}
+	// Compare fractions exactly; a free account always wins over an occupied one.
+	aUtilization, bUtilization := a.Inflight*bLimit, b.Inflight*aLimit
+	if aUtilization != bUtilization {
+		return aUtilization < bUtilization
+	}
+	if a.Sessions != b.Sessions {
+		return a.Sessions < b.Sessions
+	}
+	return freshQuotaHeadroom(candidate, now) && !freshQuotaHeadroom(selected, now)
 }
 
 func acquireResult(item *account) events.AcquireResult {
