@@ -96,6 +96,36 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.ArchiveInteractions || cfg.ArchiveFullContent {
 		t.Fatal("example config must keep interaction archival disabled")
 	}
+	if cfg.VerboseLogging {
+		t.Fatal("example config must keep verbose logging disabled")
+	}
+}
+
+func TestVerboseLoggingDefaultsOffAndSupportsExplicitOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name, setting, env string
+		want               bool
+	}{
+		{name: "default"},
+		{name: "config", setting: "  verbose_logging: true\n", want: true},
+		{name: "environment", env: "true", want: true},
+		{name: "environment_override", setting: "  verbose_logging: true\n", env: "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AETHERRELAY_VERBOSE_LOGGING", tc.env)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("server:\n  listen_addr: 127.0.0.1:18080\n"+tc.setting), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.VerboseLogging != tc.want {
+				t.Fatalf("verbose logging=%v want=%v", cfg.VerboseLogging, tc.want)
+			}
+		})
+	}
 }
 
 func TestInteractionArchiveDefaultsToOffAndCanBeEnabled(t *testing.T) {

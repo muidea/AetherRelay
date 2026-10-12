@@ -297,7 +297,7 @@ make release VERSION=v1.2.3
 
 ### Codex 长流超时与账号冷却排查
 
-Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex stream stopped` 的 `phase`、`error_class`、`first_event_duration_ms`、`total_duration_ms`、`event_count`、`stream_bytes` 和 `last_event_at`；兼容字段 `duration_ms` 与 `total_duration_ms` 相同。`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
+Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex attempt failed` 的 `phase`、`error_class`、`first_event_duration_ms`、`total_duration_ms`、`event_count`、`stream_bytes` 和 `last_event_at`；旧版本另用 `Codex stream stopped` 输出这些字段，兼容字段 `duration_ms` 在合并后移除，以 `total_duration_ms` 为准。`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
 
 账号池 503 的 `accounts_cooling` 与 `Retry-After` 表示暂时冷却，网络/超时/上游失败默认冷却 30 秒；仅一个合格账号时，冷却期间无法切换账号。增加可用账号需由管理员按实际授权启用，不能靠自动启用禁用账号或清空冷却绕过。`accounts_cooling` 不等于新一次上游故障；`no_eligible_account` 或 `accounts_busy_or_excluded` 需结合账号模型、状态和并发占用检查。准入拒绝、客户端取消/写失败和本地最大流时长不会追加 Provider 熔断样本。已有熔断到期后允许恢复请求，真实成功才清零连续失败；HTTP 200 的流仍须以合法终态确认成功。
 
@@ -341,7 +341,9 @@ API 代理关闭响应缓冲，以便 SSE 及时交付；`stream=false` 仍等�
 
 2026-10-09 x600 的 `claude-owner/036891`、`036898` 为非流式 Messages 请求，正文约 1.06 MB，含 196 条历史消息和 25 个工具，上游推理强度为 `high`。两次请求持续收到约 1 万、9000 个业务事件，但未观察到完成事件。客户端 `X-Stainless-Timeout: 300` 加上最多 5 秒错误交付余量，形成 295 秒有效预算，最终为 504 `request_timeout`。收到上游 200 或增量事件不能延长非流式总预算，也不能说明压缩已完成。
 
-本地总预算耗尽额外记录 `failure_class=request_budget_exceeded`，管理 API、usage、归档与请求日志保持一致；不冷却账号、不自动切号重试。上游传输超时仍保留原始上游失败分类。每次非流式 Messages、Chat 或 Responses 执行前记录 `Codex completion budget`：`request_budget_ms`、`request_budget_source`（`server/client/context/unbounded`）、规范化请求 `request_bytes`、`input_items`、`tool_count`、实际 `reasoning_effort`、客户端声明 `client_timeout` 和完整 `request_body`。预算诊断正文不脱敏、不截断，保留提示文本、工具 schema/参数及正文中的 metadata，便于直接核对实际出站请求；认证 Header 不写入该日志。该日志不受归档及归档脱敏开关控制；`unbounded` 的 0 不代表立即超时。
+本地总预算耗尽额外记录 `failure_class=request_budget_exceeded`，管理 API、usage、归档与请求日志保持一致；不冷却账号、不自动切号重试。上游传输超时仍保留原始上游失败分类。每次非流式 Messages、Chat 或 Responses 执行前可在 DEBUG 记录 `Codex completion budget`：`request_budget_ms`、`request_budget_source`（`server/client/context/unbounded`）、规范化请求 `request_bytes`、`input_items`、`tool_count`、`reasoning_effort` 和客户端声明 `client_timeout`。推理强度超过 128 字节记为 `<oversized>`，非法超时提示记为 `<invalid>`，合法超时提示规范化为秒数；只改变日志，不改写请求。日志不输出 `request_body`、提示文本、工具 schema/参数或正文 metadata；完整请求仅按交互归档配置保存。关闭 DEBUG 不影响预算生效；`unbounded` 的 0 不代表立即超时。
+
+详细日志默认关闭。成功请求汇总、HTTP 请求开始/成功结束、路由注册及下游正常取消降为 DEBUG，需显式开启 `server.verbose_logging: true` 或 `AETHERRELAY_VERBOSE_LOGGING=true` 才输出。已有配置中的显式 `true` 会继续生效，升级时需改为 `false` 并重启以降低日志量。HTTP 4xx/5xx 完成记录分别为 WARN/ERROR，业务失败、用量估算、模型发现失败和 SLO 状态日志继续保留；用量数据库、指标及交互归档不受日志级别影响。Codex 流失败的 attempt 分类、上游观测及流计时合并到一条 `Codex attempt failed` WARN，不再额外输出 `Codex stream stopped`。
 
 若压缩任务确实需要更长等待，需同时协调客户端、网关及反向代理。例如客户端声明 `X-Stainless-Timeout: 600`，网关显式配置：
 
@@ -356,6 +358,20 @@ server:
 
 管理页最终状态优先展示实际 outcome：HTTP 200 + `upstream_truncated` 为“200 输出中断”，`incomplete` 为“未完成”，其它失败同样不显示成功；504 `request_timeout` 为“请求超时”，503 `accounts_cooling` 为“账号冷却”。保留实际 HTTP 状态，不伪造新的响应码；历史数据不回填，旧记录可直接使用新展示规则。
 
+
+## 2026-10-12 运行日志核对与降噪
+
+x600 `/home/workspace/deploy` 在北京时间 17:16–17:46 的日志样本共 896 行。远端已配置 `verbose_logging: false`，但旧代码的 INFO 请求日志和预算正文仍照常输出；日志级别需要在代码中同步调整。
+
+| 日志 | 样本数量 | 调整 |
+| --- | ---: | --- |
+| `request started` / `request completed` | 376 / 374 | 开始和成功结束降为 DEBUG；3 条 HTTP 502 完成记录保留为 ERROR。 |
+| 成功 `AetherRelay` 汇总 | 111 | 降为 DEBUG；用量记录和指标照常保存。 |
+| `Codex completion budget` | 17 | 降为 DEBUG，并移除完整正文；这些记录约占样本 UTF-8 日志体积的 96.7%。 |
+| `Codex attempt failed` / `Codex stream stopped` | 各 3 | 合并为每次失败一条 WARN，保留错误分类、上游观测与流计时。 |
+| 模型发现失败 / SLO 违反及恢复 | 6 / 3 | 频率较低且有排障价值，继续保留。 |
+
+代码检查同时将启动路由注册和下游正常取消日志降为 DEBUG，并把配置默认值及示例的 `verbose_logging` 设为 `false`。此记录为本地代码调整，尚未部署到 x600。
 
 ## 2026-10-10 TPS 口径核对与代码收口
 

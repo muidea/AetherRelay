@@ -53,11 +53,14 @@ func (h *Handler) codexCompletionBudget(r *http.Request, started time.Time) code
 	return budget
 }
 
-// Preserve the normalized request and actual reasoning parameters for diagnostics.
-// Authentication headers are not part of the logged request body.
+// Keep budget and request shape diagnostics separate from full-content archives.
+// Prompts, tool schemas and metadata must never enter ordinary logs, even at DEBUG.
 func (h *Handler) prepareCodexCompletion(r *http.Request, started time.Time, request *codexresponses.Request) {
 	budget := h.codexCompletionBudget(r, started)
 	request.Deadline = budget.deadline
+	if !slog.Default().Enabled(r.Context(), slog.LevelDebug) {
+		return
+	}
 	var shape struct {
 		Input     json.RawMessage   `json:"input"`
 		Tools     []json.RawMessage `json:"tools"`
@@ -72,9 +75,24 @@ func (h *Handler) prepareCodexCompletion(r *http.Request, started time.Time, req
 	if !budget.deadline.IsZero() {
 		budgetMS = max(0, budget.deadline.Sub(started).Milliseconds())
 	}
-	slog.InfoContext(r.Context(), "Codex completion budget", "request_id", request.Diagnostics.RequestID,
+	// These fields are client-controlled too; keep diagnostics bounded without
+	// modifying the request or the timeout calculation.
+	effort := shape.Reasoning.Effort
+	if len(effort) > 128 {
+		effort = "<oversized>"
+	}
+	clientTimeout := strings.TrimSpace(r.Header.Get("X-Stainless-Timeout"))
+	if clientTimeout != "" {
+		seconds, err := strconv.ParseFloat(clientTimeout, 64)
+		if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64((24*time.Hour)/time.Second) {
+			clientTimeout = "<invalid>"
+		} else {
+			clientTimeout = strconv.FormatFloat(seconds, 'g', -1, 64)
+		}
+	}
+	slog.DebugContext(r.Context(), "Codex completion budget", "request_id", request.Diagnostics.RequestID,
 		"request_budget_ms", budgetMS, "request_budget_source", budget.source,
 		"request_bytes", len(request.Body), "input_items", len(input), "tool_count", len(shape.Tools),
-		"reasoning_effort", shape.Reasoning.Effort,
-		"client_timeout", r.Header.Get("X-Stainless-Timeout"), "request_body", string(request.Body))
+		"reasoning_effort", effort,
+		"client_timeout", clientTimeout)
 }

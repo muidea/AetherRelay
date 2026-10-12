@@ -3242,7 +3242,7 @@ func responseFileName(contentType string, stream bool) string {
 }
 
 func (h *Handler) printSummary(round *archive.Round, eventID, provider, model string, stream bool, status int, duration time.Duration, usage tokenUsage, outcome, errorCode, failureClass string, retryable *bool, retryAfterSeconds int, errMessage string) {
-	level := slog.LevelInfo
+	level := slog.LevelDebug
 	label := "ok"
 	clientCanceled := isClientCanceledStreamIssue(errMessage)
 	if status >= 500 {
@@ -3257,6 +3257,9 @@ func (h *Handler) printSummary(round *archive.Round, eventID, provider, model st
 		}
 	} else if clientCanceled {
 		label = "canceled"
+	}
+	if !slog.Default().Enabled(context.Background(), level) {
+		return
 	}
 	roundID := roundIDValue(round)
 	attrs := []any{
@@ -3347,7 +3350,7 @@ func (h *Handler) logStreamFail(round *archive.Round, provider, model string, fa
 	}
 	level := slog.LevelWarn
 	if fail.Kind == streamKindClientCanceled {
-		level = slog.LevelInfo
+		level = slog.LevelDebug
 	}
 	slog.LogAttrs(context.Background(), level, "stream issue",
 		slog.String("event", "STREAM"),
@@ -3384,7 +3387,7 @@ func (h *Handler) logStreamIssue(round *archive.Round, provider, model, operatio
 		message = fmt.Sprintf("%s: stream idle timeout exceeded after %s", operation, idleTimer.timeout.Truncate(time.Millisecond))
 	case clientCanceled:
 		kind = streamKindClientCanceled
-		level = slog.LevelInfo
+		level = slog.LevelDebug
 		// 保持与历史测试/日志一致的消息格式。
 		message = fmt.Sprintf("%s: client canceled downstream request", operation)
 	case deadlineExceeded:

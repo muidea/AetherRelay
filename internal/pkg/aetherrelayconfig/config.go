@@ -392,7 +392,7 @@ func Load(path string) (Config, error) {
 		ArchiveUnredactedHeaders: false,
 		InteractionDir:           "interactions",
 		InteractionRetention:     500,
-		VerboseLogging:           true,
+		VerboseLogging:           false,
 		LogFormat:                "json",
 		RequestTimeout:           5 * time.Minute,
 		StreamIdleTimeout:        5 * time.Minute,

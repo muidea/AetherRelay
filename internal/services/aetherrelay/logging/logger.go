@@ -3,6 +3,7 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -41,7 +42,51 @@ func newLoggerWithOptions(w io.Writer, format string, debug bool) *slog.Logger {
 	} else {
 		handler = slog.NewJSONHandler(w, opts)
 	}
-	return slog.New(handler)
+	return slog.New(&requestLogHandler{handler: handler})
+}
+
+// magicEngine emits access traces and route registration at INFO. Apply the
+// application's verbosity policy without changing the vendored framework.
+type requestLogHandler struct {
+	handler slog.Handler
+}
+
+func (h *requestLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.handler.Enabled(ctx, level)
+}
+
+func (h *requestLogHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Level == slog.LevelInfo {
+		switch record.Message {
+		case "request started", "addRoute":
+			record.Level = slog.LevelDebug
+		case "request completed":
+			record.Level = slog.LevelDebug
+			record.Attrs(func(attr slog.Attr) bool {
+				if attr.Key == "status" && attr.Value.Kind() == slog.KindInt64 {
+					if attr.Value.Int64() >= 500 {
+						record.Level = slog.LevelError
+					} else if attr.Value.Int64() >= 400 {
+						record.Level = slog.LevelWarn
+					}
+					return false
+				}
+				return true
+			})
+		}
+	}
+	if !h.handler.Enabled(ctx, record.Level) {
+		return nil
+	}
+	return h.handler.Handle(ctx, record)
+}
+
+func (h *requestLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &requestLogHandler{handler: h.handler.WithAttrs(attrs)}
+}
+
+func (h *requestLogHandler) WithGroup(name string) slog.Handler {
+	return &requestLogHandler{handler: h.handler.WithGroup(name)}
 }
 
 func parseDebugFlag() bool {

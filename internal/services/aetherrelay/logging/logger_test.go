@@ -3,10 +3,49 @@ package logging
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
 )
+
+func TestFrameworkRequestLogsFollowApplicationVerbosity(t *testing.T) {
+	for _, format := range []string{"json", "text"} {
+		for _, debug := range []bool{false, true} {
+			var out bytes.Buffer
+			logger := newLoggerWithOptions(&out, format, debug).With("component", "http").WithGroup("request")
+			logger.Info("request started", "serial", 1, "path", "/admin/api/usage/runtime")
+			logger.Info("request completed", "serial", 1, "status", 200)
+			logger.Info("addRoute", "pattern", "/healthz")
+			if !debug && out.Len() != 0 {
+				t.Fatalf("%s: routine request logs at INFO: %s", format, out.String())
+			}
+			if debug && strings.Count(out.String(), "\n") != 3 {
+				t.Fatalf("%s: missing DEBUG access traces: %s", format, out.String())
+			}
+			if debug && !strings.Contains(out.String(), "DEBUG") {
+				t.Fatalf("%s: traces must be DEBUG: %s", format, out.String())
+			}
+			out.Reset()
+			logger.Info("request completed", "serial", 2, "status", 401)
+			logger.Info("request completed", "serial", 3, "status", 502)
+			logger.Info("server listening", "addr", "127.0.0.1:8080")
+			logger.Warn("slow request", "status", 200)
+			if strings.Count(out.String(), "\n") != 4 || !strings.Contains(out.String(), "WARN") || !strings.Contains(out.String(), "ERROR") || !strings.Contains(out.String(), "INFO") {
+				t.Fatalf("%s: missing failure, startup or slow-request logs: %s", format, out.String())
+			}
+			if format == "json" {
+				var record map[string]any
+				if err := json.Unmarshal(bytes.Split(out.Bytes(), []byte("\n"))[0], &record); err != nil {
+					t.Fatal(err)
+				}
+				if record["component"] != "http" || record["request"].(map[string]any)["status"] != float64(401) {
+					t.Fatalf("lost logger attributes or groups: %v", record)
+				}
+			}
+		}
+	}
+}
 
 func TestTextLoggerColorsLevelTokenOnly(t *testing.T) {
 	t.Setenv("LOG_FORMAT", "text")

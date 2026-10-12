@@ -51,7 +51,7 @@ func TestTransportReasonLogsWithoutArchiveOrPrivateText(t *testing.T) {
 		defer guard.close()
 		logCodexStreamAttempt(request, failure, "pull", guard)
 		lines := bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n"))
-		if len(lines) != 2 {
+		if len(lines) != 1 {
 			t.Fatalf("log records=%d", len(lines))
 		}
 		for _, line := range lines {
@@ -61,6 +61,14 @@ func TestTransportReasonLogsWithoutArchiveOrPrivateText(t *testing.T) {
 			}
 			if got["transport_reason"] != string(reason.Safe()) || got["request_id"] != "request-test" || got["account_attempt"] != float64(2) || got["error_class"] != "network" {
 				t.Fatalf("diagnostic=%v", got)
+			}
+			if got["msg"] != "Codex attempt failed" || got["level"] != "WARN" || got["phase"] != "pull" {
+				t.Fatalf("missing combined attempt/stream diagnostic: %v", got)
+			}
+			for _, key := range []string{"upstream_status", "headers_duration_ms", "total_duration_ms", "first_event_duration_ms", "first_client_event_duration_ms", "first_upstream_event_duration_ms", "event_count", "stream_bytes"} {
+				if _, ok := got[key]; !ok {
+					t.Errorf("missing %s in combined diagnostic", key)
+				}
 			}
 		}
 		if strings.Contains(output.String(), "private-") {

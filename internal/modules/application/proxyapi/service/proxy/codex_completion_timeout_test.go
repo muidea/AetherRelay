@@ -112,12 +112,12 @@ func TestCodexCompletionBudgetKeepsClientServerAndContextLimits(t *testing.T) {
 	}
 }
 
-func TestCodexCompletionBudgetDiagnosticsPreserveCompleteRequest(t *testing.T) {
+func TestCodexCompletionBudgetDiagnosticsOmitContentEvenAtDebug(t *testing.T) {
 	h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{})
 	h.cfg.RequestTimeout = 300 * time.Second
 	var logs bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	r := httptest.NewRequest("POST", "/v1/messages", nil)
 	r.Header.Set("Authorization", "Bearer private-header-sentinel")
@@ -128,12 +128,17 @@ func TestCodexCompletionBudgetDiagnosticsPreserveCompleteRequest(t *testing.T) {
 		bodies = append(bodies, body)
 		request := codexresponses.Request{Body: []byte(body)}
 		h.prepareCodexCompletion(r, time.Now(), &request)
+		if string(request.Body) != body {
+			t.Error("diagnostics changed the upstream request body")
+		}
 		if request.Deadline.IsZero() {
 			t.Error("deadline omitted")
 		}
 	}
-	if strings.Contains(logs.String(), "private-header-sentinel") {
-		t.Error("authentication header was logged")
+	for _, private := range []string{"private-header-sentinel", "complete-prompt-content-", "end-of-prompt", "actual-tool-name", "complete tool schema"} {
+		if strings.Contains(logs.String(), private) {
+			t.Errorf("private content %q was logged", private)
+		}
 	}
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	if len(lines) != len(bodies) {
@@ -144,8 +149,11 @@ func TestCodexCompletionBudgetDiagnosticsPreserveCompleteRequest(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &fields); err != nil {
 			t.Fatal(err)
 		}
-		if fields["request_body"] != bodies[i] {
-			t.Error("request body was masked or truncated")
+		if _, exists := fields["request_body"]; exists {
+			t.Error("request body field must not be logged")
+		}
+		if fields["level"] != "DEBUG" || fields["request_bytes"] != float64(len(bodies[i])) {
+			t.Error("missing debug level or request size")
 		}
 		if fields["request_budget_ms"] != float64(295000) || fields["request_budget_source"] != "client" || fields["input_items"] != float64(1) || fields["tool_count"] != float64(1) || fields["client_timeout"] != "300" {
 			t.Errorf("missing budget/context fields")
@@ -154,5 +162,19 @@ func TestCodexCompletionBudgetDiagnosticsPreserveCompleteRequest(t *testing.T) {
 	if !strings.Contains(logs.String(), `"reasoning_effort":"custom-effort-value"`) {
 		t.Error("actual effort was replaced")
 	}
-
+	logs.Reset()
+	r.Header.Set("X-Stainless-Timeout", "private-invalid-timeout")
+	oversizedBody := `{"reasoning":{"effort":"` + strings.Repeat("private-effort-", 2048) + `"}}`
+	oversizedRequest := codexresponses.Request{Body: []byte(oversizedBody)}
+	h.prepareCodexCompletion(r, time.Now(), &oversizedRequest)
+	if strings.Contains(logs.String(), "private-") || !strings.Contains(logs.String(), `"reasoning_effort":"<oversized>"`) || !strings.Contains(logs.String(), `"client_timeout":"<invalid>"`) || string(oversizedRequest.Body) != oversizedBody {
+		t.Fatal("client-controlled diagnostic fields must stay bounded without modifying the request")
+	}
+	logs.Reset()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	request := codexresponses.Request{Body: []byte(bodies[0])}
+	h.prepareCodexCompletion(r, time.Now(), &request)
+	if logs.Len() != 0 || request.Deadline.IsZero() {
+		t.Fatal("INFO must omit diagnostics while still applying the deadline")
+	}
 }

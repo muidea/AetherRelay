@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -140,8 +139,8 @@ func (g *codexStreamGuard) close() {
 }
 
 func logCodexStreamAttempt(request codexresponses.Request, failure *codexresponses.Failure, phase string, g *codexStreamGuard) {
-	logCodexAttempt(request, failure)
 	if failure == nil {
+		logCodexAttempt(request, nil)
 		return
 	}
 	g.mu.Lock()
@@ -149,14 +148,9 @@ func logCodexStreamAttempt(request codexresponses.Request, failure *codexrespons
 	// CP-OBS-008: bounded phase/class and counters only, never raw transport
 	// errors, credentials, or generated tool arguments.
 	totalDurationMS := time.Since(g.started).Milliseconds()
-	slog.Warn("Codex stream stopped", "request_id", request.Diagnostics.RequestID,
-		"account_attempt", request.AccountAttempt, "phase", phase, "error_class", failure.Kind,
-		"transport_reason", failure.Attempt.Response.TransportReason.Safe(),
-		"duration_ms", totalDurationMS,
+	logCodexAttempt(request, failure, "phase", phase,
 		"first_event_duration_ms", durationMilliseconds(g.started, g.firstEvent),
 		"first_client_event_duration_ms", durationMilliseconds(g.started, g.firstDelivery),
-		"upstream_event_count", failure.Attempt.Response.EventCount,
-		"upstream_wire_bytes", failure.Attempt.Response.WireBytes,
 		"first_upstream_event_duration_ms", failure.Attempt.Response.FirstEventDurationMS,
 		"total_duration_ms", totalDurationMS, "event_count", g.events,
 		"stream_bytes", g.bytes, "last_event_at", g.lastEvent)

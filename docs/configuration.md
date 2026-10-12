@@ -111,7 +111,7 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 | `archive_interactions` / `AETHERRELAY_ARCHIVE_INTERACTIONS` | 是否创建 `interactions` 归档，默认 `false`。关闭时不创建交互目录，也不写脱敏元数据。开启后，管理型 Provider 与 Codex OAuth 记录客户端请求、最终上游 attempt、客户端响应的脱敏 HTTP header，以及路由、耗时与用量摘要；客户端响应是应用提交快照，不包含服务端自动生成的线级 header。ChatGPT Web 多阶段上游 attempt 归档为后续待办。 |
 | `archive_full_content` / `AETHERRELAY_ARCHIVE_FULL_CONTENT` | 仅在 `archive_interactions=true` 时生效：是否落盘完整请求/响应正文（含最终 HTTP 上游请求），默认 `false`。Codex HTTP Responses/compact 保存逐次尝试正文，关闭时不采集该正文。header 与其它元数据不受此开关影响。 |
 | `archive_unredacted_headers` / `AETHERRELAY_ARCHIVE_UNREDACTED_HEADERS` | 仅在 `archive_interactions=true` 时生效：归档 header 是否保真，默认 `false`（按脱敏名单写入）。设为 `true` 后客户端请求、上游请求、上游响应、客户端响应四个方向的**全部 header 按原值落盘**，包含明文 `Authorization`、客户端 API Key、`ChatGPT-Account-ID`、`Session-Id`、`X-Codex-Turn-State` 等；日志、指标、错误响应、管理视图与普通凭据导出**不受影响，始终脱敏**。最终 Codex HTTP 正文的代理注入 `client_metadata` 身份与内嵌 turn metadata 同步按此开关保真/脱敏（正文仍受 `archive_full_content` 控制）。开启时启动日志输出明文凭据告警。只在受控排障期间使用，归档目录应视同凭据保管。 |
-| `verbose_logging`、`log_format` | 是否输出详细请求/上游观测日志，以及 `json`/`text` 格式。 |
+| `verbose_logging`、`log_format` | 详细日志默认关闭（`verbose_logging: false`），可通过 `AETHERRELAY_VERBOSE_LOGGING` 覆盖。成功请求汇总、HTTP 请求开始/成功结束、路由注册、Codex 预算诊断及下游正常取消仅在 DEBUG 输出；HTTP 4xx/5xx、上游失败、用量估算和 SLO 状态仍保留。预算日志即使在 DEBUG 也不包含完整请求正文。格式支持 `json`/`text`。 |
 | `metrics_remote_access`、`metrics_allowed_cidrs` | `/metrics`、`/stats` 的远程访问控制。 |
 | `trusted_proxy_cidrs` / `AETHERRELAY_TRUSTED_PROXY_CIDRS` | 允许提供 `X-Forwarded-Proto` 的直接反向代理 IP/CIDR；未命中时忽略转发协议头。 |
 | `admin_auth_enabled` / `AETHERRELAY_ADMIN_AUTH_ENABLED` | Admin 登录开关，默认 `false`（保持 loopback-only）。 |
