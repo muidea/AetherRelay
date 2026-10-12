@@ -145,7 +145,7 @@ type TurnMetadata struct {
 type ClientIdentity struct {
 	UserAgent  string
 	Originator string
-	// Version is populated only for a validated account-scoped observed profile.
+	// Version is populated only for a validated shared observed profile.
 	// This is a derived hint; model discovery revalidates the atomic pair and
 	// extracts its version rather than trusting this field independently.
 	Version string

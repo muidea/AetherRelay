@@ -182,6 +182,12 @@ func nextCodexUsageRefreshAt(accountID string, now time.Time, interval time.Dura
 }
 
 func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCandidate) (codexupevents.GetUsageResult, error) {
+	identity, identityErr := s.currentCodexClientIdentity(ctx)
+	if identityErr != nil {
+		return codexupevents.GetUsageResult{}, identityErr
+	}
+	candidate.ClientIdentity = identity
+
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
 	value, err := s.SendEvent(codexupevents.BindCommandLane(event.NewEventWithContext(codexupevents.TopicGetUsage, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.GetUsageCommand{

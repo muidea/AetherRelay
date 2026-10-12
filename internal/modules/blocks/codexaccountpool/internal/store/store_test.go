@@ -167,7 +167,7 @@ func TestAccountMaxConcurrencyDefaultsUpdatesAndExports(t *testing.T) {
 	}
 }
 
-func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T) {
+func TestSharedClientIdentityConvergesFromLatestInteractionClients(t *testing.T) {
 	store := openTestStore(t)
 	if added, _, _, err := store.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil || added != 1 {
 		t.Fatalf("import added=%d err=%v", added, err)
@@ -181,7 +181,7 @@ func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T)
 	test := events.ClientIdentityCandidate{UserAgent: "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)", Originator: "codex-tui"}
 
 	acquired, err := store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, work)
-	if err != nil || acquired.ClientIdentity.UserAgent != work.UserAgent || acquired.ClientIdentity.Version != "0.154.0" {
+	if err != nil || acquired.ClientIdentity.Version != "0.155.0" {
 		t.Fatalf("initial identity=%+v err=%v", acquired.ClientIdentity, err)
 	}
 	acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, test)
@@ -210,7 +210,7 @@ func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T)
 	if len(usage) != 1 || usage[0].ClientIdentity != discovery[0].ClientIdentity {
 		t.Fatalf("usage lost promoted identity: %+v", usage)
 	}
-	if profile := store.ClientIdentityProfile(id); profile != discovery[0].ClientIdentity {
+	if profile := store.SharedClientIdentity(); profile != discovery[0].ClientIdentity {
 		t.Fatalf("refresh lost promoted identity: %+v", profile)
 	}
 
@@ -219,8 +219,8 @@ func TestScopedClientIdentityConvergesFromLatestInteractionClients(t *testing.T)
 		t.Fatal(err)
 	}
 	acquired, err = store.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, id, events.TransportResponses, work)
-	if err != nil || acquired.ClientIdentity != (events.ClientIdentityProfile{}) {
-		t.Fatalf("off mode exposed scoped identity=%+v err=%v", acquired.ClientIdentity, err)
+	if err != nil || acquired.ClientIdentity.UserAgent != test.UserAgent {
+		t.Fatalf("off mode lost shared highest identity=%+v err=%v", acquired.ClientIdentity, err)
 	}
 	exported := store.ExportByIDs([]string{id})
 	payload, marshalErr := json.Marshal(exported)
@@ -239,7 +239,7 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 		t.Fatalf("items=%+v", items)
 	}
 	oldSeed := store.items[items[0].ID].FingerprintSeed
-	promoteClientIdentityProfile(store.items[items[0].ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
+	seedLegacyClientIdentityProfile(store.items[items[0].ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
 	if _, err := store.RecordTransportCapability(items[0].ID, events.TransportCompact, false); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	}
 	view := store.List()[0]
 	seed := store.items[view.ID].FingerprintSeed
-	promoteClientIdentityProfile(store.items[view.ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
+	seedLegacyClientIdentityProfile(store.items[view.ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
 	identity := *store.items[view.ID].ClientIdentityProfile
 	status := events.StatusAbnormal
 	if _, err := store.Update(view.ID, &status, nil, nil); err != nil {

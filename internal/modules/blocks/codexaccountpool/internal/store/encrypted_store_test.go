@@ -109,7 +109,7 @@ func TestEncryptedAccountPersistenceKeepsPrivateFingerprintSeed(t *testing.T) {
 	id := store.order[0]
 	seed := store.items[id].FingerprintSeed
 	observedUserAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
-	if !promoteClientIdentityProfile(store.items[id], events.ClientIdentityCandidate{UserAgent: observedUserAgent, Originator: "codex-tui"}) {
+	if !seedLegacyClientIdentityProfile(store.items[id], events.ClientIdentityCandidate{UserAgent: observedUserAgent, Originator: "codex-tui"}) {
 		t.Fatal("valid observed identity was not selected")
 	}
 	if err := store.saveLocked(); err != nil {

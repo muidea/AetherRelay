@@ -6,9 +6,11 @@
 >
 > 适用合同：[Codex 反向代理首要维护合同](codex-proxy-maintenance-contract.md)
 >
-> 实现基线：AetherRelay `13.3.0` 工作树（2026-09-21）
+> 实现基线：AetherRelay `17.0.0` 工作树（2026-10-12）
 
 本文是 AetherRelay 中 Codex `Installation`、`Session`、`Thread`、`X-Client-Request-Id`、`Window`、`Turn`、调度 `sessionHash` 与 Turn-State scope 的语义基准。它把真实 Codex CLI 流量观察与当前代理策略分开记录，供后续实现、评审、测试和现场排障使用。
+
+17.0.0 将客户端实现版本收敛为账号池共享最高值；off/scoped 与全部出站路径共同使用，独立加密持久化，并自动重同步旧版本模型缓存。账号和会话物理身份继续独立派生，详见 2.9、6.3 及首要维护合同实施追踪。
 
 13.3.0 修复消息树将工具参数对象误计为协议内容块的问题，并增加结构超限错误合同；本文身份派生、UA/Originator、缓存隔离与账号调度不变。现场 001454–001456 为本地转换阶段拒绝，未访问上游，不能将其解释为上游身份不匹配。
 
@@ -21,7 +23,7 @@
 - `X-Client-Request-Id`、`Session_Id` 等兼容 header；
 - `client_metadata` 或 `X-Codex-Turn-Metadata` 的身份字段归属；
 - fingerprint `off/scoped`；
-- `User-Agent`/`Originator` 的候选校验、账号级选择和生命周期；
+- `User-Agent`/`Originator` 的候选校验、全局最高版本选择和生命周期；
 - prompt cache 或账号调度对会话身份的使用；
 - Turn-State scope、记录或回填边界；
 - API Key ID、模型或客户端身份对上述命名空间的影响。
@@ -179,18 +181,15 @@ Turn 是一次逻辑交互，生命周期短于 Session，但不必等于一次 
 
 ### 2.9 Client Identity Profile
 
-`User-Agent` 与 `Originator` 是客户端实现身份，不属于 Installation、Session 或 Thread，但在 `scoped` 模式下必须与账号的其它上游投影保持稳定。两者必须作为同一次请求观察到的原子 profile 处理，禁止从不同请求分别挑选再拼接。
+`User-Agent` 与 `Originator` 是客户端实现身份，不属于 Installation、Session 或 Thread。两者必须作为同一次真实 Codex 请求观察到的原子 profile 处理，禁止分别拼接。
 
-- `off`：推理请求仅透传合法 codex-tui 原子身份；没有下游请求上下文的账号域调用使用内置 profile。
-- `scoped`：账号实际被选中时观察候选，并为该账号选择一个稳定 profile；推理、refresh、模型发现和用量查询共用它。
-- 选择顺序：仅允许 `codex-tui` family；同 family 只向严格更高版本提升；同版本保留当前平台文本。
-- 版本采用严格三段格式，最低基线为 `codex-tui 0.154.0`；不设静态版本上限，合法高版本自动参与选择，同 family 严格单调晋升。未知 family、family/Originator/版本自述不一致、同版本其它平台、低于基线或格式非法的候选不改变账号状态。模型发现的 `client_version` 与选中的原子 profile 一致；必须实际观察到新客户端请求才会提升，不能由同步动作猜测版本。
-- `codex_exec` 及其它工具不具有候选资格，加载时清除其存量 profile。内置 fallback 使用既有真实流量的 codex-tui 0.155.0 原子身份；`off` 的出站身份也只允许合法 codex-tui，非法/其它工具整组回落。
-- profile 加密持久化，不进入管理视图、普通凭据导出或日志；OAuth 重认证保留，显式将槽位替换为另一账号凭据时清除。
+- Codex 账号池共享一个最高版本，off/scoped、所有账号、原生与转换推理入口、refresh、授权码交换、模型发现和用量查询共同使用它。
+- 候选只允许 `codex-tui`、严格三段版本、最低 `0.154.0`；长度有界、无控制字符、family/Originator 与首尾版本自述一致。出站以内置 `0.155.0` 为最低兜底，不设静态最高版本；有效更高版本严格单调晋升，同版本保留已有平台文本。
+- Claude、codex_exec、残缺或非法身份不能覆盖共享值，也不因此拒绝业务请求。它们的 Codex 出站同样使用当前最高 profile。
+- profile 在账号之外独立加密持久化，不进入管理视图、日志或普通凭据导出；启动合并有效历史账号观察值，账号删除、禁用、重认证、凭据替换与重启不能降级。
+- 模型发现 query `client_version` 来自同次原子 profile，缓存记录实际发现版本。共享值提升后自动安排旧缓存重同步，刷新期间保留仍有效的模型成员资格；晚到的旧版本结果仍须再次同步。后台排队请求及刷新后的重试发出前重读共享最高值。
 
-“合法原始值”是原子组概念：两个字段必须同时存在、长度有界且不含控制字符；任一字段缺失或非法时整组回落内置 profile，不能把客户端字段与内置字段拼接。非 Codex family 的完整安全组合不会成为 scoped 候选，scoped 账号尚无已选 profile 时也不会透传它；显式 `off` 也整组回落为内置 codex-tui profile。身份不具候选资格本身不构成业务请求错误。
-
-这是一种“来源于客户端的稳定选择”，不是固定伪造值，也不是把多个客户端的所有字段合并。最低版本、family 准入或版本选择规则变化属于协议决策，必须同步修改合同、测试与本文。
+已准入请求和已建立 WebSocket 使用当时快照。共享客户端版本不合并账号凭据、Installation、Session/Thread 或 Turn-State。最低版本、family 准入或版本选择规则变化属于协议决策，必须同步修改合同、测试与本文。
 
 ## 3. Turn Metadata 字段分层
 
@@ -289,13 +288,11 @@ Upstream Window       = Upstream Thread + ":" + ClientWindowNumber
 
 ### 6.3 客户端实现身份收敛
 
-跨协议转换优先遵守目标协议合同：Anthropic Messages、OpenAI Chat 转 Codex 时，不把源客户端 UA/Originator 提交为账号身份候选，亦不透传它们。`scoped` 使用账号已选的有效 Codex profile，无可用 profile 时整组回落内置 Codex 身份；`off` 在跨协议入口同样整组使用内置 Codex 身份，不能绕过目标协议边界。下述客户端候选观察规则适用于原生 Codex/Responses 入口。
+跨协议转换遵守目标协议合同：Anthropic Messages、OpenAI Chat 转 Codex 时，不把源客户端 UA/Originator 提交为候选或透传它们。两种 fingerprint 模式均使用账号池当前共享最高 Codex profile，无更高观察时使用内置兜底。原生 Codex/Responses 在准入时验证原子候选，真实更高版本一经观察，对所有后续账号和请求生效，failover 不回到目标账号的旧版本。
 
-转换后的正文统一通过 Codex normalizer；目标层负责补齐 instructions、stream=true、store=false、缓存身份和每次尝试的 client_metadata，账号层负责鉴权、账号头及 Session/Thread/Window/Turn 投影。Installation 只在 scoped 下发送；Turn-State 依现有来源和回填规则处理，不能为凑齐字段编造。Anthropic-Version/Beta、X-Stainless-*、X-Claude-* 和 metadata.user_id、cache_control、thinking/output_config 的源协议形态不进入上游协议封装。消息文本、工具 schema/参数中的同名业务字段不属于协议头或封装，不得误删。
+转换后的正文统一通过 Codex normalizer；目标层负责 instructions、stream=true、store=false、缓存身份及每次尝试的 client_metadata，账号层负责鉴权、账号头及 Session/Thread/Window/Turn 投影。Installation 只在 scoped 下发送，Turn-State 遵循既有来源和回填规则。源协议的 Anthropic/Stainless/Claude 封装不进入上游协议，业务文本及工具 schema 中的同名字段不误删。
 
-账号选择发生前，当前请求携带原始 `User-Agent`/`Originator` 候选，但候选只有在账号实际入选后才可影响该账号。首次有效候选建立 profile；之后仅在 codex-tui family 内按版本单调晋升。failover 时每个实际尝试的账号独立观察同一客户端候选，未被选中的账号不得被预热。
-
-选择结果是账号物理投影的一部分，而不是 LogicalConversation 的一部分。因此多个下游 CLI 使用同一账号时仍保留各自 Session/Thread 隔离，但上游看到稳定的账号级客户端实现身份；不同账号可因各自观察历史而使用不同 profile。
+客户端实现版本由账号池共享，账号物理身份和 LogicalConversation 仍分别隔离；两个账号可以使用同一最高 UA/Originator，同时保持不同凭据、Installation、Session/Thread 与 Turn-State。历史账号 profile 仅用于启动迁移，不再参与逐账号选择。
 
 ### 6.4 信息守恒与账号切换
 
@@ -335,6 +332,9 @@ AccountProjection
 7. 信息守恒不得放宽凭据、客户端原始身份、Turn-State 和跨账号来源保护。
 
 ## 7. 2026-09-18 现场证据
+
+> 历史现场记录中的账号级版本选择描述属于旧实现；当前规范以 17.0.0 的全局最高版本规则（2.9、6.3）为准。
+
 
 现场核对使用受控交互归档，仅统计字段关系、长度、唯一值数量和载体一致性，不在本文记录原始身份值、Turn-State 或凭据。
 

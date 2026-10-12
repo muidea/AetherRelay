@@ -17,7 +17,6 @@ import (
 	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
-	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 )
@@ -455,7 +454,7 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccountWithinBudget(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: account.ClientIdentity}, request)
+				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: refreshed.ClientIdentity}, request)
 				if failure == nil {
 					s.releaseCodexAccount(ctx, account.LeaseID)
 					s.recordCodexResult(ctx, account.AccountID, request.Model, true, "", 0, false, "")
@@ -676,7 +675,7 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
-				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed}, request, started, func(line []byte) error {
+				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: refreshed.ClientIdentity}, request, started, func(line []byte) error {
 					emitted = emitted || len(line) > 0
 					if emit == nil {
 						return nil
@@ -824,17 +823,10 @@ func codexClientIdentityCandidate(userAgent, originator string) accevents.Client
 	return accevents.ClientIdentityCandidate{UserAgent: userAgent, Originator: originator}
 }
 
-func resolvedCodexClientIdentity(account accevents.AcquireResult, userAgent, originator string) upevents.ClientIdentity {
-	if strings.TrimSpace(account.FingerprintMode) == accevents.FingerprintModeScoped {
-		if strings.TrimSpace(account.ClientIdentity.UserAgent) != "" && strings.TrimSpace(account.ClientIdentity.Originator) != "" {
-			return toUpstreamAccountClientIdentity(account.ClientIdentity)
-		}
-		return upevents.ClientIdentity{}
-	}
-	if _, valid := codexidentity.ParseObserved(userAgent, originator); !valid {
-		return upevents.ClientIdentity{}
-	}
-	return upevents.ClientIdentity{UserAgent: userAgent, Originator: originator}
+func resolvedCodexClientIdentity(account accevents.AcquireResult, _, _ string) upevents.ClientIdentity {
+	// Account admission returns the service-wide maximum for both off/scoped.
+	// Raw request headers are candidates for that authority, never an override.
+	return toUpstreamAccountClientIdentity(account.ClientIdentity)
 }
 
 func toUpstreamAccountClientIdentity(profile accevents.ClientIdentityProfile) upevents.ClientIdentity {

@@ -1,5 +1,5 @@
 // Package codexidentity owns the immutable fallback identity and the validation
-// and promotion rules for account-scoped client-observed identities.
+// and promotion rules for shared client-observed identities.
 package codexidentity
 
 import (
@@ -26,6 +26,17 @@ var current = Profile{
 
 // Current returns the single verified identity profile by value.
 func Current() Profile { return current }
+
+// HighestObserved selects one verified atomic pair across all supplied
+// observations. The built-in fallback is the minimum outbound version; equal
+// versions retain the first selected platform rather than mixing fields.
+func HighestObserved(profiles ...ObservedProfile) ObservedProfile {
+	selected, _ := ParseObserved(current.UserAgent, current.Originator)
+	for _, profile := range profiles {
+		selected, _ = PromoteObserved(selected, profile)
+	}
+	return selected
+}
 
 const (
 	maxObservedUserAgentBytes  = 256
@@ -76,14 +87,14 @@ type observedVersion struct{ major, minor, patch int }
 // ParseObserved accepts only bounded, internally consistent client profiles
 // whose supported family and minimum version satisfy the current wire
 // contract. Newer versions are accepted automatically. Unknown clients can still
-// use the proxy but cannot mutate an account-scoped identity profile.
+// use the proxy but cannot mutate a shared identity profile.
 func ParseObserved(userAgent, originator string) (ObservedProfile, bool) {
 	profile, reason := ClassifyObserved(userAgent, originator)
 	return profile, reason == ObservationVerified
 }
 
 // ClassifyObserved validates one atomic User-Agent/Originator pair and returns
-// only a bounded reason when it cannot become an account-scoped profile.
+// only a bounded reason when it cannot become a shared profile.
 func ClassifyObserved(userAgent, originator string) (ObservedProfile, ObservationReason) {
 	userAgent = strings.TrimSpace(userAgent)
 	originator = strings.TrimSpace(originator)
@@ -133,7 +144,7 @@ func ClassifyObserved(userAgent, originator string) (ObservedProfile, Observatio
 
 // PromoteObserved accepts only codex-tui candidates with a strictly newer
 // version. Equal versions keep the persisted platform/profile, preventing
-// clients on different platforms from making the account identity oscillate.
+// clients on different platforms from making the shared identity oscillate.
 func PromoteObserved(currentProfile, candidate ObservedProfile) (ObservedProfile, bool) {
 	candidate, validCandidate := ParseObserved(candidate.UserAgent, candidate.Originator)
 	if !validCandidate {

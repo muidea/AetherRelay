@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`16.0.0`
+> 合同版本：`17.0.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-10-11
+> 生效日期：2026-10-12
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`17.0.0` 将客户端版本选择从账号级提升为整个 Codex 账号池共享最高版本（`CP-HDR-003..004`、`CP-HDR-021`、`CP-HDR-025`）：有效实际观察值高于内置兜底后，所有账号、off/scoped、原生与转换入口、推理、模型发现、用量和 OAuth 请求统一使用该最高版本的原子 UA/Originator；不得退回旧账号版本或透传较低客户端版本。最高值独立加密持久化，启动时合并有效历史账号观察值，账号删除、凭据替换与重启不能降级。模型缓存记录发现使用的版本，过旧缓存自动安排重同步并保留有效成员资格；后台排队和刷新重试在发出时重读共享最高值。已准入请求和已建立的 WebSocket 使用当时快照。默认身份选择范围改变，按 MAJOR 记录；本地实现完成，x600 待部署验收。
 
 `16.0.0` 调整新会话的账号选择（`CP-SCHED-012`）：可用绑定账号仍优先复用；同 transport 能力层级的其余候选依次按并发槽位占用比例、未过期会话绑定数、额度证据与轮转选择。空闲账号优先于占用中的账号，已完成一轮的会话仍计入绑定数；过期绑定在分配时清理。该变化调整默认候选顺序，按 MAJOR 维护合同；已有会话身份、账号并发上限、准入与重试边界保持原规则。实施与本地测试完成，线上待部署验收。
 
@@ -272,7 +274,7 @@
 | --- | --- | --- |
 | `Authorization` | generate：只来自选中账号 | `CP-HDR-001` |
 | `ChatGPT-Account-ID` | generate：只来自选中账号 | `CP-HDR-002` |
-| `User-Agent` | 原生入口 `off`：仅合法 codex-tui 原子身份逐请求复用；`scoped`：使用所选账号的客户端来源 profile；跨协议入口不观察或透传源 UA/Originator，`off` 使用内置 Codex profile，`scoped` 使用账号 profile；缺失时整组回落内置 profile | `CP-HDR-003` |
+| `User-Agent` | off/scoped、原生与转换入口统一使用账号池共享最高 Codex profile；无高于兜底的有效观察时使用内置 profile；跨协议入口不观察或透传源 UA/Originator | `CP-HDR-003` |
 | `Originator` | 与 `User-Agent` 作为不可拆分 profile 同源选择；不得独立拼接 | `CP-HDR-004` |
 | `Accept` | generate：HTTP Responses 与 compact upstream 均为 SSE；compact downstream 再投影 JSON/SSE | `CP-HDR-005` |
 | `OpenAI-Beta` | generate/merge allowlist：WebSocket beta | `CP-HDR-006` |
@@ -307,7 +309,7 @@
 
 `CP-HDR-020` Turn-State 只作为有界 opaque 值处理，不解析、不记录原值。代理必须按状态值哈希记录铸造账号与 TTL；同账号或未知来源可回带，已知由其它账号铸造时必须在 failover attempt 出站前剥离。HTTP/SSE/compact 只在最终选中 attempt 提交响应头；WebSocket 入站握手状态执行同一守卫。
 
-`CP-HDR-021` Codex OAuth 授权码交换、refresh token、模型发现与用量查询属于凭据/账号域请求。授权码交换没有已选账号，使用内置版本 profile；`scoped` 账号的 refresh、模型发现与用量查询必须使用该账号已选的客户端来源 profile，尚未观察到有效候选时回落内置 profile；`off` 账号的这些无下游请求上下文的路径同样回落内置 profile。推理路径遵循 `CP-HDR-003`/`CP-HDR-004`。OAuth credential endpoint 不发送 inference-only `Version` header；模型发现的 `client_version` 必须与账号 profile 的版本一致。任何 profile 规则升级必须同时覆盖 credential、账号域与 inference 测试。
+`CP-HDR-021` Codex OAuth 授权码交换、refresh token、模型发现与用量查询属于凭据/账号域请求，均使用账号池共享最高客户端 profile，不因账号、off/scoped 或有无下游请求上下文改变。OAuth credential endpoint 不发送 inference-only `Version` header；模型发现的 `client_version` 必须与同次请求实际使用的原子 profile 版本一致。后台任务取得候选后可能排队，必须在发出账号域请求及凭据刷新后的重试前重新读取共享最高值；成功模型缓存记录该次请求版本，共享值提升后过旧缓存须按正常重试窗口自动重新发现，刷新期间保留未过期的既有成员资格。任何 profile 规则升级必须同时覆盖 credential、账号域与 inference 测试。
 
 `CP-HDR-022` `X-Codex-Turn-State` 必须按「铸造账号 + 客户端显式声明的会话」在进程内记录最近观测值，并在客户端**未提供**该 header 时回填。记录单位包含账号、规范化 fingerprint mode、账号 fingerprint session 与客户端声明会话摘要；`off/scoped` 都必须保留声明会话维度，禁止跨会话回填。声明会话依次取显式会话 header、`client_metadata.session_id/thread_id` 固定元组、显式 `prompt_cache_key`；全部缺失时不记录也不回放，调度使用的合成 `default` 不得成为 bucket。回填顺序为该记录单位最近观测值、配置默认值、缺失；客户端已提供但被来源守卫剥离的值不得由回填替换。failover 后只可使用新账号记录或默认值，不得沿用上一账号状态。HTTP、SSE、compact、WebSocket 握手及两个适配入口共用该实现；WS 后续 turn 不受本规则影响。`turn_state_force_default` 启用时只使用有效默认值且优先于 fallback，强制值不污染会话记录。
 
@@ -315,7 +317,7 @@
 
 `CP-HDR-024` 身份术语必须按 [Codex 身份与会话语义基准](codex-identity-semantics.md) 分层使用：Installation 是安装/设备层身份，Client Session 是 CLI 会话，`sessionHash` 是 Key ID + 模型 + 客户端会话信号派生的代理 UUID，Upstream Session/Thread/Window 是 attempt 级出站身份，Turn 是可跨多个 HTTP/tool 请求的逻辑交互，Turn-State scope 是账号与客户端声明会话共同决定的独立记录单位。API Key 明文不得进入身份派生；同一 Key ID 槽位替换明文不构成新命名空间。`X-Client-Request-Id` 取 attempt 的 `Thread-Id`，不得误用为 AetherRelay 单请求诊断 ID。实现、测试、日志分析和文档不得用无所有权前缀的“Session”替代这些不同层级。
 
-`CP-HDR-025` `scoped` 的客户端来源 profile 以账号为 scope，并把同一次请求的 `User-Agent` 与 `Originator` 作为不可拆分候选。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；仅允许 `codex-tui` family，最低版本为 `0.154.0`，不设静态最高版本，格式合法的更高版本自动接纳。`codex_exec` 和其它工具不能创建或更新 profile，加载时清除这些存量 profile；同 family 只允许严格升版；同版本不同平台、低版本、未知 family、不一致组合或低于最低版本或格式非法的版本均保持当前值。候选只能在账号实际被某次 attempt 选中后晋升，failover 对每个实际选中账号分别观察，不得由未使用请求预热其它账号。选择结果加密持久化，不进入管理视图、日志或普通凭据导出；OAuth 重认证保留，显式替换为另一凭据清除。`off` 不读取或更新此 profile；只有通过同一 codex-tui family/version 校验的完整身份才整组透传，否则整组使用内置 fallback，禁止独立回落形成混合身份。非 Codex family 不具有 scoped 候选资格，但不得仅因此拒绝业务请求。
+`CP-HDR-025` 客户端来源 profile 由 Codex 账号池 owner 全局共享，并把同一次原生请求的 `User-Agent` 与 `Originator` 作为不可拆分候选，在账号准入时观察。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；仅允许 `codex-tui` family，最低候选版本为 `0.154.0`，出站最低版本为内置兜底 `0.155.0`，不设静态最高版本。有效更高版本一经观察，后续所有账号、off/scoped、原生与跨协议推理、模型发现、用量、OAuth 刷新及授权码交换统一使用最高版本的完整原子组。只允许严格升版；同版本保留已选平台，低版本、残缺、未知 family、不一致或非法版本均不能覆盖共享值；非 Codex 身份不参与观察，也不因此拒绝业务请求。最高值在账号记录之外独立加密持久化，启动时合并有效历史账号 profile，账号删除、禁用、重认证或凭据替换不得降级。选择结果不进入管理视图、日志或普通凭据导出。已准入请求及既有 WebSocket 保持当时 identity 快照；新准入、failover 和凭据刷新重试使用当时共享值。版本收敛不改变各账号凭据、Installation、Session/Thread 与 Turn-State 隔离。
 
 `CP-FP-001` 账号 `fingerprint_mode` 只允许 `off/scoped`，缺失和空值默认 `scoped`。管理 API 与导入对其它显式值直接拒绝；加密存量中的缺失、未知或已删除值加载时直接重写为 `scoped`。
 
@@ -567,6 +569,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 
+`17.0.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 全账号共享最高版本、独立加密恢复及旧模型缓存重同步 | CP-HDR-003..004, CP-HDR-021, CP-HDR-025, CP-VER-006 | implemented（本地）；x600 待部署 | `codexaccountpool/internal/store/client_identity.go`, `proxyapi/biz/codex_client_identity.go`, `proxyapi/biz/discovery.go`, `proxyapi/biz/codex_usage.go`, `codexaccountpool/internal/oauth/client.go` | `client_identity_test.go`, `identity_test.go`, `discovery_test.go`, `codex_responses_test.go`, `oauth/client_test.go` |
+
 `16.0.0` 新增实施追踪：
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
@@ -609,7 +617,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| scoped 账号级客户端来源 profile 选择（仅 codex-tui，高版本自动接纳，无静态上限） | CP-HDR-003..004, CP-HDR-021, CP-HDR-025 | implemented | `pkg/aetherrelaycodexidentity/identity.go`, `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/biz.go`, `codexaccountpool/internal/oauth/client.go` | `identity_test.go`, `store_test.go`, `encrypted_store_test.go`, `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `oauth/client_test.go` |
+| 全账号共享最高客户端来源 profile 选择（仅 codex-tui，高版本自动接纳，无静态上限） | CP-HDR-003..004, CP-HDR-021, CP-HDR-025 | implemented | `pkg/aetherrelaycodexidentity/identity.go`, `codexaccountpool/internal/store/store.go`, `proxyapi/biz/codex_responses.go`, `codexupstream/biz/biz.go`, `codexaccountpool/internal/oauth/client.go` | `identity_test.go`, `client_identity_test.go`, `store_test.go`, `encrypted_store_test.go`, `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `oauth/client_test.go` |
 
 `11.0.0` 新增实施追踪：
 
@@ -766,7 +774,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | delegation/automation bootstrap | CLIProxyAPI `291cfb87`；sub2api `1be69e56a`、`421a83282`、`af90a9bd1`、`28dde982c` | 原生 Responses HTTP 在 `CP-REQ-031` 完整形状证明下支持无 call ID bootstrap、配对历史 delegation 和严格 heartbeat；其它路径继续 fail closed |
 | multi-agent v2 task | CLIProxyAPI `d2f71220`；脱敏样本 `agent_message` + string `encrypted_content` | 原生 Codex 保序透传，Responses→Anthropic 按 `CP-REQ-032` 规范为 user message/input_text，不接受错误载荷类型 |
 | GPT-6 Astra manifest | CLIProxyAPI `c77b1369` 的可信 model-info profile；sub2api `3c8be0013` 的本地模型元数据 | 固化 `CP-CAP-008` 列出的稳定字段；transport 字段继续与 AetherRelay 实际路由能力求交 |
-| 当前 Codex identity | 既有 `test-office` 真实流量观察到的 codex-tui 0.155.0 / gnome-terminal 原子身份，见身份语义基准现场记录 | 内置 fallback 仅使用 codex-tui，账号后续自动接纳合法高版本；其它工具和 codex_exec 不参与选择 |
+| 当前 Codex identity | 既有 `test-office` 真实流量观察到的 codex-tui 0.155.0 / gnome-terminal 原子身份，见身份语义基准现场记录 | 内置 fallback 仅使用 codex-tui，账号池统一使用实际观察到的最高合法版本；其它工具和 codex_exec 不参与选择 |
 | credential-wide quota cooldown | CLIProxyAPI `5ab0bca0`、`1c22598d`；脱敏样本顶层/嵌套 `usage_limit_reached` 与绝对/相对 reset | 按 `CP-FAIL-017` 写账号级单调 cooldown，成功或更短失败都不能提前释放 |
 | WebSocket replay 正文所有权 | sub2api `ca9b4d73f` | 历史 RawMessage 正文按不可变共享引用保存，避免随 turn 数产生 O(T²) 深拷贝 |
 | access-token JWT 到期提示 | CLIProxyAPI `9812b1e7` 从 JWT `exp` 判断 access token 有效期并在临时 refresh 失败时保留可用凭据 | 只把未验签 `exp` 用于 account owner 的主动刷新调度；认证与 401/failover 仍由既有合同裁决 |

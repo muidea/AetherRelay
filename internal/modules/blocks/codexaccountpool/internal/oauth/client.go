@@ -37,6 +37,8 @@ type AuthorizationCodeRequest struct {
 	Code         string
 	CodeVerifier string
 	Proxy        string
+	UserAgent    string
+	Originator   string
 }
 
 type Result struct {
@@ -62,11 +64,15 @@ func Refresh(ctx context.Context, request Request) (Result, error) {
 }
 
 func ExchangeAuthorizationCode(ctx context.Context, request AuthorizationCodeRequest) (Result, error) {
+	return exchangeAuthorizationCode(ctx, request, TokenURL)
+}
+
+func exchangeAuthorizationCode(ctx context.Context, request AuthorizationCodeRequest, endpoint string) (Result, error) {
 	form := url.Values{"client_id": {ClientID}, "grant_type": {"authorization_code"}, "code": {strings.TrimSpace(request.Code)}, "redirect_uri": {RedirectURI}, "code_verifier": {strings.TrimSpace(request.CodeVerifier)}}
 	if strings.TrimSpace(request.Code) == "" {
 		return Result{}, &Error{Permanent: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
 	}
-	return exchange(ctx, TokenURL, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", request.Proxy)
+	return exchange(ctx, endpoint, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", request.Proxy, request.UserAgent, request.Originator)
 }
 
 func refresh(ctx context.Context, request Request, endpoint string) (Result, error) {

@@ -38,7 +38,7 @@ func TestRefreshUsesCurrentCodexJSONContract(t *testing.T) {
 	}
 }
 
-func TestRefreshUsesSelectedAccountClientIdentity(t *testing.T) {
+func TestRefreshUsesSharedClientIdentity(t *testing.T) {
 	userAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") != userAgent || r.Header.Get("Originator") != "codex-tui" || r.Header.Get("Version") != "" {
@@ -84,5 +84,28 @@ func TestRefreshClassifiesOnlyKnownCredentialFailuresAsPermanent(t *testing.T) {
 				t.Fatalf("error=%#v", err)
 			}
 		})
+	}
+}
+
+// CP-HDR-021/025: code exchange uses the same selected maximum as refresh.
+func TestAuthorizationCodeExchangeUsesSharedClientIdentity(t *testing.T) {
+	ua := "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != ua || r.Header.Get("Originator") != "codex-tui" || r.Header.Get("Version") != "" {
+			t.Errorf("credential identity=%v", r.Header)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Error(err)
+		}
+		if r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("code") != "test-code" || r.Form.Get("code_verifier") != "test-verifier" {
+			t.Errorf("form=%v", r.Form)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+	result, err := exchangeAuthorizationCode(context.Background(), AuthorizationCodeRequest{Code: "test-code", CodeVerifier: "test-verifier", UserAgent: ua, Originator: "codex-tui"}, server.URL)
+	if err != nil || result.AccessToken != "new-access" {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

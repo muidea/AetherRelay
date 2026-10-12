@@ -367,7 +367,7 @@ func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, 
 }
 
 func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexevents.DiscoveryCandidate) error {
-	listed, failureClass, err := s.listCodexModels(ctx, candidate)
+	listed, failureClass, err := s.listCodexModels(ctx, &candidate)
 	if err != nil && failureClass == codexupevents.ErrorInvalidToken {
 		refreshed, refreshErr := s.refreshCodexAccount(ctx, candidate.AccountID)
 		switch {
@@ -375,7 +375,7 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 			candidate.AccessToken = refreshed.AccessToken
 			candidate.AccountIDHeader = refreshed.AccountIDHeader
 			candidate.Proxy = refreshed.Proxy
-			listed, failureClass, err = s.listCodexModels(ctx, candidate)
+			listed, failureClass, err = s.listCodexModels(ctx, &candidate)
 		case refreshed.PermanentFailure:
 			failureClass = codexupevents.ErrorInvalidToken
 			err = fmt.Errorf("Codex model discovery credential refresh failed")
@@ -390,9 +390,10 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 	}
 	now := time.Now().UTC()
 	snapshot := codexevents.AccountModelSnapshot{
-		AccountID:    candidate.AccountID,
-		DiscoveredAt: now.Format(time.RFC3339),
-		ExpiresAt:    now.Add(modelSnapshotTTL).Format(time.RFC3339),
+		AccountID:     candidate.AccountID,
+		ClientVersion: candidate.ClientIdentity.Version,
+		DiscoveredAt:  now.Format(time.RFC3339),
+		ExpiresAt:     now.Add(modelSnapshotTTL).Format(time.RFC3339),
 	}
 	for _, model := range listed.Models {
 		if strings.TrimSpace(model.ID) == "" {
@@ -408,7 +409,13 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 	return nil
 }
 
-func (s *Proxy) listCodexModels(ctx context.Context, candidate codexevents.DiscoveryCandidate) (codexupevents.ListModelsResult, codexupevents.ErrorClass, error) {
+func (s *Proxy) listCodexModels(ctx context.Context, candidate *codexevents.DiscoveryCandidate) (codexupevents.ListModelsResult, codexupevents.ErrorClass, error) {
+	identity, identityErr := s.currentCodexClientIdentity(ctx)
+	if identityErr != nil {
+		return codexupevents.ListModelsResult{}, codexupevents.ErrorUpstream, identityErr
+	}
+	candidate.ClientIdentity = identity
+
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
 	value, eventErr := s.SendEvent(codexupevents.BindCommandLane(event.NewEventWithContext(codexupevents.TopicListModels, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.ListModelsCommand{

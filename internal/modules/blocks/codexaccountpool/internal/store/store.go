@@ -85,7 +85,8 @@ type account struct {
 	// FingerprintSeed is encrypted with the rest of the account document. It is
 	// deliberately absent from management views and credential exports.
 	FingerprintSeed string `json:"fingerprint_seed,omitempty"`
-	// ClientIdentityProfile is the selected client-observed UA/originator pair.
+	// ClientIdentityProfile is a legacy account observation used only to seed
+	// the shared highest identity on startup.
 	// It stays inside the encrypted account document and is never exported by
 	// management credential APIs.
 	ClientIdentityProfile *codexidentity.ObservedProfile `json:"client_identity_profile,omitempty"`
@@ -99,6 +100,10 @@ type Store struct {
 	order       []string
 	index       int
 	persisted   map[string]secureDocumentRevision
+	// One durable maximum applies to every account and transport, independent
+	// of fingerprint mode or the requesting client's tool family.
+	clientIdentity          codexidentity.ObservedProfile
+	persistedClientIdentity [sha256.Size]byte
 	// catalogVersion increments whenever an account's routing eligibility or
 	// cached model capability changes.
 	catalogVersion uint64
@@ -154,6 +159,9 @@ func (s *Store) load() error {
 }
 
 func (s *Store) loadEncrypted() error {
+	if err := s.loadClientIdentityLocked(); err != nil {
+		return err
+	}
 	rows, err := s.documents.LoadSecureDocuments(secureDocumentScope)
 	if err != nil {
 		return err
@@ -184,6 +192,9 @@ func (s *Store) loadEncrypted() error {
 		if reconcileClientIdentityProfile(&item) {
 			migrated = true
 		}
+		if item.ClientIdentityProfile != nil {
+			s.clientIdentity = codexidentity.HighestObserved(s.clientIdentity, *item.ClientIdentityProfile)
+		}
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
 		if err := validatePersistedAccount(row.ID, &item); err != nil {
 			return err
@@ -194,7 +205,7 @@ func (s *Store) loadEncrypted() error {
 	if migrated {
 		return s.saveLocked()
 	}
-	return nil
+	return s.saveClientIdentityLocked()
 }
 
 func validatePersistedAccount(documentID string, item *account) error {
@@ -238,6 +249,9 @@ func (s *Store) saveLocked() error {
 }
 
 func (s *Store) saveEncryptedLocked() error {
+	if err := s.saveClientIdentityLocked(); err != nil {
+		return err
+	}
 	upserts := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
 	next := make(map[string]secureDocumentRevision, len(s.order))
 	for position, id := range s.order {
@@ -699,6 +713,10 @@ type SchedulingLoad struct {
 func (s *Store) AcquireScheduledTransport(model string, exclude, busy []string, preferredID, transport string, candidate events.ClientIdentityCandidate, loads map[string]SchedulingLoad) (events.AcquireResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.promoteSharedClientIdentityLocked(candidate)
+	if err := s.saveClientIdentityLocked(); err != nil {
+		return events.AcquireResult{}, err
+	}
 	model = strings.TrimSpace(model)
 	now := time.Now().UTC()
 	excluded := make(map[string]struct{}, len(exclude))
@@ -713,12 +731,11 @@ func (s *Store) AcquireScheduledTransport(model string, exclude, busy []string, 
 		_, excludedPreferred := excluded[preferred.ID]
 		_, busyPreferred := busySet[preferred.ID]
 		if !excludedPreferred && !busyPreferred && transportSupport(preferred, transport) == 1 {
-			promoteClientIdentityProfile(preferred, candidate)
 			preferred.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
 			}
-			return acquireResult(preferred), nil
+			return s.acquireResult(preferred), nil
 		}
 	}
 	for _, tier := range []int{1, 0} {
@@ -741,13 +758,12 @@ func (s *Store) AcquireScheduledTransport(model string, exclude, busy []string, 
 			}
 		}
 		if selected != nil {
-			promoteClientIdentityProfile(selected, candidate)
 			s.index = (selectedPos + 1) % len(s.order)
 			selected.LastUsedAt = now.Format(time.RFC3339)
 			if err := s.saveLocked(); err != nil {
 				return events.AcquireResult{}, err
 			}
-			return acquireResult(selected), nil
+			return s.acquireResult(selected), nil
 		}
 	}
 	return s.unavailableResult(model, excluded, busySet, transport, now), fmt.Errorf("no eligible Codex OAuth account")
@@ -773,7 +789,7 @@ func preferSchedulingCandidate(candidate, selected *account, loads map[string]Sc
 	return freshQuotaHeadroom(candidate, now) && !freshQuotaHeadroom(selected, now)
 }
 
-func acquireResult(item *account) events.AcquireResult {
+func (s *Store) acquireResult(item *account) events.AcquireResult {
 	if item == nil {
 		return events.AcquireResult{}
 	}
@@ -785,7 +801,7 @@ func acquireResult(item *account) events.AcquireResult {
 		Proxy:           item.Proxy,
 		FingerprintMode: mode,
 		FingerprintSeed: item.FingerprintSeed,
-		ClientIdentity:  clientIdentityProfile(item),
+		ClientIdentity:  s.sharedClientIdentityProfileLocked(),
 	}
 }
 
@@ -855,10 +871,10 @@ func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
 	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency}, true
 }
 
-func (s *Store) ClientIdentityProfile(id string) events.ClientIdentityProfile {
+func (s *Store) SharedClientIdentity() events.ClientIdentityProfile {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return clientIdentityProfile(s.items[strings.TrimSpace(id)])
+	return s.sharedClientIdentityProfileLocked()
 }
 
 func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
@@ -927,7 +943,7 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 	if catalogChanged {
 		s.bumpCatalogLocked()
 	}
-	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, FingerprintSeed: item.FingerprintSeed, Refreshed: true}, nil
+	return events.RefreshTokenResult{AccountID: item.ID, AccessToken: item.AccessToken, AccountIDHeader: item.AccountIDHeader, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, FingerprintSeed: item.FingerprintSeed, ClientIdentity: s.sharedClientIdentityProfileLocked(), Refreshed: true}, nil
 }
 
 func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (events.RefreshTokenResult, error) {
@@ -1365,7 +1381,7 @@ func (s *Store) ListDiscoveryCandidates(accountIDs []string) events.ListDiscover
 				continue
 			}
 		}
-		needs := item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now)
+		needs := item.ModelSnapshot == nil || snapshotExpired(item.ModelSnapshot, now) || s.modelSnapshotIdentityOutdatedLocked(item.ModelSnapshot)
 		retryDue := modelDiscoveryRetryDue(item, now)
 		backedOff := !retryDue
 		hasFailure := strings.TrimSpace(item.ModelDiscoveryErrorClass) != ""
@@ -1374,7 +1390,7 @@ func (s *Store) ListDiscoveryCandidates(accountIDs []string) events.ListDiscover
 			AccessToken:        item.AccessToken,
 			AccountIDHeader:    item.AccountIDHeader,
 			Proxy:              item.Proxy,
-			ClientIdentity:     clientIdentityProfile(item),
+			ClientIdentity:     s.sharedClientIdentityProfileLocked(),
 			NeedsDiscovery:     needs,
 			DiscoveryDue:       (needs || hasFailure) && retryDue,
 			DiscoveryBackedOff: backedOff,
@@ -1395,6 +1411,9 @@ func (s *Store) PutModelSnapshot(accountID string, snapshot events.AccountModelS
 		return s.catalogVersion, false, nil
 	}
 	clean := normalizeSnapshot(accountID, snapshot)
+	if clean.ClientVersion == "" {
+		clean.ClientVersion = s.sharedClientIdentityProfileLocked().Version
+	}
 	item.ModelSnapshot = &clean
 	item.ModelDiscoveryFailures = 0
 	item.ModelDiscoveryRetryAt = ""
@@ -1509,7 +1528,7 @@ func (s *Store) ListUsageCandidatesForSchedule(accountIDs []string, dueOnly bool
 			AccessToken:     item.AccessToken,
 			AccountIDHeader: item.AccountIDHeader,
 			Proxy:           item.Proxy,
-			ClientIdentity:  clientIdentityProfile(item),
+			ClientIdentity:  s.sharedClientIdentityProfileLocked(),
 		}}
 		if dueOnly {
 			candidate.priority = 1
@@ -1784,9 +1803,10 @@ func modelDiscoveryRetryDelay(failures int) time.Duration {
 
 func normalizeSnapshot(accountID string, snapshot events.AccountModelSnapshot) events.AccountModelSnapshot {
 	out := events.AccountModelSnapshot{
-		AccountID:    accountID,
-		DiscoveredAt: strings.TrimSpace(snapshot.DiscoveredAt),
-		ExpiresAt:    strings.TrimSpace(snapshot.ExpiresAt),
+		AccountID:     accountID,
+		DiscoveredAt:  strings.TrimSpace(snapshot.DiscoveredAt),
+		ExpiresAt:     strings.TrimSpace(snapshot.ExpiresAt),
+		ClientVersion: strings.TrimSpace(snapshot.ClientVersion),
 	}
 	if out.DiscoveredAt == "" {
 		out.DiscoveredAt = time.Now().UTC().Format(time.RFC3339)
@@ -1969,29 +1989,6 @@ func reconcileClientIdentityProfile(item *account) bool {
 	}
 	item.ClientIdentityProfile = &normalized
 	return true
-}
-
-func promoteClientIdentityProfile(item *account, candidate events.ClientIdentityCandidate) bool {
-	if item == nil || item.FingerprintMode != events.FingerprintModeScoped {
-		return false
-	}
-	current := codexidentity.ObservedProfile{}
-	if item.ClientIdentityProfile != nil {
-		current = *item.ClientIdentityProfile
-	}
-	next, promoted := codexidentity.PromoteObserved(current, codexidentity.ObservedProfile{UserAgent: candidate.UserAgent, Originator: candidate.Originator})
-	if promoted {
-		item.ClientIdentityProfile = &next
-	}
-	return promoted
-}
-
-func clientIdentityProfile(item *account) events.ClientIdentityProfile {
-	if item == nil || item.FingerprintMode != events.FingerprintModeScoped || item.ClientIdentityProfile == nil {
-		return events.ClientIdentityProfile{}
-	}
-	profile := item.ClientIdentityProfile
-	return events.ClientIdentityProfile{UserAgent: profile.UserAgent, Originator: profile.Originator, Family: profile.Family, Version: profile.Version}
 }
 
 func unique(values []string) []string {

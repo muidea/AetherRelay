@@ -41,6 +41,9 @@ func TestStartupRestoresDurableCodexCatalogBeforeReturning(t *testing.T) {
 		result.Set(accevents.ListDiscoveryCandidatesResult{}, nil)
 	})
 	codexAccounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	codexAccounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	codexAccounts.Subscribe(codexevents.TopicCatalogSnapshot, func(_ event.Event, result event.Result) {
 		result.Set(codexevents.CatalogSnapshotResult{
 			Version: 1, AvailableAccounts: 1,
@@ -218,6 +221,9 @@ func TestCodexDiscoveryUsesAccountScopedCredentialsAndSkipsBackoff(t *testing.T)
 	defer background.Shutdown(nil)
 
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	candidates := []codexevents.DiscoveryCandidate{
 		{AccountID: "backed-off", AccessToken: "token-backoff", DiscoveryBackedOff: true},
 		{AccountID: "due", AccessToken: "token-due", AccountIDHeader: "upstream-account", Proxy: "http://due-proxy.invalid:8080", NeedsDiscovery: true, DiscoveryDue: true},
@@ -284,6 +290,10 @@ func TestCodexDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T) 
 	})
 
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	sharedVersion := "0.162.1"
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/" + sharedVersion + " (Ubuntu; x86_64) terminal (codex-tui; " + sharedVersion + ")", Originator: "codex-tui", Version: sharedVersion}, nil)
+	})
 	refreshes := 0
 	var snapshot codexevents.AccountModelSnapshot
 	accounts.Subscribe(codexevents.TopicRefreshToken, func(ev event.Event, result event.Result) {
@@ -292,6 +302,7 @@ func TestCodexDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T) 
 			t.Fatalf("refresh command=%#v", ev.Data())
 		}
 		refreshes++
+		sharedVersion = "0.163.0"
 		result.Set(codexevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "fresh-token", AccountIDHeader: "fresh-header", Proxy: "http://fresh-proxy.invalid:8080", Refreshed: true}, nil)
 	})
 	accounts.Subscribe(codexevents.TopicPutModelSnapshot, func(ev event.Event, result event.Result) {
@@ -311,6 +322,9 @@ func TestCodexDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T) 
 	upstream.Subscribe(codexupevents.TopicListModels, func(ev event.Event, result event.Result) {
 		command := ev.Data().(codexupevents.ListModelsCommand)
 		requests++
+		if command.ClientIdentity.Version != sharedVersion {
+			t.Errorf("queued/retried model request lost highest version: %+v", command.ClientIdentity)
+		}
 		switch command.AccessToken {
 		case "expired-token":
 			result.Set(codexupevents.ListModelsResult{ErrorClass: codexupevents.ErrorInvalidToken}, nil)
@@ -326,6 +340,9 @@ func TestCodexDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T) 
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}}
 	err := proxy.discoverOneCodexAccount(context.Background(), codexevents.DiscoveryCandidate{AccountID: "account-1", AccessToken: "expired-token", AccountIDHeader: "old-header", Proxy: "http://old-proxy.invalid:8080"})
+	if snapshot.ClientVersion != "0.163.0" {
+		t.Errorf("snapshot version=%q", snapshot.ClientVersion)
+	}
 	if err != nil || refreshes != 1 || requests != 2 || len(snapshot.Models) != 1 || snapshot.Models[0].ID != "gpt-5.2-codex" {
 		t.Fatalf("err=%v refreshes=%d requests=%d snapshot=%+v", err, refreshes, requests, snapshot)
 	}
@@ -340,6 +357,9 @@ func TestCodexDiscoveryQuarantinesCredentialAfterPermanentRefreshFailure(t *test
 	})
 
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	accounts.Subscribe(codexevents.TopicRefreshToken, func(_ event.Event, result event.Result) {
 		result.Set(codexevents.RefreshTokenResult{PermanentFailure: true, ErrorClass: codexevents.ErrorInvalidToken}, nil)
 	})
@@ -376,6 +396,9 @@ func TestManualCodexDiscoveryReportsAccountScopedProgress(t *testing.T) {
 		hub.Terminate(context.Background())
 	})
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	accounts.Subscribe(codexevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
 		result.Set(codexevents.ListDiscoveryCandidatesResult{Candidates: []codexevents.DiscoveryCandidate{{AccountID: "account-1", AccessToken: "token-1"}}}, nil)
 	})
@@ -421,6 +444,9 @@ func TestCodexModelDiscoveryCountsIneligibleRequestedAccountsAsFailures(t *testi
 		hub.Terminate(context.Background())
 	})
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	accounts.Subscribe(codexevents.TopicListDiscoveryCandidates, func(_ event.Event, result event.Result) {
 		result.Set(codexevents.ListDiscoveryCandidatesResult{}, nil)
 	})
@@ -456,6 +482,9 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 		hub.Terminate(context.Background())
 	})
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	accounts.Subscribe(codexevents.TopicListUsageCandidates, func(ev event.Event, result event.Result) {
 		command, ok := ev.Data().(codexevents.ListUsageCandidatesCommand)
 		if !ok || len(command.AccountIDs) != 1 || command.AccountIDs[0] != "account-1" {
@@ -480,7 +509,7 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 	upstream := event.NewSimpleObserver(codexupcommon.UnitID, hub)
 	upstream.Subscribe(codexupevents.TopicGetUsage, func(ev event.Event, result event.Result) {
 		command, ok := ev.Data().(codexupevents.GetUsageCommand)
-		if !ok || command.AccessToken != "token-1" || command.AccountIDHeader != "upstream-account" || command.Proxy != "http://proxy.invalid:8080" {
+		if !ok || command.AccessToken != "token-1" || command.AccountIDHeader != "upstream-account" || command.Proxy != "http://proxy.invalid:8080" || command.ClientIdentity.Version != "0.162.1" {
 			t.Fatalf("usage command=%#v", ev.Data())
 		}
 		result.Set(codexupevents.GetUsageResult{PlanType: "pro", Windows: []codexupevents.UsageWindow{{
@@ -522,6 +551,9 @@ func TestCodexUsageRefreshCountsMissingRequestedAccountsAsFailures(t *testing.T)
 		hub.Terminate(context.Background())
 	})
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	accounts.Subscribe(codexevents.TopicListUsageCandidates, func(_ event.Event, result event.Result) {
 		result.Set(codexevents.ListUsageCandidatesResult{}, nil)
 	})
@@ -575,6 +607,9 @@ func TestCodexUsageRefreshRetriesOnceAfterCredentialRefresh(t *testing.T) {
 		hub.Terminate(context.Background())
 	})
 	accounts := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	accounts.Subscribe(codexevents.TopicClientIdentity, func(_ event.Event, result event.Result) {
+		result.Set(codexevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}, nil)
+	})
 	accounts.Subscribe(codexevents.TopicListUsageCandidates, func(_ event.Event, result event.Result) {
 		result.Set(codexevents.ListUsageCandidatesResult{Candidates: []codexevents.UsageCandidate{{AccountID: "account-1", AccessToken: "expired-token", AccountIDHeader: "old-account", Proxy: "http://old-proxy.invalid:8080"}}}, nil)
 	})

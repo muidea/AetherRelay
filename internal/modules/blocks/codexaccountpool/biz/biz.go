@@ -94,7 +94,8 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.SubscribeFunc(events.TopicClientIdentity, b.handleClientIdentity)
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
@@ -551,7 +552,8 @@ func (s *Account) handleOAuthFinish(ev event.Event, result event.Result) {
 	}
 	oauthCtx, cancel := s.oauthRequestContext(ev.Context())
 	defer cancel()
-	tokens, err := oauth.ExchangeAuthorizationCode(oauthCtx, oauth.AuthorizationCodeRequest{Code: code, CodeVerifier: session.verifier, Proxy: session.proxy})
+	identity := s.store.SharedClientIdentity()
+	tokens, err := oauth.ExchangeAuthorizationCode(oauthCtx, oauth.AuthorizationCodeRequest{Code: code, CodeVerifier: session.verifier, Proxy: session.proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, "Codex OAuth exchange failed"))
 		return
@@ -626,7 +628,7 @@ func (s *Account) refreshTokenOnce(ctx context.Context, accountID string) (event
 	}
 	oauthCtx, cancel := s.oauthRequestContext(ctx)
 	defer cancel()
-	identity := s.store.ClientIdentityProfile(accountID)
+	identity := s.store.SharedClientIdentity()
 	result, err := oauth.Refresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
 	if err != nil {
 		class, permanent := events.ErrorUpstream, false
@@ -770,4 +772,9 @@ func (s *Account) oauthRequestContext(ctx context.Context) (context.Context, con
 		return context.WithCancel(base)
 	}
 	return context.WithTimeout(base, s.oauthTimeout)
+}
+
+// handleClientIdentity resolves the latest shared maximum at request dispatch.
+func (s *Account) handleClientIdentity(_ event.Event, result event.Result) {
+	result.Set(s.store.SharedClientIdentity(), nil)
 }

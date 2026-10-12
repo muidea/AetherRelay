@@ -139,3 +139,23 @@ func TestObservedProfileClassifiesMissingAtomicFields(t *testing.T) {
 		t.Fatal("unbounded observation reason was accepted")
 	}
 }
+
+// CP-HDR-025: the outbound floor and semantic maximum are independent of accounts.
+func TestHighestObservedUsesFallbackFloorAndSemanticMaximum(t *testing.T) {
+	makeProfile := func(version, platform string) ObservedProfile {
+		ua := "codex-tui/" + version + " (" + platform + ") terminal (codex-tui; " + version + ")"
+		return ObservedProfile{UserAgent: ua, Originator: "codex-tui", Version: "forged-hint"}
+	}
+	fallback := HighestObserved()
+	if got := HighestObserved(makeProfile("0.154.0", "Ubuntu")); got != fallback {
+		t.Fatalf("floor=%+v", got)
+	}
+	selected := makeProfile("0.162.10", "Ubuntu")
+	got := HighestObserved(makeProfile("0.162.9", "Windows"), selected, makeProfile("0.162.10", "Windows"), makeProfile("0.155.0", "Ubuntu"), ObservedProfile{UserAgent: "claude-cli/99.0.0", Originator: "claude-cli"})
+	if got.UserAgent != selected.UserAgent || got.Version != "0.162.10" {
+		t.Fatalf("maximum=%+v", got)
+	}
+	if got := HighestObserved(got, makeProfile("1.0.0", "Ubuntu")); got.Version != "1.0.0" {
+		t.Fatalf("major promotion=%+v", got)
+	}
+}

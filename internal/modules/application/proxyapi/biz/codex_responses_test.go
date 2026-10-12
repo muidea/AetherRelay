@@ -362,18 +362,15 @@ func TestCodexFingerprintModesAreStableAndTurnScoped(t *testing.T) {
 	}
 }
 
-func TestResolvedCodexClientIdentityUsesScopedSelectionAndOffPassthrough(t *testing.T) {
+func TestResolvedCodexClientIdentityUsesSharedSelectionForEveryModeAndProtocol(t *testing.T) {
 	rawUserAgent := "codex-tui/0.154.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal (codex-tui; 0.154.0)"
 	selectedUserAgent := "codex-tui/0.159.2 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.159.2)"
 	profile := accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}
 	// Cross-protocol adapters deliberately send no source identity candidate.
 	for _, mode := range []string{accevents.FingerprintModeScoped, accevents.FingerprintModeOff} {
 		converted := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: mode, ClientIdentity: profile}, "", "")
-		if mode == accevents.FingerprintModeScoped && converted.UserAgent != selectedUserAgent {
-			t.Fatal("converted scoped request lost account profile")
-		}
-		if mode == accevents.FingerprintModeOff && converted != (upevents.ClientIdentity{}) {
-			t.Fatal("converted off request must use native transport fallback")
+		if converted.UserAgent != selectedUserAgent || converted.Originator != profile.Originator || converted.Version != profile.Version {
+			t.Fatal("converted request lost shared profile")
 		}
 	}
 
@@ -382,7 +379,7 @@ func TestResolvedCodexClientIdentityUsesScopedSelectionAndOffPassthrough(t *test
 		t.Fatalf("scoped identity=%+v", scoped)
 	}
 	off := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeOff, ClientIdentity: profile}, rawUserAgent, "codex-tui")
-	if off.UserAgent != rawUserAgent || off.Originator != "codex-tui" {
+	if off.UserAgent != selectedUserAgent || off.Originator != "codex-tui" {
 		t.Fatalf("off identity=%+v", off)
 	}
 	if partial := resolvedCodexClientIdentity(accevents.AcquireResult{FingerprintMode: accevents.FingerprintModeOff}, rawUserAgent, ""); partial != (upevents.ClientIdentity{}) {
@@ -432,7 +429,7 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 			t.Errorf("acquire client identity=%+v", command.ClientIdentity)
 		}
 		if acquires == 1 {
-			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: rawUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.154.0"}}, nil)
+			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
 			return
 		}
 		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
@@ -463,8 +460,8 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	if second.Fingerprint.Mode != accevents.FingerprintModeScoped || second.Fingerprint.InstallationID == first.Fingerprint.InstallationID || second.Fingerprint.SessionID == first.Fingerprint.SessionID || second.Fingerprint.TurnID != first.Fingerprint.TurnID || second.Fingerprint.TurnStartedAtUnixMS != first.Fingerprint.TurnStartedAtUnixMS || second.TurnState != "" {
 		t.Fatalf("failover did not preserve semantics and replace account projection: first=%+v second=%+v", first, second)
 	}
-	if first.ClientIdentity.UserAgent != rawUserAgent || second.ClientIdentity.UserAgent != selectedUserAgent {
-		t.Fatalf("failover did not select identity per account: first=%+v second=%+v", first.ClientIdentity, second.ClientIdentity)
+	if first.ClientIdentity.UserAgent != selectedUserAgent || second.ClientIdentity.UserAgent != selectedUserAgent {
+		t.Fatalf("failover lost shared highest identity: first=%+v second=%+v", first.ClientIdentity, second.ClientIdentity)
 	}
 }
 
@@ -706,17 +703,19 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 		hub.Terminate(context.Background())
 	})
 
+	shared := accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111"}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: shared}, nil)
 	})
 	refreshes := 0
 	accounts.Subscribe(accevents.TopicRefreshToken, func(ev event.Event, result event.Result) {
 		refreshes++
+		shared = accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.163.0 (Ubuntu; x86_64) terminal (codex-tui; 0.163.0)", Originator: "codex-tui", Version: "0.163.0"}
 		if command := ev.Data().(accevents.RefreshTokenCommand); command.AccountID != "account-1" {
 			t.Errorf("refresh command=%+v", command)
 		}
-		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", Refreshed: true}, nil)
+		result.Set(accevents.RefreshTokenResult{AccountID: "account-1", AccessToken: "new-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://new-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: shared, Refreshed: true}, nil)
 	})
 	recorded := make(chan accevents.RecordResultCommand, 2)
 	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
@@ -738,7 +737,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 			result.Set(upevents.CompleteResult{ErrorClass: upevents.ErrorInvalidToken}, nil)
 			return
 		}
-		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
+		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" || command.ClientIdentity.Version != "0.163.0" {
 			t.Errorf("retry upstream command=%+v", command)
 		}
 		if command.Fingerprint.InstallationID == "" || command.Fingerprint.InstallationID != firstFingerprint.InstallationID || command.Fingerprint.SessionID != firstFingerprint.SessionID || command.Fingerprint.TurnID == "" || command.Fingerprint.TurnID != firstFingerprint.TurnID || command.Fingerprint.TurnStartedAtUnixMS != firstFingerprint.TurnStartedAtUnixMS {
@@ -937,5 +936,46 @@ func TestFailureFromUpstreamDistinguishesQuotaExhaustion(t *testing.T) {
 	genericFailure := failureFromUpstream(upevents.ErrorRateLimit, 120, upevents.RateLimitObservation{}, 429)
 	if genericFailure.QuotaExhausted || genericFailure.QuotaResetAt != "" {
 		t.Fatalf("generic failure=%+v", genericFailure)
+	}
+}
+
+// CP-HDR-021/025: a streaming 401 retry must retain the latest shared identity.
+func TestStreamCredentialRetryUsesSharedHighestIdentity(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	old := accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}
+	newest := accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.163.0 (Ubuntu; x86_64) terminal (codex-tui; 0.163.0)", Originator: "codex-tui", Version: "0.163.0"}
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
+		result.Set(accevents.AcquireResult{AccountID: "account", AccessToken: "old", LeaseID: "lease", ClientIdentity: old}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRefreshToken, func(_ event.Event, result event.Result) {
+		result.Set(accevents.RefreshTokenResult{AccountID: "account", AccessToken: "new", Refreshed: true, ClientIdentity: newest}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	attempts := 0
+	upstream.Subscribe(upevents.TopicStart, func(ev event.Event, result event.Result) {
+		command := ev.Data().(upevents.StartCommand)
+		attempts++
+		if attempts == 1 {
+			result.Set(upevents.StartResult{ErrorClass: upevents.ErrorInvalidToken}, nil)
+			return
+		}
+		if command.AccessToken != "new" || command.ClientIdentity != toUpstreamAccountClientIdentity(newest) {
+			t.Errorf("retry lost highest identity: %+v", command)
+		}
+		result.Set(upevents.StartResult{StreamID: "stream"}, nil)
+	})
+	upstream.Subscribe(upevents.TopicPull, func(_ event.Event, result event.Result) {
+		result.Set(upevents.PullResult{Data: []byte("data: {\"type\":\"response.completed\"}\n"), Done: true}, nil)
+	})
+	upstream.Subscribe(upevents.TopicCancel, func(_ event.Event, result event.Result) { result.Set(upevents.CancelResult{Cancelled: true}, nil) })
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	err := proxy.StreamCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`)}, nil, nil)
+	if err != nil || attempts != 2 {
+		t.Fatalf("attempts=%d err=%v", attempts, err)
 	}
 }

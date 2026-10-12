@@ -8,6 +8,7 @@ const (
 	TopicImport                    = "aetherrelay.codex.accountpool.command.import"
 	TopicDelete                    = "aetherrelay.codex.accountpool.command.delete"
 	TopicUpdate                    = "aetherrelay.codex.accountpool.command.update"
+	TopicClientIdentity            = "aetherrelay.codex.accountpool.command.client_identity"
 	TopicAcquire                   = "aetherrelay.codex.accountpool.command.acquire"
 	TopicRelease                   = "aetherrelay.codex.accountpool.command.release"
 	TopicRecordResult              = "aetherrelay.codex.accountpool.command.record_result"
@@ -178,15 +179,15 @@ type UpdateResult struct {
 }
 
 // ClientIdentityCandidate is the atomic bounded pair observed on one
-// downstream request. The account store validates and ranks it before it can
-// become an account-scoped upstream profile.
+// downstream request. The account store validates and ranks it against the
+// service-wide maximum before admission, independently of fingerprint mode.
 type ClientIdentityCandidate struct {
 	UserAgent  string
 	Originator string
 }
 
-// ClientIdentityProfile is the selected client-sourced identity for one
-// encrypted account. It is EventHub-only and never enters management views or
+// ClientIdentityProfile is the shared highest client-sourced identity returned
+// for every account. It is EventHub-only and never enters management views or
 // ordinary credential exports.
 type ClientIdentityProfile struct {
 	UserAgent  string
@@ -260,7 +261,8 @@ type RefreshTokenResult struct {
 	AccountIDHeader  string
 	Proxy            string
 	FingerprintMode  string
-	FingerprintSeed  string `json:"-"`
+	FingerprintSeed  string                `json:"-"`
+	ClientIdentity   ClientIdentityProfile `json:"-"`
 	Refreshed        bool
 	PermanentFailure bool
 	ErrorClass       string
@@ -293,10 +295,11 @@ type AccountModelEntry struct {
 // AccountModelSnapshot is the persisted, bounded discovery cache for one
 // account. It deliberately excludes raw upstream payloads and credentials.
 type AccountModelSnapshot struct {
-	AccountID    string              `json:"account_id"`
-	Models       []AccountModelEntry `json:"models"`
-	DiscoveredAt string              `json:"discovered_at"`
-	ExpiresAt    string              `json:"expires_at,omitempty"`
+	AccountID     string              `json:"account_id"`
+	Models        []AccountModelEntry `json:"models"`
+	DiscoveredAt  string              `json:"discovered_at"`
+	ExpiresAt     string              `json:"expires_at,omitempty"`
+	ClientVersion string              `json:"client_version,omitempty"`
 }
 
 // UsageWindow is a bounded projection of one upstream Codex usage window.
