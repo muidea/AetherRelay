@@ -10,6 +10,7 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
@@ -55,6 +56,7 @@ type chatGPTSearchAttempt struct {
 }
 
 func (s *Proxy) searchChatGPTWithAccount(ctx context.Context, account accevents.AcquireTextTokenResult, request chatgptsearch.Request) (chatGPTSearchAttempt, error) {
+	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
 	attempt, err := s.searchChatGPTOnce(ctx, account.AccessToken, account.Account.Proxy, request)
 	if !isInvalidChatGPTTextFailure(err) {
 		return attempt, err
@@ -70,6 +72,7 @@ func (s *Proxy) searchChatGPTWithAccount(ctx context.Context, account accevents.
 		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
 		return attempt, err
 	}
+	usagetarget.Record(ctx, "chatgptweb", refreshed.Account.ID, refreshed.Account.Email)
 	attempt, err = s.searchChatGPTOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request)
 	if isInvalidChatGPTTextFailure(err) {
 		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)

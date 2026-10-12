@@ -17,6 +17,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	aetherrelayarchive "aetherrelay/internal/pkg/aetherrelayarchive"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
 	aetherrelaymetrics "aetherrelay/internal/pkg/aetherrelaymetrics"
@@ -351,7 +352,8 @@ func TestCodexOAuthArchiveRecordsTurnStateFallbackOnObservedFailure(t *testing.T
 func TestCodexOAuthResponsesNormalizesRequestAndSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	var received codexresponses.Request
-	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{complete: func(ctx context.Context, request codexresponses.Request) (codexresponses.Result, error) {
+		usagetarget.Record(ctx, "codexoauth", "local-slot", "operator@example.com")
 		received = request
 		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_2","usage":{"input_tokens":7,"output_tokens":4}}`)}, nil
 	}})
@@ -381,6 +383,11 @@ func TestCodexOAuthResponsesNormalizesRequestAndSettlesUsage(t *testing.T) {
 	if event.Outcome != "success" || event.Provider != effectivecatalog.CodexOAuthProviderID || event.UpstreamProtocol != effectivecatalog.CodexOAuthProviderID || event.UpstreamEndpoint != "codex_oauth_responses" || event.ConversionMode != TransportModeCodexOAuthResponses {
 		t.Fatalf("Codex usage metadata=%+v", event)
 	}
+	// CP-OBS-013: usage target survives with interaction archives disabled.
+	if event.AccountID != "local-slot" || event.AccountLabel != "operator@example.com" {
+		t.Fatalf("account selection=%+v", event)
+	}
+
 }
 
 func TestCodexOAuthStreamKeepsBodyTurnMetadata(t *testing.T) {
@@ -1468,7 +1475,10 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 		},
 	})
 	store := usage.NewMemoryStore()
-	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{})
+	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
+		usagetarget.Record(ctx, "codexoauth", "fallback-slot", "fallback@example.com")
+		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_fallback","usage":{"input_tokens":3,"output_tokens":2}}`)}, nil
+	}})
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-shared"}}}))
 	attempts := 0
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1489,7 +1499,7 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 		t.Fatalf("direct attempts=%d want 1", attempts)
 	}
 	events := usageEvents(t, store)
-	if len(events) != 1 || events[0].Provider != effectivecatalog.CodexOAuthProviderID || events[0].Outcome != "success" {
+	if len(events) != 1 || events[0].Provider != effectivecatalog.CodexOAuthProviderID || events[0].Outcome != "success" || events[0].AccountID != "fallback-slot" || events[0].AccountLabel != "fallback@example.com" {
 		t.Fatalf("usage events=%+v", events)
 	}
 }
@@ -1510,7 +1520,8 @@ func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 	store := usage.NewMemoryStore()
 	failure := codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream failed"))
 	failure.HTTPStatus = http.StatusBadGateway
-	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
+		usagetarget.Record(ctx, "codexoauth", "failed-slot", "first@example.com")
 		return codexresponses.Result{}, failure
 	}})
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-shared"}}}))
@@ -1530,7 +1541,7 @@ func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 		t.Fatalf("direct attempts=%d want 1", attempts)
 	}
 	events := usageEvents(t, store)
-	if len(events) != 1 || events[0].Provider != "backup" || events[0].Outcome != "success" {
+	if len(events) != 1 || events[0].Provider != "backup" || events[0].Outcome != "success" || events[0].AccountID != "" || events[0].AccountLabel != "" {
 		t.Fatalf("usage events=%+v", events)
 	}
 }

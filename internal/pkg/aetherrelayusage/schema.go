@@ -7,7 +7,7 @@ import (
 )
 
 // initializeSchema creates the final tables and verifies runtime columns.
-// The generation tables are additive; existing event tables are never altered.
+// The observation tables are additive; existing event tables are never altered.
 // Incompatible existing layouts fail without migrating or resetting data.
 func initializeSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
@@ -41,6 +41,9 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	if _, err := tx.ExecContext(ctx, `SELECT event_id, known FROM usage_output_observation LIMIT 0`); err != nil {
 		return fmt.Errorf("verify output observation schema: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `SELECT event_id, account_id, account_label FROM usage_account_selection LIMIT 0`); err != nil {
+		return fmt.Errorf("verify account selection schema: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
 	}
@@ -49,6 +52,7 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 
 func createSchema(ctx context.Context, tx *sql.Tx) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS usage_account_selection (event_id VARCHAR PRIMARY KEY, account_id VARCHAR NOT NULL, account_label VARCHAR NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_output_observation (event_id VARCHAR PRIMARY KEY, known BOOLEAN NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_generation_buffering (event_id VARCHAR PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS usage_generation (

@@ -43,6 +43,8 @@ type CompleteRecord struct {
 	EventID                       string
 	CompletedAt                   time.Time
 	Provider                      string
+	AccountID                     string // Local account slot ID; never the upstream account header.
+	AccountLabel                  string // Email label captured at execution time.
 	Model                         string
 	UpstreamProtocol              string
 	UpstreamEndpoint              string
@@ -194,6 +196,8 @@ type Event struct {
 	CompletedAt                   *time.Time `json:"completed_at,omitempty"`
 	APIKeyID                      string     `json:"api_key_id"`
 	Provider                      string     `json:"provider,omitempty"`
+	AccountID                     string     `json:"account_id,omitempty"`
+	AccountLabel                  string     `json:"account_label,omitempty"`
 	Model                         string     `json:"model,omitempty"`
 	Operation                     string     `json:"operation,omitempty"`
 	Route                         string     `json:"route,omitempty"`

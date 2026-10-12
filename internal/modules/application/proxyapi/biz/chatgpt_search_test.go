@@ -9,6 +9,7 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	basebiz "aetherrelay/internal/modules/base/biz"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
@@ -99,7 +100,7 @@ func TestSearchFailsOverFromPrepareTLSWithoutReusingProxy(t *testing.T) {
 			if !containsSearchToken(command.Exclude, "token-a") || !containsSearchToken(command.Exclude, "token-b") {
 				t.Fatalf("third acquire exclusion=%v", command.Exclude)
 			}
-			result.Set(accevents.AcquireTextTokenResult{AccessToken: "token-c", Account: accevents.AccountView{ID: "account-c", Proxy: "http://proxy-two.invalid:8080"}}, nil)
+			result.Set(accevents.AcquireTextTokenResult{AccessToken: "token-c", Account: accevents.AccountView{ID: "account-c", Email: "search@example.com", Proxy: "http://proxy-two.invalid:8080"}}, nil)
 		default:
 			t.Fatalf("unexpected acquire %d", acquires)
 		}
@@ -124,7 +125,8 @@ func TestSearchFailsOverFromPrepareTLSWithoutReusingProxy(t *testing.T) {
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-	searched, err := proxy.Search(context.Background(), chatgptsearch.Request{Model: "gpt-search", Query: "recover search"})
+	ctx := usagetarget.WithTracker(context.Background())
+	searched, err := proxy.Search(ctx, chatgptsearch.Request{Model: "gpt-search", Query: "recover search"})
 	if err != nil || searched.Text != "recovered" || acquires != 3 {
 		t.Fatalf("result=%+v err=%v acquires=%d", searched, err, acquires)
 	}
@@ -135,6 +137,11 @@ func TestSearchFailsOverFromPrepareTLSWithoutReusingProxy(t *testing.T) {
 	if second.AccountID != "account-c" || !second.Success || second.ErrorClass != "" {
 		t.Fatalf("second record=%+v", second)
 	}
+	// CP-OBS-013: skipped same-proxy candidate B must not become the usage target.
+	if target := usagetarget.Snapshot(ctx); target.Provider != "chatgptweb" || target.AccountID != "account-c" || target.AccountLabel != "search@example.com" {
+		t.Fatalf("search usage target=%+v", target)
+	}
+
 }
 
 func TestSearchDoesNotFailOverAfterConversationStageFailure(t *testing.T) {

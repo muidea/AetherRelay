@@ -211,6 +211,7 @@ type AcquireResult struct {
 	UnavailableReason string
 	RetryAfterSeconds int
 	AccountID         string
+	AccountLabel      string // Safe management email snapshot, never an upstream account header.
 	AccessToken       string
 	AccountIDHeader   string
 	Proxy             string

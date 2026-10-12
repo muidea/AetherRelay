@@ -796,6 +796,7 @@ func (s *Store) acquireResult(item *account) events.AcquireResult {
 	mode, _ := normalizeFingerprintMode(item.FingerprintMode)
 	return events.AcquireResult{
 		AccountID:       item.ID,
+		AccountLabel:    item.Email,
 		AccessToken:     item.AccessToken,
 		AccountIDHeader: item.AccountIDHeader,
 		Proxy:           item.Proxy,

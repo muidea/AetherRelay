@@ -109,6 +109,7 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	if rec.Model != "" {
 		e.Model = rec.Model
 	}
+	e.AccountID, e.AccountLabel = rec.AccountID, rec.AccountLabel
 	e.CompletedAt = &completedAt
 	e.UpstreamProtocol = rec.UpstreamProtocol
 	e.UpstreamEndpoint = rec.UpstreamEndpoint
@@ -513,6 +514,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			strconv.FormatBool(e.CacheCreationInputTokensKnown),
 		}
 		row = append(row, tpsCSV(e.GenerationSample)...)
+		row = append(row, e.AccountID, e.AccountLabel)
 		if err := cw.Write(row); err != nil {
 			return err
 		}

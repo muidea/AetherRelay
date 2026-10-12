@@ -19,7 +19,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'loadEvents', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'loadEvents', 'usageAccountLabel', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -328,4 +328,21 @@ test('known zero output on canceled requests remains observable', () => {
  assert.equal(c.usageTokenValue(e,'output_tokens'),'0');
  assert.equal(c.usageTPS(e),'0.00');
  assert.match(c.usageTPSHint(e),/部分输出/);
+});
+
+// CP-OBS-013: actual target is visible in a single-event dialog and escaped.
+test('event dialog shows provider and historical account snapshot safely', () => {
+ const {context:c,elements}=harness();
+ c.showUsageEvent({provider:'codexoauth',account_id:'slot-id',account_label:'operator<admin>@example.com'});
+ const detail=elements.usageEventDetail.innerHTML;
+ assert.match(detail, /<dt>实际 Provider<\/dt><dd>codexoauth<\/dd>/);
+ assert.match(detail, /operator&lt;admin&gt;@example.com/);
+ assert.match(detail, /<dt>账号槽位 ID<\/dt><dd>slot-id<\/dd>/);
+ assert.ok(!detail.includes('operator<admin>'));
+ c.showUsageEvent({provider:'chatgptweb'});
+ assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd>未记录<\/dd>/);
+ c.showUsageEvent({provider:'custom-provider'});
+ assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd>不适用<\/dd>/);
+ c.showUsageEvent({provider:'codexoauth',account_id:'unlabelled-slot'});
+ assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd>unlabelled-slot<\/dd>/);
 });

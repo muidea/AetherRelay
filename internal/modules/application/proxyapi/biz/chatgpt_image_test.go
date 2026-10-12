@@ -13,6 +13,7 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	basebiz "aetherrelay/internal/modules/base/biz"
 	imgcommon "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/common"
 	imgevents "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
@@ -34,7 +35,7 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 
 	accountObs := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accountObs.Subscribe(accevents.TopicAcquireImageToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://image-proxy.invalid:8080"}}, nil)
+		result.Set(accevents.AcquireImageTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account-1", Email: "operator@example.com", Proxy: "http://image-proxy.invalid:8080"}}, nil)
 	})
 	accountObs.Subscribe(accevents.TopicReleaseImageSlot, func(_ event.Event, result event.Result) {
 		result.Set(accevents.ReleaseImageSlotResult{OK: true}, nil)
@@ -64,7 +65,8 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 	})
 
 	p := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-	result, err := p.GenerateImage(context.Background(), chatgptimage.Request{
+	ctx := usagetarget.WithTracker(context.Background())
+	result, err := p.GenerateImage(ctx, chatgptimage.Request{
 		Prompt: "cat", Model: "gpt-image-2", N: 2, ResponseFormat: "b64_json",
 	})
 	if err == nil {
@@ -79,6 +81,11 @@ func TestGenerateImageKeepsUsageFromFailedNthUpstreamCall(t *testing.T) {
 	if result.ConversationID != "conversation-1" || result.AccountID != "account-1" {
 		t.Fatalf("recovery metadata was lost: %+v", result)
 	}
+	// CP-OBS-013: usage receives only the local ID/email, including partial failures and refresh.
+	if target := usagetarget.Snapshot(ctx); target.Provider != "chatgptweb" || target.AccountID != "account-1" || target.AccountLabel != "operator@example.com" {
+		t.Fatalf("usage target=%+v", target)
+	}
+
 }
 
 func TestPresentChatGPTImagesUsesRasterBytesForBase64Response(t *testing.T) {

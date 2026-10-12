@@ -12,6 +12,7 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	basebiz "aetherrelay/internal/modules/base/biz"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
@@ -129,7 +130,7 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old-token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://old-proxy.invalid:8080"}}, nil)
+		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old-token", Account: accevents.AccountView{ID: "account-1", Email: "operator@example.com", Proxy: "http://old-proxy.invalid:8080"}}, nil)
 	})
 	var refreshes atomic.Int32
 	accounts.Subscribe(accevents.TopicRefreshTextToken, func(ev event.Event, result event.Result) {
@@ -137,7 +138,7 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 		if command := ev.Data().(accevents.RefreshTextTokenCommand); command.AccessToken != "old-token" {
 			t.Fatalf("refresh command=%+v", command)
 		}
-		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new-token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://new-proxy.invalid:8080"}, Refreshed: true}, nil)
+		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new-token", Account: accevents.AccountView{ID: "account-1", Email: "operator@example.com", Proxy: "http://new-proxy.invalid:8080"}, Refreshed: true}, nil)
 	})
 	recorded := make(chan accevents.RecordTextResultCommand, 1)
 	accounts.Subscribe(accevents.TopicRecordTextResult, func(ev event.Event, result event.Result) {
@@ -168,7 +169,8 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-	completed, err := proxy.Complete(context.Background(), chatgpttext.Request{Model: "gpt", Messages: []chatgpttext.Message{{Role: "user", Content: "test"}}})
+	ctx := usagetarget.WithTracker(context.Background())
+	completed, err := proxy.Complete(ctx, chatgpttext.Request{Model: "gpt", Messages: []chatgpttext.Message{{Role: "user", Content: "test"}}})
 	if err != nil || completed.Text != "recovered" || attempts.Load() != 2 || refreshes.Load() != 1 {
 		t.Fatalf("complete=%+v err=%v attempts=%d refreshes=%d", completed, err, attempts.Load(), refreshes.Load())
 	}
@@ -185,6 +187,11 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 		t.Fatalf("recovered token must not be removed: %+v", command)
 	default:
 	}
+	// CP-OBS-013: usage receives only the local ID/email, including partial failures and refresh.
+	if target := usagetarget.Snapshot(ctx); target.Provider != "chatgptweb" || target.AccountID != "account-1" || target.AccountLabel != "operator@example.com" {
+		t.Fatalf("usage target=%+v", target)
+	}
+
 }
 
 func TestCompleteKeepsAccountOnTransientOAuthRefreshFailure(t *testing.T) {

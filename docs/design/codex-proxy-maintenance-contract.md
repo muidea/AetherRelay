@@ -6,7 +6,7 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.0.0`
+> 合同版本：`17.1.0`
 >
 > 状态：`active`
 >
@@ -15,6 +15,8 @@
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`17.1.0` 增加调用明细的实际执行目标（`CP-OBS-013`）：保留实际 Provider，并记录账号池最终执行账号的本地槽位 ID 与当时邮箱标签；HTTP/SSE、compact、WebSocket、跨协议转换和 ChatGPT Web 文本/搜索/图片共用安全观测。切号覆盖最终选择，未选中或历史缺失不推测。管理明细弹窗及 CSV 展示该信息；账号后来删除或改名不改变历史标签。使用新增附属表，既有 usage_events 布局不 ALTER、不回填。仅增加管理字段，按 MINOR 记录。
 
 `17.0.0` 将客户端版本选择从账号级提升为整个 Codex 账号池共享最高版本（`CP-HDR-003..004`、`CP-HDR-021`、`CP-HDR-025`）：有效实际观察值高于内置兜底后，所有账号、off/scoped、原生与转换入口、推理、模型发现、用量和 OAuth 请求统一使用该最高版本的原子 UA/Originator；不得退回旧账号版本或透传较低客户端版本。最高值独立加密持久化，启动时合并有效历史账号观察值，账号删除、凭据替换与重启不能降级。模型缓存记录发现使用的版本，过旧缓存自动安排重同步并保留有效成员资格；后台排队和刷新重试在发出时重读共享最高值。已准入请求和已建立的 WebSocket 使用当时快照。默认身份选择范围改变，按 MAJOR 记录；本地实现完成，x600 待部署验收。
 
@@ -519,6 +521,8 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-SEC-004` HTTPS 账号代理的 proxy TLS leg 必须仅协商 `http/1.1` 并完成显式 TLS handshake，再由 HTTP/WebSocket transport 执行 CONNECT 和目标端 TLS；OAuth、refresh、模型、用量、HTTP、compact 与 WebSocket 使用同一代理 TLS 策略。
 
+`CP-OBS-013` 调用明细保存实际出站 Provider；账号池请求同时保存最终执行账号的本地槽位 ID（`account_id`）及当时管理邮箱标签（`account_label`）。记录从账号 owner 的安全投影取得，不解析 Authorization 或 ChatGPT-Account-ID，禁止持久化凭据、上游账号头、代理地址与会话原值。切号更新到实际最后执行的账号；仅扫描但未执行的候选不得覆盖，切到普通 Provider 必须清除前一账号。未准入不伪造账号，历史缺失不回填。管理明细与 CSV 共用该快照，账号删除/重命名不抹去历史信息，API Key 删除同步删除附属记录。关闭交互归档或正常日志不影响此观测；普通日志和指标不添加邮箱标签。Web 必须转义显示，普通 Provider 的账号显示不适用、账号池缺失显示未记录。
+
 `CP-OBS-001` 用量统一记录客户端身份、模型、上游协议、transport（HTTP/SSE/WS/compact）、账号安全引用、是否估算和最终 outcome。
 
 `CP-OBS-002` outcome 至少包括 `success`、`client_canceled`、`invalid_request`、`authentication_failed`、`rate_limited`、`quota_exhausted`、`upstream_failed`、`upstream_truncated`、`first_event_timeout`、`idle_timeout`、`protocol_error`。
@@ -568,6 +572,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`17.1.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 实际 Provider/账号快照与 Web 明细 | CP-OBS-013 | implemented（本地）；x600 待部署 | `proxyapi/pkg/usagetarget/target.go`, `proxyapi/biz`, `proxyapi/service/proxy/handler.go`, `aetherrelayusage`, `web/admin/index.html` | `aetherrelayusage/account_selection_test.go`, `proxyapi/biz/codex_responses_test.go`, `proxyapi/biz/chatgpt_{text,search,image}_test.go`, `proxyapi/service/proxy/codex_responses_test.go`, `adminapi/service/admin/usage_test.go`, `web/admin/usage.test.cjs` |
 
 `17.0.0` 新增实施追踪：
 

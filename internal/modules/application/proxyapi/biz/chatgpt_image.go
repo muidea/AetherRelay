@@ -13,6 +13,7 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptimage"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	imgcommon "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/common"
 	imgevents "aetherrelay/internal/modules/blocks/chatgptimagestore/pkg/events"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
@@ -112,6 +113,7 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 	if !ok || strings.TrimSpace(account.AccessToken) == "" {
 		return oneImageResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("invalid chatgpt image account result"))
 	}
+	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
 	defer s.releaseChatGPTImageSlot(ctx, account.AccessToken)
 
 	activeToken, activeProxy := account.AccessToken, account.Account.Proxy

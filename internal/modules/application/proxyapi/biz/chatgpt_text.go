@@ -11,6 +11,7 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	"github.com/muidea/magicCommon/event"
@@ -24,6 +25,7 @@ func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (out 
 	}
 	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
 
+	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
 	out, err = s.completeChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request)
 	if !isInvalidChatGPTTextFailure(err) {
 		return out, err
@@ -43,6 +45,7 @@ func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (out 
 		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
 		return out, err
 	}
+	usagetarget.Record(ctx, "chatgptweb", refreshed.Account.ID, refreshed.Account.Email)
 	out, err = s.completeChatGPTTextOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request)
 	if isInvalidChatGPTTextFailure(err) {
 		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)
@@ -57,6 +60,7 @@ func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit fu
 	}
 	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
 
+	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
 	out, emitted, err := s.streamChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request, emit)
 	if !isInvalidChatGPTTextFailure(err) || emitted {
 		return out, err
@@ -72,6 +76,7 @@ func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit fu
 		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
 		return out, err
 	}
+	usagetarget.Record(ctx, "chatgptweb", refreshed.Account.ID, refreshed.Account.Email)
 	out, _, err = s.streamChatGPTTextOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request, emit)
 	if isInvalidChatGPTTextFailure(err) {
 		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)

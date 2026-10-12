@@ -19,8 +19,8 @@ func sharedIdentityCandidate(version string) events.ClientIdentityCandidate {
 func addSharedIdentityAccounts(t *testing.T, s *Store) []string {
 	t.Helper()
 	if added, _, _, err := s.Import([]events.CredentialInput{
-		{AccountID: "account-a", AccessToken: "access-a", RefreshToken: "refresh-a", FingerprintMode: events.FingerprintModeScoped},
-		{AccountID: "account-b", AccessToken: "access-b", RefreshToken: "refresh-b", FingerprintMode: events.FingerprintModeOff},
+		{AccountID: "account-a", Email: "first@example.com", AccessToken: "access-a", RefreshToken: "refresh-a", FingerprintMode: events.FingerprintModeScoped},
+		{AccountID: "account-b", Email: "second@example.com", AccessToken: "access-b", RefreshToken: "refresh-b", FingerprintMode: events.FingerprintModeOff},
 	}); err != nil || added != 2 {
 		t.Fatalf("import added=%d err=%v", added, err)
 	}
@@ -46,6 +46,10 @@ func TestSharedHighestIdentityAppliesAcrossAccountsModesAndBackgroundRequests(t 
 	first, err := s.AcquirePreferredTransportWithBusyIdentity("gpt-test", nil, nil, ids[0], events.TransportResponses, newest)
 	if err != nil || first.ClientIdentity.Version != "0.162.1" {
 		t.Fatalf("first admission=%+v err=%v", first, err)
+	}
+	// CP-OBS-013: the admitted slot carries its safe management label.
+	if first.AccountLabel != "first@example.com" {
+		t.Fatalf("admission label=%q", first.AccountLabel)
 	}
 	for _, candidate := range []events.ClientIdentityCandidate{
 		{},

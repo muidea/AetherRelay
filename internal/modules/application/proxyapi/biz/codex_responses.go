@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	acccommon "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
 	accevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
@@ -816,6 +817,7 @@ func (s *Proxy) acquireCodexAccountForTransportWithIdentity(ctx context.Context,
 		}
 		return accevents.AcquireResult{}, failure
 	}
+	usagetarget.Record(ctx, "codexoauth", account.AccountID, account.AccountLabel)
 	return account, nil
 }
 

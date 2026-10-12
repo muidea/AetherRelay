@@ -29,6 +29,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
@@ -150,7 +151,7 @@ func archiveRoundFromContext(ctx context.Context) *archive.Round {
 }
 
 func withUsageCompletion(ctx context.Context, completion *usageCompletion) context.Context {
-	return context.WithValue(ctx, usageCompletionKey{}, completion)
+	return context.WithValue(usagetarget.WithTracker(ctx), usageCompletionKey{}, completion)
 }
 
 func usageCompletionFromContext(ctx context.Context) *usageCompletion {
@@ -758,7 +759,9 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	target := usagetarget.Snapshot(r.Context())
 	err := h.usageStore.Complete(ctx, usage.CompleteRecord{
+		Provider: target.Provider, AccountID: target.AccountID, AccountLabel: target.AccountLabel,
 		EventID: eventID, CompletedAt: time.Now().UTC(), HTTPStatus: http.StatusInternalServerError,
 		Outcome: "error", ErrorCode: ErrorCodeProxyInternalError,
 		Duration: time.Since(startedAt), FirstEventDuration: firstEventDuration, UpstreamDuration: upstreamDuration,
@@ -833,6 +836,11 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		Estimated:                     tok.Estimated,
 	}
 	if r != nil {
+		target := usagetarget.Snapshot(r.Context())
+		if target.Provider != "" && (rec.Provider == "" || rec.Provider == target.Provider) {
+			rec.Provider = target.Provider
+			rec.AccountID, rec.AccountLabel = target.AccountID, target.AccountLabel
+		}
 		rec.FirstEventDuration = firstEventDurationFromContext(r.Context())
 		if completion := usageCompletionFromContext(r.Context()); completion != nil {
 			sample := completion.generation.Snapshot(time.Now())
@@ -2515,6 +2523,7 @@ func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, provider
 	if client == nil {
 		return upstreamResult{}, fmt.Errorf("upstream client is unavailable")
 	}
+	usagetarget.Record(r.Context(), providerName, "", "")
 	resp, err := client.Do(req)
 	duration := time.Since(upstreamStart)
 	if resp != nil {

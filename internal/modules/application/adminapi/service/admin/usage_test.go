@@ -32,7 +32,7 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 		Operation: "chat_completions", ClientEndpoint: "/v1/chat/completions", ClientProtocol: "openai",
 	})
 	_ = store.Complete(context.Background(), usage.CompleteRecord{
-		EventID: "e1", OutputTokensKnown: true, FirstOutputAt: now.Add(500 * time.Millisecond), GenerationDuration: 500 * time.Millisecond, Duration: time.Second, CompletedAt: now.Add(time.Second), Provider: "openai", Model: "gpt-4o",
+		EventID: "e1", OutputTokensKnown: true, FirstOutputAt: now.Add(500 * time.Millisecond), GenerationDuration: 500 * time.Millisecond, Duration: time.Second, CompletedAt: now.Add(time.Second), Provider: "codexoauth", AccountID: "local-slot", AccountLabel: "operator@example.com", Model: "gpt-4o",
 		InputTokens: 10, OutputTokens: 5, CachedInputTokens: 4, CacheCreationInputTokens: 2, HTTPStatus: 200, Outcome: "success",
 	})
 
@@ -102,6 +102,11 @@ func TestUsageDashboardAndEventsLoopback(t *testing.T) {
 	}
 	if len(page.Events) != 1 || page.Events[0].CacheHitRate != 0.4 || page.Events[0].TPS == nil || *page.Events[0].TPS != 5 || page.Events[0].ObservedTPS == nil || *page.Events[0].ObservedTPS != 10 || page.Events[0].GenerationDurationMS != 500 {
 		t.Fatalf("event cache statistics=%+v", page)
+	}
+
+	// CP-OBS-013: the Web API uses the stored target snapshot.
+	if event := page.Events[0]; event.Provider != "codexoauth" || event.AccountID != "local-slot" || event.AccountLabel != "operator@example.com" {
+		t.Fatalf("account detail=%+v", event)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/admin/api/usage/export.csv?range=30d", nil)

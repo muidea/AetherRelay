@@ -385,7 +385,7 @@ func (s *DuckDBStore) Events(ctx context.Context, filter EventFilter) (EventPage
 SELECT
     event_id, coalesce(round_id, 0), started_at, completed_at,
     cast(usage_date AS VARCHAR), api_key_id,
-    coalesce(provider, ''), coalesce(model, ''),
+    coalesce(provider, ''), coalesce(model, ''), account_id, account_label,
     coalesce(operation, ''), coalesce(route, ''),
     coalesce(client_endpoint, ''), coalesce(client_protocol, ''),
     coalesce(upstream_protocol, ''), coalesce(upstream_endpoint, ''),
@@ -400,7 +400,7 @@ SELECT
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
     stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known
-FROM ` + tpsEvents + `
+FROM ` + targetEvents + `
 WHERE ` + where + `
 ORDER BY started_at DESC, event_id DESC
 LIMIT ?`
@@ -428,7 +428,7 @@ LIMIT ?`
 		if err := rows.Scan(
 			&e.EventID, &e.RoundID, &e.StartedAt, &completedAt,
 			&usageDate, &e.APIKeyID,
-			&e.Provider, &e.Model,
+			&e.Provider, &e.Model, &e.AccountID, &e.AccountLabel,
 			&e.Operation, &e.Route,
 			&e.ClientEndpoint, &e.ClientProtocol,
 			&e.UpstreamProtocol, &e.UpstreamEndpoint,

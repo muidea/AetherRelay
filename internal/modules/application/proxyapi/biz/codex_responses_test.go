@@ -10,6 +10,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	basebiz "aetherrelay/internal/modules/base/biz"
 	acccommon "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/common"
 	accevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
@@ -429,10 +430,10 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 			t.Errorf("acquire client identity=%+v", command.ClientIdentity)
 		}
 		if acquires == 1 {
-			result.Set(accevents.AcquireResult{AccountID: "account-a", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
+			result.Set(accevents.AcquireResult{AccountID: "account-a", AccountLabel: "first@example.com", AccessToken: "token-a", LeaseID: "lease-a", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
 			return
 		}
-		result.Set(accevents.AcquireResult{AccountID: "account-b", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
+		result.Set(accevents.AcquireResult{AccountID: "account-b", AccountLabel: "last@example.com", AccessToken: "token-b", LeaseID: "lease-b", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "22222222-2222-4222-8222-222222222222", ClientIdentity: accevents.ClientIdentityProfile{UserAgent: selectedUserAgent, Originator: "codex-tui", Family: "codex-tui", Version: "0.159.2"}}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
 	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
@@ -449,7 +450,8 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	})
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), codexTurnStates: map[string]codexTurnStateOrigin{}}
 	proxy.noteCodexTurnState("account-a", upevents.CodexFingerprint{}, "client-session", []upevents.Header{{Name: "X-Codex-Turn-State", Value: "state-a"}})
-	completed, err := proxy.CompleteCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), SessionHash: "client-session", TurnState: "state-a", ClientUserAgent: rawUserAgent, ClientOriginator: "codex-tui"})
+	ctx := usagetarget.WithTracker(context.Background())
+	completed, err := proxy.CompleteCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), SessionHash: "client-session", TurnState: "state-a", ClientUserAgent: rawUserAgent, ClientOriginator: "codex-tui"})
 	if err != nil || string(completed.Body) != `{"id":"resp-b"}` {
 		t.Fatalf("completed=%s err=%v", completed.Body, err)
 	}
@@ -463,6 +465,11 @@ func TestCodexFailoverRecomputesFingerprintAndGuardsTurnStatePerAccount(t *testi
 	if first.ClientIdentity.UserAgent != selectedUserAgent || second.ClientIdentity.UserAgent != selectedUserAgent {
 		t.Fatalf("failover lost shared highest identity: first=%+v second=%+v", first.ClientIdentity, second.ClientIdentity)
 	}
+	// CP-OBS-013: failover records the actual last account without credentials.
+	if target := usagetarget.Snapshot(ctx); target.Provider != "codexoauth" || target.AccountID != "account-b" || target.AccountLabel != "last@example.com" {
+		t.Fatalf("selected usage target=%+v", target)
+	}
+
 }
 
 func TestCompleteCodexResponsesPreservesLastRetryableFailure(t *testing.T) {

@@ -340,6 +340,12 @@ WHERE event_id = ?
 		// 缺失或重复 Complete:不降级健康(业务一致性问题),但返回错误。
 		return ErrEventNotStarted
 	}
+	if rec.AccountID != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_account_selection (event_id, account_id, account_label) VALUES (?, ?, ?)`, rec.EventID, rec.AccountID, rec.AccountLabel); err != nil {
+			s.markDegraded()
+			return fmt.Errorf("%w: save account selection: %v", ErrStoreUnavailable, err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO usage_output_observation (event_id, known) VALUES (?, ?)`, rec.EventID, rec.OutputTokensKnown || rec.OutputTokens > 0); err != nil {
 		s.markDegraded()
 		return fmt.Errorf("%w: save output observation: %v", ErrStoreUnavailable, err)

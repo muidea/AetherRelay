@@ -154,3 +154,7 @@ func cloneGenerationSample(s GenerationSample) GenerationSample {
 	}
 	return s
 }
+
+// Account labels are needed only for details and export; aggregates do not join
+// the selection table or include account labels in metric dimensions.
+const targetEvents = `(SELECT usage_events.*, coalesce(a.account_id, '') AS account_id, coalesce(a.account_label, '') AS account_label FROM ` + tpsEvents + ` LEFT JOIN usage_account_selection a ON usage_events.event_id=a.event_id) AS usage_events`
