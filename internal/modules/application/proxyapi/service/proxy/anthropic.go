@@ -59,19 +59,34 @@ func (h *Handler) handleAnthropicMessages(w http.ResponseWriter, r *http.Request
 	}
 	h.archiveAndLogClientRequest(round, r, len(bodyBytes))
 
-	var body map[string]any
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+	// Route from a small envelope before decoding tool arguments. Codex needs
+	// UseNumber from ingress; float64 decoding would irreversibly round them.
+	// Keep exact field-name lookup, as in the original map-based parser.
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(bodyBytes, &envelope); err != nil {
 		h.writeArchivedError(w, round, r, start, "", "", false, http.StatusBadRequest, "invalid JSON request body")
 		return
 	}
-	model, _ := body["model"].(string)
-	stream, _ := body["stream"].(bool)
+	var model string
+	var stream bool
+	_ = json.Unmarshal(envelope["model"], &model)
+	_ = json.Unmarshal(envelope["stream"], &stream)
 	plans, apiErr := h.resolveTransportPlans(r, model)
 	if apiErr != nil {
 		h.writeArchivedAPIError(w, round, r, start, "", model, stream, statusForAPIError(apiErr), *apiErr)
 		return
 	}
 	plan := plans[0]
+	var body map[string]any
+	if plan.Mode == TransportModeAnthropicToCodex && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
+		err = decodeCodexJSON(bodyBytes, &body)
+	} else {
+		err = json.Unmarshal(bodyBytes, &body)
+	}
+	if err != nil {
+		h.writeArchivedError(w, round, r, start, "", "", false, http.StatusBadRequest, "invalid JSON request body")
+		return
+	}
 	if round != nil && plan.IsConversion() {
 		round.SetTransportPlan(RouteLabel(r), plan.ClientEndpoint, plan.ClientProtocol, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
 		round.SetConversionLevel(plan.ConversionLevel)

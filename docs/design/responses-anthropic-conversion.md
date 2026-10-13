@@ -1,5 +1,15 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-10-13 Anthropic→Codex 混合内容与请求对象收口
+
+仅 Anthropic→Codex 路径按消息内 content 块的原顺序生成 Responses input；连续文本块保持原有拼接，遇到工具调用或结果先结束当前文本段，再输出工具项。`tool_result → text` 保持为 `function_call_output → user message`，工具 ID、错误标记及结果内图片数组不变。顶层 system 仍生成 instructions，历史 system 仍原位生成结构化 developer 项；通用 Responses Provider 保留既有映射。
+
+Codex 转换入站由 model/stream 小信封确定路径后以 UseNumber 解析正文，避免工具参数先经 float64 丢失精度；其它 Anthropic 路径沿用原解析口径。生产 handler 使用请求自有对象完成转换、共享 Codex 校验/归一化和缓存键补齐后只编码一次。工具 parameters 和结构化输出 schema 与源请求隔离；保留大整数原文、最终编码不转义 `<`/`>`/`&`、错误字段定位、降级项及最终出站归档。原生 HTTP 的 bootstrap 逻辑保留在原始字节入口，转换入口不放宽能力。测试实验的 byte builder 接线继续保留。
+
+Debug 转换摘要移除缓存键哈希，遵守 CP-SCHED-010；仅保留指令/工具摘要、输入条数、历史指令条数、工具调用/结果数和缓存键来源枚举。历史指令计数包含 developer 映射。成功请求不新增 INFO/WARN，不新增跨会话诊断状态，也不把结构摘要当作零命中的原因判定。
+
+回归覆盖混合内容在流式/非流式 handler 到 executor 的顺序、调用配对、历史追加前缀、通用映射不变、未知结果拒绝、源请求与嵌套 schema 不变、对象与字节归一化等价及摘要不受缓存键影响。合成大请求的 byte/object 基准仅度量本地编解码开销；真实上游语义接受和缓存收益仍须部署后独立验证。上线首次会改变包含交错文本/工具的历史投影，可能发生一次缓存重新预热。
+
 ## 2026-09-23 历史 system 保序映射验收与收口
 
 `claude-owner/001622、001628、001631` 的历史 system 从 12 增至 14 条，顶层 `instructions` 从 18037 增至 18135 字符；三次均只读取 17920 缓存 Token。`001631 → 001642` 的 `instructions`、工具、缓存键不变且历史 `input` 继续追加，缓存读取升至 70144/71607（约 98%）。另一组无工具、固定指令的约 31k 请求稳定读取 30464 Token，不能混作同一分支的优化效果。
@@ -41,7 +51,7 @@ go test ./internal/modules/application/proxyapi/service/proxy -run '^TestLiveAnt
 - [OpenAI Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)支持用兼容消息项保存历史，但具体映射以上述 Codex OAuth 实测为准；回归测试保护历史文本、顺序、工具配对及稳定前缀。
 
 错误观测：Codex HTTP complete/start/compact 的非 2xx 响应记录安全的 type/code/param/message，并识别字符串 error/detail；元数据保留 error_body_format、error_body_truncated、error_body_read_failed。仅完整正文归档开启时写入逐尝试 `upstream_response_NNN.error.body.txt`；默认是明确标记 redacted 的安全投影，显式不脱敏时保留最多 64 KiB 原文。未知结构/HTML 不在普通日志输出；读失败和截断不可伪装为完整正文。WS 握手和成功 HTTP 内的 SSE 错误仍沿用现有安全错误通道，不宣称此次覆盖其原始正文。
-- 缓存键和账号路由规则保持不变。Debug 日志 `Codex conversion cache summary` 包含 request_id/model、instructions_digest、tools_digest、prompt_cache_key_digest、prompt_cache_key_source、input_items、history_system_messages，仅为转换侧结构摘要；不输出正文或原始身份，不作为路由键，也不推断分支身份。
+- 缓存键和账号路由规则保持不变。Debug 日志 `Codex conversion cache summary` 包含 request_id/model、instructions_digest、tools_digest、prompt_cache_key_source、input_items、history_instruction_messages、tool_calls、tool_results，仅为转换侧结构摘要；不输出正文或原始身份，不作为路由键，也不推断分支身份。
 - Live 验证限定 `claude-owner → gpt-6-luna`，按工具/指令摘要和已有客户端身份分组，对照连续调用；工具变更、新分支、上游缓存状态引起的未命中不得伪装为成功命中。
 
 ## 2026-09-23 模型能力配置核对

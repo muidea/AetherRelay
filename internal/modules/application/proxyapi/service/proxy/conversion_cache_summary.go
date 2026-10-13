@@ -13,9 +13,9 @@ func codexConversionCacheSummary(encoded []byte) []slog.Attr {
 	var body struct {
 		Instructions json.RawMessage `json:"instructions"`
 		Tools        json.RawMessage `json:"tools"`
-		CacheKey     json.RawMessage `json:"prompt_cache_key"`
 		Input        []struct {
 			Role string `json:"role"`
+			Type string `json:"type"`
 		} `json:"input"`
 	}
 	if json.Unmarshal(encoded, &body) != nil {
@@ -25,17 +25,24 @@ func codexConversionCacheSummary(encoded []byte) []slog.Attr {
 		sum := sha256.Sum256(raw)
 		return hex.EncodeToString(sum[:])
 	}
-	systems := 0
+	instructions, calls, results := 0, 0, 0
 	for _, item := range body.Input {
-		if item.Role == "system" {
-			systems++
+		if item.Role == "system" || item.Role == "developer" {
+			instructions++
+		}
+		switch item.Type {
+		case "function_call":
+			calls++
+		case "function_call_output":
+			results++
 		}
 	}
 	return []slog.Attr{
 		slog.String("instructions_digest", digest(body.Instructions)),
 		slog.String("tools_digest", digest(body.Tools)),
-		slog.String("prompt_cache_key_digest", digest(body.CacheKey)),
 		slog.Int("input_items", len(body.Input)),
-		slog.Int("history_system_messages", systems),
+		slog.Int("history_instruction_messages", instructions),
+		slog.Int("tool_calls", calls),
+		slog.Int("tool_results", results),
 	}
 }

@@ -42,24 +42,32 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 			r.Header.Set("X-Claude-Code-Session-Id", session)
 		}
 	}
-	builder := h.anthropicResponsesBuilder
-	if builder == nil {
-		builder = buildCodexResponsesFromAnthropicWithCapability
+	var normalizedBody map[string]any
+	var degraded []string
+	if h.anthropicResponsesBuilder == nil {
+		capability.Images = true // Only tool-result images, as in the byte builder.
+		normalizedBody, degraded, err = buildResponsesObjectFromAnthropic(body, model, stream, capability, historicalSystemDeveloperMessage)
+	} else {
+		// Isolated acceptance experiments still use the byte-builder seam.
+		var responsesBody []byte
+		responsesBody, degraded, err = h.anthropicResponsesBuilder(body, model, stream, capability)
+		if err == nil {
+			err = decodeCodexJSON(responsesBody, &normalizedBody)
+		}
 	}
-	responsesBody, degraded, err := builder(body, model, stream, capability)
 	if err != nil {
 		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, conversionAPIError(plan, err))
 		return
 	}
 	r = withAnthropicStops(r, body)
-	normalized, normalizedBody, ignored, err := normalizeCodexRequest(responsesBody, false)
+	turnMetadata, turnMetadataIgnored := codexTurnMetadataFromBody(r.Header, normalizedBody)
+	ignored, err := normalizeCodexRequestObject(normalizedBody, codexNormalizationOptions{})
 	if err != nil {
 		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusBadRequest, err.Error())
 		return
 	}
-	turnMetadata, turnMetadataIgnored := codexTurnMetadataFrom(r.Header, responsesBody)
 	ignored = append(ignored, turnMetadataIgnored...)
 	markConversionDegraded(round, append(degraded, ignored...))
 	// CP-HDR-022: the adapter entry is a Codex entry too, so an inbound turn
@@ -71,7 +79,8 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	sessionHash := codexSessionHash(r, model, normalizedBody)
-	normalized, _, cacheKeySource, err := ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
+	cacheKeySource := setCodexPromptCacheKey(normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
+	normalized, err := encodeCodexJSON(normalizedBody)
 	if err != nil {
 		round.SetConversionDuration(time.Since(conversionStart))
 		h.writeArchivedError(w, round, r, started, plan.RouteOwner, model, stream, http.StatusInternalServerError, err.Error())

@@ -1026,6 +1026,17 @@ func historicalSystemDeveloperMessage(text string) map[string]any {
 
 // A nil projection retains the old merged mapping for isolated comparison.
 func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model string, stream bool, capability config.ConversionCapability, projectSystem func(string) map[string]any) ([]byte, []string, error) {
+	out, ignored, err := buildResponsesObjectFromAnthropic(body, model, stream, capability, projectSystem)
+	if err != nil {
+		return nil, nil, err
+	}
+	encoded, err := json.Marshal(out)
+	return encoded, ignored, err
+}
+
+// The object builder owns the output envelopes. Codex's normalizer mutates tool
+// schemas, so those are detached from the source before entering that path.
+func buildResponsesObjectFromAnthropic(body map[string]any, model string, stream bool, capability config.ConversionCapability, projectSystem func(string) map[string]any) (map[string]any, []string, error) {
 	stops, err := parseAnthropicStops(body)
 	if err != nil {
 		return nil, nil, err
@@ -1050,7 +1061,7 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 	if err := validateConversionTree(msgs, "messages"); err != nil {
 		return nil, nil, err
 	}
-	input := make([]map[string]any, 0, len(msgs))
+	input := make([]any, 0, len(msgs))
 	registry := newToolCallRegistry()
 	instructions, err := anthropicSystemText(body["system"])
 	if err != nil {
@@ -1066,7 +1077,7 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 		}
 		role, _ := m["role"].(string)
 		contentRaw := m["content"]
-		content, blocks, err := anthropicMessageContentToResponses(contentRaw, role, registry, capability.Images)
+		content, blocks, err := anthropicMessageContentToResponses(contentRaw, role, registry, capability.Images, projectSystem != nil)
 		if err != nil {
 			path := fmt.Sprintf("messages[%d].content", i)
 			var located *conversionLocationError
@@ -1092,7 +1103,16 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 		if content != "" {
 			input = append(input, map[string]any{"type": "message", "role": role, "content": content})
 		}
-		input = append(input, blocks...)
+		for _, block := range blocks {
+			if parts, ok := block["output"].([]map[string]any); ok {
+				output := make([]any, len(parts))
+				for i, part := range parts {
+					output[i] = part
+				}
+				block["output"] = output
+			}
+			input = append(input, block)
+		}
 	}
 	if err := registry.EnsureResolved(); err != nil {
 		return nil, nil, err
@@ -1114,7 +1134,14 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 		if err != nil {
 			return nil, nil, err
 		}
-		out["tools"] = mapped
+		tools := make([]any, len(mapped))
+		for i, tool := range mapped {
+			if projectSystem != nil {
+				tool["parameters"] = cloneConversionJSON(tool["parameters"])
+			}
+			tools[i] = tool
+		}
+		out["tools"] = tools
 	}
 	if choice, ok := body["tool_choice"]; ok {
 		mapped, err := anthropicToolChoiceToResponses(choice)
@@ -1151,6 +1178,9 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 			if !ok {
 				return nil, nil, fmt.Errorf("output_config.format.schema")
 			}
+			if projectSystem != nil {
+				schema = cloneConversionJSON(schema).(map[string]any)
+			}
 			out["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "response", "strict": true, "schema": schema}}
 			delete(remaining, "format")
 		}
@@ -1160,8 +1190,26 @@ func buildResponsesFromAnthropicWithHistoryProjection(body map[string]any, model
 	if err != nil {
 		return nil, nil, err
 	}
-	encoded, err := json.Marshal(out)
-	return encoded, uniqueSortedFeatures(append(annotations, ignored...)), err
+	return out, uniqueSortedFeatures(append(annotations, ignored...)), nil
+}
+
+func cloneConversionJSON(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for key, item := range value {
+			out[key] = cloneConversionJSON(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(value))
+		for i, item := range value {
+			out[i] = cloneConversionJSON(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // disableResponsesReasoningForOmittedAnthropicThinking preserves the source
@@ -1234,7 +1282,7 @@ func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thin
 	return nil, nil
 }
 
-func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry, toolResultImages bool) (textOut string, itemsOut []map[string]any, resultErr error) {
+func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry, toolResultImages, preserveOrder bool) (textOut string, itemsOut []map[string]any, resultErr error) {
 	blockIndex := -1
 	defer func() {
 		if resultErr != nil && blockIndex >= 0 {
@@ -1259,6 +1307,12 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 	}
 	var text strings.Builder
 	items := make([]map[string]any, 0)
+	flushText := func() {
+		if preserveOrder && role != "system" && text.Len() > 0 {
+			items = append(items, map[string]any{"type": "message", "role": role, "content": text.String()})
+			text.Reset()
+		}
+	}
 	for i, rawBlock := range blocks {
 		blockIndex = i
 		block, ok := rawBlock.(map[string]any)
@@ -1277,6 +1331,7 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 			}
 			text.WriteString(value)
 		case "tool_use":
+			flushText()
 			if role != "assistant" {
 				return "", nil, fmt.Errorf("tool_use requires assistant role")
 			}
@@ -1289,6 +1344,7 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 			}
 			items = append(items, mapped)
 		case "tool_result":
+			flushText()
 			if role != "user" {
 				return "", nil, fmt.Errorf("tool_result requires user role")
 			}
@@ -1304,6 +1360,7 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 			return "", nil, fmt.Errorf("content.%s", typ)
 		}
 	}
+	flushText()
 	return text.String(), items, nil
 }
 

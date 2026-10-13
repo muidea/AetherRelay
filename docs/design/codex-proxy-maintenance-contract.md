@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.1.0`
+> 合同版本：`17.1.1`
 >
 > 状态：`active`
 >
-> 生效日期：2026-10-12
+> 生效日期：2026-10-13
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`17.1.1` 修复 Anthropic→Codex 消息内文本/工具 content 块顺序，只拼接连续文本；保持历史 developer 映射、工具 ID、结果图片和通用 Provider 行为。Codex 转换从入站开始保留数字原文，生产转换对象须自有，归一化前隔离共享 schema，统一编码不得绕过校验、精度/字节保真或最终出站归档。Debug 摘要仅含结构信息和缓存键来源，移除缓存键哈希（CP-SCHED-010），历史指令计数包含 developer。回归覆盖混合内容 handler、追加前缀、源数据不变、编解码等价和日志边界；语义和真实缓存收益需独立上游验收，离线测试/性能基准不构成该证据。恢复保序、精度和诊断既有合同，按 PATCH 记录。
 
 `17.1.0` 增加调用明细的实际执行目标（`CP-OBS-013`）：保留实际 Provider，并记录账号池最终执行账号的本地槽位 ID 与当时邮箱标签；HTTP/SSE、compact、WebSocket、跨协议转换和 ChatGPT Web 文本/搜索/图片共用安全观测。切号覆盖最终选择，未选中或历史缺失不推测。管理明细弹窗及 CSV 展示该信息；账号后来删除或改名不改变历史标签。使用新增附属表，既有 usage_events 布局不 ALTER、不回填。仅增加管理字段，按 MINOR 记录。
 
@@ -572,6 +574,13 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`17.1.1` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| 混合内容保序、追加前缀与精度保真 | CP-REQ-012, CP-REQ-015, CP-REQ-035..036, CP-FP-008 | implemented（本地）；上游语义与缓存收益待验收 | `proxyapi/service/proxy/anthropic.go`, `responses_anthropic.go`, `codex_messages.go`, `codex_compat.go` | `codex_anthropic_conversion_test.go`, `conversion_system_history_test.go` |
+| 转换摘要移除缓存键哈希并统计历史指令和工具 | CP-SCHED-010 | implemented（本地） | `proxyapi/service/proxy/conversion_cache_summary.go` | `conversion_system_history_test.go` |
 
 `17.1.0` 新增实施追踪：
 

@@ -120,7 +120,7 @@ func TestGenericResponsesHistoricalSystemMappingUnchanged(t *testing.T) {
 func TestCodexCacheSummaryContainsOnlyDigestsAndCounts(t *testing.T) {
 	a := []byte(`{"instructions":"secret instructions","tools":[{"name":"private tool"}],"prompt_cache_key":"private session","input":[{"role":"system","content":"private history"},{"role":"user"}]}`)
 	attrs := codexConversionCacheSummary(a)
-	if len(attrs) != 5 {
+	if len(attrs) != 6 {
 		t.Fatalf("attrs=%v", attrs)
 	}
 	for _, attr := range attrs {
@@ -128,7 +128,7 @@ func TestCodexCacheSummaryContainsOnlyDigestsAndCounts(t *testing.T) {
 			t.Fatalf("not a digest: %v", attr)
 		}
 	}
-	if attrs[3].Value.Int64() != 2 || attrs[4].Value.Int64() != 1 {
+	if attrs[2].Value.Int64() != 2 || attrs[3].Value.Int64() != 1 {
 		t.Fatal("incorrect counts")
 	}
 	if !reflect.DeepEqual(attrs, codexConversionCacheSummary(a)) {
@@ -138,5 +138,18 @@ func TestCodexCacheSummaryContainsOnlyDigestsAndCounts(t *testing.T) {
 	other := codexConversionCacheSummary(b)
 	if attrs[0].Equal(other[0]) || !attrs[1].Equal(other[1]) || !attrs[2].Equal(other[2]) {
 		t.Fatal("digest scope incorrect")
+	}
+	changedKey := bytes.Replace(a, []byte("private session"), []byte("different session"), 1)
+	if !reflect.DeepEqual(attrs, codexConversionCacheSummary(changedKey)) {
+		t.Fatal("cache key affected diagnostic summary")
+	}
+	for _, attr := range attrs {
+		if strings.Contains(attr.Key, "cache_key") {
+			t.Fatal("cache key diagnostic must not be recorded")
+		}
+	}
+	counts := codexConversionCacheSummary([]byte(`{"input":[{"role":"developer"},{"type":"function_call"},{"type":"function_call_output"}]}`))
+	if counts[3].Value.Int64() != 1 || counts[4].Value.Int64() != 1 || counts[5].Value.Int64() != 1 {
+		t.Fatal("instruction or tool counts incorrect")
 	}
 }

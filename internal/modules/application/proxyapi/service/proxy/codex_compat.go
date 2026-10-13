@@ -539,6 +539,20 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 			}
 		}
 	}
+	ignored, err := normalizeCodexRequestObject(body, options)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	encoded, err := encodeCodexJSON(body)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
+	}
+	return encoded, body, ignored, nil
+}
+
+// normalizeCodexRequestObject requires a request-owned JSON object with []any
+// arrays. Raw HTTP bootstrap projection remains in the byte-based entry point.
+func normalizeCodexRequestObject(body map[string]any, options codexNormalizationOptions) ([]string, error) {
 	model, _ := body["model"].(string)
 	if trimmed := strings.TrimSpace(model); trimmed != "" {
 		body["model"] = trimmed
@@ -553,7 +567,7 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 	if instructions, exists := body["instructions"]; !exists || instructions == nil {
 		body["instructions"] = ""
 	} else if _, ok := instructions.(string); !ok {
-		return nil, nil, nil, fmt.Errorf("instructions must be a string")
+		return nil, fmt.Errorf("instructions must be a string")
 	}
 	if options.compact {
 		delete(body, "stream")
@@ -569,21 +583,21 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 	normalizeCodexInputToolSchemas(body["input"])
 	streamOptionsIgnored, err := normalizeCodexStreamOptions(body, options.compact)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	responsesLite, metadataIgnored, err := projectCodexClientMetadata(body)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if responsesLite || options.responsesLite {
 		body["parallel_tool_calls"] = false
 		options.responsesLite = true
 		if err := normalizeCodexResponsesLite(body); err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 	}
 	if err := validateCodexRequest(body, options); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	body["input"] = normalizeCodexInputItemIDs(body["input"])
 	if options.compact {
@@ -609,11 +623,7 @@ func normalizeCodexRequestWithOptions(raw []byte, options codexNormalizationOpti
 			body["service_tier"] = "priority"
 		}
 	}
-	encoded, err := encodeCodexJSON(body)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("encode normalized Codex request: %w", err)
-	}
-	return encoded, body, ignored, nil
+	return ignored, nil
 }
 
 // decodeCodexJSON preserves protocol integers across map/any normalization.
@@ -1826,16 +1836,24 @@ func ensureCodexPromptCacheKey(encoded []byte, body map[string]any, sessionHash 
 	if body == nil {
 		body = map[string]any{}
 	}
-	if value, ok := body["prompt_cache_key"].(string); ok && strings.TrimSpace(value) != "" {
-		return encoded, body, codexresponses.PromptCacheKeyExplicit, nil
+	source := setCodexPromptCacheKey(body, sessionHash)
+	if source != codexresponses.PromptCacheKeyGenerated {
+		return encoded, body, source, nil
 	}
-	if strings.TrimSpace(sessionHash) == "" {
-		return encoded, body, codexresponses.PromptCacheKeyAbsent, nil
-	}
-	body["prompt_cache_key"] = strings.TrimSpace(sessionHash)
 	updated, err := encodeCodexJSON(body)
 	if err != nil {
 		return nil, nil, codexresponses.PromptCacheKeyAbsent, fmt.Errorf("encode Codex prompt cache key: %w", err)
 	}
-	return updated, body, codexresponses.PromptCacheKeyGenerated, nil
+	return updated, body, source, nil
+}
+
+func setCodexPromptCacheKey(body map[string]any, sessionHash string) codexresponses.PromptCacheKeySource {
+	if value, ok := body["prompt_cache_key"].(string); ok && strings.TrimSpace(value) != "" {
+		return codexresponses.PromptCacheKeyExplicit
+	}
+	if strings.TrimSpace(sessionHash) == "" {
+		return codexresponses.PromptCacheKeyAbsent
+	}
+	body["prompt_cache_key"] = strings.TrimSpace(sessionHash)
+	return codexresponses.PromptCacheKeyGenerated
 }
