@@ -501,6 +501,8 @@ func applyProviderHealthSample(health providerHealth, sample healthSample) provi
 		health.ConsecutiveFailures++
 		health.LastFailureAt = sample.At
 		health.LastStatus = sample.Status
+		health.LastFailureStatus = sample.Status
+		health.LastFailureOutcome = sample.Outcome
 		if health.ConsecutiveFailures >= 3 && retryableHealthFailure(sample.Status, sample.Outcome) {
 			health.CircuitOpenUntil = sample.At.Add(30 * time.Second)
 		}

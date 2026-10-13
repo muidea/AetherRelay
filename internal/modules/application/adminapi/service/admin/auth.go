@@ -561,13 +561,14 @@ function cookieLanguage(){const found=document.cookie.split(";").map(v=>v.trim()
 function urlLanguage(){return validLanguage(new URLSearchParams(location.search).get("lang"))}
 function browserLanguage(){for(const value of [...(navigator.languages||[]),navigator.language]){if(String(value||"").toLowerCase().startsWith("en"))return "en-US";if(String(value||"").toLowerCase().startsWith("zh"))return "zh-CN"}return "zh-CN"}
 let locale=urlLanguage()||cookieLanguage()||validLanguage(window.__AETHERRELAY_ADMIN_DEFAULT_LANGUAGE__)||browserLanguage();
-function renderLanguage(){const dict=locale==="en-US"?en:zh;document.documentElement.lang=locale;document.title=locale==="en-US"?"AetherRelay · Sign in":"AetherRelay · 登录";document.querySelectorAll("[data-i18n]").forEach(el=>el.textContent=dict[el.dataset.i18n]||"");document.querySelector("label[for=language]").firstChild.nodeValue=dict.language+" ";document.getElementById("language").value=locale;}
+let loginError={kind:"",seconds:0};
+function renderLanguage(){renderError();const dict=locale==="en-US"?en:zh;document.documentElement.lang=locale;document.title=locale==="en-US"?"AetherRelay · Sign in":"AetherRelay · 登录";document.querySelectorAll("[data-i18n]").forEach(el=>el.textContent=dict[el.dataset.i18n]||"");document.querySelector("label[for=language]").firstChild.nodeValue=dict.language+" ";document.getElementById("language").value=locale;}
 document.getElementById("language").onchange=e=>{const selected=validLanguage(e.target.value)||"zh-CN";document.cookie=cookieName+"="+encodeURIComponent(selected)+"; Path="+base+"; SameSite=Strict; Max-Age=31536000";locale=urlLanguage()||selected;renderLanguage();};
 renderLanguage();
-const errEl=document.getElementById("err");
 const btn=document.getElementById("btn");
 let retryTimer=null;
-function showErr(msg){errEl.textContent=msg||""}
+function renderError(){const {kind,seconds}=loginError;document.getElementById("err").textContent=kind==="rate-limit"?(locale==="en-US"?"Too many attempts. Try again in "+seconds+" seconds.":"尝试过多，请 "+seconds+" 秒后重试"):kind==="credentials"?(locale==="en-US"?"Invalid username or password":"用户名或密码错误"):kind==="network"?(locale==="en-US"?"Network error. Try again later.":"网络错误，请稍后重试"):"";}
+function showErr(kind,seconds=0){loginError={kind,seconds};renderError()}
 document.getElementById("f").onsubmit=async(e)=>{
   e.preventDefault();showErr("");btn.disabled=true;
   try{
@@ -576,14 +577,14 @@ document.getElementById("f").onsubmit=async(e)=>{
     if(r.status===429){
       const ra=Number(r.headers.get("Retry-After")||"0");
       let left=Number.isFinite(ra)&&ra>0?Math.ceil(ra):900;
-      showErr(locale==="en-US"?"Too many attempts. Try again in "+left+" seconds.":"尝试过多，请 "+left+" 秒后重试");
+      showErr("rate-limit",left);
       if(retryTimer)clearInterval(retryTimer);
-      retryTimer=setInterval(()=>{left--;if(left<=0){clearInterval(retryTimer);showErr("");btn.disabled=false}else{showErr(locale==="en-US"?"Too many attempts. Try again in "+left+" seconds.":"尝试过多，请 "+left+" 秒后重试")}},1000);
+      retryTimer=setInterval(()=>{left--;if(left<=0){clearInterval(retryTimer);showErr("");btn.disabled=false}else{showErr("rate-limit",left)}},1000);
       return;
     }
-    if(!r.ok){showErr(locale==="en-US"?"Invalid username or password":"用户名或密码错误");btn.disabled=false;return}
+    if(!r.ok){showErr("credentials");btn.disabled=false;return}
     location.replace(base+"/");
-  }catch(err){showErr(locale==="en-US"?"Network error. Try again later.":"网络错误，请稍后重试");btn.disabled=false}
+  }catch(err){showErr("network");btn.disabled=false}
 };
 </script>
 </body>

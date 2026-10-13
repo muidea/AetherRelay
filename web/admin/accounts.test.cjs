@@ -22,7 +22,7 @@ function harness(options={}){
     apiURL:path=>`/admin${path}`,
     authHeaders:headers=>headers,
     invalidateFeatureCatalog:()=>{},
-    toast:(message,tone)=>messages.push({message,tone}),
+    toast:(message,tone,params={})=>messages.push({message:message.replace(/\{(\w+)\}/g,(_,key)=>params[key]??''),tone}),
     loadUnifiedAccounts:async()=>{},
     loadCodexAccounts:async()=>{reloads.codex++},
     renderCodexAccounts:()=>{},

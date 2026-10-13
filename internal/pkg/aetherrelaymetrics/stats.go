@@ -42,6 +42,8 @@ type providerHealth struct {
 	LastSuccessAt, LastFailureAt             time.Time
 	LastStatus                               int
 	LastOutcome                              string
+	LastFailureStatus                        int
+	LastFailureOutcome                       string
 	CircuitOpenUntil                         time.Time
 }
 
@@ -62,6 +64,8 @@ type StatsProviderHealth struct {
 	LastFailureAt       time.Time `json:"last_failure_at,omitempty"`
 	LastStatus          int       `json:"last_status,omitempty"`
 	LastOutcome         string    `json:"last_outcome,omitempty"`
+	LastFailureStatus   int       `json:"last_failure_status,omitempty"`
+	LastFailureOutcome  string    `json:"last_failure_outcome,omitempty"`
 	Status              string    `json:"status"`
 	Score               int       `json:"score"`
 	WindowSeconds       int       `json:"window_seconds"`
@@ -246,6 +250,7 @@ func buildProviderHealth(value providerHealth, samples []healthSample, now time.
 	result := StatsProviderHealth{
 		Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures,
 		LastSuccessAt: value.LastSuccessAt, LastFailureAt: value.LastFailureAt, LastStatus: value.LastStatus, LastOutcome: value.LastOutcome,
+		LastFailureStatus: value.LastFailureStatus, LastFailureOutcome: value.LastFailureOutcome,
 		Status: "unknown", WindowSeconds: int(providerHealthWindow.Seconds()), CircuitState: "closed",
 	}
 	halfOpen := false

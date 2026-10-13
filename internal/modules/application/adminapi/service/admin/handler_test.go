@@ -169,7 +169,7 @@ func TestHandlerServesProjectAdminPageAndMasksAPIKey(t *testing.T) {
 		t.Fatalf("admin page = %d %s", rec.Code, rec.Body.String())
 	}
 	for _, marker := range []string{
-		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "function providerChanges(original,item)", "function invalidateFeatureCatalog()", "async function createProvider(payload,message,close=false)", "async function patchProvider(name,payload,message,close=false)", "/api/providers/${encodeURIComponent(name)}", `method:"DELETE"`, "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)", `id="uaAccountTable"`, "<summary class=\"btn btn-primary\">账号池迁移 ▾</summary><div class=\"account-menu-panel\"><span class=\"menu-label\">整体账号池文件</span>\n              <button type=\"button\" class=\"btn\" id=\"uaBundleImport\">导入整体账号池</button>\n              <button type=\"button\" class=\"btn\" id=\"uaBundleExport\">导出整体账号池</button>", "function unifiedAccounts()", "function unifiedSlotEmail(slot)", "pairUnique(unifiedSlotIdentity,true)", "pairUnique(unifiedSlotEmail,false)", "credential_type=chatgpt_web", "credential_type=codex_cli", "/api/account-pool-bundle/export", "if(state.codex.busy)return;", `id="codexAccNormal"`, `id="codexAccAbnormal"`, `id="codexAccRoutable"`, "`${counts.abnormal} / ${counts.disabled}`", `id="cgImportFile"`, `id="codexImportFile"`, `accept=".json,application/json" multiple`, "async function readAccountImport(fileID,textID)", "accountImportMaxBytes=1<<20", "accountImportMaxItems=1000", "accountImportMaxFiles=20", "function accountImportRequestBody(payload)", "function validCodexImportProxy(value)", "function collectCodexAccountImportFiles(files)", "ignored.push({name:file.name", "function collectChatGPTAccountImportFiles(files)", "beginCodexDiscoveryPolling(result.model_discovery,{visible:false})", "beginCodexUsagePolling(result.usage_refresh,{visible:false})", "function scheduleCodexProgressDismiss(kind,progress,visible)", "renderCodexUsageProgress(null)", "账号刷新完成：成功 ${refreshed}，失败 ${failed}，共 ${total} 个账号", "},4200);",
+		"officialCount", "thirdPartyCount", "providerSourceMeta", "provider-table", ".provider-table th,.provider-table td{text-align:left}", "<th>来源</th>", "builtinProviderDialog", "openBuiltinDialog(index)", "provider-health", "builtin-providers", "function providerChanges(original,item)", "function invalidateFeatureCatalog()", "async function createProvider(payload,message,close=false)", "async function patchProvider(name,payload,message,close=false)", "/api/providers/${encodeURIComponent(name)}", `method:"DELETE"`, "featureSubSearch", "cgPanelSearch", "/api/features/search", "/api/features/search/history", "cgSearchHistory", "function loadFeatureSearchHistory()", "function submitFeatureSearch(event)", `id="uaAccountTable"`, "<summary class=\"btn btn-primary\">账号池迁移 ▾</summary><div class=\"account-menu-panel\"><span class=\"menu-label\">整体账号池文件</span>\n              <button type=\"button\" class=\"btn\" id=\"uaBundleImport\">导入整体账号池</button>\n              <button type=\"button\" class=\"btn\" id=\"uaBundleExport\">导出整体账号池</button>", "function unifiedAccounts()", "function unifiedSlotEmail(slot)", "pairUnique(unifiedSlotIdentity,true)", "pairUnique(unifiedSlotEmail,false)", "credential_type=chatgpt_web", "credential_type=codex_cli", "/api/account-pool-bundle/export", "if(state.codex.busy)return;", `id="codexAccNormal"`, `id="codexAccAbnormal"`, `id="codexAccRoutable"`, "`${counts.abnormal} / ${counts.disabled}`", `id="cgImportFile"`, `id="codexImportFile"`, `accept=".json,application/json" multiple`, "async function readAccountImport(fileID,textID)", "accountImportMaxBytes=1<<20", "accountImportMaxItems=1000", "accountImportMaxFiles=20", "function accountImportRequestBody(payload)", "function validCodexImportProxy(value)", "function collectCodexAccountImportFiles(files)", "ignored.push({name:file.name", "function collectChatGPTAccountImportFiles(files)", "beginCodexDiscoveryPolling(result.model_discovery,{visible:false})", "beginCodexUsagePolling(result.usage_refresh,{visible:false})", "function scheduleCodexProgressDismiss(kind,progress,visible)", "renderCodexUsageProgress(null)", "账号刷新完成：成功 {v0}，失败 {v1}，共 {v2} 个账号", "},4200);",
 		`id="featureSubChat" data-feature-sub="chat" class="active">临时对话</button>`, `id="tcAttach" title="添加附件" aria-label="添加附件"`, `application/pdf,text/plain,text/markdown,text/csv`, "temporaryMessageAttachmentURL", `<svg viewBox="0 0 24 24" aria-hidden="true">`, ".tc-citation", "function normalizeTemporaryContent(value)", "function renderTemporaryContent(value)", "renderTemporaryContent(content)", "normalizeTemporaryContent(msg.content)", "function sortChatGPTTasks(items)", `id="cgTaskOwner"`, "if(!setTaskOwner(owner))return;", "loadFeatureModels(state.cg.tasks.mode,true,true);", `id="navSystem"`, `id="panelSystem"`, "function loadSystemInfo()", "/api/system/info", "function displayEmail(email)", "搜索邮箱",
 	} {
 		if !strings.Contains(rec.Body.String(), marker) {
@@ -402,6 +402,29 @@ func TestHandlerProjectsProviderAvailability(t *testing.T) {
 	} {
 		if got := availability[name].Status; got != want {
 			t.Errorf("%s status = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestProviderAvailabilityKeepsRecoveredFailureSnapshot(t *testing.T) {
+	registry := metrics.NewRegistry()
+	registry.RecordRequest("relay", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed")
+	registry.RecordRequest("relay", "m", "responses", http.StatusOK, time.Millisecond, "success")
+	cfg := config.Config{Providers: map[string]config.Provider{"relay": {}}}
+	handler := NewHandler("", &testRuntime{cfg: cfg}).WithMetrics(registry)
+	assertFailure := func(got providerAvailability) {
+		t.Helper()
+		if got.LastStatus != http.StatusOK || got.LastOutcome != "success" || got.LastFailureStatus != http.StatusBadGateway || got.LastFailureOutcome != "upstream_failed" || got.LastFailureAt == "" || got.LastSuccessAt == "" {
+			t.Fatalf("mixed latest-request and failure details: %+v", got)
+		}
+	}
+	assertFailure(handler.providerHealth(cfg)["relay"])
+	for _, status := range []string{"healthy", "disabled", "unavailable"} {
+		view := providerView{Name: "relay", Availability: providerAvailability{Status: status}}
+		handler.applyObservedHealth(&view)
+		assertFailure(view.Availability)
+		if (status == "disabled" || status == "unavailable") && view.Availability.Status != status {
+			t.Fatalf("authoritative catalog state changed: %+v", view.Availability)
 		}
 	}
 }

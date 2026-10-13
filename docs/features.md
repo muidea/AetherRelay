@@ -101,12 +101,15 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 
 默认位于 `http://127.0.0.1:8080/admin/`（`admin_base_path` 可改，默认 loopback-only）。支持简体中文与英文（URL `?lang=` > 浏览器偏好 > `admin_default_language` > 浏览器语言 > `zh-CN`）。未登录时写接口需要 `X-AetherRelay-Admin: 1` 意图头；启用登录后需要会话 Cookie 与 `X-AetherRelay-CSRF`。
 
+语言切换同步更新动态数量、统计悬停提示、已打开的调用明细和权限弹窗、OAuth 到期提示、确认框及登录错误（含限流倒计时）。模型名、账号标识、对话标题、用户消息和图片标签保留原文；临时对话的系统引用标签按当前语言显示。
+
 ### Provider
 
 - 管理型 Provider：新增、编辑、启停和删除均使用单项接口；编辑表单只提交实际发生变化的字段，避免旧页面值覆盖其他内容。`PATCH <base>/api/providers/{name}` 只合并请求中出现的字段，未重新输入的 API Key 保持不变，只有显式 `clear_api_key: true` 才会清空。变更加密写入 DuckDB 并热更新。
 - Provider 启停、模型匹配或端点变更后会原子刷新有效模型目录；`/v1/models`、Admin 功能模型接口及临时对话模型选择器在下一次读取时使用新目录。仅由已禁用 Provider 提供的模型不会继续显示或路由。
 - 内建 Provider（`chatgptweb` / `codexoauth`）：展示路由启停与优先级控制、可路由账号数和模型数、不可用原因；不可删除。
 - 运行期可用性：「检查」按钮对当前 Provider 执行一次最小非流式探测，不改写配置；状态合并账号池可用性与请求健康度（`disabled` / `unknown` / `healthy` / `degraded` / `unavailable` / `credential_error` / `endpoint_drift`）。
+- 健康卡片分别显示最近成功与最近失败；失败时间、HTTP 状态和 outcome 来自同一次失败请求，后续成功不会覆盖历史失败详情。恢复后的历史失败使用普通提示样式。
 - 来源列仅作展示：`builtin` / `official` / `third_party`，不参与路由或安全判断。
 
 ### 客户端 Key

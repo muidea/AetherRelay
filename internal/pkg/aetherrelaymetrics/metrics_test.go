@@ -128,6 +128,38 @@ func TestProviderHealthSnapshotTracksLatestOutcome(t *testing.T) {
 	}
 }
 
+func TestProviderHealthRetainsFailureDetailsAfterRecovery(t *testing.T) {
+	for _, failure := range []struct {
+		status  int
+		outcome string
+	}{
+		{http.StatusBadGateway, "upstream_failed"},
+		{http.StatusOK, "upstream_truncated"},
+	} {
+		t.Run(failure.outcome, func(t *testing.T) {
+			r := NewRegistry()
+			r.RecordRequest("relay", "m", "responses", failure.status, time.Millisecond, failure.outcome)
+			before := r.ProviderHealthSnapshot()["relay"]
+			r.RecordRequest("relay", "m", "responses", http.StatusOK, time.Millisecond, "success")
+			payload, err := r.StatsJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stats StatsJSON
+			if err := json.Unmarshal(payload, &stats); err != nil {
+				t.Fatal(err)
+			}
+			got := stats.ProviderHealth["relay"]
+			if got.LastStatus != http.StatusOK || got.LastOutcome != "success" || got.ConsecutiveFailures != 0 {
+				t.Fatalf("latest request did not recover: %+v", got)
+			}
+			if got.LastFailureStatus != failure.status || got.LastFailureOutcome != failure.outcome || !got.LastFailureAt.Equal(before.LastFailureAt) {
+				t.Fatalf("failure snapshot changed after success: before=%+v after=%+v", before, got)
+			}
+		})
+	}
+}
+
 func TestProviderHealthIgnoresLocalClientAndConversionErrors(t *testing.T) {
 	r := NewRegistry()
 	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "conversion", "", "", "", "openai_to_anthropic")

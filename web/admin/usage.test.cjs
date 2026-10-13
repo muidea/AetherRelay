@@ -13,7 +13,9 @@ function harness() {
   const context = vm.createContext({
     state: {locale: 'zh-CN', range: 'today', events: []}, URLSearchParams, AbortController, setTimeout, clearTimeout,
     $: id => elements[id] ||= {showModal() {}},
-    t: s => s, apiURL: s => s,
+    t: (s,params={}) => s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??'')), apiURL: s => s,
+    setLocalizedText: (el,s,params={}) => {el.textContent=s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??''));},
+    setLocalizedAttribute: (el,name,source) => {el[name]=typeof source==='function'?source():source;},
     formatDate: s => s,
     document: {querySelectorAll: () => []},
     toast: message => { throw new Error(message); },
@@ -85,12 +87,12 @@ test('observation presence preserves unknown, known zero and partial totals', ()
   assert.match(c.usageCacheTokens({cached_input_tokens:40,cached_input_tokens_known:false},'cached_input_tokens'), /40.*不完整/);
   assert.match(c.usageCacheHint({cache_input_tokens:100,input_tokens:125,cached_input_tokens:80,cached_input_tokens_known:true,cache_creation_input_tokens:0,cache_creation_input_tokens_known:true}), /输入 Token: 100/);
   c.showUsageEvent({upstream_status:200,upstream_content_length:0,upstream_content_length_known:true,conversion_level:2,conversion_duration_ms:0,conversion_degraded:false});
-  assert.match(elements.usageEventDetail.innerHTML,/上游 Content-Length<\/dt><dd>0/);
-  assert.match(elements.usageEventDetail.innerHTML,/转换等级<\/dt><dd>2/);
-  assert.match(elements.usageEventDetail.innerHTML,/转换降级<\/dt><dd>false/);
-  assert.match(elements.usageEventDetail.innerHTML,/转换耗时（秒）<\/dt><dd>0/);
+  assert.match(elements.usageEventDetail.innerHTML,/上游 Content-Length<\/dt><dd[^>]*>0/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换等级<\/dt><dd[^>]*>2/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换降级<\/dt><dd[^>]*>false/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换耗时（秒）<\/dt><dd[^>]*>0/);
   c.showUsageEvent({upstream_status:200,upstream_content_length:0,upstream_content_length_known:false});
-  assert.match(elements.usageEventDetail.innerHTML,/上游 Content-Length<\/dt><dd>未知/);
+  assert.match(elements.usageEventDetail.innerHTML,/上游 Content-Length<\/dt><dd[^>]*>未知/);
 });
 
 test('cache rate distinguishes no input, missing data, misses and hits', () => {
@@ -133,14 +135,14 @@ test('dashboard, chart, key table and events render server cache statistics', as
   assert.match(elements.eventTable.innerHTML, /title="0.108"><div[^>]*>0.108<\/div>/);
   assert.match(elements.eventTable.innerHTML, />10%</);
   c.showUsageEvent(event);
-  assert.match(elements.usageEventDetail.innerHTML, /缓存使用率<\/dt><dd>10%/);
-  assert.match(elements.usageEventDetail.innerHTML, /转换耗时（秒）<\/dt><dd>0.017/);
-  assert.match(elements.usageEventDetail.innerHTML, /首事件耗时（秒）<\/dt><dd>0.082/);
-  assert.match(elements.usageEventDetail.innerHTML, /总耗时（秒）<\/dt><dd>0.108/);
-  assert.match(elements.usageEventDetail.innerHTML, /上游响应头耗时（秒）<\/dt><dd>0.007/);
-  assert.match(elements.usageEventDetail.innerHTML, /失败分类<\/dt><dd>accounts_cooling/);
-  assert.match(elements.usageEventDetail.innerHTML, /可重试<\/dt><dd>是/);
-  assert.match(elements.usageEventDetail.innerHTML, /建议等待（秒）<\/dt><dd>5/);
+  assert.match(elements.usageEventDetail.innerHTML, /缓存使用率<\/dt><dd[^>]*>10%/);
+  assert.match(elements.usageEventDetail.innerHTML, /转换耗时（秒）<\/dt><dd[^>]*>0.017/);
+  assert.match(elements.usageEventDetail.innerHTML, /首事件耗时（秒）<\/dt><dd[^>]*>0.082/);
+  assert.match(elements.usageEventDetail.innerHTML, /总耗时（秒）<\/dt><dd[^>]*>0.108/);
+  assert.match(elements.usageEventDetail.innerHTML, /上游响应头耗时（秒）<\/dt><dd[^>]*>0.007/);
+  assert.match(elements.usageEventDetail.innerHTML, /失败分类<\/dt><dd[^>]*>accounts_cooling/);
+  assert.match(elements.usageEventDetail.innerHTML, /可重试<\/dt><dd[^>]*>是/);
+  assert.match(elements.usageEventDetail.innerHTML, /建议等待（秒）<\/dt><dd[^>]*>5/);
   c.renderCharts([]);
   assert.doesNotMatch(elements.chartCacheRate.innerHTML, /NaN|Infinity/);
   c.renderCharts([{date: '<unsafe>', input_tokens: 0, cache_hit_rate: 0}]);
@@ -159,9 +161,9 @@ test('usage event list keeps complete values and diagnostic fields in the dialog
   assert.doesNotMatch(table,/text-overflow:ellipsis|0123456789abcdef|anthropic_to_codex_responses/);
   assert.match(table,/tabindex="0"/);
   c.showUsageEvent(event);
-  assert.match(elements.usageEventDetail.innerHTML,/Event ID<\/dt><dd>0123456789abcdef/);
-  assert.match(elements.usageEventDetail.innerHTML,/转换模式<\/dt><dd>anthropic_to_codex_responses/);
-  assert.match(elements.usageEventDetail.innerHTML,/上游 HTTP 状态<\/dt><dd>200/);
+  assert.match(elements.usageEventDetail.innerHTML,/Event ID<\/dt><dd[^>]*>0123456789abcdef/);
+  assert.match(elements.usageEventDetail.innerHTML,/转换模式<\/dt><dd[^>]*>anthropic_to_codex_responses/);
+  assert.match(elements.usageEventDetail.innerHTML,/上游 HTTP 状态<\/dt><dd[^>]*>200/);
   assert.ok(c.renderUsageEventTable([{...event,api_key_id:'<script>bad</script>'}]).includes('&lt;script&gt;bad&lt;/script&gt;'));
 });
 
@@ -229,7 +231,7 @@ test('proxy cancellation and absent failed usage are not shown as successful zer
  assert.match(c.usageUpstreamMeta(e).title,/不代表请求最终完成/);
  assert.equal(c.usageTokenValue(e,'input_tokens'),'未取得');
  c.showUsageEvent(e);
- assert.match(elements.usageEventDetail.innerHTML,/输入 Token<\/dt><dd>未取得/);
+ assert.match(elements.usageEventDetail.innerHTML,/输入 Token<\/dt><dd[^>]*>未取得/);
  assert.equal(c.usageTokenValue({...e,outcome:'success'},'input_tokens'),'0');
  assert.equal(c.usageTokenValue({...e,input_tokens:10},'input_tokens'),'10');
  assert.equal(c.usageTokenValue({...e,cached_input_tokens_known:true},'input_tokens'),'0');
@@ -253,7 +255,7 @@ test('TPS renders weighted server values, unknown and known zero with sample pro
   assert.doesNotMatch(elements.eventTable.innerHTML,/>partial</);
   c.showUsageEvent(event);
   assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\).*30\.00/);
-  assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd>30<\/dd>/);
+  assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd[^>]*>30<\/dd>/);
 });
 
 test('TPS trend uses daily weighted values and distinguishes missing days from known zero', async () => {
@@ -300,7 +302,7 @@ test('cards keep concise TPS values while buffered diagnostics remain in events 
  assert.doesNotMatch(elements.eventTable.innerHTML,/>buffered</);
  assert.match(elements.eventTable.innerHTML,/上游明确缓冲/);
  c.showUsageEvent(event);
- assert.match(elements.usageEventDetail.innerHTML,/上游明确缓冲<\/dt><dd>true/);
+ assert.match(elements.usageEventDetail.innerHTML,/上游明确缓冲<\/dt><dd[^>]*>true/);
  assert.doesNotMatch(c.usageTPSHint({tps:10}),/上游明确缓冲/);
 });
 
@@ -313,9 +315,9 @@ test('E2E and buffered observed output rates are distinct in list and detail', (
  assert.match(table,/>32\.89</);
  assert.doesNotMatch(table,/>5727\.72</);
  c.showUsageEvent(event);
- assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\)<\/dt><dd>32\.89/);
- assert.match(elements.usageEventDetail.innerHTML,/观测输出 TPS \(Token\/s\)<\/dt><dd>5727\.72/);
- assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd>0\.094/);
+ assert.match(elements.usageEventDetail.innerHTML,/TPS \(Token\/s\)<\/dt><dd[^>]*>32\.89/);
+ assert.match(elements.usageEventDetail.innerHTML,/观测输出 TPS \(Token\/s\)<\/dt><dd[^>]*>5727\.72/);
+ assert.match(elements.usageEventDetail.innerHTML,/观测输出阶段耗时（秒）<\/dt><dd[^>]*>0\.094/);
  assert.match(c.usageTPSHint(event),/请求总耗时，含首输出等待/);
  assert.equal(c.usageTPS({tps:null,observed_tps:5727.72}), '—');
 });
@@ -335,14 +337,24 @@ test('event dialog shows provider and historical account snapshot safely', () =>
  const {context:c,elements}=harness();
  c.showUsageEvent({provider:'codexoauth',account_id:'slot-id',account_label:'operator<admin>@example.com'});
  const detail=elements.usageEventDetail.innerHTML;
- assert.match(detail, /<dt>实际 Provider<\/dt><dd>codexoauth<\/dd>/);
+ assert.match(detail, /<dt>实际 Provider<\/dt><dd[^>]*>codexoauth<\/dd>/);
  assert.match(detail, /operator&lt;admin&gt;@example.com/);
- assert.match(detail, /<dt>账号槽位 ID<\/dt><dd>slot-id<\/dd>/);
+ assert.match(detail, /<dt>账号槽位 ID<\/dt><dd[^>]*>slot-id<\/dd>/);
  assert.ok(!detail.includes('operator<admin>'));
  c.showUsageEvent({provider:'chatgptweb'});
- assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd>未记录<\/dd>/);
+ assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd[^>]*>未记录<\/dd>/);
  c.showUsageEvent({provider:'custom-provider'});
- assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd>不适用<\/dd>/);
+ assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd[^>]*>不适用<\/dd>/);
  c.showUsageEvent({provider:'codexoauth',account_id:'unlabelled-slot'});
- assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd>unlabelled-slot<\/dd>/);
+ assert.match(elements.usageEventDetail.innerHTML, /<dt>账号<\/dt><dd[^>]*>unlabelled-slot<\/dd>/);
+});
+
+test('localized event counts retain the load-more hint when a cursor is present',async()=>{
+  const {context:c,elements}=harness();
+  c.request=async()=>({events:[{event_id:'page-1',http_status:200,outcome:'success'}],next_cursor:'page-2'});
+  await c.loadEvents(true);
+  assert.equal(elements.eventMeta.textContent,'1 条（可加载更多）');assert.equal(elements.loadMoreEvents.disabled,false);
+  c.request=async()=>({events:[{event_id:'page-2',http_status:200,outcome:'success'}]});
+  await c.loadEvents(false);
+  assert.equal(elements.eventMeta.textContent,'2 条');assert.equal(elements.loadMoreEvents.disabled,true);
 });

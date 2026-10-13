@@ -184,6 +184,8 @@ type providerAvailability struct {
 	LastFailureAt       string  `json:"last_failure_at,omitempty"`
 	LastStatus          int     `json:"last_status,omitempty"`
 	LastOutcome         string  `json:"last_outcome,omitempty"`
+	LastFailureStatus   int     `json:"last_failure_status,omitempty"`
+	LastFailureOutcome  string  `json:"last_failure_outcome,omitempty"`
 	Score               int     `json:"score"`
 	WindowSeconds       int     `json:"window_seconds"`
 	SampleCount         int64   `json:"sample_count"`
@@ -1079,6 +1081,7 @@ func (h *Handler) applyObservedHealth(view *providerView) {
 	availability := providerAvailability{
 		Status: value.Status, Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures,
 		LastSuccessAt: formatOptionalTime(value.LastSuccessAt), LastFailureAt: formatOptionalTime(value.LastFailureAt), LastStatus: value.LastStatus, LastOutcome: value.LastOutcome,
+		LastFailureStatus: value.LastFailureStatus, LastFailureOutcome: value.LastFailureOutcome,
 		Score: value.Score, WindowSeconds: value.WindowSeconds, SampleCount: value.SampleCount, SuccessRate: value.SuccessRate,
 		P50MS: value.P50MS, P95MS: value.P95MS, CircuitState: value.CircuitState, CircuitRetryAt: formatOptionalTime(value.CircuitRetryAt),
 	}
@@ -1108,6 +1111,8 @@ func mergeProviderAvailabilityDetails(target *providerAvailability, observed pro
 	target.LastFailureAt = observed.LastFailureAt
 	target.LastStatus = observed.LastStatus
 	target.LastOutcome = observed.LastOutcome
+	target.LastFailureStatus = observed.LastFailureStatus
+	target.LastFailureOutcome = observed.LastFailureOutcome
 	target.Score = observed.Score
 	target.WindowSeconds = observed.WindowSeconds
 	target.SampleCount = observed.SampleCount
@@ -1134,6 +1139,7 @@ func (h *Handler) providerHealth(cfg config.Config) map[string]providerAvailabil
 		result[name] = providerAvailability{
 			Status: value.Status, Successes: value.Successes, Failures: value.Failures, ConsecutiveFailures: value.ConsecutiveFailures,
 			LastSuccessAt: formatOptionalTime(value.LastSuccessAt), LastFailureAt: formatOptionalTime(value.LastFailureAt), LastStatus: value.LastStatus, LastOutcome: value.LastOutcome,
+			LastFailureStatus: value.LastFailureStatus, LastFailureOutcome: value.LastFailureOutcome,
 			Score: value.Score, WindowSeconds: value.WindowSeconds, SampleCount: value.SampleCount, SuccessRate: value.SuccessRate,
 			P50MS: value.P50MS, P95MS: value.P95MS, CircuitState: value.CircuitState, CircuitRetryAt: formatOptionalTime(value.CircuitRetryAt),
 		}
