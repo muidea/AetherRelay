@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 )
 
 type Recorder struct {
@@ -32,8 +34,11 @@ func NewObservationRound() *Round {
 }
 
 type Round struct {
-	memoryOnly bool
-	EventID    string
+	codexmodel.Observation
+	AccountID    string
+	AccountLabel string
+	memoryOnly   bool
+	EventID      string
 
 	ID                 int       `json:"id"`
 	Dir                string    `json:"dir"`
@@ -245,6 +250,9 @@ func (r *Round) SetIgnoredFeatures(features []string) {
 }
 
 type Metadata struct {
+	codexmodel.Observation
+	AccountID                     string    `json:"account_id,omitempty"`
+	AccountLabel                  string    `json:"account_label,omitempty"`
 	ErrorCode                     string    `json:"error_code,omitempty"`
 	CachedInputTokensKnown        bool      `json:"cached_input_tokens_known"`
 	CacheCreationInputTokensKnown bool      `json:"cache_creation_input_tokens_known"`

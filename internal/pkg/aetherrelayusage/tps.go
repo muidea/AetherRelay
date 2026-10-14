@@ -157,4 +157,4 @@ func cloneGenerationSample(s GenerationSample) GenerationSample {
 
 // Account labels are needed only for details and export; aggregates do not join
 // the selection table or include account labels in metric dimensions.
-const targetEvents = `(SELECT usage_events.*, coalesce(a.account_id, '') AS account_id, coalesce(a.account_label, '') AS account_label FROM ` + tpsEvents + ` LEFT JOIN usage_account_selection a ON usage_events.event_id=a.event_id) AS usage_events`
+const targetEvents = `(SELECT usage_events.*, coalesce(a.account_id, '') AS account_id, coalesce(a.account_label, '') AS account_label, coalesce(m.upstream_request_model, '') AS upstream_request_model, coalesce(m.response_model, '') AS response_model, coalesce(m.model_substituted, false) AS model_substituted FROM ` + tpsEvents + ` LEFT JOIN usage_account_selection a ON usage_events.event_id=a.event_id LEFT JOIN usage_codex_model m ON usage_events.event_id=m.event_id) AS usage_events`

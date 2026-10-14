@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.1.1`
+> 合同版本：`17.2.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-10-13
+> 生效日期：2026-10-14
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`17.2.0` 吸收 CLIProxyAPI `25f40d8c` 的响应对象模型观测（`CP-OBS-015`），仅限 Codex CLI 号池。保留实际出站请求模型、最后有效响应对象模型及执行账号；模型替换诊断不参与账号健康、冷却、重试、熔断或路由。以新增附属表关联调用明细、归档和 CSV，既有布局与历史观测不回填。按 MINOR 记录，本地实现，待部署验收。
 
 `17.1.1` 修复 Anthropic→Codex 消息内文本/工具 content 块顺序，只拼接连续文本；保持历史 developer 映射、工具 ID、结果图片和通用 Provider 行为。Codex 转换从入站开始保留数字原文，生产转换对象须自有，归一化前隔离共享 schema，统一编码不得绕过校验、精度/字节保真或最终出站归档。Debug 摘要仅含结构信息和缓存键来源，移除缓存键哈希（CP-SCHED-010），历史指令计数包含 developer。回归覆盖混合内容 handler、追加前缀、源数据不变、编解码等价和日志边界；语义和真实缓存收益需独立上游验收，离线测试/性能基准不构成该证据。恢复保序、精度和诊断既有合同，按 PATCH 记录。
 
@@ -531,6 +533,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-003` 指标和日志只记录有界错误类别，不记录上游正文、token、代理凭据、原始 session 或完整 account ID。
 
+`CP-OBS-015` 仅 Codex CLI 号池采集实际出站请求 `model` 与转换前上游响应对象 `response.model`（原生 JSON 响应对象使用顶层 `model`）。HTTP/SSE/WebSocket 和 Anthropic→Codex 共用判定；ChatGPT Web 与普通 Provider 不参与。响应头（包括 `faster-model` / Safety Buffering）及输出文本不参与模型替换判断。只采集 `response.created`、`response.in_progress`、`response.completed`、`response.incomplete`、`response.done` 或原生 `object=response`；模型字段为字符串，限 128 字节、拒绝控制字符，缺证据为未知，不推断一致。保留最后有效模型，终结事件的有效模型优先并锁定，不将中间差异累积为永久异常。去首尾空白、不区分大小写、去尾部 reasoning 括号后缀；基础名与 YYYY-MM-DD / YYYYMMDD 日期快照互认，其余不同才标记 `model_substituted`。此标记仅描述上游声明变化，不验证物理执行模型或智力，不表示账号健康异常。
+
+每次实际上游尝试、同账号重试及 WebSocket 新回合均重置观测；账号归属取 owner 的安全槽位/邮箱快照，失败尝试不得污染最终调用。HTTP 完整读取在 upstream owner 采集所有原始事件，不丢失非流式中间声明；流进度与最终结果通过 typed 合同投影。WebSocket 逐回合记录诊断，但保留现有连接/HTTP 用量结算粒度，不增加独立回合用量事件。compact 不报告响应模型，不凭请求回填。
+
+`usage_codex_model` 附属表和用量事件、已有账号快照在同一事务写入；API Key 删除同步清理；明细 API、Web、CSV 与交互 metadata 展示安全观测，关闭正文归档仍有效。历史缺失不回填。Web 调用列表提示“上游模型替换”；单条调用明细顶部提示上游声明模型与请求的差异、执行邮箱和本地槽位，并明确不代表账号健康异常；一致、未知、ChatGPT Web 与普通 Provider 不显示此提示。模型不一致 WARN 在尝试/回合完成时输出，含 request_id（可用时）、account_attempt、Provider、本地 account_id 与当时 account_label、请求/响应模型；依据本次用户要求仅此限频诊断允许安全邮箱标签，正常日志和指标不添加邮箱。按账号/请求/响应模型组合 10 分钟最多一次，缓存最多 1024 组；限频不影响每条调用记录，不以 WARN 次数统计替换数量。不得输出凭据、上游账号头、session、正文。
+
 `CP-OBS-012` Codex HTTP/SSE/compact 的传输失败必须由 `codexupstream` owner 提取有界 `transport_reason`：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`http2_stream_error`、`http2_stream_cancel`、`http2_refused_stream`、`http2_goaway`、`http2_connection_error`、`sse_line_limit`、`unknown`。HTTP/2 错误只提取类型和有界枚举，不泄漏 DebugData/Cause；SSE 行超限归协议错误。只依据结构化错误链识别，不从原始错误字符串猜测；未识别错误与非法投影值归为 `unknown`，无传输失败时字段为空/省略。typed attempt/result 向 proxyapi 传递安全枚举，逐次失败与流终止日志关联 request_id/account_attempt，`upstream_response[_NNN].json` 按同一 attempt 记录该字段；关闭归档仍有失败日志。握手与流终态更新不得丢失原因或伪造上游响应；合法终态后的正常 EOF 不记为失败。该诊断不参与错误分类、冷却、健康、重试或客户端错误 envelope，不持久化原始错误、代理地址、凭据、账号身份和会话值。
 
 `CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
@@ -581,6 +589,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | --- | --- | --- | --- | --- |
 | 混合内容保序、追加前缀与精度保真 | CP-REQ-012, CP-REQ-015, CP-REQ-035..036, CP-FP-008 | implemented（本地）；上游语义与缓存收益待验收 | `proxyapi/service/proxy/anthropic.go`, `responses_anthropic.go`, `codex_messages.go`, `codex_compat.go` | `codex_anthropic_conversion_test.go`, `conversion_system_history_test.go` |
 | 转换摘要移除缓存键哈希并统计历史指令和工具 | CP-SCHED-010 | implemented（本地） | `proxyapi/service/proxy/conversion_cache_summary.go` | `conversion_system_history_test.go` |
+
+`17.2.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| Codex 响应对象模型与执行账号诊断 | CP-OBS-015 | implemented（本地）；待部署验收 | `aetherrelaycodexmodel`, `proxyapi/pkg/usagetarget`, `codexupstream/biz`, `proxyapi/biz`, `aetherrelayusage`, `web/admin/index.html` | `aetherrelaycodexmodel/model_test.go`, `proxyapi/pkg/usagetarget/target_test.go`, `codexupstream/biz/model_observation_test.go`, `proxyapi/biz/codex_model_observation_test.go`, `aetherrelayusage/codex_model_test.go`, `web/admin/usage.test.cjs` |
 
 `17.1.0` 新增实施追踪：
 

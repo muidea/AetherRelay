@@ -9,6 +9,7 @@ import (
 	"time"
 
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -121,6 +122,10 @@ func (s *responseStream) observe(line []byte) {
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 	s.generation.ObserveSSE(line, time.Now())
+	for _, expanded := range expandCodexSSELine(line) {
+		s.model.Observe(expanded)
+	}
+	s.progress.Observation = codexmodel.New(s.progress.UpstreamRequestModel, s.model.Model)
 	s.progress.WireBytes += int64(len(line))
 	if terminal := terminalEventType(line); terminal != "" {
 		s.progress.TerminalEvent = terminal

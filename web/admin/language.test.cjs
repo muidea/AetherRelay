@@ -154,3 +154,11 @@ test('provider health card keeps failure details separate from later success in 
   delete availability.last_failure_status;delete availability.last_failure_outcome;
   assert.equal(c.providerFailureHint(availability),'Last failure · 2026-10-13T07:02:00Z');
 });
+
+test('Codex response model evidence labels localize without translating model identifiers',()=>{
+  const {context:c}=harness();c.state.locale='en-US';
+  assert.equal(c.t('上游请求模型'),'Upstream request model');assert.equal(c.t('响应模型'),'Response model');assert.equal(c.t('上游模型替换'),'Upstream model substitution');
+  const hint=c.t('上游响应声明的模型与请求不一致：{request} → {response}。执行账号：{account}（槽位：{slot}）。仅记录模型差异，不代表账号健康异常。',{request:'gpt-6.1-sol',response:'gpt-6-luna',account:'operator@example.com',slot:'local-slot'});
+  assert.match(hint,/gpt-6.1-sol → gpt-6-luna/);assert.match(hint,/operator@example.com \(slot: local-slot\)/);assert.match(hint,/does not indicate an account health issue/);assert.doesNotMatch(hint,/\{request\}|上游/);
+  const model=new Element('gpt-6.1-sol',true);c.translateDOM(model);assert.equal(model.textContent,'gpt-6.1-sol');
+});

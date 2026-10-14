@@ -23,6 +23,7 @@ import (
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	aetherrelaycodexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	accountproxy "aetherrelay/internal/pkg/aetherrelayproxy"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
@@ -65,6 +66,7 @@ type streamUpdate struct {
 }
 
 type responseStream struct {
+	model        codexmodel.Observer
 	generation   generation.Clock
 	cancel       context.CancelFunc
 	updates      chan streamUpdate
@@ -530,7 +532,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 	// The EventHub command is synchronous and may finish before its SSE reader.
 	// Keep request values, but let explicit Pull/Cancel own stream lifetime.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ev.Context()))
-	stream := &responseStream{cancel: func() { cancel(); cancelCommand(ev.Context()); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64), readStarted: time.Now(), progress: events.HTTPResponseObservation{GenerationBuffered: attempt.Response.GenerationBuffered}}
+	stream := &responseStream{cancel: func() { cancel(); cancelCommand(ev.Context()); _ = response.Body.Close() }, updates: make(chan streamUpdate, 64), readStarted: time.Now(), progress: events.HTTPResponseObservation{Observation: attempt.Response.Observation, GenerationBuffered: attempt.Response.GenerationBuffered}}
 	s.mu.Lock()
 	if s.stopping || len(s.streams)+len(s.websockets) >= maxConcurrentCommands {
 		s.mu.Unlock()
@@ -765,6 +767,8 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 	if profile.archiveFullContent {
 		attempt.Request.Body = bytes.Clone(body)
 	}
+	requestedModel := codexmodel.RequestModel(body)
+	attempt.Response.Observation = codexmodel.New(requestedModel, "")
 	response, err := client.Do(req)
 	if err != nil {
 		attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
@@ -772,6 +776,7 @@ func performURL(ctx context.Context, endpoint, accept, accessToken, accountID, p
 		return nil, attempt, classifyRequestTransport(ctx, err), 0, err
 	}
 	attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
+	attempt.Response.Observation = codexmodel.New(requestedModel, "")
 	return response, attempt, "", retryAfterSeconds(response.Header), nil
 }
 
@@ -1237,6 +1242,7 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 	}
 	readStarted := time.Now()
 	var clock generation.Clock
+	var model codexmodel.Observer
 	var observation *events.HTTPResponseObservation
 	if len(observations) > 0 {
 		observation = observations[0]
@@ -1244,6 +1250,7 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 	if observation != nil {
 		observation.ReadObserved = true
 		defer func() {
+			observation.Observation = codexmodel.New(observation.UpstreamRequestModel, model.Model)
 			observation.ReadDurationMS = time.Since(readStarted).Milliseconds()
 			sample := clock.Snapshot(time.Now())
 			observation.FirstOutputAt, observation.GenerationDuration, observation.GenerationPartial = sample.FirstOutputAt, sample.Duration, sample.Partial
@@ -1276,6 +1283,7 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 			observation.TerminalEvent = "response"
 			observation.FirstEventDurationMS = time.Since(readStarted).Milliseconds()
 		}
+		model.Observe(payload)
 		if aetherrelaycodex.EmptyIncompleteResponse(payload) {
 			return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
 		}
@@ -1314,6 +1322,7 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 					documents = [][]byte{payload}
 				}
 				for _, payload := range documents {
+					model.Observe(payload)
 					outputEvidence = outputEvidence || aetherrelaycodex.MeaningfulOutputEvent(payload)
 					var event struct {
 						Type        string          `json:"type"`

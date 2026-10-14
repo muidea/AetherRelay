@@ -761,7 +761,7 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 	defer cancel()
 	target := usagetarget.Snapshot(r.Context())
 	err := h.usageStore.Complete(ctx, usage.CompleteRecord{
-		Provider: target.Provider, AccountID: target.AccountID, AccountLabel: target.AccountLabel,
+		Provider: target.Provider, AccountID: target.AccountID, AccountLabel: target.AccountLabel, Observation: target.Observation,
 		EventID: eventID, CompletedAt: time.Now().UTC(), HTTPStatus: http.StatusInternalServerError,
 		Outcome: "error", ErrorCode: ErrorCodeProxyInternalError,
 		Duration: time.Since(startedAt), FirstEventDuration: firstEventDuration, UpstreamDuration: upstreamDuration,
@@ -840,6 +840,7 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		if target.Provider != "" && (rec.Provider == "" || rec.Provider == target.Provider) {
 			rec.Provider = target.Provider
 			rec.AccountID, rec.AccountLabel = target.AccountID, target.AccountLabel
+			rec.Observation = target.Observation
 		}
 		rec.FirstEventDuration = firstEventDurationFromContext(r.Context())
 		if completion := usageCompletionFromContext(r.Context()); completion != nil {
@@ -3043,6 +3044,13 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 		round.RetryAfterSeconds = fail.RetryAfterSeconds
 	}
 	outcome := outcomeFromStreamFail(fail, status)
+	if round != nil && r != nil {
+		target := usagetarget.Snapshot(r.Context())
+		if target.Provider == "codexoauth" && target.Provider == provider {
+			round.Observation = target.Observation
+			round.AccountID, round.AccountLabel = target.AccountID, target.AccountLabel
+		}
+	}
 	if status == 0 && outcome == string(streamKindClientCanceled) {
 		status = 499
 	}
@@ -3164,6 +3172,8 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		Error:                         message,
 	}
 	if round != nil {
+		meta.Observation = round.Observation
+		meta.AccountID, meta.AccountLabel = round.AccountID, round.AccountLabel
 		meta.RequestID = round.RequestID
 		meta.ErrorCode = round.ErrorCode
 		meta.EventID = round.EventID

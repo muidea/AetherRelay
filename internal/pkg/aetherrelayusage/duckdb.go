@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -339,6 +340,13 @@ WHERE event_id = ?
 	if n != 1 {
 		// 缺失或重复 Complete:不降级健康(业务一致性问题),但返回错误。
 		return ErrEventNotStarted
+	}
+	if rec.Provider == "codexoauth" && rec.UpstreamRequestModel != "" {
+		o := codexmodel.New(rec.UpstreamRequestModel, rec.ResponseModel)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_codex_model (event_id, upstream_request_model, response_model, model_substituted) VALUES (?, ?, ?, ?)`, rec.EventID, o.UpstreamRequestModel, o.ResponseModel, o.ModelSubstituted); err != nil {
+			s.markDegraded()
+			return fmt.Errorf("%w: save Codex model: %v", ErrStoreUnavailable, err)
+		}
 	}
 	if rec.AccountID != "" {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_account_selection (event_id, account_id, account_label) VALUES (?, ?, ?)`, rec.EventID, rec.AccountID, rec.AccountLabel); err != nil {

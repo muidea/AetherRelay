@@ -25,6 +25,7 @@ import (
 type codexWebsocketBinding struct {
 	leaseID        string
 	accountID      string
+	accountLabel   string
 	model          string
 	resultRecorded bool
 	turnEvidence   bool
@@ -95,7 +96,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		if s.codexWebsockets == nil {
 			s.codexWebsockets = map[string]codexWebsocketBinding{}
 		}
-		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, model: request.Model, fingerprint: fingerprint}
+		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, accountLabel: account.AccountLabel, model: request.Model, fingerprint: fingerprint}
 		s.mu.Unlock()
 		s.noteCodexTurnState(account.AccountID, fingerprint, request.SessionScope, opened.Headers)
 		s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
@@ -113,6 +114,10 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		s.codexWebsockets[sessionID] = binding
 	}
 	s.mu.Unlock()
+	if found {
+		usagetarget.Record(ctx, "codexoauth", binding.accountID, binding.accountLabel)
+		usagetarget.BeginCodexAttempt(ctx, payload)
+	}
 	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload, Fingerprint: codexFingerprintForTurn(binding.fingerprint)}))).Get()
 	if err != nil {
 		return codexCommandFailure(ctx, err)
@@ -147,6 +152,7 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 		return result, nil
 	}
 	if len(update.Payload) > 0 {
+		usagetarget.ObserveCodex(ctx, update.Payload)
 		evidence := codexWebsocketPayloadHasEvidence(update.Payload)
 		outputEvidence := codexWebsocketPayloadHasOutputEvidence(update.Payload)
 		s.mu.Lock()
@@ -205,6 +211,7 @@ func (s *Proxy) recordCodexWebsocketTurnResult(ctx context.Context, sessionID st
 	}
 	s.mu.Unlock()
 	if shouldRecord {
+		logCodexModelSubstitution(ctx, "", 0)
 		s.recordCodexResult(ctx, binding.accountID, binding.model, success, class, retryAfter, quotaExhausted, quotaResetAt)
 	}
 }
@@ -870,6 +877,8 @@ func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
 }
 
 func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (out codexresponses.Result, failure *codexresponses.Failure) {
+	usagetarget.BeginCodexAttempt(ctx, request.Body)
+	defer logCodexModelSubstitution(ctx, request.Diagnostics.RequestID, request.AccountAttempt)
 	defer func() {
 		logCodexAttempt(request, failure)
 		if request.ObserveAttempt != nil {
@@ -903,6 +912,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	if !ok {
 		return codexresponses.Result{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex upstream result"))
 	}
+	usagetarget.SetCodexModels(ctx, completed.Attempt.Response.Observation)
 	if completed.ErrorClass != "" {
 		failure := failureFromUpstream(completed.ErrorClass, completed.RetryAfterSeconds, completed.RateLimit, completed.HTTPStatus, completed.SafeError)
 		failure.Attempt = toCodexHTTPAttempt(completed.Attempt)
@@ -915,6 +925,8 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 }
 
 func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) (resultErr error) {
+	usagetarget.BeginCodexAttempt(ctx, request.Body)
+	defer logCodexModelSubstitution(ctx, request.Diagnostics.RequestID, request.AccountAttempt)
 	parent := ctx
 	ctx, guard := newCodexStreamGuard(parent, s.config.StreamFirstEventTimeout, s.config.StreamIdleTimeout, s.config.CodexOAuth.StreamMaxDuration)
 	var observedAttempt codexresponses.HTTPAttempt
@@ -935,6 +947,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			value, _ := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicCancel, s.ID(), upcommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), upevents.CancelCommand{StreamID: streamID}))).Get()
 			if canceled, ok := value.(upevents.CancelResult); ok {
 				mergeCodexStreamProgress(&observedAttempt, canceled.Progress)
+				usagetarget.SetCodexModels(ctx, observedAttempt.Response.Observation)
 			}
 		}
 		failure, _ := codexresponses.AsFailure(resultErr)
@@ -986,6 +999,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	observedAttempt = toCodexHTTPAttempt(startedUpstream.Attempt)
+	usagetarget.SetCodexModels(ctx, observedAttempt.Response.Observation)
 	// Publish headers before waiting for the first business event. Completion
 	// reports any later error for the same attempt; the adapter deduplicates it.
 	if request.ObserveAttempt != nil && startedUpstream.ErrorClass == "" {
@@ -1020,6 +1034,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream update"))
 		}
 		mergeCodexStreamProgress(&observedAttempt, update.Progress)
+		usagetarget.SetCodexModels(ctx, observedAttempt.Response.Observation)
 		if len(update.Data) > 0 {
 			firstBusinessEvent := guard.observe(update.Data)
 			if !clientStarted && !firstBusinessEvent {
@@ -1200,7 +1215,8 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			Body: bytes.Clone(attempt.Request.Body), BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
 		},
 		Response: codexresponses.HTTPResponseObservation{
-			ErrorBody: bytes.Clone(attempt.Response.ErrorBody), ErrorBodyFormat: attempt.Response.ErrorBodyFormat,
+			Observation: attempt.Response.Observation,
+			ErrorBody:   bytes.Clone(attempt.Response.ErrorBody), ErrorBodyFormat: attempt.Response.ErrorBodyFormat,
 			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,
 			TransferEncoding:     attempt.Response.TransferEncoding,
 			ReadObserved:         attempt.Response.ReadObserved,
@@ -1308,6 +1324,9 @@ func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure
 }
 
 func mergeCodexStreamProgress(attempt *codexresponses.HTTPAttempt, progress upevents.HTTPResponseObservation) {
+	if progress.UpstreamRequestModel != "" {
+		attempt.Response.Observation = progress.Observation
+	}
 	attempt.Response.GenerationBuffered = attempt.Response.GenerationBuffered || progress.GenerationBuffered
 	if !progress.FirstOutputAt.IsZero() {
 		attempt.Response.FirstOutputAt, attempt.Response.GenerationDuration, attempt.Response.GenerationPartial = progress.FirstOutputAt, progress.GenerationDuration, progress.GenerationPartial

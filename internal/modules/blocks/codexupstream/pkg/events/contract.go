@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
@@ -48,6 +49,7 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	codexmodel.Observation
 	FirstOutputAt        time.Time
 	GenerationDuration   time.Duration
 	GenerationBuffered   bool

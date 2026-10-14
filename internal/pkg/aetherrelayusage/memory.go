@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 )
 
 // MemoryStore 是单测用内存 Store,实现与 DuckDBStore 相同接口语义。
@@ -110,6 +112,9 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 		e.Model = rec.Model
 	}
 	e.AccountID, e.AccountLabel = rec.AccountID, rec.AccountLabel
+	if rec.Provider == "codexoauth" {
+		e.Observation = codexmodel.New(rec.UpstreamRequestModel, rec.ResponseModel)
+	}
 	e.CompletedAt = &completedAt
 	e.UpstreamProtocol = rec.UpstreamProtocol
 	e.UpstreamEndpoint = rec.UpstreamEndpoint
@@ -514,7 +519,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 			strconv.FormatBool(e.CacheCreationInputTokensKnown),
 		}
 		row = append(row, tpsCSV(e.GenerationSample)...)
-		row = append(row, e.AccountID, e.AccountLabel)
+		row = append(row, e.AccountID, e.AccountLabel, e.UpstreamRequestModel, e.ResponseModel, strconv.FormatBool(e.ModelSubstituted))
 		if err := cw.Write(row); err != nil {
 			return err
 		}

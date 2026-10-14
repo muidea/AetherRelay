@@ -15,6 +15,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/pkg/aetherrelayarchive"
+	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
@@ -51,6 +52,7 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	codexmodel.Observation
 	GenerationBuffered         bool                `json:"generation_buffered,omitempty"`
 	LastEventAt                time.Time           `json:"last_upstream_event_at,omitempty"`
 	LastEventDurationMS        int64               `json:"last_upstream_event_duration_ms,omitempty"`
@@ -339,6 +341,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		round.SetUpstreamHeaders(0, "", -1, "", 0)
 	}
 	responseInfo := upstreamResponseDebugInfo{
+		Observation:                attempt.Response.Observation,
 		GenerationBuffered:         attempt.Response.GenerationBuffered,
 		FirstClientEventDurationMS: attempt.Response.FirstClientEventDurationMS, ReadObserved: attempt.Response.ReadObserved,
 		LastEventAt:          attempt.Response.LastEventAt,

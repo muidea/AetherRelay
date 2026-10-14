@@ -12,7 +12,7 @@ function harness() {
   const elements = {};
   const context = vm.createContext({
     state: {locale: 'zh-CN', range: 'today', events: []}, URLSearchParams, AbortController, setTimeout, clearTimeout,
-    $: id => elements[id] ||= {showModal() {}},
+    $: id => elements[id] ||= {style: {}, showModal() {}},
     t: (s,params={}) => s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??'')), apiURL: s => s,
     setLocalizedText: (el,s,params={}) => {el.textContent=s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??''));},
     setLocalizedAttribute: (el,name,source) => {el[name]=typeof source==='function'?source():source;},
@@ -357,4 +357,18 @@ test('localized event counts retain the load-more hint when a cursor is present'
   c.request=async()=>({events:[{event_id:'page-2',http_status:200,outcome:'success'}]});
   await c.loadEvents(false);
   assert.equal(elements.eventMeta.textContent,'2 条');assert.equal(elements.loadMoreEvents.disabled,true);
+});
+
+test('Codex substitution shows response evidence and account while success stays successful',()=>{
+  const {context:c,elements}=harness();
+  const event={provider:'codexoauth',model:'gpt-6.1-sol',upstream_request_model:'gpt-6.1-sol',response_model:'gpt-6-luna<script>',model_substituted:true,account_label:'operator@example.com',account_id:'local-slot',outcome:'success',http_status:200};
+  const table=c.renderUsageEventTable([event]);
+  assert.match(table,/上游模型替换/);assert.match(table,/gpt-6-luna&lt;script&gt;/);assert.match(table,/200.*成功/);assert.doesNotMatch(table,/<script>/);
+  c.showUsageEvent(event);const detail=elements.usageEventDetail.innerHTML;
+  assert.equal(elements.usageEventModelNotice.style.display,'block');assert.match(elements.usageEventModelNotice.textContent,/gpt-6.1-sol → gpt-6-luna<script>/);assert.match(elements.usageEventModelNotice.textContent,/operator@example.com（槽位：local-slot）/);assert.match(elements.usageEventModelNotice.textContent,/不代表账号健康异常/);
+  assert.match(detail,/上游请求模型<\/dt><dd[^>]*>gpt-6.1-sol/);assert.match(detail,/响应模型<\/dt><dd[^>]*>gpt-6-luna&lt;script&gt;/);assert.match(detail,/operator@example.com/);assert.match(detail,/local-slot/);
+  c.showUsageEvent({provider:'codexoauth'});assert.match(elements.usageEventDetail.innerHTML,/响应模型<\/dt><dd[^>]*>未记录/);
+  c.showUsageEvent({provider:'chatgptweb'});assert.match(elements.usageEventDetail.innerHTML,/响应模型<\/dt><dd[^>]*>不适用/);
+  assert.doesNotMatch(c.renderUsageEventTable([{...event,provider:'chatgptweb'}]),/上游模型替换/);
+  for(const current of [{...event,model_substituted:false},{...event,provider:'chatgptweb'},{provider:'codexoauth'}]){c.showUsageEvent(current);assert.equal(elements.usageEventModelNotice.style.display,'none');assert.equal(elements.usageEventModelNotice.textContent,'');}
 });
