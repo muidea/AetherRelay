@@ -311,12 +311,18 @@ func (s *Admin) GetChatGPTImageThumbnail(ctx context.Context, apiKeyID, path str
 
 func (s *Admin) DeleteChatGPTImageScope(ctx context.Context, apiKeyID string) error {
 	_, err := s.SendEvent(event.NewEventWithContext(imgevents.TopicDeleteScope, s.ID(), imgcommon.UnitID, event.NewHeader(), ctx, imgevents.DeleteScopeCommand{APIKeyID: apiKeyID})).Get()
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Admin) DeleteChatGPTImageTaskScope(ctx context.Context, apiKeyID string) error {
 	_, err := s.SendEvent(event.NewEventWithContext(taskevents.TopicDeleteOwner, s.ID(), taskcommon.UnitID, event.NewHeader(), ctx, taskevents.DeleteOwnerCommand{OwnerID: apiKeyID})).Get()
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Admin) ChatGPTEffectiveCatalog(ctx context.Context) (effectivecatalog.Snapshot, error) {
