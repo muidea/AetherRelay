@@ -161,6 +161,7 @@ type ClientAPIKeyMetadata struct {
 type ClientAPIKeyRecord struct {
 	ID             string
 	Hash           string
+	Hint           string
 	Enabled        bool
 	CreatedAt      time.Time
 	LastUsedAt     *time.Time
@@ -291,7 +292,7 @@ type Store interface {
 	ListClientAPIKeys(context.Context) (map[string]ClientAPIKeyRecord, error)
 	CreateClientAPIKey(context.Context, ClientAPIKeyRecord) error
 	SetClientAPIKeyEnabled(context.Context, string, bool) error
-	RotateClientAPIKey(context.Context, string, string, time.Time) error
+	RotateClientAPIKey(context.Context, string, string, string, time.Time) error
 	BeginClientAPIKeyDeletion(context.Context, string, time.Time) error
 	RevokeClientAPIKey(context.Context, string, time.Time) error
 	DeleteClientAPIKey(context.Context, string) error

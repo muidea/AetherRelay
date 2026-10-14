@@ -77,8 +77,8 @@ type ClientKeyEnableCommand struct {
 	Enabled bool
 }
 type ClientKeyRotateCommand struct {
-	ID, Hash string
-	At       time.Time
+	ID, Hash, Hint string
+	At             time.Time
 }
 type ClientKeyBeginDeletionCommand struct {
 	ID string

@@ -6,7 +6,7 @@
 
 ## 设计目标
 
-- 客户端 Key 是数据端点的必需认证，也是用量归属的唯一身份来源；明文只在创建/轮换响应中出现一次，DuckDB 只保存摘要。
+- 客户端 Key 是数据端点的必需认证，也是用量归属的唯一身份来源；明文只在创建/轮换响应中出现一次，DuckDB 仅保存摘要与脱敏 hint，不保存完整 Key。
 - Admin 默认仅本机可访问；开启登录后任意来源都必须认证，不保留 loopback 旁路。
 - 敏感信息（Key、token、账号凭据、密码哈希）不写入日志、归档、错误信息或浏览器持久化。
 
@@ -18,14 +18,15 @@
 - Key 摘要仅接受 `sha256:` + 64 位小写十六进制；原始 Key 与摘要在所有条目间均唯一。
 - Key ID 匹配 `[a-z0-9][a-z0-9._-]{0,63}`；`default` 为历史用量保留 ID，不能配置。
 - `builtin-local` 是 Usage runtime 启动时幂等维护的服务端内建工具 scope：仅有元数据和 `all` Provider 权限，不保存摘要/secret，不进入外部认证索引。Admin 工具请求在内部注入该身份；该条目可查看模型但不可创建、修改、轮换、启停或删除。
-- 服务端生成 Key 统一 `sk_` + base64.RawURLEncoding(crypto/rand 32 bytes)，至少 256 bit 熵；明文仅在创建/轮换成功响应中返回一次，响应 `Cache-Control: no-store`。
+- 服务端生成 Key 统一 `sk_` + base64.RawURLEncoding(crypto/rand 32 bytes)，生成随机源为 256 bit；明文仅在创建/轮换成功响应中返回一次，响应 `Cache-Control: no-store`。
+- 管理列表的 hint 只暴露前 5 位（其中 `sk_` 为固定前缀）和最后 2 位，中间固定 `****`，如 `sk_sx****ab`；这会暴露少量随机位，因此 hint 与数据库仍需按管理数据保护。hint 不参与鉴权，不可恢复完整 Key，不写入请求日志、用量事件或指标。创建/轮换原子保存摘要和 hint，旧 Key 无 hint 时保持空值直到轮换，内置 scope 无 hint。
 
 ### 身份解析与 401 不变量
 
 - 运行时认证索引只从 DuckDB 读取摘要 → ClientIdentity 映射。
 - OpenAI 用 `Authorization: Bearer <key>`，Anthropic 用 `X-API-Key: <key>`；两种 Header 可兼容，同时出现必须为同一 Key。
 - 缺失、空白、未知、禁用、格式错误或冲突 Header 均返回 401，且**不产生用量记录**（401 发生在 `UsageStore.Start` 之前）。
-- 所有持久化、指标、日志、归档与 Admin 查询只出现 `api_key_id`，原始 Key 绝不出现。
+- 用量、指标、日志与归档使用 `api_key_id`，不包含 hint；Admin Key 查询可返回上述固定脱敏 hint，但不得返回摘要或原始 Key。原始 Key 仅允许出现在创建/轮换的一次性成功响应中。
 - `ClientIdentity` 携带不可变 ProviderAccess 快照；零值为 deny-all。`selected` 只允许明确 Provider，`all` 允许当前和未来 Provider。模型发现、能力投影、路由候选和 fallback 必须先执行同一权限过滤，未授权模型统一返回 `model_not_found`。
 
 ### Admin 管理

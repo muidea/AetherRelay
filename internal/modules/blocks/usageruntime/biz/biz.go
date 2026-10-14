@@ -313,7 +313,7 @@ func (s *UsageRuntime) handleClientKeyCommand(ev event.Event, result event.Resul
 	case usageevents.ClientKeyEnableCommand:
 		err = st.SetClientAPIKeyEnabled(ev.Context(), c.ID, c.Enabled)
 	case usageevents.ClientKeyRotateCommand:
-		err = st.RotateClientAPIKey(ev.Context(), c.ID, c.Hash, c.At)
+		err = st.RotateClientAPIKey(ev.Context(), c.ID, c.Hash, c.Hint, c.At)
 	case usageevents.ClientKeyBeginDeletionCommand:
 		err = st.BeginClientAPIKeyDeletion(ev.Context(), c.ID, c.At)
 	case usageevents.ClientKeyRevokeCommand:

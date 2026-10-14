@@ -130,6 +130,7 @@ CREATE TABLE client_api_key_metadata (
     created_at          TIMESTAMPTZ NOT NULL,
     last_used_at        TIMESTAMPTZ,
     key_hash            VARCHAR,
+    hint                VARCHAR,
     enabled             BOOLEAN NOT NULL DEFAULT TRUE,
     last_rotated_at     TIMESTAMPTZ,
     revoked_at          TIMESTAMPTZ,
@@ -158,7 +159,7 @@ ON client_api_key_provider_access(provider_id);
 
 ### 4.2 Schema 基线策略
 
-Usage runtime 只保留当前最终 schema。启动时幂等创建 owner 自己的三张表及索引，再校验运行期读取和写入的全部列。代码不识别 schema 版本，不执行增量迁移、补列、重命名或旧表重置；结构不匹配时启动失败且不修改已有数据。全新部署直接创建最终结构。
+Usage runtime 只保留当前最终 schema。启动时幂等创建 owner 自己的三张表及索引，再校验运行期读取和写入的全部列。代码不识别 schema 版本，不执行通用增量迁移、重命名或旧表重置；基础结构不匹配时启动失败且不修改已有数据。全新部署直接创建最终结构。唯一针对客户端 Key 的兼容补列是可空 `hint VARCHAR`：先验证当前基础结构，再在 schema 初始化事务中检查并追加缺失列，成功提交后生效；重复启动不重复补列，失败回滚。旧 Key 的 hint 保持 NULL，不从摘要推断或伪造首尾片段。
 
 ### 4.3 Go 领域模型
 
@@ -188,7 +189,7 @@ type Policy struct {
 
 它不读取 config、不查询 Provider、不做 HTTP DTO 序列化。
 
-`usage.ClientAPIKeyRecord` 增加规范化后的 `ProviderAccess clientaccess.Policy`。
+`usage.ClientAPIKeyRecord` 增加规范化后的 `ProviderAccess clientaccess.Policy`，以及仅用于管理列表识别的 `Hint string`。hint 在创建/轮换时从明文 Key 派生：保留前 5 位（`sk_` + 随机部分前 2 位）和末尾 2 位，中间固定 `****`，例如 `sk_sx****ab`。只保存最终脱敏结果，不保存完整 Key，不参与鉴权，也不接受管理员自定义输入。轮换必须原子更新摘要和 hint；启停、Touch、权限变更不修改 hint。`builtin-local` 无实际密钥，hint 始终为空。
 
 ## 5. 后端收口设计
 
@@ -427,6 +428,7 @@ GET /admin/api/client-api-keys
 ```json
 {
   "id": "workorch",
+  "hint": "sk_sx****ab",
   "enabled": true,
   "provider_access": {
     "mode": "selected",
@@ -440,6 +442,7 @@ GET /admin/api/client-api-keys
 
 定义：
 
+- `hint` 是服务端生成的脱敏 Key 展示，仅用于识别；旧 Key 和内置 Key 无 hint 时省略字段，旧 Key 下次轮换时补齐，不强制轮换。
 - `provider_ids` 是持久化策略。
 - `effective_provider_ids` 是当前至少能形成一个目录候选的授权 Provider，不按瞬时健康度过滤。
 - `unavailable_provider_ids` 是已绑定但当前禁用、无账号、未发现模型或异常缺失，因而没有目录候选的 Provider。
@@ -533,12 +536,13 @@ ProviderAccess 创建、更新、启停、轮换和删除的最终一致顺序�
 
 在“客户端 Key”页面增加：
 
+- ID 后同行显示可选 hint：等宽、略小字号、次要颜色，不增加行高；长 ID 优先省略并通过 title 提示完整值，hint 不缩小或换行。旧 Key 无 hint 不显示占位，内置 Key 沿用内置标识。
 - Provider 权限列：显示“全部 Provider”或“已选择 N 个”。
 - 有效 Provider 列：显示当前有效数；存在 unavailable 时给出状态提示。
 - 可用模型列：显示去重模型数量，并提供“查看模型”操作。
 - 操作列增加“编辑权限”，保留启用/禁用、轮换、删除。
 
-移动端优先保留 ID、状态、Provider 权限和操作；时间字段可按现有响应式规则隐藏。操作按钮使用现有 `.actions`，不得因文字长度撑破表格。
+列表按可用宽度分配 ID、状态、权限、数量、时间和操作列，在较小分辨率压缩列间距与操作按钮；极窄屏使用表格容器横向滚动，保持 ID 与 hint 同行，不隐藏 hint。操作按钮使用现有 `.actions`，不得因文字长度撑破表格。
 
 ### 6.2 创建 Key 对话框
 

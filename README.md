@@ -49,6 +49,8 @@ Anthropic API base: http://127.0.0.1:8080
 
 所有调用都需携带客户端密钥：OpenAI 客户端用 `Authorization: Bearer <key>`，Anthropic 客户端用 `X-API-Key: <key>`。缺少密钥、密钥错误或已停用时请求会被拒绝（401），且不会产生用量记录。
 
+管理台客户端 Key 列表在 ID 后同行显示脱敏 hint（例如 `sk_sx****ab`，前 5 位 + 固定 `****` + 后 2 位），长 ID 优先省略、悬停查看完整值，窄屏可横向滚动。hint 在创建和轮换时自动生成并保存，不参与鉴权；完整 Key 仍只在创建/轮换时返回一次，不落库。旧 Key 不显示 hint，下次轮换时补齐，不强制轮换；`builtin-local` 沿用内置标识。
+
 管理台工具集由服务端内建的 `builtin-local` scope 归属（不是可对外携带的 secret，不能轮换或删除）；图片任务/图片库未指定 `api_key_id` 时默认使用它。ChatGPT Web 生图只返回栅格图：明确 `WIDTHxHEIGHT` 会在本地裁切/缩放到精确像素，`auto` 保留上游尺寸；SVG 真矢量输出不支持。
 
 ## 容器快速开始

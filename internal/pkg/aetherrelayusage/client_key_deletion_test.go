@@ -41,7 +41,7 @@ func TestClientKeyDeletionSurvivesReopenAndRejectsMutation(t *testing.T) {
 	}
 	for _, mutate := range []func() error{
 		func() error { return s.SetClientAPIKeyEnabled(ctx, record.ID, true) },
-		func() error { return s.RotateClientAPIKey(ctx, record.ID, "new", time.Now()) },
+		func() error { return s.RotateClientAPIKey(ctx, record.ID, "new", "sk_ne****ab", time.Now()) },
 		func() error { return s.SetClientAPIKeyProviderAccess(ctx, record.ID, clientaccess.All()) },
 	} {
 		if err := mutate(); err == nil {

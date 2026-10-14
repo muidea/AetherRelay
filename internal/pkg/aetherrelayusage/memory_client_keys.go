@@ -50,6 +50,7 @@ func (s *MemoryStore) EnsureClientAPIKey(_ context.Context, id string, createdAt
 	record := s.clientKeyRecords[id]
 	record.ID = id
 	record.Hash = ""
+	record.Hint = ""
 	record.Enabled = true
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = metadata.CreatedAt
@@ -175,7 +176,7 @@ func (s *MemoryStore) SetClientAPIKeyEnabled(_ context.Context, id string, enabl
 	s.clientKeyRecords[id] = r
 	return nil
 }
-func (s *MemoryStore) RotateClientAPIKey(_ context.Context, id, hash string, t time.Time) error {
+func (s *MemoryStore) RotateClientAPIKey(_ context.Context, id, hash, hint string, t time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.clientKeyRecords[id]
@@ -185,7 +186,7 @@ func (s *MemoryStore) RotateClientAPIKey(_ context.Context, id, hash string, t t
 	if r.DeletingAt != nil {
 		return errors.New("client API key deletion pending")
 	}
-	r.Hash, r.Enabled, r.LastRotatedAt, r.RevokedAt = hash, true, &t, nil
+	r.Hash, r.Hint, r.Enabled, r.LastRotatedAt, r.RevokedAt = hash, hint, true, &t, nil
 	s.clientKeyRecords[id] = r
 	return nil
 }

@@ -6,9 +6,9 @@ import (
 	"fmt"
 )
 
-// initializeSchema creates the final tables and verifies runtime columns.
-// The observation tables are additive; existing event tables are never altered.
-// Incompatible existing layouts fail without migrating or resetting data.
+// initializeSchema 创建最终表并校验运行期列。
+// 兼容当前基础结构时，仅定向补齐客户端 Key 的脱敏 hint；不重置历史数据。
+// 观测表仅作追加，不修改现有事件表；不兼容的基础结构直接报错。
 func initializeSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -31,6 +31,19 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	}
 	if err := verifySchema(ctx, tx); err != nil {
 		return err
+	}
+	var hintColumns int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
+WHERE table_name='client_api_key_metadata' AND column_name='hint'`).Scan(&hintColumns); err != nil {
+		return fmt.Errorf("inspect client API key hint schema: %w", err)
+	}
+	if hintColumns == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE client_api_key_metadata ADD COLUMN hint VARCHAR`); err != nil {
+			return fmt.Errorf("add client API key hint: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT hint FROM client_api_key_metadata LIMIT 0`); err != nil {
+		return fmt.Errorf("verify client API key hint schema: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT event_id, first_output_at, generation_duration_ns, partial FROM usage_generation LIMIT 0`); err != nil {
 		return fmt.Errorf("verify generation schema: %w", err)
@@ -134,6 +147,7 @@ func createSchema(ctx context.Context, tx *sql.Tx) error {
     created_at      TIMESTAMPTZ NOT NULL,
     last_used_at    TIMESTAMPTZ,
     key_hash        VARCHAR,
+    hint            VARCHAR,
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     last_rotated_at TIMESTAMPTZ,
     revoked_at      TIMESTAMPTZ,

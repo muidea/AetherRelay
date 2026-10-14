@@ -17,7 +17,7 @@ func (s *DuckDBStore) ListClientAPIKeys(ctx context.Context) (map[string]ClientA
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, e := tx.QueryContext(ctx, `SELECT api_key_id,coalesce(key_hash,''),coalesce(enabled,TRUE),created_at,last_used_at,last_rotated_at,revoked_at,deleting_at,provider_access_mode FROM client_api_key_metadata`)
+	rows, e := tx.QueryContext(ctx, `SELECT api_key_id,coalesce(key_hash,''),coalesce(hint,''),coalesce(enabled,TRUE),created_at,last_used_at,last_rotated_at,revoked_at,deleting_at,provider_access_mode FROM client_api_key_metadata`)
 	if e != nil {
 		return nil, e
 	}
@@ -26,7 +26,7 @@ func (s *DuckDBStore) ListClientAPIKeys(ctx context.Context) (map[string]ClientA
 	for rows.Next() {
 		var r ClientAPIKeyRecord
 		var a, b, c, d sql.NullTime
-		if e := rows.Scan(&r.ID, &r.Hash, &r.Enabled, &r.CreatedAt, &a, &b, &c, &d, &r.ProviderAccess.Mode); e != nil {
+		if e := rows.Scan(&r.ID, &r.Hash, &r.Hint, &r.Enabled, &r.CreatedAt, &a, &b, &c, &d, &r.ProviderAccess.Mode); e != nil {
 			return nil, e
 		}
 		if a.Valid {
@@ -98,7 +98,7 @@ func (s *DuckDBStore) CreateClientAPIKey(ctx context.Context, r ClientAPIKeyReco
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO client_api_key_metadata(api_key_id,key_hash,enabled,created_at,provider_access_mode) VALUES(?,?,?,?,?)`, r.ID, r.Hash, r.Enabled, r.CreatedAt.UTC(), policy.Mode); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO client_api_key_metadata(api_key_id,key_hash,hint,enabled,created_at,provider_access_mode) VALUES(?,?,?,?,?,?)`, r.ID, r.Hash, r.Hint, r.Enabled, r.CreatedAt.UTC(), policy.Mode); err != nil {
 		return err
 	}
 	if err := insertProviderAccess(ctx, tx, r.ID, policy); err != nil {
@@ -173,10 +173,10 @@ func (s *DuckDBStore) SetClientAPIKeyEnabled(ctx context.Context, id string, v b
 	}
 	return e
 }
-func (s *DuckDBStore) RotateClientAPIKey(ctx context.Context, id, h string, t time.Time) error {
+func (s *DuckDBStore) RotateClientAPIKey(ctx context.Context, id, h, hint string, t time.Time) error {
 	s.write.Lock()
 	defer s.write.Unlock()
-	res, e := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=?,enabled=TRUE,revoked_at=NULL,last_rotated_at=? WHERE api_key_id=? AND deleting_at IS NULL`, h, t.UTC(), id)
+	res, e := s.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=?,hint=?,enabled=TRUE,revoked_at=NULL,last_rotated_at=? WHERE api_key_id=? AND deleting_at IS NULL`, h, hint, t.UTC(), id)
 	if e == nil {
 		if n, err := res.RowsAffected(); err == nil && n == 0 {
 			return sql.ErrNoRows
@@ -284,7 +284,7 @@ func (s *DuckDBStore) EnsureClientAPIKey(ctx context.Context, id string, created
 	// Clear stale credential state for the built-in scope before it reaches the
 	// proxy's auth index. Other Ensure callers retain the generic metadata-only
 	// create-if-absent behavior above.
-	if _, err := tx.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=NULL,enabled=TRUE,last_rotated_at=NULL,revoked_at=NULL,provider_access_mode='all' WHERE api_key_id=?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE client_api_key_metadata SET key_hash=NULL,hint=NULL,enabled=TRUE,last_rotated_at=NULL,revoked_at=NULL,provider_access_mode='all' WHERE api_key_id=?`, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM client_api_key_provider_access WHERE api_key_id=?`, id); err != nil {

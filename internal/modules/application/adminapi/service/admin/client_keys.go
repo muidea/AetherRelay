@@ -30,6 +30,7 @@ type providerAccessDTO struct {
 
 type clientKeyView struct {
 	ID                     string            `json:"id"`
+	Hint                   string            `json:"hint,omitempty"`
 	Builtin                bool              `json:"builtin,omitempty"`
 	Enabled                bool              `json:"enabled"`
 	CreatedAt              string            `json:"created_at,omitempty"`
@@ -108,12 +109,12 @@ func (h *Handler) createClientAPIKey(w http.ResponseWriter, r *http.Request) {
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
-	secret, hash, err := generateClientKey()
+	secret, hash, hint, err := generateClientKey()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "generate client API key")
 		return
 	}
-	record := usage.ClientAPIKeyRecord{ID: id, Hash: hash, Enabled: enabled, CreatedAt: time.Now().UTC(), ProviderAccess: policy}
+	record := usage.ClientAPIKeyRecord{ID: id, Hash: hash, Hint: hint, Enabled: enabled, CreatedAt: time.Now().UTC(), ProviderAccess: policy}
 
 	records, err := h.clientKeyRecords(r.Context())
 	if err != nil {
@@ -181,7 +182,7 @@ func (h *Handler) clientAPIKeyAction(w http.ResponseWriter, r *http.Request, rel
 }
 
 func (h *Handler) rotateClientAPIKey(w http.ResponseWriter, r *http.Request, id string) {
-	secret, hash, err := generateClientKey()
+	secret, hash, hint, err := generateClientKey()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "generate client API key")
 		return
@@ -196,14 +197,14 @@ func (h *Handler) rotateClientAPIKey(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	now := time.Now().UTC()
-	record.Hash, record.Enabled, record.LastRotatedAt, record.RevokedAt = hash, true, &now, nil
+	record.Hash, record.Hint, record.Enabled, record.LastRotatedAt, record.RevokedAt = hash, hint, true, &now, nil
 	records[id] = record
 	index, err := h.prepareClientKeyIndex(records)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "prepare client API keys")
 		return
 	}
-	if err := h.usageStore.RotateClientAPIKey(r.Context(), id, hash, now); err != nil {
+	if err := h.usageStore.RotateClientAPIKey(r.Context(), id, hash, hint, now); err != nil {
 		writeError(w, http.StatusNotFound, "client API key not found")
 		return
 	}
@@ -508,6 +509,9 @@ func (h *Handler) validateProviderAccess(input providerAccessDTO) (clientaccess.
 
 func clientKeyViewFor(record usage.ClientAPIKeyRecord, snapshot effectivecatalog.Snapshot) clientKeyView {
 	view := clientKeyView{ID: record.ID, Builtin: config.IsBuiltinClientAPIKeyID(record.ID), Enabled: record.Enabled, CreatedAt: record.CreatedAt.UTC().Format(time.RFC3339), ProviderAccess: providerAccessView(record.ProviderAccess)}
+	if !view.Builtin {
+		view.Hint = record.Hint
+	}
 	if record.LastUsedAt != nil {
 		view.LastUsedAt = record.LastUsedAt.UTC().Format(time.RFC3339)
 	}
@@ -565,12 +569,13 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
-func generateClientKey() (string, string, error) {
+func generateClientKey() (string, string, string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	key := "sk_" + base64.RawURLEncoding.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(key))
-	return key, "sha256:" + hex.EncodeToString(sum[:]), nil
+	hint := key[:5] + "****" + key[len(key)-2:]
+	return key, "sha256:" + hex.EncodeToString(sum[:]), hint, nil
 }

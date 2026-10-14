@@ -10,7 +10,7 @@ import (
 )
 
 func TestSchemaStartupSurvivesUncleanExit(t *testing.T) {
-	for _, layout := range []string{"fresh", "existing", "existing_without_generation", "existing_without_buffering", "existing_without_output_observation"} {
+	for _, layout := range []string{"fresh", "existing", "existing_without_generation", "existing_without_buffering", "existing_without_output_observation", "existing_without_key_hint"} {
 		t.Run(layout, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "usage.duckdb")
 			cmd := exec.Command(os.Args[0], "-test.run=^TestUsageSchemaCrashHelper$")
@@ -51,6 +51,11 @@ func TestUsageSchemaCrashHelper(t *testing.T) {
 	if layout := os.Getenv("AETHERRELAY_USAGE_CRASH_LAYOUT"); layout != "fresh" {
 		if err = initializeSchema(ctx, db); err != nil {
 			t.Fatal(err)
+		}
+		if layout == "existing_without_key_hint" {
+			if _, err = db.Exec(`ALTER TABLE client_api_key_metadata DROP COLUMN hint`); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if layout == "existing_without_generation" {
 			if _, err = db.Exec(`DROP TABLE usage_generation`); err != nil {
