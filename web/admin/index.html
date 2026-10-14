@@ -3133,12 +3133,12 @@ function renderUsageEventTable(events){
     const cells=[
       {value:e.started_at?esc(formatDate(e.started_at)):"—",title:e.started_at},
       {value:esc(e.api_key_id||"—"),title:e.api_key_id},
-      {value:esc(e.model||"—")+(e.provider==="codexoauth"&&e.model_substituted?`<div class="muted">${esc(t("上游模型替换"))} · ${esc(e.response_model||t("未记录"))}</div>`:""),title:[e.model,e.provider].filter(Boolean).join(" · ")},
+      {value:esc(e.model||"—"),title:[e.model,e.provider].filter(Boolean).join(" · ")},
       {value:esc(e.operation||"—")},
       {value:tokens,title:usageTokensUnavailable(e)?t("未取得"):`in/out/total: ${formatNumber(e.input_tokens)}/${formatNumber(e.output_tokens)}/${formatNumber(e.total_tokens)}${e.estimated?" · "+t("估算"):""}`,numeric:true},
       {value:usageCacheRate(e),title:usageCacheHint(e),numeric:true},
       {value:usageTPS(e),title:usageTPSHint(e),numeric:true},
-      {value:`<span class="status-pill" title="${esc(status.title)}">${esc(status.label)}</span>`,title:e.outcome},
+      {value:`<span class="status-pill" title="${esc(status.title)}">${esc(status.label)}</span>`+(e.provider==="codexoauth"&&e.model_substituted===true?`<div class="muted" title="${esc(`${e.upstream_request_model||t("未记录")} → ${e.response_model||t("未记录")}`)}">${esc(t("上游模型替换"))}</div>`:""),title:e.outcome},
       {value:duration,title:duration,numeric:true},
     ];
     return `<tr class="event-row ${status.className}" data-event="${i}" tabindex="0" aria-label="${esc(`${t("调用明细")} ${e.api_key_id||""} ${e.started_at||""}`)}">${cells.map((cell,j)=>`<td data-label="${esc(labels[j])}"${cell.title?` title="${esc(cell.title)}"`:""}><div class="usage-event-value${cell.numeric?" usage-event-number":""}">${cell.value}</div></td>`).join("")}</tr>`;
