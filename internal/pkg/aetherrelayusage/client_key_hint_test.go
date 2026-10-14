@@ -2,7 +2,9 @@ package usage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +92,7 @@ func TestClientAPIKeyHintLifecycle(t *testing.T) {
 	}
 }
 
-func TestSchemaAddsClientAPIKeyHintWithoutChangingExistingKeys(t *testing.T) {
+func TestFinalSchemaRejectsMissingClientAPIKeyHintWithoutChangingData(t *testing.T) {
 	ctx := context.Background()
 	cfg := testCfg(filepath.Join(t.TempDir(), "legacy-hint.duckdb"))
 	store, err := OpenDuckDB(cfg)
@@ -116,33 +118,78 @@ func TestSchemaAddsClientAPIKeyHintWithoutChangingExistingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		store, err = OpenDuckDB(cfg)
-		if err != nil {
-			t.Fatal(err)
+		if reopened, err := OpenDuckDB(cfg); err == nil {
+			_ = reopened.Close()
+			t.Fatal("missing hint column must reject startup")
+		} else if !strings.Contains(err.Error(), "does not match the final schema") {
+			t.Fatalf("unexpected schema error: %v", err)
 		}
-		keys, err := store.ListClientAPIKeys(ctx)
-		got := keys[record.ID]
-		if err != nil || got.Hash != record.Hash || got.Hint != "" || got.Enabled || !got.CreatedAt.Equal(at) || got.ProviderAccess.Mode != clientaccess.ModeSelected || !got.ProviderAccess.Allows("provider") {
-			t.Fatalf("existing key changed: %+v err=%v", got, err)
-		}
-		var count int
-		if err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE event_id='preserved'`).Scan(&count); err != nil || count != 1 {
-			t.Fatalf("existing usage changed: count=%d err=%v", count, err)
-		}
-		if err := store.Close(); err != nil {
-			t.Fatal(err)
-		}
+	}
+	db, err := sql.Open("duckdb", cfg.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var hash, mode string
+	var enabled bool
+	var createdAt time.Time
+	if err := db.QueryRowContext(ctx, `SELECT key_hash,enabled,created_at,provider_access_mode FROM client_api_key_metadata WHERE api_key_id=?`, record.ID).Scan(&hash, &enabled, &createdAt, &mode); err != nil {
+		t.Fatal(err)
+	}
+	if hash != record.Hash || enabled != record.Enabled || !createdAt.Equal(at) || mode != string(policy.Mode) {
+		t.Fatalf("existing key changed: hash=%q enabled=%v created_at=%v mode=%q", hash, enabled, createdAt, mode)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM client_api_key_provider_access WHERE api_key_id=? AND provider_id='provider'`, record.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("existing provider access changed: count=%d err=%v", count, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM client_api_key_provider_access WHERE api_key_id=?`, record.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("provider access gained rows: count=%d err=%v", count, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE event_id='preserved' AND api_key_id=? AND state='started' AND started_at=?`, record.ID, at).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("existing usage changed: count=%d err=%v", count, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name='client_api_key_metadata' AND column_name='hint'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("missing hint column was added: count=%d err=%v", count, err)
+	}
+}
+
+func TestFinalSchemaPreservesNullClientAPIKeyHintUntilRotation(t *testing.T) {
+	ctx := context.Background()
+	cfg := testCfg(filepath.Join(t.TempDir(), "null-hint.duckdb"))
+	store, err := OpenDuckDB(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	record := ClientAPIKeyRecord{ID: "existing", Hash: "sha256:existing", Enabled: true, CreatedAt: at, ProviderAccess: clientaccess.All()}
+	if err := store.CreateClientAPIKey(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE client_api_key_metadata SET hint=NULL WHERE api_key_id=?`, record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
 	}
 	store, err = OpenDuckDB(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	keys, err := store.ListClientAPIKeys(ctx)
+	if err != nil || keys[record.ID].Hint != "" || keys[record.ID].Hash != record.Hash {
+		t.Fatalf("NULL hint record changed: %+v err=%v", keys[record.ID], err)
+	}
+	var hint sql.NullString
+	if err := store.db.QueryRowContext(ctx, `SELECT hint FROM client_api_key_metadata WHERE api_key_id=?`, record.ID).Scan(&hint); err != nil || hint.Valid {
+		t.Fatalf("NULL hint was rewritten at startup: %+v err=%v", hint, err)
+	}
 	if err := store.RotateClientAPIKey(ctx, record.ID, "sha256:rotated", "sk_sx****ab", at); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := store.ListClientAPIKeys(ctx)
+	keys, err = store.ListClientAPIKeys(ctx)
 	if err != nil || keys[record.ID].Hint != "sk_sx****ab" || keys[record.ID].Hash != "sha256:rotated" {
-		t.Fatalf("legacy rotation did not populate hint: %+v err=%v", keys[record.ID], err)
+		t.Fatalf("rotation did not update credential pair: %+v err=%v", keys[record.ID], err)
 	}
 }

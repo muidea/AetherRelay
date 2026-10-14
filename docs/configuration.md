@@ -154,7 +154,7 @@ state:
 
 `state.database` 的业务表按 owner 划分：Provider、ChatGPT Web 账号和 Codex OAuth 账号以不同 scope 写入 `secure_documents`，payload 在进入数据库前已加密；用量、图片任务、图片索引与标签、Admin 在线搜索历史继续使用各自的查询表。`builtin-local` 只作为服务端工具调用的稳定 `api_key_id` 元数据，不与管理员登录用户名/临时会话 owner 混用。图片元数据和搜索来源可保留 JSON 扩展列，但不包含上述三类可恢复凭据。
 
-Usage runtime 启动时幂等创建 `usage_events`、`client_api_key_metadata` 和 `client_api_key_provider_access` 并校验当前基础结构。13.0.0 仅对该结构追加缓存读取/创建 `*_known` 两个观测标志，逐列原子执行且可重试，保留原数据；历史值默认未知，不推断补齐。客户端 Key 另支持在基础结构校验通过后，于 schema 初始化事务中定向追加可空 `hint` 列；已有摘要、启停、权限、用量均保留，旧 Key 不回填 hint，轮换后才补齐。更早的不兼容结构仍启动失败且保留原数据，不执行旧表重置或通用历史升级。观测补全与 Key hint 均不新增配置，归档开关不影响管理页用量统计。
+Usage runtime 启动时只幂等创建最终表及索引，并校验已有表的运行期必需字段，包括 `usage_events` 的缓存读取/创建 `*_known` 观测标志和 `client_api_key_metadata.hint`。不执行 ALTER、补列、表重命名、兼容升级或历史数据回填；缺少必需字段的旧布局明确启动失败，保留原结构和数据，不重置数据库。已有最终 schema 直接复用，观测标志原值保留；`hint` 列允许 NULL，空 hint 的已有 Key 不在启动时补值，仅在轮换生成新 Key 时同步更新。观测与 Key hint 均不新增配置，归档开关不影响管理页用量统计。
 
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 

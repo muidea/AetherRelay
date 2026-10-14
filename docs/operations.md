@@ -228,7 +228,7 @@ CSV 仅用于导出当前用量，不提供旧 CSV 导入。交互归档默认�
 
 2026-10-08 x600 在加载 `aetherrelay.duckdb.wal` 时出现 `GetDefaultDatabase with no default database set`，容器循环退出，尚未接收业务请求。用 DuckDB v1.5.4 复现：对带 `length(outcome)` CHECK 的用量表执行 `ALTER TABLE ... ADD COLUMN` 后异常退出，重开文件触发同一断言。这与上游 [WAL 回放问题](https://github.com/duckdb/duckdb/issues/21490) 属于相同错误族；现场的具体回放栈为 `ReplayAlter → SetDefault → BindCheckConstraint`。
 
-启动时只创建最终 schema 的新表或校验已有表，包括 `cached_input_tokens_known` 与 `cache_creation_input_tokens_known`；运行期不再执行 ALTER、补列或升级迁移。现有最终 schema 数据库直接复用，不需要重建或导出导入，历史观测标志原值保留。缺少必需字段的旧布局明确启动失败并保留数据，不自动重置。回归测试覆盖新库、已有最终库的异常退出和重开，以及旧布局拒绝后原始行和字段布局保持不变。离线 WAL 恢复命令用于完整回放已提交操作，不升级 schema。
+启动时只创建最终 schema 的新表或校验已有表，包括 `cached_input_tokens_known`、`cache_creation_input_tokens_known` 与客户端 Key 的 `hint` 列；运行期不再执行 ALTER、补列或升级迁移。现有最终 schema 数据库直接复用，不需要重建或导出导入，历史观测标志原值保留。缺少必需字段的旧布局明确启动失败并保留数据，不自动重置。回归测试覆盖新库、已有最终库的异常退出和重开，以及旧布局拒绝后原始行和字段布局保持不变。离线 WAL 恢复命令用于完整回放已提交操作，不升级 schema。
 
 出现上述回放失败时，先停止服务及所有写入者，保留数据库与 `.wal` 成对备份。使用包含恢复子命令的同版本驱动构建执行：
 
@@ -311,7 +311,7 @@ Codex HTTP/SSE/compact 失败日志新增 `transport_reason`，逐 attempt 的�
 
 13.0.0 不新增配置开关，配置模板无需改动。交互归档及 content/脱敏开关仍仅控制归档行为，不再决定转换和上游用量观测是否可见。
 
-当前 DuckDB schema 在启动时追加缓存读写 `*_known` 两个布尔列，保留原有用量和客户端配置；更早的不兼容布局仍拒绝启动，不自动重建。历史记录无法证明缓存字段是否存在，因此标为未知，不将旧零值解释为真实未命中。升级前按既有流程备份数据库。Claude 有效会话的默认 cache identity 命名空间发生变化，升级首轮可能冷缓存。
+13.0.0 当时在启动时追加缓存读写 `*_known` 两个布尔列；此为历史升级行为，当前实现已移除。现在只创建最终表并校验已有表，缺少必需字段时拒绝启动，不自动补列或重建；当前规则见上文“DuckDB WAL 回放失败”。已有最终库的观测标志原值保留，历史记录无法证明缓存字段是否存在时仍标为未知，不将旧零值解释为真实未命中。结构变更前按既有流程备份数据库。该版本有效会话的默认 cache identity 命名空间发生变化，升级首轮可能冷缓存。
 
 部署后以同一 Event ID 对比用量详情和 metadata.json，再核对最终 upstream_response 与逐次尝试记录。检查 level=2、降级项一致、响应头观测、缓存存在性；继续执行工具续轮直到真实 end_turn。没有 Content-Type 或未知长度可为上游真实缺失，不能仅凭管理页空值判定转发失败。详见[转换设计](design/responses-anthropic-conversion.md)与[身份语义基准](design/codex-identity-semantics.md)。
 

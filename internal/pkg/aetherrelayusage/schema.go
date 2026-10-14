@@ -6,8 +6,7 @@ import (
 	"fmt"
 )
 
-// initializeSchema 创建最终表并校验运行期列。
-// 兼容当前基础结构时，仅定向补齐客户端 Key 的脱敏 hint；不重置历史数据。
+// initializeSchema 创建最终表并校验运行期列，不执行兼容升级或数据重置。
 // 观测表仅作追加，不修改现有事件表；不兼容的基础结构直接报错。
 func initializeSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
@@ -31,19 +30,6 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	}
 	if err := verifySchema(ctx, tx); err != nil {
 		return err
-	}
-	var hintColumns int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
-WHERE table_name='client_api_key_metadata' AND column_name='hint'`).Scan(&hintColumns); err != nil {
-		return fmt.Errorf("inspect client API key hint schema: %w", err)
-	}
-	if hintColumns == 0 {
-		if _, err := tx.ExecContext(ctx, `ALTER TABLE client_api_key_metadata ADD COLUMN hint VARCHAR`); err != nil {
-			return fmt.Errorf("add client API key hint: %w", err)
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `SELECT hint FROM client_api_key_metadata LIMIT 0`); err != nil {
-		return fmt.Errorf("verify client API key hint schema: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT event_id, first_output_at, generation_duration_ns, partial FROM usage_generation LIMIT 0`); err != nil {
 		return fmt.Errorf("verify generation schema: %w", err)
@@ -182,7 +168,7 @@ cached_input_tokens_known, cache_creation_input_tokens_known,
 http_status, outcome, error_code, failure_class, retryable, retry_after_seconds,
 duration_ms, first_event_duration_ms, upstream_duration_ms, stream, estimated, state
 FROM usage_events LIMIT 0`,
-		`SELECT api_key_id, created_at, last_used_at, key_hash, enabled,
+		`SELECT api_key_id, created_at, last_used_at, key_hash, hint, enabled,
 last_rotated_at, revoked_at, deleting_at, provider_access_mode
 FROM client_api_key_metadata LIMIT 0`,
 		`SELECT api_key_id, provider_id FROM client_api_key_provider_access LIMIT 0`,
