@@ -14,6 +14,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	usage "aetherrelay/internal/pkg/aetherrelayusage"
 )
@@ -76,6 +77,63 @@ func TestGenerationRetryResetAndReadFailure(t *testing.T) {
 	s := completion.generation.Snapshot(time.Now().Add(time.Hour))
 	if !s.Partial || s.Duration <= 0 || s.Duration > time.Second {
 		t.Fatal(s)
+	}
+}
+
+func TestCodexGenerationRejectsStaleCallbacksAndResetsNewAttempt(t *testing.T) {
+	for _, archived := range []bool{false, true} {
+		t.Run(fmt.Sprint(archived), func(t *testing.T) {
+			store := usage.NewMemoryStore()
+			defer store.Close()
+			h := &Handler{usageStore: store}
+			completion := &usageCompletion{}
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			req = req.WithContext(withUsageCompletion(req.Context(), completion))
+			var round *archive.Round
+			if archived {
+				round = archive.NewObservationRound()
+			}
+			observer := h.codexAttemptObserver(round, req, "codexoauth")
+			at := time.Now().Add(-time.Minute)
+			header := codexresponses.HTTPAttempt{Request: codexresponses.HTTPRequestObservation{At: at, Method: "POST", URL: "https://upstream.invalid/responses"}}
+			progress := header
+			progress.Response = codexresponses.HTTPResponseObservation{FirstOutputAt: at.Add(time.Second), GenerationDuration: 2 * time.Second, GenerationPartial: true}
+			observer(header, nil)
+			observer(progress, errors.New("conversion"))
+			observer(header, nil)
+			old := header
+			old.Request.At = at.Add(-time.Second)
+			observer(old, errors.New("stale"))
+			if s := completion.generationObserved; s.FirstOutputAt.IsZero() || s.Duration != 2*time.Second || !s.Partial {
+				t.Fatalf("late callbacks erased output: %+v", s)
+			}
+			next := header
+			next.Request.At = at.Add(10 * time.Second)
+			observer(next, nil)
+			if s := completion.generationObserved; !s.FirstOutputAt.IsZero() || s.Partial {
+				t.Fatalf("prior output leaked into new attempt: %+v", s)
+			}
+		})
+	}
+}
+
+func TestCodexPartialGenerationSettlementWithoutUsage(t *testing.T) {
+	store := usage.NewMemoryStore()
+	defer store.Close()
+	h := &Handler{usageStore: store}
+	at := time.Now().Add(-time.Minute)
+	if err := store.Start(context.Background(), usage.StartRecord{EventID: "partial", APIKeyID: "key", StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req = req.WithContext(withUsageCompletion(req.Context(), &usageCompletion{}))
+	h.codexAttemptObserver(nil, req, "codexoauth")(codexresponses.HTTPAttempt{Response: codexresponses.HTTPResponseObservation{FirstOutputAt: at.Add(time.Second), GenerationDuration: time.Second, GenerationPartial: true}}, errors.New("conversion"))
+	if !h.completeUsage(req, "partial", "codexoauth", "model", true, 200, 3*time.Second, tokenUsage{}, "conversion", "conversion", "", nil, 0, nil) {
+		t.Fatal("settlement failed")
+	}
+	e := usageEvents(t, store)[0]
+	if e.FirstOutputAt == nil || e.GenerationDurationMS != 1000 || !e.GenerationPartial || e.OutputTokensKnown || e.TPS != nil || e.ObservedTPS != nil {
+		t.Fatalf("partial output without usage lost or fabricated: %+v", e)
 	}
 }
 

@@ -1318,6 +1318,9 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 						Error       json.RawMessage `json:"error"`
 					}
 					if json.Unmarshal(payload, &event) == nil {
+						if aetherrelaycodex.ObservationFeature(event.Type) != "" {
+							continue
+						}
 						semanticEvidence = semanticEvidence || rawPresent(event.Usage) || rawPresent(event.Error)
 						switch event.Type {
 						case "response.web_search_call.searching", "response.web_search_call.completed":
@@ -1540,6 +1543,9 @@ func codexStreamSemanticsWithOutput(line []byte, semanticOutputSeen, generatedOu
 		Response json.RawMessage `json:"response"`
 	}
 	if json.Unmarshal(payload, &event) != nil {
+		return false, false
+	}
+	if aetherrelaycodex.ObservationFeature(event.Type) != "" {
 		return false, false
 	}
 	switch event.Type {

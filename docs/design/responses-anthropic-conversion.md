@@ -1,5 +1,11 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-10-16 WS 附加事件兼容（17.5.2，待 live 验收）
+
+Codex 的 Messages/Chat 转换共用精确附加事件规则，接纳 `response.metadata`、`codex.response.metadata`、`codex.rate_limits` 和 `responsesapi.websocket_timing` 的内部扩展，记录固定省略项并继续等正式终态。附加事件原文留在完整正文归档和原生接口；未知业务事件仍拒绝，失败终态保留 upstream owner 的 typed 分类和实际 usage。Chat 已开始的失败流输出 error，禁止伪造 [DONE]；Messages 保持 Anthropic error 终态。
+
+首输出时间和正耗时独立于 Token 已知状态保存；缺 usage 的部分输出仍可在明细/CSV 查看，TPS 及其聚合继续排除未知 Token。使用已有 schema，不回填历史。覆盖接口、现场证据及部署复验见 [17.5.2 收口记录](x800-codex-conversion-closure-2026-10-16.md#9-1752-ws-timing-及全接口收口)。
+
 ## 2026-10-16 output item 附带信息统一投影（17.3.1，待 live 验收）
 
 x800 Event `0f733a6913ea1e29855f4e07b4e64f16` 在 `Edit` 的 `response.output_item.added` 被拒绝：同一 function_call 带有 `metadata` 和 `internal_chat_message_metadata_passthrough`，非流式已兼容而流式预校验未复用。两者只作为已知附带信息处理，内部新增键和嵌套值不需要逐个登记；仅在投影副本中省略，记录固定 `output_metadata` / `internal_chat_message_metadata_passthrough` 忽略项，转换前归档保留原内容。不根据 `internal_*`、`*metadata*` 等命名推断其它未知字段可忽略。

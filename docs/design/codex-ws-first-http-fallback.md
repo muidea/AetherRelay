@@ -52,3 +52,13 @@ HTTP/JSON/SSE 每个请求创建并关闭一个上游 WS，沿用现有请求租
 5. 在测试上游收到 create 后主动断线，确认没有 POST 回退或换号重放；关闭客户端及停机后没有遗留读任务。
 
 当前为本地实现与离线验证范围，生产能力及延迟收益需部署后核对，不据此声明 live 已通过。
+
+## 17.5.2 附加事件兼容
+
+x800 部署 `dec0efa` 后，上游正常 Upgrade 为 101，但 Messages 流在 `responsesapi.websocket_timing` 被本地转换器拒绝。两个指定事件都已生成 Edit 工具参数，尚未读到正式终态便取消上游。101 与已提交的客户端 HTTP 200 均不构成请求成功。
+
+共享 `aetherrelaycodex.ObservationFeature` 精确识别 `response.metadata`、`codex.response.metadata`、`codex.rate_limits` 和 `responsesapi.websocket_timing`，不在 WS reader 中丢弃。Messages/Chat 投影省略并记录固定降级项，Responses SSE、原生 WS 和完整正文归档保留。内部新字段透明接纳；未知业务事件仍按转换能力拒绝。timing 的 `num_sampled_tokens_total`、`engine_total_prompt_tokens_total` 及 critical_path 均为观测数据，不能替代正式完成、输出证据或 usage。
+
+本地验收矩阵包含三种 HTTP 入口的流式/非流式文本和工具输出、WS 成功与握手安全回退的完成/不完整/失败/断线、仅遥测和空完成拒绝、原生 WS 多轮透传及用量隔离、compact 仍使用 HTTP 并要求压缩项。失败时保留首输出时间与正耗时，不要求已取得 Token；Token/TPS 未知保持未知。已有 schema 和 CSV 列保持不变，不回填历史记录。新 attempt 清除旧观测，迟到握手不覆盖已结算失败。
+
+live 除上述步骤外，必须抽查实际包含 timing 的请求：转换前归档继续出现正式 completed/incomplete 和 usage，Messages 有唯一 message_stop，Chat 有 finish_reason 和 [DONE]，原生接口保留 timing。缺终态仍失败且无自动重放，部分输出观测在缺 usage 时仍可见。详细事件与验收见 [x800 收口记录](x800-codex-conversion-closure-2026-10-16.md#9-1752-ws-timing-及全接口收口)。

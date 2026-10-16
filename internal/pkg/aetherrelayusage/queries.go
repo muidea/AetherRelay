@@ -447,7 +447,7 @@ LIMIT ?`
 		e.GenerationBuffered = buffered
 		if firstOutputAt.Valid && generationNS.Valid {
 			known := e.OutputTokensKnown
-			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial, buffered)
+			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial, buffered, known)
 			e.OutputTokensKnown = known
 		}
 		e.UpstreamContentLengthKnown = contentLength.Valid

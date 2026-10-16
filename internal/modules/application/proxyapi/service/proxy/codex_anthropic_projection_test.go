@@ -100,6 +100,7 @@ func projectionFixture() (map[string]any, []map[string]any) {
 		{"type": "response.output_text.done", "output_index": 3, "text": "after"},
 		{"type": "response.output_item.done", "output_index": 3, "item": final},
 		metadata,
+		{"type": "responsesapi.websocket_timing", "response_id": "resp_projection", "timing_scope": "logical_turn", "timing_metrics": map[string]any{"engine_total_prompt_tokens_total": 99031, "num_sampled_tokens_total": 74, "critical_path": map[string]any{"coverage": "complete", "boundary_type": "actionable_output_item_done", "future": []any{nil, 1}}}},
 		{"type": "response.completed", "response": response},
 	}
 }
@@ -238,7 +239,7 @@ func TestCodexProjectionWebsocketMetadataIsObservational(t *testing.T) {
 
 func TestCodexChatWebsocketObservationsPreserveOutputAndCompletion(t *testing.T) {
 	state := &codexChatStreamState{}
-	for _, typ := range []string{"response.metadata", "codex.response.metadata", "codex.rate_limits"} {
+	for _, typ := range []string{"response.metadata", "codex.response.metadata", "codex.rate_limits", "responsesapi.websocket_timing"} {
 		out, err := codexResponsesEventToChat(projectionJSON(map[string]any{"type": typ, "headers": map[string]any{"x-codex-turn-state": "opaque"}}), state)
 		if err != nil || len(out) != 0 || state.OutputEvidence || state.Started || state.Done || state.Usage != (tokenUsage{}) {
 			t.Fatalf("%s changed response state: out=%q state=%+v err=%v", typ, out, state, err)
@@ -414,7 +415,10 @@ func TestCodexProjectionMetadataCannotCompleteStream(t *testing.T) {
 						return err
 					}
 				}
-				return emit([]byte(`data: {"type":"response.metadata","metadata":{"openai_chatgpt_moderation_metadata":{}}}`))
+				if err := emit([]byte(`data: {"type":"response.metadata","metadata":{"openai_chatgpt_moderation_metadata":{}}}`)); err != nil {
+					return err
+				}
+				return emit([]byte(`data: {"type":"responsesapi.websocket_timing","timing_metrics":{"num_sampled_tokens_total":74}}`))
 			}})
 			r := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.2-codex","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"hello"}]}`))
 			r.Header.Set("Authorization", "Bearer test-client-key")
@@ -527,6 +531,9 @@ func TestCodexProjectionHandlerSuccessHasSameStreamSemantics(t *testing.T) {
 		}
 		if stream && !slices.Contains(events[0].IgnoredFeatures, "response_metadata") {
 			t.Fatal("metadata consumption missing from observation")
+		}
+		if stream && !slices.Contains(events[0].IgnoredFeatures, "websocket_timing") {
+			t.Fatal("timing consumption missing from observation")
 		}
 		for _, feature := range []string{"output_metadata", "internal_chat_message_metadata_passthrough"} {
 			if !slices.Contains(events[0].IgnoredFeatures, feature) {

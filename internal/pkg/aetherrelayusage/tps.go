@@ -38,21 +38,22 @@ type TPSStats struct {
 	ObservedTPSGenerationDurationMS float64  `json:"observed_tps_generation_duration_ms"`
 }
 
+// Timing can be retained without usage; rate eligibility is checked separately.
 func validGeneration(r CompleteRecord) bool {
-	return r.OutputTokensKnown && !r.FirstOutputAt.IsZero() && r.GenerationDuration > 0
+	return !r.FirstOutputAt.IsZero() && r.GenerationDuration > 0
 }
 func generationSample(r CompleteRecord) GenerationSample {
 	if !validGeneration(r) {
 		return GenerationSample{GenerationBuffered: r.GenerationBuffered}
 	}
 	at := r.FirstOutputAt.UTC()
-	return makeGenerationSample(at, int64(r.GenerationDuration), r.OutputTokens, r.GenerationPartial || r.Outcome != "success", r.GenerationBuffered)
+	return makeGenerationSample(at, int64(r.GenerationDuration), r.OutputTokens, r.GenerationPartial || r.Outcome != "success", r.GenerationBuffered, r.OutputTokensKnown || r.OutputTokens > 0)
 }
-func makeGenerationSample(at time.Time, ns, tokens int64, partial, buffered bool) GenerationSample {
+func makeGenerationSample(at time.Time, ns, tokens int64, partial, buffered, known bool) GenerationSample {
 	if ns <= 0 || at.IsZero() || tokens < 0 {
 		return GenerationSample{GenerationBuffered: buffered}
 	}
-	tps := outputRate(tokens, float64(ns)/float64(time.Second), true)
+	tps := outputRate(tokens, float64(ns)/float64(time.Second), known)
 	return GenerationSample{FirstOutputAt: &at, GenerationDurationNS: ns, GenerationDurationMS: float64(ns) / float64(time.Millisecond), ObservedTPS: tps, GenerationPartial: partial, GenerationBuffered: buffered}
 }
 func (s *TPSStats) finish() {
@@ -95,18 +96,19 @@ func (s *TPSStats) add(e Event) {
 // Keep filter/cursor columns unambiguous and preserve all ordinary event totals.
 const tpsEvents = `(SELECT e.*, g.first_output_at, g.generation_duration_ns, g.partial AS generation_partial, b.event_id IS NOT NULL AS generation_buffered, coalesce(o.known, e.output_tokens > 0 OR g.event_id IS NOT NULL) AS output_tokens_known FROM usage_events e LEFT JOIN usage_generation g ON e.event_id=g.event_id LEFT JOIN usage_generation_buffering b ON e.event_id=b.event_id LEFT JOIN usage_output_observation o ON e.event_id=o.event_id) AS usage_events`
 const e2eEligible = "state = 'completed' AND output_tokens_known AND output_tokens >= 0 AND duration_ms > 0"
+const observedEligible = "state = 'completed' AND output_tokens_known AND output_tokens >= 0 AND generation_duration_ns > 0"
 const tpsAggregates = `,
  count(*) FILTER (WHERE ` + e2eEligible + `),
  count(*) FILTER (WHERE ` + e2eEligible + ` AND estimated),
  count(*) FILTER (WHERE ` + e2eEligible + ` AND (generation_partial OR outcome IS DISTINCT FROM 'success')),
  coalesce(sum(output_tokens) FILTER (WHERE ` + e2eEligible + `), 0),
  coalesce(sum(duration_ms) FILTER (WHERE ` + e2eEligible + `), 0),
- count(generation_duration_ns),
- count(generation_duration_ns) FILTER (WHERE estimated),
- count(generation_duration_ns) FILTER (WHERE generation_partial),
- count(generation_duration_ns) FILTER (WHERE generation_buffered),
- coalesce(sum(output_tokens) FILTER (WHERE generation_duration_ns IS NOT NULL), 0),
- coalesce(sum(generation_duration_ns)::DOUBLE / 1000000, 0)`
+ count(*) FILTER (WHERE ` + observedEligible + `),
+ count(*) FILTER (WHERE ` + observedEligible + ` AND estimated),
+ count(*) FILTER (WHERE ` + observedEligible + ` AND generation_partial),
+ count(*) FILTER (WHERE ` + observedEligible + ` AND generation_buffered),
+ coalesce(sum(output_tokens) FILTER (WHERE ` + observedEligible + `), 0),
+ coalesce(sum(generation_duration_ns) FILTER (WHERE ` + observedEligible + `)::DOUBLE / 1000000, 0)`
 
 // outputRate is shared by events, aggregates and CSV. A known zero is distinct
 // from missing usage. Durations use the same millisecond precision as the API.
@@ -131,7 +133,7 @@ func rateCSV(rate *float64) string {
 }
 func tpsCSV(s GenerationSample) []string {
 	row := []string{"", "", rateCSV(s.TPS), "", "", rateCSV(s.ObservedTPS), strconv.FormatBool(s.OutputTokensKnown)}
-	if s.ObservedTPS != nil && s.FirstOutputAt != nil {
+	if s.FirstOutputAt != nil {
 		row[0] = s.FirstOutputAt.Format(time.RFC3339Nano)
 		row[1] = strconv.FormatFloat(s.GenerationDurationMS, 'f', -1, 64)
 		row[3], row[4] = strconv.FormatBool(s.GenerationPartial), strconv.FormatBool(s.GenerationBuffered)

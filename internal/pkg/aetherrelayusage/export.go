@@ -225,7 +225,7 @@ ORDER BY started_at ASC, event_id ASC`
 		}
 		sample := GenerationSample{GenerationBuffered: buffered}
 		if firstOutputAt.Valid && generationNS.Valid {
-			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial, buffered)
+			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial, buffered, outputKnown)
 		}
 		sample.OutputTokensKnown = outputKnown
 		sample.TPS = outputRate(outputTok, float64(durationMS.Int64)/1000, state == StateCompleted && outputKnown)

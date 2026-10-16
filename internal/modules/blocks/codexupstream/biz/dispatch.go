@@ -186,7 +186,7 @@ func terminalEventType(line []byte) string {
 			continue
 		}
 		switch value.Type {
-		case "response.completed", "response.incomplete", "response.failed", "error":
+		case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "error":
 			return value.Type
 		}
 	}

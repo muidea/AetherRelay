@@ -137,6 +137,9 @@ type usageCompletion struct {
 	generation              generation.Clock
 	generationMu            sync.Mutex
 	generationObserved      generation.Sample
+	generationAttemptAt     time.Time
+	generationAttemptKey    string
+	generationAttemptFailed bool
 	done                    atomic.Bool
 	firstEventDurationNanos atomic.Int64
 }

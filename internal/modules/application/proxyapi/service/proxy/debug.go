@@ -17,7 +17,6 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
-	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
@@ -272,11 +271,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		h.archiveCodexUpstreamAttempt(round, r, providerName, prior, nil)
 	}
 	if r != nil {
-		if completion := usageCompletionFromContext(r.Context()); completion != nil {
-			completion.generationMu.Lock()
-			completion.generationObserved = generation.Sample{FirstOutputAt: attempt.Response.FirstOutputAt, Duration: attempt.Response.GenerationDuration, Partial: attempt.Response.GenerationPartial, Buffered: attempt.Response.GenerationBuffered}
-			completion.generationMu.Unlock()
-		}
+		recordCodexGeneration(r.Context(), attempt, attemptErr)
 	}
 	if round == nil || strings.TrimSpace(attempt.Request.URL) == "" {
 		return

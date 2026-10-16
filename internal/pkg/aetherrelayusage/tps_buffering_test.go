@@ -24,7 +24,7 @@ func TestBufferingSurvivesWithoutOutputSample(t *testing.T) {
 				}
 			}
 			defer func() { s.Close() }()
-			at := time.Now().Add(-time.Minute)
+			at := time.Now().Add(-time.Minute).Truncate(time.Microsecond)
 			for _, id := range []string{"no-output", "no-usage", "known-zero"} {
 				if err := s.Start(ctx, StartRecord{EventID: id, APIKeyID: "key", StartedAt: at}); err != nil {
 					t.Fatal(err)
@@ -55,8 +55,15 @@ func TestBufferingSurvivesWithoutOutputSample(t *testing.T) {
 				t.Fatal(page, err)
 			}
 			for _, e := range page.Events {
-				if !e.GenerationBuffered || e.ObservedTPS != nil || e.FirstOutputAt != nil || e.GenerationDurationMS != 0 || e.OutputTokensKnown != (e.EventID == "known-zero") || e.EventID != "known-zero" && e.TPS != nil {
+				if !e.GenerationBuffered || e.ObservedTPS != nil || e.OutputTokensKnown != (e.EventID == "known-zero") || e.EventID != "known-zero" && e.TPS != nil {
 					t.Fatalf("buffering lost or output fabricated: %+v", e)
+				}
+				if e.EventID == "no-usage" {
+					if e.FirstOutputAt == nil || !e.FirstOutputAt.Equal(at) || e.GenerationDurationMS != 1000 || !e.GenerationPartial {
+						t.Fatalf("observed output lost with missing usage: %+v", e)
+					}
+				} else if e.FirstOutputAt != nil || e.GenerationDurationMS != 0 {
+					t.Fatalf("unobserved output fabricated: %+v", e)
 				}
 			}
 			d, err := s.Dashboard(ctx, UsageFilter{AllTime: true})
@@ -76,8 +83,11 @@ func TestBufferingSurvivesWithoutOutputSample(t *testing.T) {
 				columns[key] = i
 			}
 			for _, row := range rows[1:] {
-				if row[columns["generation_buffered"]] != "true" || row[columns["observed_tps"]] != "" || row[columns["first_output_at"]] != "" {
+				if row[columns["generation_buffered"]] != "true" || row[columns["observed_tps"]] != "" {
 					t.Fatalf("CSV lost buffering or fabricated timing: %v", row)
+				}
+				if row[columns["event_id"]] == "no-usage" && (row[columns["first_output_at"]] == "" || row[columns["generation_duration_ms"]] != "1000" || row[columns["generation_partial"]] != "true" || row[columns["output_tokens_known"]] != "false") {
+					t.Fatalf("CSV lost observed output without usage: %v", row)
 				}
 			}
 		})

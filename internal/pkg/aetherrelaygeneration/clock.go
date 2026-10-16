@@ -90,7 +90,7 @@ func (c *Clock) ObserveSSE(line []byte, at time.Time) {
 				Type string `json:"type"`
 			}
 			_ = json.Unmarshal(raw, &kind)
-			if kind.Type == "response.failed" || kind.Type == "response.incomplete" || kind.Type == "error" {
+			if kind.Type == "response.failed" || kind.Type == "response.incomplete" || kind.Type == "response.cancelled" || kind.Type == "response.canceled" || kind.Type == "error" {
 				c.Stop(at)
 			} else {
 				c.Finish(at)
@@ -135,8 +135,11 @@ func classify(raw []byte) (bool, bool) {
 	if json.Unmarshal(raw, &kind) != nil {
 		return false, false
 	}
+	if aetherrelaycodex.ObservationFeature(kind.Type) != "" {
+		return false, false
+	}
 	if strings.HasPrefix(kind.Type, "response.") || kind.Type == "error" {
-		terminal := kind.Type == "response.completed" || kind.Type == "response.incomplete" || kind.Type == "response.failed" || kind.Type == "error"
+		terminal := kind.Type == "response.completed" || kind.Type == "response.done" || kind.Type == "response.incomplete" || kind.Type == "response.failed" || kind.Type == "response.cancelled" || kind.Type == "response.canceled" || kind.Type == "error"
 		return aetherrelaycodex.MeaningfulOutputEvent(raw), terminal
 	}
 	if json.Unmarshal(raw, &v) != nil {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
 )
 
@@ -185,12 +186,17 @@ func codexResponsesEventToAnthropic(capability config.ConversionCapability) conv
 		if state == nil || state.Completed {
 			return nil, fmt.Errorf("stream event received outside active response")
 		}
-		if typ == "response.metadata" || typ == "codex.response.metadata" {
-			state.markIgnored("response_metadata")
+		if feature := aetherrelaycodex.ObservationFeature(typ); feature != "" {
+			state.markIgnored(feature)
 			return nil, nil
 		}
-		if typ == "codex.rate_limits" {
-			state.markIgnored("codex_rate_limits")
+		if typ == "response.failed" || typ == "response.cancelled" || typ == "response.canceled" || typ == "error" {
+			// The upstream owner delivers the typed failure after this frame.
+			// Do not replace its classification with a local conversion error.
+			response, _ := event["response"].(map[string]any)
+			if u, ok := usageFromMap(response["usage"]); ok {
+				state.CacheUsage, state.InputTokens, state.OutputTokens = u, u.PromptTokens, u.CompletionTokens
+			}
 			return nil, nil
 		}
 		if typ == "response.content_part.added" {

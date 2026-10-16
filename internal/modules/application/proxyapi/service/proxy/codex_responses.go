@@ -282,6 +282,9 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	err := executor.StreamCodexResponses(r.Context(), request, startStream, emit)
+	if err == nil && !terminalObserved {
+		err = codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream ended without terminal event"))
+	}
 	if err != nil {
 		if !streamStarted {
 			h.writeCodexResponsesError(w, r, round, started, provider, model, true, err)
@@ -296,7 +299,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 				flusher.Flush()
 			}
 		}
-		tok := accumulator.FinalizeUsage(body)
+		tok := accumulator.Usage
 		_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
 		h.recordAndPrintFail(round, r, provider, model, true, http.StatusOK, time.Since(started), tok, failure)
 		h.writeArchiveMetadata(round, provider, model, true, http.StatusOK, time.Since(started), tok, "response.sse", failure.Error(), "", outcomeFromStreamFail(failure, http.StatusOK))
@@ -306,7 +309,7 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		_ = startStream(codexresponses.StreamStart{})
 	}
 	_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
-	tok := accumulator.FinalizeUsage(body)
+	tok := accumulator.Usage
 	h.recordAndPrint(round, r, provider, model, true, http.StatusOK, time.Since(started), tok, "")
 	h.writeArchiveMetadata(round, provider, model, true, http.StatusOK, time.Since(started), tok, "response.sse", "", "", "success")
 }

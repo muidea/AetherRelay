@@ -171,3 +171,39 @@ namespace 不在本次故障主修复范围。不能为了通过转换随意删�
 本次范围是代码与离线验收准备；本节不代表已发布或已完成 live 验收。
 
 本次本地验收已通过：`go test ./...`、`make check-codex`（包含相关 race、32 项前端测试、vet、diff 和凭据检查）、`go test -race ./internal/pkg/aetherrelayusage`。另用现场原始 `upstream_response_001.projection.sse` 离线回放，三帧均无需移除字段即可转换，两个忽略项均记录，metadata 未进入客户端内容，缺少 completed 时未伪造完成。完整后续生命周期仍以固定合成回归验证，最终线上结论以本节 live 验收为准。
+
+## 9. 17.5.2 WS timing 及全接口收口
+
+### 现场证据
+
+运行版本 `dec0efad51ffa66af7af25e407e38a662219028b`，容器 healthy，restart=0、OOM=false。首批 54 个完成归档中，13 个 Responses 流式与 6 个 Messages 非流式成功；32 个 Messages 流式均因 `responsesapi.websocket_timing` 转换失败，另有 3 个启动期账号冷却 503。503 与本地转换故障分别归因。
+
+| Event ID | 归档 | 结果 |
+|---|---|---|
+| `30bf53df4a1546a9ef2be32e00e0b488` | `claude-office/002278` | 上游 101，握手 220ms，总耗时 4.045s，本地 conversion |
+| `47c4b7f3e9bb82f5c45ba34c13c11b52` | `claude-owner/002298` | 上游 101，握手 177ms，总耗时 4.933s，本地 conversion |
+
+两个请求均由 `muidea@gmail.com` 的槽位 `b7f48e2b-c128-49c9-b8da-7af08566b450` 执行 `gpt-6.1-sol`，各归档 71 个转换前事件。顺序包含 rate_limits、Codex metadata、created、in_progress、Edit 工具调用、62 个参数 delta、arguments done、output item done、response metadata 和 websocket timing；在 timing 转换失败处停止，未取得正式 completed/usage。客户端已交付工具参数，随后 Anthropic error，没有 message_stop。工具参数完成不证明客户端执行过 Edit。GET 握手与 WS create 是两个归档尝试，并非重复生成；没有发生 HTTP 回退。
+
+官方 Codex 快照 `6ae8b8aa7c608730d4315d59c5c081897ae02780` 的 `responses_websocket.rs` 对该事件记录 trace 后继续处理，`client_websockets.rs` 有 created → timing → completed 回归。实际 timing 包括 logical_turn scope、response_id、engine 时间/计数和可扩展 critical_path；engine prompt/sample token 与正式 usage 不能混用。
+
+### 代码边界与回归
+
+- 在现有纯协议包集中四种已知附加事件；转换器省略、固定 ignored feature 去重，原生传输和有界完整正文归档保留。未知业务类型继续拒绝，附加事件内部扩展不误作 output/usage/error。
+- Messages 与 Chat 继续读取正式完成和用量。Chat 补齐转换前 SSE 归档、输入字节预算、本地 conversion 分类和失败 error 终态；已发送 create 或输出后保持禁止 HTTP/换号重放。上游失败终态由 typed owner result 决定，不当作本地转换错误。
+- 原生 Responses/WS 不再用估算替代缺失 Codex usage；WS 正式用量保留显式零和缓存 presence，遥测不更新续轮 response ID。缺终态明确失败，原生未知业务事件保持透传。
+- 输出观测缺失的独立原因是旧用量存储只在 OutputTokensKnown 为真时保存 generation；现改为独立保存有效时间和部分输出，内存、DuckDB 重开、明细、CSV 一致，TPS 汇总仍只使用 Token 已知样本。迟到握手/旧 attempt 不覆盖最终观测，新 attempt 重置。原生 response.done 的计时冻结与 completed 一致。没有 schema 变更，不修补历史。
+- 固定测试覆盖三类 HTTP 入口的 12 组流式/非流式文本/工具组合、上游 WS/安全 HTTP 回退与各类终态、仅遥测/空完成/断线、未知业务、失败 typed 分类及 usage、原生 WS 多轮与遥测透传、compact HTTP 压缩项、观测持久化与 TPS 样本隔离。模型目录、input_tokens、鉴权和账号策略由全量合同回归验证，不新增生成路径。
+
+### 部署后的 live 验收
+
+1. 记录新镜像 revision，确认实际容器运行版本、健康和重启计数；本地检查通过不等于 x800 已部署。
+2. 对 Messages、Chat、Responses 分别执行流式和非流式文字、Edit 调用及工具结果续轮，记录 Event ID、账号/槽位、模型和每次出站路径；同账号复验单独注明。
+3. 抽查实际包含 timing 的上游事件链：工具参数 → output_item.done → metadata/timing → 正式 completed/usage。转换器只记录 websocket_timing 降级项，Messages 唯一 message_stop，Chat 正常 finish_reason/[DONE]，原生 Responses/WS 保留 timing 原文。若该请求未带 timing，只能记作普通链路通过。
+4. 原生 WS 连续多轮逐 create 独立结算和归档，核对工具历史、response ID、真实 usage 和账号策略，没有上一轮用量/时间泄漏。
+5. 可控测试上游验证握手安全失败只发生一次同账号 HTTP 回退；create 后断线或输出后失败无重放，缺终态仍失败。已有工具参数且无 usage 时应显示首输出时间、正耗时和部分输出，Token/TPS 仍未知。不要以 timing token 补账。
+6. compact 继续 HTTP 并含真实 compaction item；models/input_tokens 不发起生成。连续至少 20 轮真实工具会话观察 conversion 复发、账号冷却和 Provider 健康。未知业务事件保留归档并按证据扩展规则。
+
+本节是本地代码与离线验收范围，尚未部署或进行修复版本 live 验证。
+
+本地验收通过：`go test ./...`、`make check-codex`（相关包 race、协议/生成观测/用量存储 race、34 项前端合同、`go vet ./...`、diff 与凭据扫描）。通过临时 overlay 回放上述两个现场 SSE 前缀，各 71 事件全部通过投影并保留一个 Edit 工具块；ignored_features 包含 websocket_timing，未伪造 completed/usage，输出观测为 partial。现场归档没有正式终态，故该回放只证明原失败前缀已兼容，完整成功仍由合成回归和后续 live 分别验证；真实请求及凭据未加入仓库。

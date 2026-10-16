@@ -10,6 +10,7 @@ func TestClockIgnoresTTFTAndFreezesAtTerminal(t *testing.T) {
 		{"custom_tool", `{"type":"response.output_item.added","item":{"type":"custom_tool_call","input":""}}`, `{"type":"response.custom_tool_call_input.delta","delta":"patch content"}`, `{"type":"response.completed"}`},
 		{"custom_tool_done", `{"type":"response.created"}`, `{"type":"response.custom_tool_call_input.done","input":"patch content"}`, `{"type":"response.completed"}`},
 		{"responses", `{"type":"response.created"}`, `{"type":"response.output_text.delta","delta":"hello"}`, `{"type":"response.completed"}`},
+		{"timing", `{"type":"responsesapi.websocket_timing","choices":[{"delta":{"content":"not output"}}],"usage":{"output_tokens":74}}`, `{"type":"response.function_call_arguments.delta","delta":"{}"}`, `{"type":"response.completed"}`},
 		{"openai", `{"choices":[{"delta":{"role":"assistant"}}]}`, `{"choices":[{"delta":{"content":"hello"}}]}`, `[DONE]`},
 		{"anthropic", `{"type":"message_start"}`, `{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`, `{"type":"message_stop"}`},
 	} {

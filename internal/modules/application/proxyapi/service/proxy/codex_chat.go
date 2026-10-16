@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,15 +21,17 @@ type codexChatToolStreamState struct {
 }
 
 type codexChatStreamState struct {
-	Usage          tokenUsage
-	ID, Model      string
-	Input, Output  int
-	Started, Done  bool
-	HasToolCall    bool
-	OutputEvidence bool
-	TextEmitted    bool
-	NextToolIndex  int
-	Tools          map[int]*codexChatToolStreamState
+	Usage           tokenUsage
+	ID, Model       string
+	Input, Output   int
+	Started, Done   bool
+	HasToolCall     bool
+	OutputEvidence  bool
+	TextEmitted     bool
+	NextToolIndex   int
+	Tools           map[int]*codexChatToolStreamState
+	IgnoredFeatures []string
+	InputBytes      int
 }
 
 func (h *Handler) handleChatToCodex(w http.ResponseWriter, r *http.Request, started time.Time, plan TransportPlan, model string, stream bool, body map[string]any) {
@@ -356,17 +359,26 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 	round := archiveRoundFromContext(r.Context())
 	state := &codexChatStreamState{Model: model}
 	var archive bytes.Buffer
+	var upstreamArchive codexProjectionArchive
 	streamStarted := false
 	emit := func(line []byte) error {
-		payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(line)), "data:"))
+		trimmed := strings.TrimSpace(string(line))
+		if !strings.HasPrefix(trimmed, "data:") {
+			return nil
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 		if payload == "" || payload == "[DONE]" {
 			return nil
+		}
+		if round != nil && round.FullContent() {
+			upstreamArchive.capture(payload, maxConversionSSEBytes)
 		}
 		mappingStart := time.Now()
 		chunks, err := codexResponsesEventToChat([]byte(payload), state)
 		round.SetConversionDuration(round.ConversionDuration + time.Since(mappingStart))
 		if err != nil {
-			return err
+			recordCodexProjectionError(round, "stream", err)
+			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
 		if len(chunks) == 0 {
 			return nil
@@ -379,7 +391,7 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 		for _, chunk := range chunks {
 			encoded := sseData(chunk)
 			if archive.Len()+len(encoded) > maxConversionSSEBytes {
-				return fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes)
+				return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes))
 			}
 			if _, err := w.Write(encoded); err != nil {
 				return err
@@ -397,6 +409,8 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 		recordFirstEventDuration(r.Context(), round, info.FirstEventDuration)
 		return nil
 	}, emit)
+	h.archiveCodexProjection(round, upstreamArchive.body.Bytes(), true, upstreamArchive.truncated)
+	markConversionDegraded(round, state.IgnoredFeatures)
 	usage := state.Usage
 	duration := time.Since(started)
 	_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
@@ -409,6 +423,16 @@ func (h *Handler) streamChatFromCodex(w http.ResponseWriter, r *http.Request, st
 			return
 		}
 		fail := conversionStreamFailure(err)
+		if r.Context().Err() == nil && fail.Kind != streamKindClientWrite {
+			terminal := []byte("data: {\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream did not complete\"}}\n\n")
+			if _, writeErr := w.Write(terminal); writeErr == nil {
+				archive.Write(terminal)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				_ = h.writeArchiveResponse(round, "response.sse", archive.Bytes())
+			}
+		}
 		h.recordAndPrintFail(round, r, plan.RouteOwner, model, true, http.StatusOK, duration, usage, fail)
 		h.writeArchiveMetadata(round, plan.RouteOwner, model, true, http.StatusOK, duration, usage, "response.sse", err.Error(), "", outcomeFromStreamFail(fail, http.StatusOK))
 		return
@@ -422,14 +446,34 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return nil, err
 	}
+	if state == nil || state.Done {
+		return nil, fmt.Errorf("stream event received outside active response")
+	}
+	state.InputBytes += len(payload)
+	if state.InputBytes > maxConversionSSEBytes {
+		return nil, fmt.Errorf("conversion SSE input exceeds limit")
+	}
 	state.OutputEvidence = state.OutputEvidence || aetherrelaycodex.MeaningfulOutputEvent(payload)
 	typ, _ := event["type"].(string)
+	if feature := aetherrelaycodex.ObservationFeature(typ); feature != "" {
+		if !slices.Contains(state.IgnoredFeatures, feature) {
+			state.IgnoredFeatures = append(state.IgnoredFeatures, feature)
+		}
+		return nil, nil
+	}
 	created := time.Now().Unix()
 	chunk := func(delta map[string]any, finish any, usage tokenUsage) []byte {
 		return openAIStreamChunk(state.ID, state.Model, created, []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}, usage)
 	}
 	switch typ {
-	case "keepalive", "response.metadata", "codex.response.metadata", "codex.rate_limits":
+	case "keepalive":
+		return nil, nil
+	case "response.failed", "response.cancelled", "response.canceled", "error":
+		// Keep the typed failure emitted by codexupstream authoritative.
+		response, _ := event["response"].(map[string]any)
+		if u, ok := usageFromMap(response["usage"]); ok {
+			state.Usage = u
+		}
 		return nil, nil
 	case "response.created", "response.in_progress":
 		if state.Started {

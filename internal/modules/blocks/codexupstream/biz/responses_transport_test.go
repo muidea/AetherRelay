@@ -191,6 +191,7 @@ func TestResponsesWSDisconnectAfterCreateNeverUsesHTTP(t *testing.T) {
 		defer conn.Close()
 		if _, _, err = conn.ReadMessage(); err == nil {
 			creates.Add(1)
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(timingObservation))
 		}
 	})
 	upstream := transportUpstream(t)

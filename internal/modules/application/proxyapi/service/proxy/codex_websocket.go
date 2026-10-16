@@ -12,6 +12,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"github.com/gorilla/websocket"
 )
 
@@ -442,7 +443,7 @@ type codexWebsocketForwardResult struct {
 
 func (h *Handler) forwardCodexWebsocketTurn(r *http.Request, conn *websocket.Conn, sessionID string, deferredLimit int64, started time.Time) (codexWebsocketForwardResult, error) {
 	ctx := r.Context()
-	result := codexWebsocketForwardResult{usage: tokenUsage{Estimated: true, Known: true}}
+	result := codexWebsocketForwardResult{}
 	writer, archiveErr := archiveRoundFromContext(ctx).CreateResponseWriter("response.ws.jsonl")
 	if archiveErr != nil {
 		return result, archiveErr
@@ -470,11 +471,12 @@ func (h *Handler) forwardCodexWebsocketTurn(r *http.Request, conn *websocket.Con
 			}
 			payload = normalizeCodexWebsocketEvent(payload)
 			var identity struct {
+				Type     string `json:"type"`
 				Response struct {
 					ID string `json:"id"`
 				} `json:"response"`
 			}
-			if json.Unmarshal(payload, &identity) == nil && identity.Response.ID != "" {
+			if json.Unmarshal(payload, &identity) == nil && aetherrelaycodex.ObservationFeature(identity.Type) == "" && identity.Response.ID != "" {
 				result.responseID = identity.Response.ID
 			}
 			result.usage = codexWebsocketUsage(payload, result.usage)
@@ -543,7 +545,7 @@ func (h *Handler) forwardCodexWebsocketTurn(r *http.Request, conn *websocket.Con
 				result.downstreamWritten = true
 			}
 			result.outputItems = collector.result()
-			return result, nil
+			return result, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex websocket stream ended without terminal event"))
 		}
 	}
 }
@@ -554,6 +556,9 @@ func codexWebsocketNeutralPrelude(payload []byte) bool {
 	}
 	if json.Unmarshal(payload, &event) != nil {
 		return false
+	}
+	if aetherrelaycodex.ObservationFeature(event.Type) != "" {
+		return true
 	}
 	switch event.Type {
 	case "response.created", "response.in_progress", "response.queued":
@@ -594,15 +599,19 @@ func codexWebsocketTerminalOutcome(payload []byte) (bool, bool) {
 
 func codexWebsocketUsage(payload []byte, current tokenUsage) tokenUsage {
 	var event struct {
+		Type     string `json:"type"`
 		Response struct {
-			Usage struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			Usage json.RawMessage `json:"usage"`
 		} `json:"response"`
 	}
-	if json.Unmarshal(payload, &event) == nil && (event.Response.Usage.InputTokens > 0 || event.Response.Usage.OutputTokens > 0) {
-		return tokenUsage{PromptTokens: event.Response.Usage.InputTokens, CompletionTokens: event.Response.Usage.OutputTokens, TotalTokens: event.Response.Usage.InputTokens + event.Response.Usage.OutputTokens, Known: true}
+	if json.Unmarshal(payload, &event) != nil {
+		return current
+	}
+	switch event.Type {
+	case "response.completed", "response.done", "response.incomplete", "response.failed":
+		if usage, ok := usageFromRaw(event.Response.Usage); ok {
+			return usage
+		}
 	}
 	return current
 }

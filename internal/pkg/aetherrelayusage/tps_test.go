@@ -92,7 +92,7 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 						t.Fatal(e)
 					}
 				case "missing-usage":
-					if e.ObservedTPS != nil || !e.GenerationBuffered {
+					if e.ObservedTPS != nil || !e.GenerationBuffered || e.FirstOutputAt == nil || e.GenerationDurationMS != 1000 || e.OutputTokensKnown {
 						t.Fatal("buffering observation lost without usage", e)
 					}
 				default:

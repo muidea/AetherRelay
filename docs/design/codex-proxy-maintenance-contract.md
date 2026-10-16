@@ -6,7 +6,7 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.5.1`
+> 合同版本：`17.5.2`
 >
 > 状态：`active`
 >
@@ -21,6 +21,8 @@
 `17.4.0` 新增账号槽位级 `blocked_models` 精确模型黑名单（`CP-SCHED-013`）。策略独立于上游能力快照，统一选号准入、模型目录、刷新凭据后的重发与 WebSocket 每轮发送共同执行；已准入的当前 attempt 允许完成，新 attempt/turn 使用新策略。策略拒绝不惩罚账号或 Provider，不编造冷却与重试时间。管理页草稿显式保存，重启/同槽位重授权及账号池 v2 bundle 导入导出保持策略。本地实现及验收随本次收口更新，live 验收待部署执行。 操作与 live 验收见 [账号模型黑名单](codex-account-model-blacklist.md)。
 
 `17.3.1` 根据 x800 Event `0f733a6913ea1e29855f4e07b4e64f16` 统一 Responses output item 的附带信息归一化与字段校验：流式 added/done 和汇聚终态复用同一规则，仅在独立投影副本中省略 `metadata`、`internal_chat_message_metadata_passthrough` 并记录固定忽略项，容器内部允许扩展，原始归档不变。未知业务字段、工具类型及 phase 继续明确拒绝，不按名称前缀推断可忽略性；工具增量与完成参数必须一致。上游明确缓冲独立于有效输出耗时样本保存和展示，缺失 usage 仍为未知，不回填历史记录。按 PATCH 记录，代码及本地验收随本次收口更新，live 验收单独执行。
+
+`17.5.2` 根据 x800 WS 流式转换故障统一附加事件规则：精确识别 `response.metadata`、`codex.response.metadata`、`codex.rate_limits`、`responsesapi.websocket_timing`，内部字段允许扩展，转换入口省略并记录固定 ignored feature，原生传输与正文归档保留。附加事件不证明生成、成功或用量，禁止用 timing tokens 补账；未知业务事件在转换入口继续拒绝。Responses、Messages、Chat 的流式/非流式、原生 WS 多轮及安全 HTTP 回退共用规则，compact 保持 HTTP 并要求真实压缩结果，其它接口不引入生成。失败保留最新有效输出观测，迟到握手/旧 attempt 不覆盖；已发送 create 或已输出后禁止重放，本地 conversion 不处罚账号或 Provider。验收必须包含工具/文本 → metadata/timing → 正式终态及 usage、仅附加事件后断线、失败/不完整终态、未知业务事件、WS 多轮隔离和失败输出结算。本地回归与部署 live 分开验收。
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -393,6 +395,8 @@
 
 `CP-STREAM-017` Codex HTTP 流在已经交付首个业务事件后发生 network、timeout、upstream 或 endpoint transport failure 时，必须记录为 `upstream_truncated` 并保留原始错误码，但账号反馈必须标记 availability-neutral，不得冷却账号或影响后续路由。输出前的同类失败仍按既有规则冷却并尝试切号；明确的认证、额度、限流和模型错误即使发生在输出后也必须更新对应账号事实。输出后的 idle timeout 保留独立 `idle_timeout` outcome，但同样不得冷却账号。Responses、Responses→Chat 和 Responses→Anthropic 必须一致。
 
+`CP-STREAM-019` 已知附加事件由共享纯协议规则精确识别，禁止按前缀或任意字段猜测：`response.metadata`、`codex.response.metadata` → `response_metadata`，`codex.rate_limits` → `codex_rate_limits`，`responsesapi.websocket_timing` → `websocket_timing`。容器内部允许扩展，仍执行既有字节预算。转换器不输出附加事件并去重登记固定 ignored feature，原生 Responses/WS 及完整正文归档保留；附加事件中的 delta/item/usage/error/response 字段均不得建立业务输出、完成或用量证据。只有正式终态决定完成与 usage，timing 的 engine token 不能补账。失败终态的 typed 分类由 upstream owner 裁决，转换器不得将其改写为本地 conversion；缺终态保持失败，未知业务事件在转换入口继续拒绝。实际首输出时间、正耗时及部分输出可独立于 usage 保存到现有附属表、明细和 CSV，缺失 Token 不参与 TPS 样本。迟到握手和旧 attempt 不得覆盖最终输出观测，新 attempt 必须重置，不回填历史。覆盖全部生成入口、compact 隔离及 WS/安全 HTTP 回退。
+
 `CP-COMPACT-001` compact 客户端入口必须翻译为 `/backend-api/codex/responses`：`stream=true`、`store=false`、input 末尾存在且只补一次 `compaction_trigger`，beta 含 `remote_compaction_v2`；不得访问已下线的 `/responses/compact` upstream。
 
 `CP-COMPACT-002` 客户端要求流式 compact 时，AetherRelay 必须把 unary JSON 合成为最小合法事件序列：每个 output item 一个 `response.output_item.done`，最后是 `response.completed`。
@@ -613,6 +617,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | --- | --- | --- | --- | --- |
 | output item 附带信息共享投影、未知业务字段拒绝及参数完成一致性 | 17.3.1 | implemented（本地）；待 live 验收 | `proxyapi/service/proxy/responses_output_projection.go`, `codex_anthropic_projection.go`, `responses_anthropic.go` | `responses_output_projection_test.go`, `codex_anthropic_projection_test.go` |
 | 无输出样本时保留明确缓冲观测 | 17.3.1 | implemented（本地）；待 live 验收 | `aetherrelayusage/duckdb.go`, `tps.go`, `queries.go`, `export.go` | `tps_buffering_test.go`, `proxyapi/service/proxy/generation_test.go` |
+| WS 附加事件兼容与缺 usage 的输出观测 | 17.5.2, CP-STREAM-019 | implemented（本地）；待 live 验收 | `aetherrelaycodex/observation.go`, `proxy/codex_chat.go`, `proxy/codex_anthropic_projection.go`, `codexupstream/biz`, `aetherrelayusage/tps.go` | `proxy/codex_observation_test.go`, `codexupstream/biz/observations_test.go`, `tps_buffering_test.go` |
 
 `17.3.0` 新增实施追踪：
 

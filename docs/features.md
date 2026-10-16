@@ -200,6 +200,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - 默认明细、总览、API Key 和趋势展示 `tps`（E2E TPS）= 输出 Token / 请求总耗时（秒），包含首输出等待、重试与请求处理耗时。分母使用与明细 `duration_ms` 相同的毫秒精度，可直接复算；这是请求级平均输出吞吐率，不是并发系统吞吐量。
 - 总览、Key、UTC 日期趋势分别使用同一批有效样本的输出 Token 合计 / 请求总耗时合计，并应用当前筛选条件。聚合字段为 `tps`、`tps_samples`、`tps_output_tokens`、`tps_duration_ms`、`tps_estimated_samples`、`tps_partial_samples`。失败、取消有已知输出及有效总耗时时保留样本，标记部分输出；缺失用量、非正耗时、未完成记录不参与。已知零输出为零，未知显示 `—`。普通 Token 合计不受 TPS 样本筛选影响。
 - `observed_tps` 独立保留网关观测输出交付速度：输出 Token / 首个实际文本、推理或工具参数输出至上游结束的耗时。详情展示 `first_output_at`、`generation_duration_ms`、`observed_tps`、`generation_partial`、`generation_buffered`；聚合使用 `observed_tps_*` 字段，分母为 `observed_tps_generation_duration_ms`。仍按最终尝试的输出计时，不将请求总耗时冒充生成计时。无有效输出计时则不可用；原计时采集、重试重置和取消冻结逻辑保持原定义。
+- 已观测的首输出时间、正耗时及部分输出标记独立于 Token 用量保存；流在取得 usage 前失败时仍展示这些观测，Token、TPS 和观测 TPS 保持未知，不加入 TPS 聚合。已有历史记录不回填。
 - Codex 上游明确的 `X-Codex-Safety-Buffering-Enabled: true` 保存在缓冲标记及 `observed_tps_buffered_samples` 中。缓冲后的集中交付可能产生极高的观测输出 TPS，不能作为模型生成速度；无明确信号也不能证明未缓冲。非流式下游可在上游 SSE 路径保留观测计时；完整 JSON 上游只有 E2E TPS。
 - `usage_output_observation` 关联表与请求完成在同一事务记录输出用量是否已知，支持已知零输出，删除 Key 用量时同步删除。已有记录的正输出计数或原生成样本可用于查询时复算；没有证据的历史零值保持未知。新增关联表不 ALTER、重建或回填历史明细。
 - API/CSV 的原 `tps` 字段改为 E2E 口径，原输出阶段值移至 `observed_tps`。CSV 保留原列位置，在末尾追加 `observed_tps` 与 `output_tokens_known`；外部消费方需同步字段含义。
