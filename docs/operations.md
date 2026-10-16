@@ -129,6 +129,18 @@ Codex 模型不可用排查（`CP-FAIL-018` / `CP-CAP-010`）：
 - 完全没有声明会话的请求还会使用服务端请求级 nonce 生成一次性调度 Session 和默认 cache identity；即使客户端重复使用同一个 `X-Request-ID` 也不会合并。需要跨请求账号粘性或缓存连续性的第三方客户端必须显式发送受支持的 Session、conversation metadata 或 `prompt_cache_key`。
 - 账号定时刷新间隔是启动期设置，修改后需重启；账号池本身始终装配。
 
+### 管理端检测 Codex 上游 Steering 能力
+
+在「账号池 → 统一账号池」的 Codex 槽位，或 Codex 账号列表，点击「检测上游能力」，选择该槽位已发现的完整模型 ID，再点击「开始检测」。打开窗口只查询最近报告；只有手工开始才发起真实请求，可能消耗上游额度。ChatGPT Web 槽位不适用。
+
+检测严格使用指定槽位，WS-only，不转 HTTP、不换号、不重放。初始准入拒绝立即结束且无出站；出站前用已持有租约复查准入，拒绝则释放租约且不启动 WS。如果此前已执行凭据刷新，报告和页面保留刷新及已出站事实。探测结论不写普通账号健康、冷却或数据面统计，必要凭据刷新与真实额度头仍按账号 owner 原有生命周期处理。`SUPPORTED` 表示观察到关联 successor 创建，后续执行仍可能失败；`ACCEPTED_PENDING` 表示等待必要输入且本次检测已结束；未知、超时和网络失败不能当作不支持。
+
+管理接口路径相对 Admin base：`POST /api/codex/accounts/{slot_id}/steering-probes`，正文仅 `{"model":"完整模型 ID"}`，须携带管理写保护及 `Idempotency-Key`；网络重试沿用同一键。`GET /api/codex/accounts/{slot_id}/steering-probes/{probe_id}` 查询结果，`probe_id=latest` 查询该槽位最近任务。槽位 ID 的首尾空白统一去除，幂等、任务判重和查询使用同一规范值。键参数冲突或槽位已有其他任务返回 409，容量不足返回 429，过期/重启丢失返回 404。
+
+单槽位一个任务，全局两个运行、32 个等待；总预算从创建起计 120 秒。报告在内存保留至完成后 30 分钟，任务和报告合计上限 200；关闭窗口不取消服务端任务，可重新打开窗口恢复查看和下载 JSON。账号重新授权或代理等配置变化后，报告标记历史观测。
+
+日志使用 `Codex steering probe created` / `Codex steering probe finished`，可按 `probe_id` 核对目标/实际槽位、模型、阶段、准入原因、能力和执行结果。报告与日志均无凭据；本地 Mock 和普通 WS 成功不证明真实 OAuth 上游支持 Steering。部署后由管理员手工检测，保存服务 revision、报告和对应日志，再按[设计文档](Mid-turnSteering协议检测器.md)的 live 验收核对。
+
 ## ChatGPT Web 内建 Provider
 
 进程始终注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。`config.yaml` 不声明任何 Provider。

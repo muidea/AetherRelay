@@ -51,7 +51,7 @@ func (s *Upstream) commandHandler(handler event.ObserverFunc) event.ObserverFunc
 			result.Set(nil, cd.NewError(cd.Timeout, "Codex command canceled before execution"))
 			return
 		}
-		control := ev.ID() == events.TopicCancel || ev.ID() == events.TopicWSClose
+		control := ev.ID() == events.TopicCancel || ev.ID() == events.TopicWSClose || ev.ID() == events.TopicSteeringClose
 		ctx, cancel := context.WithCancel(context.WithValue(ev.Context(), dispatchWaitKey{}, events.QueueWait(ev.Context())))
 		lifetime := &commandLifetime{cancel: cancel}
 		ctx = context.WithValue(ctx, commandLifetimeKey{}, lifetime)
@@ -62,7 +62,9 @@ func (s *Upstream) commandHandler(handler event.ObserverFunc) event.ObserverFunc
 		}()
 		id := uuid.NewString()
 		s.mu.Lock()
-		if s.stopping || (!control && len(s.active) >= maxConcurrentCommands) {
+		// Probe cleanup is part of the proxy module's checked shutdown barrier.
+		// Keep the existing data-plane stopping contract unchanged.
+		if (s.stopping && ev.ID() != events.TopicSteeringClose) || (!control && len(s.active) >= maxConcurrentCommands) {
 			s.mu.Unlock()
 			result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex upstream local capacity unavailable"))
 			return

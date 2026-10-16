@@ -103,6 +103,7 @@ type Upstream struct {
 	basebiz.Base
 	topics     []string
 	mu         sync.Mutex
+	steering   map[string]*steeringSession
 	streams    map[string]*responseStream
 	websockets map[string]*websocketSession
 	stopping   bool
@@ -113,7 +114,10 @@ type Upstream struct {
 
 func New(hub event.Hub, background task.BackgroundRoutine) *Upstream {
 	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}, websockets: map[string]*websocketSession{}, active: map[string]context.CancelFunc{}}
-	b.topics = []string{events.TopicComplete, events.TopicCompact, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicWSOpen, events.TopicWSSend, events.TopicWSPull, events.TopicWSClose, events.TopicListModels, events.TopicGetUsage}
+	b.topics = []string{events.TopicSteeringStart, events.TopicSteeringSnapshot, events.TopicSteeringClose, events.TopicComplete, events.TopicCompact, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicWSOpen, events.TopicWSSend, events.TopicWSPull, events.TopicWSClose, events.TopicListModels, events.TopicGetUsage}
+	b.SubscribeFunc(events.TopicSteeringStart, b.commandHandler(b.handleSteeringStart))
+	b.SubscribeFunc(events.TopicSteeringSnapshot, b.commandHandler(b.handleSteeringSnapshot))
+	b.SubscribeFunc(events.TopicSteeringClose, b.commandHandler(b.handleSteeringClose))
 	b.SubscribeFunc(events.TopicComplete, b.commandHandler(b.handleComplete))
 	b.SubscribeFunc(events.TopicCompact, b.commandHandler(b.handleCompact))
 	b.SubscribeFunc(events.TopicStart, b.commandHandler(b.handleStart))
@@ -173,6 +177,9 @@ func (s *Upstream) BeginShutdown(context.Context) *cd.Error {
 	s.mu.Lock()
 	s.stopping = true
 	var cancelers []context.CancelFunc
+	for _, probe := range s.steering {
+		cancelers = append(cancelers, probe.cancel)
+	}
 	for _, cancel := range s.active {
 		cancelers = append(cancelers, cancel)
 	}
@@ -218,6 +225,7 @@ func (s *Upstream) Teardown(ctx context.Context) {
 	s.mu.Lock()
 	s.websockets = map[string]*websocketSession{}
 	s.streams = map[string]*responseStream{}
+	s.steering = nil
 	s.mu.Unlock()
 }
 

@@ -94,7 +94,8 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicCheckModelPolicy, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicProbeAdmission, events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicCheckModelPolicy, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.SubscribeFunc(events.TopicProbeAdmission, b.handleProbeAdmission)
 	b.SubscribeFunc(events.TopicClientIdentity, b.handleClientIdentity)
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
@@ -352,7 +353,13 @@ func (s *Account) handleRefreshToken(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex token refresh command"))
 		return
 	}
-	refreshed, err := s.refreshToken(ev.Context(), cmd.AccountID)
+	var refreshed events.RefreshTokenResult
+	var err error
+	if cmd.ProbeLeaseID != "" {
+		refreshed, err = s.refreshTokenForProbe(ev.Context(), cmd)
+	} else {
+		refreshed, err = s.refreshToken(ev.Context(), cmd.AccountID)
+	}
 	if err != nil {
 		result.Set(refreshed, cd.NewError(cd.Unexpected, "Codex token refresh failed"))
 		return
@@ -635,30 +642,44 @@ func (s *Account) finishRefresh(accountID string, flight *refreshFlight, result 
 }
 
 func (s *Account) refreshTokenOnce(ctx context.Context, accountID string) (events.RefreshTokenResult, error) {
-	credential, found := s.store.RefreshCredential(accountID)
+	return s.refreshTokenOnceVersion(ctx, accountID, "")
+}
+func (s *Account) refreshTokenOnceVersion(ctx context.Context, accountID, version string) (out events.RefreshTokenResult, retErr error) {
+	credential, found := s.store.RefreshCredentialVersion(accountID, version)
 	if !found {
-		out, recordErr := s.store.RecordRefreshFailure(accountID, events.ErrorInvalidToken, true)
+		out, recordErr := s.store.RecordRefreshFailureVersion(accountID, events.ErrorInvalidToken, true, version)
 		if recordErr != nil {
 			return out, recordErr
 		}
 		return out, fmt.Errorf("OAuth refresh credential is unavailable")
 	}
-	oauthCtx, cancel := s.oauthRequestContext(ctx)
+	var oauthCtx context.Context
+	var cancel context.CancelFunc
+	if version != "" {
+		if s.oauthTimeout > 0 {
+			oauthCtx, cancel = context.WithTimeout(ctx, s.oauthTimeout)
+		} else {
+			oauthCtx, cancel = context.WithCancel(ctx)
+		}
+	} else {
+		oauthCtx, cancel = s.oauthRequestContext(ctx)
+	}
 	defer cancel()
 	identity := s.store.SharedClientIdentity()
+	defer func() { out.RequestSent = true }()
 	result, err := oauth.Refresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
 	if err != nil {
 		class, permanent := events.ErrorUpstream, false
 		if oauthErr, ok := err.(*oauth.Error); ok {
 			class, permanent = oauthErr.Class, oauthErr.Permanent
 		}
-		out, recordErr := s.store.RecordRefreshFailure(accountID, class, permanent)
+		out, recordErr := s.store.RecordRefreshFailureVersion(accountID, class, permanent, version)
 		if recordErr != nil {
 			return out, recordErr
 		}
 		return out, err
 	}
-	return s.store.ApplyRefresh(accountID, events.CredentialInput{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, IDToken: result.IDToken, AccountID: result.AccountID, Email: result.Email, Expired: result.Expired})
+	return s.store.ApplyRefreshVersion(accountID, events.CredentialInput{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, IDToken: result.IDToken, AccountID: result.AccountID, Email: result.Email, Expired: result.Expired}, version)
 }
 
 func (s *Account) refreshExpiring() {

@@ -51,6 +51,7 @@ type ClientKeyRuntime interface {
 }
 
 type Proxy struct {
+	steering steeringJobs
 	basebiz.Base
 	config   config.Config
 	usage    usage.Store
@@ -107,6 +108,8 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.usage = usageStore
 	biz.metrics = metrics
 	biz.recorder = recorder
+	biz.SubscribeFunc(proxyevents.TopicStartSteeringProbe, biz.handleStartSteeringProbe)
+	biz.SubscribeFunc(proxyevents.TopicGetSteeringProbe, biz.handleGetSteeringProbe)
 	biz.SubscribeFunc(proxyevents.TopicUpdateConfig, biz.handleUpdate)
 	biz.SubscribeFunc(proxyevents.TopicEffectiveCatalog, biz.handleEffectiveCatalog)
 	biz.SubscribeFunc(proxyevents.TopicStartCodexDiscovery, biz.handleStartCodexDiscovery)
@@ -150,6 +153,7 @@ func (s *Proxy) archiveUnredactedHeaders() bool {
 }
 
 func (s *Proxy) Run(ctx context.Context) *cd.Error {
+	s.Timer(ctx, 200*time.Millisecond, 0, s.tickSteering)
 	s.startModelDiscovery(ctx)
 	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
 		s.Timer(ctx, min(interval, time.Minute), 0, s.startScheduledCodexUsageRefresh)
@@ -157,7 +161,12 @@ func (s *Proxy) Run(ctx context.Context) *cd.Error {
 	return nil
 }
 
-func (s *Proxy) Teardown(context.Context) {
+func (s *Proxy) Teardown(ctx context.Context) {
+	if err := s.drainSteering(ctx); err != nil {
+		panic(err)
+	}
+	s.UnsubscribeFunc(proxyevents.TopicStartSteeringProbe)
+	s.UnsubscribeFunc(proxyevents.TopicGetSteeringProbe)
 	s.mu.Lock()
 	websockets := s.codexWebsockets
 	s.codexWebsockets = nil

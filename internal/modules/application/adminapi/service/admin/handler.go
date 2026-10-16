@@ -394,6 +394,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case strings.HasPrefix(rel, "/api/usage/"):
 		h.usageAPI(w, r, rel)
+	case h.codexSteeringAPI(w, r, rel):
+		// Handled by the dedicated management adapter.
 	case rel == "/api/codex/accounts" && r.Method == http.MethodGet:
 		h.listCodexAccounts(w, r)
 	case rel == "/api/codex/accounts" && r.Method == http.MethodPost:

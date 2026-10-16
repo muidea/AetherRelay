@@ -44,6 +44,8 @@ type quotaObservation struct {
 }
 
 type account struct {
+	// Runtime execution epoch, deliberately unchanged by normal Token refresh.
+	ProbeConfigVersion   string                      `json:"-"`
 	ID                   string                      `json:"id"`
 	AccessToken          string                      `json:"access_token"`
 	RefreshToken         string                      `json:"refresh_token"`
@@ -488,6 +490,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 			policyOnly.BlockedModels = nil
 			if input.BlockedModels != nil && unchangedCodexImport(existing, policyOnly) {
 				existing.BlockedModels = append(events.ModelBlacklist{}, input.BlockedModels...)
+				existing.ProbeConfigVersion = uuid.NewString()
 				updated++
 				ids = append(ids, existing.ID)
 				changed = true
@@ -497,6 +500,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		}
 		ids = append(ids, existing.ID)
 		changed = true
+		existing.ProbeConfigVersion = uuid.NewString()
 		existing.AccessToken = input.AccessToken
 		existing.RefreshToken = input.RefreshToken
 		if value := strings.TrimSpace(input.IDToken); value != "" || !reauthenticated {
@@ -697,6 +701,9 @@ func (s *Store) UpdateAccount(cmd events.UpdateCommand) (events.AccountView, err
 	if err := s.saveLocked(); err != nil {
 		*item = old
 		return events.AccountView{}, err
+	}
+	if old.Status != item.Status || old.Proxy != item.Proxy || old.FingerprintMode != item.FingerprintMode || old.FingerprintSeed != item.FingerprintSeed || old.MaxConcurrency != item.MaxConcurrency || !slices.Equal(old.BlockedModels, item.BlockedModels) {
+		item.ProbeConfigVersion = uuid.NewString()
 	}
 	if changed {
 		s.bumpCatalogLocked()
@@ -904,10 +911,13 @@ func (s *Store) RecordTransportCapability(id, transport string, supported bool) 
 }
 
 func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
+	return s.RefreshCredentialVersion(id, "")
+}
+func (s *Store) RefreshCredentialVersion(id, version string) (events.CredentialInput, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
-	if item == nil || strings.TrimSpace(item.RefreshToken) == "" {
+	if item == nil || strings.TrimSpace(item.RefreshToken) == "" || version != "" && item.ProbeConfigVersion != version {
 		return events.CredentialInput{}, false
 	}
 	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency, BlockedModels: append(events.ModelBlacklist{}, item.BlockedModels...)}, true
@@ -944,10 +954,13 @@ func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
 }
 
 func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.RefreshTokenResult, error) {
+	return s.ApplyRefreshVersion(id, input, "")
+}
+func (s *Store) ApplyRefreshVersion(id string, input events.CredentialInput, version string) (events.RefreshTokenResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
-	if item == nil {
+	if item == nil || version != "" && item.ProbeConfigVersion != version {
 		return events.RefreshTokenResult{}, fmt.Errorf("account not found")
 	}
 	if strings.TrimSpace(input.AccessToken) == "" {
@@ -989,10 +1002,13 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 }
 
 func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (events.RefreshTokenResult, error) {
+	return s.RecordRefreshFailureVersion(id, errorClass, permanent, "")
+}
+func (s *Store) RecordRefreshFailureVersion(id, errorClass string, permanent bool, version string) (events.RefreshTokenResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
-	if item == nil {
+	if item == nil || version != "" && item.ProbeConfigVersion != version {
 		return events.RefreshTokenResult{}, fmt.Errorf("account not found")
 	}
 	item.LastRefreshErrAt = time.Now().UTC().Format(time.RFC3339)

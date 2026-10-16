@@ -272,8 +272,15 @@ type RecordTransportCapabilityCommand struct {
 }
 type RecordTransportCapabilityResult struct{ Account AccountView }
 
-type RefreshTokenCommand struct{ AccountID string }
+type RefreshTokenCommand struct {
+	AccountID string
+	// Probe-only guards: refresh is bounded by the task context and applies
+	// only to the leased execution epoch. Ordinary refresh keeps its lifecycle.
+	ProbeLeaseID       string
+	ProbeConfigVersion string
+}
 type RefreshTokenResult struct {
+	RequestSent      bool
 	AccountID        string
 	AccessToken      string
 	AccountIDHeader  string

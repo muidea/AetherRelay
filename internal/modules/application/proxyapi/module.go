@@ -12,6 +12,7 @@ import (
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
+	plugincommon "github.com/muidea/magicCommon/framework/plugin/common"
 	"github.com/muidea/magicCommon/framework/plugin/initiator"
 	pluginmodule "github.com/muidea/magicCommon/framework/plugin/module"
 	"github.com/muidea/magicCommon/task"
@@ -24,6 +25,11 @@ type Module struct {
 	routes  registrycommon.RouteRegistryHelper
 	bizPtr  *biz.Proxy
 }
+
+var (
+	_ plugincommon.ShutdownStarter = (*Module)(nil)
+	_ plugincommon.Quiescer        = (*Module)(nil)
+)
 
 func New() *Module            { return &Module{} }
 func (m *Module) ID() string  { return proxycommon.UnitID }
@@ -72,4 +78,16 @@ func (m *Module) Teardown(ctx context.Context) {
 		m.bizPtr.Teardown(ctx)
 	}
 	m.bizPtr, m.handler, m.routes = nil, nil, nil
+}
+
+func (m *Module) BeginShutdown(ctx context.Context) {
+	if m.bizPtr != nil {
+		m.bizPtr.BeginShutdown(ctx)
+	}
+}
+func (m *Module) Quiesce(ctx context.Context) *cd.Error {
+	if m.bizPtr != nil {
+		return m.bizPtr.Quiesce(ctx)
+	}
+	return nil
 }
