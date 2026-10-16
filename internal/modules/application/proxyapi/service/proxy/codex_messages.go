@@ -108,15 +108,18 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, result.Attempt, nil)
+		h.archiveCodexProjection(round, result.Body, false, false)
 		round.SetTurnStateFallback(codexresponses.TurnStateFallback(result.TurnStateSource))
 		conversionStart = time.Now()
-		converted, usage, degradedResponse, convertErr := convertOpenAIResponsesToAnthropicWithCapability(result.Body, model, capability)
+		converted, usage, degradedResponse, convertErr := convertCodexResponsesToAnthropic(result.Body, model, capability)
 		if convertErr == nil {
 			converted, convertErr = applyAnthropicStops(converted, anthropicStops(r))
 		}
 		round.SetConversionDuration(round.ConversionDuration + time.Since(conversionStart))
 		if convertErr != nil {
+			recordCodexProjectionError(round, "complete", convertErr)
 			failure := newStreamFailWithCode(streamKindConversion, "conversion_response_error", "Codex response conversion failed", convertErr, false)
+			failure.Usage = &usage
 			h.writeArchivedAPIError(w, round, r, started, plan.RouteOwner, model, false, http.StatusBadGateway, APIError{Code: "conversion_response_error", Message: failure.Message}, failure)
 			return
 		}
@@ -136,8 +139,9 @@ func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request, started time.Time, plan TransportPlan, model string, request codexresponses.Request, capability config.ConversionCapability) {
 	round := archiveRoundFromContext(r.Context())
 	state := &textConversionStreamState{}
-	mapper := withAnthropicStopMapper(responsesEventToAnthropicWithCapability(capability), anthropicStops(r))
+	mapper := withAnthropicStopMapper(codexResponsesEventToAnthropic(capability), anthropicStops(r))
 	var archive bytes.Buffer
+	var upstreamArchive codexProjectionArchive
 	streamStarted := false
 	startStream := func(info codexresponses.StreamStart) error {
 		h.archiveCodexUpstreamAttempt(round, r, plan.RouteOwner, info.Attempt, nil)
@@ -154,22 +158,29 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		if payload == "" || payload == "[DONE]" {
 			return nil
 		}
+		if round != nil && round.FullContent() {
+			upstreamArchive.capture(payload, maxConversionSSEBytes)
+		}
 		mappingStart := time.Now()
 		events, err := mapper([]byte(payload), state)
 		if err != nil {
+			recordCodexProjectionError(round, "stream", err)
 			round.SetConversionDuration(round.ConversionDuration + time.Since(mappingStart))
 			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
 		encoded, err := encodeConversionSSE(events, true)
 		round.SetConversionDuration(round.ConversionDuration + time.Since(mappingStart))
 		if err != nil {
+			recordCodexProjectionError(round, "encode", err)
 			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("converted SSE: %w", err))
 		}
 		if len(encoded) == 0 {
 			return nil
 		}
 		if archive.Len()+len(encoded) > maxConversionSSEBytes {
-			return codexresponses.NewFailure(codexresponses.KindConversion, 0, fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes))
+			err := fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes)
+			recordCodexProjectionError(round, "encode", err)
+			return codexresponses.NewFailure(codexresponses.KindConversion, 0, err)
 		}
 		if !streamStarted {
 			prepareSSEHeaders(w.Header())
@@ -186,6 +197,7 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 		return nil
 	}
 	err := h.codexResponses.StreamCodexResponses(r.Context(), request, startStream, emit)
+	h.archiveCodexProjection(round, upstreamArchive.body.Bytes(), true, upstreamArchive.truncated)
 	markConversionDegraded(round, state.IgnoredFeatures)
 	usage := state.tokenUsage()
 	duration := time.Since(started)
@@ -193,9 +205,10 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 	if err != nil || !state.Completed {
 		if err == nil {
 			err = fmt.Errorf("conversion SSE ended without terminal event")
+			recordCodexProjectionError(round, "stream", err)
 		}
 		if !streamStarted {
-			h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, true, err)
+			h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, true, err, usage)
 			return
 		}
 		failure := conversionStreamFailure(err)

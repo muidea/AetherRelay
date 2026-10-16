@@ -133,6 +133,7 @@ func withAnthropicStopMapper(mapper conversionSSEMapper, stops []string) convers
 	}
 	matcher := localStopMatcher{stops: stops}
 	opened := map[int]bool{}
+	textBlock := -1
 	inputBytes := 0
 	return func(payload []byte, state *textConversionStreamState) ([]map[string]any, error) {
 		inputBytes += len(payload)
@@ -153,6 +154,13 @@ func withAnthropicStopMapper(mapper conversionSSEMapper, stops []string) convers
 					continue
 				}
 				opened[index] = true
+				block, _ := event["content_block"].(map[string]any)
+				if block["type"] == "text" {
+					textBlock = index
+					if text, _ := block["text"].(string); text != "" {
+						block["text"] = matcher.push(text)
+					}
+				}
 			case "content_block_delta":
 				if matcher.matched != "" {
 					continue
@@ -174,6 +182,9 @@ func withAnthropicStopMapper(mapper conversionSSEMapper, stops []string) convers
 					out = append(out, map[string]any{"type": "content_block_delta", "index": index, "delta": map[string]any{"type": "text_delta", "text": text}})
 				}
 				delete(opened, index)
+				if index == textBlock {
+					textBlock = -1
+				}
 			case "message_delta":
 				if matcher.matched != "" {
 					delta, _ := event["delta"].(map[string]any)
@@ -182,17 +193,17 @@ func withAnthropicStopMapper(mapper conversionSSEMapper, stops []string) convers
 			}
 			out = append(out, event)
 		}
-		// The Responses mapper coalesces visible text into downstream block 0.
-		// Do not let that coalescing invent a match across source text parts.
+		// Do not invent a match across source text parts, even when the
+		// Responses mapper coalesces them into one downstream text block.
 		var source struct {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(payload, &source); err != nil {
 			return nil, err
 		}
-		if source.Type == "response.output_text.done" || source.Type == "response.content_part.done" {
+		if textBlock >= 0 && (source.Type == "response.output_text.done" || source.Type == "response.content_part.done") {
 			if text := matcher.flush(); text != "" {
-				out = append(out, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": text}})
+				out = append(out, map[string]any{"type": "content_block_delta", "index": textBlock, "delta": map[string]any{"type": "text_delta", "text": text}})
 			}
 		}
 		return out, nil

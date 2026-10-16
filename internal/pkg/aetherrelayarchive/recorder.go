@@ -34,6 +34,7 @@ func NewObservationRound() *Round {
 }
 
 type Round struct {
+	ResponseProjectionObservation
 	codexmodel.Observation
 	AccountID    string
 	AccountLabel string
@@ -250,6 +251,7 @@ func (r *Round) SetIgnoredFeatures(features []string) {
 }
 
 type Metadata struct {
+	ResponseProjectionObservation
 	codexmodel.Observation
 	AccountID                     string    `json:"account_id,omitempty"`
 	AccountLabel                  string    `json:"account_label,omitempty"`
@@ -317,6 +319,18 @@ type Metadata struct {
 	// FullContentEnabled 标明配置是否启用完整正文归档(不保证磁盘写入一定成功)。
 	FullContentEnabled bool   `json:"full_content_enabled"`
 	Error              string `json:"error,omitempty"`
+}
+
+// ResponseProjectionObservation describes adapter input and local failures;
+// it does not claim to contain the original transport wire representation.
+type ResponseProjectionObservation struct {
+	ConversionErrorStage        string `json:"conversion_error_stage,omitempty"`
+	ConversionErrorDetail       string `json:"conversion_error_detail,omitempty"`
+	ConversionErrorEventType    string `json:"conversion_error_event_type,omitempty"`
+	ConversionErrorPhase        string `json:"conversion_error_phase,omitempty"`
+	UpstreamProjectionPath      string `json:"upstream_projection_path,omitempty"`
+	UpstreamProjectionFormat    string `json:"upstream_projection_format,omitempty"`
+	UpstreamProjectionTruncated bool   `json:"upstream_projection_truncated,omitempty"`
 }
 
 func (r *Round) SetUnsupportedFeatures(features []string) {

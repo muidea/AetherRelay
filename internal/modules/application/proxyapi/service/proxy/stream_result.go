@@ -56,7 +56,8 @@ type streamFail struct {
 	RetryAfterSeconds int
 	Message           string // 完整可读消息，写入 metadata / 日志
 	Err               error
-	CountUpstream     bool // 是否计入 provider upstream error rate
+	CountUpstream     bool        // 是否计入 provider upstream error rate
+	Usage             *tokenUsage // Completed upstream usage survives local projection failure.
 }
 
 func (e *streamFail) Error() string {

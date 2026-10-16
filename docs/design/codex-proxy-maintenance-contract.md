@@ -6,15 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.2.0`
+> 合同版本：`17.3.0`
 >
 > 状态：`active`
 >
-> 生效日期：2026-10-14
+> 生效日期：2026-10-16
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
+
+`17.3.0` 根据 x800 转换故障收口 Codex→Anthropic 响应投影（本地实现及离线验收完成，待部署验收）：显式消费 `response.metadata`，仅作为附加元信息而非输出/完成证据；接纳 message 的 absent/commentary/final_answer phase，保留文字、工具和顺序，未知 phase 仍失败。新行为仅作用于 Codex adapter，通用 Provider 边界不变。本地 conversion 无论 HTTP 状态均不得新增、延长或清除 Provider 熔断。完成上游后转换失败保留真实 usage、结构化错误位置，并按完整正文归档开关保存转换前完成对象或有界 SSE（明确为 adapter 输入、标记截断），不冒充原始传输。具体范围和线上验收见 [x800 收口方案](x800-codex-conversion-closure-2026-10-16.md)。
 
 `17.2.0` 吸收 CLIProxyAPI `25f40d8c` 的响应对象模型观测（`CP-OBS-015`），仅限 Codex CLI 号池。保留实际出站请求模型、最后有效响应对象模型及执行账号；模型替换诊断不参与账号健康、冷却、重试、熔断或路由。以新增附属表关联调用明细、归档和 CSV，既有布局与历史观测不回填。按 MINOR 记录，本地实现，待部署验收。
 
@@ -582,6 +584,13 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`17.3.0` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| Codex metadata/commentary 响应投影、工具保序、错误用量与诊断归档 | 17.3.0, CP-OBS-011, CP-SEC-003 | implemented（本地）；待部署验收 | `proxyapi/service/proxy/codex_anthropic_projection.go`, `codex_messages.go`, `responses_anthropic.go`, `aetherrelayarchive/recorder.go` | `codex_anthropic_projection_test.go`；现场样本离线回放 |
+| 本地 conversion 对 Provider 熔断保持中性 | 17.3.0 | implemented（本地）；待部署验收 | `aetherrelaymetrics/registry.go` | `conversion_health_test.go`；`TestCodexProjectionFailuresDoNotBlockNativeResponses` |
 
 `17.1.1` 新增实施追踪：
 

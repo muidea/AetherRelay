@@ -410,8 +410,11 @@ func (h *Handler) writeCodexOAuthCompleteSuccess(w http.ResponseWriter, r *http.
 	h.writeArchiveMetadata(round, provider, model, false, http.StatusOK, time.Since(started), tok, "response.json", "", "", "success")
 }
 
-func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, stream bool, err error) {
+func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Request, round *archivepkg.Round, started time.Time, provider, model string, stream bool, err error, observedUsage ...tokenUsage) {
 	failure := streamFailFromCodexError(err)
+	if len(observedUsage) > 0 {
+		failure.Usage = &observedUsage[0]
+	}
 	codexFailure, _ := codexresponses.AsFailure(err)
 	if codexFailure != nil {
 		h.archiveCodexUpstreamAttempt(round, r, provider, codexFailure.Attempt, err)

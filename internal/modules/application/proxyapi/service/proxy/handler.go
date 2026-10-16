@@ -1319,6 +1319,9 @@ func (h *Handler) writeArchivedAPIError(w http.ResponseWriter, round *archive.Ro
 	if len(failures) > 0 && failures[0] != nil {
 		failure = failures[0]
 	}
+	if failure != nil && failure.Usage != nil {
+		usage = *failure.Usage
+	}
 	if failure != nil {
 		if failure.ErrorCode == "" && apiErr.Code != "" {
 			failure.ErrorCode = apiErr.Code
@@ -3192,6 +3195,7 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.IgnoredFeatures = append([]string(nil), round.IgnoredFeatures...)
 		meta.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		meta.ConversionErrorPath = round.ConversionErrorPath
+		meta.ResponseProjectionObservation = round.ResponseProjectionObservation
 		meta.FailureClass = round.FailureClass
 		meta.Retryable = round.Retryable
 		meta.RetryAfterSeconds = round.RetryAfterSeconds
@@ -3302,6 +3306,16 @@ func (h *Handler) printSummary(round *archive.Round, eventID, provider, model st
 	}
 	if outcome != "" {
 		attrs = append(attrs, slog.String("outcome", outcome))
+	}
+	if round != nil && round.ConversionErrorStage != "" {
+		attrs = append(attrs,
+			slog.String("request_id", round.RequestID),
+			slog.String("conversion_mode", round.ConversionMode),
+			slog.String("conversion_error_stage", round.ConversionErrorStage),
+			slog.String("conversion_error_path", round.ConversionErrorPath),
+			slog.String("conversion_error_event_type", round.ConversionErrorEventType),
+			slog.String("conversion_error_phase", round.ConversionErrorPhase),
+			slog.String("conversion_error_detail", round.ConversionErrorDetail))
 	}
 	if errorCode != "" {
 		attrs = append(attrs, slog.String("error_code", errorCode))

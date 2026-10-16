@@ -522,7 +522,7 @@ func shouldTrackProviderHealth(status int, outcome string) bool {
 		// The first-event budget is request-local. Slow reasoning or upstream
 		// buffering does not establish that the entire Provider is unavailable.
 		return false
-	case "request_timeout", "provider_unavailable", "stream_lifetime_timeout", "client_canceled", "client_write":
+	case "conversion", "request_timeout", "provider_unavailable", "stream_lifetime_timeout", "client_canceled", "client_write":
 		return false
 	}
 	if status >= 200 && status < 400 && outcome == "success" {

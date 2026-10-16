@@ -1,5 +1,11 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-10-16 x800 Codex 响应投影收口（本地验收完成，待部署）
+
+Codex→Anthropic 独立启用 metadata 与 commentary 兼容：`response.metadata` 只记忽略项，继续等待合法终态；消息 phase 仅接纳缺失、commentary、final_answer，commentary 正文作为 text 保序投影，不省略、不改写为 final_answer。流式文本/工具/后续文本使用递增 content block index，参数 done 不重复发送，未知事件/phase、未完成工具及缺终态仍失败。通用 Provider 保持原有转换边界。
+
+本地 conversion/502 与 conversion/200 均不改变 Provider 健康/熔断；已完成上游的 usage 独立于投影是否成功提取。转换失败记录 stage/path/event_type/phase/detail，客户端错误 code 保持稳定。完整正文归档开启时保存投影前的 Responses 完成对象或有界 SSE，并注明 adapter 输入层次和截断状态；关闭时不写正文。SSE 输入和归档均沿用 64 MiB 预算，归档只保留完整 data 帧前缀并标记截断。终态完整对象与已经输出的内容存在差异时明确失败，避免遗漏内容却报告成功。历史缺失不回填。相关回归、真实样本离线回放、`go test ./...`、`make check-codex` 及观测组件 race 已通过；线上语义验收尚未执行，见 [收口方案](x800-codex-conversion-closure-2026-10-16.md)。
+
 ## 2026-10-13 Anthropic→Codex 混合内容与请求对象收口
 
 仅 Anthropic→Codex 路径按消息内 content 块的原顺序生成 Responses input；连续文本块保持原有拼接，遇到工具调用或结果先结束当前文本段，再输出工具项。`tool_result → text` 保持为 `function_call_output → user message`，工具 ID、错误标记及结果内图片数组不变。顶层 system 仍生成 instructions，历史 system 仍原位生成结构化 developer 项；通用 Responses Provider 保留既有映射。

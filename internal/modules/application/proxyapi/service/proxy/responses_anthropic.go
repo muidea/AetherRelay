@@ -456,6 +456,27 @@ func convertOpenAIResponsesToAnthropic(body []byte, fallbackModel string) ([]byt
 }
 
 func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel string, capability config.ConversionCapability) ([]byte, tokenUsage, []string, error) {
+	return convertResponsesToAnthropic(body, fallbackModel, capability, false)
+}
+
+// Codex's commentary is visible assistant text, independent of reasoning.
+// Keep this projection opt-in: generic Responses providers retain their contract.
+func convertCodexResponsesToAnthropic(body []byte, fallbackModel string, capability config.ConversionCapability) ([]byte, tokenUsage, []string, error) {
+	return convertResponsesToAnthropic(body, fallbackModel, capability, true)
+}
+
+func convertResponsesToAnthropic(body []byte, fallbackModel string, capability config.ConversionCapability, codex bool) (encoded []byte, usage tokenUsage, ignored []string, resultErr error) {
+	path, phase := "response", ""
+	defer func() {
+		if resultErr != nil && codex {
+			usage = responsesCompletionUsage(body)
+			var location *conversionLocationError
+			if errors.As(resultErr, &location) {
+				path += "." + location.Path
+			}
+			resultErr = &responseProjectionError{Path: path, Phase: phase, Err: resultErr}
+		}
+	}()
 	var in struct {
 		ID                string `json:"id"`
 		Model             string `json:"model"`
@@ -473,10 +494,11 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 		return nil, tokenUsage{}, nil, err
 	}
 	var content []any
-	var ignored []string
 	registry := newToolCallRegistry()
 	toolStop := false
-	for _, item := range in.Output {
+	for index, item := range in.Output {
+		path, phase = fmt.Sprintf("output[%d]", index), ""
+		phase, _ = item["phase"].(string)
 		if _, exists := item["internal_chat_message_metadata_passthrough"]; exists {
 			// Krill/Codex-compatible Responses relays may attach opaque
 			// internal message metadata to output items. It has no Anthropic
@@ -496,34 +518,43 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 			}
 			if phase, exists := item["phase"]; exists {
 				value, ok := phase.(string)
-				if !ok || value != "final_answer" {
+				if !ok || (value != "final_answer" && !(codex && value == "commentary")) {
+					path += ".phase"
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.message.phase")
+				}
+				if value == "commentary" {
+					ignored = append(ignored, "message_phase")
 				}
 			}
 			blocks, ok := item["content"].([]any)
 			if !ok {
 				return nil, tokenUsage{}, nil, fmt.Errorf("output.message.content")
 			}
-			for _, rawBlock := range blocks {
+			for blockIndex, rawBlock := range blocks {
+				path = fmt.Sprintf("output[%d].content[%d]", index, blockIndex)
 				block, ok := rawBlock.(map[string]any)
 				if !ok {
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.message.content")
 				}
 				blockType, _ := block["type"].(string)
 				if blockType != "output_text" {
+					path += ".type"
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.%s", blockType)
 				}
 				if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "text": {}, "annotations": {}, "logprobs": {}}); err != nil {
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.%w", err)
 				}
 				if hasNonEmptyConversionFeature(block["annotations"]) {
+					path += ".annotations"
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.annotations")
 				}
 				if hasNonEmptyConversionFeature(block["logprobs"]) {
+					path += ".logprobs"
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.logprobs")
 				}
 				text, ok := block["text"].(string)
 				if !ok {
+					path += ".text"
 					return nil, tokenUsage{}, nil, fmt.Errorf("output.output_text.text")
 				}
 				content = append(content, map[string]any{"type": "text", "text": text})
@@ -535,11 +566,15 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 			callID, _ := item["call_id"].(string)
 			name, _ := item["name"].(string)
 			arguments, _ := item["arguments"].(string)
-			if callID == "" || name == "" || len(arguments) > maxConversionToolArgumentBytes || !json.Valid([]byte(arguments)) {
+			if callID == "" || name == "" {
 				return nil, tokenUsage{}, nil, fmt.Errorf("output.function_call")
 			}
+			if len(arguments) > maxConversionToolArgumentBytes || !json.Valid([]byte(arguments)) {
+				path += ".arguments"
+				return nil, tokenUsage{}, nil, fmt.Errorf("output.function_call.arguments")
+			}
 			var input any
-			if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+			if err := decodeCodexJSON([]byte(arguments), &input); err != nil {
 				return nil, tokenUsage{}, nil, err
 			}
 			if err := registry.Add(callID); err != nil {
@@ -573,7 +608,7 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 	if model == "" {
 		model = fallbackModel
 	}
-	usage := tokenUsage{PromptTokens: in.Usage.Input, CompletionTokens: in.Usage.Output, TotalTokens: in.Usage.Input + in.Usage.Output}
+	usage = tokenUsage{PromptTokens: in.Usage.Input, CompletionTokens: in.Usage.Output, TotalTokens: in.Usage.Input + in.Usage.Output}
 	var envelope struct {
 		Usage json.RawMessage `json:"usage"`
 	}
@@ -585,6 +620,7 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 	if len(content) == 0 {
 		content = []any{map[string]any{"type": "text", "text": ""}}
 	}
+	path, phase = "response.status", ""
 	stopReason, err := responsesTerminationToAnthropic(in.Status, in.IncompleteDetails.Reason, toolStop)
 	if err != nil {
 		return nil, tokenUsage{}, nil, err
@@ -593,7 +629,7 @@ func convertOpenAIResponsesToAnthropicWithCapability(body []byte, fallbackModel 
 	if out["id"] == "" {
 		out["id"] = "msg-responses"
 	}
-	encoded, err := json.Marshal(out)
+	encoded, err = json.Marshal(out)
 	return encoded, usage, uniqueSortedFeatures(ignored), err
 }
 

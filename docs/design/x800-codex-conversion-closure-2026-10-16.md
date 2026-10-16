@@ -1,0 +1,136 @@
+# x800 Codex → Anthropic 响应转换核查与收口方案
+
+日期：2026-10-16。状态：调查、代码修复和本地验收完成，待上线验收。
+
+对象：`root@x800.muidea.com:1212`，部署目录 `/home/workspace/deploy`，容器 `deploy_aetherrelay_1`。调查时镜像 revision 与本地基线均为 `dc8514c750eb1c0159065e1899843a6577ebf219`；本次修复是该基线上的工作区变更，未部署。本文时间除特别说明外均为北京时间。
+
+## 1. 结论与证据边界
+
+这批故障有三个已经复现的实现缺口：
+
+1. Responses → Anthropic SSE 转换器拒绝正常出现的 `response.metadata`，解释全部 8 次流式转换异常。
+2. 非流式转换器拒绝 `message.phase=commentary`。现存真实消息逐项回放和真实 HTTP handler 均复现转换 502，是 22 次历史非流式失败的明确候选触发点。
+3. Provider 健康统计把 HTTP 502 的本地 `conversion` 当作上游失败；连续三次会开启 30 秒熔断。即使 `streamFail.CountUpstream=false`，这条统计路径仍会发生，进而影响同 Provider 的原生 Responses 请求。
+
+22 次历史失败没有保存转换前的完成响应，错误包装也没有输出底层字段位置。因此可以逐条确认其失败阶段，但不能把这 22 次全部归因为 commentary；同样不能认为只放行 `response.metadata` 就解决了它们。修复验收必须补齐这一证据链。
+
+## 2. 历史 30 次逐条核对
+
+远端证据根目录：`/home/workspace/deploy/data/interactions`。
+
+| 分组 | 身份与 round | 每条均成立的事实 |
+| --- | --- | --- |
+| 非流式 502，13 次 | `claude-owner/{000003,000004,000005,000044,000048,000053,000087,000088,000092,000097,000099,000113,000119}` | `anthropic_to_codex_responses`；上游 200；上游终态 `response.completed`；下游 `conversion_response_error` |
+| 非流式 502，9 次 | `claude-office/{000033,000037,000039,000040,000046,000052,000058,000068,000075}` | 同上 |
+| 流式异常，7 次 | `claude-owner/{000001,000002,000042,000067,000074,000080,000084}` | 下游已经提交 200；业务结果 `conversion`；上游错误归档精确为 `converted SSE: responses stream event "response.metadata"` |
+| 流式异常，1 次 | `claude-office/000027` | 同上 |
+
+合计非流式 22 次，流式 8 次。
+
+样例：
+
+- `claude-owner/000119`：11:01:37，下游 502；`upstream_response_001.json` 记录上游 200、`response.completed`；Request ID `27eba5938555d9d0a0463336cd689cad`。
+- `claude-owner/000080`：10:55:09，上游观察到 `response.completed`，但转换侧先因 `response.metadata` 失败；不能因为上游读取任务已经观察到终态而把下游流记为成功。
+- 22 次非流式失败中，部分已有完整请求归档，包括 `000097/000099/000113/000119`；但其 `response.json` 是发给客户端的错误信封，不是上游完成对象。
+- 当前 `upstream_response[_001].json` 仅记录状态、header 和读取观测。开启完整正文归档并不自动保存成功上游的完成对象。
+- 30 次异常的调用明细均为输入/输出 Token 零；转换器在字段失败时也会返回空 usage。这些零不能证明上游未产生用量，完成响应中已有计数时应独立保留。
+
+## 3. 离线复现与最小线上验证
+
+诊断文件位于本机 `/tmp/aetherrelay-conversion-audit.dW0YYI/`；初次调查通过 Go overlay 加载临时测试，当时生产代码未改动。以下 3.1–3.3 为修复前复现结果，修复后的离线回放见第 7 节。
+
+### 3.1 response.metadata
+
+从同机成功的原生 `/v1/responses` 归档提取 53 份完成响应及其 metadata 事件。53 份均在 `response.completed` 之前出现一次 `response.metadata`，转换器对 53 份事件全部报相同错误。
+
+实际结构为：`type`、`sequence_number`、`response_id`、`metadata.openai_chatgpt_moderation_metadata`。它是附加元信息事件，原生路径正常消费；它本身不构成生成完成或工具调用。
+
+代码定位：`responses_anthropic.go` 的 `responsesEventToAnthropicWithCapabilityState` 没有该 case，进入 default 拒绝分支（约 2260 行）。上游正常读取和非流式汇聚不依赖这个 mapper，因此与非流式 22 次错误不是同一直接触发点。
+
+### 3.2 commentary
+
+对上述样本中的真实 message 项逐项调用当前转换器：10 个 `commentary` 全部报 `output.message.phase`；4 个 `final_answer` 全部通过。将真实 commentary 完成对象作为 executor 结果交给 `/v1/messages` 的真实 handler，可复现 HTTP 502 和完全相同的 `conversion_response_error` 信封。
+
+代码定位：`responses_anthropic.go:497` 只接纳 `phase=final_answer`；`responses_anthropic_test.go` 现有测试明确要求拒绝 commentary。因此这是当前既定转换边界与 Codex 实际响应形态的冲突，需要先更新有界合同，不能仅删掉一个判断。
+
+53 个完整原生结果中，48 个含 `custom_tool_call`，超出本次 Anthropic 平面函数工具范围，未将它们当作 Messages 应当支持的样本。剩余 5 个完整结果为 4 个通过、1 个先因 commentary 失败；对失败样本做单变量排除后，还出现真实非空 `function_call.namespace=clock` 的拒绝。这是独立的命名空间语义问题。
+
+为核对平面工具是否也必然出现 namespace，额外发送了一次小型合成原生请求：模型 `gpt-6.1-sol`，工具 `audit_echo(value)`，不执行任何工具。Request ID 为 `x800-conversion-audit-751012e62a7c4b57977db8df98e8cdb7`，远端归档为 `claude-owner/000210`。结果 HTTP 200，返回普通 function_call、不含 namespace；用原转换器回放通过。这次调用产生少量真实 Token 用量，不是历史会话重放，也不证明 22 次历史响应的具体字段。
+
+### 3.3 熔断放大与诊断缺失
+
+对 Registry 连续记录三次 `status=502,outcome=conversion`，得到 `failures=3,consecutive=3,circuit=open`；记录同样业务结果但 `status=200` 时不增加健康失败。原因为 `shouldTrackProviderHealth` 在排除本地 outcome 时遗漏 `conversion`，随后命中 `status>=500`。
+
+现有 `TestProviderHealthIgnoresLocalClientAndConversionErrors` 仅覆盖 conversion/400，未覆盖响应转换的 502，因而现有测试通过也不能保护这条故障链。
+
+`codex_messages.go:119` 将 `convertErr` 放入 `streamFail.Err`，但 `streamFail.Error()` 优先返回通用 Message。普通日志、客户端错误和 metadata 最终只保留通用说明，`conversion_error_path` 也没有在这个错误分支设置。
+
+所有调查测试与选取的现有相关测试通过。这里的“通过”表示成功复现并断言当前缺陷，不表示修复已实现。
+
+### 3.4 官方 Codex 源码对照
+
+按用户提供的 `openai/codex` 仓库核对 revision `e790ce271749ce431e446a9e2cc66485fe60f931`：
+
+- [`codex-api/src/sse/responses.rs`](https://github.com/openai/codex/blob/e790ce271749ce431e446a9e2cc66485fe60f931/codex-rs/codex-api/src/sse/responses.rs#L160) 将 metadata 定义为可选 JSON，而不是固定的审核结果 schema。`response.metadata` 还可能包含 `openai_verification_recommendation`、`metadata.type=safety_buffering`，并可携带 headers 中的 turn-state 和实际模型。CLI 先提取内部观测事件，主响应事件分支不把 metadata 当作正文或完成信号。
+- 现场 53 份 metadata 仅观察到 `openai_chatgpt_moderation_metadata`，不能据此断言该事件只有审核信息。样本中的 `prompt`、`generation`、`tool_call`、`tool_response` 是审核阶段分组；内部分类代码不作无依据的业务解释。
+- [`protocol/src/models.rs`](https://github.com/openai/codex/blob/e790ce271749ce431e446a9e2cc66485fe60f931/codex-rs/protocol/src/models.rs#L955) 将 commentary 定义为轮次中途的助手文字，后面可继续输出工具或文字。官方还定义 partial_answer，但现场仅见 commentary/final_answer；本次仍限定这两种非空 phase，未将所有新 phase 自动放行。
+- 先前提供的 `microsoft/Codex-CLI` revision `331667b708ead5f209c2796ea4398c940a011a8b` 为 2022 年 GPT-3 Codex 补全示例，其 `openai.Completion.create` 不涉及本次 Responses 协议。
+
+## 4. 实施范围
+
+实施前已更新 [Codex 首要维护合同](codex-proxy-maintenance-contract.md) 和 [双向转换设计](responses-anthropic-conversion.md)。以下能力现已在本地实现，生产验收单独记录。
+
+| 工作项 | 处理规则 | 主要位置 |
+| --- | --- | --- |
+| 已知元信息事件 | 在 Codex→Anthropic 映射中显式消费 `response.metadata`；不生成正文、不改变完成状态、不把它作为成功终态；记录有界忽略项。其它未知事件仍明确失败。 | `codex_anthropic_projection.go`、`codex_messages.go` |
+| commentary 映射 | 在 Codex 响应投影范围接纳 absent、commentary、final_answer；正文映射为 Anthropic text 并按输出顺序保留，与工具调用一起返回；工具调用仍返回 tool_use stop reason。未知 phase 和错误类型明确失败。 | `responses_anthropic.go`、`codex_messages.go` |
+| 本地失败隔离 | 在 HTTP 状态分支之前排除 `outcome=conversion` 对 Provider 健康、失败次数、熔断的影响；保留请求错误、转换指标和 usage 结算。不得伪记成功来清除真实故障。 | `aetherrelaymetrics/registry.go` |
+| 具体错误定位 | 记录响应侧 path、event_type、phase、mode、request_id/event_id；底层错误结构化传递到日志和 metadata。客户端保持现有错误 code。 | `codex_messages.go`、`stream_result.go`、归档 metadata 接线 |
+| 转换前正文留存 | 非流式在投影前按现有完整正文归档开关保存 `result.Body`，名称如 `upstream_response_001.body.json`，明确它是汇聚后的 Responses 完成对象；流式需要时保存 mapper 收到的 Responses SSE，并明确记录层次、预算与截断状态。 | `codex_messages.go`、`debug.go`、归档组件 |
+| 已完成上游的 usage | 本地投影失败时，若完成对象已经携带有效 usage，独立提取真实计数后结算；缺失仍保持未知，不伪造零或成功。 | 转换返回值、usage 接线 |
+
+commentary 不是 reasoning，不能套用 reasoning_output 的省略规则，也不能删掉文字或伪改为 final_answer。通用 Provider 目前明确拒绝 commentary，现已用独立 Codex 投影入口限定新行为；通用路径仍按原合同验收。
+
+namespace 不在本次故障主修复范围。不能为了通过转换随意删除非空 namespace 或拼接工具名；未来支持必须按实际请求工具定义做无歧义映射。此次平面工具 probe 已通过，且历史完整出站请求的工具定义没有 namespace。
+
+## 5. 验收矩阵
+
+| 层次 | 必测输入 | 通过标准 |
+| --- | --- | --- |
+| Metadata 状态机 | metadata 出现在 created 后、文本后、工具后及终态前；metadata 后 EOF；未知事件；终态后事件 | 正常 metadata 不报错、不触发完成；缺终态和未知事件仍失败；错误后不伪造 message_stop |
+| 非流式投影 | commentary-only、commentary+工具、commentary+final_answer、并行工具、仅工具、reasoning+commentary、未知 phase | 已声明语义完整保留；文本与工具保序；stop_reason 正确；未知语义明确拒绝 |
+| 流式/非流式一致性 | 同一 Responses 语义的两种输入，包含 metadata、commentary、工具参数 done 和 usage | 输出文本、工具身份/参数、终止原因和用量一致；done 参数不重复；文本不重复或遗漏 |
+| 负向诊断 | 未知输出字段、未知事件、畸形工具参数 | 明确记录失败 stage/path/type；客户端 code 保持稳定；归档可直接离线回放 |
+| 健康隔离 | 连续三次 conversion/502、conversion/200、已有真实熔断后追加 conversion | 不新增/延长/清除真实熔断；原生 Responses 不因本地转换失败被拒绝；真实 upstream/502 仍可熔断 |
+| 用量 | 成功上游后投影失败，usage 有值/缺失/显式零；流式错误终态 | HTTP 与 outcome 如实记录；已知 Token 不丢失；无重复结算 |
+| 兼容边界 | 通用 Provider、原生 Responses、非空 namespace、custom_tool_call、未知 phase | 保持各自合同，未声明的映射不静默放行 |
+
+至少加入真实 `/v1/messages` handler 级回归，不能只测试 mapper。使用当前临时样本建立最小固定 fixture；正式 fixture 应保留导致失败的字段和事件顺序。
+
+候选实现完成后运行相关 Go 测试、race，以及仓库要求的 `make check-codex`。离线通过后再以固定镜像 revision 进行线上小流量验收：普通文本、工具调用、工具结果续轮各覆盖 stream=true/false，检查完整 Anthropic 终态、工具语义、usage 和归档完成对象。之后在真实 Claude 工具会话中观察连续至少 20 轮，期间同时验证原生 Responses 调用；真实上游过载单独统计。
+
+## 6. 完成标准与发布顺序
+
+先实现诊断留存和健康隔离，再实现 metadata 与 commentary 的有界映射，完成离线回放后作为一组候选发布。实施过程中如新的响应原文显示其它字段导致失败，应以新证据扩充合同和回归，不能直接扩大通用字段白名单。
+
+只有线上 Messages 两种模式均通过语义验收、conversion 不再污染熔断、失败能定位到具体字段且可回放，才将本项标为收口。原先 22 次历史请求保留“转换阶段已确认、具体字段证据缺失”的结论，不回填猜测。
+
+本次已修改本地转换实现及回归测试，未修改生产配置、重启或部署；生产故障是否消除仍待部署验收。
+
+## 7. 本地实现与验证结果
+
+新增 `codex_anthropic_projection.go`，Codex 非流式转换接纳 commentary 并保留其文字。Codex SSE 在复用既有验证与用量解析的同时按文本、工具、后续文本分配递增 block index；并行工具按添加顺序输出，等待完成较晚的前序工具；参数 done 与 delta 不重复输出。只有完整终态对象的流可投影其内容；已有增量输出与终态正文不一致则明确失败，不伪造成功终态。
+
+转换错误携带 stage/path/event_type/phase/detail，日志关联 request_id 与原有 event_id。完成对象中的真实 usage 在投影失败时仍结算，缓存计数显式零和缺失保持区别。完整正文开关控制转换前 JSON/SSE 的落盘，stream 采用 64 MiB 上限，仅保留完整帧前缀，metadata 记录格式和截断标志；这些文件是 adapter 输入，不能称为原始线上传输。
+
+永久回归位于 `codex_anthropic_projection_test.go` 和 `aetherrelaymetrics/conversion_health_test.go`，覆盖：
+
+- 真实 handler 流式/非流式成功语义一致；commentary、并行工具逆序完成、参数 done、后续文字；工具参数大整数不丢精度、不重复。
+- metadata 多处插入、metadata 后 EOF、未知事件/phase、namespace、终态后事件及终态内容不一致。失败后返回错误而非伪造 message_stop。
+- 投影失败 usage 为非零、显式零、缺失，以及归档开关两种状态；错误位置和普通日志正文边界。
+- 归档完整帧预算、截断状态及文件类型；stop prefix 在工具后的正确 text block 中刷新。
+- conversion/200、400、502、503 不新增/延长/清除健康熔断；真实 upstream/502 仍可熔断；真实 handler 连续三次本地 502 后原生 Responses 仍可访问。
+
+修复后通过临时 overlay 再次回放现场样本，结果存于本机 `closure-replay.log`：53/53 metadata 被消费且不产生正文/完成状态；10/10 commentary 与 4/4 final_answer 消息投影成功；平面工具 probe 的实际完成对象投影成功。53 个原生完整对象中，原可转换的 4 个仍通过，48 个 custom_tool_call 与 1 个 namespace 边界仍明确拒绝；未把原生工具形态全量放行。22 条历史失败的具体字段仍无法追溯，不宣称这批历史请求已全部成功回放。
+
+本地检查全部通过：相关分包测试、`go test ./...`、`make check-codex`（含相关 race、32 项前端合同测试、`go vet ./...`、diff 检查和凭据扫描），以及 metrics/archive 的额外 race。尚未执行修复版本的线上 smoke 或真实 Claude 连续工具会话验收。
