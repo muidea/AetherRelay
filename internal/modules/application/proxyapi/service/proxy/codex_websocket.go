@@ -3,7 +3,9 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"github.com/gorilla/websocket"
@@ -37,8 +40,34 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	defer h.codexWebsockets.Add(-1)
-	conn, err := codexWebsocketUpgrader.Upgrade(w, r, nil)
+	// Copy the upgrader: its error callback captures this request and must not
+	// be installed on the shared value used by concurrent handshakes.
+	upgrader := codexWebsocketUpgrader
+	rejected := false
+	upgrader.Error = func(w http.ResponseWriter, r *http.Request, status int, reason error) {
+		rejected = true
+		code := ErrorCodeInvalidRequest
+		if status >= 500 {
+			code = ErrorCodeProxyInternalError
+		}
+		w.Header().Set("Sec-WebSocket-Version", "13")
+		h.archiveAndLogClientRequest(round, r, 0)
+		h.writeArchivedAPIError(w, round, r, started, "", "", false, status, APIError{
+			Code: code, Message: reason.Error(), ClientEndpoint: "/v1/responses", ClientProtocol: ClientProtocolOpenAI,
+		})
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		if !rejected {
+			// A transport failure after hijacking cannot receive another HTTP
+			// response. Keep the captured status and finish its observation.
+			status := http.StatusInternalServerError
+			if response, ok := round.ClientResponse(); ok {
+				status = response.Status
+			}
+			h.archiveAndLogClientRequest(round, r, 0)
+			h.recordCodexWebsocketLocalResult(r, "", started, status, newStreamFailWithCode(streamKindClientWrite, "client_write", "websocket handshake transport failed", nil, false))
+		}
 		return
 	}
 	defer conn.Close()
@@ -106,6 +135,22 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
 		messageType, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
+			if messageNumber == 0 {
+				// The HTTP request already owns a usage event, even if no create
+				// arrives. Closing an unused session is not a generation failure.
+				h.archiveAndLogClientRequest(baseRound, baseRequest, 0)
+				failure := newStreamFailWithCode(streamKindClientCanceled, "client_canceled", "websocket closed before response.create", nil, false)
+				var timeout net.Error
+				switch {
+				case errors.Is(readErr, websocket.ErrReadLimit):
+					failure = newStreamFailWithCode(streamKindLimitExceeded, ErrorCodeRequestTooLarge, "websocket message exceeds configured limit", nil, false)
+				case ctx.Err() == context.DeadlineExceeded:
+					failure = newStreamFailWithCode(streamKindRequestTimeout, "request_timeout", "websocket lifetime expired before response.create", nil, false)
+				case errors.As(readErr, &timeout) && timeout.Timeout():
+					failure = newStreamFailWithCode(streamKindIdleTimeout, "idle_timeout", "websocket idle timeout before response.create", nil, false)
+				}
+				h.recordCodexWebsocketLocalResult(baseRequest, "", started, http.StatusSwitchingProtocols, failure)
+			}
 			return
 		}
 		turnStarted := time.Now()
@@ -132,7 +177,9 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				return
 			}
 		} else {
-			r = baseRequest.WithContext(sessionContext)
+			// The HTTP request owns the first completion; later turns receive
+			// their own completion and target tracker from withUsageCompletion.
+			r = baseRequest.WithContext(usagetarget.WithTracker(sessionContext))
 		}
 		turnCtx := r.Context()
 		currentRequest, currentRound := r, round
@@ -145,13 +192,17 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 		_ = h.writeArchiveRequest(round, raw)
 		h.archiveAndLogClientRequest(round, r, len(raw))
 		round.SetTransportPlan(RouteLabel(r), "/v1/responses", ClientProtocolOpenAI, effectivecatalog.CodexOAuthProviderID, "codex_oauth_responses", TransportModeCodexOAuthResponses)
+		reject := func(code, message string) {
+			writeCodexWebsocketError(conn, code, message)
+			h.recordCodexWebsocketLocalResult(r, model, turnStarted, http.StatusSwitchingProtocols, newStreamFailWithCode(streamKindError, code, message, nil, false))
+		}
 		if messageType != websocket.TextMessage {
-			writeCodexWebsocketError(conn, "invalid_request", "only text response.create messages are supported")
+			reject("invalid_request", "only text response.create messages are supported")
 			return
 		}
 		normalized, requestModel, features, normalizeErr := normalizeCodexWebsocketCreate(raw, model, r.Header, sessionFeatures)
 		if normalizeErr != nil {
-			writeCodexWebsocketError(conn, "invalid_request", normalizeErr.Error())
+			reject("invalid_request", normalizeErr.Error())
 			return
 		}
 		if model == "" {
@@ -164,7 +215,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				if apiErr != nil {
 					message = apiErr.Message
 				}
-				writeCodexWebsocketError(conn, "model_not_found", message)
+				reject("model_not_found", message)
 				return
 			}
 			sessionHash := codexSessionHash(r, model, map[string]any{"prompt_cache_key": websocketPromptCacheKey(normalized)})
@@ -195,27 +246,27 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			httpFallback = opened.HTTPFallback
 		}
 		if requestModel != model {
-			writeCodexWebsocketError(conn, "invalid_request", "websocket model cannot change within a session")
+			reject("invalid_request", "websocket model cannot change within a session")
 			return
 		}
 		if features != sessionFeatures {
-			writeCodexWebsocketError(conn, "invalid_request", "websocket feature profile cannot change within a session")
+			reject("invalid_request", "websocket feature profile cannot change within a session")
 			return
 		}
 		var normalizedBody map[string]any
 		if err := decodeCodexJSON(normalized, &normalizedBody); err != nil {
-			writeCodexWebsocketError(conn, "invalid_request", "invalid normalized response.create message")
+			reject("invalid_request", "invalid normalized response.create message")
 			return
 		}
 		var cacheErr error
 		normalized, normalizedBody, _, cacheErr = ensureCodexPromptCacheKey(normalized, normalizedBody, codexPromptCacheHash(r, model, normalizedBody))
 		if cacheErr != nil {
-			writeCodexWebsocketError(conn, "invalid_request", cacheErr.Error())
+			reject("invalid_request", cacheErr.Error())
 			return
 		}
 		turnReplay, replayErr := replayState.prepare(normalized)
 		if replayErr != nil {
-			writeCodexWebsocketError(conn, "invalid_request", "Codex websocket replay state is invalid")
+			reject("invalid_request", "Codex websocket replay state is invalid")
 			return
 		}
 		if matches, _ := codexWebsocketHistoryMatches(normalized, lastResponseID); !matches {
@@ -264,7 +315,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			if canMigrate {
 				retryPayload, retrySafe, retryErr := buildCodexWebsocketHTTPPayload(normalized, turnReplay, lastResponseID, maxMessageBytes)
 				if retryErr != nil {
-					writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket replay could not be prepared")
+					reject("invalid_request", "Codex websocket replay could not be prepared")
 					return
 				}
 				if retrySafe {
@@ -330,6 +381,21 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 	}
+}
+
+// Local outcomes do not count as upstream errors. Only a target observed in
+// this turn is retained; HTTP 101 remains the actual upgraded status.
+func (h *Handler) recordCodexWebsocketLocalResult(r *http.Request, model string, started time.Time, status int, failure *streamFail) {
+	round := archiveRoundFromContext(r.Context())
+	if round != nil {
+		round.Operation = RouteLabel(r)
+		round.ClientEndpoint = "/v1/responses"
+		round.ClientProtocol = ClientProtocolOpenAI
+	}
+	duration := time.Since(started)
+	provider := usagetarget.Snapshot(r.Context()).Provider
+	h.recordAndPrintFail(round, r, provider, model, true, status, duration, tokenUsage{}, failure)
+	h.writeArchiveMetadata(round, provider, model, true, status, duration, tokenUsage{}, "", failure.Error(), "", outcomeFromStreamFail(failure, status))
 }
 
 func (h *Handler) recordCodexWebsocketFailure(r *http.Request, model string, started time.Time, err error) {

@@ -349,6 +349,14 @@ Codex 上游归档及安全诊断增加 `last_upstream_event_at`、`last_upstrea
 
 API 代理关闭响应缓冲，以便 SSE 及时交付；`stream=false` 仍等待完整结果。Nginx read timeout 是相邻读取间隔，应用非流式超时是整个请求预算，不能混为同一时限。修改后运行 `nginx -t`，再平滑 reload；新应用预算逻辑及后台展示须部署对应服务版本后生效。此前 `035631` 的流式网络截断仍需部署后继续核对新诊断，不把代理配置调整宣称为上游网络故障已经修复。
 
+### Responses WebSocket 入站升级与结算
+
+Nginx 的 API location 必须显式设置 `proxy_http_version 1.1`、`proxy_set_header Upgrade $http_upgrade` 和按请求 Upgrade 生成的 Connection 值。只设置 HTTP/1.1 或只在 server 层设置 header 不足以保证透传：location 自己定义 proxy_set_header 时不会继承 server 的整组 header。完整示例见 [nginx-api.conf](examples/nginx-api.conf)，其中 map 放在 http 上下文且只定义一次；普通 HTTP 的 Connection 保持为空。修改前备份，执行 `nginx -t` 后平滑 reload。
+
+2026-10-16 x800 事件 `80ccf477b7033b8fd42aab626a329407` 对应北京时间 20:34:04 的 `GET /v1/responses`，Nginx 与 `codex-ubuntu/005159/response.meta.json` 均为 400，旧应用的提前返回却由用量兜底记为 500 / proxy_internal_error；当时尚未访问上游。现场 `/etc/nginx/conf.d/api.test.abc.conf` 的 `/v1` 缺少升级头，已备份至 `/etc/nginx/backups/api.test.abc.conf.before-ws-20261016T140215Z`，补齐 Upgrade/Connection 后 `nginx -t` 与平滑 reload 成功。经本机 Nginx、现有客户端鉴权进行仅握手测试，返回 `101 Switching Protocols`；随后关闭连接，未发送 response.create，未发起模型生成。
+
+配置刷新与应用修复分别验收。该次检查的运行 revision 为 `1b523a03d4a16c5d799f8152a6bdaf813e5f866e`，应用尚未部署本次结算修复。新版本部署后，握手拒绝须在 HTTP、用量与归档中一致记录真实状态及 invalid_request；底层不支持协议升级等真实服务端错误仍保留 500。升级后本地校验拒绝应为 101 加帧内错误，空连接关闭/超时须显式结算，不生成账号、模型或 token 事实，不污染上游健康；正常多轮关闭不得追加空失败。再以有效 response.create 核对真实响应终态、账号和用量，才能认定生成链路通过 live 验证。历史事件保持原值。
+
 ### Messages 会话压缩与非流式总预算
 
 2026-10-09 x600 的 `claude-owner/036891`、`036898` 为非流式 Messages 请求，正文约 1.06 MB，含 196 条历史消息和 25 个工具，上游推理强度为 `high`。两次请求持续收到约 1 万、9000 个业务事件，但未观察到完成事件。客户端 `X-Stainless-Timeout: 300` 加上最多 5 秒错误交付余量，形成 295 秒有效预算，最终为 504 `request_timeout`。收到上游 200 或增量事件不能延长非流式总预算，也不能说明压缩已完成。

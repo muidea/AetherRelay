@@ -156,7 +156,7 @@ func TestCodexBufferingWithoutOutputSettlement(t *testing.T) {
 		t.Fatal(page, err)
 	}
 	e := page.Events[0]
-	if !e.GenerationBuffered || e.OutputTokensKnown || e.FirstOutputAt != nil || e.TPS != nil || e.ObservedTPS != nil || e.Outcome != "conversion" {
+	if !e.GenerationBuffered || e.OutputTokensKnown || e.FirstOutputAt != nil || e.TPS != nil || e.ObservedTPS != nil || e.Outcome != "conversion" || e.GenerationPartial {
 		t.Fatalf("buffering lost or output fabricated: %+v", e)
 	}
 }

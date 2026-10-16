@@ -6,13 +6,15 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.6.1`
+> 合同版本：`17.6.2`
 >
 > 状态：`active`
 >
 > 生效日期：2026-10-16
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+
+`17.6.2` 修复入站 WS 握手及本地拒绝的观测闭环：Nginx API 模板按 Upgrade 请求显式转发 Upgrade/Connection，普通 HTTP 保持原连接策略。非 101 握手按真实 HTTP 状态和有界错误完成 usage、响应与归档，不落入固定 500 兜底；已升级后本地帧/模型/续接校验拒绝同样显式结束本轮，保持实际 HTTP 101 与协议错误分类。升级成功但没有 create 就关闭/超时的连接单独记录取消/超时，不伪造模型、账号、用量或生成成功。验收覆盖缺失升级头、非法版本/Key、真实 TCP 101、零 create 关闭/超时、本地错误及下一轮失败、逐轮独立结算、归档开关与健康隔离。未观测到实际输出时不标记部分输出；已有输出的失败仍保留部分输出证据。历史误记事件不回写。线上 Nginx 配置与应用修复分别验证，reload 不等于新版应用已部署。
 
 `17.6.1` 收口管理探测准入边界：槽位 ID 在 Proxy 登记、幂等、查询及账号 owner 并发账本之前统一去除首尾空白。出站前以已持有租约复查全部准入事实，owner 验证租约归属后只扣除该租约自身占用；失效、已释放或跨账号租约不得豁免并发，携租约复查不得再申请租约或返回凭据。复查拒绝即结束并释放原租约，不启动 WS；配置变化仍为 account_changed，超时与 owner 错误独立分类。若之前已执行 OAuth 刷新，报告保留刷新及已出站事实，页面说明未发起 WS 探测，不宣称完全未请求上游。验收覆盖空白别名的并发/幂等/任务隔离、单并发自有租约复查、无效租约、刷新前后动态拒绝、资源回收及健康隔离。
 
@@ -445,6 +447,8 @@
 
 `CP-WS-015` 每个原生 response.create 必须独立建立 usage EventID、completion guard 和归档 round；连接 request ID 可共享以关联，不能用单个 usage completion 吞掉后续响应。每轮保存请求、响应帧、账号、模型、终态和 token；首事件及输出时间不得继承上一轮。原始 WS 握手与 create 尝试分开观察。
 
+`CP-WS-018` 入站握手失败必须按升级器真实 HTTP 状态显式结算并归档，保留安全原因和握手请求元数据；不得写入账号/上游故障或由兜底伪造 500。成功升级后的本地校验错误保留 HTTP 101 与帧内错误码，零 create 的连接取消/超时不算生成成功，也不能留下 proxy_internal_error；正常多轮结束不能多记一笔空失败。Nginx API 反向代理必须同时透传 HTTP/1.1、Upgrade 及按请求生成的 Connection 升级 token。
+
 `CP-WS-016` HTTP 回退会话的 generate=false 不得发起生成。允许代理以零用量、本地 response ID 确认可选预热，并保留输入供下一次完整重建；不能宣称实际预热了上游缓存。独立 HTTP 请求若缺少该本地续接状态，不能将 generate=false 回退为 HTTP 生成。
 
 `CP-WS-017` 握手的连接资源归 codexupstream Block；caller context 取消/超时或 BeginShutdown 必须中断直接连接、HTTP/HTTPS 代理 CONNECT 及 Upgrade 响应头读取，不能等到固定握手超时。成功移交 session 前解除并等待取消回调，已建立的原生会话不得因 WSOpen 命令 context 随后结束而关闭；取消后的握手不得转 HTTP 或发送 create。验收必须覆盖进行中取消、超时、排空、两种代理及成功移交。
@@ -821,7 +825,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
 | Codex manifest profile 与客户端版本过滤 | CP-CAP-007..009 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `model_profiles_test.go`, `aetherrelayconfig/config_test.go` |
 | HTTPS 账号代理 ALPN | CP-SEC-002, CP-SEC-004 | implemented | `aetherrelayproxy/transport.go`, `codexupstream/biz/biz.go` | `aetherrelayproxy/transport_test.go`, `codexupstream/biz/biz_test.go` |
-| Responses WebSocket | CP-EP-002, CP-WS-001..017 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/responses_transport.go`, `codexupstream/biz/websocket_http_fallback.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_replay_test.go`, `codex_websocket_fallback_test.go`, `codexupstream/biz/websocket_handshake_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
+| Responses WebSocket | CP-EP-002, CP-WS-001..018 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/responses_transport.go`, `codexupstream/biz/websocket_http_fallback.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_observation_test.go`, `codex_websocket_replay_test.go`, `codex_websocket_fallback_test.go`, `codexupstream/biz/websocket_handshake_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
 | 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | ChatGPT Web 模型级能力 | CP-CAP-011 | implemented | `proxyapi/biz/discovery.go`, `effectivecatalog/catalog.go` | `effectivecatalog/catalog_test.go`, `proxy/chatgpt_images_test.go` |

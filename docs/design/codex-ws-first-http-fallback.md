@@ -37,7 +37,7 @@ HTTP/JSON/SSE 每个请求创建并关闭一个上游 WS，沿用现有请求租
 
 ## 记录与验收
 
-每个原生 response.create 独立建立 EventID、usage completion 和归档 round，共享原始连接 request ID 以便关联。每轮分别保存 request.json、response.ws.jsonl、账号、模型、用量、首事件与终态，避免一条长连接只结算第一轮。首轮沿用已开始的握手 usage event；未发送 create 就关闭的连接沿用请求兜底结算。
+每个原生 response.create 独立建立 EventID、usage completion 和归档 round，共享原始连接 request ID 以便关联。每轮分别保存请求、响应帧、账号、模型、用量、首事件与终态，正文遵循归档开关，避免一条长连接只结算第一轮。首轮沿用已开始的握手 usage event；未发送 create 就关闭的连接显式结算为取消、空闲超时、生命周期超时或消息超限，不进入固定 500 的异常兜底，也不算生成成功。握手拒绝保留真实 HTTP 状态和 invalid_request；升级后的本地校验拒绝保留 HTTP 101 与帧内错误码。握手的 response.meta.json 只属于首轮，后续帧没有新的 HTTP 握手，结算状态由各轮 metadata.json 记录。每轮重新建立账号/响应模型观测，未实际输出不能标记部分输出。
 
 上游尝试归档区分 GET 握手、WS create 和 POST HTTP。`upstream.response*.json` 中的 `upstream_transport`、`transport_fallback_reason`、`websocket_request_sent` 标明实际路径，失败握手与最终 HTTP 响应分别保留。普通回退日志只写有界原因及握手状态；完整正文遵循已有归档开关。
 
