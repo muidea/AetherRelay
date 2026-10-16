@@ -71,6 +71,10 @@ func projectionFixture() (map[string]any, []map[string]any) {
 	final := projectionMessage("final_answer", "after")
 	a := map[string]any{"type": "function_call", "call_id": "a", "name": "Read", "arguments": `{"number":9007199254740993}`}
 	b := map[string]any{"type": "function_call", "call_id": "b", "name": "Read", "arguments": `{"path":"b"}`}
+	for _, item := range []map[string]any{comment, a, b, final} {
+		item["metadata"] = map[string]any{"turn_id": "fixture-turn", "future": map[string]any{"nested": []any{true, nil, "opaque marker"}}}
+		item["internal_chat_message_metadata_passthrough"] = map[string]any{"turn_id": "fixture-turn"}
+	}
 	response := projectionResponse(comment, a, b, final)
 	metadata := map[string]any{"type": "response.metadata", "sequence_number": 2, "response_id": "resp_projection", "metadata": map[string]any{"openai_chatgpt_moderation_metadata": map[string]any{"prompt": map[string]any{"omnimod": map[string]any{"protection_type": "omnimod", "outputs": []any{map[string]any{"is_blocked": false}}}}, "generation": map[string]any{}, "tool_call": map[string]any{}, "tool_response": map[string]any{}}}}
 	return response, []map[string]any{
@@ -420,7 +424,12 @@ func TestCodexProjectionHandlerSuccessHasSameStreamSemantics(t *testing.T) {
 				return nil
 			},
 		}
-		h, _ := newArchivedCodexResponsesHandler(t, executor)
+		h, root := newArchivedCodexResponsesHandler(t, executor)
+		recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true, FullContent: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.interactionRecorder = recorder
 		r := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(fmt.Sprintf(`{"model":"gpt-5.2-codex","stream":%t,"max_tokens":128,"messages":[{"role":"user","content":"hello"}]}`, stream)))
 		r.Header.Set("Authorization", "Bearer test-client-key")
 		w := httptest.NewRecorder()
@@ -466,6 +475,35 @@ func TestCodexProjectionHandlerSuccessHasSameStreamSemantics(t *testing.T) {
 		}
 		if stream && !slices.Contains(events[0].IgnoredFeatures, "response_metadata") {
 			t.Fatal("metadata consumption missing from observation")
+		}
+		for _, feature := range []string{"output_metadata", "internal_chat_message_metadata_passthrough"} {
+			if !slices.Contains(events[0].IgnoredFeatures, feature) {
+				t.Fatalf("output metadata consumption missing: %s", feature)
+			}
+		}
+		name := "upstream_response_001.body.json"
+		if stream {
+			name = "upstream_response_001.projection.sse"
+		}
+		raw, err := os.ReadFile(filepath.Join(root, "test-client", "000001", name))
+		if err != nil || !bytes.Contains(raw, []byte("opaque marker")) || !bytes.Contains(raw, []byte("internal_chat_message_metadata_passthrough")) {
+			t.Fatalf("original metadata missing from archive: %v", err)
+		}
+		expected := projectionJSON(response)
+		if stream {
+			var captured bytes.Buffer
+			for _, event := range source {
+				captured.WriteString("data: ")
+				captured.Write(projectionJSON(event))
+				captured.WriteString("\n\n")
+			}
+			expected = captured.Bytes()
+		}
+		if !bytes.Equal(raw, expected) {
+			t.Fatal("archive differs from original projection input")
+		}
+		if strings.Contains(w.Body.String(), "opaque marker") || strings.Contains(w.Body.String(), "internal_chat_message_metadata_passthrough") {
+			t.Fatal("observational metadata leaked to client")
 		}
 	}
 }

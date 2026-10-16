@@ -1,5 +1,13 @@
 # OpenAI Responses 与 Anthropic Messages 双向转换设计
 
+## 2026-10-16 output item 附带信息统一投影（17.3.1，待 live 验收）
+
+x800 Event `0f733a6913ea1e29855f4e07b4e64f16` 在 `Edit` 的 `response.output_item.added` 被拒绝：同一 function_call 带有 `metadata` 和 `internal_chat_message_metadata_passthrough`，非流式已兼容而流式预校验未复用。两者只作为已知附带信息处理，内部新增键和嵌套值不需要逐个登记；仅在投影副本中省略，记录固定 `output_metadata` / `internal_chat_message_metadata_passthrough` 忽略项，转换前归档保留原内容。不根据 `internal_*`、`*metadata*` 等命名推断其它未知字段可忽略。
+
+流式 output_item.added/done 与终态 output 共用 `normalizeResponsesOutputItem`、`validateResponsesOutputItemFields`；通用 Provider 非流式沿用原附带信息兼容行为，Codex 流式接入相同规则。核心 call_id/name/arguments 检查与字段白名单共享，added 允许空参数，中途检查累计字节预算，参数 done / item done 校验完整参数及与增量的一致性（接受 JSON 空白和对象键顺序差异，保留大整数精度）。未知字段、item 类型、namespace、phase 继续失败；独立 response.metadata 仍不能产生正文或完成状态。
+
+明确的上游缓冲观测独立写入现有附属表，不再要求已取得输出 Token 或有效输出耗时；内存、数据库重开后的明细和 CSV 口径相同。缺失 usage/输出时间仍为未知，缓冲标记本身不构成 TPS 样本。没有 schema 变更，不修补历史记录；live 步骤和验收限制见 [现场收口记录](x800-codex-conversion-closure-2026-10-16.md#8-1731-output-item-附带信息收口与-live-验收)。
+
 ## 2026-10-16 x800 Codex 响应投影收口（本地验收完成，待部署）
 
 Codex→Anthropic 独立启用 metadata 与 commentary 兼容：`response.metadata` 只记忽略项，继续等待合法终态；消息 phase 仅接纳缺失、commentary、final_answer，commentary 正文作为 text 保序投影，不省略、不改写为 final_answer。流式文本/工具/后续文本使用递增 content block index，参数 done 不重复发送，未知事件/phase、未完成工具及缺终态仍失败。通用 Provider 保持原有转换边界。

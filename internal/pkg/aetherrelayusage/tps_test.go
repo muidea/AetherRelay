@@ -91,6 +91,10 @@ func TestTPSWeightedAggregationAndEligibility(t *testing.T) {
 					if e.ObservedTPS == nil || *e.ObservedTPS != 30 || !e.GenerationPartial || !e.GenerationBuffered {
 						t.Fatal(e)
 					}
+				case "missing-usage":
+					if e.ObservedTPS != nil || !e.GenerationBuffered {
+						t.Fatal("buffering observation lost without usage", e)
+					}
 				default:
 					if e.ObservedTPS != nil || e.GenerationBuffered {
 						t.Fatal("unknown sample assigned ObservedTPS", e)

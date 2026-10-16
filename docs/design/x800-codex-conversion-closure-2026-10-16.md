@@ -134,3 +134,40 @@ namespace 不在本次故障主修复范围。不能为了通过转换随意删�
 修复后通过临时 overlay 再次回放现场样本，结果存于本机 `closure-replay.log`：53/53 metadata 被消费且不产生正文/完成状态；10/10 commentary 与 4/4 final_answer 消息投影成功；平面工具 probe 的实际完成对象投影成功。53 个原生完整对象中，原可转换的 4 个仍通过，48 个 custom_tool_call 与 1 个 namespace 边界仍明确拒绝；未把原生工具形态全量放行。22 条历史失败的具体字段仍无法追溯，不宣称这批历史请求已全部成功回放。
 
 本地检查全部通过：相关分包测试、`go test ./...`、`make check-codex`（含相关 race、32 项前端合同测试、`go vet ./...`、diff 检查和凭据扫描），以及 metrics/archive 的额外 race。尚未执行修复版本的线上 smoke 或真实 Claude 连续工具会话验收。
+
+## 8. 17.3.1 output item 附带信息收口与 live 验收
+
+现场新证据：Event `0f733a6913ea1e29855f4e07b4e64f16`，`claude-owner/000440`，2026-10-16T05:06:52.898561Z，执行账号 `muidea@gmail.com`。运行镜像已是 `f8cf1634`；`Edit` function_call 的两个附带字段都包含同一 turn_id。流式预校验首先拒绝 internal_chat_message_metadata_passthrough，仅去掉该字段又拒绝 metadata，去掉两者后已有三帧可通过。实际客户端仅有 message_start 和 api_error，未取得工具输出、完成事件或最终 usage。原始归档前缀通过不能证明整个上游请求成功。
+
+本次实现：
+
+- 共享 output item 归一化和字段规则，流式 added/done、完整终态和非流式复用；两个明确附带字段在独立副本中省略，容器内部扩展透明兼容，原文留在归档。忽略项只有固定字段分类，不增加动态维度或逐字段日志。
+- 工具参数允许 added 空值，保留累计预算、完成 JSON 校验和身份校验；done 参数与已收增量不一致时明确失败，格式空白或对象键顺序变化允许。未知业务字段、类型及 phase 保持拒绝。
+- 缓冲标记独立于输出耗时和用量落库，内存、DuckDB 重开、明细和 CSV 保持一致，不创建虚假输出时间、Token 或 TPS。现有附属表即可承载，无 schema 变更、不回填历史。
+- 固定回归覆盖真实 Edit added 字段形态，以及合成的参数增量、done-only、item-done-only 和 terminal-only 完整流程；handler 覆盖文字/工具保序、流式与非流式内容及用量一致、附带信息原始归档保真且不进入客户端正文。合成后续帧明确不作为 live 证据。
+
+### Live 验证步骤
+
+1. 发布候选时记录固定 commit/image revision，并核对实际容器运行的 image ID 与 revision。确认 `archive_interactions=true`、`archive_full_content=true`，以便比对转换前后的内容。
+2. 通过 `claude-owner` 的 `/v1/messages` 调用 `gpt-6.1-sol`，分别覆盖 stream=true/false：普通文字、强制 Edit 工具调用、工具结果续轮。记录每轮 Event ID、归档目录、实际账号/槽位和模型。若实际账号不是 muidea@gmail.com，应明确它不构成相同账号的复验。
+3. 工具调用请求可使用下列正文，将 stream 分别设为 true/false。这里只生成工具调用，验证端无须写入真实文件；从响应提取实际 tool_use.id 和完整 assistant content，再用 tool_result 续轮，返回固定结果 `LIVE_EDIT_OK`，要求模型回复 `LIVE_OK`。续轮将 tool_choice 改为 `{"type":"none"}`，避免继续强制 Edit，也分别覆盖两种模式。
+
+```json
+{
+  "model": "gpt-6.1-sol",
+  "stream": true,
+  "max_tokens": 1024,
+  "messages": [{"role": "user", "content": "这是协议工具调用验证。请调用 Edit，将 /tmp/aetherrelay-live.txt 的 BEFORE 改为 AFTER。"}],
+  "tools": [{"name": "Edit", "description": "协议验证工具，返回固定验证结果。", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["file_path", "old_string", "new_string"]}}],
+  "tool_choice": {"type": "tool", "name": "Edit"}
+}
+```
+
+4. 对工具轮检查：响应只有一次对应 tool_use，名称/调用 ID/参数正确且与上游一致；stop_reason=tool_use；流式有完整帧和唯一 message_stop；无 error；最终 outcome=success。续轮须携带原 assistant content 和对应 tool_result，不复用不同请求的 call ID。最终 usage 按实际上游值记录。
+5. 检查转换前归档是否实际包含两个附带字段，且 ignored_features 有对应固定分类、客户端内容不泄漏附带信息。若上游该轮没有携带字段，只能确认普通工具链路成功，不能记为现场故障形态已复现并验证修复。
+6. 对缓冲上游，核对归档 GenerationBuffered、页面“上游明确缓冲”及 CSV 一致。若出现缺终态/本地转换失败，HTTP200 仍须显示失败，usage 未取得保持未知，不纳入观测 TPS 样本。`first_event_duration_ms` 是转换入口首次交付观测，上游读取首事件耗时与客户端首次交付耗时在 attempt 归档/日志中分别核对，不能把它解释为模型首 Token 耗时。
+7. 在真实 Claude 工具会话中继续观察至少 20 轮，期间抽查原生 Responses，并按字段路径核对 conversion 错误及 Provider 健康；出现未知业务语义时保留失败与归档，按证据扩展适配规则。
+
+本次范围是代码与离线验收准备；本节不代表已发布或已完成 live 验收。
+
+本次本地验收已通过：`go test ./...`、`make check-codex`（包含相关 race、32 项前端测试、vet、diff 和凭据检查）、`go test -race ./internal/pkg/aetherrelayusage`。另用现场原始 `upstream_response_001.projection.sse` 离线回放，三帧均无需移除字段即可转换，两个忽略项均记录，metadata 未进入客户端内容，缺少 completed 时未伪造完成。完整后续生命周期仍以固定合成回归验证，最终线上结论以本节 live 验收为准。

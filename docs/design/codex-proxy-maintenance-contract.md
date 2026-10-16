@@ -6,13 +6,15 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.3.0`
+> 合同版本：`17.3.1`
 >
 > 状态：`active`
 >
 > 生效日期：2026-10-16
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+
+`17.3.1` 根据 x800 Event `0f733a6913ea1e29855f4e07b4e64f16` 统一 Responses output item 的附带信息归一化与字段校验：流式 added/done 和汇聚终态复用同一规则，仅在独立投影副本中省略 `metadata`、`internal_chat_message_metadata_passthrough` 并记录固定忽略项，容器内部允许扩展，原始归档不变。未知业务字段、工具类型及 phase 继续明确拒绝，不按名称前缀推断可忽略性；工具增量与完成参数必须一致。上游明确缓冲独立于有效输出耗时样本保存和展示，缺失 usage 仍为未知，不回填历史记录。按 PATCH 记录，代码及本地验收随本次收口更新，live 验收单独执行。
 
 本文是 AetherRelay 的 **Codex 访问反向代理首要维护合同**。凡涉及 Codex 入站路由、请求变换、上游身份、OAuth 账号、调度、重试、HTTP/SSE/WebSocket、compact、模型发现或用量观察的实现、测试和文档，都必须服从本文。
 
@@ -584,6 +586,13 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 ## 14. 实施追踪矩阵
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
+
+`17.3.1` 新增实施追踪：
+
+| 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
+| --- | --- | --- | --- | --- |
+| output item 附带信息共享投影、未知业务字段拒绝及参数完成一致性 | 17.3.1 | implemented（本地）；待 live 验收 | `proxyapi/service/proxy/responses_output_projection.go`, `codex_anthropic_projection.go`, `responses_anthropic.go` | `responses_output_projection_test.go`, `codex_anthropic_projection_test.go` |
+| 无输出样本时保留明确缓冲观测 | 17.3.1 | implemented（本地）；待 live 验收 | `aetherrelayusage/duckdb.go`, `tps.go`, `queries.go`, `export.go` | `tps_buffering_test.go`, `proxyapi/service/proxy/generation_test.go` |
 
 `17.3.0` 新增实施追踪：
 

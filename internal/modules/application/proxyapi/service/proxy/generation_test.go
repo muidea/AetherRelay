@@ -47,6 +47,9 @@ func TestCodexGenerationSettlementWithoutArchive(t *testing.T) {
 				t.Fatal(page, err)
 			}
 			e := page.Events[0]
+			if !e.GenerationBuffered {
+				t.Fatal("buffering observation lost", e)
+			}
 			if tok.OutputTokensKnown {
 				if e.ObservedTPS == nil || *e.ObservedTPS != float64(tok.CompletionTokens)/10 || e.GenerationDurationMS != 10000 || !e.GenerationBuffered {
 					t.Fatal(e)
@@ -73,6 +76,30 @@ func TestGenerationRetryResetAndReadFailure(t *testing.T) {
 	s := completion.generation.Snapshot(time.Now().Add(time.Hour))
 	if !s.Partial || s.Duration <= 0 || s.Duration > time.Second {
 		t.Fatal(s)
+	}
+}
+
+func TestCodexBufferingWithoutOutputSettlement(t *testing.T) {
+	store := usage.NewMemoryStore()
+	defer store.Close()
+	h := &Handler{usageStore: store}
+	at := time.Now().Add(-time.Minute)
+	if err := store.Start(context.Background(), usage.StartRecord{EventID: "buffered-conversion", APIKeyID: "key", StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req = req.WithContext(withUsageCompletion(req.Context(), &usageCompletion{}))
+	h.codexAttemptObserver(nil, req, "codexoauth")(codexresponses.HTTPAttempt{Response: codexresponses.HTTPResponseObservation{GenerationBuffered: true}}, nil)
+	if !h.completeUsage(req, "buffered-conversion", "codexoauth", "gpt-6.1-sol", true, 200, time.Second, tokenUsage{}, "conversion", "conversion", "", nil, 0, nil) {
+		t.Fatal("settlement failed")
+	}
+	page, err := store.Events(context.Background(), usage.EventFilter{UsageFilter: usage.UsageFilter{AllTime: true}})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatal(page, err)
+	}
+	e := page.Events[0]
+	if !e.GenerationBuffered || e.OutputTokensKnown || e.FirstOutputAt != nil || e.TPS != nil || e.ObservedTPS != nil || e.Outcome != "conversion" {
+		t.Fatalf("buffering lost or output fabricated: %+v", e)
 	}
 }
 

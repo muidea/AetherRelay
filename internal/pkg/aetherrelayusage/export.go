@@ -223,7 +223,7 @@ ORDER BY started_at ASC, event_id ASC`
 			strconv.FormatBool(cachedKnown),
 			strconv.FormatBool(creationKnown),
 		}
-		sample := GenerationSample{}
+		sample := GenerationSample{GenerationBuffered: buffered}
 		if firstOutputAt.Valid && generationNS.Valid {
 			sample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, outputTok, partial, buffered)
 		}

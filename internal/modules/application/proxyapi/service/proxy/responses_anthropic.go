@@ -499,21 +499,13 @@ func convertResponsesToAnthropic(body []byte, fallbackModel string, capability c
 	for index, item := range in.Output {
 		path, phase = fmt.Sprintf("output[%d]", index), ""
 		phase, _ = item["phase"].(string)
-		if _, exists := item["internal_chat_message_metadata_passthrough"]; exists {
-			// Krill/Codex-compatible Responses relays may attach opaque
-			// internal message metadata to output items. It has no Anthropic
-			// semantic equivalent and must never be exposed as content.
-			delete(item, "internal_chat_message_metadata_passthrough")
-			ignored = append(ignored, "internal_chat_message_metadata_passthrough")
-		}
-		if _, exists := item["metadata"]; exists {
-			delete(item, "metadata")
-			ignored = append(ignored, "output_metadata")
-		}
+		var itemIgnored []string
+		item, itemIgnored = normalizeResponsesOutputItem(item)
+		ignored = append(ignored, itemIgnored...)
 		typ, _ := item["type"].(string)
 		switch typ {
 		case "message":
-			if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "role": {}, "status": {}, "content": {}, "phase": {}}); err != nil {
+			if err := validateResponsesOutputItemFields(item); err != nil {
 				return nil, tokenUsage{}, nil, fmt.Errorf("output.message.%w", err)
 			}
 			if phase, exists := item["phase"]; exists {
@@ -560,7 +552,7 @@ func convertResponsesToAnthropic(body []byte, fallbackModel string, capability c
 				content = append(content, map[string]any{"type": "text", "text": text})
 			}
 		case "function_call":
-			if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "call_id": {}, "name": {}, "arguments": {}, "status": {}}); err != nil {
+			if err := validateResponsesOutputItemFields(item); err != nil {
 				return nil, tokenUsage{}, nil, fmt.Errorf("output.function_call.%w", err)
 			}
 			callID, _ := item["call_id"].(string)
@@ -583,7 +575,7 @@ func convertResponsesToAnthropic(body []byte, fallbackModel string, capability c
 			content = append(content, map[string]any{"type": "tool_use", "id": callID, "name": name, "input": input})
 			toolStop = true
 		case "function_call_output":
-			if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "call_id": {}, "output": {}, "status": {}}); err != nil {
+			if err := validateResponsesOutputItemFields(item); err != nil {
 				return nil, tokenUsage{}, nil, fmt.Errorf("output.function_call_output.%w", err)
 			}
 			callID, _ := item["call_id"].(string)

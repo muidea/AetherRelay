@@ -21,6 +21,14 @@ type responseProjectionError struct {
 func (e *responseProjectionError) Error() string { return e.Path + ": " + e.Err.Error() }
 func (e *responseProjectionError) Unwrap() error { return e.Err }
 
+func equivalentResponsesToolArguments(a, b string) bool {
+	if a == b {
+		return true
+	}
+	var left, right any
+	return decodeCodexJSON([]byte(a), &left) == nil && decodeCodexJSON([]byte(b), &right) == nil && reflect.DeepEqual(left, right)
+}
+
 func responsesCompletionUsage(body []byte) tokenUsage {
 	var envelope struct {
 		Usage json.RawMessage `json:"usage"`
@@ -184,14 +192,62 @@ func codexResponsesEventToAnthropic(capability config.ConversionCapability) conv
 		if typ == "response.content_part.added" {
 			state.ResponseTextEmitted = false
 		}
-		if (typ == "response.output_item.added" || typ == "response.output_item.done") && item["type"] == "function_call" {
+		if typ == "response.output_item.added" || typ == "response.output_item.done" {
+			var ignored []string
+			item, ignored = normalizeResponsesOutputItem(item)
+			for _, feature := range ignored {
+				state.markIgnored(feature)
+			}
 			path = "item"
-			if err := rejectConversionFields(item, map[string]struct{}{"type": {}, "id": {}, "call_id": {}, "name": {}, "arguments": {}, "status": {}}); err != nil {
+			if err := validateResponsesOutputItemFields(item); err != nil {
 				var location *conversionLocationError
 				if errors.As(err, &location) {
 					path += "." + location.Path
 				}
 				return nil, err
+			}
+			switch item["type"] {
+			case "message", "function_call", "reasoning":
+			default:
+				path = "item.type"
+				return nil, fmt.Errorf("unsupported response output item type")
+			}
+			event["item"] = item
+			// The generic state machine receives the same normalized projection.
+			// The archive has already captured the original payload.
+			payload, _ = json.Marshal(event)
+		}
+		if (typ == "response.output_item.added" || typ == "response.output_item.done") && item["type"] == "function_call" {
+			if value, exists := item["arguments"]; exists {
+				arguments, ok := value.(string)
+				if !ok || len(arguments) > maxConversionToolArgumentBytes {
+					path = "item.arguments"
+					return nil, fmt.Errorf("invalid function arguments")
+				}
+			}
+		}
+		if typ == "response.function_call_arguments.done" || (typ == "response.output_item.done" && item["type"] == "function_call") {
+			index, err := responsesAnthropicToolOutputIndex(event, state.ResponsesTools)
+			if err != nil {
+				return nil, err
+			}
+			arguments, exists := event["arguments"]
+			path = "event.arguments"
+			if typ == "response.output_item.done" {
+				arguments, exists = item["arguments"]
+				path = "item.arguments"
+			}
+			if exists {
+				value, ok := arguments.(string)
+				if !ok || len(value) > maxConversionToolArgumentBytes {
+					return nil, fmt.Errorf("invalid function arguments")
+				}
+				if value != "" && !json.Valid([]byte(value)) {
+					return nil, fmt.Errorf("invalid completed function arguments")
+				}
+				if tool := state.ResponsesTools[index]; tool != nil && tool.ArgumentsEmitted && !equivalentResponsesToolArguments(tool.Arguments, value) {
+					return nil, fmt.Errorf("completed function arguments differ from streamed arguments")
+				}
 			}
 		}
 		if (typ == "response.output_item.added" || typ == "response.output_item.done") && item["type"] == "message" {

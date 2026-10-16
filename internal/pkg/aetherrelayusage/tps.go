@@ -43,14 +43,14 @@ func validGeneration(r CompleteRecord) bool {
 }
 func generationSample(r CompleteRecord) GenerationSample {
 	if !validGeneration(r) {
-		return GenerationSample{}
+		return GenerationSample{GenerationBuffered: r.GenerationBuffered}
 	}
 	at := r.FirstOutputAt.UTC()
 	return makeGenerationSample(at, int64(r.GenerationDuration), r.OutputTokens, r.GenerationPartial || r.Outcome != "success", r.GenerationBuffered)
 }
 func makeGenerationSample(at time.Time, ns, tokens int64, partial, buffered bool) GenerationSample {
 	if ns <= 0 || at.IsZero() || tokens < 0 {
-		return GenerationSample{}
+		return GenerationSample{GenerationBuffered: buffered}
 	}
 	tps := outputRate(tokens, float64(ns)/float64(time.Second), true)
 	return GenerationSample{FirstOutputAt: &at, GenerationDurationNS: ns, GenerationDurationMS: float64(ns) / float64(time.Millisecond), ObservedTPS: tps, GenerationPartial: partial, GenerationBuffered: buffered}
@@ -135,6 +135,9 @@ func tpsCSV(s GenerationSample) []string {
 		row[0] = s.FirstOutputAt.Format(time.RFC3339Nano)
 		row[1] = strconv.FormatFloat(s.GenerationDurationMS, 'f', -1, 64)
 		row[3], row[4] = strconv.FormatBool(s.GenerationPartial), strconv.FormatBool(s.GenerationBuffered)
+	}
+	if s.GenerationBuffered {
+		row[4] = "true"
 	}
 	return row
 }

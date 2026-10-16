@@ -444,6 +444,7 @@ LIMIT ?`
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
 		}
+		e.GenerationBuffered = buffered
 		if firstOutputAt.Valid && generationNS.Valid {
 			known := e.OutputTokensKnown
 			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial, buffered)
