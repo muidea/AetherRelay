@@ -180,6 +180,49 @@ func TestSteeringAdmissionRejectedWithoutExecution(t *testing.T) {
 	}
 }
 
+func TestSteeringFailureDiagnosticsSurviveCleanupAndQueries(t *testing.T) {
+	p, f := newSteeringFixture(t)
+	cmd := proxyevents.StartSteeringProbeCommand{SlotID: "slot", Model: "gpt-test", IdempotencyKey: "diagnostic"}
+	first := p.startSteeringProbe(context.Background(), cmd)
+	waitSteeringTest(t, p, func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.starts == 1 })
+	m := steering.NewMachine()
+	m.HTTPStatus = 101
+	m.WriteAttempt("response.create")
+	m.WriteResult("response.create", nil)
+	m.Observe([]byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+	m.WriteAttempt("response.steer")
+	m.WriteResult("response.steer", nil)
+	m.Observe([]byte(`{"type":"error","error":{"code":"future_error","message":"management detail"}}`))
+	f.mu.Lock()
+	snap := f.snapshots[first.Report.ProbeID]
+	snap.Evidence = m.Evidence.Clone()
+	f.snapshots[first.Report.ProbeID] = snap
+	f.mu.Unlock()
+	waitSteeringTest(t, p, func() bool { return getSteeringTest(t, p, "slot", first.Report.ProbeID).Report.State == "finished" })
+	for _, query := range []string{first.Report.ProbeID, "latest", "idempotent"} {
+		var result proxyevents.SteeringProbeResult
+		if query == "idempotent" {
+			result = p.startSteeringProbe(context.Background(), cmd)
+		} else {
+			result = getSteeringTest(t, p, "slot", query)
+		}
+		e := result.Report
+		if e.Capability != steering.Unknown || e.ErrorCode != "upstream_error" || !e.SteerWriteCompleted || e.UpstreamError == nil || e.UpstreamError.Code != "future_error" || e.UpstreamError.Message != "management detail" || len(e.Timeline) != len(m.Timeline) {
+			t.Fatal("management projection lost failure evidence", e)
+		}
+		e.UpstreamError.Message = "reader mutation"
+		e.Timeline[0].Type = "reader mutation"
+	}
+	if m.UpstreamError.Message != "management detail" || snap.Evidence.UpstreamError.Message != "management detail" {
+		t.Fatal("snapshot mutated")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.starts != 1 || f.releases != 1 || f.healthWrites != 0 {
+		t.Fatal("diagnostics changed execution or health", f)
+	}
+}
+
 func TestSteeringTerminalEvidenceSurvivesDelayedController(t *testing.T) {
 	for _, reason := range []string{"timeout", "canceled"} {
 		for _, outcome := range []string{"waiting_for_required_input", "completed", "successor_failed", "awaiting_commit"} {

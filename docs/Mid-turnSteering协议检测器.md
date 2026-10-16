@@ -48,6 +48,18 @@
 
 入口复用现有管理认证、写操作来源/CSRF 防护及正文大小限制，结果设置 `Cache-Control: no-store`。请求不能覆盖上游 URL、凭据、代理或请求头。接口只登记在管理路由，不登记为下游 API 或可路由模型能力。
 
+## 17.6.3 诊断补充
+
+2026-10-17 核对 x800 `dd923ab` 的任务 `33772607-80bb-4119-b6c5-818d40853d3e`：槽位 `d5e3f15b-9275-4f3a-9f5b-8cb3d1df0029` 的 `gpt-6-astra` 已获准、WS 为 101，发送 steer 后以 UNKNOWN/upstream_error 结束；旧报告未保留原始拒绝详情，无法据此确认具体原因或判定不支持。本次只补诊断，不改探测输入 profile 或能力判据，不回填旧任务。
+
+- `create_sent`、`steer_sent` 保持“已尝试提交”的兼容语义，写操作可能已经抵达服务端；新增 `create_write_completed`、`steer_write_completed` 只在本地 WriteMessage 成功后为 true。初始 created 仅使 steering_state 进入 ready；尝试时为 writing、成功写入为 sent、写入失败为 write_failed。accepted、pending、committed 继续由上游关联事件决定，写入完成不代表接受。
+- `upstream_error` 独立记录失败 `event_type`、`type`、`code`、`param`、`message`、`status` 和 `truncated`；文本分别最多 128/128/128/256/4096 字节，UTF-8 边界截断，控制字符过滤。数值 code 保留文本形式；缺失字段保持空。未知 code 按独立错误状态分类，状态也未知时仍归一化为 upstream_error，原始详情不丢失；缺少 code 时可用 error.type 分类，不能从 message 猜测不支持。握手状态独立保存在 upstream_http_status，帧内 status 不覆盖 101。错误详情只来自失败事件的错误字段或握手安全错误投影，不包含完整帧、请求头或输出正文。
+- `timeline` 保存最近 64 条事件的递增 sequence、elapsed_ms、direction（send/receive/local）、type 和 state；发送记录 attempt/written/write_failed，接收记录事件类型，结束记录归一化结果。`timeline_truncated` 标记旧条目被淘汰，失败详情独立保留。诊断受既有任务容量和 30 分钟有效期约束，不进入下游归档/usage。
+- 管理页区分提交尝试、写入结果、协议接受，展示错误详情及最近事件，并对上游文本做 HTML 转义。普通结束日志记录 probe_id、失败事件及有界 type/code/param/status、写入事实和事件数，不写错误 message、完整事件或生成正文。诊断快照、查询结果与上游引擎彼此隔离，不能共享可变切片或错误指针。
+- 自动化覆盖状态/类型兼容、未知错误详情、关联冲突、successor 失败、失败后证据、实际 WS 顺序及清理、写入失败、截断与快照隔离、管理 API/页面展示；仍要求部署后管理员重新手工检测真实账号，不自动发起付费探测。
+
+17.6.3 本地验证：全仓 `go test -p 1 ./... -count=1`、最终 `GOFLAGS=-p=1 bash scripts/check-codex-contract.sh`（含 race、43 项 Web 检查、vet 与凭据模式扫描）通过；`node --test web/admin/*.test.cjs` 共 58 项通过。补充的握手 504 诊断与并发快照通过定向 race。主程序构建成功，产物 `/tmp/aetherrelay-steering-diagnostics`；本轮未部署或重新触发真实探测。
+
 ## 指定账号与执行边界
 
 1. 严格绑定目标槽位，不可用时返回该槽位的原因，禁止换号。现有 `PreferredID` 只表示优先且会回退，不能直接当作严格绑定使用。
@@ -180,6 +192,9 @@ JSON 至少包括任务 ID、目标/实际槽位 ID、账号标签、请求/响�
   "upstream_request_sent": true,
   "create_sent": true,
   "steer_sent": true,
+  "create_write_completed": true,
+  "steer_write_completed": true,
+  "timeline_truncated": false,
   "phase": "successor",
   "steering_state": "committed",
   "capability": "SUPPORTED",
@@ -192,4 +207,4 @@ JSON 至少包括任务 ID、目标/实际槽位 ID、账号标签、请求/响�
 }
 ```
 
-尚未部署本轮修改，未针对真实 OAuth 账号执行 live 检测，不声明上游已支持 Steering。部署后由管理员手工检测，下载完整 JSON 并结合 `Codex steering probe created/finished` 日志按 `probe_id` 核对实际槽位、配置、阶段和消耗。真实上游若返回明确不支持、pending 或 UNKNOWN，应保留原始分类，不将 Mock 成功推广为生产能力保证。
+17.6.0/17.6.1 的上述结果为本地验收记录。后续 x800 `dd923ab` 已由管理员执行真实探测，具体任务见本文 17.6.3 诊断补充：结果为 UNKNOWN/upstream_error，尚不能确认支持或具体拒绝原因。17.6.3 诊断修改仍待部署，须由管理员手工重新检测，下载完整 JSON 并结合 `Codex steering probe created/finished`、`Codex steering probe upstream error` 日志按 `probe_id` 核对实际槽位、配置、错误详情、事件顺序和消耗。真实上游若返回明确不支持、pending 或 UNKNOWN，应保留原始分类，不将 Mock 成功推广为生产能力保证。

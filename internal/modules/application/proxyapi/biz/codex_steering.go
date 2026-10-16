@@ -93,7 +93,10 @@ func (j *steeringJobs) finish(t *codexSteeringTask) {
 	if t.report.ActualSlotID != nil {
 		actualSlot = *t.report.ActualSlotID
 	}
-	slog.Info("Codex steering probe finished", "probe_id", t.report.ProbeID, "target_slot_id", t.report.TargetSlotID, "actual_slot_id", actualSlot, "model", t.report.Model, "probe_profile", t.report.Profile, "phase", t.report.Phase, "admission_state", t.report.AdmissionState, "admission_reason", t.report.AdmissionReason, "capability", t.report.Capability, "execution_outcome", t.report.ExecutionOutcome, "error_code", t.report.ErrorCode, "upstream_request_sent", t.report.UpstreamRequestSent, "credential_refresh_performed", t.report.CredentialRefreshPerformed)
+	if detail := t.report.UpstreamError; detail != nil {
+		slog.Info("Codex steering probe upstream error", "probe_id", t.report.ProbeID, "event_type", detail.EventType, "upstream_error_type", detail.Type, "upstream_error_code", detail.Code, "upstream_error_param", detail.Param, "upstream_error_status", detail.Status, "diagnostic_truncated", detail.Truncated)
+	}
+	slog.Info("Codex steering probe finished", "probe_id", t.report.ProbeID, "target_slot_id", t.report.TargetSlotID, "actual_slot_id", actualSlot, "model", t.report.Model, "probe_profile", t.report.Profile, "phase", t.report.Phase, "admission_state", t.report.AdmissionState, "admission_reason", t.report.AdmissionReason, "capability", t.report.Capability, "execution_outcome", t.report.ExecutionOutcome, "error_code", t.report.ErrorCode, "upstream_request_sent", t.report.UpstreamRequestSent, "credential_refresh_performed", t.report.CredentialRefreshPerformed, "create_sent", t.report.CreateSent, "create_write_completed", t.report.CreateWriteCompleted, "steer_sent", t.report.SteerSent, "steer_write_completed", t.report.SteerWriteCompleted, "event_count", t.report.EventCount, "timeline_truncated", t.report.TimelineTruncated)
 }
 
 func (s *Proxy) handleStartSteeringProbe(ev event.Event, r event.Result) {
@@ -129,6 +132,7 @@ func (s *Proxy) startSteeringProbe(ctx context.Context, cmd proxyevents.StartSte
 	if id := j.keys[cmd.IdempotencyKey]; id != "" {
 		t := j.jobs[id]
 		out := t.report
+		out.Evidence = out.Evidence.Clone()
 		j.mu.Unlock()
 		if out.TargetSlotID != cmd.SlotID || out.Model != cmd.Model || out.Profile != steering.Profile {
 			return fail(409, "idempotency_conflict")
@@ -191,6 +195,7 @@ func (s *Proxy) startSteeringProbe(ctx context.Context, cmd proxyevents.StartSte
 		}
 	}
 	out := t.report
+	out.Evidence = out.Evidence.Clone()
 	j.mu.Unlock()
 	s.pumpSteering()
 	return proxyevents.SteeringProbeResult{Status: 202, Report: out}
@@ -247,6 +252,7 @@ func (s *Proxy) runSteeringTask(t *codexSteeringTask) {
 	t.cancel = cancel
 	stopping := j.stopping
 	out := t.report
+	out.Evidence = out.Evidence.Clone()
 	j.mu.Unlock()
 	if stopping {
 		cancel()
@@ -370,6 +376,7 @@ func (s *Proxy) pollSteeringTask(t *codexSteeringTask, cleanupCtx context.Contex
 	j := &s.steering
 	j.mu.Lock()
 	out := t.report
+	out.Evidence = out.Evidence.Clone()
 	j.mu.Unlock()
 	if t.finalizing {
 		s.finishSteeringTask(t, out, cleanupCtx)
@@ -482,7 +489,7 @@ func (s *Proxy) finishSteeringTask(t *codexSteeringTask, out proxyevents.Steerin
 
 func applySteeringSnapshot(out *proxyevents.SteeringReport, s upevents.SteeringSnapshotResult) {
 	refreshSent := out.CredentialRefreshPerformed
-	out.Evidence = s.Evidence
+	out.Evidence = s.Evidence.Clone()
 	out.UpstreamRequestSent = out.UpstreamRequestSent || refreshSent
 	out.Endpoint = s.Endpoint
 }
@@ -514,6 +521,7 @@ func (s *Proxy) handleGetSteeringProbe(ev event.Event, r event.Result) {
 		return
 	}
 	out := t.report
+	out.Evidence = out.Evidence.Clone()
 	j.mu.Unlock()
 	if current, err := s.probeAdmission(ev.Context(), accevents.ProbeAdmissionCommand{AccountID: out.TargetSlotID, Model: out.Model}); err == nil && current.Reason != "pool_stopping" {
 		out.Historical = out.ConfigVersion != "" && current.ConfigVersion != out.ConfigVersion

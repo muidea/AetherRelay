@@ -36,7 +36,7 @@ func closeSteeringTest(t *testing.T, s *Upstream) events.SteeringCloseResult {
 }
 
 func TestSteeringWSProtocolAndCleanup(t *testing.T) {
-	for _, mode := range []string{"completed", "pending", "disconnect", "oversize", "cumulative", "compressed", "cancel"} {
+	for _, mode := range []string{"completed", "pending", "upstream_error", "disconnect", "oversize", "cumulative", "compressed", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			wire := make(chan []byte, 1)
 			ready := make(chan struct{}, 1)
@@ -77,6 +77,10 @@ func TestSteeringWSProtocolAndCleanup(t *testing.T) {
 					return
 				}
 				wire <- steer
+				if mode == "upstream_error" {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"future_rejection","type":"future_error","param":"input","message":"this profile was rejected"}}`))
+					return
+				}
 				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.steer.accepted","steer":{"id":"steer_one","previous_response_id":"resp_parent"}}`))
 				if mode == "cancel" {
 					ready <- struct{}{}
@@ -132,7 +136,23 @@ func TestSteeringWSProtocolAndCleanup(t *testing.T) {
 			if !closed.Closed || !e.Done || s.steeringSession("probe_test") != nil {
 				t.Fatal("probe leaked")
 			}
+			if !e.CreateSent || !e.CreateWriteCompleted || !e.SteerSent || !e.SteerWriteCompleted {
+				t.Fatal("successful writes lost", e)
+			}
 			switch mode {
+			case "upstream_error":
+				if e.Capability != steering.Unknown || e.ErrorCode != "upstream_error" || e.UpstreamError == nil || e.UpstreamError.Code != "future_rejection" || e.UpstreamError.Message != "this profile was rejected" || e.UpstreamError.Status != 0 || e.HTTPStatus != 101 || e.SteerID != "" {
+					t.Fatal("unknown upstream failure lost", e)
+				}
+				want := []string{"websocket.handshake", "response.create", "response.create", "response.created", "response.steer", "response.steer", "error", "probe.finished"}
+				if len(e.Timeline) != len(want) {
+					t.Fatal(e.Timeline)
+				}
+				for i, kind := range want {
+					if e.Timeline[i].Type != kind {
+						t.Fatal(e.Timeline)
+					}
+				}
 			case "completed":
 				if e.Capability != steering.Supported || e.ExecutionOutcome != "completed" || e.ParentUsage == nil || e.SuccessorUsage == nil {
 					t.Fatal(e)
@@ -172,6 +192,66 @@ func TestSteeringHandshakeFailureDoesNotFallback(t *testing.T) {
 	e := closeSteeringTest(t, s).Snapshot.Evidence
 	if e.HTTPStatus != 403 || e.AuthState == "rejected" || e.CreateSent || e.Capability != steering.Unknown {
 		t.Fatal(e)
+	}
+	if e.UpstreamError == nil || e.UpstreamError.EventType != "websocket.handshake" || e.UpstreamError.Status != 403 || e.CreateWriteCompleted {
+		t.Fatal("handshake diagnostics lost", e)
+	}
+}
+
+func TestSteeringSnapshotDiagnosticsAreIndependent(t *testing.T) {
+	p := &steeringSession{}
+	m := steering.NewMachine()
+	m.RecordUpstreamError(steering.UpstreamError{EventType: "error", Code: "original"})
+	m.Trace("receive", "error", "")
+	p.publish(m.Evidence)
+	m.UpstreamError.Code = "writer mutation"
+	m.Timeline[0].Type = "writer mutation"
+	v := p.read()
+	if v.Evidence.UpstreamError.Code != "original" || v.Evidence.Timeline[0].Type != "error" {
+		t.Fatal(v)
+	}
+	v.Evidence.UpstreamError.Code = "reader mutation"
+	v.Evidence.Timeline[0].Type = "reader mutation"
+	if next := p.read(); next.Evidence.UpstreamError.Code != "original" || next.Evidence.Timeline[0].Type != "error" {
+		t.Fatal(next)
+	}
+	// Race verification: the event reader keeps rolling its own timeline
+	// while management readers receive, and may mutate, independent copies.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			m.Trace("receive", "response.metadata", "")
+			p.publish(m.Evidence)
+		}
+	}()
+	for range 200 {
+		v := p.read()
+		v.Evidence.UpstreamError.Code = "concurrent reader mutation"
+		v.Evidence.Timeline[0].Type = "concurrent reader mutation"
+	}
+	<-done
+}
+
+func TestSteeringGatewayTimeoutKeepsHandshakeDiagnostic(t *testing.T) {
+	transportServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Error("unexpected fallback")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		_, _ = w.Write([]byte(`{"error":{"code":"gateway_timeout","message":"upstream timed out"}}`))
+	})
+	s := transportUpstream(t)
+	startSteeringTest(t, s, time.Now().Add(2*time.Second))
+	select {
+	case <-s.steeringSession("probe_test").done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("probe did not finish")
+	}
+	e := closeSteeringTest(t, s).Snapshot.Evidence
+	if e.HTTPStatus != 504 || e.UpstreamError == nil || e.UpstreamError.EventType != "websocket.handshake" || e.UpstreamError.Status != 504 || e.CreateSent {
+		t.Fatal("timeout classification discarded its HTTP error", e)
 	}
 }
 

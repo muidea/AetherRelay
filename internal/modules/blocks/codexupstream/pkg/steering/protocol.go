@@ -5,6 +5,7 @@ package steering
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 )
@@ -27,28 +28,33 @@ type Usage struct {
 }
 
 type Evidence struct {
-	Capability          string   `json:"capability"`
-	Phase               string   `json:"phase"`
-	ExecutionOutcome    string   `json:"execution_outcome"`
-	AuthState           string   `json:"auth_state"`
-	ModelAccessState    string   `json:"model_access_state"`
-	WebsocketState      string   `json:"websocket_state"`
-	SteeringState       string   `json:"steering_state"`
-	UpstreamRequestSent bool     `json:"upstream_request_sent"`
-	CreateSent          bool     `json:"create_sent"`
-	SteerSent           bool     `json:"steer_sent"`
-	HTTPStatus          int      `json:"upstream_http_status,omitempty"`
-	ParentID            string   `json:"parent_response_id,omitempty"`
-	SuccessorID         string   `json:"successor_response_id,omitempty"`
-	SteerID             string   `json:"steering_id,omitempty"`
-	ResponseModel       string   `json:"response_model,omitempty"`
-	ErrorCode           string   `json:"error_code,omitempty"`
-	RequiredInput       []string `json:"required_input_types,omitempty"`
-	ParentUsage         *Usage   `json:"parent_usage,omitempty"`
-	SuccessorUsage      *Usage   `json:"successor_usage,omitempty"`
-	EventCount          int      `json:"event_count"`
-	ReceivedBytes       int64    `json:"received_bytes"`
-	Done                bool     `json:"done"`
+	Capability           string         `json:"capability"`
+	Phase                string         `json:"phase"`
+	ExecutionOutcome     string         `json:"execution_outcome"`
+	AuthState            string         `json:"auth_state"`
+	ModelAccessState     string         `json:"model_access_state"`
+	WebsocketState       string         `json:"websocket_state"`
+	SteeringState        string         `json:"steering_state"`
+	UpstreamRequestSent  bool           `json:"upstream_request_sent"`
+	CreateSent           bool           `json:"create_sent"`
+	SteerSent            bool           `json:"steer_sent"`
+	CreateWriteCompleted bool           `json:"create_write_completed"`
+	SteerWriteCompleted  bool           `json:"steer_write_completed"`
+	UpstreamError        *UpstreamError `json:"upstream_error,omitempty"`
+	Timeline             []TraceEvent   `json:"timeline,omitempty"`
+	TimelineTruncated    bool           `json:"timeline_truncated"`
+	HTTPStatus           int            `json:"upstream_http_status,omitempty"`
+	ParentID             string         `json:"parent_response_id,omitempty"`
+	SuccessorID          string         `json:"successor_response_id,omitempty"`
+	SteerID              string         `json:"steering_id,omitempty"`
+	ResponseModel        string         `json:"response_model,omitempty"`
+	ErrorCode            string         `json:"error_code,omitempty"`
+	RequiredInput        []string       `json:"required_input_types,omitempty"`
+	ParentUsage          *Usage         `json:"parent_usage,omitempty"`
+	SuccessorUsage       *Usage         `json:"successor_usage,omitempty"`
+	EventCount           int            `json:"event_count"`
+	ReceivedBytes        int64          `json:"received_bytes"`
+	Done                 bool           `json:"done"`
 }
 
 func NewEvidence() Evidence {
@@ -90,14 +96,20 @@ type Machine struct {
 	Evidence
 	parentEnded bool
 	accepted    bool
+	started     time.Time
+	sequence    int64
 }
 
-func NewMachine() *Machine { return &Machine{Evidence: NewEvidence()} }
+func NewMachine() *Machine { return &Machine{Evidence: NewEvidence(), started: time.Now()} }
 
 func (m *Machine) Finish(code string) {
+	if m.Done {
+		return
+	}
 	m.ErrorCode = code
 	m.ExecutionOutcome = code
 	m.Done = true
+	m.Trace("local", "probe.finished", code)
 }
 
 // Reject preserves the phase and protocol commit evidence. Codes are bounded
@@ -152,6 +164,11 @@ func (m *Machine) Observe(raw []byte) bool {
 	if m.Done {
 		return false
 	}
+	defer func() {
+		if m.Done && (len(m.Timeline) == 0 || m.Timeline[len(m.Timeline)-1].Type != "probe.finished") {
+			m.Trace("local", "probe.finished", m.ExecutionOutcome)
+		}
+	}()
 	var e struct {
 		Type     string `json:"type"`
 		Response struct {
@@ -162,36 +179,32 @@ func (m *Machine) Observe(raw []byte) bool {
 			Incomplete struct {
 				Reason string `json:"reason"`
 			} `json:"incomplete_details"`
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
+			Error errorWire `json:"error"`
 		} `json:"response"`
 		Steer struct {
 			ID     string `json:"id"`
 			Parent string `json:"previous_response_id"`
 		} `json:"steer"`
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-		Code     string `json:"code"`
+		Error    errorWire       `json:"error"`
+		Code     json.RawMessage `json:"code"`
+		Status   json.RawMessage `json:"status"`
 		Required []struct {
 			Type string `json:"type"`
 		} `json:"required_input"`
 	}
 	if json.Unmarshal(raw, &e) != nil || e.Type == "" {
+		m.Trace("receive", "invalid_event", "")
 		m.Finish("protocol_error")
 		return false
 	}
 	m.EventCount++
+	m.Trace("receive", e.Type, "")
 	if aetherrelaycodex.ObservationFeature(e.Type) != "" {
 		return false
 	}
 	if e.Type == "error" {
-		code := e.Error.Code
-		if code == "" {
-			code = e.Code
-		}
-		m.Reject(code, 0)
+		code := m.eventError(e.Type, e.Error, e.Status, e.Code)
+		m.Reject(code, m.UpstreamError.Status)
 		return false
 	}
 	switch e.Type {
@@ -205,7 +218,7 @@ func (m *Machine) Observe(raw []byte) bool {
 			m.AuthState = "accepted"
 			m.ModelAccessState = "accepted"
 			m.Phase = "steering"
-			m.SteeringState = "sent"
+			m.SteeringState = "ready"
 			if len(e.Response.Model) > 0 && len(e.Response.Model) <= 256 {
 				m.ResponseModel = e.Response.Model
 			}
@@ -224,6 +237,10 @@ func (m *Machine) Observe(raw []byte) bool {
 			m.ResponseModel = e.Response.Model
 		}
 	case "response.steer.accepted", "response.steer.pending", "response.steer.failed":
+		failureCode := ""
+		if e.Type == "response.steer.failed" {
+			failureCode = m.eventError(e.Type, e.Error, e.Status, e.Code)
+		}
 		if m.ParentID == "" || e.Steer.Parent != m.ParentID || m.accepted && e.Steer.ID != m.SteerID || e.Steer.ID != "" && !validID(e.Steer.ID) || m.SuccessorID != "" {
 			m.Finish("correlation_error")
 			return false
@@ -257,9 +274,14 @@ func (m *Machine) Observe(raw []byte) bool {
 			m.Done = true
 		case "response.steer.failed":
 			m.SteeringState = "failed"
-			m.Reject(e.Error.Code, 0)
+			m.Reject(failureCode, m.UpstreamError.Status)
 		}
 	case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled":
+		failed := e.Type != "response.completed" && e.Type != "response.done" && !(e.Type == "response.incomplete" && e.Response.Incomplete.Reason == "steered" && e.Response.ID == m.ParentID)
+		failureCode := ""
+		if failed {
+			failureCode = m.eventError(e.Type, e.Response.Error, e.Status, nil)
+		}
 		if e.Response.ID == "" || e.Response.ID != m.ParentID && e.Response.ID != m.SuccessorID {
 			m.Finish("correlation_error")
 			return false
@@ -269,8 +291,8 @@ func (m *Machine) Observe(raw []byte) bool {
 				m.ParentUsage = e.Response.Usage
 			}
 			m.parentEnded = true
-			if e.Type != "response.completed" && e.Type != "response.done" && !(e.Type == "response.incomplete" && e.Response.Incomplete.Reason == "steered") {
-				m.Reject(e.Response.Error.Code, 0)
+			if failed {
+				m.Reject(failureCode, m.UpstreamError.Status)
 			}
 		} else {
 			if e.Response.Usage != nil {

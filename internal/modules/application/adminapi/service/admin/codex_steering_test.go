@@ -2,12 +2,14 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
+	"aetherrelay/internal/modules/blocks/codexupstream/pkg/steering"
 )
 
 type steeringRuntimeStub struct {
@@ -15,6 +17,7 @@ type steeringRuntimeStub struct {
 	calls                int
 	slot, model, key, id string
 	err                  error
+	evidence             steering.Evidence
 }
 
 func (s *steeringRuntimeStub) StartCodexSteeringProbe(_ context.Context, slot, model, key string) (proxyevents.SteeringReport, error) {
@@ -28,7 +31,29 @@ func (s *steeringRuntimeStub) GetCodexSteeringProbe(_ context.Context, slot, id 
 	s.calls++
 	s.slot = slot
 	s.id = id
-	return proxyevents.SteeringReport{ProbeID: id, TargetSlotID: slot}, s.err
+	return proxyevents.SteeringReport{Evidence: s.evidence, ProbeID: id, TargetSlotID: slot}, s.err
+}
+
+func TestSteeringManagementDiagnosticJSON(t *testing.T) {
+	m := steering.NewMachine()
+	m.HTTPStatus = 101
+	m.Observe([]byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+	m.WriteAttempt("response.steer")
+	m.WriteResult("response.steer", nil)
+	m.Observe([]byte(`{"type":"error","status":400,"error":{"code":"future_error","message":"input rejected","param":"input","type":"invalid_request_error"}}`))
+	runtime := &steeringRuntimeStub{evidence: m.Evidence}
+	h := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	r := httptest.NewRequest(http.MethodGet, "/admin/api/codex/accounts/slot/steering-probes/probe", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var report proxyevents.SteeringReport
+	if err := json.Unmarshal(w.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || report.HTTPStatus != 101 || report.UpstreamError == nil || report.UpstreamError.Code != "future_error" || report.UpstreamError.Status != 400 || report.UpstreamError.Message != "input rejected" || !report.SteerWriteCompleted || len(report.Timeline) == 0 {
+		t.Fatal(w.Code, w.Body.String())
+	}
 }
 func TestSteeringManagementHTTP(t *testing.T) {
 	for _, tc := range []struct {

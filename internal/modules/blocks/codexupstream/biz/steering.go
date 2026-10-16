@@ -25,14 +25,14 @@ func (p *steeringSession) read() events.SteeringSnapshotResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	v := p.snapshot
-	v.Evidence.RequiredInput = append([]string(nil), v.Evidence.RequiredInput...)
+	v.Evidence = v.Evidence.Clone()
 	v.Headers = append([]events.Header(nil), v.Headers...)
 	return v
 }
 func (p *steeringSession) publish(e steering.Evidence) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.snapshot.Evidence = e
+	p.snapshot.Evidence = e.Clone()
 }
 
 func (s *Upstream) handleSteeringStart(ev event.Event, r event.Result) {
@@ -147,11 +147,15 @@ func (s *Upstream) runSteering(ctx context.Context, cmd events.SteeringStartComm
 	if m.HTTPStatus == 0 {
 		m.HTTPStatus = opened.HTTPStatus
 	}
+	m.Trace("receive", "websocket.handshake", "")
 	p.mu.Lock()
 	p.snapshot.Headers = append([]events.Header(nil), opened.Headers...)
 	p.mu.Unlock()
 	if conn == nil {
 		m.WebsocketState = "failed"
+		if m.HTTPStatus >= 400 {
+			m.RecordUpstreamError(steering.UpstreamError{EventType: "websocket.handshake", Type: opened.SafeError.Type, Code: opened.SafeError.Code, Param: opened.SafeError.Param, Message: opened.SafeError.Message, Status: m.HTTPStatus})
+		}
 		if class == events.ErrorTimeout || class == events.ErrorCanceled || class == events.ErrorNetwork {
 			m.Finish(string(class))
 		} else {
@@ -179,9 +183,12 @@ func (s *Upstream) runSteering(ctx context.Context, cmd events.SteeringStartComm
 		return
 	}
 	// Writes may have reached the server even when the client reports an error.
-	m.CreateSent = true
+	m.WriteAttempt("response.create")
 	p.publish(m.Evidence)
-	if err = conn.WriteMessage(wsclient.TextMessage, body); err != nil {
+	err = conn.WriteMessage(wsclient.TextMessage, body)
+	m.WriteResult("response.create", err)
+	p.publish(m.Evidence)
+	if err != nil {
 		m.Finish(steeringReadError(ctx, err))
 		return
 	}
@@ -206,8 +213,11 @@ func (s *Upstream) runSteering(ctx context.Context, cmd events.SteeringStartComm
 			return
 		}
 		if m.Observe(payload) {
-			m.SteerSent = true
-			if err := conn.WriteMessage(wsclient.TextMessage, steering.Steer(m.ParentID)); err != nil {
+			m.WriteAttempt("response.steer")
+			p.publish(m.Evidence)
+			err := conn.WriteMessage(wsclient.TextMessage, steering.Steer(m.ParentID))
+			m.WriteResult("response.steer", err)
+			if err != nil {
 				m.Finish(steeringReadError(ctx, err))
 				return
 			}

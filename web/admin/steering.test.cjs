@@ -73,3 +73,26 @@ test('admission recheck refusal preserves credential refresh without claiming ze
   assert.match(elements.codexSteeringResult.innerHTML,/账号额度受限/);
   assert.match(elements.codexSteeringJSON.textContent,/"upstream_request_sent": true/);
 });
+test('management diagnostics separate handshake, writes and upstream rejection and escape all text',()=>{
+  const {c,elements}=harness();
+  c.renderCodexSteeringReport({...report,done:true,state:'finished',execution_outcome:'upstream_error',error_code:'upstream_error',upstream_http_status:101,steer_sent:true,steer_write_completed:true,create_sent:true,create_write_completed:true,steering_state:'sent',upstream_error:{event_type:'error',type:'<type>',code:'<code>',param:'<input>',message:'<img src=x onerror=alert(1)>',status:400,truncated:true},timeline_truncated:true,timeline:[{sequence:1,elapsed_ms:0,direction:'send',type:'<response.steer>',state:'written'}]});
+  const html=elements.codexSteeringResult.innerHTML;
+  assert.match(html,/101/);assert.match(html,/400/);assert.match(html,/本地写入完成/);
+  assert.match(html,/未观测到接受/);assert.match(html,/失败事件/);assert.match(html,/较早条目或过长类型已截断/);
+  for(const value of ['type','code','input','response.steer'])assert.ok(html.includes(`&lt;${value}&gt;`));
+  assert.match(html,/&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(html,/<img|<response\.steer>/);
+  const exported=JSON.parse(elements.codexSteeringJSON.textContent);
+  assert.equal(exported.upstream_error.code,'<code>');assert.equal(exported.steer_write_completed,true);
+  assert.equal(exported.capability,'UNKNOWN');assert.equal(exported.timeline.length,1);
+});
+test('attempted write failures and old reports never claim successful upstream acceptance',()=>{
+  const {c,elements}=harness();
+  c.renderCodexSteeringReport({...report,done:true,steer_sent:true,steer_write_completed:false,steering_state:'write_failed'});
+  assert.match(elements.codexSteeringResult.innerHTML,/可能已抵达上游/);
+  assert.match(elements.codexSteeringResult.innerHTML,/写入未完成/);
+  assert.doesNotMatch(elements.codexSteeringResult.innerHTML,/已接受/);
+  c.renderCodexSteeringReport({...report,done:true,steer_sent:true,steering_state:'sent'});
+  assert.match(elements.codexSteeringResult.innerHTML,/已尝试提交（旧报告）/);
+  assert.doesNotMatch(elements.codexSteeringResult.innerHTML,/本地写入完成|未观测到接受/);
+});
