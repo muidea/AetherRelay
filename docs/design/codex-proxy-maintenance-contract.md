@@ -6,13 +6,15 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.3.1`
+> 合同版本：`17.4.0`
 >
 > 状态：`active`
 >
 > 生效日期：2026-10-16
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+
+`17.4.0` 新增账号槽位级 `blocked_models` 精确模型黑名单（`CP-SCHED-013`）。策略独立于上游能力快照，统一选号准入、模型目录、刷新凭据后的重发与 WebSocket 每轮发送共同执行；已准入的当前 attempt 允许完成，新 attempt/turn 使用新策略。策略拒绝不惩罚账号或 Provider，不编造冷却与重试时间。管理页草稿显式保存，重启/同槽位重授权及账号池 v2 bundle 导入导出保持策略。本地实现及验收随本次收口更新，live 验收待部署执行。 操作与 live 验收见 [账号模型黑名单](codex-account-model-blacklist.md)。
 
 `17.3.1` 根据 x800 Event `0f733a6913ea1e29855f4e07b4e64f16` 统一 Responses output item 的附带信息归一化与字段校验：流式 added/done 和汇聚终态复用同一规则，仅在独立投影副本中省略 `metadata`、`internal_chat_message_metadata_passthrough` 并记录固定忽略项，容器内部允许扩展，原始归档不变。未知业务字段、工具类型及 phase 继续明确拒绝，不按名称前缀推断可忽略性；工具增量与完成参数必须一致。上游明确缓冲独立于有效输出耗时样本保存和展示，缺失 usage 仍为未知，不回填历史记录。按 PATCH 记录，代码及本地验收随本次收口更新，live 验收单独执行。
 
@@ -453,6 +455,8 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-SCHED-008` 成功 Responses/compact 握手返回的 primary/secondary used、window 和 reset header 必须投影为有界账号 usage 快照；非法或缺失 header 不得覆盖独立 usage 查询的有效字段。
 
+`CP-SCHED-013` 每个稳定账号槽位独立持久化模型黑名单 `blocked_models`，缺失默认空；trim、去重、排序，保持大小写敏感的完整 ID 精确匹配，不推断别名或模式。最多 256 项，每项 1–256 字节且不含控制字符；允许预设尚未发现的模型。策略不得修改上游能力快照。管理投影用 `model_blocked` 标注人工禁止；首次、粘性、重试和 compact 选号共同排除被禁止组合。目录按发现能力减去黑名单聚合，仅移除没有任何策略允许账号的 Codex 模型来源，保留其它 Provider 来源；临时冷却/满载不改变目录成员资格。更新成功推进目录版本。已准入的当前 attempt 可完成；凭据刷新后的重发与已建立 WebSocket 的每轮 response.create 须通过 owner 的无凭据策略检查，检查不可用时关闭放行，不能绕过或把原账号的上游状态迁移给其它账号；刷新重发遇到策略禁止时，仅无 previous_response_id/显式 Turn-State 的请求允许按既有有界规则另选号。所有支持账号均被策略禁止时，返回非重试的 model_not_found，内部原因 model_blocked，不编造 Retry-After，不改变账号失败/额度/冷却或 Provider 健康。PATCH 缺失保持、[] 清空、null/非法项拒绝；管理页编辑草稿，保存才 PATCH，取消无请求。重启、Token 刷新、同槽位重授权保留策略；v2 bundle 与凭据导入缺失字段保留已有值，显式 [] 清空，导出总包含当前数组。验收覆盖跨 transport/粘性/重试、目录及其它来源、WS 下一轮与刷新重发、故障关闭放行、重启/重授权/导入导出以及健康隔离。
+
 ## 9. Refresh、错误与 Failover
 
 | 失败 | 同账号重试 | 切账号 | 规则 |
@@ -767,6 +771,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | 转换与上游观测、缓存存在性 | CP-OBS-007 / CP-SCHED-002 | implemented（本地）；线上待复验 | `proxyapi/service/proxy`, `aetherrelayusage`, `aetherrelayarchive`, `web/admin` | `codex_conversion_observation_test.go`, `observation_presence_test.go`, `web/admin/usage.test.cjs` |
 | 缓存读写统一采集 | CP-OBS-007 | implemented | `proxyapi/service/proxy/usage.go`, `proxyapi/service/proxy/stream_archive.go` | `cache_write_usage_test.go`, `handler_test.go`, `aetherrelayusage/cache_statistics_test.go` |
 | 逐账号完整模型列表 | CP-CAP-010 | implemented | `codexaccountpool/internal/store/model_availability.go`, `web/admin/index.html` | `model_availability_test.go`, `web/admin/models.test.cjs` |
+| 账号模型黑名单 | CP-SCHED-013 | implemented | `codexaccountpool/internal/store/model_policy.go`, `proxyapi/biz/codex_responses.go`, `adminapi/service/admin/codex_accounts.go`, `web/admin/index.html` | `codexaccountpool/internal/store/model_policy_test.go`, `proxyapi/biz/codex_model_policy_test.go`, `adminapi/service/admin/codex_accounts_test.go`, `web/admin/accounts.test.cjs` |
 | 切号严格匹配账号模型 | CP-SCHED-009 | implemented | `codexaccountpool/internal/store/model_availability.go`, `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/strict_model_selection_test.go`, `codexaccountpool/biz/strict_model_selection_test.go` |
 
 前端合同测试使用 Node.js 18+ 内建 test runner，无需 npm 依赖；`scripts/check-codex-contract.sh` 同时执行 Go/race、前端测试、vet 与凭据扫描。真实 CLI 跨模型恢复仍按 CP-DOD-006 单独验收。

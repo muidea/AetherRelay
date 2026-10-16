@@ -14,7 +14,7 @@ import (
 func (s *Store) unavailableResult(model string, excluded, busy map[string]struct{}, transport string, now time.Time) events.AcquireResult {
 	result := events.AcquireResult{UnavailableReason: "no_eligible_account"}
 	var earliest time.Time
-	relevant, permanentlyInvalid := 0, 0
+	relevant, permanentlyInvalid, policyBlocked := 0, 0, 0
 	hasBusy, hasExcluded, hasCooling := false, false, false
 	for _, item := range s.items {
 		if item == nil || item.Status == events.StatusDisabled {
@@ -28,6 +28,10 @@ func (s *Store) unavailableResult(model string, excluded, busy map[string]struct
 			supportsModel = accountSnapshotHasModel(item, model)
 		}
 		if !supportsModel {
+			continue
+		}
+		if modelBlocked(item, model) {
+			policyBlocked++
 			continue
 		}
 		relevant++
@@ -74,6 +78,8 @@ func (s *Store) unavailableResult(model string, excluded, busy map[string]struct
 		}
 	}
 	switch {
+	case relevant == 0 && policyBlocked > 0:
+		result.UnavailableReason = "model_blocked"
 	case hasBusy:
 		result.UnavailableReason = "accounts_busy"
 	case hasCooling:
@@ -98,6 +104,8 @@ func modelAvailability(item *account, model string, now time.Time) events.ModelA
 		view.Reason = "account_missing"
 	case item.Status == events.StatusDisabled:
 		view.Reason = "account_" + item.Status
+	case modelBlocked(item, model):
+		view.Reason = "model_blocked"
 	case item.PermanentAuthFailure:
 		view.Reason = "credential_permanently_invalid"
 	case item.Status != events.StatusNormal:

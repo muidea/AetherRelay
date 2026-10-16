@@ -570,6 +570,9 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 	default:
 		kind = streamKindError
 	}
+	if failure.UnavailableReason == "model_blocked" {
+		kind, countUpstream = streamKind("provider_unavailable"), false
+	}
 	result := newStreamFailWithCode(kind, string(failure.Kind), failure.Error(), failure, countUpstream)
 	result.FailureClass = failure.UnavailableReason
 	if failure.RequestBudgetExceeded {

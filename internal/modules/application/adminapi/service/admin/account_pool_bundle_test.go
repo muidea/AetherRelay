@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,39 @@ import (
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
+
+func TestBundleBlacklistPresenceAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		policy  string
+		want    codexevents.ModelBlacklist
+		invalid bool
+	}{
+		{"", nil, false},
+		{`,"blocked_models":[]`, codexevents.ModelBlacklist{}, false},
+		{`,"blocked_models":["gpt-sol"]`, codexevents.ModelBlacklist{"gpt-sol"}, false},
+		{`,"blocked_models":null`, nil, true},
+		{`,"blocked_models":[""]`, nil, true},
+	} {
+		web := &chatGPTAccountRuntimeStub{}
+		codex := &codexAccountRuntimeStub{}
+		h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
+		body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"slot","identity":{"email":"same@example.com"},"slots":{"chatgpt_web":{"access_token":"web","refresh_token":"web-r"},"codex_cli":{"access_token":"codex","refresh_token":"codex-r"` + tc.policy + `}}}]}`
+		req := httptest.NewRequest("POST", "/admin/api/account-pool-bundle/import", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AetherRelay-Admin", "1")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if tc.invalid {
+			if w.Code != 400 || len(web.addedAccounts) != 0 || len(codex.imported) != 0 {
+				t.Fatalf("invalid policy partially imported: HTTP=%d", w.Code)
+			}
+			continue
+		}
+		if w.Code != http.StatusCreated || len(codex.imported) != 1 || !reflect.DeepEqual(codex.imported[0].BlockedModels, tc.want) {
+			t.Fatalf("policy=%s HTTP=%d imported=%+v body=%s", tc.policy, w.Code, codex.imported, w.Body.String())
+		}
+	}
+}
 
 func TestResolveBundleTargetEmailOnlyUsesEmailFallback(t *testing.T) {
 	target, reason := resolveBundleTarget("", "user@example.com", []bundleTargetView{{ID: "local-1", IdentityKey: "acct_upstream", Email: "USER@example.com"}}, false)
@@ -63,7 +97,7 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	codex := &codexAccountRuntimeStub{
 		accounts: []codexevents.AccountView{{ID: "codex-1", Email: "user@example.com"}},
-		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeScoped, MaxConcurrency: 3}},
+		exported: []codexevents.CredentialInput{{AccountID: "codex-upstream", Email: "user@example.com", AccessToken: "codex-access", RefreshToken: "codex-refresh", FingerprintMode: codexevents.FingerprintModeScoped, MaxConcurrency: 3, BlockedModels: codexevents.ModelBlacklist{"gpt-sol"}}},
 	}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/export", strings.NewReader(`{}`))
@@ -92,6 +126,9 @@ func TestAccountPoolBundleExportGroupsByCredentialEmailWhenListEmailMissing(t *t
 	}
 	if payload.Accounts[0].Slots.Codex.MaxConcurrency != 3 {
 		t.Fatalf("export lost max concurrency: %+v", payload.Accounts[0].Slots.Codex)
+	}
+	if !reflect.DeepEqual(payload.Accounts[0].Slots.Codex.BlockedModels, codexevents.ModelBlacklist{"gpt-sol"}) {
+		t.Fatal("bundle export lost policy")
 	}
 	exportedAt, err := time.Parse(time.RFC3339, payload.ExportedAt)
 	if err != nil {
@@ -192,7 +229,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	web := &chatGPTAccountRuntimeStub{}
 	codex := &codexAccountRuntimeStub{}
 	h := NewHandler("", &testRuntime{}).WithChatGPTRuntime(web).WithCodexRuntime(codex)
-	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SCOPED ","max_concurrency":3}}}]}`
+	body := `{"format":"aetherrelay.account-pool-bundle","schema_version":2,"accounts":[{"account_ref":"acct_01","identity":{"email":"USER@example.com"},"slots":{"chatgpt_web":{"access_token":"web-access","refresh_token":"web-refresh"},"codex_cli":{"access_token":"codex-access","refresh_token":"codex-refresh","fingerprint_mode":" SCOPED ","max_concurrency":3,"blocked_models":[" gpt-sol ","gpt-sol"]}}}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/account-pool-bundle/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -201,7 +238,7 @@ func TestAccountPoolBundleImportDispatchesBothSlots(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeScoped || codex.imported[0].MaxConcurrency != 3 {
+	if len(web.addedAccounts) != 1 || web.addedAccounts[0].Email != "USER@example.com" || len(codex.imported) != 1 || codex.imported[0].Email != "USER@example.com" || codex.imported[0].FingerprintMode != codexevents.FingerprintModeScoped || codex.imported[0].MaxConcurrency != 3 || !reflect.DeepEqual(codex.imported[0].BlockedModels, codexevents.ModelBlacklist{"gpt-sol"}) {
 		t.Fatalf("web imports=%+v codex imports=%+v", web.addedAccounts, codex.imported)
 	}
 }

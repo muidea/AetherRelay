@@ -57,6 +57,34 @@ func TestCodexPermanentAuthenticationFailureContract(t *testing.T) {
 	}
 }
 
+func TestCodexModelBlacklistIs404AndHealthNeutral(t *testing.T) {
+	registry := metrics.NewRegistry()
+	h := &Handler{metricsRegistry: metricsport.AsPort(registry)}
+	registry.RecordRequestPlan("codexoauth", "gpt-sol", "responses", 502, time.Second, "upstream_failed", "", "", "", "")
+	before := registry.ProviderHealthSnapshot()["codexoauth"]
+	for _, endpoint := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions"} {
+		for _, streaming := range []bool{false, true} {
+			f := codexresponses.NewFailure(codexresponses.KindModelNotFound, 0, nil)
+			retryable := false
+			f.Retryable = &retryable
+			f.UnavailableReason = "model_blocked"
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("POST", endpoint, nil)
+			h.writeCodexResponsesError(w, r, nil, time.Now(), "codexoauth", "gpt-sol", streaming, f)
+			if w.Code != 404 || w.Header().Get("Retry-After") != "" || !strings.Contains(w.Body.String(), "model_not_found") {
+				t.Fatalf("HTTP=%d body=%s", w.Code, w.Body.String())
+			}
+			if endpoint == "/v1/responses" && (!strings.Contains(w.Body.String(), `"failure_class":"model_blocked"`) || !strings.Contains(w.Body.String(), `"retryable":false`)) {
+				t.Fatalf("policy details=%s", w.Body.String())
+			}
+		}
+	}
+	after := registry.ProviderHealthSnapshot()["codexoauth"]
+	if before.Failures != after.Failures || before.ConsecutiveFailures != after.ConsecutiveFailures || before.CircuitState != after.CircuitState || !before.LastFailureAt.Equal(after.LastFailureAt) {
+		t.Fatalf("policy changed provider health: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestCodexAdmissionAndLocalFailuresDoNotOpenProviderCircuit(t *testing.T) {
 	// CP-FAIL-019: exercise the HTTP error writer, not just the metrics helper.
 	registry := metrics.NewRegistry()

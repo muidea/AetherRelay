@@ -15,6 +15,37 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
+func TestCodexBlacklistUpdateRefreshesPublishedDirectory(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(4)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(accountcommon.UnitID, hub)
+	updated := false
+	accounts.Subscribe(accountevents.TopicUpdate, func(e event.Event, r event.Result) {
+		updated = true
+		cmd := e.Data().(accountevents.UpdateCommand)
+		r.Set(accountevents.UpdateResult{Item: accountevents.AccountView{ID: cmd.ID, BlockedModels: cmd.BlockedModels}}, nil)
+	})
+	proxy := event.NewSimpleObserver(proxycommon.UnitID, hub)
+	refreshes := 0
+	proxy.Subscribe(proxyevents.TopicEffectiveCatalog, func(e event.Event, r event.Result) {
+		if !updated || !e.Data().(proxyevents.EffectiveCatalogCommand).Refresh {
+			t.Error("catalog refreshed before policy save")
+		}
+		refreshes++
+		r.Set(proxyevents.EffectiveCatalogResult{}, nil)
+	})
+	admin := &Admin{Base: basebiz.New(admincommon.UnitID, hub, background)}
+	result, err := admin.UpdateCodexAccount(context.Background(), accountevents.UpdateCommand{ID: "slot", BlockedModels: accountevents.ModelBlacklist{"gpt-sol"}})
+	if err != nil || refreshes != 1 || result.CatalogRefreshError != "" {
+		t.Fatalf("result=%+v refreshes=%d err=%v", result, refreshes, err)
+	}
+	limit := 3
+	if _, err = admin.UpdateCodexAccount(context.Background(), accountevents.UpdateCommand{ID: "slot", MaxConcurrency: &limit}); err != nil || refreshes != 1 {
+		t.Fatal("unrelated settings refreshed model directory", err)
+	}
+}
+
 func TestCodexAccountMutationsStartProxyOwnedDiscovery(t *testing.T) {
 	hub := event.NewHub(16)
 	background := task.NewBackgroundRoutine(8)

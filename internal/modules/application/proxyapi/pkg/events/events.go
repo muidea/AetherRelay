@@ -39,7 +39,10 @@ type UpdateConfigCommand struct{ Config config.Config }
 // EffectiveCatalogCommand requests the proxy-owned, request-time model
 // directory. Consumers must not rebuild this projection from account-pool
 // state because only proxyapi applies static-model conflict precedence.
-type EffectiveCatalogCommand struct{}
+type EffectiveCatalogCommand struct {
+	// Refresh rebuilds from durable owner snapshots without upstream probes.
+	Refresh bool
+}
 
 type EffectiveCatalogResult struct{ Snapshot effectivecatalog.Snapshot }
 

@@ -70,6 +70,13 @@ func (s *Admin) UpdateCodexAccount(ctx context.Context, command events.UpdateCom
 	if !ok {
 		return events.UpdateResult{}, fmt.Errorf("invalid Codex account update result")
 	}
+	if command.BlockedModels != nil {
+		refreshed, refreshErr := s.SendEvent(event.NewEventWithContext(proxyevents.TopicEffectiveCatalog, s.ID(), proxycommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), proxyevents.EffectiveCatalogCommand{Refresh: true})).Get()
+		_, validRefresh := refreshed.(proxyevents.EffectiveCatalogResult)
+		if refreshErr != nil || !validRefresh {
+			result.CatalogRefreshError = "account settings saved; model directory refresh pending"
+		}
+	}
 	return result, nil
 }
 func (s *Admin) RefreshCodexAccounts(ctx context.Context, ids []string) (codexmanagement.RefreshResult, error) {

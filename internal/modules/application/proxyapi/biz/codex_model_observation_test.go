@@ -34,6 +34,7 @@ func TestCodexSubstitutionLogsExecutingAccountAndKeepsSuccess(t *testing.T) {
 			background := task.NewBackgroundRoutine(8)
 			t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
 			accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+			accounts.Subscribe(accevents.TopicCheckModelPolicy, func(_ event.Event, r event.Result) { r.Set(accevents.CheckModelPolicyResult{Allowed: true}, nil) })
 			accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, r event.Result) {
 				r.Set(accevents.AcquireResult{AccountID: "slot-" + mode, AccountLabel: "operator@example.com", AccessToken: "private-token", LeaseID: "lease"}, nil)
 			})

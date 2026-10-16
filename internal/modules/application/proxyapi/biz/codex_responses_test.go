@@ -712,6 +712,7 @@ func TestCompleteCodexResponsesRefreshesOnceThenRetries(t *testing.T) {
 
 	shared := accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicCheckModelPolicy, func(_ event.Event, r event.Result) { r.Set(accevents.CheckModelPolicyResult{Allowed: true}, nil) })
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
 		result.Set(accevents.AcquireResult{AccountID: "account-1", AccessToken: "old-token", AccountIDHeader: "chatgpt-account-1", Proxy: "http://old-proxy.invalid:8080", FingerprintMode: accevents.FingerprintModeScoped, FingerprintSeed: "11111111-1111-4111-8111-111111111111", ClientIdentity: shared}, nil)
 	})
@@ -954,6 +955,7 @@ func TestStreamCredentialRetryUsesSharedHighestIdentity(t *testing.T) {
 	old := accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.162.1 (Ubuntu; x86_64) terminal (codex-tui; 0.162.1)", Originator: "codex-tui", Version: "0.162.1"}
 	newest := accevents.ClientIdentityProfile{UserAgent: "codex-tui/0.163.0 (Ubuntu; x86_64) terminal (codex-tui; 0.163.0)", Originator: "codex-tui", Version: "0.163.0"}
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicCheckModelPolicy, func(_ event.Event, r event.Result) { r.Set(accevents.CheckModelPolicyResult{Allowed: true}, nil) })
 	accounts.Subscribe(accevents.TopicAcquire, func(_ event.Event, result event.Result) {
 		result.Set(accevents.AcquireResult{AccountID: "account", AccessToken: "old", LeaseID: "lease", ClientIdentity: old}, nil)
 	})

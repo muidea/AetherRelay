@@ -170,7 +170,10 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 		var turnResult codexWebsocketForwardResult
 		for {
 			if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, attemptPayload); err != nil {
-				writeCodexWebsocketError(conn, "upstream_unavailable", "Codex websocket send failed")
+				writeCodexWebsocketFailure(conn, err, "upstream_unavailable", "Codex websocket send failed")
+				failure := streamFailFromCodexError(err)
+				h.recordAndPrintFail(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), tokenUsage{}, failure)
+				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), tokenUsage{}, "websocket", err.Error(), "", outcomeFromStreamFail(failure, http.StatusSwitchingProtocols))
 				return
 			}
 			turnResult, err = h.forwardCodexWebsocketTurn(ctx, conn, sessionID, maxMessageBytes)
@@ -491,6 +494,9 @@ func writeCodexWebsocketFailure(conn *websocket.Conn, err error, fallbackCode, f
 	var retryable *bool
 	if failure, ok := codexresponses.AsFailure(err); ok && failure != nil {
 		retryable = failure.Retryable
+		if failure.UnavailableReason == "model_blocked" {
+			errorType, code, message = "invalid_request_error", "model_not_found", "model is not available for the bound Codex account; reconnect to select another account"
+		}
 		if failure.Kind == codexresponses.KindAuthentication {
 			errorType = "authentication_error"
 			code = ErrorCodeUpstreamAuthRequired

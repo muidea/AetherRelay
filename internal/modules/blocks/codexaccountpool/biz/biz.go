@@ -94,13 +94,14 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicCheckModelPolicy, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
 	b.SubscribeFunc(events.TopicClientIdentity, b.handleClientIdentity)
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicImport, b.handleImport)
 	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
 	b.SubscribeFunc(events.TopicUpdate, b.handleUpdate)
 	b.SubscribeFunc(events.TopicAcquire, b.handleAcquire)
+	b.SubscribeFunc(events.TopicCheckModelPolicy, b.handleCheckModelPolicy)
 	b.SubscribeFunc(events.TopicRelease, b.handleRelease)
 	b.SubscribeFunc(events.TopicRecordResult, b.handleRecordResult)
 	b.SubscribeFunc(events.TopicRecordTransportCapability, b.handleRecordTransportCapability)
@@ -202,11 +203,11 @@ func (s *Account) handleUpdate(ev event.Event, result event.Result) {
 		return
 	}
 	cmd, ok := ev.Data().(events.UpdateCommand)
-	if !ok || strings.TrimSpace(cmd.ID) == "" || (cmd.Status == nil && cmd.Proxy == nil && cmd.FingerprintMode == nil && cmd.MaxConcurrency == nil) {
+	if !ok || strings.TrimSpace(cmd.ID) == "" || (cmd.Status == nil && cmd.Proxy == nil && cmd.FingerprintMode == nil && cmd.MaxConcurrency == nil && cmd.BlockedModels == nil) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account update command"))
 		return
 	}
-	item, err := s.store.Update(cmd.ID, cmd.Status, cmd.Proxy, cmd.FingerprintMode, cmd.MaxConcurrency)
+	item, err := s.store.UpdateAccount(cmd)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -267,6 +268,22 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 	}
 	item.LeaseID = leaseID
 	result.Set(item, nil)
+}
+
+func (s *Account) handleCheckModelPolicy(ev event.Event, result event.Result) {
+	if result == nil {
+		return
+	}
+	cmd, ok := ev.Data().(events.CheckModelPolicyCommand)
+	if !ok || strings.TrimSpace(cmd.AccountID) == "" || strings.TrimSpace(cmd.Model) == "" {
+		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex model policy check"))
+		return
+	}
+	if s.stopping.Load() {
+		result.Set(nil, cd.NewError(cd.Unexpected, "Codex account pool is stopping"))
+		return
+	}
+	result.Set(s.store.CheckModelPolicy(cmd.AccountID, cmd.Model), nil)
 }
 
 func (s *Account) handleRelease(ev event.Event, result event.Result) {

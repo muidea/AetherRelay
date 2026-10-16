@@ -65,6 +65,7 @@ type Proxy struct {
 	catalogPublisher   CatalogPublisher
 	catalog            effectivecatalog.Snapshot
 	discoveryMu        sync.Mutex
+	catalogRefreshMu   sync.Mutex
 	codexDiscoveryMu   sync.Mutex
 	codexUsageMu       sync.Mutex
 	discoveryJobsMu    sync.RWMutex
@@ -474,9 +475,13 @@ func (s *Proxy) handleUpdate(ev event.Event, result event.Result) {
 }
 
 func (s *Proxy) handleEffectiveCatalog(ev event.Event, result event.Result) {
-	if _, ok := ev.Data().(proxyevents.EffectiveCatalogCommand); !ok {
+	cmd, ok := ev.Data().(proxyevents.EffectiveCatalogCommand)
+	if !ok {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid effective catalog command"))
 		return
+	}
+	if cmd.Refresh {
+		s.refreshEffectiveCatalog(ev.Context())
 	}
 	result.Set(proxyevents.EffectiveCatalogResult{Snapshot: s.EffectiveCatalog()}, nil)
 }

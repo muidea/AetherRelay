@@ -10,6 +10,7 @@ import (
 	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
 	basebiz "aetherrelay/internal/modules/base/biz"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
@@ -22,6 +23,41 @@ import (
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
 )
+
+func TestPolicyCatalogRefreshRemovesOnlyCodexSource(t *testing.T) {
+	hub := event.NewHub(16)
+	background := task.NewBackgroundRoutine(4)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	chat := event.NewSimpleObserver(acccommon.UnitID, hub)
+	chat.Subscribe(accevents.TopicCatalogSnapshot, func(_ event.Event, r event.Result) { r.Set(accevents.CatalogSnapshotResult{}, nil) })
+	codex := event.NewSimpleObserver(codexcommon.UnitID, hub)
+	models := []codexevents.CatalogModel{{ID: "gpt-sol"}}
+	version := uint64(1)
+	codex.Subscribe(codexevents.TopicCatalogSnapshot, func(_ event.Event, r event.Result) {
+		r.Set(codexevents.CatalogSnapshotResult{Version: version, AvailableAccounts: 1, Models: models}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{
+		CodexOAuth: config.CodexOAuthConfig{ProviderEnabled: true},
+		Providers:  map[string]config.Provider{"direct": {Name: "direct", Protocol: "openai", Models: []string{"gpt-sol"}, Endpoints: []string{config.ProviderEndpointResponses}}},
+	}}
+	proxy.refreshEffectiveCatalog(context.Background())
+	if len(proxy.EffectiveCatalog().CandidatesFor("gpt-sol")) != 2 {
+		t.Fatal("missing initial same-model sources")
+	}
+	models = nil
+	version++
+	r := event.NewResult(proxyevents.TopicEffectiveCatalog, "test", proxy.ID())
+	proxy.handleEffectiveCatalog(event.NewEvent(proxyevents.TopicEffectiveCatalog, "test", proxy.ID(), nil, proxyevents.EffectiveCatalogCommand{Refresh: true}), r)
+	value, err := r.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := value.(proxyevents.EffectiveCatalogResult).Snapshot
+	candidates := snapshot.CandidatesFor("gpt-sol")
+	if snapshot.CodexOAuthVersion != version || len(candidates) != 1 || candidates[0].RouteOwner == effectivecatalog.CodexOAuthProviderID {
+		t.Fatal("policy removed another Provider or retained Codex source", candidates)
+	}
+}
 
 func TestStartupRestoresDurableCodexCatalogBeforeReturning(t *testing.T) {
 	hub := event.NewHub(8)

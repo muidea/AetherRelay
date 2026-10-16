@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,6 +83,7 @@ type account struct {
 	WebsocketSupported   *bool                        `json:"websocket_supported,omitempty"`
 	FingerprintMode      string                       `json:"fingerprint_mode,omitempty"`
 	MaxConcurrency       int                          `json:"max_concurrency"`
+	BlockedModels        events.ModelBlacklist        `json:"blocked_models,omitempty"`
 	// FingerprintSeed is encrypted with the rest of the account document. It is
 	// deliberately absent from management views and credential exports.
 	FingerprintSeed string `json:"fingerprint_seed,omitempty"`
@@ -181,6 +183,11 @@ func (s *Store) loadEncrypted() error {
 		if mode, valid := normalizeFingerprintMode(item.FingerprintMode); !valid || item.FingerprintMode != mode {
 			item.FingerprintMode = events.FingerprintModeScoped
 			migrated = true
+		}
+		if clean, err := events.NormalizeBlockedModels(item.BlockedModels); err != nil {
+			return fmt.Errorf("invalid account model policy: %w", err)
+		} else {
+			item.BlockedModels = clean
 		}
 		if item.MaxConcurrency == 0 {
 			item.MaxConcurrency = events.DefaultMaxConcurrency
@@ -393,6 +400,11 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		if input.MaxConcurrency != 0 && !validMaxConcurrency(input.MaxConcurrency) {
 			return 0, 0, skipped, nil, fmt.Errorf("max_concurrency must be between %d and %d", events.MinMaxConcurrency, events.MaxMaxConcurrency)
 		}
+		clean, err := events.NormalizeBlockedModels(input.BlockedModels)
+		if err != nil {
+			return 0, 0, skipped, nil, err
+		}
+		input.BlockedModels = clean
 		seenRefresh[input.RefreshToken] = struct{}{}
 		seenAccess[input.AccessToken] = struct{}{}
 		normalized = append(normalized, input)
@@ -471,6 +483,16 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 				skipped++
 				continue
 			}
+			// A policy-only import must not invalidate upstream observations.
+			policyOnly := input
+			policyOnly.BlockedModels = nil
+			if input.BlockedModels != nil && unchangedCodexImport(existing, policyOnly) {
+				existing.BlockedModels = append(events.ModelBlacklist{}, input.BlockedModels...)
+				updated++
+				ids = append(ids, existing.ID)
+				changed = true
+				continue
+			}
 			updated++
 		}
 		ids = append(ids, existing.ID)
@@ -499,6 +521,9 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 			existing.MaxConcurrency = input.MaxConcurrency
 		} else if existing.MaxConcurrency == 0 {
 			existing.MaxConcurrency = events.DefaultMaxConcurrency
+		}
+		if input.BlockedModels != nil && !reauthenticated {
+			existing.BlockedModels = append(events.ModelBlacklist{}, input.BlockedModels...)
 		}
 		if rotateFingerprintSeed {
 			existing.FingerprintSeed = ""
@@ -569,7 +594,8 @@ func unchangedCodexImport(existing *account, input events.CredentialInput) bool 
 		existing.Expired == strings.TrimSpace(input.Expired) &&
 		existing.Proxy == strings.TrimSpace(input.Proxy) &&
 		existing.FingerprintMode == fingerprintMode &&
-		existing.MaxConcurrency == maxConcurrency
+		existing.MaxConcurrency == maxConcurrency &&
+		(input.BlockedModels == nil || slices.Equal(existing.BlockedModels, input.BlockedModels))
 }
 
 func (s *Store) Delete(ids []string) (int, error) {
@@ -601,13 +627,22 @@ func (s *Store) Delete(ids []string) (int, error) {
 }
 
 func (s *Store) Update(id string, status, proxy, fingerprintMode *string, concurrency ...*int) (events.AccountView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var maxConcurrency *int
 	if len(concurrency) > 0 {
 		maxConcurrency = concurrency[0]
 	}
-	item := s.items[strings.TrimSpace(id)]
+	return s.UpdateAccount(events.UpdateCommand{ID: id, Status: status, Proxy: proxy, FingerprintMode: fingerprintMode, MaxConcurrency: maxConcurrency})
+}
+
+func (s *Store) UpdateAccount(cmd events.UpdateCommand) (events.AccountView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status, proxy, fingerprintMode, maxConcurrency := cmd.Status, cmd.Proxy, cmd.FingerprintMode, cmd.MaxConcurrency
+	blockedModels, err := events.NormalizeBlockedModels(cmd.BlockedModels)
+	if err != nil {
+		return events.AccountView{}, err
+	}
+	item := s.items[strings.TrimSpace(cmd.ID)]
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
@@ -639,6 +674,7 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string, concur
 	if maxConcurrency != nil && !validMaxConcurrency(*maxConcurrency) {
 		return events.AccountView{}, fmt.Errorf("max_concurrency must be between %d and %d", events.MinMaxConcurrency, events.MaxMaxConcurrency)
 	}
+	old := *item
 	changed := false
 	if status != nil && item.Status != normalizedStatus {
 		item.Status = normalizedStatus
@@ -654,7 +690,12 @@ func (s *Store) Update(id string, status, proxy, fingerprintMode *string, concur
 	if maxConcurrency != nil {
 		item.MaxConcurrency = *maxConcurrency
 	}
+	if blockedModels != nil && !slices.Equal(item.BlockedModels, blockedModels) {
+		item.BlockedModels = blockedModels
+		changed = true
+	}
 	if err := s.saveLocked(); err != nil {
+		*item = old
 		return events.AccountView{}, err
 	}
 	if changed {
@@ -869,7 +910,7 @@ func (s *Store) RefreshCredential(id string) (events.CredentialInput, bool) {
 	if item == nil || strings.TrimSpace(item.RefreshToken) == "" {
 		return events.CredentialInput{}, false
 	}
-	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency}, true
+	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency, BlockedModels: append(events.ModelBlacklist{}, item.BlockedModels...)}, true
 }
 
 func (s *Store) SharedClientIdentity() events.ClientIdentityProfile {
@@ -896,7 +937,7 @@ func (s *Store) ExportByIDs(ids []string) []events.CredentialInput {
 		result = append(result, events.CredentialInput{
 			CredentialType: "codex_cli",
 			AccessToken:    item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken,
-			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency,
+			AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency, BlockedModels: append(events.ModelBlacklist{}, item.BlockedModels...),
 		})
 	}
 	return result
@@ -1310,6 +1351,7 @@ func toView(item *account, now time.Time) events.AccountView {
 		WebsocketSupported:         item.WebsocketSupported,
 		FingerprintMode:            item.FingerprintMode,
 		MaxConcurrency:             item.MaxConcurrency,
+		BlockedModels:              append([]string{}, item.BlockedModels...),
 	}
 	if item.ModelSnapshot != nil {
 		snapshot := normalizeSnapshot(item.ID, *item.ModelSnapshot)
@@ -1719,7 +1761,7 @@ func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 		}
 		for _, model := range item.ModelSnapshot.Models {
 			modelID := strings.TrimSpace(model.ID)
-			if !validSnapshotModelID(modelID) {
+			if !validSnapshotModelID(modelID) || modelBlocked(item, modelID) {
 				continue
 			}
 			entry := byID[modelID]

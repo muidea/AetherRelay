@@ -270,6 +270,9 @@ func (s *Proxy) StartCodexModelDiscovery(ctx context.Context, accountIDs []strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Imports may change local model policy while retaining capability cache.
+	// Publish that change before any asynchronous upstream enumeration.
+	s.refreshEffectiveCatalog(ctx)
 	progress := proxyevents.CodexDiscoveryProgress{
 		ProgressID: uuid.NewString(),
 		StartedAt:  time.Now().UTC().Format(time.RFC3339),
@@ -625,6 +628,10 @@ func (s *Proxy) listCodexDiscoveryCandidates(ctx context.Context, accountIDs []s
 }
 
 func (s *Proxy) refreshEffectiveCatalog(ctx context.Context) {
+	// Serialize snapshot reads and publication so an older background refresh
+	// cannot publish stale policy membership after a management refresh.
+	s.catalogRefreshMu.Lock()
+	defer s.catalogRefreshMu.Unlock()
 	chatGPTResult := accevents.CatalogSnapshotResult{}
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicCatalogSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.CatalogSnapshotCommand{})).Get()
 	if err != nil {

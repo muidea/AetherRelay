@@ -16,6 +16,7 @@ function functionSource(name){
 function harness(options={}){
   const requests=[],messages=[],reloads={codex:0};
   const context=vm.createContext({
+    TextEncoder,
     state:{locale:'zh-CN',unified:{loading:false,updating:new Set()},cg:{accounts:[]},codex:{accounts:[],settingsDrafts:new Map(),busy:false}},
     t:(text,values={})=>text.replace(/\{(\w+)\}/g,(_,key)=>values[key]??''),
     request:async(url,requestOptions)=>{requests.push({url,options:requestOptions});if(options.request)return options.request(url,requestOptions);return {item:{}}},
@@ -30,7 +31,7 @@ function harness(options={}){
     document:{querySelectorAll:()=>[]},
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0],context);
-  for(const name of ['normalizedCodexFingerprintMode','unifiedCredentialKey','codexSettingsValue','codexSettingsDirty','codexFingerprintControl','codexConcurrencyControl','codexSettingsActions','refreshCodexSettingsDraftUI','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode','updateCodexMaxConcurrency','cancelCodexAccountSettings','saveCodexAccountSettings']){
+  for(const name of ['normalizedCodexBlockedModels','validCodexImportBlockedModels','codexBlockedModelsControl','updateCodexBlockedModels','normalizedCodexFingerprintMode','unifiedCredentialKey','codexSettingsValue','codexSettingsDirty','codexFingerprintControl','codexConcurrencyControl','codexSettingsActions','refreshCodexSettingsDraftUI','unifiedCredentialEnabled','unifiedCredentialToggle','unifiedCredentialActionBlocked','setUnifiedCredentialEnabled','updateCodexFingerprintMode','updateCodexMaxConcurrency','cancelCodexAccountSettings','saveCodexAccountSettings']){
     vm.runInContext(functionSource(name),context);
   }
   return {context,requests,messages,reloads};
@@ -44,6 +45,37 @@ test('unified account fingerprint control exposes off and scoped modes',()=>{
   assert.match(c.codexFingerprintControl({id:'codex-1'}),/<option value="scoped" selected>/);
   c.state.unified.updating.add('codex:codex-1');
   assert.match(c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'}),/ disabled>/);
+});
+
+test('model blacklist uses a draft, normalizes exact IDs and supports explicit clear',async()=>{
+  const {context:c,requests}=harness({request:async()=>({item:{id:'slot',blocked_models:['future','gpt-sol']}})});
+  const account={id:'slot',blocked_models:[],model_snapshot:{models:[{id:'gpt-sol'},{id:'<unsafe>'}]}};
+  c.state.codex.accounts=[account];
+  c.updateCodexBlockedModels({dataset:{codexBlockedModel:'slot',model:'gpt-sol'},checked:true});
+  c.updateCodexBlockedModels({dataset:{codexBlockedModels:'slot'},value:' gpt-sol \nfuture\ngpt-sol'});
+  assert.equal(requests.length,0);
+  assert.match(c.codexBlockedModelsControl(account),/data-model="gpt-sol" checked/);
+  assert.match(c.codexBlockedModelsControl(account),/&lt;unsafe&gt;/);
+  await c.saveCodexAccountSettings('slot');
+  assert.deepEqual(JSON.parse(requests[0].options.body),{blocked_models:['future','gpt-sol']});
+  c.updateCodexBlockedModels({dataset:{codexBlockedModels:'slot'},value:''});
+  await c.saveCodexAccountSettings('slot');
+  assert.deepEqual(JSON.parse(requests[1].options.body),{blocked_models:[]});
+});
+
+test('cancelled or invalid blacklist edits do not issue a PATCH',async()=>{
+  const {context:c,requests,messages}=harness();
+  c.state.codex.accounts=[{id:'slot',blocked_models:['gpt-sol']}];
+  c.updateCodexBlockedModels({dataset:{codexBlockedModel:'slot',model:'gpt-sol'},checked:false});
+  c.cancelCodexAccountSettings('slot');
+  await c.saveCodexAccountSettings('slot');
+  assert.equal(requests.length,0);
+  assert.equal(c.codexSettingsDirty(c.state.codex.accounts[0]),false);
+  c.updateCodexBlockedModels({dataset:{codexBlockedModels:'slot'},value:'bad\x00model'});
+  assert.equal(messages.at(-1).tone,'error');
+  assert.equal(c.validCodexImportBlockedModels(null),false);
+  assert.equal(c.validCodexImportBlockedModels(undefined),true);
+  assert.equal(c.validCodexImportBlockedModels(['字'.repeat(86)]),false);
 });
 
 test('account settings remain local until one explicit save',async()=>{

@@ -9,6 +9,7 @@ const (
 	TopicDelete                    = "aetherrelay.codex.accountpool.command.delete"
 	TopicUpdate                    = "aetherrelay.codex.accountpool.command.update"
 	TopicClientIdentity            = "aetherrelay.codex.accountpool.command.client_identity"
+	TopicCheckModelPolicy          = "aetherrelay.codex.accountpool.command.check_model_policy"
 	TopicAcquire                   = "aetherrelay.codex.accountpool.command.acquire"
 	TopicRelease                   = "aetherrelay.codex.accountpool.command.release"
 	TopicRecordResult              = "aetherrelay.codex.accountpool.command.record_result"
@@ -101,6 +102,7 @@ type AccountView struct {
 	WebsocketSupported       *bool                 `json:"websocket_supported,omitempty"`
 	FingerprintMode          string                `json:"fingerprint_mode"`
 	MaxConcurrency           int                   `json:"max_concurrency"`
+	BlockedModels            []string              `json:"blocked_models"`
 }
 
 type CooldownView struct {
@@ -131,16 +133,17 @@ type QuotaObservation struct {
 // CredentialInput is the deliberate secret-bearing Admin import contract.
 // It never appears in a list or health response.
 type CredentialInput struct {
-	CredentialType  string `json:"credential_type,omitempty"`
-	AccessToken     string `json:"access_token"`
-	RefreshToken    string `json:"refresh_token"`
-	IDToken         string `json:"id_token,omitempty"`
-	AccountID       string `json:"account_id,omitempty"`
-	Email           string `json:"email,omitempty"`
-	Expired         string `json:"expired,omitempty"`
-	Proxy           string `json:"proxy,omitempty"`
-	FingerprintMode string `json:"fingerprint_mode,omitempty"`
-	MaxConcurrency  int    `json:"max_concurrency,omitempty"`
+	CredentialType  string         `json:"credential_type,omitempty"`
+	AccessToken     string         `json:"access_token"`
+	RefreshToken    string         `json:"refresh_token"`
+	IDToken         string         `json:"id_token,omitempty"`
+	AccountID       string         `json:"account_id,omitempty"`
+	Email           string         `json:"email,omitempty"`
+	Expired         string         `json:"expired,omitempty"`
+	Proxy           string         `json:"proxy,omitempty"`
+	FingerprintMode string         `json:"fingerprint_mode,omitempty"`
+	MaxConcurrency  int            `json:"max_concurrency,omitempty"`
+	BlockedModels   ModelBlacklist `json:"blocked_models,omitzero"`
 	// TargetID is an internal import selector. It is populated only by the
 	// Admin account-bundle orchestration and is never serialized or exported.
 	TargetID string `json:"-"`
@@ -173,9 +176,11 @@ type UpdateCommand struct {
 	Proxy           *string
 	FingerprintMode *string
 	MaxConcurrency  *int
+	BlockedModels   ModelBlacklist
 }
 type UpdateResult struct {
-	Item AccountView `json:"item"`
+	Item                AccountView `json:"item"`
+	CatalogRefreshError string      `json:"catalog_refresh_error,omitempty"`
 }
 
 // ClientIdentityCandidate is the atomic bounded pair observed on one
@@ -221,6 +226,18 @@ type AcquireResult struct {
 	// Codex identity. It must never cross an HTTP management projection.
 	FingerprintSeed string                `json:"-"`
 	ClientIdentity  ClientIdentityProfile `json:"-"`
+}
+
+// CheckModelPolicy is a fresh authorization boundary for an existing account
+// lease (WS next turn / token-refresh resend). It does not reapply quota,
+// concurrency or snapshot expiry to an already acquired lease.
+type CheckModelPolicyCommand struct {
+	AccountID string
+	Model     string
+}
+type CheckModelPolicyResult struct {
+	Allowed bool
+	Reason  string
 }
 
 type ReleaseCommand struct{ LeaseID string }

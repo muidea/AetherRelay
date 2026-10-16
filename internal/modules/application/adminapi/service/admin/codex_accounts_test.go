@@ -47,6 +47,35 @@ func (s *codexAccountRuntimeStub) UpdateCodexAccount(_ context.Context, command 
 	s.updated = command
 	return codexevents.UpdateResult{}, nil
 }
+
+func TestCodexAccountBlacklistPatchPresenceAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		body   string
+		want   codexevents.ModelBlacklist
+		status int
+	}{
+		{`{"blocked_models":[" gpt-sol ","future-model","gpt-sol"]}`, codexevents.ModelBlacklist{"future-model", "gpt-sol"}, 200},
+		{`{"blocked_models":[]}`, codexevents.ModelBlacklist{}, 200},
+		{`{"max_concurrency":3}`, nil, 200},
+		{`{"blocked_models":null}`, nil, 400},
+		{`{"blocked_models":[""]}`, nil, 400},
+		{`{"blocked_models":["bad\nmodel"]}`, nil, 400},
+	} {
+		runtime := &codexAccountRuntimeStub{}
+		h := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+		req := httptest.NewRequest(http.MethodPatch, "/admin/api/codex/accounts/slot-1", strings.NewReader(tc.body))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AetherRelay-Admin", "1")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != tc.status || !reflect.DeepEqual(runtime.updated.BlockedModels, tc.want) {
+			t.Fatalf("body=%s HTTP=%d update=%+v response=%s", tc.body, w.Code, runtime.updated, w.Body.String())
+		}
+		if tc.status != 200 && runtime.updated.ID != "" {
+			t.Fatal("invalid PATCH changed account")
+		}
+	}
+}
 func (s *codexAccountRuntimeStub) RefreshCodexAccounts(context.Context, []string) (admincodex.RefreshResult, error) {
 	return admincodex.RefreshResult{}, nil
 }

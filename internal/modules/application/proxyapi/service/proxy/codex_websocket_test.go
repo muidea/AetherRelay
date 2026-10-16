@@ -72,6 +72,69 @@ func TestCodexWebsocketAuthenticatesAndForwardsFirstTurn(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketBlockedNextTurnReturnsModelErrorAndCloses(t *testing.T) {
+	sends := 0
+	closed := make(chan struct{}, 1)
+	executor := codexResponsesExecutorStub{
+		wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
+			return codexresponses.WebsocketOpenResult{SessionID: "ws"}, nil
+		},
+		wsSend: func(context.Context, string, []byte) error {
+			sends++
+			if sends == 1 {
+				return nil
+			}
+			f := codexresponses.NewFailure(codexresponses.KindModelNotFound, 0, nil)
+			retryable := false
+			f.Retryable = &retryable
+			f.UnavailableReason = "model_blocked"
+			return f
+		},
+		wsPull: func(context.Context, string) ([]byte, bool, error) {
+			return []byte(`{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}}`), false, nil
+		},
+		wsClose: func(context.Context, string) { closed <- struct{}{} },
+	}
+	h := newCodexResponsesHandler(t, usage.NewMemoryStore(), executor)
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses", http.Header{"Authorization": []string{"Bearer test-client-key"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	payload := []byte(`{"type":"response.create","model":"gpt-5.2-codex","input":"hello"}`)
+	for range 2 {
+		if err = conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+			t.Fatal(err)
+		}
+		_, frame, readErr := conn.ReadMessage()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if strings.Contains(string(frame), `"type":"error"`) {
+			var event struct {
+				Error APIError `json:"error"`
+			}
+			if err = json.Unmarshal(frame, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Error.Code != "model_not_found" || event.Error.Retryable == nil || *event.Error.Retryable || !strings.Contains(event.Error.Message, "reconnect") {
+				t.Fatalf("frame=%s", frame)
+			}
+		}
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("blocked connection stayed open")
+	}
+	if sends != 2 {
+		t.Fatal("unexpected replay", sends)
+	}
+}
+
 func TestCodexWebsocketRejectsUnauthenticatedUpgrade(t *testing.T) {
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{})
 	server := httptest.NewServer(handler)

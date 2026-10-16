@@ -107,6 +107,25 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payload []byte) error {
 	s.mu.Lock()
 	binding, found := s.codexWebsockets[sessionID]
+	s.mu.Unlock()
+	if !found {
+		return codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("Codex websocket session is missing"))
+	}
+	var create struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(payload, &create) != nil || (create.Model != "" && create.Model != binding.model) {
+		return codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("invalid Codex websocket model"))
+	}
+	if err := s.checkCodexModelPolicy(ctx, binding.accountID, binding.model); err != nil {
+		// This turn never executed. Do not reuse the previous turn's account
+		// or response-model observation in its failure record.
+		usagetarget.Record(ctx, "codexoauth", "", "")
+		s.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
+		return err
+	}
+	s.mu.Lock()
+	binding, found = s.codexWebsockets[sessionID]
 	if found {
 		binding.resultRecorded = false
 		binding.turnEvidence = false
@@ -114,6 +133,9 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		s.codexWebsockets[sessionID] = binding
 	}
 	s.mu.Unlock()
+	if !found {
+		return codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("Codex websocket session is missing"))
+	}
 	if found {
 		usagetarget.Record(ctx, "codexoauth", binding.accountID, binding.accountLabel)
 		usagetarget.BeginCodexAttempt(ctx, payload)
@@ -462,6 +484,14 @@ func (s *Proxy) CompleteCodexResponses(ctx context.Context, request codexrespons
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccountWithinBudget(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
+				if policyErr := s.checkCodexModelPolicy(ctx, account.AccountID, request.Model); policyErr != nil {
+					s.releaseCodexAccount(ctx, account.LeaseID)
+					if policyFailure, ok := codexresponses.AsFailure(policyErr); ok && policyFailure.UnavailableReason == "model_blocked" && codexModelFailoverSafe(request, tried) {
+						tried = append(tried, account.AccountID)
+						continue
+					}
+					return codexresponses.Result{}, policyErr
+				}
 				out, failure = s.completeCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: refreshed.ClientIdentity}, request)
 				if failure == nil {
 					s.releaseCodexAccount(ctx, account.LeaseID)
@@ -683,6 +713,14 @@ func (s *Proxy) StreamCodexResponses(ctx context.Context, request codexresponses
 		if failure.Kind == codexresponses.KindInvalidToken {
 			refreshed, refreshErr := s.refreshCodexAccount(ctx, account.AccountID)
 			if refreshErr == nil && refreshed.Refreshed {
+				if policyErr := s.checkCodexModelPolicy(ctx, account.AccountID, request.Model); policyErr != nil {
+					s.releaseCodexAccount(ctx, account.LeaseID)
+					if policyFailure, ok := codexresponses.AsFailure(policyErr); ok && policyFailure.UnavailableReason == "model_blocked" && codexModelFailoverSafe(request, tried) {
+						tried = append(tried, account.AccountID)
+						continue
+					}
+					return policyErr
+				}
 				err = s.streamCodexOnce(ctx, accevents.AcquireResult{AccountID: refreshed.AccountID, AccessToken: refreshed.AccessToken, AccountIDHeader: refreshed.AccountIDHeader, Proxy: refreshed.Proxy, FingerprintMode: refreshed.FingerprintMode, FingerprintSeed: refreshed.FingerprintSeed, ClientIdentity: refreshed.ClientIdentity}, request, started, func(line []byte) error {
 					emitted = emitted || len(line) > 0
 					if emit == nil {
@@ -774,9 +812,17 @@ func retryableCodexFailure(failure *codexresponses.Failure) bool {
 // CP-FAIL-018: this exception is HTTP-only. Stateful WS migration keeps its
 // separate rate-limit/replay contract; do not add this kind to the shared list.
 func retryableCodexRequestFailure(failure *codexresponses.Failure, request codexresponses.Request, tried []string) bool {
+	if failure != nil && failure.Retryable != nil && !*failure.Retryable {
+		return false
+	}
 	if failure == nil || failure.Kind != codexresponses.KindModelNotFound {
 		return retryableCodexFailure(failure)
 	}
+	return codexModelFailoverSafe(request, tried)
+}
+
+// Model-policy changes cannot replay an account-bound continuation elsewhere.
+func codexModelFailoverSafe(request codexresponses.Request, tried []string) bool {
 	if len(tried) >= 2 || strings.TrimSpace(request.TurnState) != "" {
 		return false
 	}
@@ -809,6 +855,9 @@ func (s *Proxy) acquireCodexAccountForTransportWithIdentity(ctx context.Context,
 		return accevents.AcquireResult{}, clientFailure(ctx.Err())
 	}
 	if err != nil || !ok || strings.TrimSpace(account.AccountID) == "" || strings.TrimSpace(account.AccessToken) == "" {
+		if account.UnavailableReason == "model_blocked" {
+			return accevents.AcquireResult{}, codexModelPolicyFailure("model_blocked")
+		}
 		if account.UnavailableReason == "credential_permanently_invalid" {
 			retryable := false
 			failure := codexresponses.NewFailure(codexresponses.KindAuthentication, 0, fmt.Errorf("Codex OAuth credentials require reauthentication"))
@@ -844,7 +893,7 @@ func toUpstreamAccountClientIdentity(profile accevents.ClientIdentityProfile) up
 
 func terminalAdmissionFailure(err error) bool {
 	failure, ok := codexresponses.AsFailure(err)
-	return ok && failure != nil && failure.Kind == codexresponses.KindAuthentication
+	return ok && failure != nil && (failure.Kind == codexresponses.KindAuthentication || failure.UnavailableReason == "model_blocked")
 }
 
 func firstString(values []string) string {

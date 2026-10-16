@@ -56,17 +56,18 @@ type accountPoolBundleChatGPT struct {
 }
 
 type accountPoolBundleCodex struct {
-	CredentialType  string `json:"credential_type,omitempty"`
-	AccountID       string `json:"account_id,omitempty"`
-	IdentityKey     string `json:"identity_key,omitempty"`
-	Email           string `json:"email,omitempty"`
-	AccessToken     string `json:"access_token"`
-	RefreshToken    string `json:"refresh_token"`
-	IDToken         string `json:"id_token,omitempty"`
-	Expired         string `json:"expired,omitempty"`
-	Proxy           string `json:"proxy,omitempty"`
-	FingerprintMode string `json:"fingerprint_mode,omitempty"`
-	MaxConcurrency  int    `json:"max_concurrency,omitempty"`
+	CredentialType  string                     `json:"credential_type,omitempty"`
+	AccountID       string                     `json:"account_id,omitempty"`
+	IdentityKey     string                     `json:"identity_key,omitempty"`
+	Email           string                     `json:"email,omitempty"`
+	AccessToken     string                     `json:"access_token"`
+	RefreshToken    string                     `json:"refresh_token"`
+	IDToken         string                     `json:"id_token,omitempty"`
+	Expired         string                     `json:"expired,omitempty"`
+	Proxy           string                     `json:"proxy,omitempty"`
+	FingerprintMode string                     `json:"fingerprint_mode,omitempty"`
+	MaxConcurrency  int                        `json:"max_concurrency,omitempty"`
+	BlockedModels   codexevents.ModelBlacklist `json:"blocked_models"`
 }
 
 type accountPoolBundleImportResult struct {
@@ -249,7 +250,7 @@ func (h *Handler) exportAccountPoolBundle(w http.ResponseWriter, r *http.Request
 		effectiveIdentity := firstNonEmpty(view.IdentityKey, accountidentity.Key(item.AccountID, effectiveEmail))
 		slots = append(slots, accountPoolBundleExportSlot{
 			position: len(slots), email: effectiveEmail, identity: effectiveIdentity,
-			codex: &accountPoolBundleCodex{CredentialType: "codex_oauth", AccountID: item.AccountID, IdentityKey: effectiveIdentity, Email: item.Email, AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency},
+			codex: &accountPoolBundleCodex{CredentialType: "codex_oauth", AccountID: item.AccountID, IdentityKey: effectiveIdentity, Email: item.Email, AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency, BlockedModels: append(codexevents.ModelBlacklist{}, item.BlockedModels...)},
 		})
 	}
 	accounts := groupAccountPoolBundleExportSlots(slots)
@@ -436,6 +437,11 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			default:
 				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli.fingerprint_mode is invalid", i)
 			}
+			clean, err := codexevents.NormalizeBlockedModels(slot.BlockedModels)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli: %w", i, err)
+			}
+			slot.BlockedModels = clean
 			if slot.MaxConcurrency != 0 && (slot.MaxConcurrency < codexevents.MinMaxConcurrency || slot.MaxConcurrency > codexevents.MaxMaxConcurrency) {
 				return nil, nil, nil, fmt.Errorf("accounts[%d].slots.codex_cli.max_concurrency must be between 1 and 32", i)
 			}
@@ -469,7 +475,7 @@ func prepareAccountPoolBundleImport(payload accountPoolBundle) (chat []accevents
 			if err := validateBundleProxy(slot.Proxy, fmt.Sprintf("accounts[%d].slots.codex_cli.proxy", i)); err != nil {
 				return nil, nil, nil, err
 			}
-			appendCodex(account.AccountRef, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode, MaxConcurrency: slot.MaxConcurrency})
+			appendCodex(account.AccountRef, codexevents.CredentialInput{CredentialType: kind, AccountID: slot.AccountID, Email: firstNonEmpty(slot.Email, account.Identity.Email), AccessToken: slot.AccessToken, RefreshToken: slot.RefreshToken, IDToken: slot.IDToken, Expired: slot.Expired, Proxy: slot.Proxy, FingerprintMode: slot.FingerprintMode, MaxConcurrency: slot.MaxConcurrency, BlockedModels: slot.BlockedModels})
 		}
 	}
 	rememberCredentials := func(accountRef, kind, accessToken, refreshToken string) {
