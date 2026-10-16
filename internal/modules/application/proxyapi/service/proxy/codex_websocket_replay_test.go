@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,65 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayusage"
 	"github.com/gorilla/websocket"
 )
+
+func TestCodexWebsocketCompleteToolTranscriptReplacesHistory(t *testing.T) {
+	for _, typ := range []string{"function", "custom_tool", "mcp_tool"} {
+		for _, prior := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/prior=%v", typ, prior), func(t *testing.T) {
+				state := newCodexWebsocketReplayState(1 << 20)
+				if prior {
+					first, _ := state.prepare([]byte(`{"input":"old context must be discarded"}`))
+					state.commit(first, nil)
+				}
+				payload := []byte(fmt.Sprintf(`{"input":[{"role":"user","content":"new context"},{"type":"%s_call","call_id":"c","name":"lookup","arguments":"{}"},{"type":"%s_call_output","call_id":"c","output":"ok"}]}`, typ, typ))
+				turn, err := state.prepare(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, safe, err := buildCodexWebsocketHTTPPayload(payload, turn, "resp_old", 1<<20)
+				if err != nil || !safe || bytes.Contains(raw, []byte("old context")) || len(turn.items) != 3 {
+					t.Fatalf("standalone transcript: safe=%v err=%v input=%s", safe, err, raw)
+				}
+			})
+		}
+	}
+}
+
+func TestCodexWebsocketEvictedHistoryCannotRecoverFromSuffix(t *testing.T) {
+	state := newCodexWebsocketReplayState(1024)
+	first, _ := state.prepare([]byte(`{"input":"original context"}`))
+	state.commit(first, []json.RawMessage{projectionJSON(projectionMessage("final_answer", strings.Repeat("x", 2048)))})
+	for _, id := range []string{"resp_1", "resp_2", "resp_3"} {
+		payload := []byte(fmt.Sprintf(`{"previous_response_id":%q,"input":"next"}`, id))
+		turn, _ := state.prepare(payload)
+		if _, safe, err := buildCodexWebsocketHTTPPayload(payload, turn, id, 1024); err != nil || safe {
+			t.Fatalf("suffix accepted: id=%s safe=%v err=%v", id, safe, err)
+		}
+		// Native WS can complete using upstream state even when local history
+		// is missing. Its small output cannot restore the lost prefix.
+		state.commit(turn, []json.RawMessage{projectionJSON(projectionMessage("final_answer", "ok"))})
+		if state.exists || len(state.items) != 0 {
+			t.Fatal("successful incremental turn restored incomplete history")
+		}
+	}
+	payload := []byte(`{"input":"complete replacement"}`)
+	turn, _ := state.prepare(payload)
+	state.commit(turn, nil)
+	if _, safe, err := buildCodexWebsocketHTTPPayload(payload, turn, "", 1024); err != nil || !safe || !state.exists {
+		t.Fatalf("complete replacement did not restore history: safe=%v err=%v", safe, err)
+	}
+}
+
+func TestCodexWebsocketImplicitToolOutputStillUsesHistory(t *testing.T) {
+	state := newCodexWebsocketReplayState(1 << 20)
+	first, _ := state.prepare([]byte(`{"input":"lookup"}`))
+	state.commit(first, []json.RawMessage{json.RawMessage(`{"type":"function_call","call_id":"c","name":"lookup","arguments":"{}"}`)})
+	payload := []byte(`{"input":[{"type":"function_call_output","call_id":"c","output":"ok"}]}`)
+	turn, _ := state.prepare(payload)
+	if _, safe, err := buildCodexWebsocketHTTPPayload(payload, turn, "resp_1", 1<<20); err != nil || !safe || len(turn.items) != 3 {
+		t.Fatalf("implicit continuation: turn=%+v safe=%v err=%v", turn, safe, err)
+	}
+}
 
 // CP-WS-012: replay must reconstruct a complete tool-call transcript.
 func TestBuildCodexWebsocketRetryPayloadReconstructsToolContext(t *testing.T) {

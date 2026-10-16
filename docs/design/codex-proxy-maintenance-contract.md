@@ -6,13 +6,17 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.4.0`
+> 合同版本：`17.5.1`
 >
 > 状态：`active`
 >
 > 生效日期：2026-10-16
 >
 > 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+
+`17.5.1` 修复 WS 优先实现的四类评审边界：历史淘汰或未知响应引用后不能用增量成功恢复完整标记，完整工具 transcript 独立替换，HTTP 回退 Send 阶段的明确 429 复用有界迁移并保留 typed 错误，以及握手/代理 CONNECT 等待期间取消立即关闭连接、成功后解除命令取消绑定。本地回归覆盖多轮、迁移上限、未知执行禁止重放、取消与排空；live 待部署验证。
+
+`17.5.0` 默认 Codex Responses 上游 WS 优先，只有生成请求尚未发送且具备完整输入时允许同账号 HTTP 回退；保留鉴权、模型、限流等拒绝语义。发送后执行结果不明禁止转 HTTP 或换号重放。原生 WS 回退会话按本地已知响应 ID 重建工具历史，每个 response.create 独立结算与归档。范围、资源边界和 live 验收见 [WS 优先与安全 HTTP 回退](codex-ws-first-http-fallback.md)。
 
 `17.4.0` 新增账号槽位级 `blocked_models` 精确模型黑名单（`CP-SCHED-013`）。策略独立于上游能力快照，统一选号准入、模型目录、刷新凭据后的重发与 WebSocket 每轮发送共同执行；已准入的当前 attempt 允许完成，新 attempt/turn 使用新策略。策略拒绝不惩罚账号或 Provider，不编造冷却与重试时间。管理页草稿显式保存，重启/同槽位重授权及账号池 v2 bundle 导入导出保持策略。本地实现及验收随本次收口更新，live 验收待部署执行。 操作与 live 验收见 [账号模型黑名单](codex-account-model-blacklist.md)。
 
@@ -407,7 +411,7 @@
 
 `CP-WS-004` 连接池、reader、writer、ping/pong 和关闭任务必须归 `codexupstream` Block 生命周期所有；长期任务使用 framework 注入的 `BackgroundRoutine`，Teardown 必须取消并等待退出。
 
-`CP-WS-005` compact 不使用上游 WebSocket。WebSocket 到 HTTP 的自动降级不属于当前合同；握手或上游连接失败必须返回明确错误，不能把客户端请求静默改成另一种 transport。
+`CP-WS-005` compact 不使用上游 WebSocket。其它 Codex Responses 入口默认上游 WS 优先；仅在尚未尝试发送 response.create、请求未取消且预算仍有效、存在完整可执行输入时允许同账号 HTTP 回退。可回退拒绝为非 model_not_found 的 404、405、426、501、其它握手 5xx 或连接失败／超时。400、401、403、429 和结构化模型拒绝保留原分类，不以 transport 回退掩盖。回退必须记录实际 transport、原因及两次尝试；已尝试发送 create 的未知执行结果禁止 HTTP 或换号重放。
 
 `CP-WS-006` WebSocket 单帧、单消息、session 数、空闲时间和存活时间必须有配置上限。
 
@@ -423,7 +427,19 @@
 
 `CP-WS-012` 原生 WebSocket 只允许在第二个及后续 turn、收到 429/usage-limit 且尚未向客户端写出任何业务帧时迁移账号。代理必须先同步登记旧账号的 typed rate-limit/cooldown，再关闭旧 session；只有能够在消息上限内重建完整有序 transcript、删除 `previous_response_id`、并重新验证全部 function/custom/MCP call-output 配对时，才可最多迁移两次。`response.created/in_progress/queued` 可为此短暂延迟；任一 delta、output、tool、usage 或其它语义帧写出后禁止迁移和重放。
 
+上述迁移同时覆盖 HTTP 回退会话 Send 阶段的明确 HTTP 429 拒绝，复用同一计数与历史/响应 ID 校验，取消后不得再选号或发送。原生 WS 发送失败和 HTTP 网络失败均不属于明确拒绝。迁移耗尽后的失败须保持 typed 记账，本地 WS error 帧保留安全错误投影及 status/retryable/retry_after_seconds，不能泛化丢失限流语义。
+
 `CP-WS-013` WebSocket failover replay 的历史 item 正文必须按不可变共享值保存；每个新 item 最多复制一次正文，后续 turn 只允许分配新的切片头或引用。前缀判断先走原始字节相等快路，只有必要时才执行保数值原文的语义比较；不得随 turn 数增长反复深拷贝完整历史而形成 O(T²) 正文分配。历史条数和总字节仍服从 `CP-WS-006` 上限。
+
+`CP-WS-014` 原生 WS 在握手阶段转 HTTP 后，同一连接保持 HTTP。每次 create 仍执行模型黑名单准入，且必须重建完整有序 input、重新校验工具配对、删除 previous_response_id；该 ID 若存在，必须匹配本连接最近成功响应。无完整历史、历史超限或陈旧 ID 必须在 HTTP 发出前拒绝。完整替换 transcript 不合并旧历史。
+
+无 previous_response_id 且自身工具配对完整的 transcript 也属于独立替换，不能仅因存在 output 拼接旧历史或拒绝首轮回退。历史缺失/淘汰及非本地响应引用必须传播不完整状态；原生 WS 的后续增量成功不能恢复该标记，只有新的完整独立输入可恢复。账号迁移必须执行相同的响应 ID 校验。
+
+`CP-WS-015` 每个原生 response.create 必须独立建立 usage EventID、completion guard 和归档 round；连接 request ID 可共享以关联，不能用单个 usage completion 吞掉后续响应。每轮保存请求、响应帧、账号、模型、终态和 token；首事件及输出时间不得继承上一轮。原始 WS 握手与 create 尝试分开观察。
+
+`CP-WS-016` HTTP 回退会话的 generate=false 不得发起生成。允许代理以零用量、本地 response ID 确认可选预热，并保留输入供下一次完整重建；不能宣称实际预热了上游缓存。独立 HTTP 请求若缺少该本地续接状态，不能将 generate=false 回退为 HTTP 生成。
+
+`CP-WS-017` 握手的连接资源归 codexupstream Block；caller context 取消/超时或 BeginShutdown 必须中断直接连接、HTTP/HTTPS 代理 CONNECT 及 Upgrade 响应头读取，不能等到固定握手超时。成功移交 session 前解除并等待取消回调，已建立的原生会话不得因 WSOpen 命令 context 随后结束而关闭；取消后的握手不得转 HTTP 或发送 create。验收必须覆盖进行中取消、超时、排空、两种代理及成功移交。
 
 ## 8. 账号调度与会话粘性
 
@@ -796,7 +812,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
 | Codex manifest profile 与客户端版本过滤 | CP-CAP-007..009 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `model_profiles_test.go`, `aetherrelayconfig/config_test.go` |
 | HTTPS 账号代理 ALPN | CP-SEC-002, CP-SEC-004 | implemented | `aetherrelayproxy/transport.go`, `codexupstream/biz/biz.go` | `aetherrelayproxy/transport_test.go`, `codexupstream/biz/biz_test.go` |
-| Responses WebSocket | CP-EP-002, CP-WS-001..013 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_replay_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
+| Responses WebSocket | CP-EP-002, CP-WS-001..017 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/responses_transport.go`, `codexupstream/biz/websocket_http_fallback.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_replay_test.go`, `codex_websocket_fallback_test.go`, `codexupstream/biz/websocket_handshake_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
 | 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |
 | Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | ChatGPT Web 模型级能力 | CP-CAP-011 | implemented | `proxyapi/biz/discovery.go`, `effectivecatalog/catalog.go` | `effectivecatalog/catalog_test.go`, `proxy/chatgpt_images_test.go` |

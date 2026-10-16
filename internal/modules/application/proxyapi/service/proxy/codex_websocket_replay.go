@@ -48,7 +48,10 @@ func (s *codexWebsocketReplayState) prepare(payload []byte) (codexWebsocketTurnR
 		exists = true
 	}
 	turn := codexWebsocketTurnReplay{items: full, exists: exists, safe: exists}
-	if needsHistory && (s == nil || !s.exists) && codexWebsocketRawItemsHaveToolOutput(current) {
+	// An incremental text turn also needs its referenced history. History can
+	// have been evicted after a large successful output, even while its response
+	// ID is still known. Never replay only the latest user message in that case.
+	if needsHistory && (s == nil || !s.exists) {
 		turn.safe = false
 	}
 	limit := int64(0)
@@ -66,13 +69,13 @@ func (s *codexWebsocketReplayState) commit(turn codexWebsocketTurnReplay, output
 		return
 	}
 	items := combineCodexWebsocketRawItems(turn.items, output)
-	if !codexWebsocketRawItemsWithinLimit(items, s.limit) {
+	if !turn.safe || !turn.exists || !codexWebsocketRawItemsWithinLimit(items, s.limit) {
 		s.items = nil
 		s.exists = false
 		return
 	}
 	s.items = items
-	s.exists = turn.exists || len(output) > 0
+	s.exists = true
 }
 
 func buildCodexWebsocketRetryPayload(payload []byte, turn codexWebsocketTurnReplay, limit int64) ([]byte, bool, error) {
@@ -106,6 +109,30 @@ func buildCodexWebsocketRetryPayload(payload []byte, turn codexWebsocketTurnRepl
 	return retry, true, nil
 }
 
+// Removing a previous_response_id is only safe if the local full history is
+// the history that ID references. A stale or unknown ID must not silently
+// resolve to the last successful response on this connection.
+func buildCodexWebsocketHTTPPayload(payload []byte, turn codexWebsocketTurnReplay, lastID string, limit int64) ([]byte, bool, error) {
+	matches, err := codexWebsocketHistoryMatches(payload, lastID)
+	if err != nil || !matches {
+		return nil, false, err
+	}
+	return buildCodexWebsocketRetryPayload(payload, turn, limit)
+}
+
+func codexWebsocketHistoryMatches(payload []byte, lastID string) (bool, error) {
+	var envelope struct {
+		Previous string `json:"previous_response_id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return false, err
+	}
+	if envelope.Previous != "" && (lastID == "" || envelope.Previous != lastID) {
+		return false, nil
+	}
+	return true, nil
+}
+
 func codexWebsocketInputSequence(payload []byte) ([]json.RawMessage, bool, error) {
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &body); err != nil {
@@ -136,7 +163,19 @@ func codexWebsocketPayloadNeedsHistory(payload []byte, current []json.RawMessage
 	}
 	var previous string
 	_ = json.Unmarshal(body["previous_response_id"], &previous)
-	return strings.TrimSpace(previous) != "" || codexWebsocketRawItemsHaveToolOutput(current), nil
+	if strings.TrimSpace(previous) != "" {
+		return true, nil
+	}
+	if !codexWebsocketRawItemsHaveToolOutput(current) {
+		return false, nil
+	}
+	// A complete transcript can contain tool outputs without continuing the
+	// previous turn. Only unmatched outputs require implicit WS history.
+	var input any
+	if err := decodeCodexJSON(body["input"], &input); err != nil {
+		return false, err
+	}
+	return validateCodexInput(input, false) != nil, nil
 }
 
 func codexWebsocketRawItemsHaveToolOutput(items []json.RawMessage) bool {

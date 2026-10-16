@@ -11,6 +11,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/pkg/aetherrelayclientauth"
 	"github.com/gorilla/websocket"
 )
 
@@ -77,21 +78,72 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 	}()
 	model := ""
 	sessionID := ""
+	httpFallback := false
+	lastResponseID := ""
 	var sessionFeatures codexRequestFeatures
 	var sessionOpenRequest codexresponses.WebsocketOpenRequest
 	replayState := newCodexWebsocketReplayState(maxMessageBytes)
 	turnNumber := 0
+	baseRequest, baseRound, sessionContext := r, round, ctx
+	messageNumber := 0
+	var finishTurn func()
+	defer func() {
+		if finishTurn != nil {
+			finishTurn()
+		}
+	}()
 	defer func() {
 		if sessionID != "" {
 			h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
 		}
 	}()
 	for {
+		if finishTurn != nil {
+			finishTurn()
+			finishTurn = nil
+		}
 		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
 		messageType, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
 			return
 		}
+		turnStarted := time.Now()
+		messageNumber++
+		if messageNumber > 1 {
+			var err error
+			round, err = h.startRound(websocketAPIKeyID(baseRequest))
+			if err != nil {
+				writeCodexWebsocketError(conn, "proxy_internal_error", "start websocket archive failed")
+				return
+			}
+			eventID := newRequestID()
+			r = baseRequest.WithContext(withUsageCompletion(withUsageEventID(withArchiveRound(sessionContext, round), eventID), &usageCompletion{}))
+			if round != nil {
+				round.EventID = eventID
+				round.SetRequestID(requestID)
+				round.SetAPIKeyID(websocketAPIKeyID(baseRequest))
+			}
+			if err := h.startUsage(r, eventID, round); err != nil {
+				if round != nil {
+					_ = round.Abort()
+				}
+				writeCodexWebsocketError(conn, "usage_store_unavailable", "usage store unavailable")
+				return
+			}
+		} else {
+			r = baseRequest.WithContext(sessionContext)
+		}
+		turnCtx := r.Context()
+		currentRequest, currentRound := r, round
+		finishTurn = func() {
+			h.completePendingUsage(currentRequest, currentRound)
+			if currentRound != nil && currentRound != baseRound {
+				_ = currentRound.Abort()
+			}
+		}
+		_ = h.writeArchiveRequest(round, raw)
+		h.archiveAndLogClientRequest(round, r, len(raw))
+		round.SetTransportPlan(RouteLabel(r), "/v1/responses", ClientProtocolOpenAI, effectivecatalog.CodexOAuthProviderID, "codex_oauth_responses", TransportModeCodexOAuthResponses)
 		if messageType != websocket.TextMessage {
 			writeCodexWebsocketError(conn, "invalid_request", "only text response.create messages are supported")
 			return
@@ -126,18 +178,20 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				round.SetIgnoredFeatures(uniqueSortedFeatures(append(round.IgnoredFeatures, turnMetadataIgnored...)))
 			}
 			sessionOpenRequest = codexresponses.WebsocketOpenRequest{Model: model, SessionHash: sessionHash, LogicalThreadHash: codexLogicalThreadHash(r, model, scopeBody), BetaFeatures: features.BetaFeatures, ResponsesLite: features.ResponsesLite, TurnState: features.TurnState, SessionScope: codexTurnStateScopeDigest(r, model, scopeBody), ClientUserAgent: userAgent, ClientOriginator: originator, TurnMetadata: turnMetadata}
-			opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
+			opened, openErr := h.codexResponses.OpenCodexWebsocket(turnCtx, sessionOpenRequest)
 			if openErr != nil {
 				if failure, ok := codexresponses.AsFailure(openErr); ok {
 					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
 					recordCodexTurnStateFallback(round, failure.TurnStateSource, failure.Attempt.Response.Observed)
 				}
 				writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket could not be opened")
+				h.recordCodexWebsocketFailure(r, model, turnStarted, openErr)
 				return
 			}
 			h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 			round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 			sessionID = opened.SessionID
+			httpFallback = opened.HTTPFallback
 		}
 		if requestModel != model {
 			writeCodexWebsocketError(conn, "invalid_request", "websocket model cannot change within a session")
@@ -163,52 +217,81 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			writeCodexWebsocketError(conn, "invalid_request", "Codex websocket replay state is invalid")
 			return
 		}
+		if matches, _ := codexWebsocketHistoryMatches(normalized, lastResponseID); !matches {
+			// Native WS may resolve IDs outside our retained transcript, but that
+			// result must not make local replay history appear complete.
+			turnReplay.safe = false
+		}
 		turnNumber++
-		turnStarted := time.Now()
 		attemptPayload := normalized
+		if httpFallback {
+			full, safe, err := buildCodexWebsocketHTTPPayload(normalized, turnReplay, lastResponseID, maxMessageBytes)
+			if err != nil || !safe {
+				writeCodexWebsocketError(conn, "invalid_request", "HTTP fallback requires a complete validated transcript")
+				h.recordCodexWebsocketFailure(r, model, turnStarted, codexresponses.NewFailure(codexresponses.KindInvalidRequest, 0, fmt.Errorf("HTTP fallback requires a complete validated transcript")))
+				return
+			}
+			attemptPayload = full
+		}
 		migrationAttempts := 0
 		var turnResult codexWebsocketForwardResult
 		for {
-			if err := h.codexResponses.SendCodexWebsocket(ctx, sessionID, attemptPayload); err != nil {
-				writeCodexWebsocketFailure(conn, err, "upstream_unavailable", "Codex websocket send failed")
-				failure := streamFailFromCodexError(err)
-				h.recordAndPrintFail(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), tokenUsage{}, failure)
-				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), tokenUsage{}, "websocket", err.Error(), "", outcomeFromStreamFail(failure, http.StatusSwitchingProtocols))
-				return
+			sendErr := h.codexResponses.SendCodexWebsocket(turnCtx, sessionID, attemptPayload)
+			if sendErr != nil {
+				failure, typed := codexresponses.AsFailure(sendErr)
+				if typed {
+					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, sendErr)
+				}
+				// Only a definite HTTP 429 rejection can enter the replay path.
+				// A failed native write or HTTP network error has unknown execution.
+				if !httpFallback || !typed || failure.Kind != codexresponses.KindRateLimit || failure.HTTPStatus != http.StatusTooManyRequests {
+					writeCodexWebsocketFailure(conn, sendErr, "upstream_unavailable", "Codex websocket send failed")
+					h.recordCodexWebsocketFailure(r, model, turnStarted, sendErr)
+					return
+				}
+				turnResult = codexWebsocketForwardResult{terminal: true, failure: failure}
+			} else {
+				turnResult, err = h.forwardCodexWebsocketTurn(r, conn, sessionID, maxMessageBytes, turnStarted)
 			}
-			turnResult, err = h.forwardCodexWebsocketTurn(ctx, conn, sessionID, maxMessageBytes)
 			if err != nil {
 				writeCodexWebsocketError(conn, "upstream_failed", err.Error())
 				h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, err.Error())
-				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, "websocket", err.Error(), "", "upstream_failed")
+				h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, "response.ws.jsonl", err.Error(), "", "upstream_failed")
 				return
 			}
-			canMigrate := turnNumber > 1 && migrationAttempts < maxCodexWebsocketTurnMigrations && !turnResult.downstreamWritten && turnResult.failure != nil && turnResult.failure.Kind == codexresponses.KindRateLimit
+			canMigrate := turnCtx.Err() == nil && turnNumber > 1 && migrationAttempts < maxCodexWebsocketTurnMigrations && !turnResult.downstreamWritten && turnResult.failure != nil && turnResult.failure.Kind == codexresponses.KindRateLimit
 			if canMigrate {
-				retryPayload, retrySafe, retryErr := buildCodexWebsocketRetryPayload(attemptPayload, turnReplay, maxMessageBytes)
+				retryPayload, retrySafe, retryErr := buildCodexWebsocketHTTPPayload(normalized, turnReplay, lastResponseID, maxMessageBytes)
 				if retryErr != nil {
 					writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket replay could not be prepared")
 					return
 				}
 				if retrySafe {
-					h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(ctx), sessionID)
+					h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(turnCtx), sessionID)
 					sessionID = ""
-					opened, openErr := h.codexResponses.OpenCodexWebsocket(ctx, sessionOpenRequest)
+					opened, openErr := h.codexResponses.OpenCodexWebsocket(turnCtx, sessionOpenRequest)
 					if openErr != nil {
 						if failure, ok := codexresponses.AsFailure(openErr); ok {
 							h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
 							recordCodexTurnStateFallback(round, failure.TurnStateSource, failure.Attempt.Response.Observed)
 						}
 						writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket replacement account is unavailable")
+						h.recordCodexWebsocketFailure(r, model, turnStarted, openErr)
 						return
 					}
 					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 					round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 					sessionID = opened.SessionID
+					httpFallback = opened.HTTPFallback
 					attemptPayload = retryPayload
 					migrationAttempts++
 					continue
 				}
+			}
+			if sendErr != nil {
+				writeCodexWebsocketFailure(conn, sendErr, "upstream_unavailable", "Codex websocket send failed")
+				h.recordCodexWebsocketFailure(r, model, turnStarted, sendErr)
+				return
 			}
 			if len(turnResult.deferred) > 0 {
 				if err := writeCodexWebsocketFrames(conn, turnResult.deferred); err != nil {
@@ -217,7 +300,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				turnResult.downstreamWritten = true
 			}
 			if turnResult.failure != nil && !turnResult.downstreamWritten {
-				writeCodexWebsocketError(conn, "upstream_failed", "Codex websocket turn failed")
+				writeCodexWebsocketFailure(conn, turnResult.failure, "upstream_failed", "Codex websocket turn failed")
 			}
 			break
 		}
@@ -231,13 +314,35 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			message = "Codex websocket turn failed"
 		} else {
 			replayState.commit(turnReplay, turnResult.outputItems)
+			lastResponseID = turnResult.responseID
 		}
-		h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, message)
-		h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, "websocket", message, "", outcome)
+		if turnResult.failure != nil {
+			failure := streamFailFromCodexError(turnResult.failure)
+			h.recordAndPrintFail(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, failure)
+			outcome = outcomeFromStreamFail(failure, http.StatusSwitchingProtocols)
+			message = turnResult.failure.Error()
+		} else {
+			h.recordAndPrint(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, message)
+		}
+		h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(turnStarted), turnResult.usage, "response.ws.jsonl", message, "", outcome)
 		if !turnResult.reusable {
 			return
 		}
 	}
+}
+
+func (h *Handler) recordCodexWebsocketFailure(r *http.Request, model string, started time.Time, err error) {
+	round := archiveRoundFromContext(r.Context())
+	failure := streamFailFromCodexError(err)
+	h.recordAndPrintFail(round, r, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(started), tokenUsage{}, failure)
+	h.writeArchiveMetadata(round, effectivecatalog.CodexOAuthProviderID, model, true, http.StatusSwitchingProtocols, time.Since(started), tokenUsage{}, "", err.Error(), "", outcomeFromStreamFail(failure, http.StatusSwitchingProtocols))
+}
+
+func websocketAPIKeyID(r *http.Request) string {
+	if identity, internal := internalFeatureIdentity(r.Context()); internal {
+		return identity.KeyID
+	}
+	return clientauth.ClientIdentityFromContext(r.Context()).KeyID
 }
 
 func cloneURLPath(r *http.Request, path string) *url.URL {
@@ -265,6 +370,11 @@ func normalizeCodexWebsocketCreate(raw []byte, currentModel string, headers http
 	}
 	if typ, _ := envelope["type"].(string); typ != "response.create" {
 		return nil, "", codexRequestFeatures{}, fmt.Errorf("message type must be response.create")
+	}
+	if generate, exists := envelope["generate"]; exists {
+		if _, ok := generate.(bool); !ok {
+			return nil, "", codexRequestFeatures{}, fmt.Errorf("generate must be a boolean")
+		}
 	}
 	model, _ := envelope["model"].(string)
 	model = strings.TrimSpace(model)
@@ -320,6 +430,7 @@ func websocketPromptCacheKey(raw []byte) string {
 }
 
 type codexWebsocketForwardResult struct {
+	responseID        string
 	terminal          bool
 	reusable          bool
 	downstreamWritten bool
@@ -329,8 +440,17 @@ type codexWebsocketForwardResult struct {
 	outputItems       []json.RawMessage
 }
 
-func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket.Conn, sessionID string, deferredLimit int64) (codexWebsocketForwardResult, error) {
+func (h *Handler) forwardCodexWebsocketTurn(r *http.Request, conn *websocket.Conn, sessionID string, deferredLimit int64, started time.Time) (codexWebsocketForwardResult, error) {
+	ctx := r.Context()
 	result := codexWebsocketForwardResult{usage: tokenUsage{Estimated: true, Known: true}}
+	writer, archiveErr := archiveRoundFromContext(ctx).CreateResponseWriter("response.ws.jsonl")
+	if archiveErr != nil {
+		return result, archiveErr
+	}
+	if writer != nil {
+		defer writer.Close()
+	}
+	firstEvent := true
 	collector := codexWebsocketOutputCollector{}
 	deferredBytes := int64(0)
 	for {
@@ -339,12 +459,33 @@ func (h *Handler) forwardCodexWebsocketTurn(ctx context.Context, conn *websocket
 			result.outputItems = collector.result()
 			return result, err
 		}
+		if update.Attempt.Request.URL != "" {
+			h.archiveCodexUpstreamAttempt(archiveRoundFromContext(ctx), r, effectivecatalog.CodexOAuthProviderID, update.Attempt, update.Failure)
+		}
 		payload := update.Payload
 		if len(payload) > 0 {
+			if firstEvent {
+				recordFirstEventDuration(ctx, archiveRoundFromContext(ctx), time.Since(started))
+				firstEvent = false
+			}
 			payload = normalizeCodexWebsocketEvent(payload)
+			var identity struct {
+				Response struct {
+					ID string `json:"id"`
+				} `json:"response"`
+			}
+			if json.Unmarshal(payload, &identity) == nil && identity.Response.ID != "" {
+				result.responseID = identity.Response.ID
+			}
 			result.usage = codexWebsocketUsage(payload, result.usage)
 			collector.addEvent(payload)
 			payload, _ = sanitizeCodexCapacityEventForClient(payload)
+			if writer != nil {
+				if _, err := writer.Write(append(append([]byte(nil), payload...), '\n')); err != nil {
+					return result, err
+				}
+			}
+
 			if update.Failure != nil && update.Failure.Kind == codexresponses.KindRateLimit && !result.downstreamWritten {
 				result.failure = update.Failure
 				result.terminal = true
@@ -490,10 +631,37 @@ func writeCodexWebsocketError(conn *websocket.Conn, code, message string) {
 }
 
 func writeCodexWebsocketFailure(conn *websocket.Conn, err error, fallbackCode, fallbackMessage string) {
+	payload := codexWebsocketFailurePayload(err, fallbackCode, fallbackMessage)
+	_ = conn.WriteMessage(websocket.TextMessage, payload)
+}
+
+func codexWebsocketFailurePayload(err error, fallbackCode, fallbackMessage string) []byte {
 	errorType, code, message := fallbackCode, fallbackCode, fallbackMessage
 	var retryable *bool
+	param, retryAfter, status := "", 0, 0
 	if failure, ok := codexresponses.AsFailure(err); ok && failure != nil {
 		retryable = failure.Retryable
+		retryAfter, status = failure.RetryAfterSeconds, failure.HTTPStatus
+		switch failure.Kind {
+		case codexresponses.KindRateLimit:
+			errorType, code, message = "rate_limit_error", "rate_limit", "Codex account rate limit reached"
+		case codexresponses.KindInvalidRequest, codexresponses.KindModelNotFound:
+			errorType, code, message = "invalid_request_error", string(failure.Kind), "Codex request was rejected"
+		}
+		// These fields have passed the upstream safe-error projection. Never
+		// expose arbitrary transport errors or raw response bodies to clients.
+		if failure.Kind == codexresponses.KindRateLimit || failure.Kind == codexresponses.KindInvalidRequest || failure.Kind == codexresponses.KindModelNotFound {
+			if failure.UpstreamType != "" {
+				errorType = failure.UpstreamType
+			}
+			if failure.UpstreamCode != "" {
+				code = failure.UpstreamCode
+			}
+			if failure.UpstreamMessage != "" {
+				message = failure.UpstreamMessage
+			}
+			param = failure.UpstreamParam
+		}
 		if failure.UnavailableReason == "model_blocked" {
 			errorType, code, message = "invalid_request_error", "model_not_found", "model is not available for the bound Codex account; reconnect to select another account"
 		}
@@ -507,8 +675,22 @@ func writeCodexWebsocketFailure(conn *websocket.Conn, err error, fallbackCode, f
 			}
 		}
 	}
-	payload := codexWebsocketErrorPayload(errorType, code, message, retryable)
-	_ = conn.WriteMessage(websocket.TextMessage, payload)
+	detail := map[string]any{"type": errorType, "code": code, "message": message}
+	if retryable != nil {
+		detail["retryable"] = *retryable
+	}
+	if param != "" {
+		detail["param"] = param
+	}
+	if retryAfter > 0 {
+		detail["retry_after_seconds"] = retryAfter
+	}
+	envelope := map[string]any{"type": "error", "error": detail}
+	if status > 0 {
+		envelope["status"] = status
+	}
+	payload, _ := json.Marshal(envelope)
+	return payload
 }
 
 func codexWebsocketErrorPayload(errorType, code, message string, retryable *bool) []byte {

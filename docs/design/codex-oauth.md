@@ -31,6 +31,7 @@
 - 账号指纹模式只允许 `off/scoped`，默认 `scoped`；`off` 是显式排障开关。`scoped` 使用加密账号文档内的系统随机 seed，而不是本地账号 ID；账号级 Installation、账号与 LogicalConversation 共同派生的 Session、以及账号/会话/LogicalThread 共同派生的 Thread保证不同下游会话不会因收敛合并。
 - HTTP、SSE、compact 与 WebSocket 握手共用同一请求级语义胶囊和 attempt 投影。账号切换只替换账号物理投影，LogicalTurn、Window Number、cache identity、正文和合法 turn 属性保持不变；header 与 `client_metadata` 使用同一组 installation/session/thread/turn/window。客户端显式或按客户端会话生成的 `prompt_cache_key` 不随账号指纹改写。
 - 官方 CLI 的 Turn-Metadata `compaction` 作为有界结构化属性保留到上游 header 与 body 内嵌 metadata，仅接受已验证的 `reason`/`phase` 枚举；其它嵌套内容继续 fail closed。它提供压缩上下文但不替代正文 `compaction_trigger` 或 `remote_compaction_v2` beta。
+- Responses 上游默认优先 WS，握手阶段且生成尚未发送时可安全转同账号 HTTP；客户端仍使用原 JSON/SSE/WS 协议。鉴权、模型、限流拒绝不以回退掩盖，发送后执行结果不明禁止重放。原生 WS 回退后逐轮重建完整历史、校验 response ID，并独立结算用量。范围与 live 验收见 [WS 优先与安全 HTTP 回退](codex-ws-first-http-fallback.md)。
 - WebSocket 支持规范入口 `GET /v1/responses`；第二个及后续 turn 在客户端尚未收到业务帧且 429 已同步写入旧账号冷却时，可以关闭旧 session、重新选择账号并发送去掉 `previous_response_id` 的完整 transcript。只有 transcript 在消息上限内、顺序完整且 function/custom/MCP tool output 全部能匹配 call 时才允许重放，单 turn 最多迁移两次；任一业务帧写出后禁止迁移。`GET /v1/responses/ws` 仅见于参考实现的 SDK 测试，不作为生产兼容入口。Realtime、网页会话或插件能力不在本合同范围。
 
 ## 账号韧性

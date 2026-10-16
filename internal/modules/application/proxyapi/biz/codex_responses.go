@@ -38,7 +38,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
-		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportWebsocket, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
+		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportResponses, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
 		if err != nil {
 			if terminalAdmissionFailure(err) {
 				return codexresponses.WebsocketOpenResult{}, err
@@ -51,7 +51,8 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 		turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 		value, sendErr := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSOpen, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSOpenCommand{
-			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash,
+			AllowHTTPFallback: true, ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent,
+			AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, MaxMessageBytes: s.config.CodexOAuth.WebsocketMaxMessageBytes, SessionHash: request.SessionHash,
 			BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite,
 			TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(),
 			ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata),
@@ -99,8 +100,10 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		s.codexWebsockets[opened.SessionID] = codexWebsocketBinding{leaseID: account.LeaseID, accountID: account.AccountID, accountLabel: account.AccountLabel, model: request.Model, fingerprint: fingerprint}
 		s.mu.Unlock()
 		s.noteCodexTurnState(account.AccountID, fingerprint, request.SessionScope, opened.Headers)
-		s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
-		return codexresponses.WebsocketOpenResult{SessionID: opened.SessionID, Attempt: toCodexHTTPAttempt(opened.Attempt), TurnStateSource: turnStateSource}, nil
+		if !opened.HTTPFallback {
+			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
+		}
+		return codexresponses.WebsocketOpenResult{HTTPFallback: opened.HTTPFallback, SessionID: opened.SessionID, Attempt: toCodexHTTPAttempt(opened.Attempt), TurnStateSource: turnStateSource}, nil
 	}
 }
 
@@ -145,13 +148,18 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		return codexCommandFailure(ctx, err)
 	}
 	if sent, ok := value.(upevents.WSSendResult); ok && sent.ErrorClass != "" {
-		failure := failureFromUpstream(sent.ErrorClass, 0, upevents.RateLimitObservation{}, 0)
-		s.recordCodexWebsocketTurn(ctx, sessionID, false, string(failure.Kind))
+		failure := failureFromUpstream(sent.ErrorClass, sent.RetryAfterSeconds, sent.RateLimit, sent.HTTPStatus, sent.SafeError)
+		failure.Attempt = toCodexHTTPAttempt(sent.Attempt)
+		preventUncertainWebsocketReplay(failure)
+		s.recordCodexWebsocketTurnResult(ctx, sessionID, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 		return failure
 	}
 	if sent, ok := value.(upevents.WSSendResult); !ok || !sent.Sent {
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket send result"))
+	}
+	if sent, ok := value.(upevents.WSSendResult); ok && len(sent.Headers) > 0 {
+		s.mergeCodexUsageHeaders(ctx, binding.accountID, sent.Headers)
 	}
 	return nil
 }
@@ -166,9 +174,11 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 		s.recordCodexWebsocketTurn(ctx, sessionID, false, accevents.ErrorProtocol)
 		return codexresponses.WebsocketUpdate{}, codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket update"))
 	}
-	result := codexresponses.WebsocketUpdate{Payload: update.Payload, Done: update.Done}
+	result := codexresponses.WebsocketUpdate{Attempt: toCodexHTTPAttempt(update.Attempt), Payload: update.Payload, Done: update.Done}
 	if update.ErrorClass != "" && len(update.Payload) == 0 {
 		failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+		failure.Attempt = result.Attempt
+		preventUncertainWebsocketReplay(failure)
 		s.recordCodexWebsocketTurnResult(ctx, sessionID, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 		result.Failure = failure
 		return result, nil
@@ -190,6 +200,8 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 		if success, terminal, class := codexWebsocketTurnOutcomeWithOutputEvidence(update.Payload, turnEvidence, turnOutputEvidence); terminal {
 			if update.ErrorClass != "" {
 				failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+				failure.Attempt = result.Attempt
+				preventUncertainWebsocketReplay(failure)
 				class = string(failure.Kind)
 				s.recordCodexWebsocketTurnResult(ctx, sessionID, false, class, failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
 				result.Failure = failure
@@ -929,7 +941,12 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	usagetarget.BeginCodexAttempt(ctx, request.Body)
 	defer logCodexModelSubstitution(ctx, request.Diagnostics.RequestID, request.AccountAttempt)
 	defer func() {
-		logCodexAttempt(request, failure)
+		preventUncertainWebsocketReplay(failure)
+		if failure != nil {
+			logCodexAttempt(request, failure)
+		} else {
+			logCodexAttempt(request, nil, codexTransportDetails(out.Attempt)...)
+		}
 		if request.ObserveAttempt != nil {
 			if failure != nil {
 				request.ObserveAttempt(failure.Attempt, failure)
@@ -953,7 +970,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 	fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 	turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 	request.TurnStateSource = turnStateSource
-	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)}))).Get()
+	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicComplete, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.CompleteCommand{PreferWebsocket: true, MaxMessageBytes: s.config.CodexOAuth.WebsocketMaxMessageBytes, AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxResponseBytes: s.config.MaxUpstreamResponseBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)}))).Get()
 	if err != nil {
 		return codexresponses.Result{}, codexCommandFailure(ctx, err)
 	}
@@ -1022,7 +1039,8 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		if failure != nil {
 			failure.Attempt.Response.FirstClientEventDurationMS = observedAttempt.Response.FirstClientEventDurationMS
 		}
-		logCodexStreamAttempt(request, failure, phase, guard)
+		preventUncertainWebsocketReplay(failure)
+		logCodexStreamAttempt(request, failure, phase, guard, observedAttempt)
 		if request.ObserveAttempt != nil {
 			if failure != nil {
 				request.ObserveAttempt(failure.Attempt, failure)
@@ -1039,7 +1057,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			failure.TurnStateSource = turnStateSource
 		}
 	}()
-	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)}))).Get()
+	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.StartCommand{PreferWebsocket: true, MaxMessageBytes: s.config.CodexOAuth.WebsocketMaxMessageBytes, AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, Body: request.Body, MaxLineBytes: s.config.MaxSSELineBytes, SessionHash: request.SessionHash, BetaFeatures: request.BetaFeatures, ResponsesLite: request.ResponsesLite, TurnState: turnState, Fingerprint: fingerprint, ArchiveUnredactedHeaders: s.archiveUnredactedHeaders(), ArchiveFullContent: s.config.ArchiveInteractions && s.config.ArchiveFullContent, ClientIdentity: resolvedCodexClientIdentity(account, request.ClientUserAgent, request.ClientOriginator), TurnMetadata: toUpstreamTurnMetadata(request.TurnMetadata)}))).Get()
 	if err != nil {
 		return codexCommandFailure(ctx, err)
 	}
@@ -1258,12 +1276,20 @@ func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {
 }
 
 func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt {
+	var prior []codexresponses.HTTPAttempt
+	if len(attempt.Prior) > 0 {
+		p := attempt.Prior[0]
+		p.Prior = nil
+		prior = append(prior, toCodexHTTPAttempt(p))
+	}
 	return codexresponses.HTTPAttempt{
+		Prior: prior,
 		Request: codexresponses.HTTPRequestObservation{
 			QueueWaitMS: attempt.Request.QueueWaitMS, At: attempt.Request.At, Method: attempt.Request.Method, URL: attempt.Request.URL,
 			Body: bytes.Clone(attempt.Request.Body), BodyBytes: attempt.Request.BodyBytes, Headers: toCodexHeaders(attempt.Request.Headers),
 		},
 		Response: codexresponses.HTTPResponseObservation{
+			Transport: attempt.Response.Transport, FallbackReason: attempt.Response.FallbackReason, WebsocketRequestSent: attempt.Response.WebsocketRequestSent,
 			Observation: attempt.Response.Observation,
 			ErrorBody:   bytes.Clone(attempt.Response.ErrorBody), ErrorBodyFormat: attempt.Response.ErrorBodyFormat,
 			ErrorBodyTruncated: attempt.Response.ErrorBodyTruncated, ErrorBodyReadFailed: attempt.Response.ErrorBodyReadFailed,

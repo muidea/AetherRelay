@@ -691,14 +691,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // beginUsage 同步写入 usage started event。失败时写 503 并返回 false。
 // 注意:round 在各 handler 内创建;此处先用 round_id=0 登记,Complete 时不依赖 round。
 func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID string, round *archive.Round) bool {
-	if h.usageStore == nil {
+	if err := h.startUsage(r, eventID, round); err != nil {
 		writeClientProtocolError(w, http.StatusServiceUnavailable, clientProtocolFromRequest(r), APIError{
-			Code:           ErrorCodeUsageStoreUnavailable,
-			Message:        "usage store unavailable",
-			ClientProtocol: clientProtocolFromRequest(r),
-			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
+			Code: ErrorCodeUsageStoreUnavailable, Message: "usage store unavailable",
+			ClientProtocol: clientProtocolFromRequest(r), ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
 		})
 		return false
+	}
+	return true
+}
+
+// startUsage also serves response.create after a WS upgrade, where writing an
+// HTTP error is no longer legal. Each response has its own durable event.
+func (h *Handler) startUsage(r *http.Request, eventID string, round *archive.Round) error {
+	if h.usageStore == nil {
+		return fmt.Errorf("usage store unavailable")
 	}
 	identity, internal := internalFeatureIdentity(r.Context())
 	if !internal {
@@ -717,22 +724,17 @@ func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID str
 	if round != nil {
 		rec.RoundID = int64(round.ID)
 	}
+
 	if err := h.usageStore.Start(r.Context(), rec); err != nil {
 		if h.metricsRegistry != nil {
 			h.metricsRegistry.RecordUsageStoreWriteError("start")
 		}
-		writeClientProtocolError(w, http.StatusServiceUnavailable, clientProtocolFromRequest(r), APIError{
-			Code:           ErrorCodeUsageStoreUnavailable,
-			Message:        "usage store unavailable",
-			ClientProtocol: clientProtocolFromRequest(r),
-			ClientEndpoint: path,
-		})
-		return false
+		return err
 	}
 	if h.metricsRegistry != nil {
 		h.metricsRegistry.SetUsageStoreHealthy(h.usageStore.Healthy())
 	}
-	return true
+	return nil
 }
 
 // completePendingUsage 仅在处理器漏掉结算（如未来新增的早退路径）时执行。

@@ -138,9 +138,13 @@ func (g *codexStreamGuard) close() {
 	g.cancel(context.Canceled)
 }
 
-func logCodexStreamAttempt(request codexresponses.Request, failure *codexresponses.Failure, phase string, g *codexStreamGuard) {
+func logCodexStreamAttempt(request codexresponses.Request, failure *codexresponses.Failure, phase string, g *codexStreamGuard, attempts ...codexresponses.HTTPAttempt) {
 	if failure == nil {
-		logCodexAttempt(request, nil)
+		var details []any
+		if len(attempts) > 0 {
+			details = codexTransportDetails(attempts[0])
+		}
+		logCodexAttempt(request, nil, details...)
 		return
 	}
 	g.mu.Lock()

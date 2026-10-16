@@ -52,6 +52,9 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	Transport            string `json:"upstream_transport,omitempty"`
+	FallbackReason       string `json:"transport_fallback_reason,omitempty"`
+	WebsocketRequestSent bool   `json:"websocket_request_sent,omitempty"`
 	codexmodel.Observation
 	GenerationBuffered         bool                `json:"generation_buffered,omitempty"`
 	LastEventAt                time.Time           `json:"last_upstream_event_at,omitempty"`
@@ -263,6 +266,11 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 // emitted by the codexupstream Block. The Block owns the transport and performs
 // first-pass redaction; the adapter sanitizes again before writing or logging.
 func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Request, providerName string, attempt codexresponses.HTTPAttempt, attemptErr error) {
+	if len(attempt.Prior) > 0 {
+		prior := attempt.Prior[0]
+		prior.Prior = nil
+		h.archiveCodexUpstreamAttempt(round, r, providerName, prior, nil)
+	}
 	if r != nil {
 		if completion := usageCompletionFromContext(r.Context()); completion != nil {
 			completion.generationMu.Lock()
@@ -341,6 +349,7 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		round.SetUpstreamHeaders(0, "", -1, "", 0)
 	}
 	responseInfo := upstreamResponseDebugInfo{
+		Transport: attempt.Response.Transport, FallbackReason: attempt.Response.FallbackReason, WebsocketRequestSent: attempt.Response.WebsocketRequestSent,
 		Observation:                attempt.Response.Observation,
 		GenerationBuffered:         attempt.Response.GenerationBuffered,
 		FirstClientEventDurationMS: attempt.Response.FirstClientEventDurationMS, ReadObserved: attempt.Response.ReadObserved,

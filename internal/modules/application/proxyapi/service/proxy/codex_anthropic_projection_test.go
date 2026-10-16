@@ -210,6 +210,58 @@ func TestCodexProjectionRejectsUnknownAndInconsistentEvents(t *testing.T) {
 	}
 }
 
+func TestCodexProjectionWebsocketMetadataIsObservational(t *testing.T) {
+	_, fixture := projectionFixture()
+	mapper, state := codexResponsesEventToAnthropic(projectionCapability), &textConversionStreamState{}
+	metadata := []byte(`{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"opaque","x-models-etag":"etag"},"model":"gpt-6.1-sol"}`)
+	for _, event := range fixture {
+		// Metadata can precede response.created or arrive during generation.
+		out, err := mapper(metadata, state)
+		if err != nil || len(out) != 0 || state.Completed || state.tokenUsage() != (tokenUsage{}) {
+			t.Fatalf("metadata changed response state: out=%v state=%+v err=%v", out, state, err)
+		}
+		out, err = mapper([]byte(`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":25}}}`), state)
+		if err != nil || len(out) != 0 || state.Completed || state.tokenUsage() != (tokenUsage{}) {
+			t.Fatalf("rate limit observation changed response state: out=%v state=%+v err=%v", out, state, err)
+		}
+		if _, err := mapper(projectionJSON(event), state); err != nil {
+			t.Fatalf("%v: %v", event["type"], err)
+		}
+	}
+	if !state.Completed || state.tokenUsage().TotalTokens == 0 || !slices.Contains(state.IgnoredFeatures, "response_metadata") || !slices.Contains(state.IgnoredFeatures, "codex_rate_limits") {
+		t.Fatalf("missing completion/usage/metadata observation: %+v", state)
+	}
+	if _, err := mapper(metadata, state); err == nil {
+		t.Fatal("metadata after completion accepted")
+	}
+}
+
+func TestCodexChatWebsocketObservationsPreserveOutputAndCompletion(t *testing.T) {
+	state := &codexChatStreamState{}
+	for _, typ := range []string{"response.metadata", "codex.response.metadata", "codex.rate_limits"} {
+		out, err := codexResponsesEventToChat(projectionJSON(map[string]any{"type": typ, "headers": map[string]any{"x-codex-turn-state": "opaque"}}), state)
+		if err != nil || len(out) != 0 || state.OutputEvidence || state.Started || state.Done || state.Usage != (tokenUsage{}) {
+			t.Fatalf("%s changed response state: out=%q state=%+v err=%v", typ, out, state, err)
+		}
+	}
+	for _, event := range []string{
+		`{"type":"response.created","response":{"id":"resp_chat","model":"gpt-6.1-sol"}}`,
+		`{"type":"response.output_text.delta","delta":"hello"}`,
+		`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}`,
+	} {
+		out, err := codexResponsesEventToChat([]byte(event), state)
+		if err != nil || len(out) == 0 {
+			t.Fatalf("event=%s out=%q err=%v", event, out, err)
+		}
+	}
+	if !state.Done || state.Usage.TotalTokens != 5 {
+		t.Fatalf("state=%+v", state)
+	}
+	if _, err := codexResponsesEventToChat([]byte(`{"type":"response.future_business_event"}`), &codexChatStreamState{}); err == nil {
+		t.Fatal("unknown business event accepted")
+	}
+}
+
 func TestCodexProjectionStopsUseTextBlockAfterTools(t *testing.T) {
 	_, fixture := projectionFixture()
 	mapper := withAnthropicStopMapper(codexResponsesEventToAnthropic(projectionCapability), []string{"afterX"})

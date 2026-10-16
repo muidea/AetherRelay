@@ -17,6 +17,8 @@ type Header struct{ Name, Value string }
 // interaction archival. Sensitive header values are already redacted at the
 // owning Block boundary and are sanitized again by the HTTP adapter.
 type HTTPAttempt struct {
+	// Prior contains at most one WS handshake preceding a create or HTTP fallback.
+	Prior    []HTTPAttempt
 	Request  HTTPRequestObservation
 	Response HTTPResponseObservation
 }
@@ -32,6 +34,10 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	Transport            string // http or websocket
+	FallbackReason       string // bounded pre-send fallback reason
+	WebsocketRequestSent bool   // a failed read after create must not replay
+
 	codexmodel.Observation
 	FirstOutputAt              time.Time
 	GenerationDuration         time.Duration
@@ -202,6 +208,7 @@ type WebsocketOpenRequest struct {
 	TurnMetadata TurnMetadata
 }
 type WebsocketOpenResult struct {
+	HTTPFallback    bool
 	SessionID       string
 	Attempt         HTTPAttempt
 	TurnStateSource TurnStateSource
@@ -211,6 +218,7 @@ type WebsocketOpenResult struct {
 // proxyapi port. Payload may be present with Failure when the upstream emitted
 // a terminal response.failed/error event.
 type WebsocketUpdate struct {
+	Attempt HTTPAttempt
 	Payload []byte
 	Done    bool
 	Failure *Failure

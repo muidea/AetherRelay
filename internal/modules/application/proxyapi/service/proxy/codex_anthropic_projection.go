@@ -185,8 +185,12 @@ func codexResponsesEventToAnthropic(capability config.ConversionCapability) conv
 		if state == nil || state.Completed {
 			return nil, fmt.Errorf("stream event received outside active response")
 		}
-		if typ == "response.metadata" {
+		if typ == "response.metadata" || typ == "codex.response.metadata" {
 			state.markIgnored("response_metadata")
+			return nil, nil
+		}
+		if typ == "codex.rate_limits" {
+			state.markIgnored("codex_rate_limits")
 			return nil, nil
 		}
 		if typ == "response.content_part.added" {

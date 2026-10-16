@@ -429,7 +429,7 @@ func codexResponsesEventToChat(payload []byte, state *codexChatStreamState) ([][
 		return openAIStreamChunk(state.ID, state.Model, created, []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}, usage)
 	}
 	switch typ {
-	case "keepalive":
+	case "keepalive", "response.metadata", "codex.response.metadata", "codex.rate_limits":
 		return nil, nil
 	case "response.created", "response.in_progress":
 		if state.Started {

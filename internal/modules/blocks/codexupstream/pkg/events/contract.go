@@ -33,6 +33,8 @@ type Header struct {
 // only for full-content archival; proxyapi applies archive-only identity and
 // attachment redaction. Neither projection may be printed as diagnostic data.
 type HTTPAttempt struct {
+	// Prior contains at most one WS handshake preceding a create or HTTP fallback.
+	Prior    []HTTPAttempt
 	Request  HTTPRequestObservation
 	Response HTTPResponseObservation
 }
@@ -49,6 +51,10 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	Transport            string // http or websocket
+	FallbackReason       string // bounded pre-send fallback reason
+	WebsocketRequestSent bool   // a failed read after create must not replay
+
 	codexmodel.Observation
 	FirstOutputAt        time.Time
 	GenerationDuration   time.Duration
@@ -157,6 +163,8 @@ type ClientIdentity struct {
 // as bytes. This preserves native Responses objects without map/any EventHub
 // envelopes or a lossy proxy-side protocol translation.
 type CompleteCommand struct {
+	PreferWebsocket  bool
+	MaxMessageBytes  int64
 	AccessToken      string
 	AccountIDHeader  string
 	Proxy            string
@@ -225,6 +233,8 @@ type CompactResult struct {
 }
 
 type StartCommand struct {
+	PreferWebsocket bool
+	MaxMessageBytes int64
 	AccessToken     string
 	AccountIDHeader string
 	Proxy           string
@@ -279,14 +289,16 @@ type CancelResult struct {
 }
 
 type WSOpenCommand struct {
-	AccessToken     string
-	AccountIDHeader string
-	Proxy           string
-	MaxMessageBytes int64
-	SessionHash     string
-	BetaFeatures    string
-	ResponsesLite   bool
-	TurnState       string
+	AllowHTTPFallback  bool
+	ArchiveFullContent bool
+	AccessToken        string
+	AccountIDHeader    string
+	Proxy              string
+	MaxMessageBytes    int64
+	SessionHash        string
+	BetaFeatures       string
+	ResponsesLite      bool
+	TurnState          string
 	// ArchiveUnredactedHeaders is CP-OBS-009: it only reaches the archived
 	// attempt observation, and its zero value keeps the credential redaction.
 	ArchiveUnredactedHeaders bool
@@ -299,6 +311,7 @@ type WSOpenCommand struct {
 	Fingerprint  CodexFingerprint
 }
 type WSOpenResult struct {
+	HTTPFallback      bool
 	SessionID         string
 	Headers           []Header
 	Attempt           HTTPAttempt
@@ -315,8 +328,14 @@ type WSSendCommand struct {
 	Fingerprint CodexFingerprint
 }
 type WSSendResult struct {
-	Sent       bool
-	ErrorClass ErrorClass
+	Attempt           HTTPAttempt
+	HTTPStatus        int
+	Headers           []Header
+	RetryAfterSeconds int
+	RateLimit         RateLimitObservation
+	SafeError         SafeError
+	Sent              bool
+	ErrorClass        ErrorClass
 }
 
 type WSPullCommand struct {
@@ -324,6 +343,7 @@ type WSPullCommand struct {
 	TimeoutMillis int
 }
 type WSPullResult struct {
+	Attempt           HTTPAttempt
 	Payload           []byte
 	Done              bool
 	ErrorClass        ErrorClass

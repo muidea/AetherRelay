@@ -77,6 +77,7 @@ type responseStream struct {
 }
 
 type websocketUpdate struct {
+	attempt           events.HTTPAttempt
 	payload           []byte
 	done              bool
 	errorClass        events.ErrorClass
@@ -85,10 +86,17 @@ type websocketUpdate struct {
 }
 
 type websocketSession struct {
-	conn    *wsclient.Conn
-	cancel  context.CancelFunc
-	updates chan websocketUpdate
-	writeMu sync.Mutex
+	observationMu      sync.Mutex
+	handshake          events.HTTPAttempt
+	attempt            events.HTTPAttempt
+	turn               *responseStream
+	published          bool
+	archiveFullContent bool
+	fallback           *httpWebsocketSession
+	conn               *wsclient.Conn
+	cancel             context.CancelFunc
+	updates            chan websocketUpdate
+	writeMu            sync.Mutex
 }
 
 type Upstream struct {
@@ -163,17 +171,24 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 func (s *Upstream) Run(context.Context) *cd.Error { return nil }
 func (s *Upstream) BeginShutdown(context.Context) *cd.Error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.stopping = true
+	var cancelers []context.CancelFunc
 	for _, cancel := range s.active {
-		cancel()
+		cancelers = append(cancelers, cancel)
 	}
 	for _, session := range s.websockets {
-		session.cancel()
-		_ = session.conn.Close()
+		cancelers = append(cancelers, session.cancel)
+		if session.conn != nil {
+			conn := session.conn
+			cancelers = append(cancelers, func() { _ = conn.Close() })
+		}
 	}
 	for _, stream := range s.streams {
-		stream.cancel()
+		cancelers = append(cancelers, stream.cancel)
+	}
+	s.mu.Unlock()
+	for _, cancel := range cancelers {
+		cancel()
 	}
 	return nil
 }
@@ -222,66 +237,20 @@ func (s *Upstream) handleWSOpen(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex upstream local capacity unavailable"))
 		return
 	}
-	dialer, err := newWebsocketDialer(cmd.Proxy)
-	if err != nil {
-		result.Set(events.WSOpenResult{ErrorClass: events.ErrorProtocol}, nil)
+	conn, opened, _ := dialResponsesWebsocket(ev.Context(), cmd)
+	if opened.ErrorClass != "" {
+		reason := websocketFallbackReason(ev.Context(), opened)
+		if !cmd.AllowHTTPFallback || reason == "" {
+			result.Set(opened, nil)
+			return
+		}
+		s.openHTTPWebsocketSession(ev, result, cmd, opened, reason)
 		return
 	}
-	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
-	headers := fhttp.Header{}
-	headers.Set("Authorization", "Bearer "+strings.TrimSpace(cmd.AccessToken))
-	headers.Set("User-Agent", profile.requestUserAgent())
-	headers.Set("Originator", profile.requestOriginator())
-	headers.Set("OpenAI-Beta", currentIdentity.WebsocketBeta)
-	applyCodexFeatureHeaders(headers, profile.betaFeatures, profile.responsesLite)
-	applyCodexRequestIdentity(headers, profile)
-	applyCodexTurnMetadata(headers, profile)
-	if accountID := strings.TrimSpace(cmd.AccountIDHeader); accountID != "" {
-		headers.Set("ChatGPT-Account-ID", accountID)
-	}
-	requestAt := time.Now()
-	attempt := events.HTTPAttempt{Request: events.HTTPRequestObservation{QueueWaitMS: dispatchQueueWait(ev.Context()).Milliseconds(), At: requestAt, Method: http.MethodGet, URL: responsesWebsocketURL, Headers: safeFHTTPHeaders(headers, profile.archiveUnredacted)}}
-	conn, response, err := dialer.DialContext(ev.Context(), responsesWebsocketURL, headers)
-	attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
-	if err != nil {
-		status := 0
-		var responseBody []byte
-		var observation events.RateLimitObservation
-		var retryAfter int
-		var safeError events.SafeError
-		var responseHeader []events.Header
-		if response != nil {
-			attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
-			status = response.StatusCode
-			responseHeader = responseHeaders(response.Header)
-			responseBody, observation, retryAfter, safeError = readErrorObservationParts(response.Header, response.Body)
-			if response.Body != nil {
-				_ = response.Body.Close()
-			}
-		}
-		class := classifyRequestTransport(ev.Context(), err)
-		if status > 0 {
-			class = errorClassWithBody(status, responseBody, observation)
-		}
-		result.Set(events.WSOpenResult{Headers: responseHeader, Attempt: attempt, HTTPStatus: status, ErrorClass: class, RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
-		return
-	}
-	var responseHeader []events.Header
-	if response != nil {
-		attempt.Response = observedHTTPResponse(response.StatusCode, response.ContentLength, response.TransferEncoding, response.Header, requestAt, profile.archiveUnredacted)
-		responseHeader = responseHeaders(response.Header)
-		if response.Body != nil {
-			_ = response.Body.Close()
-		}
-	}
-	limit := cmd.MaxMessageBytes
-	if limit <= 0 || limit > 16<<20 {
-		limit = 1 << 20
-	}
-	conn.SetReadLimit(limit)
+	attempt, responseHeader := opened.Attempt, opened.Headers
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ev.Context()))
 	sessionID := uuid.NewString()
-	session := &websocketSession{conn: conn, cancel: cancel, updates: make(chan websocketUpdate, 64)}
+	session := &websocketSession{conn: conn, cancel: cancel, updates: make(chan websocketUpdate, 64), handshake: attempt, archiveFullContent: cmd.ArchiveFullContent}
 	s.mu.Lock()
 	if s.stopping || len(s.streams)+len(s.websockets) >= maxConcurrentCommands {
 		s.mu.Unlock()
@@ -328,16 +297,21 @@ func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket send command"))
 		return
 	}
+	if session.fallback != nil {
+		s.sendHTTPWebsocketTurn(ev, result, session, cmd)
+		return
+	}
 	payload, fingerprintErr := applyCodexRequestBody(cmd.Payload, codexRequestProfile{fingerprint: cmd.Fingerprint})
 	if fingerprintErr != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket fingerprint body"))
 		return
 	}
 	session.writeMu.Lock()
+	attempt := session.beginObservation(payload)
 	err := session.conn.WriteMessage(wsclient.TextMessage, payload)
 	session.writeMu.Unlock()
 	if err != nil {
-		result.Set(events.WSSendResult{ErrorClass: classifyRequestTransport(ev.Context(), err)}, nil)
+		result.Set(events.WSSendResult{Attempt: attempt, ErrorClass: classifyRequestTransport(ev.Context(), err)}, nil)
 		return
 	}
 	result.Set(events.WSSendResult{Sent: true}, nil)
@@ -353,6 +327,10 @@ func (s *Upstream) handleWSPull(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex websocket pull command"))
 		return
 	}
+	if session.fallback != nil {
+		s.pullHTTPWebsocketTurn(ev, result, session, cmd)
+		return
+	}
 	timeout := time.Duration(cmd.TimeoutMillis) * time.Millisecond
 	if timeout <= 0 || timeout > time.Minute {
 		timeout = time.Second
@@ -363,7 +341,7 @@ func (s *Upstream) handleWSPull(ev event.Event, result event.Result) {
 			result.Set(events.WSPullResult{Done: true}, nil)
 			return
 		}
-		result.Set(events.WSPullResult{Payload: update.payload, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
+		result.Set(events.WSPullResult{Attempt: update.attempt, Payload: update.payload, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
 	case <-time.After(timeout):
 		result.Set(events.WSPullResult{}, nil)
 	case <-ev.Context().Done():
@@ -397,12 +375,16 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 		for {
 			select {
 			case <-ctx.Done():
-				_ = session.conn.Close()
+				if session.conn != nil {
+					_ = session.conn.Close()
+				}
 				return
 			case <-ticker.C:
 				if err := session.conn.WriteControl(wsclient.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
 					session.cancel()
-					_ = session.conn.Close()
+					if session.conn != nil {
+						_ = session.conn.Close()
+					}
 					return
 				}
 			}
@@ -426,7 +408,7 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 		messageType, payload, err := session.conn.ReadMessage()
 		if err != nil {
 			select {
-			case session.updates <- websocketUpdate{done: true, errorClass: classifyTransport(err)}:
+			case session.updates <- websocketUpdate{attempt: session.observePayload(nil, true), done: true, errorClass: classifyTransport(err)}:
 			case <-ctx.Done():
 			}
 			return
@@ -441,7 +423,7 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 		for _, document := range documents {
 			class, observation := websocketTerminalFailure(document)
 			select {
-			case session.updates <- websocketUpdate{payload: document, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation}:
+			case session.updates <- websocketUpdate{attempt: session.observePayload(document, false), payload: document, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation}:
 			case <-ctx.Done():
 				return
 			}
@@ -463,7 +445,9 @@ func (s *Upstream) closeWebsocket(id string) bool {
 		return false
 	}
 	session.cancel()
-	_ = session.conn.Close()
+	if session.conn != nil {
+		_ = session.conn.Close()
+	}
 	return true
 }
 
@@ -482,7 +466,7 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		return
 	}
 	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, archiveFullContent: cmd.ArchiveFullContent, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
-	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
+	response, attempt, class, retryAfter, err := performResponses(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile, cmd.PreferWebsocket, cmd.MaxMessageBytes)
 	if err != nil {
 		result.Set(events.CompleteResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -517,7 +501,7 @@ func (s *Upstream) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	profile := codexRequestProfile{sessionHash: cmd.SessionHash, betaFeatures: cmd.BetaFeatures, responsesLite: cmd.ResponsesLite, turnState: cmd.TurnState, fingerprint: cmd.Fingerprint, archiveUnredacted: cmd.ArchiveUnredactedHeaders, archiveFullContent: cmd.ArchiveFullContent, clientIdentity: cmd.ClientIdentity, turnMetadata: cmd.TurnMetadata}
-	response, attempt, class, retryAfter, err := perform(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile)
+	response, attempt, class, retryAfter, err := performResponses(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, body, profile, cmd.PreferWebsocket, cmd.MaxMessageBytes)
 	if err != nil {
 		result.Set(events.StartResult{Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfter}, nil)
 		return
@@ -1218,7 +1202,7 @@ func forceStream(body []byte) ([]byte, error) {
 	if raw, ok := values["input"]; ok {
 		var text string
 		if json.Unmarshal(raw, &text) == nil {
-			normalized, err := json.Marshal([]any{map[string]any{
+			normalized, err := encodeCodexJSON([]any{map[string]any{
 				"role":    "user",
 				"content": []any{map[string]any{"type": "input_text", "text": text}},
 			}})
@@ -1233,7 +1217,7 @@ func forceStream(body []byte) ([]byte, error) {
 	// non-persisted executions. Downstream clients need not know this transport
 	// detail, so enforce it at the upstream boundary.
 	values["store"] = json.RawMessage("false")
-	return json.Marshal(values)
+	return encodeCodexJSON(values)
 }
 
 func completedResponse(response *http.Response, maxBytes int64, observations ...*events.HTTPResponseObservation) ([]byte, events.ErrorClass, events.RateLimitObservation, events.SafeError, error) {

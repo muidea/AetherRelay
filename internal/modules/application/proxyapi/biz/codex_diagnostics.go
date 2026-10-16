@@ -37,6 +37,7 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 		"request_kind", request.Diagnostics.RequestKind, "compaction_reason", request.Diagnostics.CompactionReason,
 		"compaction_phase", request.Diagnostics.CompactionPhase}
 	if failure != nil {
+		attrs = append(attrs, codexTransportDetails(failure.Attempt)...)
 		status := failure.HTTPStatus
 		if failure.Attempt.Response.Observed {
 			status = failure.Attempt.Response.Status
@@ -45,6 +46,21 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 		attrs = append(attrs, details...)
 		slog.Warn("Codex attempt failed", attrs...)
 	} else {
+		attrs = append(attrs, details...)
 		slog.Debug("Codex attempt completed", attrs...)
 	}
+}
+
+func codexTransportDetails(attempt codexresponses.HTTPAttempt) []any {
+	transport := attempt.Response.Transport
+	if transport != "http" && transport != "websocket" {
+		transport = ""
+	}
+	reason := attempt.Response.FallbackReason
+	switch reason {
+	case "ws_upgrade_unsupported", "ws_connect_failed", "ws_handshake_unavailable":
+	default:
+		reason = ""
+	}
+	return []any{"upstream_transport", transport, "transport_fallback_reason", reason, "websocket_request_sent", attempt.Response.WebsocketRequestSent}
 }
