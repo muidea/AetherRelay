@@ -16,29 +16,30 @@ type SteeringParameters struct {
 }
 type SteeringReport struct {
 	steering.Evidence
-	ProbeID                    string             `json:"probe_id"`
-	TargetSlotID               string             `json:"target_slot_id"`
-	ActualSlotID               *string            `json:"actual_slot_id"`
-	AccountLabel               string             `json:"account_label,omitempty"`
-	Model                      string             `json:"model"`
-	Profile                    string             `json:"probe_profile"`
-	Parameters                 SteeringParameters `json:"parameters"`
-	ConfigVersion              string             `json:"account_config_version,omitempty"`
-	FingerprintMode            string             `json:"fingerprint_mode,omitempty"`
-	ProxyConfigured            bool               `json:"proxy_configured"`
-	ClientVersion              string             `json:"client_version,omitempty"`
-	AdmissionState             string             `json:"admission_state"`
-	AdmissionReason            string             `json:"admission_reason,omitempty"`
-	Endpoint                   string             `json:"upstream_endpoint,omitempty"`
-	Transport                  string             `json:"transport"`
-	State                      string             `json:"state"`
-	CreatedAt                  string             `json:"created_at"`
-	StartedAt                  string             `json:"started_at,omitempty"`
-	FinishedAt                 string             `json:"finished_at,omitempty"`
-	ExpiresAt                  string             `json:"expires_at,omitempty"`
-	CredentialRefreshPerformed bool               `json:"credential_refresh_performed"`
-	CredentialRefreshResult    string             `json:"credential_refresh_result,omitempty"`
-	Historical                 bool               `json:"historical"`
+	Fallback                   *steering.FallbackDiagnostic `json:"fallback,omitempty"`
+	ProbeID                    string                       `json:"probe_id"`
+	TargetSlotID               string                       `json:"target_slot_id"`
+	ActualSlotID               *string                      `json:"actual_slot_id"`
+	AccountLabel               string                       `json:"account_label,omitempty"`
+	Model                      string                       `json:"model"`
+	Profile                    string                       `json:"probe_profile"`
+	Parameters                 SteeringParameters           `json:"parameters"`
+	ConfigVersion              string                       `json:"account_config_version,omitempty"`
+	FingerprintMode            string                       `json:"fingerprint_mode,omitempty"`
+	ProxyConfigured            bool                         `json:"proxy_configured"`
+	ClientVersion              string                       `json:"client_version,omitempty"`
+	AdmissionState             string                       `json:"admission_state"`
+	AdmissionReason            string                       `json:"admission_reason,omitempty"`
+	Endpoint                   string                       `json:"upstream_endpoint,omitempty"`
+	Transport                  string                       `json:"transport"`
+	State                      string                       `json:"state"`
+	CreatedAt                  string                       `json:"created_at"`
+	StartedAt                  string                       `json:"started_at,omitempty"`
+	FinishedAt                 string                       `json:"finished_at,omitempty"`
+	ExpiresAt                  string                       `json:"expires_at,omitempty"`
+	CredentialRefreshPerformed bool                         `json:"credential_refresh_performed"`
+	CredentialRefreshResult    string                       `json:"credential_refresh_result,omitempty"`
+	Historical                 bool                         `json:"historical"`
 }
 type StartSteeringProbeCommand struct{ SlotID, Model, IdempotencyKey string }
 type GetSteeringProbeCommand struct{ SlotID, ProbeID string }
@@ -56,3 +57,14 @@ type SteeringAPIError struct {
 }
 
 func (e *SteeringAPIError) Error() string { return e.Code }
+
+// Clone isolates nested evidence across worker, event and management readers.
+func (r SteeringReport) Clone() SteeringReport {
+	r.Evidence = r.Evidence.Clone()
+	r.Fallback = r.Fallback.Clone()
+	if r.ActualSlotID != nil {
+		v := *r.ActualSlotID
+		r.ActualSlotID = &v
+	}
+	return r
+}

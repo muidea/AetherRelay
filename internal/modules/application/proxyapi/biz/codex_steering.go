@@ -23,17 +23,18 @@ const steeringTTL = 30 * time.Minute
 const steeringBudget = 120 * time.Second
 
 type codexSteeringTask struct {
-	report          proxyevents.SteeringReport
-	key             string
-	created         time.Time
-	finished        time.Time
-	ctx             context.Context
-	cancel          context.CancelFunc
-	leaseID         string
-	monitoring      bool
-	upstreamStarted bool
-	usageMerged     bool
-	finalizing      bool
+	report            proxyevents.SteeringReport
+	key               string
+	created           time.Time
+	finished          time.Time
+	ctx               context.Context
+	cancel            context.CancelFunc
+	leaseID           string
+	monitoring        bool
+	upstreamStarted   bool
+	usageMerged       bool
+	clientUsageMerged bool
+	finalizing        bool
 }
 
 type steeringJobs struct {
@@ -93,10 +94,14 @@ func (j *steeringJobs) finish(t *codexSteeringTask) {
 	if t.report.ActualSlotID != nil {
 		actualSlot = *t.report.ActualSlotID
 	}
+	if f := t.report.Fallback; f != nil {
+		slog.Info("Codex steering probe switched invocation", "probe_id", t.report.ProbeID, "reason", f.Reason, "native_phase", f.Phase, "native_execution_outcome", f.ExecutionOutcome, "native_error_code", f.ErrorCode)
+	}
+
 	if detail := t.report.UpstreamError; detail != nil {
 		slog.Info("Codex steering probe upstream error", "probe_id", t.report.ProbeID, "event_type", detail.EventType, "upstream_error_type", detail.Type, "upstream_error_code", detail.Code, "upstream_error_param", detail.Param, "upstream_error_status", detail.Status, "diagnostic_truncated", detail.Truncated)
 	}
-	slog.Info("Codex steering probe finished", "probe_id", t.report.ProbeID, "target_slot_id", t.report.TargetSlotID, "actual_slot_id", actualSlot, "model", t.report.Model, "probe_profile", t.report.Profile, "phase", t.report.Phase, "admission_state", t.report.AdmissionState, "admission_reason", t.report.AdmissionReason, "capability", t.report.Capability, "execution_outcome", t.report.ExecutionOutcome, "error_code", t.report.ErrorCode, "upstream_request_sent", t.report.UpstreamRequestSent, "credential_refresh_performed", t.report.CredentialRefreshPerformed, "create_sent", t.report.CreateSent, "create_write_completed", t.report.CreateWriteCompleted, "steer_sent", t.report.SteerSent, "steer_write_completed", t.report.SteerWriteCompleted, "event_count", t.report.EventCount, "timeline_truncated", t.report.TimelineTruncated)
+	slog.Info("Codex steering probe finished", "probe_id", t.report.ProbeID, "target_slot_id", t.report.TargetSlotID, "actual_slot_id", actualSlot, "model", t.report.Model, "probe_profile", t.report.Profile, "phase", t.report.Phase, "capability_target", t.report.CapabilityTarget, "invocation_mode", t.report.InvocationMode, "admission_state", t.report.AdmissionState, "admission_reason", t.report.AdmissionReason, "capability", t.report.Capability, "execution_outcome", t.report.ExecutionOutcome, "error_code", t.report.ErrorCode, "upstream_request_sent", t.report.UpstreamRequestSent, "credential_refresh_performed", t.report.CredentialRefreshPerformed, "create_sent", t.report.CreateSent, "create_write_completed", t.report.CreateWriteCompleted, "steer_sent", t.report.SteerSent, "steer_write_completed", t.report.SteerWriteCompleted, "event_count", t.report.EventCount, "timeline_truncated", t.report.TimelineTruncated)
 }
 
 func (s *Proxy) handleStartSteeringProbe(ev event.Event, r event.Result) {
@@ -131,8 +136,7 @@ func (s *Proxy) startSteeringProbe(ctx context.Context, cmd proxyevents.StartSte
 	}
 	if id := j.keys[cmd.IdempotencyKey]; id != "" {
 		t := j.jobs[id]
-		out := t.report
-		out.Evidence = out.Evidence.Clone()
+		out := t.report.Clone()
 		j.mu.Unlock()
 		if out.TargetSlotID != cmd.SlotID || out.Model != cmd.Model || out.Profile != steering.Profile {
 			return fail(409, "idempotency_conflict")
@@ -194,8 +198,7 @@ func (s *Proxy) startSteeringProbe(ctx context.Context, cmd proxyevents.StartSte
 			j.queue = append(j.queue, t.report.ProbeID)
 		}
 	}
-	out := t.report
-	out.Evidence = out.Evidence.Clone()
+	out := t.report.Clone()
 	j.mu.Unlock()
 	s.pumpSteering()
 	return proxyevents.SteeringProbeResult{Status: 202, Report: out}
@@ -251,8 +254,7 @@ func (s *Proxy) runSteeringTask(t *codexSteeringTask) {
 	t.ctx = ctx
 	t.cancel = cancel
 	stopping := j.stopping
-	out := t.report
-	out.Evidence = out.Evidence.Clone()
+	out := t.report.Clone()
 	j.mu.Unlock()
 	if stopping {
 		cancel()
@@ -340,7 +342,7 @@ func (s *Proxy) runSteeringTask(t *codexSteeringTask) {
 	}
 	session := "steering-probe:" + out.ProbeID
 	cmd := upevents.SteeringStartCommand{ProbeID: out.ProbeID, Model: out.Model, Deadline: t.created.Add(steeringBudget), AccessToken: account.AccessToken, AccountIDHeader: account.AccountIDHeader, Proxy: account.Proxy, SessionHash: session,
-		Fingerprint: codexFingerprintForTurn(resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, session, "", codexresponses.TurnMetadata{})), ClientIdentity: resolvedCodexClientIdentity(account, "", "")}
+		Fingerprint: codexFingerprintForTurn(resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, session, "", codexresponses.TurnMetadata{})), ClientSessionHash: session + ":client", ClientFingerprint: codexFingerprintForTurn(resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, session+":client", "", codexresponses.TurnMetadata{})), ClientIdentity: resolvedCodexClientIdentity(account, "", "")}
 	t.upstreamStarted = true
 	v, sendErr := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicSteeringStart, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, cmd))).Get()
 	started, ok := v.(upevents.SteeringStartResult)
@@ -375,8 +377,7 @@ func (s *Proxy) tickSteeringContext(cleanupCtx context.Context) {
 func (s *Proxy) pollSteeringTask(t *codexSteeringTask, cleanupCtx context.Context) {
 	j := &s.steering
 	j.mu.Lock()
-	out := t.report
-	out.Evidence = out.Evidence.Clone()
+	out := t.report.Clone()
 	j.mu.Unlock()
 	if t.finalizing {
 		s.finishSteeringTask(t, out, cleanupCtx)
@@ -418,6 +419,10 @@ func (s *Proxy) pollSteeringTask(t *codexSteeringTask, cleanupCtx context.Contex
 	if !t.usageMerged && len(snapshot.Headers) > 0 {
 		s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, snapshot.Headers)
 		t.usageMerged = true
+	}
+	if !t.clientUsageMerged && len(snapshot.ClientHeaders) > 0 {
+		s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, snapshot.ClientHeaders)
+		t.clientUsageMerged = true
 	}
 	if out.Done {
 		s.finishSteeringTask(t, out, cleanupCtx)
@@ -490,7 +495,8 @@ func (s *Proxy) finishSteeringTask(t *codexSteeringTask, out proxyevents.Steerin
 func applySteeringSnapshot(out *proxyevents.SteeringReport, s upevents.SteeringSnapshotResult) {
 	refreshSent := out.CredentialRefreshPerformed
 	out.Evidence = s.Evidence.Clone()
-	out.UpstreamRequestSent = out.UpstreamRequestSent || refreshSent
+	out.Fallback = s.Fallback.Clone()
+	out.UpstreamRequestSent = out.UpstreamRequestSent || refreshSent || out.Fallback != nil
 	out.Endpoint = s.Endpoint
 }
 
@@ -520,8 +526,7 @@ func (s *Proxy) handleGetSteeringProbe(ev event.Event, r event.Result) {
 		r.Set(proxyevents.SteeringProbeResult{Status: 404, ErrorCode: "probe_not_found"}, nil)
 		return
 	}
-	out := t.report
-	out.Evidence = out.Evidence.Clone()
+	out := t.report.Clone()
 	j.mu.Unlock()
 	if current, err := s.probeAdmission(ev.Context(), accevents.ProbeAdmissionCommand{AccountID: out.TargetSlotID, Model: out.Model}); err == nil && current.Reason != "pool_stopping" {
 		out.Historical = out.ConfigVersion != "" && current.ConfigVersion != out.ConfigVersion

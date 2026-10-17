@@ -11,14 +11,17 @@ import (
 )
 
 const (
-	Profile      = "single_agent_no_tools_v1"
-	Instructions = "This is a synthetic protocol capability probe. Follow the user request."
-	InitialInput = "Write a numbered list of the integers from 1 to 100, one per line."
-	SteerInput   = "Stop the list. Reply with exactly STEERING_PROBE_OK."
-	Unknown      = "UNKNOWN"
-	Supported    = "SUPPORTED"
-	Unsupported  = "UNSUPPORTED_FOR_PROFILE"
-	Pending      = "ACCEPTED_PENDING"
+	Profile          = "native_first_client_fallback_v3"
+	NativeProfile    = "single_agent_no_tools_v1"
+	NativeTarget     = "upstream_response_steer"
+	NativeInvocation = "response_steer"
+	Instructions     = "This is a synthetic protocol capability probe. Follow the user request."
+	InitialInput     = "Write a numbered list of the integers from 1 to 100, one per line."
+	SteerInput       = "Stop the list. Reply with exactly STEERING_PROBE_OK."
+	Unknown          = "UNKNOWN"
+	Supported        = "SUPPORTED"
+	Unsupported      = "UNSUPPORTED_FOR_PROFILE"
+	Pending          = "ACCEPTED_PENDING"
 )
 
 type Usage struct {
@@ -28,37 +31,43 @@ type Usage struct {
 }
 
 type Evidence struct {
-	Capability           string         `json:"capability"`
-	Phase                string         `json:"phase"`
-	ExecutionOutcome     string         `json:"execution_outcome"`
-	AuthState            string         `json:"auth_state"`
-	ModelAccessState     string         `json:"model_access_state"`
-	WebsocketState       string         `json:"websocket_state"`
-	SteeringState        string         `json:"steering_state"`
-	UpstreamRequestSent  bool           `json:"upstream_request_sent"`
-	CreateSent           bool           `json:"create_sent"`
-	SteerSent            bool           `json:"steer_sent"`
-	CreateWriteCompleted bool           `json:"create_write_completed"`
-	SteerWriteCompleted  bool           `json:"steer_write_completed"`
-	UpstreamError        *UpstreamError `json:"upstream_error,omitempty"`
-	Timeline             []TraceEvent   `json:"timeline,omitempty"`
-	TimelineTruncated    bool           `json:"timeline_truncated"`
-	HTTPStatus           int            `json:"upstream_http_status,omitempty"`
-	ParentID             string         `json:"parent_response_id,omitempty"`
-	SuccessorID          string         `json:"successor_response_id,omitempty"`
-	SteerID              string         `json:"steering_id,omitempty"`
-	ResponseModel        string         `json:"response_model,omitempty"`
-	ErrorCode            string         `json:"error_code,omitempty"`
-	RequiredInput        []string       `json:"required_input_types,omitempty"`
-	ParentUsage          *Usage         `json:"parent_usage,omitempty"`
-	SuccessorUsage       *Usage         `json:"successor_usage,omitempty"`
-	EventCount           int            `json:"event_count"`
-	ReceivedBytes        int64          `json:"received_bytes"`
-	Done                 bool           `json:"done"`
+	CheckProfile               string         `json:"check_profile,omitempty"`
+	CapabilityTarget           string         `json:"capability_target,omitempty"`
+	InvocationMode             string         `json:"invocation_mode,omitempty"`
+	InputQueued                bool           `json:"input_queued"`
+	ContinuationSent           bool           `json:"continuation_sent"`
+	ContinuationWriteCompleted bool           `json:"continuation_write_completed"`
+	Capability                 string         `json:"capability"`
+	Phase                      string         `json:"phase"`
+	ExecutionOutcome           string         `json:"execution_outcome"`
+	AuthState                  string         `json:"auth_state"`
+	ModelAccessState           string         `json:"model_access_state"`
+	WebsocketState             string         `json:"websocket_state"`
+	SteeringState              string         `json:"steering_state"`
+	UpstreamRequestSent        bool           `json:"upstream_request_sent"`
+	CreateSent                 bool           `json:"create_sent"`
+	SteerSent                  bool           `json:"steer_sent"`
+	CreateWriteCompleted       bool           `json:"create_write_completed"`
+	SteerWriteCompleted        bool           `json:"steer_write_completed"`
+	UpstreamError              *UpstreamError `json:"upstream_error,omitempty"`
+	Timeline                   []TraceEvent   `json:"timeline,omitempty"`
+	TimelineTruncated          bool           `json:"timeline_truncated"`
+	HTTPStatus                 int            `json:"upstream_http_status,omitempty"`
+	ParentID                   string         `json:"parent_response_id,omitempty"`
+	SuccessorID                string         `json:"successor_response_id,omitempty"`
+	SteerID                    string         `json:"steering_id,omitempty"`
+	ResponseModel              string         `json:"response_model,omitempty"`
+	ErrorCode                  string         `json:"error_code,omitempty"`
+	RequiredInput              []string       `json:"required_input_types,omitempty"`
+	ParentUsage                *Usage         `json:"parent_usage,omitempty"`
+	SuccessorUsage             *Usage         `json:"successor_usage,omitempty"`
+	EventCount                 int            `json:"event_count"`
+	ReceivedBytes              int64          `json:"received_bytes"`
+	Done                       bool           `json:"done"`
 }
 
 func NewEvidence() Evidence {
-	return Evidence{Capability: Unknown, Phase: "admission", ExecutionOutcome: "not_started", AuthState: "not_observed", ModelAccessState: "not_observed", WebsocketState: "not_observed", SteeringState: "not_observed"}
+	return Evidence{CheckProfile: NativeProfile, CapabilityTarget: NativeTarget, InvocationMode: NativeInvocation, Capability: Unknown, Phase: "admission", ExecutionOutcome: "not_started", AuthState: "not_observed", ModelAccessState: "not_observed", WebsocketState: "not_observed", SteeringState: "not_observed"}
 }
 
 func Create(model string) []byte {
@@ -115,10 +124,19 @@ func (m *Machine) Finish(code string) {
 // Reject preserves the phase and protocol commit evidence. Codes are bounded
 // here instead of projecting raw upstream errors into the management report.
 func (m *Machine) Reject(code string, status int) {
+	if m.Done {
+		return
+	}
 	switch code {
 	case "steering_not_supported":
-		if m.Capability != Supported && m.Phase == "steering" {
+		if !m.accepted && m.Phase == "steering" {
 			m.Capability = Unsupported
+			m.SteeringState = "failed"
+		}
+	case "unsupported_native_inflight_message":
+		if !m.accepted && m.Phase == "steering" && m.SteerSent && !m.parentEnded {
+			m.Capability = Unsupported
+			m.SteeringState = "failed"
 		}
 	case "invalid_api_key", "invalid_token", "token_expired", "authentication_error":
 		m.AuthState = "rejected"

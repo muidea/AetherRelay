@@ -18,6 +18,7 @@ type steeringRuntimeStub struct {
 	slot, model, key, id string
 	err                  error
 	evidence             steering.Evidence
+	fallback             *steering.FallbackDiagnostic
 }
 
 func (s *steeringRuntimeStub) StartCodexSteeringProbe(_ context.Context, slot, model, key string) (proxyevents.SteeringReport, error) {
@@ -31,7 +32,7 @@ func (s *steeringRuntimeStub) GetCodexSteeringProbe(_ context.Context, slot, id 
 	s.calls++
 	s.slot = slot
 	s.id = id
-	return proxyevents.SteeringReport{Evidence: s.evidence, ProbeID: id, TargetSlotID: slot}, s.err
+	return proxyevents.SteeringReport{Evidence: s.evidence, Fallback: s.fallback.Clone(), ProbeID: id, TargetSlotID: slot}, s.err
 }
 
 func TestSteeringManagementDiagnosticJSON(t *testing.T) {
@@ -114,5 +115,31 @@ func TestSteeringManagementErrorStatusAndAuthentication(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code == 200 || runtime.calls != 0 {
 		t.Fatal("remote request bypassed admin authentication")
+	}
+}
+
+// CP-PROBE-003: the management HTTP projection keeps independent check scopes.
+func TestSteeringFallbackManagementJSON(t *testing.T) {
+	n := steering.NewEvidence()
+	n.Capability = steering.Unsupported
+	n.Done = true
+	c := steering.NewClientEvidence()
+	c.Capability = steering.Supported
+	c.ContinuationWriteCompleted = true
+	c.Done = true
+	runtime := &steeringRuntimeStub{evidence: c, fallback: steering.NewFallback(n, "native_protocol_unsupported")}
+	h := NewHandler("", &testRuntime{}).WithCodexRuntime(runtime)
+	r := httptest.NewRequest(http.MethodGet, "/admin/api/codex/accounts/slot/steering-probes/probe", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var report proxyevents.SteeringReport
+	if json.Unmarshal(w.Body.Bytes(), &report) != nil || w.Code != 200 || report.Capability != steering.Supported || report.CapabilityTarget != steering.ClientTarget || !report.ContinuationWriteCompleted || report.Fallback == nil || report.Fallback.Reason != "native_protocol_unsupported" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var raw map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &raw)
+	if raw["native_steering"] != nil || raw["client_steering"] != nil || raw["fallback"].(map[string]any)["capability"] != nil {
+		t.Fatal("parallel results survived", raw)
 	}
 }

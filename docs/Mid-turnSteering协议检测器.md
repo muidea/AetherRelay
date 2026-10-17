@@ -14,7 +14,9 @@
 - https://developers.openai.com/api/docs/guides/websocket-mode
 - https://developers.openai.com/api/reference/resources/responses/websocket-events
 
-参考源码：https://github.com/openai/codex 。本期依据上述官方协议文档和仓库现有 owner 合同自行实现，未采用外部源码，不声明已核对某个 Codex 源码 commit；后续采用源码时记录具体 commit。公共 API 文档不能代替 Codex OAuth 上游的真实验证。
+参考源码：[openai/codex rust-v0.163.0](https://github.com/openai/codex/tree/83086188ae0614bd882818ff1aa23f3194962012)，核对 commit 为 `83086188ae0614bd882818ff1aa23f3194962012`。官方客户端的 turn/steer 是本地会话操作，普通模式将更新入队、排空父响应后走普通 response.create；不能把它等同于上游 response.steer。公共 API 文档与源码核对均不能代替 Codex OAuth 上游的真实验证。
+
+当前版本 `17.7.0` 先检测原生 response.steer，无法完成时切换一次官方客户端式调用。只给出实际检测路径的一份最终能力结论，并明确 invocation_mode / capability_target；客户端式成功不宣称原生 response.steer 支持。
 
 ## 当前架构与接线
 
@@ -33,7 +35,7 @@
 1. 在统一账号池的 Codex 槽位及 Codex 账号页提供“检测上游能力”。同邮箱的不同槽位按槽位 ID 区分。
 2. 管理员选择该槽位已发现的完整模型 ID；页面说明检测会产生真实上游请求并可能消耗额度。只允许手工触发，不随列表加载、模型同步或定时刷新发起。
 3. 提交后显示任务 ID、进度、槽位和模型；同槽位同时最多一个任务，重复点击不重复生成。
-4. 结果分别展示认证、模型访问、WS 握手、Steering 提交、successor 执行结果、错误类别及检测时间，提供安全 JSON 报告。
+4. 同一任务先执行原生检测，无法取得能力结论且具备继续条件时切换一次客户端式调用。展示实际检测方式及一份阶段、能力、执行结果、错误、时序和正式用量报告；发生切换时附原生尝试诊断，JSON 同步保存。
 5. 初始本地准入拒绝时立即结束，页面显示“本地准入拒绝，未请求上游”及具体原因；租约复查拒绝且此前已刷新凭据时，明确显示已刷新但未发起 WS 探测，不继续排队等待恢复。未执行、超时或断线同样展示实际阶段与原因，不直接显示为“不支持”或“账号正常”。ChatGPT Web 槽位显示不适用，不影响同一账号下 Codex 槽位的结果。
 
 管理 API 合同（已实现，路径相对现有 Admin base）：
@@ -60,6 +62,53 @@
 
 17.6.3 本地验证：全仓 `go test -p 1 ./... -count=1`、最终 `GOFLAGS=-p=1 bash scripts/check-codex-contract.sh`（含 race、43 项 Web 检查、vet 与凭据模式扫描）通过；`node --test web/admin/*.test.cjs` 共 58 项通过。补充的握手 504 诊断与并发快照通过定向 race。主程序构建成功，产物 `/tmp/aetherrelay-steering-diagnostics`；本轮未部署或重新触发真实探测。
 
+## 17.6.4 明确 native turn 拒绝分类
+
+管理员提供的两份 x800 报告（以下时间为 UTC）均已记录完整错误详情：
+
+| 任务 | 账号/槽位 | 开始时间 | 结果 |
+|---|---|---|---|
+| `f9cb58e5-7419-426e-bf24-46fe044ae17f` | `athanmomiy@gmail.com` / `d5e3f15b-9275-4f3a-9f5b-8cb3d1df0029` | 2026-10-16T18:41:59Z | `unsupported_native_inflight_message` |
+| `254c415a-57f2-4036-bf2c-22f7d88a4f24` | `muidea@gmail.com` / `b7f48e2b-c128-49c9-b8da-7af08566b450` | 2026-10-16T18:44:19Z | `unsupported_native_inflight_message` |
+
+两次模型均为 `gpt-6-astra`、profile 为 `single_agent_no_tools_v1`、客户端版本为 `0.163.0`。认证、模型访问及 WS 101 成功；create/steer 本地写入完成；同连接收到 `codex.rate_limits`、`codex.response.metadata`、父 `response.created`、`response.in_progress` 和 `error`，没有 accepted/pending/successor。原报告保持 UNKNOWN/upstream_error，不回填；错误明确说明 experimental native turn lane 不接受运行中的 stateful WebSocket 消息，只建议启动独立 response.create。该建议不是 Steering 支持证据，也不能据此判断账号整体不可用或所有模型均不支持。
+
+新增结构化错误码白名单：仅精确的 `unsupported_native_inflight_message`，且已有父 created、已尝试 steer、父响应尚未结束、未接受 steer 时，判为 `UNSUPPORTED_FOR_PROFILE`、`steering_state=failed`，`execution_outcome` 与 `error_code` 均保留该代码。只在 create 阶段、尚未提交或父响应已结束时收到该码仍为 UNKNOWN，保留具体错误；未知、近似代码或仅 message 包含拒绝文本均不能推断不支持。已有 accepted 后再收到明确拒绝也不改为不支持，只有 accepted 仍为 UNKNOWN，已有 successor 则保留 SUPPORTED；pending、完成或其他终结报告不再被后续错误覆盖。原有 `steering_not_supported` 遵循相同的已有接受证据优先规则。
+
+管理页执行结果显示“上游当前通道不支持运行中更新”，原始错误代码、详情与时序仍可查看和下载。能力判定只作用于独立管理报告，不改变账号健康、冷却、模型黑名单或调度；不自动重连、重试、换号、回退 HTTP 或发送独立 response.create。新判定上线后需由管理员手工复测，预期在上述条件下直接结束为当前配置不支持；本地事件回放或 Mock WS 不代表已验证新版线上行为。
+
+17.6.4 本地验收：定向协议分类、Mock WS 与管理编排回归通过；`GOFLAGS=-p=1 bash scripts/check-codex-contract.sh` 全部通过（含相关包 race、Web、全仓 vet、差异和凭据模式检查）；`node --test web/admin/*.test.cjs` 共 59 项通过。主程序构建成功，产物 `/tmp/aetherrelay-steering-native-inflight`。本轮未部署、未触发真实探测，线上新分类仍待手工验收。
+
+## 17.7.0 原生优先、客户端式调用后备
+
+任务 profile 为 `native_first_client_fallback_v3`。原生检测使用 single_agent_no_tools_v1 / upstream_response_steer / response_steer；仅发生切换时使用 codex_client_drain_no_tools_v2 / codex_client_steering / local_queue_drain_create。
+
+切换规则（CP-PROBE-001/002）：
+
+1. 首先按原生流程检测；已获关联后继 created 的 SUPPORTED（即使后继生成失败），或正式 ACCEPTED_PENDING，直接结束，不发起客户端式调用。
+2. 原生已经通过认证与模型访问、父 created、初始 create 完成写入并尝试 steer，随后明确不支持或以 UNKNOWN 结束，才允许切换。包括 unsupported_native_inflight_message、steering_not_supported 以及协议错误、竞争窗口、未知错误、断线或单路径超时造成的证据不足。
+3. 认证/模型拒绝、限流/额度受限、取消、配置错误、接收限额、未创建父响应或未发送 steer 不通过另一种调用方式重试。总预算到期、取消或接收总量耗尽时也不启动后备路径，保留原生结果。
+4. 关闭原连接后，用同一目标账号、模型及固定参数建立独立合成 WS，执行一次客户端式调用。不在被拒绝的连接补发独立 create，不重放生产输入，不循环切换或换号。
+
+客户端检查依据官方固定 commit 的普通、非 responses-lite 路径：
+
+- [turn_processor.rs](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/app-server/src/request_processors/turn_processor.rs)：turn/steer 调用本地 thread.steer_turn。
+- [turn_input.rs](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/turn_input.rs) 与 [input_queue.rs](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/input_queue.rs)：校验活动任务、更新本地待处理输入、通知排空。
+- [turn.rs](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/session/turn.rs)：普通路径读取父终态，再将待处理输入纳入下一次请求；response.interrupt 只在 use_responses_lite 等条件下使用。
+- [client.rs](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/client.rs)：用 previous_response_id 和增量 input 构造后续 response.create。
+
+本检测只模拟固定的单 Agent、无工具普通模式；不冒充完整官方客户端，不探测 responses-lite、中断、自动压缩、多 Agent 或全部工具模式。没有根据模型名称启用模式，也不发送 response.interrupt。
+
+客户端方式在父 created 后标记 input_queued=true / queued_local，读取父正式成功终态后发送一次带 previous_response_id 和合成增量 user input 的 response.create。只有续接完成写入后的关联后继 created 才判 SUPPORTED；本地排队或写入不能证明上游接受。后继若带父引用必须匹配；省略时依据唯一未决续接、单连接顺序和不同响应 ID 关联。
+
+父失败、incomplete、取消、关联冲突或缺失终态不续接；正式输出需要 function_call_output、custom_tool_call_output 或 mcp_approval_response 时以 ACCEPTED_PENDING / waiting_for_required_input 终结，此处表示本地更新等待必要输入，不表示上游接受原生 steer。后继创建后的错误保留 SUPPORTED 并单列执行失败。
+
+报告只返回当前/最终路径的 capability、phase、execution_outcome、错误、时序和正式用量；check_profile / capability_target / invocation_mode 表示实际检测范围。切换后根报告完全转为客户端方式，steer_sent/write_completed 为 false，input_queued/continuation_sent/write_completed 表示客户端阶段。不再返回 native_steering、client_steering 或 active_check 两套结果。
+
+`fallback` 仅在实际切换时存在，包含 reason（native_protocol_unsupported 或 native_protocol_inconclusive）、原生阶段/执行结果/错误、父响应/Steering ID、写入状态、原生时序及正式用量，不含 capability。页面只显示最终路径的能力表，原生尝试诊断可展开；导出保留全部诊断。done 仅表示整个任务结束，切换期间始终为 false。
+
+每条路径至多 60 秒，共用任务创建起 120 秒总预算及 8 MiB 接收限额，不因切换重置。原生完成时最多一次 create/steer；切换时总计最多三次 create/一次 steer，最多可能触发四段生成。后备路径失败后直接结束，不自动再切换。取消和配置变化关闭当前连接，保留已取得的提交证据及原生诊断。历史报告不回填，新版仍须管理员手工 live 验证。
+
 ## 指定账号与执行边界
 
 1. 严格绑定目标槽位，不可用时返回该槽位的原因，禁止换号。现有 `PreferredID` 只表示优先且会回退，不能直接当作严格绑定使用。
@@ -74,7 +123,7 @@
 
 ## 探测请求与事件状态机
 
-初版采用固定配置 `single_agent_no_tools_v1`：真实生成、`store=false`、合成文本输入、不声明客户端工具或 hosted tools、不绑定 conversation、不启用自动压缩或多 Agent。不使用 `generate=false` 预热事件作为生成证据。管理员只能选择模型，不能从浏览器覆盖探测参数。
+原生路径使用固定配置 `single_agent_no_tools_v1`，必要时切换到 `codex_client_drain_no_tools_v2`；两条路径均为：真实生成、`store=false`、合成文本输入、不声明客户端工具或 hosted tools、不绑定 conversation、不启用自动压缩或多 Agent。不使用 `generate=false` 预热事件作为生成证据。管理员只能选择模型，不能从浏览器覆盖探测参数。
 
 该版本固定 instructions 为 `This is a synthetic protocol capability probe. Follow the user request.`，初始 input 为 `Write a numbered list of the integers from 1 to 100, one per line.`，steer input 为 `Stop the list. Reply with exactly STEERING_PROBE_OK.`。必要的 create 参数、合成内容及其版本由服务端统一维护，不额外覆盖推理设置；改变这些条件须发布新的 profile 版本。是否输出 `STEERING_PROBE_OK` 只作为独立内容观察，不作为协议支持的判据。
 
@@ -84,9 +133,9 @@ create 将初始 input 编码为 `[{"role":"user","content":[{"type":"input_text
 
 Steering 使用专用 typed 结构和编码器，实际出站 JSON 恰好包含 `type`、`previous_response_id`、`input` 三个字段。仅复用连接、代理、TLS 和身份配置，不调用普通 create 的请求体加工器，避免自动注入 `client_metadata` 等字段。create 与 steer 不共用普通生成的逐轮统计和终态状态机。
 
-官方文档目前将 Steering 限定于支持的 GPT-6 模型和执行模式，不按名称前缀猜测实际支持。`steering_not_supported` 只证明此次模型或配置不兼容，固定探测配置不代表所有生产参数组合。
+官方文档目前将 Steering 限定于支持的 GPT-6 模型和执行模式，不按名称前缀猜测实际支持。`steering_not_supported` 与有效 Steering 提交阶段的 `unsupported_native_inflight_message` 只证明此次模型、通道或配置不兼容，固定探测配置不代表所有生产参数组合。
 
-事件处理：
+原生路径事件处理（切换后的客户端方式按 17.7.0 的排队、排空和续接流程处理）：
 
 1. 建立独立上游 WS，发送最小合法 `response.create`。
 2. 初始 `response.created` 后立即在同一连接发送一次 `response.steer`，只包含 `type`、初始 ID 对应的 `previous_response_id` 和 `input`，不附加 model、stream_id、工具或其它 create 参数。
@@ -103,14 +152,14 @@ Steering 使用专用 typed 结构和编码器，实际出站 JSON 恰好包含 
 | 能力状态 | 证据 |
 |---|---|
 | `SUPPORTED` | 已观察到关联 successor created；后续执行仍可能失败 |
-| `UNSUPPORTED_FOR_PROFILE` | 上游明确返回此次配置的 steering_not_supported |
+| `UNSUPPORTED_FOR_PROFILE` | 未获 accepted 时，上游明确返回 steering_not_supported，或在有效提交阶段返回 unsupported_native_inflight_message；仅限本次配置 |
 | `ACCEPTED_PENDING` | 已接受，仍等待 required input，尚未提交；本次检测已终结 |
 | `UNKNOWN` | 认证、准入、参数、网络、超时或竞争窗口导致证据不足 |
 | `NOT_APPLICABLE` | 所选槽位类型不在本次范围；不能只因 WS 不通而使用 |
 
 另行返回 `admission_state`、`auth_state`、`model_access_state`、`websocket_state`、`phase`、`execution_outcome` 和安全错误代码；未到达的阶段为 `not_observed`。101 只证明握手成功，accepted 只证明入队。真实 `response.created` 可以证明本次生成已获准，不能证明模型权重或后端身份。
 
-错误按实际发生阶段与上游结构化错误码分类：明确的凭据错误、模型访问拒绝、`429` 限流、网络/`5xx`、参数不兼容分别记录，不把所有 `403` 都归为 Token 无效，也不把这些失败归为 Steering 不支持。只有明确的 `steering_not_supported` 可得出 `UNSUPPORTED_FOR_PROFILE`；其余缺少充分协议证据的情况保持 `UNKNOWN`，且均不以探测结论回写健康状态。
+错误按实际发生阶段与上游结构化错误码分类：明确的凭据错误、模型访问拒绝、`429` 限流、网络/`5xx`、参数不兼容分别记录，不把所有 `403` 都归为 Token 无效，也不把这些失败归为 Steering 不支持。只有符合阶段和证据约束的明确 `steering_not_supported` 或 `unsupported_native_inflight_message` 可得出 `UNSUPPORTED_FOR_PROFILE`（详见 17.6.4）；其余缺少充分协议证据的情况保持 `UNKNOWN`，且均不以探测结论回写健康状态。
 
 初始准入（提交预检或执行时获取租约）拒绝的终结报告固定为：`admission_state=rejected`、`phase=admission`、`capability=UNKNOWN`、`execution_outcome=not_started`、`upstream_request_sent=false`。保存目标槽位及 owner 的拒绝原因；实际执行槽位为空，`auth_state`、`model_access_state`、`websocket_state` 均为 `not_observed`，Steering/响应 ID 与用量均未取得。该报告表示本次没有检测上游，不能用已有快照填充成本次成功观测。管理 API 已接收的异步任务仍可通过 GET 查询该终结报告，不把本地拒绝改为另一次探测。
 
@@ -127,18 +176,21 @@ JSON 至少包括任务 ID、目标/实际槽位 ID、账号标签、请求/响�
 ## 生命周期与存储
 
 - 任务使用现有受管理的后台生命周期，不依赖浏览器保持连接；停机取消并排空。
-- 初版单槽位最多一个排队或运行任务，全局最多两个运行任务，等待队列最多 32 个；每个任务最多一次 create 和一次 steer，无隐式重试。排队仅等待检测执行资源，不持有账号租约，不为本地账号冷却或满载等待恢复。
+- 初版单槽位最多一个排队或运行任务，全局最多两个运行任务，等待队列最多 32 个；原生取得支持或待输入结论时只执行一次 create/steer；必要切换后总计最多三个 create/一个 steer，不循环重试，后备使用独立会话。排队仅等待检测执行资源，不持有账号租约，不为本地账号冷却或满载等待恢复。
 - 槽位 ID 在 Proxy 的登记、幂等比较、同槽位判重和查询前，以及 owner 的并发账本查询前，统一去除首尾空白；模型 ID 仍精确匹配。空白别名不能产生第二个同槽位任务或绕过并发。
 - 提交时先执行无出站、无租约的本地准入预检，拒绝即形成终结报告；执行时由 owner 原子完成严格指定槽位准入和租约获取，仍被拒绝则直接结束。预检不能代替实际执行准入。
-- 总时限从服务端创建任务起计 120 秒，包含排队、准入、凭据刷新、握手和事件读取，阶段切换不延长总预算。握手上限为 10 秒与剩余预算的较小值；排队超时不请求上游。
+- 总时限从服务端创建任务起计 120 秒，包含排队、准入、凭据刷新、握手和事件读取，阶段切换不延长总预算。每条路径至多 60 秒，握手上限为 10 秒与当前路径剩余预算的较小值；排队超时不请求上游。
 - 探测新建的凭据刷新受任务 deadline 和 owner 停机取消约束，刷新前校验租约与执行配置版本，提交刷新结果时再次校验版本，防止旧刷新覆盖重新授权后的账号。若复用已经独立运行的 owner 刷新，只限时等待，不取消该独立生命周期。
-- 解压后的单条完整 WS 消息最多 1 MiB，累计接收最多 8 MiB；限制作用于完整消息而非单个传输分片。输出参数不能替代时间和接收上限。
+- 解压后的单条完整 WS 消息最多 1 MiB，包括切换在内累计接收最多 8 MiB；限制作用于完整消息而非单个传输分片。输出参数不能替代时间和接收上限。
 - 排队任务采用执行时账号配置并记录版本。账号删除、重新授权、代理或其他关键执行配置在运行期间变化时，取消任务、关闭连接，记录 `account_changed`，不重放；保留已取得的能力证据。owner 维护执行配置版本，正常 Token 刷新不触发该版本变化或自我取消。
 - 所有退出路径关闭连接、停止读写任务、释放租约；失败后保留已获取的证据。
 - 编排初始化与上游引擎分别由现有受管理后台任务执行；初始化完成后由 200 毫秒短周期控制器读取快照，不占用后台 worker 等待另一个引擎。关闭命令等待引擎真正退出，再释放租约；清理失败保持任务活跃并重试，不提前释放该槽位。控制器稍晚观察到超时或停机时，保留引擎已记录的 pending、完成或失败终态。
 - 初版任务与结果保留在有界进程内存，合计最多 200 条，接收任务时为结果预留容量；已完成结果从结束时间起保留 30 分钟，幂等记录同寿命。清理已过期记录后仍满容量则拒绝新任务，不为新任务提前淘汰结果或活跃任务。页面提示有效期及重启后需重新检测，不新增数据库 schema 或修改账号池 bundle。
 
 ## 测试验收
+
+原生优先后备验收（CP-PROBE-001..003）：原生成功、已提交后生成失败、pending、认证拒绝、取消、接收限额时零客户端调用；明确拒绝和 UNKNOWN 后只切换一次；父终态前零续接、同连接增量 input 和父引用、合成身份隔离；父失败/错序/写入失败不误判；切换后的 pending/拒绝/取消直接结束；共享预算；快照/管理查询深拷贝；API/JSON/Web 只显示一份当前结果并保留原生诊断，切换中仍轮询。下列原生与管理边界继续保留。
+
 
 1. Mock WS 覆盖 accepted → steered incomplete → successor created → completed、原始 completed 后的合法 successor、只有 accepted、pending、明确不支持、accepted 前无 ID 的 failed、accepted 后同 ID 的 failed、无关/矛盾 ID、竞争窗口、参数错误、认证失败、超时和断线。断言实际出站 steer 恰好三个规定字段，无普通请求加工器注入的字段。
 2. pending 立即以待输入结束，不被后续超时覆盖；只有 accepted 时超时为未知。successor 创建后失败、超时或取消，能力与执行结果分别正确；原始终态不提前关闭等待，附加事件不误作终态，缺 usage 不估算，输出是否命中固定文本不改变协议能力结论。
@@ -164,7 +216,7 @@ JSON 至少包括任务 ID、目标/实际槽位 ID、账号标签、请求/响�
 
 新增协议、Mock WS、owner、编排、Admin HTTP 与 Web 行为测试，纳入 `scripts/check-codex-contract.sh`；验收结论区分本地自动化与真实上游观测。
 
-本轮本地验收结果：
+17.6.0/17.6.1 本地验收结果（历史记录）：
 
 - `go test -p 1 ./... -count=1`：通过。
 - `GOFLAGS=-p=1 bash scripts/check-codex-contract.sh`：通过，包含 Codex 数据面回归、受影响包 race、Web 检查、vet、差异与凭据模式扫描；随后补充的协议分类、控制器终态及准入测试另行通过 race。
@@ -172,7 +224,7 @@ JSON 至少包括任务 ID、目标/实际槽位 ID、账号标签、请求/响�
 - `node --test web/admin/*.test.cjs`：56 项全部通过，包含陈旧能力展示及刷新后复查拒绝文案回归。
 - 最终 `go vet ./...`、主程序构建与 `git diff --check`：通过；构建产物为 `/tmp/aetherrelay-steering-build`。
 
-以下是**合成报告节选，仅说明字段和分类，不是目标账号的 live 证据**：
+以下是**历史原生合成报告节选，仅说明字段和分类，不是目标账号的 live 证据**：
 
 ```json
 {
@@ -207,4 +259,34 @@ JSON 至少包括任务 ID、目标/实际槽位 ID、账号标签、请求/响�
 }
 ```
 
-17.6.0/17.6.1 的上述结果为本地验收记录。后续 x800 `dd923ab` 已由管理员执行真实探测，具体任务见本文 17.6.3 诊断补充：结果为 UNKNOWN/upstream_error，尚不能确认支持或具体拒绝原因。17.6.3 诊断修改仍待部署，须由管理员手工重新检测，下载完整 JSON 并结合 `Codex steering probe created/finished`、`Codex steering probe upstream error` 日志按 `probe_id` 核对实际槽位、配置、错误详情、事件顺序和消耗。真实上游若返回明确不支持、pending 或 UNKNOWN，应保留原始分类，不将 Mock 成功推广为生产能力保证。
+17.6.0/17.6.1 的上述结果为本地验收记录。后续 x800 `dd923ab` 已由管理员执行真实探测，具体任务见本文 17.6.3 诊断补充：结果为 UNKNOWN/upstream_error，尚不能确认支持或具体拒绝原因。随后管理员提供的两次含完整诊断的真实报告已明确观测 native turn 拒绝，详见本文 17.6.4；新分类尚待部署。复测须下载完整 JSON 并结合 `Codex steering probe created/finished`、`Codex steering probe upstream error` 日志按 `probe_id` 核对实际槽位、配置、错误详情、事件顺序和消耗。真实上游若返回明确不支持、pending 或 UNKNOWN，应保留原始分类，不将 Mock 成功推广为生产能力保证。
+
+
+17.7.0 新报告合成节选（不是 live 结果）：
+
+```json
+{
+  "probe_profile": "native_first_client_fallback_v3",
+  "check_profile": "codex_client_drain_no_tools_v2",
+  "capability_target": "codex_client_steering",
+  "invocation_mode": "local_queue_drain_create",
+  "capability": "SUPPORTED",
+  "execution_outcome": "completed",
+  "input_queued": true,
+  "continuation_sent": true,
+  "continuation_write_completed": true,
+  "steer_sent": false,
+  "done": true,
+  "fallback": {
+    "reason": "native_protocol_unsupported",
+    "phase": "steering",
+    "execution_outcome": "unsupported_native_inflight_message",
+    "error_code": "unsupported_native_inflight_message",
+    "steer_sent": true,
+    "steer_write_completed": true
+  }
+}
+```
+
+
+17.7.0 原生优先后备的本地验收：受影响的 steering、codexupstream/biz、proxyapi/biz、Admin HTTP 包全部测试通过；`GOFLAGS=-p=1 bash scripts/check-codex-contract.sh` 最终完整通过（含 race、数据面回归、全仓 vet、Web、差异和凭据模式检查）；全部 Web 测试 61 项通过；主程序构建成功，产物 `/tmp/aetherrelay-steering-fallback`。一次完整检查中既有 TestCodexCompletionBudgetIncludesAdmissionAndRetries/client_cancel 出现时序相关失败；未修改该数据面调用链，随后单独连续 25 次及最终合同重跑均通过。未部署、未触发真实上游请求，新流程仍待管理员手工 live 验证。

@@ -27,6 +27,8 @@ type steeringFixture struct {
 	snapshots                                         map[string]upevents.SteeringSnapshotResult
 	acquired                                          map[string]int
 	starts, releases, closes, refreshes, healthWrites int
+	usageSnapshots                                    []accevents.MergeUsageSnapshotCommand
+	scopedIdentity                                    bool
 	closeFailures                                     int
 	refreshNeeded                                     bool
 	recheckReason, recheckVersion, recheckLeaseID     string
@@ -77,6 +79,10 @@ func newSteeringFixture(t *testing.T) (*Proxy, *steeringFixture) {
 			f.acquired[cmd.AccountID]++
 			out.Credential = accevents.AcquireResult{AccountID: cmd.AccountID, AccountLabel: out.AccountLabel, AccessToken: "test-secret", LeaseID: "lease:" + cmd.AccountID}
 		}
+		if out.Allowed && cmd.Acquire && f.scopedIdentity {
+			out.Credential.FingerprintMode = accevents.FingerprintModeScoped
+			out.Credential.FingerprintSeed = "7327df33-9db6-4a25-afc5-387db8221acf"
+		}
 		r.Set(out, nil)
 	}); err != nil {
 		t.Fatal(err)
@@ -86,6 +92,12 @@ func newSteeringFixture(t *testing.T) (*Proxy, *steeringFixture) {
 		defer f.mu.Unlock()
 		f.refreshes++
 		r.Set(accevents.RefreshTokenResult{AccessToken: "refreshed-test-token", RequestSent: true}, nil)
+	})
+	a.Subscribe(accevents.TopicMergeUsageSnapshot, func(ev event.Event, r event.Result) {
+		f.mu.Lock()
+		f.usageSnapshots = append(f.usageSnapshots, ev.Data().(accevents.MergeUsageSnapshotCommand))
+		f.mu.Unlock()
+		r.Set(nil, nil)
 	})
 	a.Subscribe(accevents.TopicRelease, func(ev event.Event, r event.Result) {
 		f.mu.Lock()
@@ -101,6 +113,13 @@ func newSteeringFixture(t *testing.T) (*Proxy, *steeringFixture) {
 		cmd := ev.Data().(upevents.SteeringStartCommand)
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if cmd.SessionHash == cmd.ClientSessionHash || cmd.ClientSessionHash != cmd.SessionHash+":client" {
+			t.Error("probe sessions not isolated")
+		}
+		if f.scopedIdentity && (cmd.Fingerprint.SessionID == cmd.ClientFingerprint.SessionID || cmd.Fingerprint.ThreadID == cmd.ClientFingerprint.ThreadID || cmd.Fingerprint.WindowID == cmd.ClientFingerprint.WindowID || cmd.Fingerprint.TurnID == cmd.ClientFingerprint.TurnID || cmd.Fingerprint.InstallationID != cmd.ClientFingerprint.InstallationID) {
+			t.Error("scoped identity not isolated per check")
+		}
+
 		f.starts++
 		e := steering.NewEvidence()
 		e.Phase = "steering"
@@ -181,45 +200,52 @@ func TestSteeringAdmissionRejectedWithoutExecution(t *testing.T) {
 }
 
 func TestSteeringFailureDiagnosticsSurviveCleanupAndQueries(t *testing.T) {
-	p, f := newSteeringFixture(t)
-	cmd := proxyevents.StartSteeringProbeCommand{SlotID: "slot", Model: "gpt-test", IdempotencyKey: "diagnostic"}
-	first := p.startSteeringProbe(context.Background(), cmd)
-	waitSteeringTest(t, p, func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.starts == 1 })
-	m := steering.NewMachine()
-	m.HTTPStatus = 101
-	m.WriteAttempt("response.create")
-	m.WriteResult("response.create", nil)
-	m.Observe([]byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
-	m.WriteAttempt("response.steer")
-	m.WriteResult("response.steer", nil)
-	m.Observe([]byte(`{"type":"error","error":{"code":"future_error","message":"management detail"}}`))
-	f.mu.Lock()
-	snap := f.snapshots[first.Report.ProbeID]
-	snap.Evidence = m.Evidence.Clone()
-	f.snapshots[first.Report.ProbeID] = snap
-	f.mu.Unlock()
-	waitSteeringTest(t, p, func() bool { return getSteeringTest(t, p, "slot", first.Report.ProbeID).Report.State == "finished" })
-	for _, query := range []string{first.Report.ProbeID, "latest", "idempotent"} {
-		var result proxyevents.SteeringProbeResult
-		if query == "idempotent" {
-			result = p.startSteeringProbe(context.Background(), cmd)
-		} else {
-			result = getSteeringTest(t, p, "slot", query)
-		}
-		e := result.Report
-		if e.Capability != steering.Unknown || e.ErrorCode != "upstream_error" || !e.SteerWriteCompleted || e.UpstreamError == nil || e.UpstreamError.Code != "future_error" || e.UpstreamError.Message != "management detail" || len(e.Timeline) != len(m.Timeline) {
-			t.Fatal("management projection lost failure evidence", e)
-		}
-		e.UpstreamError.Message = "reader mutation"
-		e.Timeline[0].Type = "reader mutation"
-	}
-	if m.UpstreamError.Message != "management detail" || snap.Evidence.UpstreamError.Message != "management detail" {
-		t.Fatal("snapshot mutated")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.starts != 1 || f.releases != 1 || f.healthWrites != 0 {
-		t.Fatal("diagnostics changed execution or health", f)
+	for _, tc := range []struct{ code, capability, outcome string }{
+		{"future_error", steering.Unknown, "upstream_error"},
+		{"unsupported_native_inflight_message", steering.Unsupported, "unsupported_native_inflight_message"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			p, f := newSteeringFixture(t)
+			cmd := proxyevents.StartSteeringProbeCommand{SlotID: "slot", Model: "gpt-test", IdempotencyKey: "diagnostic"}
+			first := p.startSteeringProbe(context.Background(), cmd)
+			waitSteeringTest(t, p, func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.starts == 1 })
+			m := steering.NewMachine()
+			m.HTTPStatus = 101
+			m.WriteAttempt("response.create")
+			m.WriteResult("response.create", nil)
+			m.Observe([]byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+			m.WriteAttempt("response.steer")
+			m.WriteResult("response.steer", nil)
+			m.Observe([]byte(`{"type":"error","error":{"code":"` + tc.code + `","message":"management detail"}}`))
+			f.mu.Lock()
+			snap := f.snapshots[first.Report.ProbeID]
+			snap.Evidence = m.Evidence.Clone()
+			f.snapshots[first.Report.ProbeID] = snap
+			f.mu.Unlock()
+			waitSteeringTest(t, p, func() bool { return getSteeringTest(t, p, "slot", first.Report.ProbeID).Report.State == "finished" })
+			for _, query := range []string{first.Report.ProbeID, "latest", "idempotent"} {
+				var result proxyevents.SteeringProbeResult
+				if query == "idempotent" {
+					result = p.startSteeringProbe(context.Background(), cmd)
+				} else {
+					result = getSteeringTest(t, p, "slot", query)
+				}
+				e := result.Report
+				if e.Capability != tc.capability || e.ErrorCode != tc.outcome || e.ExecutionOutcome != tc.outcome || !e.SteerWriteCompleted || e.UpstreamError == nil || e.UpstreamError.Code != tc.code || e.UpstreamError.Message != "management detail" || len(e.Timeline) != len(m.Timeline) {
+					t.Fatal("management projection lost failure evidence", e)
+				}
+				e.UpstreamError.Message = "reader mutation"
+				e.Timeline[0].Type = "reader mutation"
+			}
+			if m.UpstreamError.Message != "management detail" || snap.Evidence.UpstreamError.Message != "management detail" {
+				t.Fatal("snapshot mutated")
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.starts != 1 || f.releases != 1 || f.healthWrites != 0 {
+				t.Fatal("diagnostics changed execution or health", f)
+			}
+		})
 	}
 }
 
@@ -590,5 +616,64 @@ func TestSteeringRecheckDeadlineIsNotAccountChange(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.starts != 0 || f.releases != 1 || f.healthWrites != 0 || f.recheckLeaseID != "lease:slot" {
 		t.Fatal("deadline did not stop and release admitted task", f)
+	}
+}
+
+// CP-PROBE-001/003: final result and fallback diagnostics survive cleanup, all query forms, and
+// arbitrary reader mutations without affecting scheduling or health.
+func TestSteeringFallbackReportProjectionAndCleanup(t *testing.T) {
+	p, f := newSteeringFixture(t)
+	f.scopedIdentity = true
+	cmd := proxyevents.StartSteeringProbeCommand{SlotID: "slot", Model: "gpt-test", IdempotencyKey: "fallback"}
+	first := p.startSteeringProbe(context.Background(), cmd)
+	waitSteeringTest(t, p, func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.starts == 1 })
+	n := steering.NewEvidence()
+	n.Capability = steering.Unsupported
+	n.ExecutionOutcome = "unsupported_native_inflight_message"
+	n.ErrorCode = n.ExecutionOutcome
+	n.Done = true
+	n.UpstreamError = &steering.UpstreamError{Code: n.ErrorCode}
+	c := steering.NewClientEvidence()
+	c.Capability = steering.Supported
+	c.ExecutionOutcome = "completed"
+	c.Done = true
+	c.InputQueued = true
+	c.ContinuationSent = true
+	c.ContinuationWriteCompleted = true
+	c.Timeline = []steering.TraceEvent{{Type: "input.queued"}}
+	tokens := int64(4)
+	c.ParentUsage = &steering.Usage{InputTokens: &tokens}
+	f.mu.Lock()
+	snap := f.snapshots[first.Report.ProbeID]
+	snap.Evidence = c.Clone()
+	snap.Fallback = steering.NewFallback(n, "native_protocol_unsupported")
+	snap.Headers = []upevents.Header{{Name: "x-codex-primary-used-percent", Value: "7"}}
+	snap.ClientHeaders = []upevents.Header{{Name: "x-codex-primary-used-percent", Value: "8"}}
+	f.snapshots[first.Report.ProbeID] = snap
+	f.mu.Unlock()
+	waitSteeringTest(t, p, func() bool { return getSteeringTest(t, p, "slot", first.Report.ProbeID).Report.State == "finished" })
+	for _, id := range []string{first.Report.ProbeID, "latest", "idempotent"} {
+		var report proxyevents.SteeringReport
+		if id == "idempotent" {
+			report = p.startSteeringProbe(context.Background(), cmd).Report
+		} else {
+			report = getSteeringTest(t, p, "slot", id).Report
+		}
+		if report.Capability != steering.Supported || report.CapabilityTarget != steering.ClientTarget || !report.UpstreamRequestSent || report.Fallback == nil || report.Fallback.UpstreamError.Code != n.ErrorCode || !report.ContinuationWriteCompleted || *report.ParentUsage.InputTokens != 4 || report.Timeline[0].Type != "input.queued" {
+			t.Fatal(report)
+		}
+		report.Fallback.UpstreamError.Code = "mutated"
+		report.Timeline[0].Type = "mutated"
+		*report.ParentUsage.InputTokens = 99
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.starts != 1 || f.releases != 1 || f.closes != 1 || f.healthWrites != 0 || len(f.usageSnapshots) != 2 {
+		t.Fatal(f)
+	}
+	for i, percent := range []float64{7, 8} {
+		if f.usageSnapshots[i].AccountID != "slot" || f.usageSnapshots[i].Snapshot.Windows[0].UsedPercent != percent {
+			t.Fatal("handshake quota observation lost", f.usageSnapshots)
+		}
 	}
 }

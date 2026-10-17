@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func closeSteeringTest(t *testing.T, s *Upstream) events.SteeringCloseResult {
 }
 
 func TestSteeringWSProtocolAndCleanup(t *testing.T) {
-	for _, mode := range []string{"completed", "pending", "upstream_error", "disconnect", "oversize", "cumulative", "compressed", "cancel"} {
+	for _, mode := range []string{"completed", "pending", "upstream_error", "native_inflight", "disconnect", "oversize", "cumulative", "compressed", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			wire := make(chan []byte, 1)
 			ready := make(chan struct{}, 1)
@@ -51,6 +52,10 @@ func TestSteeringWSProtocolAndCleanup(t *testing.T) {
 					return
 				}
 				defer conn.Close()
+				if strings.HasSuffix(r.Header.Get("Session-Id"), ":client") {
+					serveClientSteering(t, conn, r, "completed")
+					return
+				}
 				if mode == "compressed" {
 					conn.EnableWriteCompression(true)
 				}
@@ -71,12 +76,26 @@ func TestSteeringWSProtocolAndCleanup(t *testing.T) {
 				if session := r.Header.Get("Session-Id"); session != "steering-test-session" || c.Metadata["session_id"] != session || c.Metadata["thread_id"] != r.Header.Get("Thread-Id") || c.Metadata["x-codex-window-id"] != r.Header.Get("X-Codex-Window-Id") {
 					t.Error("probe create identity differs from handshake")
 				}
+				if mode == "native_inflight" {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"codex.rate_limits"}`))
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"codex.response.metadata"}`))
+				}
 				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_parent","model":"gpt-test"}}`))
 				_, steer, err := conn.ReadMessage()
 				if err != nil {
 					return
 				}
 				wire <- steer
+				if mode == "native_inflight" {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.in_progress"}`))
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_native_inflight_message","message":"The experimental native turn lane cannot accept stateful WebSocket messages while a native turn is running. Start a new independent response.create turn instead."}}`))
+					// The client must terminate, never send an independent create
+					// or replay the rejected steer on this connection.
+					if _, next, err := conn.ReadMessage(); err == nil {
+						t.Errorf("unexpected replay: %s", next)
+					}
+					return
+				}
 				if mode == "upstream_error" {
 					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"future_rejection","type":"future_error","param":"input","message":"this profile was rejected"}}`))
 					return
@@ -136,38 +155,39 @@ func TestSteeringWSProtocolAndCleanup(t *testing.T) {
 			if !closed.Closed || !e.Done || s.steeringSession("probe_test") != nil {
 				t.Fatal("probe leaked")
 			}
-			if !e.CreateSent || !e.CreateWriteCompleted || !e.SteerSent || !e.SteerWriteCompleted {
-				t.Fatal("successful writes lost", e)
-			}
+			f := closed.Snapshot.Fallback
 			switch mode {
-			case "upstream_error":
-				if e.Capability != steering.Unknown || e.ErrorCode != "upstream_error" || e.UpstreamError == nil || e.UpstreamError.Code != "future_rejection" || e.UpstreamError.Message != "this profile was rejected" || e.UpstreamError.Status != 0 || e.HTTPStatus != 101 || e.SteerID != "" {
-					t.Fatal("unknown upstream failure lost", e)
+			case "native_inflight", "upstream_error", "disconnect":
+				if f == nil || e.Capability != steering.Supported || e.CapabilityTarget != steering.ClientTarget || e.SteerSent || !e.ContinuationWriteCompleted || !f.SteerSent || !f.SteerWriteCompleted {
+					t.Fatal("fallback failed", e, f)
 				}
-				want := []string{"websocket.handshake", "response.create", "response.create", "response.created", "response.steer", "response.steer", "error", "probe.finished"}
-				if len(e.Timeline) != len(want) {
-					t.Fatal(e.Timeline)
+				if mode == "native_inflight" && (f.ErrorCode != "unsupported_native_inflight_message" || f.UpstreamError == nil || f.UpstreamError.Code != f.ErrorCode || f.EventCount != 5 || len(f.Timeline) != 11 || f.Timeline[10].Type != "probe.finished") {
+					t.Fatal("native diagnostic lost", f)
 				}
-				for i, kind := range want {
-					if e.Timeline[i].Type != kind {
-						t.Fatal(e.Timeline)
-					}
-				}
-			case "completed":
-				if e.Capability != steering.Supported || e.ExecutionOutcome != "completed" || e.ParentUsage == nil || e.SuccessorUsage == nil {
-					t.Fatal(e)
-				}
-			case "pending":
-				if e.Capability != steering.Pending || e.ExecutionOutcome != "waiting_for_required_input" {
-					t.Fatal(e)
-				}
-			case "disconnect", "cancel":
-				if e.Capability != steering.Unknown || e.ErrorCode == "" {
-					t.Fatal(e)
+				if mode == "upstream_error" && (f.ErrorCode != "upstream_error" || f.UpstreamError == nil || f.UpstreamError.Code != "future_rejection" || f.UpstreamError.Message != "this profile was rejected") {
+					t.Fatal("unknown diagnostic lost", f)
 				}
 			default:
-				if e.Capability != steering.Unknown || e.ErrorCode != "receive_limit" {
-					t.Fatal(e)
+				if f != nil || e.CapabilityTarget != steering.NativeTarget || !e.CreateWriteCompleted || !e.SteerWriteCompleted {
+					t.Fatal("unexpected fallback", e, f)
+				}
+				switch mode {
+				case "completed":
+					if e.Capability != steering.Supported || e.ExecutionOutcome != "completed" || e.ParentUsage == nil || e.SuccessorUsage == nil {
+						t.Fatal(e)
+					}
+				case "pending":
+					if e.Capability != steering.Pending || e.ExecutionOutcome != "waiting_for_required_input" {
+						t.Fatal(e)
+					}
+				case "cancel":
+					if e.Capability != steering.Unknown || e.ErrorCode != "canceled" {
+						t.Fatal(e)
+					}
+				default:
+					if e.Capability != steering.Unknown || e.ErrorCode != "receive_limit" {
+						t.Fatal(e)
+					}
 				}
 			}
 		})
@@ -287,5 +307,327 @@ func TestSteeringCloseRemainsAvailableDuringShutdown(t *testing.T) {
 	}
 	if err := s.Quiesce(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func serveClientSteering(t *testing.T, conn *websocket.Conn, r *http.Request, mode string) {
+	t.Helper()
+	_, initial, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
+	var first map[string]any
+	if json.Unmarshal(initial, &first) != nil || first["type"] != "response.create" || first["previous_response_id"] != nil {
+		t.Error("invalid client initial create")
+		return
+	}
+	metadata, _ := first["client_metadata"].(map[string]any)
+	if metadata["session_id"] != r.Header.Get("Session-Id") || metadata["thread_id"] != r.Header.Get("Thread-Id") {
+		t.Error("client identity differs from handshake")
+	}
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_client_parent"}}`))
+	next := make(chan []byte, 1)
+	go func() { _, b, _ := conn.ReadMessage(); next <- b }()
+	select {
+	case b := <-next:
+		t.Errorf("client sent before parent terminal: %s", b)
+		return
+	case <-time.After(15 * time.Millisecond):
+	}
+	terminal := `{"type":"response.completed","response":{"id":"resp_client_parent","usage":{"input_tokens":4,"output_tokens":2}}}`
+	if mode == "pending" {
+		terminal = `{"type":"response.completed","response":{"id":"resp_client_parent","output":[{"type":"function_call"}]}}`
+	}
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(terminal))
+	var b []byte
+	select {
+	case b = <-next:
+	case <-time.After(2 * time.Second):
+		t.Error("no client continuation or close")
+		return
+	}
+	if mode == "pending" {
+		if len(b) > 0 {
+			t.Errorf("continued through required tool input: %s", b)
+		}
+		return
+	}
+	var continuation map[string]any
+	if json.Unmarshal(b, &continuation) != nil || continuation["type"] != "response.create" || continuation["previous_response_id"] != "resp_client_parent" || continuation["model"] != first["model"] || continuation["instructions"] != first["instructions"] || continuation["store"] != false {
+		t.Errorf("invalid client continuation: %s", b)
+		return
+	}
+	a, _ := json.Marshal(first["client_metadata"])
+	c, _ := json.Marshal(continuation["client_metadata"])
+	if string(a) != string(c) {
+		t.Error("client continuation identity changed")
+	}
+	if mode == "rejected" {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"unsupported_native_inflight_message","message":"stateful request rejected"}}`))
+		return
+	}
+	for _, payload := range []string{`{"type":"response.created","response":{"id":"resp_client_next","previous_response_id":"resp_client_parent"}}`, `{"type":"response.completed","response":{"id":"resp_client_next","usage":{"input_tokens":7,"output_tokens":1}}}`} {
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(payload))
+	}
+	if _, b, err := conn.ReadMessage(); err == nil {
+		t.Errorf("unexpected extra client request: %s", b)
+	}
+}
+
+// CP-PROBE-001/002: native completion stops; only an inconclusive native
+// invocation switches once, and the final result belongs to the selected path.
+func TestSteeringNativeFirstFallback(t *testing.T) {
+	for _, mode := range []string{"native_completed", "native_pending", "native_successor_failed", "native_auth", "native_rejected", "native_unknown", "client_rejected", "client_pending"} {
+		t.Run(mode, func(t *testing.T) {
+			var connections atomic.Int32
+			transportServer(t, func(w http.ResponseWriter, r *http.Request) {
+				connections.Add(1)
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				if strings.HasSuffix(r.Header.Get("Session-Id"), ":client") {
+					cm := "completed"
+					if mode == "client_rejected" {
+						cm = "rejected"
+					}
+					if mode == "client_pending" {
+						cm = "pending"
+					}
+					serveClientSteering(t, conn, r, cm)
+					return
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+				_, steer, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				var fields map[string]any
+				_ = json.Unmarshal(steer, &fields)
+				if fields["type"] != "response.steer" || len(fields) != 3 {
+					t.Errorf("native changed: %s", steer)
+				}
+				if mode == "native_auth" {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"invalid_token"}}`))
+					return
+				}
+				if mode == "native_unknown" {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"unknown_future_error"}}`))
+					return
+				}
+				if mode == "native_rejected" || strings.HasPrefix(mode, "client_") {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"unsupported_native_inflight_message"}}`))
+					return
+				}
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.steer.accepted","steer":{"id":"steer_one","previous_response_id":"resp_parent"}}`))
+				if mode == "native_pending" {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.steer.pending","steer":{"id":"steer_one","previous_response_id":"resp_parent"},"required_input":[{"type":"function_call_output"}]}`))
+					return
+				}
+				terminal := `{"type":"response.completed","response":{"id":"resp_next"}}`
+				if mode == "native_successor_failed" {
+					terminal = `{"type":"response.failed","response":{"id":"resp_next","error":{"code":"server_error"}}}`
+				}
+				for _, payload := range []string{`{"type":"response.completed","response":{"id":"resp_parent"}}`, `{"type":"response.created","response":{"id":"resp_next"}}`, terminal} {
+					_ = conn.WriteMessage(websocket.TextMessage, []byte(payload))
+				}
+			})
+			s := transportUpstream(t)
+			startSteeringTest(t, s, time.Now().Add(5*time.Second))
+			p := s.steeringSession("probe_test")
+			select {
+			case <-p.done:
+			case <-time.After(6 * time.Second):
+				t.Fatal("probe stuck")
+			}
+			v := closeSteeringTest(t, s).Snapshot
+			e := v.Evidence
+			switched := mode == "native_rejected" || mode == "native_unknown" || strings.HasPrefix(mode, "client_")
+			count := int32(1)
+			target := steering.NativeTarget
+			want := steering.Supported
+			if switched {
+				count = 2
+				target = steering.ClientTarget
+			}
+			if mode == "native_pending" || mode == "client_pending" {
+				want = steering.Pending
+			}
+			if mode == "native_auth" {
+				want = steering.Unknown
+			}
+			if mode == "client_rejected" {
+				want = steering.Unsupported
+			}
+			if connections.Load() != count || !e.Done || e.Capability != want || e.CapabilityTarget != target || (v.Fallback != nil) != switched {
+				t.Fatalf("connections=%d report=%+v fallback=%+v", connections.Load(), e, v.Fallback)
+			}
+			if switched && (e.SteerSent || !e.InputQueued || v.Fallback.SteerSent != true || v.Fallback.UpstreamError == nil) {
+				t.Fatal("fallback evidence lost", v)
+			}
+			if mode == "native_successor_failed" && e.ExecutionOutcome != "successor_failed" {
+				t.Fatal(e)
+			}
+		})
+	}
+}
+
+// CP-PROBE-002/003: cancellation in the fallback preserves its own result
+// alongside the original diagnostic, without resurrecting the native result.
+func TestSteeringFallbackCancellation(t *testing.T) {
+	ready := make(chan struct{})
+	transportServer(t, func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+		if strings.HasSuffix(r.Header.Get("Session-Id"), ":client") {
+			close(ready)
+			if _, b, err := conn.ReadMessage(); err == nil {
+				t.Errorf("continued before terminal: %s", b)
+			}
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"unsupported_native_inflight_message"}}`))
+	})
+	s := transportUpstream(t)
+	startSteeringTest(t, s, time.Now().Add(5*time.Second))
+	p := s.steeringSession("probe_test")
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no fallback")
+	}
+	deadline := time.Now().Add(time.Second)
+	for !p.read().Evidence.InputQueued && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	before := p.read()
+	if before.Evidence.Done || before.Fallback == nil || !before.Evidence.InputQueued {
+		t.Fatal(before)
+	}
+	v := closeSteeringTest(t, s).Snapshot
+	if !v.Evidence.Done || v.Evidence.Capability != steering.Unknown || v.Evidence.CapabilityTarget != steering.ClientTarget || v.Evidence.ExecutionOutcome != "canceled" || v.Evidence.ContinuationSent || v.Fallback.ErrorCode != "unsupported_native_inflight_message" {
+		t.Fatal(v)
+	}
+}
+func TestSteeringFallbackSnapshotClone(t *testing.T) {
+	p := &steeringSession{snapshot: events.SteeringSnapshotResult{Headers: []events.Header{{Name: "native", Value: "original"}}, ClientHeaders: []events.Header{{Name: "client", Value: "original"}}}}
+	e := steering.NewEvidence()
+	token := int64(3)
+	e.ParentUsage = &steering.Usage{InputTokens: &token}
+	e.UpstreamError = &steering.UpstreamError{Code: "original"}
+	e.Timeline = []steering.TraceEvent{{Type: "original"}}
+	p.beginFallback(e, "native_protocol_inconclusive")
+	p.publish(steering.NewClientEvidence())
+	if !p.read().Evidence.UpstreamRequestSent {
+		t.Fatal("native request attempt lost before fallback send")
+	}
+	e.UpstreamError.Code = "writer"
+	*e.ParentUsage.InputTokens = 99
+	e.Timeline[0].Type = "writer"
+	v := p.read()
+	if v.Fallback.UpstreamError.Code != "original" || *v.Fallback.ParentUsage.InputTokens != 3 || v.Fallback.Timeline[0].Type != "original" {
+		t.Fatal(v)
+	}
+	v.Headers[0].Value = "reader"
+	v.ClientHeaders[0].Value = "reader"
+	v.Fallback.UpstreamError.Code = "reader"
+	*v.Fallback.ParentUsage.InputTokens = 99
+	v.Fallback.Timeline[0].Type = "reader"
+	next := p.read()
+	if next.Headers[0].Value != "original" || next.ClientHeaders[0].Value != "original" || next.Fallback.UpstreamError.Code != "original" || *next.Fallback.ParentUsage.InputTokens != 3 || next.Fallback.Timeline[0].Type != "original" {
+		t.Fatal(next)
+	}
+}
+
+// CP-PROBE-002: changing invocation never resets the receive budget.
+func TestSteeringFallbackSharedReceiveBudget(t *testing.T) {
+	var connections atomic.Int32
+	transportServer(t, func(w http.ResponseWriter, r *http.Request) {
+		connections.Add(1)
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+		client := strings.HasSuffix(r.Header.Get("Session-Id"), ":client")
+		count := 4
+		if client {
+			count = 8
+		} else {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+		payload := []byte(`{"type":"response.metadata","padding":"` + strings.Repeat("x", (1<<20)-256) + `"}`)
+		for range count {
+			if conn.WriteMessage(websocket.TextMessage, payload) != nil {
+				return
+			}
+		}
+		if !client {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":{"code":"unsupported_native_inflight_message"}}`))
+		}
+	})
+	s := transportUpstream(t)
+	startSteeringTest(t, s, time.Now().Add(10*time.Second))
+	p := s.steeringSession("probe_test")
+	select {
+	case <-p.done:
+	case <-time.After(11 * time.Second):
+		t.Fatal("receive budget did not stop")
+	}
+	v := closeSteeringTest(t, s).Snapshot
+	if connections.Load() != 2 || v.Fallback == nil || v.Evidence.ErrorCode != "receive_limit" || v.Evidence.Capability != steering.Unknown || v.Evidence.CapabilityTarget != steering.ClientTarget || v.Evidence.ContinuationSent || v.Fallback.ReceivedBytes <= 3<<20 || v.Evidence.ReceivedBytes >= 6<<20 || v.Fallback.ReceivedBytes+v.Evidence.ReceivedBytes > 8<<20+1 {
+		t.Fatal("receive budget reset", v)
+	}
+}
+
+func TestSteeringDeadlinePreventsFallback(t *testing.T) {
+	var connections atomic.Int32
+	transportServer(t, func(w http.ResponseWriter, r *http.Request) {
+		connections.Add(1)
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created","response":{"id":"resp_parent"}}`))
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+	s := transportUpstream(t)
+	startSteeringTest(t, s, time.Now().Add(300*time.Millisecond))
+	p := s.steeringSession("probe_test")
+	select {
+	case <-p.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadline ignored")
+	}
+	v := closeSteeringTest(t, s).Snapshot
+	if connections.Load() != 1 || v.Fallback != nil || v.Evidence.ErrorCode != "timeout" || v.Evidence.Capability != steering.Unknown {
+		t.Fatal("deadline switched invocation", v)
 	}
 }

@@ -14,22 +14,26 @@ const (
 // Credentials remain internal. Probe IDs are supplied by the orchestrator so
 // even a lost start acknowledgement can be closed without a replay.
 type SteeringStartCommand struct {
-	ProbeID         string
-	Model           string
-	Deadline        time.Time
-	AccessToken     string
-	AccountIDHeader string
-	Proxy           string
-	SessionHash     string
-	Fingerprint     CodexFingerprint
-	ClientIdentity  ClientIdentity
+	ProbeID           string
+	Model             string
+	Deadline          time.Time
+	AccessToken       string
+	AccountIDHeader   string
+	Proxy             string
+	SessionHash       string
+	ClientSessionHash string
+	ClientFingerprint CodexFingerprint
+	Fingerprint       CodexFingerprint
+	ClientIdentity    ClientIdentity
 }
 type SteeringStartResult struct{ ProbeID string }
 type SteeringSnapshotCommand struct{ ProbeID string }
 type SteeringSnapshotResult struct {
-	Evidence steering.Evidence
-	Endpoint string
-	Headers  []Header
+	Evidence      steering.Evidence
+	Fallback      *steering.FallbackDiagnostic
+	Endpoint      string
+	Headers       []Header
+	ClientHeaders []Header
 }
 type SteeringCloseCommand struct{ ProbeID string }
 type SteeringCloseResult struct {

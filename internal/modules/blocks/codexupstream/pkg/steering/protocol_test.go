@@ -32,7 +32,7 @@ func TestSteeringClassification(t *testing.T) {
 		{"accepted_only", []string{parentCreated, accepted}, Unknown, "awaiting_commit", false},
 		{"pending", []string{parentCreated, accepted, `{"type":"response.steer.pending","steer":{"id":"steer_one","previous_response_id":"resp_parent"},"required_input":[{"type":"function_call_output","name":"secret-do-not-project"}]}`}, Pending, "waiting_for_required_input", true},
 		{"unsupported_before_accepted", []string{parentCreated, `{"type":"response.steer.failed","steer":{"previous_response_id":"resp_parent"},"error":{"code":"steering_not_supported","message":"do-not-project"}}`}, Unsupported, "steering_not_supported", true},
-		{"unsupported_after_accepted", []string{parentCreated, accepted, `{"type":"response.steer.failed","steer":{"id":"steer_one","previous_response_id":"resp_parent"},"error":{"code":"steering_not_supported"}}`}, Unsupported, "steering_not_supported", true},
+		{"unsupported_after_accepted", []string{parentCreated, accepted, `{"type":"response.steer.failed","steer":{"id":"steer_one","previous_response_id":"resp_parent"},"error":{"code":"steering_not_supported"}}`}, Unknown, "steering_not_supported", true},
 		{"successor_creation_failed", []string{parentCreated, accepted, parentSteered, `{"type":"response.steer.failed","steer":{"id":"steer_one","previous_response_id":"resp_parent"},"error":{"code":"successor_creation_failed"}}`}, Unknown, "successor_creation_failed", true},
 		{"wrong_steer", []string{parentCreated, accepted, `{"type":"response.steer.failed","steer":{"id":"other","previous_response_id":"resp_parent"},"error":{"code":"steering_not_supported"}}`}, Unknown, "correlation_error", true},
 		{"unrelated_created", []string{parentCreated, successorCreated}, Unknown, "correlation_error", true},
@@ -89,6 +89,90 @@ func TestDisconnectCommitAndErrorStages(t *testing.T) {
 		m.Reject("", tc.status)
 		if m.ErrorCode != tc.code || m.AuthState != tc.auth || m.ModelAccessState != tc.model || m.Capability != Unknown {
 			t.Fatal(m.Evidence)
+		}
+	}
+}
+
+const nativeInflightError = `{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_native_inflight_message","message":"The experimental native turn lane cannot accept stateful WebSocket messages while a native turn is running. Start a new independent response.create turn instead."}}`
+
+func TestNativeInflightRejectionClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		events                     []string
+		submit                     bool
+		capability, state, outcome string
+	}{
+		{"live_sequence", []string{`{"type":"codex.rate_limits"}`, `{"type":"codex.response.metadata"}`, parentCreated, `{"type":"response.in_progress"}`}, true, Unsupported, "failed", "unsupported_native_inflight_message"},
+		{"create_phase", nil, false, Unknown, "not_observed", "unsupported_native_inflight_message"},
+		{"before_steer_attempt", []string{parentCreated}, false, Unknown, "ready", "unsupported_native_inflight_message"},
+		{"parent_completed", []string{parentCreated, `{"type":"response.completed","response":{"id":"resp_parent"}}`}, true, Unknown, "sent", "unsupported_native_inflight_message"},
+		{"accepted", []string{parentCreated, accepted}, true, Unknown, "accepted", "unsupported_native_inflight_message"},
+		{"committed", []string{parentCreated, accepted, parentSteered, successorCreated}, true, Supported, "committed", "unsupported_native_inflight_message"},
+		{"pending_is_terminal", []string{parentCreated, accepted, `{"type":"response.steer.pending","steer":{"id":"steer_one","previous_response_id":"resp_parent"}}`}, true, Pending, "pending", "waiting_for_required_input"},
+		{"completed_is_terminal", []string{parentCreated, accepted, parentSteered, successorCreated, `{"type":"response.completed","response":{"id":"resp_next"}}`}, true, Supported, "committed", "completed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewMachine()
+			m.HTTPStatus = 101
+			for _, e := range tc.events {
+				if m.Observe([]byte(e)) && tc.submit {
+					m.WriteAttempt("response.steer")
+					m.WriteResult("response.steer", nil)
+				}
+			}
+			wasDone := m.Done
+			m.Observe([]byte(nativeInflightError))
+			if !m.Done || m.Capability != tc.capability || m.SteeringState != tc.state || m.ExecutionOutcome != tc.outcome || m.HTTPStatus != 101 {
+				t.Fatal(m.Evidence)
+			}
+			if wasDone {
+				if m.UpstreamError != nil {
+					t.Fatal("terminal evidence changed", m.Evidence)
+				}
+			} else if m.UpstreamError == nil || m.UpstreamError.Code != "unsupported_native_inflight_message" || m.UpstreamError.Type != "invalid_request_error" || m.UpstreamError.Message == "" || m.ErrorCode != tc.outcome {
+				t.Fatal("lost rejection details", m.Evidence)
+			}
+		})
+	}
+}
+
+func TestUnsupportedClassificationUsesExactCodeAndPreservesEvidence(t *testing.T) {
+	for _, code := range []string{"steering_not_supported", "unsupported_native_inflight_message"} {
+		for _, stage := range []string{"accepted", "committed", "pending", "timeout"} {
+			t.Run(code+"/"+stage, func(t *testing.T) {
+				m := NewMachine()
+				m.Observe([]byte(parentCreated))
+				m.WriteAttempt("response.steer")
+				want := Unknown
+				if stage == "timeout" {
+					m.Finish("timeout")
+				} else {
+					m.Observe([]byte(accepted))
+					if stage == "committed" {
+						m.Observe([]byte(parentSteered))
+						m.Observe([]byte(successorCreated))
+						want = Supported
+					} else if stage == "pending" {
+						m.Observe([]byte(`{"type":"response.steer.pending","steer":{"id":"steer_one","previous_response_id":"resp_parent"}}`))
+						want = Pending
+					}
+				}
+				wasDone, outcome := m.Done, m.ExecutionOutcome
+				m.Reject(code, 400)
+				if m.Capability != want || !m.Done || wasDone && m.ExecutionOutcome != outcome {
+					t.Fatal("later rejection overwrote evidence", m.Evidence)
+				}
+			})
+		}
+	}
+	for _, code := range []string{"future_rejection", "unsupported_native_inflight_message_v2", "Unsupported_native_inflight_message", ""} {
+		m := NewMachine()
+		m.Observe([]byte(parentCreated))
+		m.WriteAttempt("response.steer")
+		raw, _ := json.Marshal(map[string]any{"type": "error", "error": map[string]string{"code": code, "type": "invalid_request_error", "message": "steering_not_supported unsupported_native_inflight_message"}})
+		m.Observe(raw)
+		if m.Capability != Unknown {
+			t.Fatal("inferred unsupported from non-exact code or text", m.Evidence)
 		}
 	}
 }

@@ -6,13 +6,9 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.6.3`
->
-> 状态：`active`
->
-> 生效日期：2026-10-17
->
-> 参考基线：AetherRelay `fe532f9`、CLIProxyAPI `bf20b999`/`37ce368c`、sub2api `81fd85300`
+> 合同版本：`17.7.0` 管理 Steering 检测采用原生优先、官方客户端式调用后备，任务 profile 为 native_first_client_fallback_v3。先执行 single_agent_no_tools_v1；已有 SUPPORTED 或 ACCEPTED_PENDING 时直接结束。原生已完成认证和父响应创建、已尝试 steer，但不支持或证据不足时，在无认证/模型拒绝/限流/取消/配置错误且剩余预算允许的条件下，关闭原连接后切换一次 codex_client_drain_no_tools_v2。客户端路径只模拟 rust-v0.163.0 / 83086188ae0614bd882818ff1aa23f3194962012 的普通非 lite 模式：父 created 后本地排队，读取父正式成功终态后在同连接以 previous_response_id + 增量 input 续接 response.create。报告只保留当前路径的一份能力结果，明确 check_profile/target/mode；fallback 只保存切换原因及原生尝试诊断，不提供两个并列能力结论。保留四种判定及分阶段证据，客户端成功不能被表述为原生支持。每条路径至多 60 秒，共用任务从创建起 120 秒和 8 MiB 总预算；最多三个 create/一个 steer，无循环切换、换号、HTTP 回退或生产输入重放。必要输入停止、取消清理、健康/下游隔离和 owner 凭据/额度语义不变。验收覆盖原生完成零客户端调用、明确拒绝/未知后的单次切换、禁止切换边界、单报告覆盖及诊断保留、预算/取消/深拷贝/API/Web。线上仍需管理员手工 live 验证。
+
+`17.6.4` 根据管理员提交的 x800 探测 `f9cb58e5-7419-426e-bf24-46fe044ae17f` 收口明确拒绝分类：精确识别 `unsupported_native_inflight_message`，在已创建父响应、已尝试提交 steer、父响应尚未结束且未接受 steer 时判为 `UNSUPPORTED_FOR_PROFILE`，协议状态为 failed，错误码与执行结果保留该结构化代码。`steering_not_supported` 同样不得覆盖已有 accepted 证据；只有 accepted 时仍为 UNKNOWN，已有 pending 或关联 successor 提交证据及已结束报告不得降级。未知代码、相似代码和仅错误文本仍不推断不支持；创建阶段或父响应结束后的新代码不证明 Steering 不支持。结论仅限本次账号、模型、通道、配置与时间；不以独立 response.create、HTTP 回退、重试或换号替代，保持健康隔离。验收覆盖原始 live 事件序列、阶段/发送/终态边界、接受与提交后错误、未知代码、实际 Mock WS 零重放及管理页 JSON 展示。历史报告不回填，新分类仍须部署后管理员手工复测。
 
 `17.6.3` 补齐管理端 Steering 失败诊断：保留独立、有界的上游错误事件类型、type/code/param/message 和事件状态，不把握手 101 当作错误状态；未获提交证据的未知错误仍为 UNKNOWN，不从文本推断不支持。最近 64 条收发/终结事件保留顺序、相对时间和截断标记，不保存生成正文；既有 create_sent/steer_sent 继续表示提交尝试，新增 write_completed 明确本地写入完成，accepted/pending/committed 仅由协议事件确认。管理页与 JSON 显示诊断，结束日志保留有界错误摘要（不记录 message 或正文），快照及查询深拷贝诊断，保持健康隔离、无重试和仅管理员手工 live 检测。验收覆盖未知/缺失/数值错误码、参数及事件状态、关联失败、握手错误、写入失败、时序上限、并发快照、管理投影与页面转义；历史报告不回填，真实拒绝原因须部署后重新手工检测。
 
@@ -587,6 +583,12 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-011` 转换失败须保留安全字段路径及有界 feature；Codex Messages 入口允许 `tool_result.content` 中的内联 Base64 PNG/JPEG/GIF/WebP 图片，按原顺序映射为 `function_call_output.output` 内的 `input_text/input_image` 内容数组，保留 call ID 和错误结果标记。纯文本工具结果保持字符串投影；通用 Provider 转换、普通消息图片和 document/URL 来源继续遵循既有能力边界。图片必须校验 Base64、媒体类型和单项结果 1 MiB 总编码预算；拒绝时定位到嵌套 content/source 字段，feature 区分 `tool_result.image` 与 `tool_result.content.type`，不得笼统声称不支持所有 tool_result。流转换异常记为 `conversion`，不得冒充客户端写入失败，不触发账号冷却。JSON `keepalive` 与 SSE 注释均不是业务输出，不完成请求、不续业务空闲/首事件超时；未知业务事件继续拒绝。账号冷却等准入失败的 `failure_class/retryable/retry_after_seconds` 必须同时进入运行记录和 round 元数据。
 
+`CP-PROBE-001` 管理 Steering 任务使用 native_first_client_fallback_v3。原生 response.steer 优先；已获 SUPPORTED 或 ACCEPTED_PENDING 直接结束。已创建父响应并尝试 steer 后的明确不支持或 UNKNOWN 可切换一次官方普通客户端式调用；认证/模型拒绝、限流、取消、配置错误、无父响应或未发送 steer 不切换。客户端在父成功终态后以 previous_response_id + 增量 input 续接，关联后继 created 才支持，本地入队/写入不等同上游接受。
+
+`CP-PROBE-002` 切换前关闭原连接，严格绑定同一账号但采用独立合成会话，不重放生产输入、不循环重试、不回退 HTTP、不换号、不执行工具、不写探测健康。每条路径至多 60 秒，共用任务 120 秒及 8 MiB 接收总预算、消息 1 MiB；无预算不启动后备路径。原生已完成时最多一次 create/steer；发生切换时总计最多三个 create/一个 steer。必要凭据刷新和真实额度头仍由既有 owner 处理。
+
+`CP-PROBE-003` 报告和页面只显示一份当前/最终能力、阶段、错误、时序及正式用量，并标明实际路径。fallback 只记录切换原因及前次诊断（不含并列 capability），快照、查询、导出深拷贝；整体 done 控制清理、轮询与再次开始。取消/配置变化保留最终路径的既有提交证据；旧原生报告按原 profile 展示，不回填。详见[检测方案](../Mid-turnSteering协议检测器.md)。
+
 ## 12. 运行时与组件边界
 
 `CP-ARCH-001` 进程只使用 `framework/application` 创建的一套 EventHub 和 BackgroundRoutine。
@@ -618,6 +620,13 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 `CP-DOD-007` 搜索验收覆盖：普通问答携带工具、cache-only/live 参数原值、Lite 顶层搜索与 namespace 共存、强制/限定 tool_choice、未知工具和错误参数拒绝、HTTP/SSE/WS 搜索输出及引用、历史续接/compact、搜索后错误禁止重放、取消及 EOF 无终态。线上 smoke 与离线回归结果必须分开记录。
 
 ## 14. 实施追踪矩阵
+
+`17.7.0` 新增实施追踪：
+
+| 规则 | 状态 | 实现 | 验收证据 |
+|---|---|---|---|
+| CP-PROBE-001/002 | implemented（本地）；待 live 验收 | steering/fallback.go、client.go 与 biz/steering.go | TestClientFallbackPolicy、TestSteeringNativeFirstFallback、TestSteeringFallbackCancellation、TestSteeringFallbackSharedReceiveBudget、TestSteeringDeadlinePreventsFallback、TestClientQueueDrainAndIndependentUsage |
+| CP-PROBE-003 | implemented（本地）；待 live 验收 | typed events 单报告/fallback 诊断、管理 UI | TestSteeringFallbackSnapshotClone、TestSteeringFallbackReportProjectionAndCleanup、TestSteeringFallbackManagementJSON、web/admin/steering.test.cjs |
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 

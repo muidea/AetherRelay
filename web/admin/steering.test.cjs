@@ -17,7 +17,7 @@ function harness(request){
     renderCodexAccounts(){},renderUnifiedAccounts(){},
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0],c);
-  for(const name of ['codexSteeringView','codexSteeringControl','codexSteeringLabel','renderCodexSteeringReport','closeCodexSteering','pollCodexSteering','openCodexSteering','startCodexSteering'])vm.runInContext(functionSource(name),c);
+  for(const name of ['codexSteeringView','codexSteeringControl','codexSteeringLabel','codexSteeringCheckHTML','renderCodexSteeringReport','closeCodexSteering','pollCodexSteering','openCodexSteering','startCodexSteering'])vm.runInContext(functionSource(name),c);
   return {c,elements,calls,timers};
 }
 const report={probe_id:'probe-one',target_slot_id:'slot',model:'gpt-test',capability:'UNKNOWN',execution_outcome:'running',state:'running',done:false};
@@ -95,4 +95,40 @@ test('attempted write failures and old reports never claim successful upstream a
   c.renderCodexSteeringReport({...report,done:true,steer_sent:true,steering_state:'sent'});
   assert.match(elements.codexSteeringResult.innerHTML,/已尝试提交（旧报告）/);
   assert.doesNotMatch(elements.codexSteeringResult.innerHTML,/本地写入完成|未观测到接受/);
+});
+
+test('native inflight refusal shows profile-scoped unsupported without changing raw diagnostics',()=>{
+  const {c,elements,calls}=harness();
+  c.renderCodexSteeringReport({...report,done:true,state:'finished',capability:'UNSUPPORTED_FOR_PROFILE',execution_outcome:'unsupported_native_inflight_message',error_code:'unsupported_native_inflight_message',steering_state:'failed',steer_sent:true,steer_write_completed:true,upstream_error:{event_type:'error',type:'invalid_request_error',code:'unsupported_native_inflight_message',message:'Start a new independent response.create turn instead.',truncated:false}});
+  const html=elements.codexSteeringResult.innerHTML;
+  assert.match(html,/当前配置不支持/);
+  assert.match(html,/上游当前通道不支持运行中更新/);
+  assert.match(html,/本地写入完成/);
+  assert.doesNotMatch(html,/证据不足|已接受/);
+  const json=JSON.parse(elements.codexSteeringJSON.textContent);
+  assert.equal(json.capability,'UNSUPPORTED_FOR_PROFILE');
+  assert.equal(json.execution_outcome,'unsupported_native_inflight_message');
+  assert.equal(json.upstream_error.code,json.error_code);
+  assert.equal(calls.length,0);
+});
+
+
+
+test('fallback reports one final capability with escaped native diagnostics',()=>{
+ const {c,elements,calls}=harness();
+ const fallback={reason:'native_protocol_unsupported',error_code:'unsupported_native_inflight_message',upstream_error:{code:'<native-error>',message:'<script>'},timeline:[{type:'<response.steer>'}]};
+ c.renderCodexSteeringReport({...report,done:true,state:'finished',capability:'SUPPORTED',invocation_mode:'local_queue_drain_create',execution_outcome:'completed',input_queued:true,continuation_sent:true,continuation_write_completed:true,fallback});
+ const rendered=elements.codexSteeringResult.innerHTML;
+ assert.match(rendered,/客户端式更新与续接/);assert.match(rendered,/协议支持/);assert.match(rendered,/原生尝试诊断/);assert.match(rendered,/已切换调用方式/);assert.match(rendered,/&lt;native-error&gt;/);assert.match(rendered,/&lt;script&gt;/);
+ assert.doesNotMatch(rendered,/<script>|当前配置不支持|Steering 协议状态/);
+ const json=JSON.parse(elements.codexSteeringJSON.textContent);
+ assert.equal(json.capability,'SUPPORTED');assert.equal(json.native_steering,undefined);assert.equal(json.client_steering,undefined);assert.equal(json.fallback.capability,undefined);assert.equal(calls.length,0);
+});
+test('a switched probe keeps polling and prevents resubmission until its final result',async()=>{
+ const ongoing={...report,invocation_mode:'local_queue_drain_create',fallback:{reason:'native_protocol_inconclusive'},input_queued:true};
+ const {c,elements,timers,calls}=harness(()=>ongoing);c.codexSteeringView().slot='slot';
+ await c.pollCodexSteering(c.codexSteeringView().epoch,'probe-one');
+ assert.equal(elements.codexSteeringStart.disabled,true);assert.equal(elements.codexSteeringModel.disabled,true);assert.equal(elements.codexSteeringExport.disabled,true);assert.equal(timers.length,1);
+ await c.startCodexSteering();assert.equal(calls.length,1);
+ assert.match(elements.codexSteeringResult.innerHTML,/实际检测方式/);
 });
