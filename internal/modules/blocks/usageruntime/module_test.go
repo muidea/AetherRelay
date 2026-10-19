@@ -2,6 +2,7 @@ package usageruntime
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
-func TestClientAPIKeyHintThroughEventHub(t *testing.T) {
+func TestClientAPIKeyHintAndSettlementThroughEventHub(t *testing.T) {
 	t.Setenv("AETHERRELAY_CREDENTIAL_KEY", "")
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "hint.duckdb")
@@ -64,6 +65,27 @@ func TestClientAPIKeyHintThroughEventHub(t *testing.T) {
 	keys, err = store.ListClientAPIKeys(ctx)
 	if err != nil || keys[record.ID].Hint != "sk_K9****X2" || keys[record.ID].Hash != "sha256:new" {
 		t.Fatalf("rotation lost credential pair: %+v err=%v", keys[record.ID], err)
+	}
+	if err := store.Start(ctx, usage.StartRecord{EventID: "request", APIKeyID: "key", StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	complete := usage.CompleteRecord{EventID: "request", CompletedAt: at.Add(time.Second), HTTPStatus: 200, Outcome: "success", OutputTokens: 7}
+	if err := store.Complete(ctx, complete); err != nil {
+		t.Fatal(err)
+	}
+	complete.OutputTokens = 99
+	if err := store.Complete(ctx, complete); !errors.Is(err, usage.ErrEventNotStarted) {
+		t.Fatalf("EventHub lost settlement sentinel: %v", err)
+	}
+	page, err := store.Events(ctx, usage.EventFilter{UsageFilter: usage.UsageFilter{AllTime: true}})
+	if err != nil || len(page.Events) != 1 || page.Events[0].OutputTokens != 7 {
+		t.Fatalf("duplicate changed usage: %+v err=%v", page, err)
+	}
+	if err := store.Start(ctx, usage.StartRecord{EventID: "invalid", APIKeyID: "key", StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(ctx, usage.CompleteRecord{EventID: "invalid"}); err == nil || errors.Is(err, usage.ErrEventNotStarted) {
+		t.Fatalf("invalid settlement was hidden: %v", err)
 	}
 }
 

@@ -339,6 +339,8 @@ Codex HTTP/SSE/compact 失败日志新增 `transport_reason`，逐 attempt 的�
 
 日志应分别保留上游 HTTP 200、下游 HTTP 504 与 first_event_timeout；metadata.error_code 和用量一致。首事件超时与 idle_timeout 分开显示，新统计不回填历史分类。首事件前的响应头即归档；同一请求的重复观测不再重复写正文，相同响应不重复记录，终态失败仍更新。13.0.0 的配置模板“无需改动”仅指该次缓存/观测补全，13.1.0 已更新首事件预算模板。
 
+非流式总预算耗尽时，WARN 日志 `Codex completion budget exceeded` 保留请求开始时选定的 `request_budget_ms`、`request_budget_source`（client/server/context/unbounded）、原始 `client_timeout` 声明和 `elapsed_ms`，无需开启 DEBUG 或交互正文归档。例如客户端声明 80 秒，预留 4 秒用于错误返回，有效预算为 76,000 ms。请求执行期间的配置或 Header 变化不会改写已选定预算的诊断值。
+
 ### Nginx 超时与应用 499 的关联核查
 
 2026-10-09 x600 的 `claude-owner/035632–035635` 均为 `stream=false`，同一请求连续提交；上游在约 1.6–2.4 秒返回 200，并已读取约 1.1 万个事件。Nginx `/v1` 当时继承 `proxy_read_timeout 300s`，四次 access log 均为 504，error log 均为 `while reading response header from upstream`；关闭应用连接后，归档记录 499 `client_canceled`。客户端也声明 300 秒，不能仅凭应用上下文取消确定是哪一层先断开。
@@ -356,6 +358,10 @@ Nginx 的 API location 必须显式设置 `proxy_http_version 1.1`、`proxy_set_
 2026-10-16 x800 事件 `80ccf477b7033b8fd42aab626a329407` 对应北京时间 20:34:04 的 `GET /v1/responses`，Nginx 与 `codex-ubuntu/005159/response.meta.json` 均为 400，旧应用的提前返回却由用量兜底记为 500 / proxy_internal_error；当时尚未访问上游。现场 `/etc/nginx/conf.d/api.test.abc.conf` 的 `/v1` 缺少升级头，已备份至 `/etc/nginx/backups/api.test.abc.conf.before-ws-20261016T140215Z`，补齐 Upgrade/Connection 后 `nginx -t` 与平滑 reload 成功。经本机 Nginx、现有客户端鉴权进行仅握手测试，返回 `101 Switching Protocols`；随后关闭连接，未发送 response.create，未发起模型生成。
 
 配置刷新与应用修复分别验收。该次检查的运行 revision 为 `1b523a03d4a16c5d799f8152a6bdaf813e5f866e`，应用尚未部署本次结算修复。新版本部署后，握手拒绝须在 HTTP、用量与归档中一致记录真实状态及 invalid_request；底层不支持协议升级等真实服务端错误仍保留 500。升级后本地校验拒绝应为 101 加帧内错误，空连接关闭/超时须显式结算，不生成账号、模型或 token 事实，不污染上游健康；正常多轮关闭不得追加空失败。再以有效 response.create 核对真实响应终态、账号和用量，才能认定生成链路通过 live 验证。历史事件保持原值。
+
+WebSocket 正常上游更新中的空 `Failure` 不作为错误；每个 response.create 的用量结算只执行一次。升级后的 panic 在 WebSocket 处理器内恢复，日志 `Codex websocket panic recovered` 保留原始 panic 值、请求 ID 和调用栈；当前轮结算为 `proxy_internal_error` 并补齐终态 metadata，连接发送 1011 关闭帧。握手已经完成时，用量中的 HTTP 状态保持真实的 101，失败由 outcome/error_code 表达。EventHub 的 `CompleteResult.EventNotStarted` 会由 Usage 适配层还原为 `ErrEventNotStarted`，重复结算不覆盖原用量、不计数据库写入错误；实际存储错误仍上报。
+
+ChatGPT Web 与 Codex 模型发现失败日志同时保留原始错误、`stage`、`upstream_status` 和 `transport_reason`；刷新凭据失败时 stage 为 `refresh_token`，不沿用此前模型枚举的 HTTP 状态。状态为 0 表示该阶段未观测到 HTTP 响应。传输原因按结构化错误链识别，原始错误补足具体端点及上下文；这些诊断字段不参与账号冷却或重试决策。
 
 ### Messages 会话压缩与非流式总预算
 

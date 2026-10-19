@@ -34,7 +34,11 @@ func TestTransportReasonArchiveUpdatesSameAttempt(t *testing.T) {
 				attempt.Response.Status = 0
 				attempt.Response.Headers = nil
 			}
-			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, nil)
+			var empty *codexresponses.Failure
+			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, empty)
+			if len(round.UpstreamAttemptFailed) != 0 {
+				t.Fatal("typed nil marked a normal attempt failed")
+			}
 			failure := codexresponses.NewFailure(codexresponses.KindNetwork, 0, nil)
 			attempt.Response.TransportReason = reason
 			failure.Attempt = attempt
@@ -42,7 +46,7 @@ func TestTransportReasonArchiveUpdatesSameAttempt(t *testing.T) {
 			// Duplicate settlement and a late handshake must retain the cause.
 			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, failure)
 			attempt.Response.TransportReason = ""
-			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, nil)
+			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, empty)
 			if len(round.UpstreamAttempts) != 1 {
 				t.Fatal("terminal update created another attempt")
 			}

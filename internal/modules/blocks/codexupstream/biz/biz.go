@@ -614,7 +614,12 @@ func (s *Upstream) handleListModels(ev event.Event, result event.Result) {
 	}
 	models, class, err := listModels(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.ClientIdentity)
 	if err != nil {
-		result.Set(events.ListModelsResult{ErrorClass: class}, cd.NewError(cd.Unexpected, "Codex model discovery failed: "+string(class)))
+		diagnostic := events.ListModelsResult{ErrorClass: class}
+		var failure *modelListError
+		if errors.As(err, &failure) {
+			diagnostic.HTTPStatus, diagnostic.TransportReason = failure.status, failure.reason.Safe()
+		}
+		result.Set(diagnostic, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
 	result.Set(events.ListModelsResult{Models: models}, nil)
@@ -839,7 +844,13 @@ func codexArchiveSensitiveHeader(key string) bool {
 	}
 }
 
-func listModels(ctx context.Context, accessToken, accountID, proxy string, identities ...events.ClientIdentity) ([]events.ModelDescriptor, events.ErrorClass, error) {
+func listModels(ctx context.Context, accessToken, accountID, proxy string, identities ...events.ClientIdentity) (models []events.ModelDescriptor, class events.ErrorClass, err error) {
+	status := 0
+	defer func() {
+		if err != nil {
+			err = &modelListError{status: status, reason: completedTransportReason(class, err), cause: err}
+		}
+	}()
 	identity := firstClientIdentity(identities)
 	client, err := newHTTPClient(proxy)
 	if err != nil {
@@ -873,6 +884,7 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string, ident
 		return nil, classifyTransport(err), err
 	}
 	defer response.Body.Close()
+	status = response.StatusCode
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, classifyStatus(response.StatusCode), fmt.Errorf("Codex models request returned %d", response.StatusCode)
 	}
@@ -883,7 +895,7 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string, ident
 	if len(body) > 8<<20 {
 		return nil, events.ErrorProtocol, fmt.Errorf("Codex models response exceeds limit")
 	}
-	models, err := parseModels(body)
+	models, err = parseModels(body)
 	if err != nil {
 		return nil, events.ErrorProtocol, err
 	}

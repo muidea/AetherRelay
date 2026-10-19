@@ -265,6 +265,10 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 // emitted by the codexupstream Block. The Block owns the transport and performs
 // first-pass redaction; the adapter sanitizes again before writing or logging.
 func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Request, providerName string, attempt codexresponses.HTTPAttempt, attemptErr error) {
+	// An optional *Failure can arrive through error as a non-nil interface.
+	if failure, typed := attemptErr.(*codexresponses.Failure); typed && failure == nil {
+		attemptErr = nil
+	}
 	if len(attempt.Prior) > 0 {
 		prior := attempt.Prior[0]
 		prior.Prior = nil

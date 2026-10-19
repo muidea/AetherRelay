@@ -18,6 +18,7 @@ import (
 	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	codexupcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	codexupevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	"github.com/google/uuid"
 	"github.com/muidea/magicCommon/event"
 )
@@ -159,22 +160,32 @@ func (s *Proxy) runDiscoveryRound(ctx context.Context, dueOnly bool) {
 }
 
 func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.DiscoveryCandidate) {
+	var refreshDiscoveryCause error
+	stage := "list_models"
 	listed, failureClass, err := s.listChatGPTModels(ctx, candidate.AccessToken, candidate.Proxy)
 	if err != nil && failureClass == upevents.ErrClassInvalidToken {
 		refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, candidate.AccessToken)
+		refreshDiscoveryCause = refreshErr
 		switch {
 		case refreshErr == nil && !permanent && refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "":
 			listed, failureClass, err = s.listChatGPTModels(ctx, refreshed.AccessToken, refreshed.Account.Proxy)
 		case permanent:
+			stage = "refresh_token"
+			listed = upevents.ListModelsResult{}
 			failureClass = upevents.ErrClassInvalidToken
 			err = fmt.Errorf("chatgpt model discovery credential refresh failed")
 		default:
+			stage = "refresh_token"
+			listed = upevents.ListModelsResult{}
 			failureClass = chatGPTDiscoveryRefreshFailureClass(refreshed.ErrorClass)
 			err = fmt.Errorf("chatgpt model discovery credential refresh unavailable")
 		}
 	}
+	if stage == "refresh_token" && err != nil && refreshDiscoveryCause != nil {
+		err = fmt.Errorf("%s: %w", err, refreshDiscoveryCause)
+	}
 	if err != nil {
-		s.recordDiscoveryFailure(ctx, candidate, "list_models", failureClass)
+		s.recordDiscoveryFailure(ctx, candidate, stage, failureClass, listed.HTTPStatus, listed.TransportReason, err)
 		return
 	}
 	now := time.Now().UTC()
@@ -203,7 +214,7 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 		Snapshot:  snap,
 	})).Get()
 	if putErr != nil {
-		s.recordDiscoveryFailure(ctx, candidate, "put_snapshot", upevents.ErrClassUpstream)
+		s.recordDiscoveryFailure(ctx, candidate, "put_snapshot", upevents.ErrClassUpstream, 0, "", putErr)
 	}
 }
 
@@ -370,9 +381,12 @@ func (s *Proxy) runCodexDiscoveryRoundLocked(ctx context.Context, dueOnly bool, 
 }
 
 func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexevents.DiscoveryCandidate) error {
+	var refreshDiscoveryCause error
+	stage := "list_models"
 	listed, failureClass, err := s.listCodexModels(ctx, &candidate)
 	if err != nil && failureClass == codexupevents.ErrorInvalidToken {
 		refreshed, refreshErr := s.refreshCodexAccount(ctx, candidate.AccountID)
+		refreshDiscoveryCause = refreshErr
 		switch {
 		case refreshErr == nil && refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "":
 			candidate.AccessToken = refreshed.AccessToken
@@ -380,15 +394,22 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 			candidate.Proxy = refreshed.Proxy
 			listed, failureClass, err = s.listCodexModels(ctx, &candidate)
 		case refreshed.PermanentFailure:
+			stage = "refresh_token"
+			listed = codexupevents.ListModelsResult{}
 			failureClass = codexupevents.ErrorInvalidToken
 			err = fmt.Errorf("Codex model discovery credential refresh failed")
 		default:
+			stage = "refresh_token"
+			listed = codexupevents.ListModelsResult{}
 			failureClass = codexDiscoveryRefreshFailureClass(refreshed.ErrorClass)
 			err = fmt.Errorf("Codex model discovery credential refresh unavailable")
 		}
 	}
+	if stage == "refresh_token" && err != nil && refreshDiscoveryCause != nil {
+		err = fmt.Errorf("%s: %w", err, refreshDiscoveryCause)
+	}
 	if err != nil {
-		s.recordCodexDiscoveryFailure(ctx, candidate, "list_models", failureClass)
+		s.recordCodexDiscoveryFailure(ctx, candidate, stage, failureClass, listed.HTTPStatus, listed.TransportReason, err)
 		return fmt.Errorf("Codex model discovery failed: %s", failureClass)
 	}
 	now := time.Now().UTC()
@@ -406,7 +427,7 @@ func (s *Proxy) discoverOneCodexAccount(ctx context.Context, candidate codexeven
 	}
 	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutModelSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutModelSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot})).Get()
 	if putErr != nil {
-		s.recordCodexDiscoveryFailure(ctx, candidate, "put_snapshot", codexupevents.ErrorUpstream)
+		s.recordCodexDiscoveryFailure(ctx, candidate, "put_snapshot", codexupevents.ErrorUpstream, 0, "", putErr)
 		return fmt.Errorf("Codex model discovery failed: %s", codexupevents.ErrorUpstream)
 	}
 	return nil
@@ -580,11 +601,9 @@ func boundedDiscoveryError(value string) string {
 	return value
 }
 
-func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, errorClass upevents.ErrorClass) {
+func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.DiscoveryCandidate, stage string, errorClass upevents.ErrorClass, status int, reason transport.Reason, cause error) {
 	errorClass = normalizeChatGPTDiscoveryErrorClass(errorClass)
-	// Account IDs are opaque local identifiers. Keep discovery telemetry to a
-	// stable class instead of logging upstream diagnostics or response bodies.
-	slog.Warn("chatgpt model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error_class", errorClass)
+	slog.Warn("chatgpt model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error_class", errorClass, "upstream_status", status, "transport_reason", reason.Safe(), "error", cause)
 	_, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRecordModelDiscoveryFailure, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RecordModelDiscoveryFailureCommand{
 		AccountID:  candidate.AccountID,
 		ErrorClass: string(errorClass),
@@ -594,9 +613,9 @@ func (s *Proxy) recordDiscoveryFailure(ctx context.Context, candidate accevents.
 	}
 }
 
-func (s *Proxy) recordCodexDiscoveryFailure(ctx context.Context, candidate codexevents.DiscoveryCandidate, stage string, errorClass codexupevents.ErrorClass) {
+func (s *Proxy) recordCodexDiscoveryFailure(ctx context.Context, candidate codexevents.DiscoveryCandidate, stage string, errorClass codexupevents.ErrorClass, status int, reason transport.Reason, cause error) {
 	errorClass = normalizeCodexDiscoveryErrorClass(errorClass)
-	slog.Warn("Codex model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error_class", errorClass)
+	slog.Warn("Codex model discovery failed", "stage", stage, "account_id", candidate.AccountID, "error_class", errorClass, "upstream_status", status, "transport_reason", reason.Safe(), "error", cause)
 	_, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRecordModelDiscoveryFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordModelDiscoveryFailureCommand{AccountID: candidate.AccountID, ErrorClass: string(errorClass)})).Get()
 	if err != nil {
 		slog.Warn("Codex model discovery failure was not recorded", "account_id", candidate.AccountID, "error", err.Error())

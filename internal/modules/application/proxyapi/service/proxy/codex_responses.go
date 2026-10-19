@@ -453,6 +453,7 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	}
 	message := "Codex OAuth response failed: " + failure.ErrorCode
 	if failure.Kind == streamKindRequestTimeout {
+		h.logCodexCompletionTimeout(r, started)
 		message = "Codex response did not complete within the effective client/gateway request budget"
 	}
 	if codexFailure != nil && codexFailure.HTTPStatus > 0 {

@@ -372,7 +372,9 @@ type ModelDescriptor struct {
 }
 
 type ListModelsResult struct {
-	Models []ModelDescriptor
+	HTTPStatus      int
+	TransportReason transport.Reason
+	Models          []ModelDescriptor
 	// ErrorClass is present alongside an EventHub error so account discovery can
 	// distinguish an invalid credential from a transient transport failure.
 	ErrorClass ErrorClass

@@ -3,12 +3,14 @@ package biz
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	basebiz "aetherrelay/internal/modules/base/biz"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	usagecommon "aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
 	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
+	usage "aetherrelay/internal/pkg/aetherrelayusage"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -134,10 +136,14 @@ func (s *UsageRuntime) handleComplete(ev event.Event, result event.Result) {
 		return
 	}
 	if err := s.runtime.Store().Complete(ev.Context(), command.Record); err != nil {
+		if errors.Is(err, usage.ErrEventNotStarted) {
+			result.Set(usageevents.CompleteResult{EventNotStarted: true}, nil)
+			return
+		}
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
-	result.Set(struct{}{}, nil)
+	result.Set(usageevents.CompleteResult{}, nil)
 }
 
 func (s *UsageRuntime) handleDashboard(ev event.Event, result event.Result) {

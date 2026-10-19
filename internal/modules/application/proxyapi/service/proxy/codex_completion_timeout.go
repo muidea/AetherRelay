@@ -13,8 +13,10 @@ import (
 )
 
 type codexCompletionBudget struct {
-	deadline time.Time
-	source   string
+	deadline      time.Time
+	started       time.Time
+	clientTimeout string
+	source        string
 }
 
 // A buffered response writes no headers until the terminal upstream event.
@@ -25,7 +27,10 @@ func (h *Handler) codexCompletionDeadline(r *http.Request, started time.Time) ti
 }
 
 func (h *Handler) codexCompletionBudget(r *http.Request, started time.Time) codexCompletionBudget {
-	budget := codexCompletionBudget{source: "unbounded"}
+	budget := codexCompletionBudget{source: "unbounded", started: started}
+	if r != nil {
+		budget.clientTimeout = r.Header.Get("X-Stainless-Timeout")
+	}
 	limit := func(deadline time.Time, source string) {
 		if budget.deadline.IsZero() || deadline.Before(budget.deadline) {
 			budget.deadline, budget.source = deadline, source
@@ -58,6 +63,11 @@ func (h *Handler) codexCompletionBudget(r *http.Request, started time.Time) code
 func (h *Handler) prepareCodexCompletion(r *http.Request, started time.Time, request *codexresponses.Request) {
 	budget := h.codexCompletionBudget(r, started)
 	request.Deadline = budget.deadline
+	if completion := usageCompletionFromContext(r.Context()); completion != nil {
+		completion.budgetMu.Lock()
+		completion.completionBudget = budget
+		completion.budgetMu.Unlock()
+	}
 	if !slog.Default().Enabled(r.Context(), slog.LevelDebug) {
 		return
 	}
@@ -81,7 +91,16 @@ func (h *Handler) prepareCodexCompletion(r *http.Request, started time.Time, req
 	if len(effort) > 128 {
 		effort = "<oversized>"
 	}
-	clientTimeout := strings.TrimSpace(r.Header.Get("X-Stainless-Timeout"))
+	clientTimeout := safeCodexClientTimeout(budget.clientTimeout)
+	slog.DebugContext(r.Context(), "Codex completion budget", "request_id", request.Diagnostics.RequestID,
+		"request_budget_ms", budgetMS, "request_budget_source", budget.source,
+		"request_bytes", len(request.Body), "input_items", len(input), "tool_count", len(shape.Tools),
+		"reasoning_effort", effort,
+		"client_timeout", clientTimeout)
+}
+
+func safeCodexClientTimeout(value string) string {
+	clientTimeout := strings.TrimSpace(value)
 	if clientTimeout != "" {
 		seconds, err := strconv.ParseFloat(clientTimeout, 64)
 		if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64((24*time.Hour)/time.Second) {
@@ -90,9 +109,29 @@ func (h *Handler) prepareCodexCompletion(r *http.Request, started time.Time, req
 			clientTimeout = strconv.FormatFloat(seconds, 'g', -1, 64)
 		}
 	}
-	slog.DebugContext(r.Context(), "Codex completion budget", "request_id", request.Diagnostics.RequestID,
+	return clientTimeout
+}
+
+// Preserve the admitted budget when config or headers change during a request.
+func (h *Handler) logCodexCompletionTimeout(r *http.Request, started time.Time) {
+	var budget codexCompletionBudget
+	if completion := usageCompletionFromContext(r.Context()); completion != nil {
+		completion.budgetMu.Lock()
+		budget = completion.completionBudget
+		completion.budgetMu.Unlock()
+	}
+	if budget.started.IsZero() {
+		budget = h.codexCompletionBudget(r, started)
+	}
+	budgetMS := int64(0)
+	if !budget.deadline.IsZero() {
+		budgetMS = max(0, budget.deadline.Sub(budget.started).Milliseconds())
+	}
+	requestID := ""
+	if round := archiveRoundFromContext(r.Context()); round != nil {
+		requestID = round.RequestID
+	}
+	slog.WarnContext(r.Context(), "Codex completion budget exceeded", "request_id", requestID,
 		"request_budget_ms", budgetMS, "request_budget_source", budget.source,
-		"request_bytes", len(request.Body), "input_items", len(input), "tool_count", len(shape.Tools),
-		"reasoning_effort", effort,
-		"client_timeout", clientTimeout)
+		"client_timeout", budget.clientTimeout, "elapsed_ms", time.Since(budget.started).Milliseconds())
 }

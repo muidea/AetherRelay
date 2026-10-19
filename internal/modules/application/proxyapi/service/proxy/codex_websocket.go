@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -116,8 +118,19 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 	turnNumber := 0
 	baseRequest, baseRound, sessionContext := r, round, ctx
 	messageNumber := 0
+	turnStarted := started
 	var finishTurn func()
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			// After the upgrade, only WebSocket frames may be written.
+			slog.Error("Codex websocket panic recovered", "request_id", requestID, "error", recovered, "stack", string(debug.Stack()))
+			completion := usageCompletionFromContext(r.Context())
+			if completion == nil || !completion.done.Load() {
+				failure := newStreamFailWithCode(streamKindError, ErrorCodeProxyInternalError, "Codex websocket internal error", nil, false)
+				h.recordCodexWebsocketLocalResult(r, model, turnStarted, http.StatusSwitchingProtocols, failure)
+			}
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "internal error"), time.Now().Add(time.Second))
+		}
 		if finishTurn != nil {
 			finishTurn()
 		}
@@ -153,7 +166,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			}
 			return
 		}
-		turnStarted := time.Now()
+		turnStarted = time.Now()
 		messageNumber++
 		if messageNumber > 1 {
 			var err error
@@ -527,7 +540,11 @@ func (h *Handler) forwardCodexWebsocketTurn(r *http.Request, conn *websocket.Con
 			return result, err
 		}
 		if update.Attempt.Request.URL != "" {
-			h.archiveCodexUpstreamAttempt(archiveRoundFromContext(ctx), r, effectivecatalog.CodexOAuthProviderID, update.Attempt, update.Failure)
+			var attemptErr error
+			if update.Failure != nil {
+				attemptErr = update.Failure
+			}
+			h.archiveCodexUpstreamAttempt(archiveRoundFromContext(ctx), r, effectivecatalog.CodexOAuthProviderID, update.Attempt, attemptErr)
 		}
 		payload := update.Payload
 		if len(payload) > 0 {

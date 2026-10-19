@@ -41,7 +41,22 @@ func (c client) Start(ctx context.Context, value usage.StartRecord) error {
 }
 
 func (c client) Complete(ctx context.Context, value usage.CompleteRecord) error {
-	return c.sendEmpty(event.NewEventWithContext(TopicComplete, c.source, common.UnitID, event.NewHeader(), ctx, CompleteCommand{Record: value}), "usage complete")
+	result, err := send(c.hub, event.NewEventWithContext(TopicComplete, c.source, common.UnitID, event.NewHeader(), ctx, CompleteCommand{Record: value}), "usage complete")
+	if err != nil {
+		return err
+	}
+	data, getErr := result.Get()
+	if getErr != nil {
+		return fmt.Errorf("usage complete command failed: %s", getErr.Message)
+	}
+	completed, ok := data.(CompleteResult)
+	if !ok {
+		return fmt.Errorf("invalid usage complete response")
+	}
+	if completed.EventNotStarted {
+		return usage.ErrEventNotStarted
+	}
+	return nil
 }
 
 func (c client) Dashboard(ctx context.Context, value usage.UsageFilter) (usage.Dashboard, error) {

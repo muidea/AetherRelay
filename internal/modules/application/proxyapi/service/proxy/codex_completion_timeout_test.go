@@ -12,6 +12,37 @@ import (
 	"time"
 )
 
+func TestCodexTimeoutLogsAdmittedBudgetAndOriginalClientHint(t *testing.T) {
+	h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{})
+	h.cfg.RequestTimeout = 300 * time.Second
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	for _, hint := range []string{"80", "original-invalid-timeout"} {
+		logs.Reset()
+		r := httptest.NewRequest("POST", "/v1/messages", nil)
+		r = r.WithContext(withUsageCompletion(r.Context(), &usageCompletion{}))
+		r.Header.Set("X-Stainless-Timeout", hint)
+		started := time.Now()
+		request := codexresponses.Request{}
+		h.prepareCodexCompletion(r, started, &request)
+		r.Header.Set("X-Stainless-Timeout", "changed-after-admission")
+		h.logCodexCompletionTimeout(r, started.Add(time.Hour))
+		var fields map[string]any
+		if err := json.Unmarshal(logs.Bytes(), &fields); err != nil {
+			t.Fatal(err)
+		}
+		wantMS, source := float64(76000), "client"
+		if hint != "80" {
+			wantMS, source = 300000, "server"
+		}
+		if fields["level"] != "WARN" || fields["request_budget_ms"] != wantMS || fields["request_budget_source"] != source || fields["client_timeout"] != hint {
+			t.Fatalf("incorrect admitted budget: %s", logs.Bytes())
+		}
+	}
+}
+
 func TestCodexCompletionDeadlineReservesDeliveryAndNeverExtendsBudget(t *testing.T) {
 	h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{})
 	h.cfg.RequestTimeout = 300 * time.Second

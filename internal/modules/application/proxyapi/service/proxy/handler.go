@@ -134,6 +134,8 @@ type usageCompletionKey struct{}
 type internalFeatureIdentityKey struct{}
 
 type usageCompletion struct {
+	budgetMu                sync.Mutex
+	completionBudget        codexCompletionBudget
 	generation              generation.Clock
 	generationMu            sync.Mutex
 	generationObserved      generation.Sample
@@ -743,11 +745,11 @@ func (h *Handler) startUsage(r *http.Request, eventID string, round *archive.Rou
 // completePendingUsage 仅在处理器漏掉结算（如未来新增的早退路径）时执行。
 // 已完成 event 的条件更新会返回 ErrEventNotStarted，因此不会产生重复入账。
 func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
-	if completion := usageCompletionFromContext(r.Context()); completion != nil && completion.done.Load() {
-		return
-	}
 	eventID := usageEventIDFromContext(r.Context())
 	if eventID == "" || h.usageStore == nil {
+		return
+	}
+	if completion := usageCompletionFromContext(r.Context()); completion != nil && !completion.done.CompareAndSwap(false, true) {
 		return
 	}
 	startedAt := time.Now()
@@ -908,6 +910,9 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.usageStore.Complete(ctx, rec); err != nil {
+		if errors.Is(err, usage.ErrEventNotStarted) {
+			return false
+		}
 		if h.metricsRegistry != nil {
 			h.metricsRegistry.RecordUsageStoreWriteError("complete")
 		}

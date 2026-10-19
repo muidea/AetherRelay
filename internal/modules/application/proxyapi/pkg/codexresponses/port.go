@@ -290,7 +290,13 @@ func NewFailure(kind ErrorKind, retryAfter int, err error) *Failure {
 func NewQuotaFailure(kind ErrorKind, retryAfter int, exhausted bool, resetAt string, err error) *Failure {
 	return &Failure{Kind: kind, RetryAfterSeconds: retryAfter, QuotaExhausted: exhausted, QuotaResetAt: resetAt, Err: err}
 }
-func AsFailure(err error) (*Failure, bool) { var value *Failure; return value, errors.As(err, &value) }
+
+// AsFailure never reports a typed nil as an actionable failure.
+func AsFailure(err error) (*Failure, bool) {
+	var value *Failure
+	ok := errors.As(err, &value)
+	return value, ok && value != nil
+}
 
 type Executor interface {
 	CompleteCodexResponses(context.Context, Request) (Result, error)

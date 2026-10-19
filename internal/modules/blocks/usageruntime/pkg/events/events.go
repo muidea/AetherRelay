@@ -38,6 +38,9 @@ type AcquireCommand struct{}
 type AcquireResult struct{}
 type StartCommand struct{ Record usage.StartRecord }
 type CompleteCommand struct{ Record usage.CompleteRecord }
+
+// CompleteResult preserves the conditional-settlement result across EventHub.
+type CompleteResult struct{ EventNotStarted bool }
 type DashboardCommand struct{ Filter usage.UsageFilter }
 type DashboardResult struct{ Value usage.Dashboard }
 type CountCommand struct{ Filter usage.UsageFilter }

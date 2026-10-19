@@ -3,6 +3,7 @@ package events
 
 import (
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	"aetherrelay/internal/pkg/chatattachment"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
@@ -44,7 +45,9 @@ type ListModelsCommand struct {
 }
 
 type ListModelsResult struct {
-	Models []ModelDescriptor
+	HTTPStatus      int
+	TransportReason transport.Reason
+	Models          []ModelDescriptor
 	// ErrorClass is populated when the EventHub result also carries an error.
 	// It lets discovery make account-health decisions without parsing upstream
 	// text or response bodies.
