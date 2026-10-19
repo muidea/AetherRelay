@@ -204,6 +204,8 @@ type ClientIdentityProfile struct {
 // AcquireResult contains only request-time credentials. It is restricted to
 // the EventHub path and must not be returned from any HTTP adapter.
 type AcquireCommand struct {
+	Request        LeaseRequest
+	LeaseKind      string
 	Model          string
 	Transport      string
 	Exclude        []string

@@ -114,11 +114,17 @@ func (r *Registry) StatsJSON() ([]byte, error) {
 	if r == nil {
 		return []byte("null"), nil
 	}
+	return json.Marshal(r.Snapshot())
+}
+
+// Snapshot returns an independent read model for metrics adapters.
+func (r *Registry) Snapshot() StatsJSON {
+	if r == nil {
+		return StatsJSON{}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	snapshot := buildStatsLocked(r)
-	return json.Marshal(snapshot)
+	return buildStatsLocked(r)
 }
 
 func buildStatsLocked(r *Registry) StatsJSON {

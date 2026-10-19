@@ -270,7 +270,7 @@ func (s *Proxy) runSteeringTask(t *codexSteeringTask) {
 		t.monitoring = true
 		j.mu.Unlock()
 	}()
-	admission, err := s.probeAdmission(ctx, accevents.ProbeAdmissionCommand{AccountID: out.TargetSlotID, Model: out.Model, Acquire: true})
+	admission, err := s.probeAdmission(ctx, accevents.ProbeAdmissionCommand{AccountID: out.TargetSlotID, Model: out.Model, Acquire: true, Request: accevents.LeaseRequest{RequestID: out.ProbeID, Protocol: "steering_probe"}})
 	out.AccountLabel = admission.AccountLabel
 	out.ConfigVersion = admission.ConfigVersion
 	if err != nil || !admission.Allowed {
@@ -471,9 +471,9 @@ func (s *Proxy) finishSteeringTask(t *codexSteeringTask, out proxyevents.Steerin
 	}
 	if t.leaseID != "" {
 		cleanup, cancel := context.WithTimeout(cleanupCtx, 5*time.Second)
-		v, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRelease, s.ID(), acccommon.UnitID, event.NewHeader(), cleanup, accevents.ReleaseCommand{LeaseID: t.leaseID})).Get()
+		err := s.releaseCodexAccountChecked(cleanup, t.leaseID)
 		cancel()
-		if _, ok := v.(accevents.ReleaseResult); err != nil || !ok {
+		if err != nil {
 			retry()
 			return
 		}

@@ -38,7 +38,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 	tried := make([]string, 0, 2)
 	var lastFailure *codexresponses.Failure
 	for {
-		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportResponses, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator))
+		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportResponses, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator), accevents.LeaseWebsocket)
 		if err != nil {
 			if terminalAdmissionFailure(err) {
 				return codexresponses.WebsocketOpenResult{}, err
@@ -143,6 +143,7 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		usagetarget.Record(ctx, "codexoauth", binding.accountID, binding.accountLabel)
 		usagetarget.BeginCodexAttempt(ctx, payload)
 	}
+	s.observeCodexLeaseState(ctx, binding.leaseID, accevents.LeaseActive)
 	value, err := s.SendEvent(upevents.BindCommandLane(event.NewEventWithContext(upevents.TopicWSSend, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.WSSendCommand{SessionID: sessionID, Payload: payload, Fingerprint: codexFingerprintForTurn(binding.fingerprint)}))).Get()
 	if err != nil {
 		return codexCommandFailure(ctx, err)
@@ -245,6 +246,7 @@ func (s *Proxy) recordCodexWebsocketTurnResult(ctx context.Context, sessionID st
 	}
 	s.mu.Unlock()
 	if shouldRecord {
+		s.observeCodexLeaseState(ctx, binding.leaseID, accevents.LeaseIdle)
 		logCodexModelSubstitution(ctx, "", 0)
 		s.recordCodexResult(ctx, binding.accountID, binding.model, success, class, retryAfter, quotaExhausted, quotaResetAt)
 	}
@@ -858,8 +860,8 @@ func (s *Proxy) acquireCodexAccountWithIdentity(ctx context.Context, model strin
 	return s.acquireCodexAccountForTransportWithIdentity(ctx, model, exclude, sessionHash, accevents.TransportResponses, identity)
 }
 
-func (s *Proxy) acquireCodexAccountForTransportWithIdentity(ctx context.Context, model string, exclude []string, sessionHash, transport string, identity accevents.ClientIdentityCandidate) (accevents.AcquireResult, error) {
-	command := accevents.AcquireCommand{Model: model, Exclude: exclude, SessionHash: sessionHash, Transport: transport, ClientIdentity: identity}
+func (s *Proxy) acquireCodexAccountForTransportWithIdentity(ctx context.Context, model string, exclude []string, sessionHash, transport string, identity accevents.ClientIdentityCandidate, leaseKind ...string) (accevents.AcquireResult, error) {
+	command := accevents.AcquireCommand{Request: codexLeaseRequest(ctx), LeaseKind: firstString(leaseKind), Model: model, Exclude: exclude, SessionHash: sessionHash, Transport: transport, ClientIdentity: identity}
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquire, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, command)).Get()
 	account, ok := value.(accevents.AcquireResult)
 	if ctx.Err() != nil {
@@ -928,13 +930,6 @@ func (s *Proxy) recordCodexTransportCapability(ctx context.Context, id, transpor
 	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordTransportCapability, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordTransportCapabilityCommand{
 		AccountID: id, Transport: transport, Supported: supported,
 	})).Get()
-}
-
-func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
-	if strings.TrimSpace(leaseID) == "" {
-		return
-	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRelease, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.ReleaseCommand{LeaseID: leaseID})).Get()
 }
 
 func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (out codexresponses.Result, failure *codexresponses.Failure) {

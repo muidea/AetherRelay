@@ -23,6 +23,7 @@ func BindProbeRefreshLane(ev event.Event) event.Event {
 // returning credentials. The owner must verify it belongs to AccountID before
 // excluding that one reservation from the concurrency check.
 type ProbeAdmissionCommand struct {
+	Request   LeaseRequest
 	AccountID string
 	Model     string
 	Acquire   bool

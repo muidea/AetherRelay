@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+
+	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 )
 
 // RequestIDHeader 是 HTTP 头中透传 / 注入 request id 的字段名。
@@ -71,7 +73,9 @@ func withUsageEventID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, usageEventKey{}, id)
+	identity := codexresponses.ExecutionIdentityFromContext(ctx)
+	identity.EventID = id
+	return context.WithValue(codexresponses.WithExecutionIdentity(ctx, identity), usageEventKey{}, id)
 }
 
 func usageEventIDFromContext(ctx context.Context) string {

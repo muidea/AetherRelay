@@ -101,7 +101,7 @@ Codex 模型不可用排查（`CP-FAIL-018` / `CP-CAP-010`）：
 - Codex 已有会话优先复用可用且未满载的绑定账号，绑定闲置一小时失效。新会话在同 transport 能力层级内先选空闲账号，否则选并发槽位占用比例较低的账号；负载相同时选未过期绑定会话较少的账号，再按新鲜额度余量证据与轮转打平（`CP-SCHED-011..012`）。因此先后启动的会话也会尽量分散，绑定数不占用并发槽位；全部账号满载仍返回 `accounts_busy`。额度未知或快照过期的账号仍可参与尝试（`CP-CAP-005`），有效耗尽窗口仍被排除。
 
 - 统一账号池的 Codex 槽位和独立 Codex 账号页均可展开完整模型列表。管理 API 新增 `available_models` 与 `model_availability`（model/available/reason/until）。可用性按账号自身模型快照、账号状态、额度及冷却判断；不等于公共 API 模型能力、不保证即时并发或上游权限。缺失/过期快照显示待同步或过期，不宣称可用；刷新列表更新状态，“同步模型”更新发现快照。
-- 两处 Codex 账号管理视图也都可修改账号级“最大并发”（默认 `2`，范围 `1–32`）。指纹模式与最大并发的编辑先进入同账号页面草稿，点击“保存设置”才合并提交一次；“取消修改”不请求服务端。它限制该账号跨所有下游客户端合计持有的上游 turn 租约；不是每客户端配额。达到上限时调度器先尝试其它合格账号，全部占满才返回 `accounts_busy`。运行中降低上限不会中断在途请求，排障时不要把 `accounts_busy` 误判为 `accounts_cooling`。
+- 两处 Codex 账号管理视图也都可修改账号级“最大并发”（默认 `2`，范围 `1–32`）。指纹模式与最大并发的编辑先进入同账号页面草稿，点击“保存设置”才合并提交一次；“取消修改”不请求服务端。它限制该账号跨所有下游客户端合计持有的执行租约；原生 WebSocket 在轮次之间也持有租约，连接关闭后释放。达到上限时调度器先尝试其它合格账号，全部占满才返回 `accounts_busy`。运行中降低上限不会中断在途请求，排障时不要把 `accounts_busy` 误判为 `accounts_cooling`。
 - 上游 HTTP 404 且结构化 `error.code=model_not_found`，或 SSE/WS 的同码失败终态，记录 5 分钟的账号 × exact model 冷却。其它模型和账号状态不受影响；过期自动恢复准入，普通目录刷新不会提前清除此观察，显式重新导入替换凭据会清除旧模型不可用观察。
 - HTTP Responses/compact 在尚未输出、无 `previous_response_id`、无非空 turn-state 时，最多尝试 3 个不同账号且始终使用原模型；候选耗尽保留本次最后真实上游错误。普通 404/参数错误不适用；WS 不因该错误迁移会话。这里的"无非空 turn-state"只按客户端请求的原值判断，代理回填的值不参与该判定。冷却期间新的请求若已无可调度账号，可能直接收到 `provider_unavailable`，可在逐账号列表核对具体原因。
 - `Codex attempt failed` 日志包含服务端 `request_id`、`inbound_model`、`upstream_model`、`account_attempt`、白名单 `request_kind` / `compaction_reason` / `compaction_phase`、`prompt_cache_key_source`、`turn_state_source`、`client_identity_reason` 和错误码；成功逐次日志为 DEBUG。`client_identity_reason` 只记录验证结果枚举，不记录完整 UA/Originator。`turn_state_source` 为 `client` / `session` / `default` / `stripped` / `forced` / `absent` 有界枚举，只表明 `X-Codex-Turn-State` 的来源，不记录该 header 的值；`session` 与 `default` 表示本次由代理回填，`forced` 表示强制默认开关（`turn_state_force_default`）直接用默认值覆盖了客户端与会话记录，`stripped` 表示存在一个值（客户端提供或记录回放的）但被跨账号守卫剥离，`absent` 表示本次确实没有可用值。`account_attempt` 是本次请求内的账号尝试序号，同账号认证刷新不增加序号。日志不记录完整 turn metadata、上下文或凭据，也不猜测 UI 目标模型。
@@ -308,6 +308,18 @@ make release VERSION=v1.2.3
 不要从 amd64 强制交叉编译 Linux arm64：DuckDB Go bindings 需要相应的原生目标 runner。手动重跑 Release workflow 时，输入的版本必须是已有 tag。
 
 ### Codex 长流超时与账号冷却排查
+
+#### 账号并发槽位与释放诊断
+
+账号级最大并发按账号跨客户端、模型和协议共享。HTTP/SSE/compact 请求在执行期间持有租约；原生下游 WebSocket 从上游会话打开起持有租约，轮次之间空闲仍占用槽位，直到连接关闭才释放。HTTP 请求内部使用 WebSocket 访问上游仍按 HTTP 请求归类。此处保留已有调度、并发上限、冷却与重放策略，不因诊断自动清空租约。
+
+`accounts_busy` 拒绝会额外记录 `Codex account slots exhausted` WARN，含被拒绝请求的 `request_id`、`event_id`、`api_key_id`、`model` 和 `slot_snapshot` JSON。快照在账号池调度锁内生成，记录各账号的 `max_concurrency`、`inflight`、WebSocket 活跃/空闲数量，以及各租约的 `lease_id`、请求/用量事件/客户端 ID、模型、客户端协议与入口、准入 transport、获取时间、持有时长与空闲时长。标识和原始错误按原值保留，便于关联日志和归档。租约状态仅用于诊断，不影响准入。`probe` 租约的 `request_id` 对应探测任务 ID。
+
+`/stats`（包括 `/stats/stream`）新增 `codex_account_slots`，在读取时通过 typed EventHub 查询账号池权威快照。`available=false` 和 `error` 表示读取失败，不表示槽位为零。账号被删除但仍有未释放租约时，快照继续保留该账号的占用；最后一个租约释放后消失。`requests.inflight` 仍是业务请求生命周期计数，与账号租约数量含义不同。
+
+`/metrics` 新增 `aetherrelay_codex_account_slots_available`，以及按 `account_id` 区分的 `aetherrelay_codex_account_limit`、`aetherrelay_codex_account_inflight`、`aetherrelay_codex_account_websocket_active`、`aetherrelay_codex_account_websocket_idle`、`aetherrelay_codex_account_oldest_lease_seconds`、`aetherrelay_codex_account_release_failures_total`。请求 ID 和租约 ID 只进入快照与诊断日志，不作为 Prometheus 标签。
+
+槽位释放检查 typed 回执，`Released=false` 表示租约已经不存在，按幂等成功处理。失败保留原始错误并记录 `Codex lease release failed`，使用独立于客户端取消的 5 秒清理预算，最多尝试 3 次；重试成功记录 `Codex lease release recovered`，仍失败记录 `Codex lease release unresolved`。探测任务保留其原有未完成清理重试机制。`release_failures_total` 统计账号池收到的失败尝试报告，重启后归零；账号池/EventHub 不可用时报告也可能失败，以原始错误日志为准。WebSocket 状态观测失败另记 `Codex lease state observation failed`，不改变业务结果。
 
 Codex HTTP 流的持续输出不再受非流式 `request_timeout_seconds` 总时限约束。先检查 `Codex attempt failed` 的 `phase`、`error_class`、`first_event_duration_ms`、`total_duration_ms`、`event_count`、`stream_bytes` 和 `last_event_at`；旧版本另用 `Codex stream stopped` 输出这些字段，兼容字段 `duration_ms` 在合并后移除，以 `total_duration_ms` 为准。`first_event_timeout` 表示未交付首个业务事件，`idle_timeout` 表示后续事件停滞，`stream_lifetime_timeout` 表示显式配置的本地最大时长到期。诊断不包含工具参数正文或凭据。
 

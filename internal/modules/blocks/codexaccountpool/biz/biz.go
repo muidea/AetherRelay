@@ -49,24 +49,25 @@ type refreshFlight struct {
 
 type Account struct {
 	basebiz.Base
-	store         *store.Store
-	topics        []string
-	stopping      atomic.Bool
-	shutdownCtx   context.Context
-	shutdown      context.CancelFunc
-	refreshEvery  time.Duration
-	oauthTimeout  time.Duration
-	refreshMu     sync.Mutex
-	refreshes     map[string]*refreshFlight
-	oauthMu       sync.Mutex
-	oauthSessions map[string]oauthSession
-	scheduleMu    sync.Mutex
-	sessions      map[string]*sessionBinding
-	sessionCounts map[string]int
-	sessionExpiry sessionExpiryHeap
-	leases        map[string]string
-	inflight      map[string]int
-	now           func() time.Time
+	store           *store.Store
+	topics          []string
+	stopping        atomic.Bool
+	shutdownCtx     context.Context
+	shutdown        context.CancelFunc
+	refreshEvery    time.Duration
+	oauthTimeout    time.Duration
+	refreshMu       sync.Mutex
+	refreshes       map[string]*refreshFlight
+	oauthMu         sync.Mutex
+	oauthSessions   map[string]oauthSession
+	scheduleMu      sync.Mutex
+	sessions        map[string]*sessionBinding
+	sessionCounts   map[string]int
+	sessionExpiry   sessionExpiryHeap
+	leases          map[string]accountLease
+	releaseFailures map[string]uint64
+	inflight        map[string]int
+	now             func() time.Time
 }
 
 func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) (*Account, *cd.Error) {
@@ -90,11 +91,14 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery, oauthTimeout time.Duration) *Account {
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
-	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}, sessions: map[string]*sessionBinding{}, sessionCounts: map[string]int{}, leases: map[string]string{}, inflight: map[string]int{}, now: time.Now}
+	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}, sessions: map[string]*sessionBinding{}, sessionCounts: map[string]int{}, leases: map[string]accountLease{}, releaseFailures: map[string]uint64{}, inflight: map[string]int{}, now: time.Now}
 	if st == nil {
 		return b
 	}
-	b.topics = []string{events.TopicProbeAdmission, events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicCheckModelPolicy, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.topics = []string{events.TopicLeaseSnapshot, events.TopicLeaseState, events.TopicReleaseFailure, events.TopicProbeAdmission, events.TopicClientIdentity, events.TopicList, events.TopicImport, events.TopicDelete, events.TopicUpdate, events.TopicAcquire, events.TopicCheckModelPolicy, events.TopicRelease, events.TopicRecordResult, events.TopicRecordTransportCapability, events.TopicRefreshToken, events.TopicRefreshByID, events.TopicExportByID, events.TopicHealth, events.TopicOAuthStart, events.TopicOAuthFinish, events.TopicListDiscoveryCandidates, events.TopicPutModelSnapshot, events.TopicRecordModelDiscoveryFailure, events.TopicCatalogSnapshot, events.TopicListUsageCandidates, events.TopicPutUsageSnapshot, events.TopicMergeUsageSnapshot, events.TopicRecordUsageFailure}
+	b.SubscribeFunc(events.TopicLeaseSnapshot, b.handleLeaseSnapshot)
+	b.SubscribeFunc(events.TopicLeaseState, b.handleLeaseState)
+	b.SubscribeFunc(events.TopicReleaseFailure, b.handleReleaseFailure)
 	b.SubscribeFunc(events.TopicProbeAdmission, b.handleProbeAdmission)
 	b.SubscribeFunc(events.TopicClientIdentity, b.handleClientIdentity)
 	b.SubscribeFunc(events.TopicList, b.handleList)
@@ -144,7 +148,8 @@ func (s *Account) Teardown(ctx context.Context) {
 	s.sessions = map[string]*sessionBinding{}
 	s.sessionCounts = map[string]int{}
 	s.sessionExpiry = nil
-	s.leases = map[string]string{}
+	s.leases = map[string]accountLease{}
+	s.releaseFailures = map[string]uint64{}
 	s.inflight = map[string]int{}
 	s.scheduleMu.Unlock()
 	if s.store != nil {
@@ -258,11 +263,14 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 	}
 	item, err := s.store.AcquireScheduledTransport(cmd.Model, exclude, busy, preferred, cmd.Transport, cmd.ClientIdentity, loads)
 	if err != nil {
+		if item.UnavailableReason == "accounts_busy" {
+			s.logSlotsExhaustedLocked(cmd.Request, cmd.Model, now)
+		}
 		result.Set(item, cd.NewError(cd.Unexpected, "Codex account unavailable"))
 		return
 	}
 	leaseID := uuid.NewString()
-	s.leases[leaseID] = item.AccountID
+	s.addLeaseLocked(leaseID, item.AccountID, cmd.Model, cmd.Transport, cmd.LeaseKind, cmd.Request, now)
 	s.inflight[item.AccountID]++
 	if sessionHash := strings.TrimSpace(cmd.SessionHash); sessionHash != "" {
 		s.bindSessionLocked(sessionHash, item.AccountID, now.Add(defaultSessionAffinityTTL))
@@ -297,7 +305,8 @@ func (s *Account) handleRelease(ev event.Event, result event.Result) {
 		return
 	}
 	s.scheduleMu.Lock()
-	accountID, found := s.leases[cmd.LeaseID]
+	lease, found := s.leases[cmd.LeaseID]
+	accountID := lease.AccountID
 	if found {
 		delete(s.leases, cmd.LeaseID)
 		if s.inflight[accountID] <= 1 {

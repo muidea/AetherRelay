@@ -627,6 +627,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = h.usageStore.TouchClientAPIKey(r.Context(), identity.KeyID, time.Now().UTC())
 	}
 	r = r.WithContext(clientauth.WithClientIdentity(r.Context(), identity))
+	r = r.WithContext(codexresponses.WithExecutionIdentity(r.Context(), codexresponses.ExecutionIdentity{RequestID: requestID, APIKeyID: identity.KeyID, Protocol: clientProtocolFromRequest(r), Endpoint: NormalizeClientEndpoint(r.URL.Path)}))
 
 	// round 与 event 在读取 body / 访问上游前建立。event ID 不复用客户端可控的
 	// X-Request-ID；round_id 用于将 usage_events 和本地归档精确关联。

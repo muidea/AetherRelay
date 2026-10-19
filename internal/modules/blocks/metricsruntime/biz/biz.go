@@ -3,12 +3,14 @@ package biz
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 
 	basebiz "aetherrelay/internal/modules/base/biz"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	metricscommon "aetherrelay/internal/modules/blocks/metricsruntime/pkg/common"
 	metricsevents "aetherrelay/internal/modules/blocks/metricsruntime/pkg/events"
 	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
+	metrics "aetherrelay/internal/pkg/aetherrelaymetrics"
 
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
@@ -159,6 +161,8 @@ func (s *MetricsRuntime) handlePrometheus(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
+	slots := s.accountSlots(ev.Context())
+	writeAccountSlots(&buffer, slots)
 	result.Set(metricsevents.BytesResult{Data: buffer.Bytes()}, nil)
 }
 
@@ -171,7 +175,10 @@ func (s *MetricsRuntime) handleStats(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "metrics block is not ready"))
 		return
 	}
-	data, err := s.runtime.Registry().StatsJSON()
+	data, err := json.Marshal(struct {
+		metrics.StatsJSON
+		CodexAccountSlots accountSlotsSnapshot `json:"codex_account_slots"`
+	}{s.runtime.Registry().Snapshot(), s.accountSlots(ev.Context())})
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
