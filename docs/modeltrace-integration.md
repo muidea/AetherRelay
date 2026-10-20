@@ -16,6 +16,8 @@
 
 评审收口：采样绕过普通 HTTP 请求归一化入口，因此在 Proxy 构造请求时显式发送 `instructions: ""`，遵循 `CP-REQ-003`。回归测试区分字段缺失与空字符串，覆盖三次采样提交及上游注入 `client_metadata` 后的最终 HTTP 正文；新增断言在修复前可复现失败。
 
+额度观测收口：旧 Steering native/fallback 链路已删除；现行采样快照从 HTTP attempt 分别取得请求开始及响应头接收时间。Proxy 以真实请求时间参与 Store 窗口排序，以响应头接收时间计算相对重置时刻，不使用任务开始、采样调度或轮询时间替代。回归使用真实账号 owner 和 Store，验证连续 99%→100% 更新、最新额度限制准入及重置时间；修复前可复现重置时间错误。
+
 ## 产品与资源
 
 原账号行“检测上游能力”直接替换为“检测模型指纹”。旧 `/steering-probes`、专用 Steering 引擎、fallback、旧页面与测试均已移除；共享账号准入/刷新代码保留并改名 probe_admission。新 API 为 `/api/codex/accounts/{slot}/modeltrace-probes`：POST 创建，GET 查询（含 latest），DELETE 取消。写操作沿用 Admin 认证、写保护与幂等键。

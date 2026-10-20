@@ -344,9 +344,8 @@ func (s *Proxy) pollModelTrace(t *modeltraceTask, cleanupCtx context.Context) {
 		if closed.Snapshot.Done {
 			sample := &out.Samples[t.index]
 			applyModelTraceSample(sample, closed.Snapshot)
-			started, _ := time.Parse(time.RFC3339Nano, sample.StartedAt)
 			ctx, cancel := context.WithTimeout(cleanupCtx, time.Second)
-			s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, closed.Snapshot.Headers, started)
+			s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, closed.Snapshot.Headers, closed.Snapshot.RequestStartedAt, closed.Snapshot.ResponseReceivedAt)
 			cancel()
 		}
 		t.sampleID = ""

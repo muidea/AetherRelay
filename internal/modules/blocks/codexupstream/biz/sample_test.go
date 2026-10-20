@@ -103,6 +103,13 @@ func TestModelTraceSampleHTTPCompletionAndDrain(t *testing.T) {
 			if !closed.Closed || !closed.Snapshot.Done || s.sample("sample") != nil {
 				t.Fatal("false drain acknowledgement")
 			}
+			if closed.Snapshot.RequestStartedAt.IsZero() || (!cancelEarly && closed.Snapshot.ResponseReceivedAt.IsZero()) {
+				t.Fatal("sample must carry the actual HTTP attempt times", closed.Snapshot)
+			}
+			// Cancellation may win before response headers reach the client.
+			if at := closed.Snapshot.ResponseReceivedAt; !at.IsZero() && (at.Before(closed.Snapshot.RequestStartedAt) || at.After(time.Now())) {
+				t.Fatal("invalid HTTP response observation time", at)
+			}
 			if !cancelEarly && !oversize && closed.Snapshot.Body[0] == 'x' {
 				t.Fatal("snapshot mutation escaped")
 			}

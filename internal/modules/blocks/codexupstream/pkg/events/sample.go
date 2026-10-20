@@ -18,7 +18,10 @@ type SampleStartCommand struct {
 type SampleStartResult struct{ ProbeID string }
 type SampleSnapshotCommand struct{ ProbeID string }
 type SampleSnapshotResult struct {
-	Done                   bool
+	Done bool
+	// Times belong to this HTTP attempt, not the task or snapshot query.
+	RequestStartedAt       time.Time
+	ResponseReceivedAt     time.Time
 	Body                   []byte
 	Headers                []Header
 	HTTPStatus             int

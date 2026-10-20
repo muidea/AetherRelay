@@ -72,7 +72,10 @@ func (s *Upstream) handleSampleStart(ev event.Event, r event.Result) {
 			complete.Body = nil
 			complete.ErrorClass = events.ErrorProtocol
 		}
-		snap := events.SampleSnapshotResult{Done: true, Body: complete.Body, Headers: complete.Headers, HTTPStatus: complete.HTTPStatus, ErrorClass: complete.ErrorClass}
+		snap := events.SampleSnapshotResult{
+			Done: true, Body: complete.Body, Headers: complete.Headers, HTTPStatus: complete.HTTPStatus, ErrorClass: complete.ErrorClass,
+			RequestStartedAt: complete.Attempt.Request.At, ResponseReceivedAt: complete.Attempt.Response.At,
+		}
 		if snap.HTTPStatus == 0 {
 			snap.HTTPStatus = complete.Attempt.Response.Status
 		}
