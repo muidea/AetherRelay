@@ -612,17 +612,18 @@
   <div class="modal-foot"><button class="btn" type="button" id="cgExportCancel">取消</button><button class="btn btn-primary" type="button" id="cgExportConfirm">确认导出并下载</button></div>
 </dialog>
 <!-- credential_type=chatgpt_web / credential_type=codex_cli are optional metadata; the import dialog selects the credential domain. -->
-<dialog id="codexSteeringDialog">
-  <div class="modal-head"><span class="modal-title">检测上游能力</span><button class="close" type="button" id="codexSteeringClose">×</button></div>
+<dialog id="codexModelTraceDialog">
+  <div class="modal-head"><span class="modal-title">检测模型指纹</span><button class="close" type="button" id="codexModelTraceClose">×</button></div>
   <div class="modal-body">
-    <p id="codexSteeringAccount"></p>
-    <p class="help">先检测原生 response.steer，无法完成时切换至官方客户端式调用，最终结果标明实际检测方式。必要切换时最多使用两个独立会话、触发四段生成，可能消耗额度。结果仅反映所选账号、模型和本次检测配置；探测结论不修改账号健康状态，必要的凭据刷新仍按账号原有规则处理。</p>
-    <div class="field"><label class="label" for="codexSteeringModel">模型</label><select id="codexSteeringModel" class="control"></select></div>
-    <div id="codexSteeringResult" aria-live="polite"></div>
-    <details><summary>检测 JSON 报告</summary><pre id="codexSteeringJSON" class="mono" style="white-space:pre-wrap;overflow-wrap:anywhere" data-i18n-ignore></pre></details>
+    <p id="codexModelTraceAccount"></p>
+    <p class="help">通过三条独立中文挑战检测数字行为指纹，最多发起三次推理请求，可能消耗额度。候选排名和库内相对权重不确认真实模型身份或能力回退。</p>
+    <div class="field"><label class="label" for="codexModelTraceModel">模型</label><select id="codexModelTraceModel" class="control"></select></div>
+    <div class="field"><label class="label" for="codexModelTraceReasoning">推理强度</label><select id="codexModelTraceReasoning" class="control"><option value="upstream_default">上游默认</option><option>none</option><option>minimal</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></div>
+    <div id="codexModelTraceResult" aria-live="polite"></div>
+    <details><summary>检测 JSON 报告</summary><pre id="codexModelTraceJSON" class="mono" style="white-space:pre-wrap;overflow-wrap:anywhere" data-i18n-ignore></pre></details>
     <p class="help">报告完成后保留 30 分钟；服务重启后需重新检测。关闭窗口不会取消服务端任务。</p>
   </div>
-  <div class="modal-foot"><button class="btn" type="button" id="codexSteeringExport" disabled>下载检测报告</button><button class="btn btn-primary" type="button" id="codexSteeringStart">开始检测</button></div>
+  <div class="modal-foot"><button class="btn" type="button" id="codexModelTraceCancel" disabled>取消检测</button><button class="btn" type="button" id="codexModelTraceExport" disabled>下载检测报告</button><button class="btn btn-primary" type="button" id="codexModelTraceStart">开始检测</button></div>
 </dialog>
 <dialog id="codexImportDialog">
   <form id="codexImportForm" autocomplete="off">
@@ -689,11 +690,7 @@ const languageCookieName="aetherrelay_admin_lang";
 // Keep stable Chinese source keys in one small runtime dictionary. Static DOM
 // is localized through the same dictionary, while dynamic labels use t().
 const enUS={
- "实际检测方式":"Invocation used","原生尝试诊断":"Native attempt diagnostics","原生协议不支持，已切换调用方式":"Native protocol unsupported; switched invocation","原生检测未取得充分证据，已切换调用方式":"Native probe inconclusive; switched invocation",
-  "response.steer 原生协议":"Native response.steer protocol","客户端式更新与续接":"Client-style update and continuation","检查配置":"Check profile","任务配置":"Task profile","当前检查":"Active check","主报告执行结果":"Primary report outcome","主报告错误代码":"Primary report error code","已在本地排队":"Queued locally","等待读取父响应终态":"Draining the parent response","更新本地入队":"Local update queue","已排队（不代表上游接受）":"Queued locally (not upstream acceptance)","续接请求尝试":"Continuation attempt","续接请求写入":"Continuation write","续接状态":"Continuation state","客户端式续接能力":"Client-style continuation capability","父响应 ID":"Parent response ID","后继响应 ID":"Successor response ID","必要输入":"Required input","父响应用量":"Parent response usage","后继响应用量":"Successor response usage",
-  "上游当前通道不支持运行中更新":"The current upstream lane does not support inflight updates",
-  "Steering 检测不适用于 ChatGPT Web 槽位":"Steering probes are not applicable to ChatGPT Web slots","先检测原生 response.steer，无法完成时切换至官方客户端式调用，最终结果标明实际检测方式。必要切换时最多使用两个独立会话、触发四段生成，可能消耗额度。结果仅反映所选账号、模型和本次检测配置；探测结论不修改账号健康状态，必要的凭据刷新仍按账号原有规则处理。":"The probe tries native response.steer first and switches to the official client-style workflow if needed. The final result identifies the invocation used. Fallback may use up to two independent sessions and four generations that consume quota. Results describe this account, model and probe profile. Probe conclusions do not change account health; necessary credential refreshes follow the account lifecycle.","报告完成后保留 30 分钟；服务重启后需重新检测。关闭窗口不会取消服务端任务。":"Completed reports are retained for 30 minutes and are lost on restart. Closing this window does not cancel the server task.","模型已被本地黑名单禁止":"Model blocked by the local blacklist","账号已禁用":"Account disabled","账号状态异常":"Account abnormal","缺少凭据":"Credentials missing","缺少刷新凭据":"Refresh credentials missing","凭据已失效":"Credentials invalid","模型快照已过期":"Model snapshot expired","模型不在账号目录中":"Model absent from account catalog","账号并发已满":"Account concurrency exhausted","账号额度受限":"Account quota limited","账号已删除":"Account deleted","检测租约已失效":"Probe lease unavailable","账号请求受限":"Account rate limited","本地准入复查拒绝，已执行凭据刷新，未发起 WS 探测":"Admission recheck rejected; credentials were refreshed, but the WS probe was not started","准入检查不可用":"Admission check unavailable","服务正在停止":"Service stopping",
-  "检测上游能力":"Check upstream capabilities","最近检测":"Latest probe","协议支持":"Protocol supported","当前配置不支持":"Unsupported for this profile","等待必要输入":"Waiting for required input","证据不足":"Insufficient evidence","不适用":"Not applicable","未观测":"Not observed","已接受":"Accepted","已拒绝":"Rejected","已连接":"Connected","已发送":"Sent","已提交":"Committed","等待检测资源":"Waiting for probe resources","本地准入检查":"Local admission check","账号准入":"Account admission","凭据刷新":"Credential refresh","连接上游":"Connecting to upstream","初始生成":"Initial generation","提交更新":"Submitting update","后续生成":"Successor generation","未执行":"Not started","等待提交确认":"Awaiting commit confirmation","执行完成":"Execution completed","后续生成失败":"Successor failed","检测超时":"Probe timed out","账号配置已变化":"Account configuration changed","检测服务不可用":"Probe unavailable","凭据刷新失败":"Credential refresh failed","本地准入拒绝，未请求上游":"Local admission rejected; upstream was not contacted","历史观测：账号配置已变化":"Historical observation: account configuration changed","结果已过期或服务已重启，请重新检测":"Result expired or service restarted; run a new probe","正在查询最近检测…":"Loading latest probe…","暂无可用检测报告；请选择模型并手工开始检测。":"No probe report available. Select a model and start a probe manually.","检测 JSON 报告":"Probe JSON report","下载检测报告":"Download probe report","开始检测":"Start probe","任务状态":"Task state","检测阶段":"Probe phase","认证":"Authentication","模型访问":"Model access","协议能力":"Protocol capability","执行结果":"Execution outcome",
+ "检测模型指纹":"Check model fingerprint","取消检测":"Cancel probe","推理强度":"Reasoning effort","上游默认":"Upstream default","模型指纹检测暂不适用于 ChatGPT Web 槽位":"Model fingerprint probes are not yet available for ChatGPT Web slots","行为指纹最接近":"Closest behavioral fingerprint","请求模型已收录于参考库":"Requested model is included in the reference bank","请求模型未收录于参考库；排名不证明模型被替换":"Requested model is absent from the reference bank; rankings do not prove model substitution","库内相对权重":"Relative weight within the bank","分布相似度":"Profile similarity","家族分布":"Family distribution","完成采样":"Completed samples","计入样本":"Accepted samples","计入":"Accepted","未计入":"Rejected","解析数量":"Parsed count","要求数量":"Expected count","接纳情况":"Acceptance","挑战":"Challenge","等待资源释放":"Waiting for cleanup","准备采样":"Preparing sample","仅提供闭集行为指纹排名；路径适用性与质量回退尚未验证。":"Closed-set behavioral rankings only; path applicability and quality regression have not been validated.","通过三条独立中文挑战检测数字行为指纹，最多发起三次推理请求，可能消耗额度。候选排名和库内相对权重不确认真实模型身份或能力回退。":"Three independent Chinese challenges measure numeric behavioral fingerprints and may consume quota through up to three inference requests. Rankings and relative weights do not establish backend identity or quality regression.","报告完成后保留 30 分钟；服务重启后需重新检测。关闭窗口不会取消服务端任务。":"Completed reports remain available for 30 minutes and are lost on restart. Closing the window does not cancel the server task.","检测 JSON 报告":"Probe JSON report","下载检测报告":"Download probe report","开始检测":"Start probe","正在查询最近检测…":"Loading latest probe…","暂无可用检测报告；请选择模型并手工开始检测。":"No probe report available. Select a model and start a probe manually.","结果已过期或服务已重启，请重新检测":"Report expired or service restarted; start a new probe",
 
   "上游请求模型":"Upstream request model","响应模型":"Response model","上游模型替换":"Upstream model substitution",
   "上游响应声明的模型与请求不一致：{request} → {response}。执行账号：{account}（槽位：{slot}）。仅记录模型差异，不代表账号健康异常。":"The model declared in the upstream response differs from the request: {request} → {response}. Account: {account} (slot: {slot}). This records a model difference and does not indicate an account health issue.",
@@ -1475,7 +1472,7 @@ function codexSettingsActions(account){
 function refreshCodexSettingsDraftUI(id){
   id=String(id||"");const account=state.codex.accounts.find(item=>item.id===id);if(!account)return;
   const value=codexSettingsValue(account),dirty=codexSettingsDirty(account);
-  document.querySelectorAll("[data-codex-steering]").forEach(el=>el.onclick=()=>openCodexSteering(el.dataset.codexSteering));
+  document.querySelectorAll("[data-codex-modeltrace]").forEach(el=>el.onclick=()=>openCodexModelTrace(el.dataset.codexModeltrace));
   document.querySelectorAll("[data-codex-fingerprint]").forEach(el=>{if(el.dataset.codexFingerprint===id)el.value=value.fingerprint_mode});
   document.querySelectorAll("[data-codex-concurrency]").forEach(el=>{if(el.dataset.codexConcurrency===id)el.value=String(value.max_concurrency)});
   document.querySelectorAll("[data-codex-blocked-summary]").forEach(el=>{if(el.dataset.codexBlockedSummary===id)el.textContent=`${t("模型黑名单")} (${value.blocked_models.length})`});
@@ -1782,7 +1779,7 @@ function unifiedWebSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 ChatGPT Web 凭据</div>`;
   const restore=formatRestoreAt(account.restore_at);
   const blocked=unifiedCredentialActionBlocked("web",account,"quota");
-  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div>${unifiedCredentialToggle("web",account)}</div><div class="unified-slot-primary"><span class="unified-slot-primary-value">${localizedHTML("图片额度 {count}",{count:Math.max(0,Number(account.quota)||0)})}</span>${restore.relative?`<span class="subtle">${localizedHTML("恢复 {time}",{time:restore.relative})}</span>`:""}</div><div class="help">${esc(t("Steering 检测不适用于 ChatGPT Web 槽位"))}</div>${tokenRefreshBadge(account)}${accountRefreshScheduleBadge(account,"web")}${modelDiscoveryBadge(account)}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}" title="${esc(t("同步图片额度和账号状态，必要时续期 OAuth 凭证"))}" ${blocked?"disabled":""}>${esc(t("刷新额度/凭据"))}</button><button class="link-btn" data-ua-web-reauth="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>删除槽位</button></div></div>`;
+  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div>${unifiedCredentialToggle("web",account)}</div><div class="unified-slot-primary"><span class="unified-slot-primary-value">${localizedHTML("图片额度 {count}",{count:Math.max(0,Number(account.quota)||0)})}</span>${restore.relative?`<span class="subtle">${localizedHTML("恢复 {time}",{time:restore.relative})}</span>`:""}</div><div class="help">${esc(t("模型指纹检测暂不适用于 ChatGPT Web 槽位"))}</div>${tokenRefreshBadge(account)}${accountRefreshScheduleBadge(account,"web")}${modelDiscoveryBadge(account)}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}" title="${esc(t("同步图片额度和账号状态，必要时续期 OAuth 凭证"))}" ${blocked?"disabled":""}>${esc(t("刷新额度/凭据"))}</button><button class="link-btn" data-ua-web-reauth="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>删除槽位</button></div></div>`;
 }
 function unifiedCodexSummary(account){
   const models=Array.isArray(account?.model_snapshot?.models)?account.model_snapshot.models:[];
@@ -1798,7 +1795,7 @@ function unifiedCodexSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 Codex CLI 凭据</div>`;
   const updating=state.unified.updating.has(unifiedCredentialKey("codex",account.id));
   const discoveryBlocked=unifiedCredentialActionBlocked("codex",account,"discovery"),usageBlocked=unifiedCredentialActionBlocked("codex",account,"usage"),refreshBlocked=unifiedCredentialActionBlocked("codex",account,"credential");
-  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">Codex CLI</span>${codexStatusTag(account.status)}</div>${unifiedCredentialToggle("codex",account)}</div>${unifiedCodexSummary(account)}<div class="actions">${codexSteeringControl(account)}<button class="link-btn" data-ua-codex-discovery="${esc(account.id)}" ${discoveryBlocked?"disabled":""}>同步模型</button><button class="link-btn" data-ua-codex-usage="${esc(account.id)}" ${usageBlocked?"disabled":""}>刷新用量</button><button class="link-btn" data-ua-codex-refresh="${esc(account.id)}" title="${esc(t("强制续期 OAuth 凭证；成功后自动同步模型与上游用量"))}" ${refreshBlocked?"disabled":""}>刷新凭据</button><button class="link-btn" data-ua-codex-reauth="${esc(account.id)}" ${updating?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-ua-codex-delete="${esc(account.id)}" ${updating?"disabled":""}>删除槽位</button></div></div>`;
+  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">Codex CLI</span>${codexStatusTag(account.status)}</div>${unifiedCredentialToggle("codex",account)}</div>${unifiedCodexSummary(account)}<div class="actions">${codexModelTraceControl(account)}<button class="link-btn" data-ua-codex-discovery="${esc(account.id)}" ${discoveryBlocked?"disabled":""}>同步模型</button><button class="link-btn" data-ua-codex-usage="${esc(account.id)}" ${usageBlocked?"disabled":""}>刷新用量</button><button class="link-btn" data-ua-codex-refresh="${esc(account.id)}" title="${esc(t("强制续期 OAuth 凭证；成功后自动同步模型与上游用量"))}" ${refreshBlocked?"disabled":""}>刷新凭据</button><button class="link-btn" data-ua-codex-reauth="${esc(account.id)}" ${updating?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-ua-codex-delete="${esc(account.id)}" ${updating?"disabled":""}>删除槽位</button></div></div>`;
 }
 function renderUnifiedAccounts(){
   const all=unifiedAccounts(),rows=all;
@@ -1818,7 +1815,7 @@ function renderUnifiedAccounts(){
   document.querySelectorAll("[data-ua-codex-usage]").forEach(el=>el.onclick=()=>startCodexUsageRefresh([el.dataset.uaCodexUsage]));
   document.querySelectorAll("[data-ua-codex-refresh]").forEach(el=>el.onclick=()=>refreshCodexAccounts([el.dataset.uaCodexRefresh]));
   document.querySelectorAll("[data-ua-codex-enabled]").forEach(el=>el.onchange=()=>setUnifiedCredentialEnabled("codex",el.dataset.uaCodexEnabled,el.checked));
-  document.querySelectorAll("[data-codex-steering]").forEach(el=>el.onclick=()=>openCodexSteering(el.dataset.codexSteering));
+  document.querySelectorAll("[data-codex-modeltrace]").forEach(el=>el.onclick=()=>openCodexModelTrace(el.dataset.codexModeltrace));
   document.querySelectorAll("[data-codex-fingerprint]").forEach(el=>el.onchange=()=>updateCodexFingerprintMode(el));
   document.querySelectorAll("[data-codex-concurrency]").forEach(el=>el.onchange=()=>updateCodexMaxConcurrency(el));
   document.querySelectorAll("[data-codex-blocked-models], [data-codex-blocked-model]").forEach(el=>el.onchange=()=>updateCodexBlockedModels(el));
@@ -1847,101 +1844,91 @@ async function loadUnifiedAccounts(){
   state.unified.loading=true;const box=$("uaAccountTable");box.className="loading";box.innerHTML=`<div class="spin"></div><div>正在加载账号…</div>`;
   try{await Promise.all([loadChatGPTAccounts(),loadCodexAccounts()]);renderUnifiedAccounts()}finally{state.unified.loading=false}
 }
-function codexSteeringView(){
-  return state.codex.steering??={epoch:0,slot:"",key:"",keyModel:"",busy:false,timer:null,report:null};
+function codexModelTraceView(){
+  return state.codex.modeltrace??={epoch:0,slot:"",key:"",keyModel:"",busy:false,timer:null,report:null};
 }
-function codexSteeringControl(account){
+function codexModelTraceControl(account){
   // Open latest from the owner when requested: a cached card cannot know
   // whether another administrator reauthorized or reconfigured the slot.
-  return `<button class="link-btn" data-codex-steering="${esc(String(account?.id||""))}">${esc(t("检测上游能力"))}</button>`;
+  return `<button class="link-btn" data-codex-modeltrace="${esc(String(account?.id||""))}">${esc(t("检测模型指纹"))}</button>`;
 }
-function codexSteeringLabel(value){
-  const labels={native_protocol_unsupported:"原生协议不支持，已切换调用方式",native_protocol_inconclusive:"原生检测未取得充分证据，已切换调用方式",queued_local:"已在本地排队",draining_parent:"等待读取父响应终态",unsupported_native_inflight_message:"上游当前通道不支持运行中更新",SUPPORTED:"协议支持",UNSUPPORTED_FOR_PROFILE:"当前配置不支持",ACCEPTED_PENDING:"等待必要输入",UNKNOWN:"证据不足",NOT_APPLICABLE:"不适用",not_observed:"未观测",accepted:"已接受",rejected:"已拒绝",connected:"已连接",failed:"失败",pending:"待处理",ready:"等待提交",writing:"正在写入",write_failed:"写入未完成",sent:"已写入连接，未观测到接受",upstream_error:"上游错误（详见诊断）",committed:"已提交",finished:"已结束",preflight:"本地准入检查",queued:"等待检测资源",running:"执行中",admission:"账号准入",credential_refresh:"凭据刷新",websocket:"连接上游",create:"初始生成",steering:"提交更新",successor:"后续生成",not_started:"未执行",awaiting_commit:"等待提交确认",waiting_for_required_input:"等待必要输入",completed:"执行完成",successor_failed:"后续生成失败",timeout:"检测超时",network:"连接中断",canceled:"已取消",account_changed:"账号配置已变化",probe_unavailable:"检测服务不可用",credential_refresh_failed:"凭据刷新失败",admission_unavailable:"准入检查不可用"};
-  return t(labels[value]||value||"未观测");
+function codexModelTraceLabel(value){
+ const labels={preflight:"本地准入检查",starting:"准备采样",running:"执行中",finalizing:"等待资源释放",finished:"已结束",not_started:"未执行",completed:"已完成",failed:"失败"};
+ return t(labels[value]||value||"—");
 }
-function codexSteeringCheckHTML(report,client){
-  const writeLabel=(attempted,completed)=>completed===undefined?"未取得（旧报告）":completed?"本地写入完成":attempted?"写入未完成，可能已抵达上游":"未执行";
-  const steeringLabel=report.steering_state==="sent"&&report.steer_write_completed===undefined?"已尝试提交（旧报告）":codexSteeringLabel(report.steering_state);
-  const rows=[["检查配置",report.check_profile||report.probe_profile||"single_agent_no_tools_v1"],["检测阶段",codexSteeringLabel(report.phase)],["认证",codexSteeringLabel(report.auth_state)],["模型访问",codexSteeringLabel(report.model_access_state)],["WS 握手",codexSteeringLabel(report.websocket_state)],["握手 HTTP 状态",report.upstream_http_status||"—"],["初始请求写入",t(writeLabel(report.create_sent,report.create_write_completed))]];
-  if(client)rows.push(["更新本地入队",t(report.input_queued?"已排队（不代表上游接受）":"未执行")],["续接请求尝试",t(report.continuation_sent?"已尝试":"未尝试")],["续接请求写入",t(writeLabel(report.continuation_sent,report.continuation_write_completed))],["续接状态",codexSteeringLabel(report.steering_state)]);
-  else rows.push(["Steering 提交尝试",t(report.steer_sent?"已尝试":"未尝试")],["Steering 写入",t(writeLabel(report.steer_sent,report.steer_write_completed))],["Steering 协议状态",steeringLabel]);
-  rows.push([client?"客户端式续接能力":"协议能力",codexSteeringLabel(report.capability)],["执行结果",codexSteeringLabel(report.execution_outcome)],["错误代码",report.error_code||"—"],["父响应 ID",report.parent_response_id||"—"],["后继响应 ID",report.successor_response_id||"—"],["必要输入",Array.isArray(report.required_input_types)?report.required_input_types.join(", "):"—"],["父响应用量",report.parent_usage?JSON.stringify(report.parent_usage):"—"],["后继响应用量",report.successor_usage?JSON.stringify(report.successor_usage):"—"]);
-  const detail=report.upstream_error;
-  if(detail)rows.push(["失败事件",detail.event_type||"—"],["上游错误类型",detail.type||"—"],["上游错误代码",detail.code||"—"],["上游错误参数",detail.param||"—"],["上游错误说明",detail.message||"—"],["错误事件状态",detail.status||"—"],["错误详情截断",t(detail.truncated?"是":"否")]);
-  const traceLabels={send:"发送",receive:"接收",local:"本地",attempt:"提交尝试",written:"写入完成",write_failed:"写入失败"};
-  const timeline=Array.isArray(report.timeline)&&report.timeline.length?`<p>${esc(t(report.timeline_truncated?"最近事件（较早条目或过长类型已截断）":"事件时序"))}</p><table><thead><tr>${["序号","相对时间（毫秒）","方向","事件类型","状态"].map(label=>`<th>${esc(t(label))}</th>`).join("")}</tr></thead><tbody>${report.timeline.map(item=>`<tr>${[item.sequence,item.elapsed_ms,t(traceLabels[item.direction]||item.direction),item.type,t(traceLabels[item.state]||item.state||"—")].map(value=>`<td>${esc(value)}</td>`).join("")}</tr>`).join("")}</tbody></table>`:"";
-  return `<h3>${esc(t(client?"客户端式更新与续接":"response.steer 原生协议"))}</h3><table><tbody>${rows.map(([key,value])=>`<tr><th>${esc(t(key))}</th><td>${esc(value??"—")}</td></tr>`).join("")}</tbody></table>${timeline}`;
+function renderCodexModelTraceReport(report){
+ const v=codexModelTraceView();v.report=report;if(!report)return;
+ const samples=Array.isArray(report.samples)?report.samples:[],a=report.result?.analysis;
+ const rows=[["任务 ID",report.probe_id],["槽位",report.target_slot_id],["请求模型",report.model],["推理强度",report.reasoning],["任务状态",codexModelTraceLabel(report.state)],["完成采样",`${samples.filter(s=>s.state==="completed").length} / 3`],["计入样本",a?.used_outputs??"—"],["准入原因",report.admission_reason||"—"],["错误代码",report.error_code||"—"],["Bank SHA256",report.bank?.bank_sha256||report.result?.snapshot?.bank_sha256||"—"]];
+ const ranking=a?.results?.length?`<p>${esc(t("行为指纹最接近"))}：${esc(a.prediction_name||a.prediction)}</p><p>${esc(t(report.result.requested_model_in_bank?"请求模型已收录于参考库":"请求模型未收录于参考库；排名不证明模型被替换"))}</p><table><thead><tr>${["候选模型","库内相对权重","分布相似度"].map(k=>`<th>${esc(t(k))}</th>`).join("")}</tr></thead><tbody>${a.results.map(c=>`<tr><td>${esc(c.display_name||c.model)}</td><td>${esc((Number(c.probability)*100).toFixed(2))}%</td><td>${esc((Number(c.profile_similarity)*100).toFixed(2))}%</td></tr>`).join("")}</tbody></table><p>${esc(t("家族分布"))}：${esc((a.family_probabilities||[]).map(f=>`${f.display_name||f.family} ${(Number(f.probability)*100).toFixed(2)}%`).join(" · "))}</p>`:"";
+ const sampleRows=samples.map((sample,i)=>{const d=a?.diagnostics?.[i]||(report.done&&report.parsed_counts?{parsed_numbers:report.parsed_counts[i],accepted:false}:null);return `<tr>${[i+1,codexModelTraceLabel(sample.state),sample.expected_count,d?.parsed_numbers??"—",d? t(d.accepted?"计入":"未计入"):"—",sample.usage?JSON.stringify(sample.usage):"—",sample.error_code||"—"].map(v=>`<td>${esc(v)}</td>`).join("")}</tr>`}).join("");
+ $("codexModelTraceResult").innerHTML=`${report.historical?`<p>${esc(t("历史观测：账号配置已变化，请重新检测"))}</p>`:""}<table><tbody>${rows.map(([k,v])=>`<tr><th>${esc(t(k))}</th><td>${esc(v??"—")}</td></tr>`).join("")}</tbody></table>${ranking}<table><thead><tr>${["挑战","状态","要求数量","解析数量","接纳情况","用量","错误代码"].map(k=>`<th>${esc(t(k))}</th>`).join("")}</tr></thead><tbody>${sampleRows}</tbody></table><p>${esc(t("仅提供闭集行为指纹排名；路径适用性与质量回退尚未验证。"))}</p>`;
+ $("codexModelTraceJSON").textContent=JSON.stringify(report,null,2);
+ $("codexModelTraceExport").disabled=!report.done;
+ $("codexModelTraceCancel").disabled=v.busy||!!report.done;
+ $("codexModelTraceStart").disabled=v.busy||!report.done||!$("codexModelTraceModel").value;
+ $("codexModelTraceModel").disabled=v.busy||!report.done;$("codexModelTraceReasoning").disabled=v.busy||!report.done;
 }
-function renderCodexSteeringReport(report){
-  const v=codexSteeringView();v.report=report;
-  if(!report)return;
-  const reasonLabels={model_blocked:"模型已被本地黑名单禁止",account_disabled:"账号已禁用",account_abnormal:"账号状态异常",credential_missing:"缺少凭据",refresh_credential_missing:"缺少刷新凭据",credential_permanently_invalid:"凭据已失效",snapshot_expired:"模型快照已过期",model_not_supported:"模型不在账号目录中",accounts_busy:"账号并发已满",usage_limit:"账号额度受限",account_missing:"账号已删除",admission_unavailable:"准入检查不可用",pool_stopping:"服务正在停止",probe_lease_unavailable:"检测租约已失效",rate_limit:"账号请求受限"};
-  const refusalLabel=report.upstream_request_sent?"本地准入复查拒绝，已执行凭据刷新，未发起 WS 探测":"本地准入拒绝，未请求上游";
-  const refusal=report.admission_state==="rejected"?`<p>${esc(t(refusalLabel))}：${esc(t(reasonLabels[report.admission_reason]||report.admission_reason||"未观测"))}</p>`:"";
-  const client=report.invocation_mode==="local_queue_drain_create";
-  const taskRows=[["任务 ID",report.probe_id],["槽位",report.target_slot_id],["Model",report.model],["任务配置",report.probe_profile||"single_agent_no_tools_v1"],["任务状态",codexSteeringLabel(report.state)],["实际检测方式",t(client?"客户端式更新与续接":"response.steer 原生协议")],["开始时间",report.started_at||report.created_at],["结束时间",report.finished_at||"—"]];
-  const checks=codexSteeringCheckHTML(report,client);
-  const fallback=report.fallback?`<p>${esc(codexSteeringLabel(report.fallback.reason))}</p><details><summary>${esc(t("原生尝试诊断"))}</summary><pre>${esc(JSON.stringify(report.fallback,null,2))}</pre></details>`:"";
-  $("codexSteeringResult").innerHTML=`${report.historical?`<p>${esc(t("历史观测：账号配置已变化，请重新检测"))}</p>`:""}${refusal}<table><tbody>${taskRows.map(([key,value])=>`<tr><th>${esc(t(key))}</th><td>${esc(value??"—")}</td></tr>`).join("")}</tbody></table>${fallback}${checks}`;
-  $("codexSteeringJSON").textContent=JSON.stringify(report,null,2);
-  $("codexSteeringExport").disabled=!report.done;
-  $("codexSteeringStart").disabled=v.busy||!report.done||!$("codexSteeringModel").value;
-  $("codexSteeringModel").disabled=v.busy||!report.done;
+function closeCodexModelTrace(){
+  const v=codexModelTraceView();v.epoch++;clearTimeout(v.timer);v.timer=null;v.busy=false;
 }
-function closeCodexSteering(){
-  const v=codexSteeringView();v.epoch++;clearTimeout(v.timer);v.timer=null;v.busy=false;
-}
-async function pollCodexSteering(epoch,id){
-  const v=codexSteeringView();if(epoch!==v.epoch)return;
+async function pollCodexModelTrace(epoch,id){
+  const v=codexModelTraceView();if(epoch!==v.epoch)return;
   try{
-    const report=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(v.slot)}/steering-probes/${encodeURIComponent(id)}`));
+    const report=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(v.slot)}/modeltrace-probes/${encodeURIComponent(id)}`));
     if(epoch!==v.epoch)return;
-    renderCodexSteeringReport(report);
-    if(!report.done)v.timer=setTimeout(()=>pollCodexSteering(epoch,id),1000);
+    renderCodexModelTraceReport(report);
+    if(!report.done)v.timer=setTimeout(()=>pollCodexModelTrace(epoch,id),1000);
     else{renderCodexAccounts();renderUnifiedAccounts()}
   }catch(e){
     if(epoch!==v.epoch)return;
-    $("codexSteeringResult").textContent=e.status===404?t("结果已过期或服务已重启，请重新检测"):e.message;
-    if(e.status===404){v.report=null;$("codexSteeringJSON").textContent="";$("codexSteeringExport").disabled=true;$("codexSteeringModel").disabled=false;$("codexSteeringStart").disabled=!$("codexSteeringModel").value}
-    else v.timer=setTimeout(()=>pollCodexSteering(epoch,id),3000);
+    $("codexModelTraceResult").textContent=e.status===404?t("结果已过期或服务已重启，请重新检测"):e.message;
+    if(e.status===404){v.report=null;$("codexModelTraceCancel").disabled=true;$("codexModelTraceJSON").textContent="";$("codexModelTraceExport").disabled=true;$("codexModelTraceModel").disabled=false;$("codexModelTraceReasoning").disabled=false;$("codexModelTraceStart").disabled=!$("codexModelTraceModel").value}
+    else v.timer=setTimeout(()=>pollCodexModelTrace(epoch,id),3000);
   }
 }
-async function openCodexSteering(id){
-  closeCodexSteering();const v=codexSteeringView(),epoch=v.epoch;v.slot=id;v.report=null;v.key="";v.keyModel="";
+async function openCodexModelTrace(id){
+  closeCodexModelTrace();const v=codexModelTraceView(),epoch=v.epoch;v.slot=id;v.report=null;v.key="";v.keyModel="";
   const account=state.codex.accounts.find(item=>item.id===id);if(!account)return;
   const models=Array.isArray(account.model_snapshot?.models)?account.model_snapshot.models:[];
-  $("codexSteeringAccount").textContent=`${account.email||id} · ${id}`;
-  $("codexSteeringModel").innerHTML=models.map(model=>`<option value="${esc(model.id)}">${esc(model.id)}</option>`).join("");
-  $("codexSteeringModel").disabled=true;$("codexSteeringStart").disabled=true;$("codexSteeringExport").disabled=true;
-  $("codexSteeringResult").textContent=t("正在查询最近检测…");$("codexSteeringJSON").textContent="";
-  $("codexSteeringDialog").showModal();
+  $("codexModelTraceAccount").textContent=`${account.email||id} · ${id}`;
+  $("codexModelTraceModel").innerHTML=models.map(model=>`<option value="${esc(model.id)}">${esc(model.id)}</option>`).join("");
+  $("codexModelTraceReasoning").value="upstream_default";$("codexModelTraceReasoning").disabled=true;$("codexModelTraceCancel").disabled=true;$("codexModelTraceModel").disabled=true;$("codexModelTraceStart").disabled=true;$("codexModelTraceExport").disabled=true;
+  $("codexModelTraceResult").textContent=t("正在查询最近检测…");$("codexModelTraceJSON").textContent="";
+  $("codexModelTraceDialog").showModal();
   try{
-    const report=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(id)}/steering-probes/latest`));
+    const report=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(id)}/modeltrace-probes/latest`));
     if(epoch!==v.epoch)return;
-    if(models.some(model=>model.id===report.model))$("codexSteeringModel").value=report.model;
-    renderCodexSteeringReport(report);if(!report.done)v.timer=setTimeout(()=>pollCodexSteering(epoch,report.probe_id),1000);
+    if(models.some(model=>model.id===report.model))$("codexModelTraceModel").value=report.model;
+    $("codexModelTraceReasoning").value=report.reasoning||"upstream_default";
+    renderCodexModelTraceReport(report);if(!report.done)v.timer=setTimeout(()=>pollCodexModelTrace(epoch,report.probe_id),1000);
   }catch(e){
     if(epoch!==v.epoch)return;
-    $("codexSteeringResult").textContent=e.status===404?t("暂无可用检测报告；请选择模型并手工开始检测。"):e.message;
-    $("codexSteeringModel").disabled=false;$("codexSteeringStart").disabled=!models.length;
+    $("codexModelTraceResult").textContent=e.status===404?t("暂无可用检测报告；请选择模型并手工开始检测。"):e.message;
+    $("codexModelTraceModel").disabled=false;$("codexModelTraceReasoning").disabled=false;$("codexModelTraceStart").disabled=!models.length;
   }
 }
-async function startCodexSteering(){
-  const v=codexSteeringView(),model=$("codexSteeringModel").value,epoch=v.epoch;
+async function startCodexModelTrace(){
+  const v=codexModelTraceView(),model=$("codexModelTraceModel").value,reasoning=$("codexModelTraceReasoning").value,epoch=v.epoch;
   if(v.busy||v.report&&!v.report.done||!model)return;
-  if(!v.key||v.keyModel!==model){v.key=newUUID();v.keyModel=model}
-  v.busy=true;$("codexSteeringStart").disabled=true;$("codexSteeringModel").disabled=true;
+  if(!v.key||v.keyModel!==`${model}:${reasoning}`){v.key=newUUID();v.keyModel=`${model}:${reasoning}`}
+  v.busy=true;$("codexModelTraceStart").disabled=true;$("codexModelTraceModel").disabled=true;$("codexModelTraceReasoning").disabled=true;
   try{
-    const report=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(v.slot)}/steering-probes`),{method:"POST",headers:authHeaders({"Content-Type":"application/json","Idempotency-Key":v.key}),body:JSON.stringify({model})});
+    const report=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(v.slot)}/modeltrace-probes`),{method:"POST",headers:authHeaders({"Content-Type":"application/json","Idempotency-Key":v.key}),body:JSON.stringify({model,reasoning})});
     if(epoch!==v.epoch)return;
-    v.key="";v.busy=false;renderCodexSteeringReport(report);
-    renderCodexAccounts();renderUnifiedAccounts();if(!report.done)v.timer=setTimeout(()=>pollCodexSteering(epoch,report.probe_id),1000);
-  }catch(e){if(epoch===v.epoch){v.busy=false;$("codexSteeringResult").textContent=e.message;$("codexSteeringStart").disabled=false;$("codexSteeringModel").disabled=false}}
+    v.key="";v.busy=false;renderCodexModelTraceReport(report);
+    renderCodexAccounts();renderUnifiedAccounts();if(!report.done)v.timer=setTimeout(()=>pollCodexModelTrace(epoch,report.probe_id),1000);
+  }catch(e){if(epoch===v.epoch){v.busy=false;$("codexModelTraceResult").textContent=e.message;$("codexModelTraceStart").disabled=false;$("codexModelTraceModel").disabled=false;$("codexModelTraceReasoning").disabled=false}}
 }
-function exportCodexSteering(){
-  const report=codexSteeringView().report;if(!report?.done)return;
+async function cancelCodexModelTrace(){
+ const v=codexModelTraceView(),report=v.report,epoch=v.epoch;if(!report||report.done||v.busy)return;
+ v.busy=true;$("codexModelTraceCancel").disabled=true;
+ try{const next=await request(apiURL(`/api/codex/accounts/${encodeURIComponent(v.slot)}/modeltrace-probes/${encodeURIComponent(report.probe_id)}`),{method:"DELETE",headers:authHeaders()});if(epoch!==v.epoch)return;v.busy=false;renderCodexModelTraceReport(next);clearTimeout(v.timer);if(!next.done)v.timer=setTimeout(()=>pollCodexModelTrace(epoch,next.probe_id),1000)}catch(e){if(epoch===v.epoch){v.busy=false;$("codexModelTraceCancel").disabled=false;$("codexModelTraceResult").textContent=e.message}}
+}
+function exportCodexModelTrace(){
+  const report=codexModelTraceView().report;if(!report?.done)return;
   const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:"application/json"}));
-  const link=document.createElement("a");link.href=url;link.download=`steering-probe-${report.probe_id}.json`;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0);
+  const link=document.createElement("a");link.href=url;link.download=`modeltrace-probe-${report.probe_id}.json`;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),0);
 }
 function renderCodexAccounts(){
   const all=state.codex.accounts||[],rows=all;
@@ -1967,7 +1954,7 @@ function renderCodexAccounts(){
   if(!rows.length){$("codexAccTable").className="";$("codexAccTable").innerHTML=`<div class="empty">${all.length?"未找到匹配账号":"尚未导入 Codex OAuth 账号"}</div>`;return}
   const body=rows.map(item=>{
     const id=String(item.id||"");
-    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td>${codexAccountIdentity(item)}</td><td class="codex-account-state">${codexStatusTag(item.status)}${codexFingerprintControl(item)}${codexConcurrencyControl(item)}${codexBlockedModelsControl(item)}${codexSettingsActions(item)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}${accountRefreshScheduleBadge(item,"codex")}${codexQuotaObservationBadges(item)}</td><td class="codex-account-usage">${codexUsageSnapshotBadge(item)}</td><td class="codex-account-models">${codexModelSnapshotBadge(item)}</td><td>${codexAccountActivity(item)}</td><td class="codex-account-actions"><div class="actions">${codexSteeringControl(item)}<button class="link-btn" data-codex-discovery="${esc(id)}" ${state.codex.busy||discovering?"disabled":""}>${esc(t("同步模型"))}</button><button class="link-btn" data-codex-usage="${esc(id)}" ${state.codex.busy||usageRefreshing?"disabled":""}>${esc(t("刷新用量"))}</button><button class="link-btn" data-codex-refresh="${esc(id)}" title="${esc(t("强制续期 OAuth 凭证；成功后自动同步模型与上游用量"))}" ${state.codex.busy?"disabled":""}>${esc(t("刷新凭据"))}</button><button class="link-btn" data-codex-reauth="${esc(id)}" ${state.codex.busy?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>${esc(t("删除"))}</button></div></td></tr>`;
+    return `<tr><td><input type="checkbox" data-codex-check="${esc(id)}" ${state.codex.selected.has(id)?"checked":""}></td><td>${codexAccountIdentity(item)}</td><td class="codex-account-state">${codexStatusTag(item.status)}${codexFingerprintControl(item)}${codexConcurrencyControl(item)}${codexBlockedModelsControl(item)}${codexSettingsActions(item)}${textCooldownBadges(item.cooldowns)}${codexRefreshBadge(item)}${accountRefreshScheduleBadge(item,"codex")}${codexQuotaObservationBadges(item)}</td><td class="codex-account-usage">${codexUsageSnapshotBadge(item)}</td><td class="codex-account-models">${codexModelSnapshotBadge(item)}</td><td>${codexAccountActivity(item)}</td><td class="codex-account-actions"><div class="actions">${codexModelTraceControl(item)}<button class="link-btn" data-codex-discovery="${esc(id)}" ${state.codex.busy||discovering?"disabled":""}>${esc(t("同步模型"))}</button><button class="link-btn" data-codex-usage="${esc(id)}" ${state.codex.busy||usageRefreshing?"disabled":""}>${esc(t("刷新用量"))}</button><button class="link-btn" data-codex-refresh="${esc(id)}" title="${esc(t("强制续期 OAuth 凭证；成功后自动同步模型与上游用量"))}" ${state.codex.busy?"disabled":""}>${esc(t("刷新凭据"))}</button><button class="link-btn" data-codex-reauth="${esc(id)}" ${state.codex.busy?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-codex-delete="${esc(id)}" ${state.codex.busy?"disabled":""}>${esc(t("删除"))}</button></div></td></tr>`;
   }).join("");
   $("codexAccTable").className="";
   $("codexAccTable").innerHTML=`<div class="table-wrap"><table class="codex-account-table"><thead><tr><th><input type="checkbox" id="codexCheckAll" title="${esc(t("选择当前筛选结果"))}"></th><th>${esc(t("账号"))}</th><th>${esc(t("状态"))}</th><th>${esc(t("上游用量"))}</th><th>${esc(t("模型目录"))}</th><th>${esc(t("调用"))}</th><th>${esc(t("操作"))}</th></tr></thead><tbody>${body}</tbody></table></div>`;
@@ -1981,7 +1968,7 @@ function renderCodexAccounts(){
   document.querySelectorAll("[data-codex-discovery]").forEach(el=>el.onclick=()=>startCodexModelDiscovery([el.dataset.codexDiscovery]));
   document.querySelectorAll("[data-codex-usage]").forEach(el=>el.onclick=()=>startCodexUsageRefresh([el.dataset.codexUsage]));
   document.querySelectorAll("[data-codex-delete]").forEach(el=>el.onclick=()=>deleteCodexAccounts([el.dataset.codexDelete]));
-  document.querySelectorAll("[data-codex-steering]").forEach(el=>el.onclick=()=>openCodexSteering(el.dataset.codexSteering));
+  document.querySelectorAll("[data-codex-modeltrace]").forEach(el=>el.onclick=()=>openCodexModelTrace(el.dataset.codexModeltrace));
   document.querySelectorAll("[data-codex-fingerprint]").forEach(el=>el.onchange=()=>updateCodexFingerprintMode(el));
   document.querySelectorAll("[data-codex-concurrency]").forEach(el=>el.onchange=()=>updateCodexMaxConcurrency(el));
   document.querySelectorAll("[data-codex-blocked-models], [data-codex-blocked-model]").forEach(el=>el.onchange=()=>updateCodexBlockedModels(el));
@@ -4167,10 +4154,11 @@ $("codexAccReload").onclick=loadCodexAccounts;
 $("codexAccDiscovery").onclick=()=>startCodexModelDiscovery(selectedCodexIDs());
 $("codexAccUsage").onclick=()=>startCodexUsageRefresh(selectedCodexIDs());
 $("codexAccImport").onclick=openCodexImport;
-$("codexSteeringClose").onclick=()=>$("codexSteeringDialog").close();
-$("codexSteeringDialog").addEventListener("close",closeCodexSteering);
-$("codexSteeringStart").onclick=startCodexSteering;
-$("codexSteeringExport").onclick=exportCodexSteering;
+$("codexModelTraceClose").onclick=()=>$("codexModelTraceDialog").close();
+$("codexModelTraceDialog").addEventListener("close",closeCodexModelTrace);
+$("codexModelTraceStart").onclick=startCodexModelTrace;
+$("codexModelTraceCancel").onclick=cancelCodexModelTrace;
+$("codexModelTraceExport").onclick=exportCodexModelTrace;
 $("codexImportClose").onclick=$("codexImportCancel").onclick=()=>{clearCodexImport();$("codexImportDialog").close()};
 $("codexImportDialog").addEventListener("close",clearCodexImport);
 $("codexImportForm").onsubmit=submitCodexImport;

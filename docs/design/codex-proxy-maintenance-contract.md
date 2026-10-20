@@ -6,7 +6,9 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`17.7.0` 管理 Steering 检测采用原生优先、官方客户端式调用后备，任务 profile 为 native_first_client_fallback_v3。先执行 single_agent_no_tools_v1；已有 SUPPORTED 或 ACCEPTED_PENDING 时直接结束。原生已完成认证和父响应创建、已尝试 steer，但不支持或证据不足时，在无认证/模型拒绝/限流/取消/配置错误且剩余预算允许的条件下，关闭原连接后切换一次 codex_client_drain_no_tools_v2。客户端路径只模拟 rust-v0.163.0 / 83086188ae0614bd882818ff1aa23f3194962012 的普通非 lite 模式：父 created 后本地排队，读取父正式成功终态后在同连接以 previous_response_id + 增量 input 续接 response.create。报告只保留当前路径的一份能力结果，明确 check_profile/target/mode；fallback 只保存切换原因及原生尝试诊断，不提供两个并列能力结论。保留四种判定及分阶段证据，客户端成功不能被表述为原生支持。每条路径至多 60 秒，共用任务从创建起 120 秒和 8 MiB 总预算；最多三个 create/一个 steer，无循环切换、换号、HTTP 回退或生产输入重放。必要输入停止、取消清理、健康/下游隔离和 owner 凭据/额度语义不变。验收覆盖原生完成零客户端调用、明确拒绝/未知后的单次切换、禁止切换边界、单报告覆盖及诊断保留、预算/取消/深拷贝/API/Web。线上仍需管理员手工 live 验证。
+> 合同版本：`18.0.0` 原管理“检测上游能力”整体替换为 ModelTrace 模型指纹检测，删除旧 Steering 管理接口、专用 WS 状态机和后备执行器。新 application/modeldetection Module 拥有任务/挑战/评分，Proxy 只提供 typed 严格采样端口；新任务仅管理员手动启动，严格绑定指定 Codex 槽位和 exact model；使用固定 Pages 中文三挑战、独立 HTTP/SSE 请求、CoreCompatible 解析及直接复制的 v0.2.0 Engine。每任务最多三次推理请求、180 秒、每次 1 MiB 接收正文及完成响应、全局一个任务；无换号、换模型、未知结果重放或自动补采。账号 owner 负责准入/受控刷新/真实额度；质量排名不写生产健康或路由。异步执行必须确认 worker 退出后才释放租约；取消及停止时仍允许窄清理合同。报告保留 30 分钟、重启丢失，绑定协议/解析器/bank/请求摘要和逐样本终态；概率仅为库内相对权重，不确认身份或能力回退。验收覆盖严格准入、三挑战、排名、有效样本诊断、幂等冲突、跨槽隔离、取消/排空/释放重试、凭据隔离、管理鉴权及 Web 转义。真实 OAuth 路径及质量校准仍须独立 live 验证。
+
+历史合同：`17.7.0` 管理 Steering 检测采用原生优先、官方客户端式调用后备，任务 profile 为 native_first_client_fallback_v3。先执行 single_agent_no_tools_v1；已有 SUPPORTED 或 ACCEPTED_PENDING 时直接结束。原生已完成认证和父响应创建、已尝试 steer，但不支持或证据不足时，在无认证/模型拒绝/限流/取消/配置错误且剩余预算允许的条件下，关闭原连接后切换一次 codex_client_drain_no_tools_v2。客户端路径只模拟 rust-v0.163.0 / 83086188ae0614bd882818ff1aa23f3194962012 的普通非 lite 模式：父 created 后本地排队，读取父正式成功终态后在同连接以 previous_response_id + 增量 input 续接 response.create。报告只保留当前路径的一份能力结果，明确 check_profile/target/mode；fallback 只保存切换原因及原生尝试诊断，不提供两个并列能力结论。保留四种判定及分阶段证据，客户端成功不能被表述为原生支持。每条路径至多 60 秒，共用任务从创建起 120 秒和 8 MiB 总预算；最多三个 create/一个 steer，无循环切换、换号、HTTP 回退或生产输入重放。必要输入停止、取消清理、健康/下游隔离和 owner 凭据/额度语义不变。验收覆盖原生完成零客户端调用、明确拒绝/未知后的单次切换、禁止切换边界、单报告覆盖及诊断保留、预算/取消/深拷贝/API/Web。线上仍需管理员手工 live 验证。
 
 `17.6.4` 根据管理员提交的 x800 探测 `f9cb58e5-7419-426e-bf24-46fe044ae17f` 收口明确拒绝分类：精确识别 `unsupported_native_inflight_message`，在已创建父响应、已尝试提交 steer、父响应尚未结束且未接受 steer 时判为 `UNSUPPORTED_FOR_PROFILE`，协议状态为 failed，错误码与执行结果保留该结构化代码。`steering_not_supported` 同样不得覆盖已有 accepted 证据；只有 accepted 时仍为 UNKNOWN，已有 pending 或关联 successor 提交证据及已结束报告不得降级。未知代码、相似代码和仅错误文本仍不推断不支持；创建阶段或父响应结束后的新代码不证明 Steering 不支持。结论仅限本次账号、模型、通道、配置与时间；不以独立 response.create、HTTP 回退、重试或换号替代，保持健康隔离。验收覆盖原始 live 事件序列、阶段/发送/终态边界、接受与提交后错误、未知代码、实际 Mock WS 零重放及管理页 JSON 展示。历史报告不回填，新分类仍须部署后管理员手工复测。
 
@@ -587,11 +589,11 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-OBS-011` 转换失败须保留安全字段路径及有界 feature；Codex Messages 入口允许 `tool_result.content` 中的内联 Base64 PNG/JPEG/GIF/WebP 图片，按原顺序映射为 `function_call_output.output` 内的 `input_text/input_image` 内容数组，保留 call ID 和错误结果标记。纯文本工具结果保持字符串投影；通用 Provider 转换、普通消息图片和 document/URL 来源继续遵循既有能力边界。图片必须校验 Base64、媒体类型和单项结果 1 MiB 总编码预算；拒绝时定位到嵌套 content/source 字段，feature 区分 `tool_result.image` 与 `tool_result.content.type`，不得笼统声称不支持所有 tool_result。流转换异常记为 `conversion`，不得冒充客户端写入失败，不触发账号冷却。JSON `keepalive` 与 SSE 注释均不是业务输出，不完成请求、不续业务空闲/首事件超时；未知业务事件继续拒绝。账号冷却等准入失败的 `failure_class/retryable/retry_after_seconds` 必须同时进入运行记录和 round 元数据。
 
-`CP-PROBE-001` 管理 Steering 任务使用 native_first_client_fallback_v3。原生 response.steer 优先；已获 SUPPORTED 或 ACCEPTED_PENDING 直接结束。已创建父响应并尝试 steer 后的明确不支持或 UNKNOWN 可切换一次官方普通客户端式调用；认证/模型拒绝、限流、取消、配置错误、无父响应或未发送 steer 不切换。客户端在父成功终态后以 previous_response_id + 增量 input 续接，关联后继 created 才支持，本地入队/写入不等同上游接受。
+`CP-PROBE-001` 手动 ModelTrace 任务固定原版 Pages 三挑战，CoreCompatible 逐样本评分后等权聚合。逐条保留完成/失败及接纳诊断，不自动补采；请求模型不在 bank 时显式提示，库内权重不代表身份概率。
 
-`CP-PROBE-002` 切换前关闭原连接，严格绑定同一账号但采用独立合成会话，不重放生产输入、不循环重试、不回退 HTTP、不换号、不执行工具、不写探测健康。每条路径至多 60 秒，共用任务 120 秒及 8 MiB 接收总预算、消息 1 MiB；无预算不启动后备路径。原生已完成时最多一次 create/steer；发生切换时总计最多三个 create/一个 steer。必要凭据刷新和真实额度头仍由既有 owner 处理。
+`CP-PROBE-002` 严格目标准入、受控刷新、持租约逐请求复查；三次独立 HTTP/SSE，禁止生产路由/Steering/换号/换模型/重放。合成请求同样遵循 `CP-REQ-003`，显式携带字符串 `instructions: ""`；验收同时检查 Proxy 提交与上游身份投影后的最终出站正文，不能把字段缺失视为空串。全局一个任务、180 秒总预算、每次 1 MiB 接收正文及完成响应、最多三次推理。真实额度照常合并，结论不修改生产健康。
 
-`CP-PROBE-003` 报告和页面只显示一份当前/最终能力、阶段、错误、时序及正式用量，并标明实际路径。fallback 只记录切换原因及前次诊断（不含并列 capability），快照、查询、导出深拷贝；整体 done 控制清理、轮询与再次开始。取消/配置变化保留最终路径的既有提交证据；旧原生报告按原 profile 展示，不回填。详见[检测方案](../Mid-turnSteering协议检测器.md)。
+`CP-PROBE-003` typed Start/Snapshot/Close 保证实际 worker 排空及检查式租约释放；清理失败保留占用并重试。报告深拷贝，只有清理完成才 done；管理鉴权/写保护、幂等、查询跨槽隔离、取消与导出均受控。报告内存保留 30 分钟，重启不保留。
 
 ## 12. 运行时与组件边界
 
@@ -629,8 +631,6 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 | 规则 | 状态 | 实现 | 验收证据 |
 |---|---|---|---|
-| CP-PROBE-001/002 | implemented（本地）；待 live 验收 | steering/fallback.go、client.go 与 biz/steering.go | TestClientFallbackPolicy、TestSteeringNativeFirstFallback、TestSteeringFallbackCancellation、TestSteeringFallbackSharedReceiveBudget、TestSteeringDeadlinePreventsFallback、TestClientQueueDrainAndIndependentUsage |
-| CP-PROBE-003 | implemented（本地）；待 live 验收 | typed events 单报告/fallback 诊断、管理 UI | TestSteeringFallbackSnapshotClone、TestSteeringFallbackReportProjectionAndCleanup、TestSteeringFallbackManagementJSON、web/admin/steering.test.cjs |
 
 状态取值：`implemented`、`in_progress`、`planned`、`blocked`。只有代码和测试证据同时存在才能标记 `implemented`。
 
@@ -916,3 +916,5 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 - 只有上游执行的 timeout/network/upstream 等故障才能参与既有账号反馈；本地容量拒绝、排队过期、客户端与停机取消保持中性。HTTP 503 `failure_class=local_capacity|queue_timeout` 携带可重试提示，真实上游 503 不改写成本地错误。
 - `queue_wait_ms` 是投递至 handler 进入的等待；响应 `duration_ms` 保持响应头耗时。`read_duration_ms` 与 `first_upstream_event_duration_ms` 从开始读取响应体计时；`upstream_event_count`/`upstream_wire_bytes` 在语义缓冲和客户端消费之前累计，keepalive 不计业务事件。`read_observed` 区分未建立读取与读取后零业务事件。`first_client_event_duration_ms` 从流 attempt 开始至第一个业务事件成功交付回调返回，不代表客户端应用已消费。
 - 历史归档不回填；归档关闭时仍输出有界失败诊断。不得输出账号、凭据、代理 URL、上下文正文或原始错误文本。
+
+当前检测实现与验收：`application/modeldetection`、`proxyapi/biz/codex_modeltrace.go`、`codexupstream/biz/sample.go`、管理 modeltrace API 与 `web/admin/modeltrace.test.cjs`。旧 17.x Steering 合同仅为历史，不再提供旧接口。

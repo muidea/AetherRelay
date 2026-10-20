@@ -43,7 +43,10 @@ internal/modules/
   blocks/codexupstream/    原生 Codex Responses 上游技术 Block
     biz/                         HTTP/SSE、账号作用域模型枚举、账号代理与有界 Pull/Cancel 流执行
     pkg/events/                  上游执行 owner 的 typed EventHub 合同
-    pkg/steering/                管理探测的固定报文、事件关联和能力分类纯逻辑
+    biz/sample.go               有界 HTTP/SSE 合成采样、查询和检查式关闭
+  application/modeldetection/   模型指纹检测任务、三挑战编排与报告 Application Module
+    biz/                         检测任务与不可变 Engine 评分（无凭据）
+    pkg/events/                  管理 Start/Get/Cancel typed 合同
   application/proxyapi/         OpenAI/Anthropic Application Module
     biz/                         EventHub 配置更新与运行期依赖
     pkg/events/                  Proxy Module 自有的配置更新合同
@@ -96,7 +99,8 @@ web/admin/                嵌入二进制的管理页
 - Usage 与 Metrics/SLO 是独立技术 Block，不暴露 HTTP route 或可变资源对象。Metrics Block 经 `MetricsPort` 接收记录事件和返回只读投影；Proxy 直接持有其唯一使用的 Client API Key 索引与 interaction archive。
 - Codex OAuth 账号池是单一凭据、模型快照与上游用量快照资源 owner，因此位于 `blocks/codexaccountpool`，而不是 ChatGPT Web 的编排 Module；它以 typed EventHub 命令提供账号管理视图、短时 request credential、账号模型/用量快照、额度/冷却结果反馈与单飞刷新。`blocks/codexupstream` 只拥有 Codex Responses HTTP/SSE、`wham/usage` 用量投影、额度受限投影和账号作用域模型枚举技术执行，不持有账号池状态。`proxyapi` 负责编排定时与手动发现、显式用量刷新（均含有界进度）、有效目录合成、获取账号、401 刷新后安全重试一次、429 切换账号及 usage/归档结算，HTTP handler 不直接访问 token、store 或上游 client。
 - Proxy API 与 Provider Admin 是有状态业务聚合 Module：它们通过 EventHub 获取 Block 依赖，并在 `Setup` 中注入 `RouteRegistryHelper`、在 `Run` 中注册各自路由。Admin 请求 Config Block 激活新配置，Config Block 同步命令 Proxy 应用新快照。Proxy 仅注册协议白名单路径，不依赖 Module Weight 确保路由优先级。
-- 管理面 Steering 检测沿用既有单元，不新增进程或 Block：Admin 的 `codex_steering.go` 适配管理请求，Proxy Biz 的同名文件持有有界任务、幂等记录和短周期控制逻辑，账号 owner 的 `steering.go` 提供严格槽位准入/租约及执行配置版本，上游 owner 的 `steering.go` 管理独立 WS 引擎。运行时版本不持久化，正常 Token 刷新不改变它；探测发起的刷新按租约/版本守卫应用结果并受任务预算限制。槽位 ID 在任务及并发入口统一去除首尾空白；WS 出站前的复查由 owner 验证已有租约，仅豁免自身一个并发占用，拒绝即释放租约并终结。跨单元仅使用各 owner 的 typed EventHub 合同，探测结果不进入数据面健康/路由；停机必须关闭引擎、确认租约释放并真实排空。
+- 模型指纹检测为独立 `application/modeldetection` Module：`module.go` 只桥接生命周期，`biz` 内嵌共享 Base 并拥有挑战、任务和评分，`pkg/events` 定义 typed 管理合同。入口显式 import；不依赖 Weight 建立合同依赖。Admin 通过 EventHub 调用；Proxy 的 `codex_modeltrace.go` 只负责严格账号采样，其 `pkg/events/modeltrace.go` 定义执行端口；账号 owner 的 `probe_admission.go` 保留共享准入/刷新/租约能力，上游 `sample.go` 拥有 HTTP/SSE worker 和真实排空屏障。跨单元不注入实现或资源句柄，所有网络/周期任务挂 BackgroundRoutine。`internal/pkg/modeltrace` 直接复制 PoC 的纯算法与内嵌资产，没有独立运行单元。旧 Steering 页面、接口、专用状态机和后备执行链全部移除。
+
 - `internal/pkg/aetherrelayarchive`、`internal/pkg/aetherrelayclientauth`、`internal/pkg/aetherrelayconfig`、`internal/pkg/aetherrelaystate`、`internal/pkg/aetherrelayusage`、`internal/pkg/aetherrelaymetrics` 是对应运行单元使用的 focused package；它们不拥有 HTTP route 或 framework 生命周期。`aetherrelaystate` 只提供同一 `state.database` 的受限连接与 owner 表，不承载跨 owner 的业务读写。
 - EventHub topic、Command、Data、Result 与 handler 由维护资源、状态或能力的 owner 在其 `pkg/events` 定义：调用方只导入并使用 owner 合同，不得按投递方复制 DTO 或 topic；`aetherrelaymetricsport` 仅定义 Metrics 的窄端口，生产实现由 Metrics owner-local EventHub client 提供。
 - 新增 magicCommon plugin module 的前提是：具备独立 Setup/Run/Teardown、正式状态 owner、route/listener 或 EventHub 订阅，并由 `cmd` 显式加载；不得仅为缩短文件而创建 module。

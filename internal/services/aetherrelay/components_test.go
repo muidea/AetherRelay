@@ -6,6 +6,7 @@ import (
 	_ "aetherrelay/internal/modules/application/chatgptaccountpool"
 	_ "aetherrelay/internal/modules/application/chatgptimagetask"
 	_ "aetherrelay/internal/modules/application/chatgpttemporarychat"
+	_ "aetherrelay/internal/modules/application/modeldetection"
 	_ "aetherrelay/internal/modules/application/proxyapi"
 	_ "aetherrelay/internal/modules/blocks/chatgptimagestore"
 	_ "aetherrelay/internal/modules/blocks/chatgptwebupstream"

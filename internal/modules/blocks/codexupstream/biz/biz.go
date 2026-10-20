@@ -103,7 +103,7 @@ type Upstream struct {
 	basebiz.Base
 	topics     []string
 	mu         sync.Mutex
-	steering   map[string]*steeringSession
+	samples    map[string]*sampleSession
 	streams    map[string]*responseStream
 	websockets map[string]*websocketSession
 	stopping   bool
@@ -114,10 +114,10 @@ type Upstream struct {
 
 func New(hub event.Hub, background task.BackgroundRoutine) *Upstream {
 	b := &Upstream{Base: basebiz.New(common.UnitID, hub, background), streams: map[string]*responseStream{}, websockets: map[string]*websocketSession{}, active: map[string]context.CancelFunc{}}
-	b.topics = []string{events.TopicSteeringStart, events.TopicSteeringSnapshot, events.TopicSteeringClose, events.TopicComplete, events.TopicCompact, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicWSOpen, events.TopicWSSend, events.TopicWSPull, events.TopicWSClose, events.TopicListModels, events.TopicGetUsage}
-	b.SubscribeFunc(events.TopicSteeringStart, b.commandHandler(b.handleSteeringStart))
-	b.SubscribeFunc(events.TopicSteeringSnapshot, b.commandHandler(b.handleSteeringSnapshot))
-	b.SubscribeFunc(events.TopicSteeringClose, b.commandHandler(b.handleSteeringClose))
+	b.topics = []string{events.TopicSampleStart, events.TopicSampleSnapshot, events.TopicSampleClose, events.TopicComplete, events.TopicCompact, events.TopicStart, events.TopicPull, events.TopicCancel, events.TopicWSOpen, events.TopicWSSend, events.TopicWSPull, events.TopicWSClose, events.TopicListModels, events.TopicGetUsage}
+	b.SubscribeFunc(events.TopicSampleStart, b.commandHandler(b.handleSampleStart))
+	b.SubscribeFunc(events.TopicSampleSnapshot, b.commandHandler(b.handleSampleSnapshot))
+	b.SubscribeFunc(events.TopicSampleClose, b.commandHandler(b.handleSampleClose))
 	b.SubscribeFunc(events.TopicComplete, b.commandHandler(b.handleComplete))
 	b.SubscribeFunc(events.TopicCompact, b.commandHandler(b.handleCompact))
 	b.SubscribeFunc(events.TopicStart, b.commandHandler(b.handleStart))
@@ -177,7 +177,7 @@ func (s *Upstream) BeginShutdown(context.Context) *cd.Error {
 	s.mu.Lock()
 	s.stopping = true
 	var cancelers []context.CancelFunc
-	for _, probe := range s.steering {
+	for _, probe := range s.samples {
 		cancelers = append(cancelers, probe.cancel)
 	}
 	for _, cancel := range s.active {
@@ -225,7 +225,7 @@ func (s *Upstream) Teardown(ctx context.Context) {
 	s.mu.Lock()
 	s.websockets = map[string]*websocketSession{}
 	s.streams = map[string]*responseStream{}
-	s.steering = nil
+	s.samples = nil
 	s.mu.Unlock()
 }
 
@@ -460,6 +460,12 @@ func (s *Upstream) closeWebsocket(id string) bool {
 }
 
 func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
+	s.completeBounded(ev, result, 0)
+}
+
+// completeBounded shares the native execution path; a nonzero wire cap is only
+// used by synthetic sampling, leaving production completion semantics intact.
+func (s *Upstream) completeBounded(ev event.Event, result event.Result, maxWireBytes int64) {
 	if result == nil {
 		return
 	}
@@ -484,6 +490,9 @@ func (s *Upstream) handleComplete(ev event.Event, result event.Result) {
 		body, observation, retryAfter, safeError := readArchivedErrorObservation(response, &attempt, profile)
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
+	}
+	if maxWireBytes > 0 {
+		response.Body = &limitedSampleBody{Reader: io.LimitReader(response.Body, maxWireBytes), Closer: response.Body}
 	}
 	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes, &attempt.Response)
 	if err != nil {

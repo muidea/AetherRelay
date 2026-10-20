@@ -51,7 +51,7 @@ type ClientKeyRuntime interface {
 }
 
 type Proxy struct {
-	steering steeringJobs
+	modeltrace modeltraceJobs
 	basebiz.Base
 	config   config.Config
 	usage    usage.Store
@@ -108,8 +108,10 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	biz.usage = usageStore
 	biz.metrics = metrics
 	biz.recorder = recorder
-	biz.SubscribeFunc(proxyevents.TopicStartSteeringProbe, biz.handleStartSteeringProbe)
-	biz.SubscribeFunc(proxyevents.TopicGetSteeringProbe, biz.handleGetSteeringProbe)
+	biz.SubscribeFunc(proxyevents.TopicStartModelTraceProbe, biz.handleStartModelTraceProbe)
+	biz.SubscribeFunc(proxyevents.TopicGetModelTraceProbe, biz.handleGetModelTraceProbe)
+	biz.SubscribeFunc(proxyevents.TopicCancelModelTraceProbe, biz.handleCancelModelTraceProbe)
+	biz.SubscribeFunc(proxyevents.TopicDrainModelTraceProbe, biz.handleDrainModelTraceProbe)
 	biz.SubscribeFunc(proxyevents.TopicUpdateConfig, biz.handleUpdate)
 	biz.SubscribeFunc(proxyevents.TopicEffectiveCatalog, biz.handleEffectiveCatalog)
 	biz.SubscribeFunc(proxyevents.TopicStartCodexDiscovery, biz.handleStartCodexDiscovery)
@@ -153,7 +155,7 @@ func (s *Proxy) archiveUnredactedHeaders() bool {
 }
 
 func (s *Proxy) Run(ctx context.Context) *cd.Error {
-	s.Timer(ctx, 200*time.Millisecond, 0, s.tickSteering)
+	s.Timer(ctx, 200*time.Millisecond, 0, s.tickModelTrace)
 	s.startModelDiscovery(ctx)
 	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
 		s.Timer(ctx, min(interval, time.Minute), 0, s.startScheduledCodexUsageRefresh)
@@ -162,11 +164,13 @@ func (s *Proxy) Run(ctx context.Context) *cd.Error {
 }
 
 func (s *Proxy) Teardown(ctx context.Context) {
-	if err := s.drainSteering(ctx); err != nil {
+	if err := s.drainModelTrace(ctx); err != nil {
 		panic(err)
 	}
-	s.UnsubscribeFunc(proxyevents.TopicStartSteeringProbe)
-	s.UnsubscribeFunc(proxyevents.TopicGetSteeringProbe)
+	s.UnsubscribeFunc(proxyevents.TopicStartModelTraceProbe)
+	s.UnsubscribeFunc(proxyevents.TopicGetModelTraceProbe)
+	s.UnsubscribeFunc(proxyevents.TopicCancelModelTraceProbe)
+	s.UnsubscribeFunc(proxyevents.TopicDrainModelTraceProbe)
 	s.mu.Lock()
 	websockets := s.codexWebsockets
 	s.codexWebsockets = nil

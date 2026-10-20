@@ -17,10 +17,10 @@ type submittedAtKey struct{}
 func BindCommandLane(ev event.Event) event.Event {
 	lane := common.UnitID + "/request/" + uuid.NewString()
 	switch cmd := ev.Data().(type) {
-	case SteeringSnapshotCommand:
-		lane = common.UnitID + "/steering/read/" + cmd.ProbeID
-	case SteeringCloseCommand:
-		lane = common.UnitID + "/steering/close/" + cmd.ProbeID
+	case SampleSnapshotCommand:
+		lane = common.UnitID + "/sample/read/" + cmd.ProbeID
+	case SampleCloseCommand:
+		lane = common.UnitID + "/sample/close/" + cmd.ProbeID
 	case PullCommand:
 		lane = common.UnitID + "/stream/read/" + cmd.StreamID
 	case CancelCommand:
