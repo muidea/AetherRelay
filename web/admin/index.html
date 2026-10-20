@@ -75,6 +75,30 @@
       #modelMetadataForm .form-grid{grid-template-columns:1fr}#modelMetadataForm .field.full{grid-column:auto}
     }
 
+    #codexModelTraceDialog{width:min(960px,calc(100vw - 32px));max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);overflow:hidden}
+    #codexModelTraceDialog[open]{display:flex;flex-direction:column}
+    #codexModelTraceDialog .modal-head,#codexModelTraceDialog .modal-foot{flex-shrink:0}
+    #codexModelTraceDialog .modal-body{min-height:0;max-height:none;overflow:auto;overflow-wrap:anywhere}
+    #codexModelTraceDialog .modal-foot{flex-wrap:wrap}
+    #codexModelTraceAccount{margin:0;font-weight:600}
+    .modeltrace-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .modeltrace-controls .control{min-width:0}
+    .modeltrace-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 20px;margin:0 0 16px;padding:14px;background:#fafafa;border:1px solid var(--line);border-radius:6px}
+    .modeltrace-summary dt{color:#666;font-size:12px}.modeltrace-summary dd{margin:2px 0 0}
+    .modeltrace-prediction{margin:16px 0 4px;font-size:16px}.modeltrace-prediction strong{color:var(--primary)}
+    #codexModelTraceDialog table{min-width:0;width:100%;margin:10px 0}
+    #codexModelTraceDialog th,#codexModelTraceDialog td{white-space:normal;overflow-wrap:anywhere;vertical-align:top}
+    #codexModelTraceDialog th:first-child{width:48%}
+    #codexModelTraceDialog details{margin:12px 0}#codexModelTraceDialog summary{cursor:pointer;color:#595959}
+    #codexModelTraceJSON{white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}
+    .modeltrace-samples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 16px}
+    .modeltrace-sample{padding:12px;border:1px solid var(--line);border-radius:6px;min-width:0}
+    .modeltrace-sample-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+    .modeltrace-sample p{margin:4px 0;font-size:12px;color:#666}
+    .modeltrace-alert{padding:10px 12px;border:1px solid #ffe58f;border-radius:6px;background:#fffbe6;margin:10px 0}
+    #codexModelTraceDialog .modeltrace-error{color:#a8071a;white-space:pre-wrap}
+    @media(max-width:600px){.modeltrace-controls,.modeltrace-samples{grid-template-columns:1fr}.modeltrace-controls{gap:0}.modeltrace-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}#codexModelTraceDialog th,#codexModelTraceDialog td{padding:8px 6px}#codexModelTraceDialog .modal-foot .btn{height:auto;min-height:32px;white-space:normal;flex:1 1 auto}}
+
     .tc-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px;min-height:560px}
     .tc-list,.tc-main{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;min-height:560px}
     .tc-list-head,.tc-main-head{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -612,15 +636,17 @@
   <div class="modal-foot"><button class="btn" type="button" id="cgExportCancel">取消</button><button class="btn btn-primary" type="button" id="cgExportConfirm">确认导出并下载</button></div>
 </dialog>
 <!-- credential_type=chatgpt_web / credential_type=codex_cli are optional metadata; the import dialog selects the credential domain. -->
-<dialog id="codexModelTraceDialog">
-  <div class="modal-head"><span class="modal-title">检测模型指纹</span><button class="close" type="button" id="codexModelTraceClose">×</button></div>
+<dialog id="codexModelTraceDialog" aria-labelledby="codexModelTraceTitle">
+  <div class="modal-head"><span class="modal-title" id="codexModelTraceTitle">检测模型指纹</span><button class="close" type="button" id="codexModelTraceClose" aria-label="关闭">×</button></div>
   <div class="modal-body">
     <p id="codexModelTraceAccount"></p>
-    <p class="help">通过三条独立中文挑战检测数字行为指纹，最多发起三次推理请求，可能消耗额度。候选排名和库内相对权重不确认真实模型身份或能力回退。</p>
-    <div class="field"><label class="label" for="codexModelTraceModel">模型</label><select id="codexModelTraceModel" class="control"></select></div>
-    <div class="field"><label class="label" for="codexModelTraceReasoning">推理强度</label><select id="codexModelTraceReasoning" class="control"><option value="upstream_default">上游默认</option><option>none</option><option>minimal</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></div>
+    <p class="help">最多发起三次推理请求，可能消耗额度。</p>
+    <div class="modeltrace-controls">
+      <div class="field"><label class="label" for="codexModelTraceModel">模型</label><select id="codexModelTraceModel" class="control"></select></div>
+      <div class="field"><label class="label" for="codexModelTraceReasoning">推理强度</label><select id="codexModelTraceReasoning" class="control"><option value="upstream_default">上游默认</option><option>none</option><option>minimal</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></div>
+    </div>
     <div id="codexModelTraceResult" aria-live="polite"></div>
-    <details><summary>检测 JSON 报告</summary><pre id="codexModelTraceJSON" class="mono" style="white-space:pre-wrap;overflow-wrap:anywhere" data-i18n-ignore></pre></details>
+    <details><summary>检测 JSON 报告</summary><pre id="codexModelTraceJSON" class="mono" data-i18n-ignore></pre></details>
     <p class="help">报告完成后保留 30 分钟；服务重启后需重新检测。关闭窗口不会取消服务端任务。</p>
   </div>
   <div class="modal-foot"><button class="btn" type="button" id="codexModelTraceCancel" disabled>取消检测</button><button class="btn" type="button" id="codexModelTraceExport" disabled>下载检测报告</button><button class="btn btn-primary" type="button" id="codexModelTraceStart">开始检测</button></div>
@@ -690,6 +716,9 @@ const languageCookieName="aetherrelay_admin_lang";
 // Keep stable Chinese source keys in one small runtime dictionary. Static DOM
 // is localized through the same dictionary, while dynamic labels use t().
 const enUS={
+ "最多发起三次推理请求，可能消耗额度。":"Up to three inference requests may consume quota.",
+ "候选排名仅表示行为指纹接近程度，不确认真实模型身份或能力回退。":"Rankings measure behavioral fingerprint similarity; they do not establish model identity or quality regression.",
+ "其余候选模型（{count}）":"Other candidate models ({count})","挑战 {number}":"Challenge {number}",
  "检测模型指纹":"Check model fingerprint","取消检测":"Cancel probe","推理强度":"Reasoning effort","上游默认":"Upstream default","模型指纹检测暂不适用于 ChatGPT Web 槽位":"Model fingerprint probes are not yet available for ChatGPT Web slots","行为指纹最接近":"Closest behavioral fingerprint","请求模型已收录于参考库":"Requested model is included in the reference bank","请求模型未收录于参考库；排名不证明模型被替换":"Requested model is absent from the reference bank; rankings do not prove model substitution","库内相对权重":"Relative weight within the bank","分布相似度":"Profile similarity","家族分布":"Family distribution","完成采样":"Completed samples","计入样本":"Accepted samples","计入":"Accepted","未计入":"Rejected","解析数量":"Parsed count","要求数量":"Expected count","接纳情况":"Acceptance","挑战":"Challenge","等待资源释放":"Waiting for cleanup","准备采样":"Preparing sample","仅提供闭集行为指纹排名；路径适用性与质量回退尚未验证。":"Closed-set behavioral rankings only; path applicability and quality regression have not been validated.","通过三条独立中文挑战检测数字行为指纹，最多发起三次推理请求，可能消耗额度。候选排名和库内相对权重不确认真实模型身份或能力回退。":"Three independent Chinese challenges measure numeric behavioral fingerprints and may consume quota through up to three inference requests. Rankings and relative weights do not establish backend identity or quality regression.","报告完成后保留 30 分钟；服务重启后需重新检测。关闭窗口不会取消服务端任务。":"Completed reports remain available for 30 minutes and are lost on restart. Closing the window does not cancel the server task.","检测 JSON 报告":"Probe JSON report","下载检测报告":"Download probe report","开始检测":"Start probe","正在查询最近检测…":"Loading latest probe…","暂无可用检测报告；请选择模型并手工开始检测。":"No probe report available. Select a model and start a probe manually.","结果已过期或服务已重启，请重新检测":"Report expired or service restarted; start a new probe",
 
   "上游请求模型":"Upstream request model","响应模型":"Response model","上游模型替换":"Upstream model substitution",
@@ -1859,10 +1888,18 @@ function codexModelTraceLabel(value){
 function renderCodexModelTraceReport(report){
  const v=codexModelTraceView();v.report=report;if(!report)return;
  const samples=Array.isArray(report.samples)?report.samples:[],a=report.result?.analysis;
- const rows=[["任务 ID",report.probe_id],["槽位",report.target_slot_id],["请求模型",report.model],["推理强度",report.reasoning],["任务状态",codexModelTraceLabel(report.state)],["完成采样",`${samples.filter(s=>s.state==="completed").length} / 3`],["计入样本",a?.used_outputs??"—"],["准入原因",report.admission_reason||"—"],["错误代码",report.error_code||"—"],["Bank SHA256",report.bank?.bank_sha256||report.result?.snapshot?.bank_sha256||"—"]];
- const ranking=a?.results?.length?`<p>${esc(t("行为指纹最接近"))}：${esc(a.prediction_name||a.prediction)}</p><p>${esc(t(report.result.requested_model_in_bank?"请求模型已收录于参考库":"请求模型未收录于参考库；排名不证明模型被替换"))}</p><table><thead><tr>${["候选模型","库内相对权重","分布相似度"].map(k=>`<th>${esc(t(k))}</th>`).join("")}</tr></thead><tbody>${a.results.map(c=>`<tr><td>${esc(c.display_name||c.model)}</td><td>${esc((Number(c.probability)*100).toFixed(2))}%</td><td>${esc((Number(c.profile_similarity)*100).toFixed(2))}%</td></tr>`).join("")}</tbody></table><p>${esc(t("家族分布"))}：${esc((a.family_probabilities||[]).map(f=>`${f.display_name||f.family} ${(Number(f.probability)*100).toFixed(2)}%`).join(" · "))}</p>`:"";
- const sampleRows=samples.map((sample,i)=>{const d=a?.diagnostics?.[i]||(report.done&&report.parsed_counts?{parsed_numbers:report.parsed_counts[i],accepted:false}:null);return `<tr>${[i+1,codexModelTraceLabel(sample.state),sample.expected_count,d?.parsed_numbers??"—",d? t(d.accepted?"计入":"未计入"):"—",sample.usage?JSON.stringify(sample.usage):"—",sample.error_code||"—"].map(v=>`<td>${esc(v)}</td>`).join("")}</tr>`}).join("");
- $("codexModelTraceResult").innerHTML=`${report.historical?`<p>${esc(t("历史观测：账号配置已变化，请重新检测"))}</p>`:""}<table><tbody>${rows.map(([k,v])=>`<tr><th>${esc(t(k))}</th><td>${esc(v??"—")}</td></tr>`).join("")}</tbody></table>${ranking}<table><thead><tr>${["挑战","状态","要求数量","解析数量","接纳情况","用量","错误代码"].map(k=>`<th>${esc(t(k))}</th>`).join("")}</tr></thead><tbody>${sampleRows}</tbody></table><p>${esc(t("仅提供闭集行为指纹排名；路径适用性与质量回退尚未验证。"))}</p>`;
+ const rows=[["请求模型",report.model],["推理强度",report.reasoning==="upstream_default"?t("上游默认"):report.reasoning],["任务状态",codexModelTraceLabel(report.state)],["完成采样",`${samples.filter(s=>s.state==="completed").length} / 3`]];
+ if(a?.used_outputs!=null)rows.push(["计入样本",a.used_outputs]);
+ const percent=value=>typeof value==="number"&&Number.isFinite(value)?`${(value*100).toFixed(2)}%`:"—";
+ const rankingTable=candidates=>`<table><thead><tr>${["候选模型","库内相对权重","分布相似度"].map(k=>`<th scope="col">${esc(t(k))}</th>`).join("")}</tr></thead><tbody>${candidates.map(c=>`<tr><td>${esc(c.display_name||c.model)}</td><td>${esc(percent(c.probability))}</td><td>${esc(percent(c.profile_similarity))}</td></tr>`).join("")}</tbody></table>`;
+ const ranking=a?.results?.length?`<p class="modeltrace-prediction">${esc(t("行为指纹最接近"))}：<strong>${esc(a.prediction_name||a.prediction)}</strong></p><p class="help">${esc(t("候选排名仅表示行为指纹接近程度，不确认真实模型身份或能力回退。"))}</p>${report.result.requested_model_in_bank===false?`<p class="help">${esc(t("请求模型未收录于参考库；排名不证明模型被替换"))}</p>`:""}${rankingTable(a.results.slice(0,3))}${a.results.length>3?`<details><summary>${esc(t("其余候选模型（{count}）",{count:a.results.length-3}))}</summary>${rankingTable(a.results.slice(3))}</details>`:""}`:"";
+ const sampleCards=samples.map((sample,i)=>{
+   const d=a?.diagnostics?.[i],parsed=d?.parsed_numbers??report.parsed_counts?.[i];
+   const metrics=[["要求数量",sample.expected_count],["解析数量",parsed]].filter(([,value])=>value!=null);
+   return `<div class="modeltrace-sample"><div class="modeltrace-sample-head"><strong>${esc(t("挑战 {number}",{number:i+1}))}</strong><span>${esc(codexModelTraceLabel(sample.state))}</span></div>${metrics.map(([label,value])=>`<p>${esc(t(label))}：${esc(value)}</p>`).join("")}${d?`<p>${esc(t(d.accepted?"计入":"未计入"))}</p>`:""}${sample.error_code?`<p class="modeltrace-error">${esc(t("错误代码"))}：${esc(sample.error_code)}</p>`:""}</div>`;
+ }).join("");
+ const errors=[["准入原因",report.admission_reason],["错误代码",report.error_code]].filter(([,value])=>value);
+ $("codexModelTraceResult").innerHTML=`${report.historical?`<p class="modeltrace-alert">${esc(t("历史观测：账号配置已变化，请重新检测"))}</p>`:""}<dl class="modeltrace-summary">${rows.map(([k,value])=>`<div><dt>${esc(t(k))}</dt><dd>${esc(value??"—")}</dd></div>`).join("")}</dl>${errors.length?`<div class="modeltrace-alert">${errors.map(([label,value])=>`<div class="modeltrace-error">${esc(t(label))}：${esc(value)}</div>`).join("")}</div>`:""}${ranking}${sampleCards?`<div class="modeltrace-samples">${sampleCards}</div>`:""}`;
  $("codexModelTraceJSON").textContent=JSON.stringify(report,null,2);
  $("codexModelTraceExport").disabled=!report.done;
  $("codexModelTraceCancel").disabled=v.busy||!!report.done;
@@ -1891,7 +1928,7 @@ async function openCodexModelTrace(id){
   closeCodexModelTrace();const v=codexModelTraceView(),epoch=v.epoch;v.slot=id;v.report=null;v.key="";v.keyModel="";
   const account=state.codex.accounts.find(item=>item.id===id);if(!account)return;
   const models=Array.isArray(account.model_snapshot?.models)?account.model_snapshot.models:[];
-  $("codexModelTraceAccount").textContent=`${account.email||id} · ${id}`;
+  $("codexModelTraceAccount").textContent=account.email||id;
   $("codexModelTraceModel").innerHTML=models.map(model=>`<option value="${esc(model.id)}">${esc(model.id)}</option>`).join("");
   $("codexModelTraceReasoning").value="upstream_default";$("codexModelTraceReasoning").disabled=true;$("codexModelTraceCancel").disabled=true;$("codexModelTraceModel").disabled=true;$("codexModelTraceStart").disabled=true;$("codexModelTraceExport").disabled=true;
   $("codexModelTraceResult").textContent=t("正在查询最近检测…");$("codexModelTraceJSON").textContent="";
