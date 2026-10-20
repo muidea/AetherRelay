@@ -1,113 +1,159 @@
 # AetherRelay
 
-一个本地运行的 AI 网关：一个地址、一套标准接口，就能接入多家 AI 服务。现有 OpenAI 或 Anthropic 客户端改一下 base URL 即可使用；网关负责挑选服务商、在故障时自动切换，并记录每一次调用的用量。单进程、无外部依赖，开箱即用，附带本地管理页面。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## 功能亮点
+AetherRelay 是一个可自行部署的 AI 网关，通过统一地址接入多个 AI 服务商、ChatGPT Web 与 Codex OAuth 账号池。客户端使用 OpenAI 或 Anthropic 兼容接口，网关负责模型路由、权限校验、可恢复故障切换和用量记录。
 
-- **统一入口，无需改代码**：只提供 OpenAI 与 Anthropic 两种标准接口，兼容绝大多数 AI 客户端与工具；按请求中的模型名精确匹配对应的服务商。
-- **多服务商自动切换**：同一个模型可以配置多家服务商并设定优先级，网关按序挑选；上游暂时不可用且响应尚未返回时，自动尝试下一个服务商。
-- **用量自动记账**：每次调用自动记录用量与归属（哪个客户端、哪个模型、哪个服务商），管理页面可按时间、Key、模型筛选查看。
-- **网页管理台**：在浏览器中管理服务商与客户端密钥、查看用量统计、体检各服务商可用性，并展示系统信息（版本、运行时长、开放端点与认证方式）。
-- **ChatGPT 网页账号接入**：导入 ChatGPT 网页账号即可使用文本对话、图片生成与联网搜索，无需官方 API Key。
-- **Codex OAuth 账号池**：接入 Codex CLI 登录的账号，提供 Responses 接口；模型自动发现、登录态自动刷新、额度情况一目了然。
-- **管理台工具集**：临时对话（支持发图与逐轮联网搜索）、图片任务与图片库、在线搜索，供管理员日常使用。
-- **安全默认**：默认只监听本机；所有请求必须携带客户端密钥；密钥与账号凭据不写入日志、数据库或网页。
+项目采用 Go 实现，单进程运行，内嵌 DuckDB 与中英文 Web 管理台，无需外部数据库或消息队列。
+
+## 主要功能
+
+| 功能 | 说明 |
+| --- | --- |
+| 标准接口 | 支持 Chat Completions、Responses、Messages、Completions、Embeddings 和 Images；具体可用端点由模型目录发布 |
+| 模型路由 | 按精确模型 ID 匹配 Provider，支持优先级、健康检查、熔断和有界故障切换 |
+| 协议转换 | 提供 Chat Completions ↔ Messages 文本转换及按能力声明开放的 Responses ↔ Messages 转换 |
+| 客户端 Key | 创建、启停、轮换密钥，并按 Key 设置指定 Provider 或全部 Provider 的访问权限 |
+| 账号池 | 统一展示 ChatGPT Web / Codex CLI 账号，分别管理凭据、刷新状态、模型目录、额度和冷却，支持整体迁移 |
+| Codex OAuth | 提供 Responses HTTP/SSE/WebSocket、compact 和本地输入 Token 预估；上游优先 WebSocket，在可确认安全时回退 HTTP |
+| 模型指纹检测 | 对指定 Codex 账号手动采样，展示参考库候选排名、采样诊断，并下载完整 JSON 报告 |
+| 用量与监控 | 按时间、Key、Provider、模型和结果筛选用量，查看缓存使用率、TPS、当前并发及完整调用详情，支持 CSV 导出与 Prometheus 指标 |
+| 管理台工具 | 临时对话、逐轮联网搜索、图片任务与图片库；工具可用性取决于账号和模型能力 |
+
+客户端必须使用已创建的客户端 Key。原始客户端 Key 仅在创建或轮换时显示一次，数据库保存摘要及展示 hint；Provider 和账号池的可恢复凭据使用主密钥加密保存。
 
 ## 快速开始
 
-以下快速体验需要 Go 1.26+（源码运行）；也可以直接用发布二进制或容器镜像，见[安装与部署](docs/deployment.md)。先从示例创建配置，再启动：
+### 容器部署
+
+需要 Docker 和 Docker Compose。部署脚本会拉取镜像、生成配置与凭据加密主密钥，并交互式初始化管理员登录：
 
 ```bash
-cp config.example.yaml config.yaml
-export AETHERRELAY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
-make run
+git clone https://github.com/muidea/AetherRelay.git
+cd AetherRelay
+./scripts/deploy-docker.sh
 ```
 
-ChatGPT Web 与 Codex OAuth 账号池始终启用。启动后通过管理台导入账号或添加直连 Provider；Provider 定义和三类可恢复凭据均加密保存在 DuckDB，不写入 `config.yaml`。
-
-默认地址为 `http://127.0.0.1:8080`。启动后可访问：
-
-- [本地管理台](http://127.0.0.1:8080/admin/)：管理服务商与客户端密钥、查看用量统计与系统信息；「账号池」区分 ChatGPT Web / Codex OAuth，「功能集」包含图片任务、图片库、在线搜索与临时对话（搜索历史按管理员隔离并保存在服务器，临时对话支持逐轮联网搜索）。默认仅本机可访问，可启用账号密码登录后远程访问，见配置参考
-- `GET /healthz`
-- `GET /metrics`、`GET /stats`（默认仅本机可访问）
-
-当前并发通过 `/stats` 的 `requests.inflight` 和 `/metrics` 的
-`aetherrelay_requests_inflight` gauge 暴露，也随 `/stats/stream` 推送。
-它统计支持的代理业务请求从进入到结束的完整生命周期（含鉴权、校验和流式输出），
-一次请求内部的重试或 Provider 切换不重复计数；健康检查、管理接口和图片下载不计入。
-该指标为进程内实时值，重启后归零。
-Web 管理台「使用统计」显示当前并发，页面可见时每 2 秒通过管理员认证接口
-`GET /admin/api/usage/runtime` 刷新（路径跟随 `admin_base_path`）。该值为全局实时值，
-不受历史日期、Key、Provider 等筛选影响；读取失败时显示 `—`。
-
-客户端直接使用模型名，把请求地址指向网关即可：
-
-```text
-OpenAI API base:    http://127.0.0.1:8080/v1
-Anthropic API base: http://127.0.0.1:8080
-```
-
-所有调用都需携带客户端密钥：OpenAI 客户端用 `Authorization: Bearer <key>`，Anthropic 客户端用 `X-API-Key: <key>`。缺少密钥、密钥错误或已停用时请求会被拒绝（401），且不会产生用量记录。
-
-管理台客户端 Key 列表在 ID 后同行显示脱敏 hint（例如 `sk_sx****ab`，前 5 位 + 固定 `****` + 后 2 位），长 ID 优先省略、悬停查看完整值，窄屏可横向滚动。hint 在创建和轮换时自动生成并保存，不参与鉴权；完整 Key 仍只在创建/轮换时返回一次，不落库。最终 schema 中 hint 为空的已有 Key 不显示 hint，仅在下次轮换时生成，不强制轮换；缺少 `hint` 列的旧库会拒绝启动，不自动升级。`builtin-local` 沿用内置标识。
-
-管理台工具集由服务端内建的 `builtin-local` scope 归属（不是可对外携带的 secret，不能轮换或删除）；图片任务/图片库未指定 `api_key_id` 时默认使用它。ChatGPT Web 生图只返回栅格图：明确 `WIDTHxHEIGHT` 会在本地裁切/缩放到精确像素，`auto` 保留上游尺寸；SVG 真矢量输出不支持。
-
-## 容器快速开始
-
-发布镜像位于 `ghcr.io/muidea/aetherrelay`，提供 Linux amd64 与 arm64 清单。**一条命令完成部署**（引导生成配置、初始化 Admin 凭据并启动容器）：
-
-```bash
-git clone https://github.com/muidea/AetherRelay.git && cd AetherRelay && ./scripts/deploy-docker.sh
-```
-
-不想 clone 仓库时，也可以直接运行自包含部署脚本（产物全部落在 `./deploy`，不依赖仓库文件）：
+也可以直接运行自包含脚本，部署文件写入当前目录的 `deploy/`：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/muidea/AetherRelay/main/scripts/deploy-docker.sh)
 ```
 
-脚本会先拉取镜像，再从同一份本地镜像提取配置模板并启动服务，避免 mutable `latest` 的缓存模板与新程序错配；重复部署会原样保留现有最终配置，不识别或改写历史配置结构。脚本会实时提示输入两次 Admin 密码（输入不回显，密码不进入参数、环境变量或日志），完成后登录管理台添加 Provider 或导入账号池凭据。无交互场景用 `--admin-password-hash '...'` 注入预生成哈希，或 `--skip-admin` 跳过；完整参数见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
+镜像为 `ghcr.io/muidea/aetherrelay`，提供 Linux amd64 与 arm64。重复运行脚本会保留现有配置和加密主密钥。完整参数、远程访问与固定版本部署见[安装与部署](docs/deployment.md#一键部署脚本推荐)。
 
-也可以手动复制配置、按容器网络调整 `listen_addr` 与 `state.dir`，再启动：
+### 源码运行
+
+需要 Go 1.26+（仓库工具链为 Go 1.26.7）及支持 CGO 的本机 C/C++ 构建工具链。DuckDB 使用平台绑定，发布构建应在对应平台原生执行。
 
 ```bash
-mkdir -p deploy/config deploy/data
-cp config.example.yaml deploy/config/config.yaml
-# 编辑 deploy/config/config.yaml：listen_addr=0.0.0.0:8080，state.dir=/var/lib/aetherrelay
-# compose.yaml 会将 deploy/data 映射为容器内 /var/lib/aetherrelay。
-# 同时配置实际启用 Provider 的环境变量与客户端 Key。
-docker compose up -d
+git clone https://github.com/muidea/AetherRelay.git
+cd AetherRelay
+cp config.example.yaml config.yaml
+# 仅在首次初始化时生成；保存该值，并在后续启动时注入同一主密钥。
+export AETHERRELAY_CREDENTIAL_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr -d '\r\n')"
+make run
 ```
 
-完整的配置目录权限、Admin 登录、持久化与升级步骤见[安装与部署](docs/deployment.md#容器部署)。
+默认监听 `http://127.0.0.1:8080`，管理台为 [`/admin/`](http://127.0.0.1:8080/admin/)。源码示例默认仅允许本机管理；需要远程管理时，先按照[配置参考](docs/configuration.md)启用管理员登录。
 
-## 常用命令
+发布二进制、容器手动部署、反向代理及升级回滚见[安装与部署](docs/deployment.md)。
+
+### 首次配置
+
+1. 打开管理台，在「Provider 管理」添加服务商，或在「账号池」导入 ChatGPT Web / Codex OAuth 凭据。
+2. 核对服务商启用状态与有效模型目录；账号池可手动同步模型及刷新用量。
+3. 在「客户端 Key」创建密钥，选择允许访问的 Provider，并保存本次返回的完整 Key。
+4. 将客户端的 Base URL 和 Key 指向网关，按目录中的精确模型 ID 发起请求。
+
+Provider 定义、客户端 Key 和账号池凭据通过管理台维护；`config.yaml` 用于进程配置与静态模型元数据。仅添加 `model_metadata` 不会创建模型路由。没有外部客户端 Key 时服务仍可启动，但数据端点会拒绝未认证调用。
+
+## 客户端接入
+
+| 客户端协议 | Base URL | 认证 |
+| --- | --- | --- |
+| OpenAI 兼容 | `http://127.0.0.1:8080/v1` | `Authorization: Bearer <client-key>` |
+| Anthropic 兼容 | `http://127.0.0.1:8080` | `X-API-Key: <client-key>` |
+
+先读取当前 Key 可访问的模型目录：
 
 ```bash
-make run                         # 使用 config.yaml 启动
-make check                       # 格式、vet、全量测试
-make build                       # 构建当前平台二进制
-docker build -t aetherrelay:dev .   # 构建本地容器镜像
+export AETHERRELAY_CLIENT_KEY='替换为管理台创建的客户端密钥'
+curl -sS http://127.0.0.1:8080/v1/models \
+  -H "Authorization: Bearer $AETHERRELAY_CLIENT_KEY"
+```
+
+以下为 Responses 调用示例，将 `gpt-6.1-sol` 替换为目录中支持 `/v1/responses` 的实际模型：
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/responses \
+  -H "Authorization: Bearer $AETHERRELAY_CLIENT_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-6.1-sol","input":"请简要介绍你能完成的任务。","stream":false}'
+```
+
+模型 ID 区分大小写。`GET /v1/models` 返回各模型的 `supported_endpoints` 与已声明能力；路由候选仍受权限、账号额度、冷却和并发限制约束。跨协议转换按已发布能力开放，图片、工具、历史续接等功能不能仅凭模型名称推断，详见[外部应用集成指南](docs/integration.md)。
+
+故障切换受执行进度限制：已向客户端输出业务内容，或上游是否执行无法确定时，不会自动重放生成请求。Codex WebSocket 的安全 HTTP 回退边界见[传输说明](docs/design/codex-ws-first-http-fallback.md)。
+
+## 模型指纹检测
+
+在管理台「账号池」中选择 Codex 账号的「检测模型指纹」，设置模型和推理强度后手动开始。每次任务最多发起三条独立挑战请求，可能消耗额度；打开窗口只查询最近报告，不会自动开始检测。
+
+结果默认展示检测摘要、前三名候选和每条采样状态，其余候选可展开。失败原因保留完整信息，原始用量、采样输出及内部标识可通过 JSON 展开区或下载报告查看。窗口按屏幕尺寸调整布局，长文本换行，标题与操作按钮保持可见。
+
+候选排名与库内相对权重只表示参考库中的行为接近程度，不能确认真实模型身份或能力回退。当前不支持 ChatGPT Web 槽位检测。报告完成后保留 30 分钟，服务重启后丢失；关闭窗口不会取消服务端任务，可使用「取消检测」终止。实现与验收见[ModelTrace 集成说明](docs/modeltrace-integration.md)。
+
+## 运行与维护
+
+- `GET /healthz`：服务健康检查。
+- `GET /metrics`、`GET /stats`、`GET /stats/stream`：Prometheus 指标、运行快照与实时推送，默认仅本机可访问。
+- 管理台「使用统计」：查看历史调用与全局当前并发；并发值在页面可见时每 2 秒刷新，不受历史筛选影响，读取失败显示 `—`。
+- 当前并发统计支持的代理业务请求从进入到结束的完整生命周期，内部重试不重复计数；重启后归零。
+- 每个实例独占 `state.dir`。备份配置、数据目录以及 `AETHERRELAY_CREDENTIAL_KEY`；恢复加密凭据需要原主密钥。
+
+管理台临时对话、搜索及图片工具使用服务端内建 `builtin-local` 作用域记录用量，该标识不能作为外部客户端 Key 使用。ChatGPT Web 生图输出栅格图，明确指定尺寸时可在本地裁切或缩放，不提供 SVG 真矢量输出。
+
+完整的超时、归档、监控、备份与故障诊断见[运维与发布](docs/operations.md)。
+
+## 开发与构建
+
+```bash
+make run                          # 使用 config.yaml 启动
+make build                        # 构建当前平台二进制
+make check                        # Go 格式化、vet 与全量 Go 测试
+make check-codex                   # Codex 代理维护合同检查
+node --test web/admin/*.test.cjs   # 管理台前端回归（需要 Node.js）
+docker build -t aetherrelay:dev .  # 构建本地容器镜像
 make release-package VERSION=v1.2.3
-AetherRelay admin password-hash     # 交互式生成 Admin Argon2id 密码哈希
-AetherRelay admin set-credentials --username ops-admin --config config.yaml # 创建或重置 Admin 登录凭据
 ```
 
-完整多平台发布由推送 `vX.Y.Z` tag 的 GitHub Actions 完成；详情见[运维与发布说明](docs/operations.md#构建与发布)。
+管理员凭据工具：
+
+```bash
+./AetherRelay admin password-hash
+./AetherRelay admin set-credentials --username ops-admin --config config.yaml
+```
+
+推送 `vX.Y.Z` tag 触发 GitHub Actions 发布流程；支持的平台与构建要求见[运维与发布](docs/operations.md#构建与发布)。
 
 ## 文档
 
 | 主题 | 文档 |
 | --- | --- |
-| 安装与部署（源码/二进制/容器、升级回滚） | [安装与部署](docs/deployment.md) |
-| 当前功能说明（端点、路由、Admin、账号池等） | [功能说明](docs/features.md) |
-| 外部应用集成（模型能力发现与端点选择） | [集成指南](docs/integration.md) |
-| 配置、客户端 Key、Provider 管理 | [配置参考](docs/configuration.md) |
-| 运行、监控、归档、探针、备份与发布 | [运维与发布](docs/operations.md) |
-| 目录职责与 magicCommon 生命周期 | [代码结构](docs/structure.md) |
-| 最终设计（按功能结构） | [设计索引](docs/design/index.md) · [核心代理与路由](docs/design/proxy-core.md) · [安全与认证](docs/design/security.md) · [ChatGPT Web 能力](docs/design/chatgpt-web.md) · [Codex OAuth 账号池](docs/design/codex-oauth.md) · [Codex 身份与会话语义](docs/design/codex-identity-semantics.md) |
+| 安装、部署与升级回滚 | [安装与部署](docs/deployment.md) |
+| 端点、路由、管理台与账号池 | [功能说明](docs/features.md) |
+| 模型能力发现与客户端接入 | [集成指南](docs/integration.md) |
+| 配置、客户端 Key 与 Provider | [配置参考](docs/configuration.md) |
+| 监控、归档、备份与发布 | [运维与发布](docs/operations.md) |
+| 目录职责与运行单元生命周期 | [代码结构](docs/structure.md) |
+| 模型指纹检测与验收 | [ModelTrace 集成说明](docs/modeltrace-integration.md) |
+| 设计与维护合同 | [设计索引](docs/design/index.md) · [Codex 代理维护合同](docs/design/codex-proxy-maintenance-contract.md) |
 
-带日期的计划、审计和现场记录是历史材料，不是运行时合同；当前行为以本 README、配置参考、运维说明、代码结构以及自动化测试为准。已完成的中间过程与失效文档归档在 [`docs/archive/`](docs/archive/)。
+[`config.example.yaml`](config.example.yaml) 是可复制的启动配置。带日期的计划、审计及现场记录属于历史材料；已归档文档位于 [`docs/archive/`](docs/archive/)。
 
-`config.example.yaml` 是可复制的启动配置；运行期 Provider 通过管理台创建并加密保存在 DuckDB。
+## 许可证
+
+AetherRelay 采用 [MIT License](LICENSE)。Copyright (c) 2026 muidea and AetherRelay contributors。
+
+第三方依赖和引用资产保留各自的许可证与版权声明。ModelTrace 算法及参考资产的来源与许可见[第三方说明](internal/pkg/modeltrace/NOTICE.md)和[原始 MIT 许可证](internal/pkg/modeltrace/assets/vendor/modeltrace/6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2/LICENSE)；`vendor/` 下的依赖以各自附带的许可证为准。
