@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"sort"
@@ -35,6 +36,8 @@ const (
 type cooldown struct {
 	Until      time.Time `json:"until"`
 	ErrorClass string    `json:"error_class"`
+	Source     string    `json:"source,omitempty"`
+	ObservedAt string    `json:"observed_at,omitempty"`
 }
 
 type quotaObservation struct {
@@ -79,6 +82,7 @@ type account struct {
 	UsageRefreshError    string                       `json:"usage_refresh_error,omitempty"`
 	NextUsageRefreshAt   string                       `json:"next_usage_refresh_at,omitempty"`
 	UsageRefreshSource   string                       `json:"usage_refresh_source,omitempty"`
+	UsageFullStartedAt   string                       `json:"usage_full_started_at,omitempty"`
 	UsageRefreshFailures int                          `json:"usage_refresh_failures,omitempty"`
 	CompactSupported     *bool                        `json:"compact_supported,omitempty"`
 	CompactProtocol      string                       `json:"compact_protocol,omitempty"`
@@ -558,6 +562,7 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		existing.ModelDiscoveryRetryAt = ""
 		existing.ModelDiscoveryErrorClass = ""
 		existing.UsageSnapshot = nil
+		existing.UsageFullStartedAt = ""
 		existing.UsageRefreshErrorAt = ""
 		existing.UsageRefreshError = ""
 		existing.CompactSupported = nil
@@ -801,7 +806,7 @@ func (s *Store) AcquireScheduledTransport(model string, exclude, busy []string, 
 			if _, found := busySet[item.ID]; found {
 				continue
 			}
-			if selected == nil || preferSchedulingCandidate(item, selected, loads, now) {
+			if selected == nil || preferSchedulingCandidate(item, selected, loads, now, model) {
 				selected, selectedPos = item, pos
 			}
 		}
@@ -817,7 +822,7 @@ func (s *Store) AcquireScheduledTransport(model string, exclude, busy []string, 
 	return s.unavailableResult(model, excluded, busySet, transport, now), fmt.Errorf("no eligible Codex OAuth account")
 }
 
-func preferSchedulingCandidate(candidate, selected *account, loads map[string]SchedulingLoad, now time.Time) bool {
+func preferSchedulingCandidate(candidate, selected *account, loads map[string]SchedulingLoad, now time.Time, model string) bool {
 	a, b := loads[candidate.ID], loads[selected.ID]
 	aLimit, bLimit := candidate.MaxConcurrency, selected.MaxConcurrency
 	if !validMaxConcurrency(aLimit) {
@@ -834,7 +839,7 @@ func preferSchedulingCandidate(candidate, selected *account, loads map[string]Sc
 	if a.Sessions != b.Sessions {
 		return a.Sessions < b.Sessions
 	}
-	return freshQuotaHeadroom(candidate, now) && !freshQuotaHeadroom(selected, now)
+	return freshQuotaHeadroom(candidate, now, model) && !freshQuotaHeadroom(selected, now, model)
 }
 
 func (s *Store) acquireResult(item *account) events.AcquireResult {
@@ -1038,6 +1043,9 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
+	old := *item
+	item.Cooldowns = maps.Clone(item.Cooldowns)
+	item.QuotaObservations = maps.Clone(item.QuotaObservations)
 	now := time.Now().UTC()
 	statusChanged := false
 	model = strings.TrimSpace(model)
@@ -1069,7 +1077,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 			}
 			item.QuotaObservations[cooldownModel] = quotaObservation{
 				State:      "exhausted",
-				ObservedAt: now.Format(time.RFC3339),
+				ObservedAt: now.Format(time.RFC3339Nano),
 				ResetAt:    resetAt,
 			}
 		}
@@ -1111,13 +1119,25 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 				if item.Cooldowns == nil {
 					item.Cooldowns = map[string]cooldown{}
 				}
-				if existing, ok := item.Cooldowns[cooldownModel]; !ok || !existing.Until.After(until) {
-					item.Cooldowns[cooldownModel] = cooldown{Until: until, ErrorClass: errorClass}
+				source := "request_failure"
+				if quotaExhausted {
+					source = "usage_limit"
 				}
+				candidate := cooldown{Until: until, ErrorClass: errorClass, Source: source, ObservedAt: now.Format(time.RFC3339Nano)}
+				if existing, ok := item.Cooldowns[cooldownModel]; ok && existing.Until.After(until) {
+					candidate.Until = existing.Until
+					// Retain unrelated, longer failure evidence. Quota failures still
+					// advance their observation time even with a shorter reset hint.
+					if !quotaExhausted || existing.Source != "usage_limit" && !legacyQuotaCooldown(item, cooldownModel, existing) {
+						candidate = existing
+					}
+				}
+				item.Cooldowns[cooldownModel] = candidate
 			}
 		}
 	}
 	if err := s.saveLocked(); err != nil {
+		*item = old
 		return events.AccountView{}, err
 	}
 	if statusChanged {
@@ -1238,85 +1258,6 @@ func cooling(item *account, model string, now time.Time) bool {
 	return false
 }
 
-// usageLimitCooling applies only to a fresh, explicit upstream quota snapshot.
-// Unknown or expired snapshots remain routable; request failures still create
-// the authoritative model- or credential-scoped cooldown in RecordResult.
-func usageLimitCooling(item *account, now time.Time) bool {
-	snapshot, fresh := freshUsageSnapshot(item, now)
-	if !fresh {
-		return false
-	}
-	for _, window := range snapshot.Windows {
-		if window.LimitReached && (window.ResetAt == "" || resetAfter(window.ResetAt, now)) {
-			return true
-		}
-	}
-	return false
-}
-
-// usageLimitResetAt follows admission: all blocking windows must reset, but
-// expired quota knowledge no longer blocks. An unknown reset therefore blocks
-// until snapshot expiry; malformed resets follow usageLimitCooling's predicate.
-func usageLimitResetAt(item *account, now time.Time) (time.Time, bool) {
-	snapshot, fresh := freshUsageSnapshot(item, now)
-	if !fresh {
-		return time.Time{}, false
-	}
-	expiresAt, _ := time.Parse(time.RFC3339, snapshot.ExpiresAt)
-	var latest time.Time
-	for _, window := range snapshot.Windows {
-		if !window.LimitReached || (window.ResetAt != "" && !resetAfter(window.ResetAt, now)) {
-			continue
-		}
-		resetAt, err := time.Parse(time.RFC3339, strings.TrimSpace(window.ResetAt))
-		if err != nil || resetAt.After(expiresAt) {
-			resetAt = expiresAt
-		}
-		if resetAt.After(latest) {
-			latest = resetAt
-		}
-	}
-	if latest.IsZero() {
-		return time.Time{}, false
-	}
-	return latest.UTC(), true
-}
-
-// freshUsageSnapshot is the single definition of "we have current quota
-// knowledge": CP-CAP-005, CP-SCHED-011 and the usage refresh scheduler must agree
-// on it, otherwise admission, ordering and polling would drift apart.
-func freshUsageSnapshot(item *account, now time.Time) (events.AccountUsageSnapshot, bool) {
-	if item == nil || item.UsageSnapshot == nil {
-		return events.AccountUsageSnapshot{}, false
-	}
-	snapshot := normalizeUsageSnapshot(*item.UsageSnapshot)
-	if snapshot.ExpiresAt == "" {
-		return events.AccountUsageSnapshot{}, false
-	}
-	expiresAt, err := time.Parse(time.RFC3339, snapshot.ExpiresAt)
-	if err != nil || !expiresAt.After(now) {
-		return events.AccountUsageSnapshot{}, false
-	}
-	return snapshot, true
-}
-
-// freshQuotaHeadroom reports whether a fresh usage snapshot exists and no window
-// is currently limit-reached. CP-SCHED-011 uses it only to rank otherwise equal
-// candidates: CP-CAP-005 still admits accounts whose quota knowledge is missing
-// or expired.
-func freshQuotaHeadroom(item *account, now time.Time) bool {
-	snapshot, fresh := freshUsageSnapshot(item, now)
-	if !fresh {
-		return false
-	}
-	for _, window := range snapshot.Windows {
-		if window.LimitReached && (window.ResetAt == "" || resetAfter(window.ResetAt, now)) {
-			return false
-		}
-	}
-	return true
-}
-
 func resetAfter(value string, now time.Time) bool {
 	resetAt, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
 	return err == nil && resetAt.After(now)
@@ -1388,7 +1329,7 @@ func toView(item *account, now time.Time) events.AccountView {
 		if now.After(value.Until) {
 			continue
 		}
-		view.Cooldowns = append(view.Cooldowns, events.CooldownView{Model: model, Until: value.Until.Format(time.RFC3339), ErrorClass: value.ErrorClass})
+		view.Cooldowns = append(view.Cooldowns, events.CooldownView{Model: model, Until: value.Until.Format(time.RFC3339), ErrorClass: value.ErrorClass, Source: value.Source, ObservedAt: value.ObservedAt})
 	}
 	sort.Slice(view.Cooldowns, func(i, j int) bool { return view.Cooldowns[i].Model < view.Cooldowns[j].Model })
 	for model, value := range item.QuotaObservations {
@@ -1621,9 +1562,8 @@ func (s *Store) ListUsageCandidatesForSchedule(accountIDs []string, dueOnly bool
 	return result
 }
 
-// PutUsageSnapshot saves a sanitized, bounded usage observation. A successful
-// observation clears only its previous refresh error; it does not manipulate
-// routing cooldowns, which remain driven by real request outcomes.
+// PutUsageSnapshot records a full usage observation. Only explicitly complete,
+// newer recovery evidence may reconcile quota-derived routing state.
 func (s *Store) PutUsageSnapshot(accountID string, snapshot events.AccountUsageSnapshot) (bool, error) {
 	return s.PutUsageSnapshotWithSchedule(accountID, snapshot, "upstream", "")
 }
@@ -1635,8 +1575,17 @@ func (s *Store) PutUsageSnapshotWithSchedule(accountID string, snapshot events.A
 	if item == nil {
 		return false, nil
 	}
-	clean := normalizeUsageSnapshot(snapshot)
-	item.UsageSnapshot = &clean
+	clean := prepareUsageSnapshot(snapshot, source)
+	// Full refreshes are ordered by request start, not by response arrival.
+	started := usageObservationStart(clean)
+	if previous, ok := parseExpiry(item.UsageFullStartedAt); ok && !started.After(previous) {
+		return true, nil
+	}
+	old := *item
+	item.Cooldowns = maps.Clone(item.Cooldowns)
+	item.QuotaObservations = maps.Clone(item.QuotaObservations)
+	item.UsageSnapshot = mergeUsageObservations(item.UsageSnapshot, clean)
+	item.UsageFullStartedAt = started.Format(time.RFC3339Nano)
 	item.UsageRefreshErrorAt = ""
 	item.UsageRefreshError = ""
 	item.UsageRefreshFailures = 0
@@ -1645,12 +1594,14 @@ func (s *Store) PutUsageSnapshotWithSchedule(accountID string, snapshot events.A
 	if clean.PlanType != "" {
 		item.PlanType = clean.PlanType
 	}
+	reconcileQuotaRecovery(item, clean, time.Now().UTC())
 	statusChanged := false
 	if item.Status == events.StatusAbnormal && !item.PermanentAuthFailure {
 		item.Status = events.StatusNormal
 		statusChanged = true
 	}
 	if err := s.saveLocked(); err != nil {
+		*item = old
 		return false, err
 	}
 	if statusChanged {
@@ -1663,41 +1614,21 @@ func (s *Store) MergeUsageSnapshot(accountID string, snapshot events.AccountUsag
 	return s.MergeUsageSnapshotWithSchedule(accountID, snapshot, "response_header", "")
 }
 
-func (s *Store) MergeUsageSnapshotWithSchedule(accountID string, snapshot events.AccountUsageSnapshot, source, nextRefreshAt string) (bool, error) {
+// Partial observations never clear full-refresh errors, reschedule that poll,
+// or prove recovery from a request-derived credential-wide quota limit.
+func (s *Store) MergeUsageSnapshotWithSchedule(accountID string, snapshot events.AccountUsageSnapshot, source, _ string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(accountID)]
 	if item == nil {
 		return false, nil
 	}
-	clean := normalizeUsageSnapshot(snapshot)
-	if item.UsageSnapshot != nil {
-		existing := normalizeUsageSnapshot(*item.UsageSnapshot)
-		byID := make(map[string]int, len(existing.Windows))
-		for index, window := range existing.Windows {
-			byID[window.ID] = index
-		}
-		for _, window := range clean.Windows {
-			if index, ok := byID[window.ID]; ok {
-				existing.Windows[index] = window
-			} else {
-				existing.Windows = append(existing.Windows, window)
-			}
-		}
-		if clean.PlanType != "" {
-			existing.PlanType = clean.PlanType
-		}
-		existing.ObservedAt = clean.ObservedAt
-		existing.ExpiresAt = clean.ExpiresAt
-		clean = normalizeUsageSnapshot(existing)
-	}
-	item.UsageSnapshot = &clean
-	item.UsageRefreshErrorAt = ""
-	item.UsageRefreshError = ""
-	item.UsageRefreshFailures = 0
-	item.NextUsageRefreshAt = normalizeFutureTime(nextRefreshAt)
-	item.UsageRefreshSource = strings.TrimSpace(source)
+	old := *item
+	clean := prepareUsageSnapshot(snapshot, source)
+	clean.Complete = false
+	item.UsageSnapshot = mergeUsageObservations(item.UsageSnapshot, clean)
 	if err := s.saveLocked(); err != nil {
+		*item = old
 		return false, err
 	}
 	return true, nil
@@ -1886,54 +1817,15 @@ func normalizeSnapshot(accountID string, snapshot events.AccountModelSnapshot) e
 	return out
 }
 
-func normalizeUsageSnapshot(snapshot events.AccountUsageSnapshot) events.AccountUsageSnapshot {
-	out := events.AccountUsageSnapshot{
-		PlanType:   bounded(snapshot.PlanType, 64),
-		ObservedAt: normalizeUsageTime(snapshot.ObservedAt, time.Now().UTC()),
-		ExpiresAt:  normalizeUsageTime(snapshot.ExpiresAt, time.Time{}),
-	}
-	seen := make(map[string]struct{}, len(snapshot.Windows))
-	for _, window := range snapshot.Windows {
-		window.ID = bounded(window.ID, 96)
-		if window.ID == "" {
-			continue
-		}
-		if _, exists := seen[window.ID]; exists {
-			continue
-		}
-		seen[window.ID] = struct{}{}
-		window.Label = bounded(window.Label, 128)
-		if window.UsedPercentKnown {
-			if window.UsedPercent != window.UsedPercent {
-				window.UsedPercent = 0
-				window.UsedPercentKnown = false
-			} else if window.UsedPercent < 0 {
-				window.UsedPercent = 0
-			} else if window.UsedPercent > 100 {
-				window.UsedPercent = 100
-			}
-		} else {
-			window.UsedPercent = 0
-		}
-		if window.WindowSeconds < 0 || window.WindowSeconds > 366*24*60*60 {
-			window.WindowSeconds = 0
-		}
-		window.ResetAt = normalizeUsageTime(window.ResetAt, time.Time{})
-		out.Windows = append(out.Windows, window)
-	}
-	sort.Slice(out.Windows, func(i, j int) bool { return out.Windows[i].ID < out.Windows[j].ID })
-	return out
-}
-
 func normalizeUsageTime(value string, fallback time.Time) string {
 	value = strings.TrimSpace(value)
 	if value != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-			return parsed.UTC().Format(time.RFC3339)
+			return parsed.UTC().Format(time.RFC3339Nano)
 		}
 	}
 	if !fallback.IsZero() {
-		return fallback.UTC().Format(time.RFC3339)
+		return fallback.UTC().Format(time.RFC3339Nano)
 	}
 	return ""
 }

@@ -105,7 +105,7 @@ func TestQuotaRecoveryMatchesAdmission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			item := &account{UsageSnapshot: &events.AccountUsageSnapshot{ExpiresAt: now.Add(2 * time.Minute).Format(time.RFC3339)}}
 			for _, reset := range tc.resets {
-				item.UsageSnapshot.Windows = append(item.UsageSnapshot.Windows, events.UsageWindow{ID: "window-" + reset, LimitReached: true, ResetAt: reset})
+				item.UsageSnapshot.Windows = append(item.UsageSnapshot.Windows, events.UsageWindow{ID: "window-" + reset, Scope: "standard", LimitReached: true, ResetAt: reset})
 			}
 			got, ok := usageLimitResetAt(item, now)
 			if tc.want == 0 {

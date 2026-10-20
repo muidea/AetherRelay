@@ -47,6 +47,22 @@ test('unified account fingerprint control exposes off and scoped modes',()=>{
   assert.match(c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'}),/ disabled>/);
 });
 
+test('partial quota refresh leaves expired windows visibly stale',()=>{
+  const {context:c}=harness();
+  c.formatAccountDate=value=>value;
+  for(const name of ['codexUsageWindowLabel','codexUsageSnapshotBadge'])vm.runInContext(functionSource(name),c);
+  const fresh=new Date(Date.now()+60000).toISOString(),old=new Date(Date.now()-60000).toISOString();
+  const rendered=c.codexUsageSnapshotBadge({usage_refresh_error:'timeout',usage_snapshot:{expires_at:fresh,windows:[
+    {id:'standard-primary',used_percent_known:true,used_percent:20,expires_at:fresh,observed_at:fresh},
+    {id:'standard-secondary',used_percent_known:true,used_percent:100,limit_reached:true,expires_at:old,observed_at:old},
+  ]}});
+  assert.equal((rendered.match(/缓存已过期/g)||[]).length,1);
+  assert.match(rendered,/剩余 80%/);
+  assert.match(rendered,/已达上限/);
+  assert.match(rendered,/用量刷新失败：timeout/);
+  assert.ok(rendered.includes(old));
+});
+
 test('model blacklist uses a draft, normalizes exact IDs and supports explicit clear',async()=>{
   const {context:c,requests}=harness({request:async()=>({item:{id:'slot',blocked_models:['future','gpt-sol']}})});
   const account={id:'slot',blocked_models:[],model_snapshot:{models:[{id:'gpt-sol'},{id:'<unsafe>'}]}};

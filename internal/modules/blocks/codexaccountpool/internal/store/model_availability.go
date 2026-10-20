@@ -50,7 +50,7 @@ func (s *Store) unavailableResult(model string, excluded, busy map[string]struct
 			}
 			continue
 		}
-		if view.Until == "" && !usageLimitCooling(item, now) {
+		if view.Until == "" && !usageLimitCooling(item, now, model) {
 			continue
 		}
 		hasCooling = true
@@ -67,7 +67,7 @@ func (s *Store) unavailableResult(model string, excluded, busy map[string]struct
 		// A quota window blocks without leaving a cooldown entry, so without
 		// folding its reset here the client would be told to retry immediately
 		// and would spin against the same exhausted account.
-		if resetAt, ok := usageLimitResetAt(item, now); ok && resetAt.After(blocked) {
+		if resetAt, ok := usageLimitResetAt(item, now, model); ok && resetAt.After(blocked) {
 			blocked = resetAt
 		}
 		if !blocked.After(now) {
@@ -125,7 +125,7 @@ func modelAvailability(item *account, model string, now time.Time) events.ModelA
 				view.Until = until.Format(time.RFC3339)
 			}
 		}
-		if view.Reason == "" && usageLimitCooling(item, now) {
+		if view.Reason == "" && usageLimitCooling(item, now, model) {
 			view.Reason = "usage_limit"
 		}
 		view.Available = view.Reason == ""

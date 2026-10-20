@@ -1012,7 +1012,16 @@ func parseUsage(body []byte, now time.Time) (string, []events.UsageWindow, error
 		if name == "" {
 			name = fmt.Sprintf("additional-%d", index+1)
 		}
+		firstWindow := len(windows)
 		appendUsageWindows(&windows, "additional-"+usageIdentifier(name, index+1), name, firstUsageRateLimit(item.RateLimit, item.RateLimitCamel), now)
+		// Only an explicit exact model identifies an additional quota's scope.
+		// Labels such as "extra credits" are not account-wide restrictions.
+		model := firstNonEmpty(item.MeteredFeature, item.MeteredFeatureCamel)
+		if (strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "codex-")) && !strings.ContainsAny(model, " \t\r\n") {
+			for i := firstWindow; i < len(windows); i++ {
+				windows[i].Model = model
+			}
+		}
 	}
 	if len(windows) == 0 {
 		return "", nil, fmt.Errorf("Codex usage response has no usage windows")
@@ -1044,7 +1053,7 @@ func appendUsageWindows(target *[]events.UsageWindow, scope, label string, limit
 		return
 	}
 	allowed, allowedKnown := rawBool(limit.Allowed)
-	limitReached, _ := rawBool(firstRaw(limit.LimitReached, limit.LimitReachedCamel))
+	limitReached, limitKnown := rawBool(firstRaw(limit.LimitReached, limit.LimitReachedCamel))
 	if allowedKnown && !allowed {
 		limitReached = true
 	}
@@ -1068,17 +1077,26 @@ func appendUsageWindows(target *[]events.UsageWindow, scope, label string, limit
 			windowSeconds = 0
 		}
 		*target = append(*target, events.UsageWindow{
-			ID:               scope + "-" + item.name,
-			Label:            label,
-			UsedPercent:      clampPercent(usedPercent),
-			UsedPercentKnown: usedKnown,
-			WindowSeconds:    int(windowSeconds),
-			ResetAt:          resetAt,
-			Allowed:          allowed,
-			AllowedKnown:     allowedKnown,
-			LimitReached:     limitReached,
+			ID:                scope + "-" + item.name,
+			Label:             label,
+			Scope:             usageWindowScope(scope),
+			UsedPercent:       clampPercent(usedPercent),
+			UsedPercentKnown:  usedKnown,
+			WindowSeconds:     int(windowSeconds),
+			ResetAt:           resetAt,
+			Allowed:           allowed,
+			AllowedKnown:      allowedKnown,
+			LimitReached:      limitReached,
+			LimitReachedKnown: limitKnown || allowedKnown,
 		})
 	}
+}
+
+func usageWindowScope(scope string) string {
+	if scope == "standard" || scope == "code-review" {
+		return scope
+	}
+	return "additional"
 }
 
 func firstRaw(values ...json.RawMessage) json.RawMessage {

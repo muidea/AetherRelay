@@ -511,7 +511,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-FAIL-016` Codex account owner 可以从结构合法的 access-token JWT 读取未验签 `exp`，并优先于持久化 `expired` 只用于主动 refresh 到期调度。该提示不得被当作身份可信声明、不得单独禁用账号或清除 token；解析失败继续使用显式 expiry，缺少两者继续依赖既有 401 singleflight refresh。临时 refresh 失败必须保留最近 access token 和现有 401/failover 边界。
 
-`CP-FAIL-017` `usage_limit_reached` 必须大小写不敏感地从顶层、`error`、`response.error` 或 WebSocket `body.error` 解析；reset 可来自相同层的绝对秒/毫秒时间或相对秒。该错误是 credential-wide quota：账号级空 model cooldown 必须阻止该凭据的全部模型，而非只阻止本次 exact model。已有未到期 cooldown 只能保持或延长，后续较短失败不得缩短；任一模型成功也不得提前清除仍有效的账号级 quota cooldown。
+`CP-FAIL-017` `usage_limit_reached` 必须大小写不敏感地从顶层、`error`、`response.error` 或 WebSocket `body.error` 解析；reset 可来自相同层的绝对秒/毫秒时间或相对秒。该错误是 credential-wide quota：账号级空 model cooldown 必须阻止该凭据的全部模型，而非只阻止本次 exact model。已有未到期 cooldown 只能保持或延长，后续较短失败不得缩短；任一模型成功也不得提前清除仍有效的账号级 quota cooldown。 例外仅限 `CP-CAP-012` 定义的更新且完整的明确恢复证据；普通请求成功、目录刷新和部分响应头均不能解除。
 
 `CP-FAIL-018` 结构化 `error.code=model_not_found` 的 HTTP 404 或 Responses failed/error 终态必须单独分类；普通 404、错误消息中的同名文本及参数错误不属于该类别。仅记录账号 × exact model 的 5 分钟冷却，不改变账号状态、quota 或 compact/WS 能力；过期自动恢复准入，显式替换凭据清除旧观察，目录刷新不能提前解除实际失败观察。HTTP Responses/compact 在未输出、无 `previous_response_id`、无非空 turn-state 时允许保持同模型最多尝试 3 个不同账号；禁止模型替换、同账号循环及输出后重放。耗尽保留最后真实上游错误。该窄例外优先于 `CP-COMPACT-005` 的普通 404 规则；WS 只分类和记录，不扩展 `CP-WS-012` 的迁移边界。
 
@@ -539,7 +539,11 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-CAP-004` `/v1/models` 与请求路由必须读取同一 effective catalog generation，不得分别拼接目录。
 
-`CP-CAP-005` 新鲜且明确标记 `LimitReached`、且 reset 尚未到期的账号用量窗口必须参与账号准入；未知、缺失或已过期快照不得阻止尝试。请求失败产生的 model cooldown 仍是更高优先级的即时事实。
+`CP-CAP-005` 新鲜且明确标记 `LimitReached`、且 reset 尚未到期的用量窗口必须按适用范围参与账号准入：standard 作用于账号，code-review 只作用于 `codex-auto-review`，附加额度只有明确 exact model 时才约束该模型，未知范围不能扩散至全部模型。窗口独立维护观测开始时间、来源和有效期；缺失或过期的观测不阻止尝试。准入、排序和 Retry-After 使用同一范围与时间判断；排序需要明确余量证据，不能将缺失状态当作健康。请求失败产生的 model cooldown 仍是更高优先级的即时事实。
+
+`CP-CAP-012` 更新完整用量时，只有本次完整响应同时覆盖 standard primary/secondary、明确无额度限制、仍新鲜且采集开始严格晚于额度失败时，账号 owner 才能在一次持久化中清除相应 quota observation 与 quota-derived cooldown。保留普通限流、网络/上游/模型失败、禁用和永久认证失败；部分或未知数据、过期观测、失败前发起而延迟返回的请求均不能解除。冷却携带来源及观测时间；旧记录只有 `rate_limit`、相同 scope 的 exhausted observation 和完全匹配 reset 可证明额度来源，否则保留至到期。秒精度旧失败记录须跨过整秒后再判断恢复。数据库写入失败必须回滚本次内存变更。
+
+`CP-CAP-013` 额度响应头与用量接口统一使用 standard primary/secondary 窗口标识，兼容读取旧 header 标识；同窗口按采集开始时间合并，旧响应不得覆盖新状态，只有 reset/duration 的元数据不得覆盖或续期已知额度状态。部分刷新不能改变未观测窗口的有效期，也不能修改完整用量刷新的计划、错误、来源或退避；完整刷新按自身采集开始时间排序。页面逐窗口标记过期并保留历史用量与观测时间。响应头时间来自原始上游请求/响应，不因长响应结束或探测轮询重新计时。模型目录继续表示能力并集，临时冷却由账号 owner 的实时准入统一裁决。
 
 `CP-CAP-006` 模型容量必须区分客户端默认 `context_window` 与服务端允许的 `max_context_window`。两者缺失时使用同一个保守默认值；显式最大值不得小于默认值。OpenAI-compatible 模型目录分别发布 `contextWindowTokens` 与可选 `maxContextWindowTokens`，Codex manifest 分别发布 `context_window` 与 `max_context_window`。当前 Codex 客户端快照中 `gpt-6-astra` 与 `gpt-5.6-luna/sol/terra` 为 272,000 / 872,000；GPT-5.6 的旧 921,000 值不再作为默认配置基线。公共 API 标称 1,050,000 不能覆盖这份 Codex 配额；真实账号允许容量仍由上游裁决。
 
@@ -739,6 +743,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
+| 额度恢复与窗口合并 | CP-CAP-012 / CP-CAP-013 | implemented | `codexaccountpool/internal/store/usage_state.go`、`proxyapi/biz/codex_usage.go` | `codexaccountpool/internal/store/usage_recovery_test.go`、`web/admin/accounts.test.cjs` |
 | 额度证据优先排序 | CP-SCHED-011 | implemented | `codexaccountpool/internal/store/store.go` | `codexaccountpool/internal/store/quota_evidence_test.go` |
 
 `9.0.0` 新增实施追踪：
@@ -871,7 +876,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 | multi-agent v2 task | CLIProxyAPI `d2f71220`；脱敏样本 `agent_message` + string `encrypted_content` | 原生 Codex 保序透传，Responses→Anthropic 按 `CP-REQ-032` 规范为 user message/input_text，不接受错误载荷类型 |
 | GPT-6 Astra manifest | CLIProxyAPI `c77b1369` 的可信 model-info profile；sub2api `3c8be0013` 的本地模型元数据 | 固化 `CP-CAP-008` 列出的稳定字段；transport 字段继续与 AetherRelay 实际路由能力求交 |
 | 当前 Codex identity | 既有 `test-office` 真实流量观察到的 codex-tui 0.155.0 / gnome-terminal 原子身份，见身份语义基准现场记录 | 内置 fallback 仅使用 codex-tui，账号池统一使用实际观察到的最高合法版本；其它工具和 codex_exec 不参与选择 |
-| credential-wide quota cooldown | CLIProxyAPI `5ab0bca0`、`1c22598d`；脱敏样本顶层/嵌套 `usage_limit_reached` 与绝对/相对 reset | 按 `CP-FAIL-017` 写账号级单调 cooldown，成功或更短失败都不能提前释放 |
+| credential-wide quota cooldown | CLIProxyAPI `5ab0bca0`、`1c22598d`；脱敏样本顶层/嵌套 `usage_limit_reached` 与绝对/相对 reset | 按 `CP-FAIL-017` 写账号级单调 cooldown，普通成功或更短失败不能提前释放；完整新鲜恢复证据按 `CP-CAP-012` 收敛 |
 | WebSocket replay 正文所有权 | sub2api `ca9b4d73f` | 历史 RawMessage 正文按不可变共享引用保存，避免随 turn 数产生 O(T²) 深拷贝 |
 | access-token JWT 到期提示 | CLIProxyAPI `9812b1e7` 从 JWT `exp` 判断 access token 有效期并在临时 refresh 失败时保留可用凭据 | 只把未验签 `exp` 用于 account owner 的主动刷新调度；认证与 401/failover 仍由既有合同裁决 |
 | `GET /v1/responses/ws` | CLIProxyAPI `f43aad76` 仅在 SDK WebSocket 测试中自行注册；生产路由未注册，sub2api 生产路由也未注册 | 测试路径，不是生产兼容合同，拒绝 |

@@ -21,6 +21,36 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
+func TestQuotaHeaderObservationRetainsWireTimeAndLeavesPollingIndependent(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	var snapshot accevents.MergeUsageSnapshotCommand
+	accounts.Subscribe(accevents.TopicMergeUsageSnapshot, func(ev event.Event, result event.Result) {
+		snapshot = ev.Data().(accevents.MergeUsageSnapshotCommand)
+		result.Set(accevents.MergeUsageSnapshotResult{OK: true}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	started := time.Now().UTC().Add(-20 * time.Minute)
+	received := started.Add(time.Second)
+	proxy.mergeCodexUsageHeaders(context.Background(), "slot", []upevents.Header{
+		{Name: "X-Codex-Primary-Used-Percent", Value: "25"},
+		{Name: "X-Codex-Primary-Reset-After-Seconds", Value: "60"},
+		{Name: "X-Codex-Secondary-Used-Percent", Value: "NaN"},
+	}, started, received)
+	if snapshot.NextRefreshAt != "" || snapshot.Snapshot.Complete || snapshot.Snapshot.StartedAt != started.Format(time.RFC3339Nano) {
+		t.Fatalf("headers impersonated complete/fresh quota: %+v", snapshot)
+	}
+	if len(snapshot.Snapshot.Windows) != 1 || snapshot.Snapshot.Windows[0].ID != "standard-primary" || !snapshot.Snapshot.Windows[0].LimitReachedKnown {
+		t.Fatalf("canonical quota/status mismatch: %+v", snapshot.Snapshot)
+	}
+	expires, _ := time.Parse(time.RFC3339Nano, snapshot.Snapshot.ExpiresAt)
+	if expires.After(time.Now()) || snapshot.Snapshot.Windows[0].ResetAt != received.Add(time.Minute).Format(time.RFC3339) {
+		t.Fatalf("late processing extended old quota: %+v", snapshot.Snapshot)
+	}
+}
+
 func TestCodexWebsocketTurnOutcomeRequiresNonEmptyCompleted(t *testing.T) {
 	if success, terminal, class := codexWebsocketTurnOutcomeWithEvidence([]byte(`{"type":"response.completed","response":{"output":[]}}`), false); success || !terminal || class != accevents.ErrorUpstream {
 		t.Fatalf("CP-STREAM-006 empty success=%v terminal=%v class=%q", success, terminal, class)

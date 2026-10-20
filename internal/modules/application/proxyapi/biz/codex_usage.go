@@ -121,6 +121,7 @@ func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, 
 }
 
 func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.UsageCandidate, source string) error {
+	startedAt := time.Now().UTC()
 	usage, err := s.getCodexUsage(ctx, candidate)
 	if err != nil {
 		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "upstream", source)
@@ -133,6 +134,7 @@ func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.
 		candidate.AccessToken = refreshed.AccessToken
 		candidate.AccountIDHeader = refreshed.AccountIDHeader
 		candidate.Proxy = refreshed.Proxy
+		startedAt = time.Now().UTC()
 		usage, err = s.getCodexUsage(ctx, candidate)
 		if err != nil {
 			return s.recordCodexUsageFailure(ctx, candidate.AccountID, "upstream", source)
@@ -143,30 +145,38 @@ func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.
 	}
 	now := time.Now().UTC()
 	snapshot := codexevents.AccountUsageSnapshot{
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
+		Complete:   true,
 		PlanType:   usage.PlanType,
-		ObservedAt: now.Format(time.RFC3339),
-		ExpiresAt:  now.Add(codexUsageSnapshotTTL).Format(time.RFC3339),
+		ObservedAt: now.Format(time.RFC3339Nano),
+		ExpiresAt:  now.Add(codexUsageSnapshotTTL).Format(time.RFC3339Nano),
 		Windows:    make([]codexevents.UsageWindow, 0, len(usage.Windows)),
 	}
 	for _, window := range usage.Windows {
 		snapshot.Windows = append(snapshot.Windows, codexevents.UsageWindow{
-			ID:               window.ID,
-			Label:            window.Label,
-			UsedPercent:      window.UsedPercent,
-			UsedPercentKnown: window.UsedPercentKnown,
-			WindowSeconds:    window.WindowSeconds,
-			ResetAt:          window.ResetAt,
-			Allowed:          window.Allowed,
-			AllowedKnown:     window.AllowedKnown,
-			LimitReached:     window.LimitReached,
+			ID:                window.ID,
+			Label:             window.Label,
+			Scope:             window.Scope,
+			Model:             window.Model,
+			UsedPercent:       window.UsedPercent,
+			UsedPercentKnown:  window.UsedPercentKnown,
+			WindowSeconds:     window.WindowSeconds,
+			ResetAt:           window.ResetAt,
+			Allowed:           window.Allowed,
+			AllowedKnown:      window.AllowedKnown,
+			LimitReached:      window.LimitReached,
+			LimitReachedKnown: window.LimitReachedKnown,
 		})
 	}
 	nextRefreshAt := ""
 	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
 		nextRefreshAt = nextCodexUsageRefreshAt(candidate.AccountID, now, interval)
 	}
-	_, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutUsageSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutUsageSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot, Source: source, NextRefreshAt: nextRefreshAt})).Get()
+	stored, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutUsageSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutUsageSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot, Source: source, NextRefreshAt: nextRefreshAt})).Get()
 	if putErr != nil {
+		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "storage", source)
+	}
+	if result, ok := stored.(codexevents.PutUsageSnapshotResult); !ok || !result.OK {
 		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "storage", source)
 	}
 	return nil

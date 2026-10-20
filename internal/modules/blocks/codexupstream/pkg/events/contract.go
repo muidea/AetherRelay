@@ -390,15 +390,18 @@ type GetUsageCommand struct {
 }
 
 type UsageWindow struct {
-	ID               string
-	Label            string
-	UsedPercent      float64
-	UsedPercentKnown bool
-	WindowSeconds    int
-	ResetAt          string
-	Allowed          bool
-	AllowedKnown     bool
-	LimitReached     bool
+	ID                string
+	Label             string
+	Scope             string
+	Model             string
+	UsedPercent       float64
+	UsedPercentKnown  bool
+	WindowSeconds     int
+	ResetAt           string
+	Allowed           bool
+	AllowedKnown      bool
+	LimitReached      bool
+	LimitReachedKnown bool
 }
 
 type GetUsageResult struct {

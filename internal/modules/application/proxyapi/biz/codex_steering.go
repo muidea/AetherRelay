@@ -417,11 +417,11 @@ func (s *Proxy) pollSteeringTask(t *codexSteeringTask, cleanupCtx context.Contex
 		return
 	}
 	if !t.usageMerged && len(snapshot.Headers) > 0 {
-		s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, snapshot.Headers)
+		s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, snapshot.Headers, steeringUsageStartedAt(out))
 		t.usageMerged = true
 	}
 	if !t.clientUsageMerged && len(snapshot.ClientHeaders) > 0 {
-		s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, snapshot.ClientHeaders)
+		s.mergeCodexUsageHeaders(ctx, out.TargetSlotID, snapshot.ClientHeaders, steeringUsageStartedAt(out))
 		t.clientUsageMerged = true
 	}
 	if out.Done {
@@ -578,3 +578,9 @@ func (s *Proxy) drainSteering(ctx context.Context) *cd.Error {
 
 func (s *Proxy) BeginShutdown(context.Context)         { s.stopSteering() }
 func (s *Proxy) Quiesce(ctx context.Context) *cd.Error { return s.drainSteering(ctx) }
+
+// A probe can be polled after newer normal traffic has observed the quota.
+func steeringUsageStartedAt(out proxyevents.SteeringReport) time.Time {
+	started, _ := time.Parse(time.RFC3339Nano, out.StartedAt)
+	return started
+}

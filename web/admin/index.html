@@ -1571,10 +1571,12 @@ function codexUsageSnapshotBadge(account){
     return `<div class="subtle">${esc(t("尚未读取"))}</div>`;
   }
   const windows=Array.isArray(snapshot.windows)?snapshot.windows:[];
-  const expired=snapshot.expires_at&&new Date(snapshot.expires_at).getTime()<=Date.now();
+  const windowExpired=window=>!(Date.parse(window?.expires_at||snapshot.expires_at)>Date.now());
+  const expired=windows.length?windows.every(windowExpired):!(Date.parse(snapshot.expires_at)>Date.now());
   const plan=String(snapshot.plan_type||account?.plan_type||"").trim();
   const head=[plan?`<span class="tag tag-purple">${esc(plan)}</span>`:"",expired?`<span class="tag tag-cooldown">${esc(t("缓存已过期"))}</span>`:""].join("");
   const visible=windows.slice(0,5).map(window=>{
+    const stale=windowExpired(window);
     const usedKnown=Boolean(window?.used_percent_known);
     const used=Math.max(0,Math.min(100,Number(window?.used_percent)||0));
     const exhausted=Boolean(window?.limit_reached)||(Boolean(window?.allowed_known)&&window?.allowed===false);
@@ -1583,7 +1585,9 @@ function codexUsageSnapshotBadge(account){
     const value=exhausted?t("已达上限"):remaining===null?"—":t("剩余 {value}%",{value:Math.round(remaining)});
     const reset=window?.reset_at?` · ${t("恢复于 {time}",{time:formatAccountDate(window.reset_at)})}`:"";
     const meter=remaining===null?"":`<div class="codex-usage-meter"><i style="width:${Math.round(remaining)}%"></i></div>`;
-    return `<div class="codex-usage-window ${level}"><span class="codex-usage-window-label" title="${esc(codexUsageWindowLabel(window))}">${esc(codexUsageWindowLabel(window))}</span><span class="codex-usage-window-value">${esc(value)}</span>${meter}</div>${reset?`<div class="codex-usage-meta">${esc(reset.trim().replace(/^·\s*/,""))}</div>`:""}`;
+    const age=stale?`<span class="tag tag-cooldown">${esc(t("缓存已过期"))}</span>`:"";
+    const sampled=window?.observed_at?` · ${t("上次观测 {time}",{time:formatAccountDate(window.observed_at)})}`:"";
+    return `<div class="codex-usage-window ${level}"><span class="codex-usage-window-label" title="${esc(codexUsageWindowLabel(window)+sampled)}">${esc(codexUsageWindowLabel(window))}</span><span class="codex-usage-window-value">${esc(value)}${age}</span>${meter}</div>${reset?`<div class="codex-usage-meta">${esc(reset.trim().replace(/^·\s*/,""))}</div>`:""}`;
   }).join("");
   const more=windows.length>5?`<div class="codex-usage-meta">+${windows.length-5}</div>`:"";
   const observed=snapshot.observed_at?`<div class="codex-usage-meta">${esc(t("上次观测 {time}",{time:formatAccountDate(snapshot.observed_at)}))}</div>`:"";

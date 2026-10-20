@@ -1195,14 +1195,35 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 	for _, window := range windows {
 		byID[window.ID] = window
 	}
-	if window := byID["standard-primary"]; !window.UsedPercentKnown || window.UsedPercent != 25 || window.WindowSeconds != 18000 || window.ResetAt == "" || !window.AllowedKnown || !window.Allowed {
+	if window := byID["standard-primary"]; window.Scope != "standard" || !window.LimitReachedKnown || !window.UsedPercentKnown || window.UsedPercent != 25 || window.WindowSeconds != 18000 || window.ResetAt == "" || !window.AllowedKnown || !window.Allowed {
 		t.Fatalf("standard primary=%+v", window)
 	}
-	if window := byID["code-review-primary"]; !window.LimitReached || !window.UsedPercentKnown || window.UsedPercent != 100 || window.Allowed {
+	if window := byID["code-review-primary"]; window.Scope != "code-review" || !window.LimitReachedKnown || !window.LimitReached || !window.UsedPercentKnown || window.UsedPercent != 100 || window.Allowed {
 		t.Fatalf("code-review primary=%+v", window)
 	}
 	if window := byID["additional-extra-credits-primary"]; window.Label != "extra credits" || !window.UsedPercentKnown || window.UsedPercent != 10 {
 		t.Fatalf("additional window=%+v", window)
+	}
+}
+
+func TestAdditionalUsageNeedsExplicitModelScope(t *testing.T) {
+	_, windows, err := parseUsage([]byte(`{"additional_rate_limits":[
+		{"limit_name":"reserve quota","metered_feature":"gpt-reserve","rate_limit":{"allowed":false,"primary_window":{"used_percent":100}}},
+		{"limit_name":"extra credits","rate_limit":{"primary_window":{"used_percent":10}}}
+	]}`), time.Now().UTC())
+	if err != nil || len(windows) != 2 {
+		t.Fatalf("windows=%+v err=%v", windows, err)
+	}
+	for _, window := range windows {
+		if window.Scope != "additional" {
+			t.Fatalf("scope lost: %+v", window)
+		}
+		if window.Label == "reserve quota" && (window.Model != "gpt-reserve" || !window.LimitReachedKnown || !window.LimitReached) {
+			t.Fatalf("explicit model restriction lost: %+v", window)
+		}
+		if window.Label == "extra credits" && (window.Model != "" || window.LimitReachedKnown) {
+			t.Fatalf("unknown metadata turned into a model/limit assertion: %+v", window)
+		}
 	}
 }
 

@@ -109,6 +109,8 @@ type CooldownView struct {
 	Model      string `json:"model"`
 	Until      string `json:"until"`
 	ErrorClass string `json:"error_class"`
+	Source     string `json:"source,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
 }
 
 // ModelAvailabilityView is current Responses admission, not a live probe or
@@ -333,21 +335,30 @@ type AccountModelSnapshot struct {
 // It conveys relative utilization, not token or request counts. ID and Label
 // are presentation metadata; no raw upstream payload crosses this contract.
 type UsageWindow struct {
-	ID               string  `json:"id"`
-	Label            string  `json:"label,omitempty"`
-	UsedPercent      float64 `json:"used_percent,omitempty"`
-	UsedPercentKnown bool    `json:"used_percent_known"`
-	WindowSeconds    int     `json:"window_seconds,omitempty"`
-	ResetAt          string  `json:"reset_at,omitempty"`
-	Allowed          bool    `json:"allowed"`
-	AllowedKnown     bool    `json:"allowed_known"`
-	LimitReached     bool    `json:"limit_reached"`
+	ID                string  `json:"id"`
+	Label             string  `json:"label,omitempty"`
+	Scope             string  `json:"scope,omitempty"`
+	Model             string  `json:"model,omitempty"`
+	Source            string  `json:"source,omitempty"`
+	ObservedAt        string  `json:"observed_at,omitempty"`
+	ExpiresAt         string  `json:"expires_at,omitempty"`
+	UsedPercent       float64 `json:"used_percent,omitempty"`
+	UsedPercentKnown  bool    `json:"used_percent_known"`
+	WindowSeconds     int     `json:"window_seconds,omitempty"`
+	ResetAt           string  `json:"reset_at,omitempty"`
+	Allowed           bool    `json:"allowed"`
+	AllowedKnown      bool    `json:"allowed_known"`
+	LimitReached      bool    `json:"limit_reached"`
+	LimitReachedKnown bool    `json:"limit_reached_known,omitempty"`
 }
 
 // AccountUsageSnapshot is the durable, redacted usage observation for a
-// single account. ExpiresAt only marks staleness for presentation; a failed
-// refresh keeps the prior snapshot so operators retain the last observation.
+// single account. Window expiry controls admission; failed refreshes retain
+// prior observations. Complete denotes a full usage-endpoint response, not
+// response headers. StartedAt is captured before issuing that observation.
 type AccountUsageSnapshot struct {
+	StartedAt  string        `json:"started_at,omitempty"`
+	Complete   bool          `json:"complete,omitempty"`
 	PlanType   string        `json:"plan_type,omitempty"`
 	Windows    []UsageWindow `json:"windows,omitempty"`
 	ObservedAt string        `json:"observed_at"`

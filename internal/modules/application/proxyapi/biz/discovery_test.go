@@ -567,7 +567,7 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 			if progress.Total != 1 || progress.Processed != 1 || progress.Succeeded != 1 || progress.Failed != 0 || len(snapshots) != 1 {
 				t.Fatalf("progress=%+v snapshots=%+v", progress, snapshots)
 			}
-			if snapshot := snapshots[0].Snapshot; snapshot.PlanType != "pro" || len(snapshot.Windows) != 1 || snapshot.Windows[0].UsedPercent != 40 || snapshot.ExpiresAt == "" {
+			if snapshot := snapshots[0].Snapshot; !snapshot.Complete || snapshot.StartedAt == "" || snapshot.PlanType != "pro" || len(snapshot.Windows) != 1 || snapshot.Windows[0].UsedPercent != 40 || snapshot.ExpiresAt == "" {
 				t.Fatalf("snapshot=%+v", snapshot)
 			}
 			return

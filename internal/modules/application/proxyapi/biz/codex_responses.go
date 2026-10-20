@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 			}
 			return codexresponses.WebsocketOpenResult{}, failure
 		}
-		s.mergeCodexUsageHeaders(ctx, account.AccountID, opened.Headers)
+		s.mergeCodexUsageHeaders(ctx, account.AccountID, opened.Headers, opened.Attempt.Request.At, opened.Attempt.Response.At)
 		if strings.TrimSpace(opened.SessionID) == "" {
 			s.releaseCodexAccount(ctx, account.LeaseID)
 			failure := codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex websocket session is missing"))
@@ -160,7 +161,7 @@ func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payloa
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex websocket send result"))
 	}
 	if sent, ok := value.(upevents.WSSendResult); ok && len(sent.Headers) > 0 {
-		s.mergeCodexUsageHeaders(ctx, binding.accountID, sent.Headers)
+		s.mergeCodexUsageHeaders(ctx, binding.accountID, sent.Headers, sent.Attempt.Request.At, sent.Attempt.Response.At)
 	}
 	return nil
 }
@@ -622,7 +623,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 				request.ObserveAttempt(toCodexHTTPAttempt(completed.Attempt), nil)
 			}
 			logCodexAttempt(request, nil)
-			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
+			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers, completed.Attempt.Request.At, completed.Attempt.Response.At)
 			s.noteCodexTurnState(account.AccountID, fingerprint, request.SessionScope, completed.Headers)
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportCompact, true)
 			s.releaseCodexAccount(ctx, account.LeaseID)
@@ -980,7 +981,7 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		failure.TurnStateSource = turnStateSource
 		return codexresponses.Result{}, failure
 	}
-	s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers)
+	s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers, completed.Attempt.Request.At, completed.Attempt.Response.At)
 	s.noteCodexTurnState(account.AccountID, fingerprint, request.SessionScope, completed.Headers)
 	return codexresponses.Result{Body: completed.Body, Headers: toCodexHeaders(completed.Headers), Attempt: toCodexHTTPAttempt(completed.Attempt), TurnStateSource: turnStateSource}, nil
 }
@@ -1077,7 +1078,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 			failure.Attempt = observedAttempt
 		}
 	}()
-	s.mergeCodexUsageHeaders(ctx, account.AccountID, startedUpstream.Headers)
+	s.mergeCodexUsageHeaders(ctx, account.AccountID, startedUpstream.Headers, startedUpstream.Attempt.Request.At, startedUpstream.Attempt.Response.At)
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
 	}
@@ -1161,32 +1162,41 @@ func codexStreamFailure(update upevents.PullResult, attempt codexresponses.HTTPA
 	return failure
 }
 
-func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, headers []upevents.Header) {
+func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, headers []upevents.Header, observed ...time.Time) {
 	values := make(map[string]string, len(headers))
 	for _, header := range headers {
 		values[strings.ToLower(strings.TrimSpace(header.Name))] = strings.TrimSpace(header.Value)
 	}
 	now := time.Now().UTC()
-	snapshot := accevents.AccountUsageSnapshot{ObservedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(codexUsageSnapshotTTL).Format(time.RFC3339)}
+	started := now
+	if len(observed) > 0 && !observed[0].IsZero() {
+		started = observed[0].UTC()
+	}
+	captured := started
+	if len(observed) > 1 && !observed[1].IsZero() {
+		captured = observed[1].UTC()
+	}
+	snapshot := accevents.AccountUsageSnapshot{StartedAt: started.Format(time.RFC3339Nano), ObservedAt: captured.Format(time.RFC3339Nano), ExpiresAt: captured.Add(codexUsageSnapshotTTL).Format(time.RFC3339Nano)}
 	for _, definition := range []struct {
 		id, label, prefix string
 	}{
-		{id: "header-primary", label: "Primary", prefix: "x-codex-primary-"},
-		{id: "header-secondary", label: "Secondary", prefix: "x-codex-secondary-"},
+		{id: "standard-primary", label: "Primary", prefix: "x-codex-primary-"},
+		{id: "standard-secondary", label: "Secondary", prefix: "x-codex-secondary-"},
 	} {
-		window := accevents.UsageWindow{ID: definition.id, Label: definition.label}
+		window := accevents.UsageWindow{ID: definition.id, Label: definition.label, Scope: "standard"}
 		used, usedErr := strconv.ParseFloat(values[definition.prefix+"used-percent"], 64)
 		minutes, minutesErr := strconv.Atoi(values[definition.prefix+"window-minutes"])
 		resetSeconds, resetErr := strconv.Atoi(values[definition.prefix+"reset-after-seconds"])
-		if usedErr == nil {
+		if usedErr == nil && !math.IsNaN(used) && !math.IsInf(used, 0) && used >= 0 && used <= 100 {
 			window.UsedPercent, window.UsedPercentKnown = used, true
 			window.LimitReached = used >= 100
+			window.LimitReachedKnown = true
 		}
-		if minutesErr == nil && minutes > 0 {
+		if minutesErr == nil && minutes > 0 && minutes <= 366*24*60 {
 			window.WindowSeconds = minutes * 60
 		}
-		if resetErr == nil && resetSeconds > 0 {
-			window.ResetAt = now.Add(time.Duration(resetSeconds) * time.Second).Format(time.RFC3339)
+		if resetErr == nil && resetSeconds > 0 && resetSeconds <= 366*24*60*60 {
+			window.ResetAt = captured.Add(time.Duration(resetSeconds) * time.Second).Format(time.RFC3339)
 		}
 		if window.UsedPercentKnown || window.WindowSeconds > 0 || window.ResetAt != "" {
 			snapshot.Windows = append(snapshot.Windows, window)
@@ -1195,11 +1205,8 @@ func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, he
 	if len(snapshot.Windows) == 0 {
 		return
 	}
-	nextRefreshAt := ""
-	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
-		nextRefreshAt = nextCodexUsageRefreshAt(accountID, now, interval)
-	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMergeUsageSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot, Source: "response_header", NextRefreshAt: nextRefreshAt})).Get()
+	// Partial headers neither postpone the full usage poll nor clear its errors.
+	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMergeUsageSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot, Source: "response_header"})).Get()
 }
 
 func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {
