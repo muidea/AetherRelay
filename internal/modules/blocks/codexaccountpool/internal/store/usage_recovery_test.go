@@ -20,6 +20,125 @@ func recoveredUsage(started time.Time) events.AccountUsageSnapshot {
 	}
 }
 
+// x800's prolite usage endpoint reports one weekly primary window, no secondary.
+func recoveredSingleWeeklyUsage(started time.Time) events.AccountUsageSnapshot {
+	snapshot := recoveredUsage(started)
+	snapshot.PlanType = "prolite"
+	snapshot.Windows = []events.UsageWindow{{
+		ID: "standard-primary", Scope: "standard", WindowSeconds: 604800,
+		UsedPercentKnown: true, UsedPercent: 0, AllowedKnown: true, Allowed: true,
+		LimitReachedKnown: true, ResetAt: started.Add(7 * 24 * time.Hour).Format(time.RFC3339),
+	}}
+	return snapshot
+}
+
+func TestSingleWeeklyUsageRecoveryRestoresAllModelsAndPersists(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "current quota"
+		if legacy {
+			name = "legacy quota"
+		}
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.duckdb")
+			codec := encryptedTestCodec(t)
+			s, err := Open(path, "256MB", 1, codec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			if _, _, _, err = s.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+				t.Fatal(err)
+			}
+			id := s.List()[0].ID
+			models := []string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-reserve"}
+			now := time.Now().UTC()
+			modelSnapshot := events.AccountModelSnapshot{ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}
+			for _, model := range models {
+				modelSnapshot.Models = append(modelSnapshot.Models, events.AccountModelEntry{ID: model})
+			}
+			if _, _, err = s.PutModelSnapshot(id, modelSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			reset := now.Add(5 * 24 * time.Hour)
+			if _, err = s.RecordResult(id, "gpt-6.1-sol", false, events.ErrorRateLimit, 3600, true, reset.Format(time.RFC3339), false); err != nil {
+				t.Fatal(err)
+			}
+			if legacy {
+				// Match the persisted pre-provenance cooldown observed on x800.
+				s.items[id].Cooldowns[""] = cooldown{Until: reset.Truncate(time.Second), ErrorClass: events.ErrorRateLimit}
+				s.items[id].QuotaObservations[""] = quotaObservation{State: "exhausted", ObservedAt: now.Add(-time.Minute).Format(time.RFC3339), ResetAt: reset.Format(time.RFC3339)}
+			}
+			if view, _ := s.View(id); len(view.AvailableModels) != 0 {
+				t.Fatalf("quota did not block all models: %+v", view.AvailableModels)
+			}
+			snapshot := recoveredSingleWeeklyUsage(time.Now().UTC())
+			snapshot.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err = s.PutUsageSnapshotWithSchedule(id, snapshot, "scheduled", now.Add(10*time.Minute).Format(time.RFC3339)); err != nil {
+				t.Fatal(err)
+			}
+			view, _ := s.View(id)
+			if len(view.AvailableModels) != len(models) || len(view.Cooldowns) != 0 || len(view.QuotaObservations) != 0 {
+				t.Fatalf("single-window refresh did not restore 9/9 models: %+v", view)
+			}
+			if _, err = s.Acquire("gpt-6.1-sol", nil); err != nil {
+				t.Fatalf("restored model still denied: %v", err)
+			}
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err = Open(path, "256MB", 1, codec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if view, _ = s.View(id); len(view.AvailableModels) != len(models) || len(view.Cooldowns) != 0 || len(view.QuotaObservations) != 0 {
+				t.Fatalf("restart resurrected old quota state: %+v", view)
+			}
+		})
+	}
+}
+
+func TestSingleWeeklyRecoveryRequiresKnownShapeAndPositiveEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name   string
+		change func(*events.AccountUsageSnapshot)
+	}{
+		{"unknown plan", func(s *events.AccountUsageSnapshot) { s.PlanType = "" }},
+		{"other plan missing secondary", func(s *events.AccountUsageSnapshot) { s.PlanType = "pro" }},
+		{"unknown duration", func(s *events.AccountUsageSnapshot) { s.Windows[0].WindowSeconds = 0 }},
+		{"short primary missing secondary", func(s *events.AccountUsageSnapshot) { s.Windows[0].WindowSeconds = 18000 }},
+		{"unknown allowance", func(s *events.AccountUsageSnapshot) { s.Windows[0].AllowedKnown = false }},
+		{"unknown percentage", func(s *events.AccountUsageSnapshot) { s.Windows[0].UsedPercentKnown = false }},
+		{"unknown limit", func(s *events.AccountUsageSnapshot) { s.Windows[0].LimitReachedKnown = false }},
+		{"disallowed", func(s *events.AccountUsageSnapshot) { s.Windows[0].Allowed = false }},
+		{"still exhausted", func(s *events.AccountUsageSnapshot) { s.Windows[0].UsedPercent = 100 }},
+		{"partial headers", func(s *events.AccountUsageSnapshot) { s.Complete = false }},
+		{"expired", func(s *events.AccountUsageSnapshot) { s.ExpiresAt = now.Add(-time.Second).Format(time.RFC3339Nano) }},
+		{"started before failure", func(s *events.AccountUsageSnapshot) { s.StartedAt = now.Add(-2 * time.Minute).Format(time.RFC3339Nano) }},
+		{"missing primary", func(s *events.AccountUsageSnapshot) { s.Windows = nil }},
+		{"secondary unknown", func(s *events.AccountUsageSnapshot) {
+			s.Windows = append(s.Windows, events.UsageWindow{ID: "standard-secondary"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observed := now.Add(-time.Minute).Format(time.RFC3339Nano)
+			reset := now.Add(5 * 24 * time.Hour)
+			item := &account{
+				Cooldowns:         map[string]cooldown{"": {Until: reset, ErrorClass: events.ErrorRateLimit, Source: "usage_limit", ObservedAt: observed}},
+				QuotaObservations: map[string]quotaObservation{"": {State: "exhausted", ObservedAt: observed, ResetAt: reset.Format(time.RFC3339Nano)}},
+			}
+			snapshot := recoveredSingleWeeklyUsage(now.Add(-time.Second))
+			tc.change(&snapshot)
+			clean := prepareUsageSnapshot(snapshot, "scheduled")
+			item.UsageSnapshot = &clean
+			reconcileQuotaRecovery(item, clean, now)
+			if len(item.Cooldowns) != 1 || len(item.QuotaObservations) != 1 {
+				t.Fatal("unproven single-window recovery cleared quota state")
+			}
+		})
+	}
+}
+
 func TestFullUsageRecoveryReleasesQuotaAndPersistsAdmission(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.duckdb")
 	codec := encryptedTestCodec(t)
@@ -73,6 +192,72 @@ func TestFullUsageRecoveryReleasesQuotaAndPersistsAdmission(t *testing.T) {
 	}
 	if _, err = s.Acquire("gpt-6.1-sol", nil); err != nil {
 		t.Fatalf("restart resurrected quota cooldown: %v", err)
+	}
+}
+
+func TestSingleWeeklyRecoveryPreservesOtherRestrictions(t *testing.T) {
+	now := time.Now().UTC()
+	reset := now.Add(5 * 24 * time.Hour)
+	observed := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	for _, tc := range []struct {
+		name  string
+		setup func(*account, *events.AccountUsageSnapshot)
+		quota bool
+	}{
+		{"ordinary account rate limit", func(a *account, _ *events.AccountUsageSnapshot) {
+			a.Cooldowns[""] = cooldown{Until: reset, ErrorClass: events.ErrorRateLimit, Source: "request_failure"}
+		}, false},
+		{"unverified legacy limit", func(a *account, _ *events.AccountUsageSnapshot) {
+			a.Cooldowns[""] = cooldown{Until: reset.Add(time.Hour), ErrorClass: events.ErrorRateLimit}
+		}, false},
+		{"model network failure", func(a *account, _ *events.AccountUsageSnapshot) {
+			a.Cooldowns["gpt-6-luna"] = cooldown{Until: reset, ErrorClass: events.ErrorNetwork}
+		}, false},
+		{"model quota failure", func(a *account, _ *events.AccountUsageSnapshot) {
+			a.Cooldowns["gpt-6-luna"] = cooldown{Until: reset, ErrorClass: events.ErrorRateLimit, Source: "usage_limit"}
+			a.QuotaObservations["gpt-6-luna"] = quotaObservation{State: "exhausted", ObservedAt: observed, ResetAt: reset.Format(time.RFC3339Nano)}
+		}, false},
+		{"newer quota failure", func(a *account, _ *events.AccountUsageSnapshot) {
+			a.QuotaObservations[""] = quotaObservation{State: "exhausted", ObservedAt: now.Format(time.RFC3339Nano), ResetAt: reset.Format(time.RFC3339Nano)}
+		}, true},
+		{"unobserved exhausted secondary", func(a *account, _ *events.AccountUsageSnapshot) {
+			a.UsageSnapshot.Windows = append(a.UsageSnapshot.Windows, events.UsageWindow{
+				ID: "standard-secondary", Scope: "standard", LimitReached: true,
+				ObservedAt: observed, ExpiresAt: now.Add(time.Minute).Format(time.RFC3339Nano), ResetAt: reset.Format(time.RFC3339Nano),
+			})
+		}, true},
+		{"unknown additional limit", func(_ *account, incoming *events.AccountUsageSnapshot) {
+			incoming.Windows = append(incoming.Windows, events.UsageWindow{ID: "additional-unknown-primary", Scope: "additional", LimitReached: true})
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			incoming := prepareUsageSnapshot(recoveredSingleWeeklyUsage(now.Add(-time.Second)), "scheduled")
+			previous := incoming
+			previous.Windows = append([]events.UsageWindow(nil), incoming.Windows...)
+			item := &account{
+				Cooldowns:         map[string]cooldown{"": {Until: reset, ErrorClass: events.ErrorRateLimit, Source: "usage_limit", ObservedAt: observed}},
+				QuotaObservations: map[string]quotaObservation{"": {State: "exhausted", ObservedAt: observed, ResetAt: reset.Format(time.RFC3339Nano)}},
+				UsageSnapshot:     &previous,
+			}
+			tc.setup(item, &incoming)
+			before := make(map[string]cooldown)
+			for model, entry := range item.Cooldowns {
+				before[model] = entry
+			}
+			reconcileQuotaRecovery(item, incoming, now)
+			for model, entry := range before {
+				if (model != "" || tc.quota || entry.Source != "usage_limit") && item.Cooldowns[model] != entry {
+					t.Fatalf("recovery altered an unrelated restriction: %q", model)
+				}
+			}
+			_, retained := item.QuotaObservations[""]
+			if retained != tc.quota {
+				t.Fatalf("credential quota retained=%v want=%v", retained, tc.quota)
+			}
+			if tc.name == "model quota failure" && len(item.QuotaObservations) != 1 {
+				t.Fatal("account recovery erased model-local quota evidence")
+			}
+		})
 	}
 }
 

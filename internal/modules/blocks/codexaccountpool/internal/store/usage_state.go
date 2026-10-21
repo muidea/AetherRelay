@@ -242,14 +242,34 @@ func legacyQuotaCooldown(item *account, model string, entry cooldown) bool {
 	return entry.Source == "" && entry.ErrorClass == events.ErrorRateLimit && ok && observation.State == "exhausted" && observed && valid && reset.Equal(entry.Until)
 }
 
+func singleWeeklyQuotaRecovery(snapshot events.AccountUsageSnapshot) bool {
+	// The observed prolite contract has one weekly primary window. Do not
+	// interpret a missing secondary on other plans or shorter windows as a
+	// complete recovery, nor infer allowance from missing status fields.
+	if snapshot.PlanType != "prolite" {
+		return false
+	}
+	var primary events.UsageWindow
+	count := 0
+	for _, window := range snapshot.Windows {
+		if window.Scope == "standard" {
+			count++
+			primary = window
+		}
+	}
+	return count == 1 && primary.ID == "standard-primary" && primary.WindowSeconds == 7*24*60*60 &&
+		primary.AllowedKnown && primary.Allowed && primary.LimitReachedKnown && !primary.LimitReached &&
+		primary.UsedPercentKnown && primary.UsedPercent < 100
+}
+
 func reconcileQuotaRecovery(item *account, incoming events.AccountUsageSnapshot, now time.Time) {
 	started, valid := parseExpiry(incoming.StartedAt)
 	finished, completeTime := parseExpiry(incoming.ObservedAt)
 	if !incoming.Complete || !valid || !completeTime || finished.Before(started) || finished.After(now) || usageLimitCooling(item, now) {
 		return
 	}
-	// Ordinary primary AND secondary windows must be present and explicitly
-	// healthy in this one full response; an empty/partial 200 is not recovery.
+	// Require both healthy ordinary windows unless the full response proves
+	// the known single-weekly-window shape. Empty/partial 200s are not recovery.
 	healthy := map[string]bool{}
 	for _, window := range incoming.Windows {
 		if window.Scope == "standard" {
@@ -263,7 +283,7 @@ func reconcileQuotaRecovery(item *account, incoming events.AccountUsageSnapshot,
 			return // No proof that an unscoped restriction recovered.
 		}
 	}
-	if !healthy["standard-primary"] || !healthy["standard-secondary"] {
+	if !healthy["standard-primary"] || !healthy["standard-secondary"] && !singleWeeklyQuotaRecovery(incoming) {
 		return
 	}
 	for model, observation := range item.QuotaObservations {

@@ -1206,6 +1206,25 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 	}
 }
 
+func TestParseUsagePreservesSingleWeeklyProliteWindow(t *testing.T) {
+	for _, body := range []string{
+		`{"plan_type":"prolite","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_after_seconds":604800},"secondary_window":null}}`,
+		`{"plan_type":"prolite","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_after_seconds":604800}}}`,
+		`{"planType":"prolite","rateLimit":{"allowed":true,"limitReached":false,"primaryWindow":{"usedPercent":0,"limitWindowSeconds":604800,"resetAfterSeconds":604800},"secondaryWindow":null}}`,
+	} {
+		plan, windows, err := parseUsage([]byte(body), time.Now().UTC())
+		if err != nil || plan != "prolite" || len(windows) != 1 {
+			t.Fatalf("single weekly usage plan=%q windows=%+v err=%v", plan, windows, err)
+		}
+		window := windows[0]
+		if window.ID != "standard-primary" || window.Scope != "standard" || window.WindowSeconds != 604800 ||
+			!window.AllowedKnown || !window.Allowed || !window.LimitReachedKnown || window.LimitReached ||
+			!window.UsedPercentKnown || window.UsedPercent != 0 || window.ResetAt == "" {
+			t.Fatalf("lost single-window recovery evidence: %+v", window)
+		}
+	}
+}
+
 func TestAdditionalUsageNeedsExplicitModelScope(t *testing.T) {
 	_, windows, err := parseUsage([]byte(`{"additional_rate_limits":[
 		{"limit_name":"reserve quota","metered_feature":"gpt-reserve","rate_limit":{"allowed":false,"primary_window":{"used_percent":100}}},
