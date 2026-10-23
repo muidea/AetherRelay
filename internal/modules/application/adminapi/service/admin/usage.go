@@ -116,7 +116,7 @@ func (h *Handler) usageEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ef := usage.EventFilter{UsageFilter: filter}
+	ef := usage.EventFilter{UsageFilter: filter, EventIDs: r.URL.Query()["event_id"]}
 	if v := strings.TrimSpace(r.URL.Query().Get("page_size")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -132,7 +132,7 @@ func (h *Handler) usageEvents(w http.ResponseWriter, r *http.Request) {
 	page, err := h.usageStore.Events(ctx, ef)
 	h.observeUsageQuery(started, err)
 	if err != nil {
-		if strings.Contains(err.Error(), "cursor") || strings.Contains(err.Error(), "page_size") {
+		if strings.Contains(err.Error(), "cursor") || strings.Contains(err.Error(), "page_size") || strings.Contains(err.Error(), "event_ids") {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -382,6 +383,9 @@ func (s *MemoryStore) Events(_ context.Context, filter EventFilter) (EventPage, 
 
 	var list []*Event
 	for _, e := range s.events {
+		if len(filter.EventIDs) > 0 && !slices.Contains(filter.EventIDs, e.EventID) {
+			continue
+		}
 		if !matchEvent(e, filter.UsageFilter, from, to) {
 			continue
 		}

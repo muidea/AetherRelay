@@ -175,8 +175,28 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.Round, r *http.Request, start time.Time, provider, model string, stream bool, status int, apiErr APIError, fail *streamFail, tok tokenUsage) {
-	if apiErr.FailureClass == "" && fail != nil {
+	if fail == nil {
+		fail = newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, nil, false)
+	}
+	if apiErr.FailureClass == "" {
 		apiErr.FailureClass = chatGPTFailureCode(fail)
+	}
+	if fail.FailureClass == "" {
+		fail.FailureClass = apiErr.FailureClass
+	}
+	if fail.Retryable == nil {
+		fail.Retryable = apiErr.Retryable
+	}
+	if fail.RetryAfterSeconds == 0 {
+		fail.RetryAfterSeconds = apiErr.RetryAfterSeconds
+	}
+	if apiErr.Code == ErrorCodeConversionUnsupported || apiErr.Code == ErrorCodeConversionLimitExceeded {
+		if len(apiErr.UnsupportedFeatures) == 0 && apiErr.Feature != "" {
+			apiErr.UnsupportedFeatures = []string{apiErr.Feature}
+		}
+		if round != nil {
+			round.SetUnsupportedFeatures(apiErr.UnsupportedFeatures)
+		}
 	}
 	if apiErr.ClientProtocol == "" {
 		apiErr.ClientProtocol = clientProtocolFromRequest(r)
@@ -194,9 +214,6 @@ func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.
 	body, _ := json.Marshal(APIErrorResponse{Error: apiErr})
 	body = append(body, '\n')
 	_ = h.writeArchiveResponse(round, "response.json", body)
-	if fail == nil {
-		fail = newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, nil, false)
-	}
 	h.settleChatGPTWeb(round, r, provider, model, stream, status, time.Since(start), tok, fail)
 }
 

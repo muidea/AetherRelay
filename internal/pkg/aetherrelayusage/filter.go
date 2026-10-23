@@ -81,6 +81,14 @@ func ValidateEventFilter(f *EventFilter) error {
 	if f == nil {
 		return fmt.Errorf("filter is nil")
 	}
+	if len(f.EventIDs) > 100 {
+		return fmt.Errorf("invalid event_ids: at most 100 IDs are allowed")
+	}
+	for _, id := range f.EventIDs {
+		if strings.TrimSpace(id) != id || id == "" || len(id) > 128 {
+			return fmt.Errorf("invalid event_ids")
+		}
+	}
 	if err := ValidateUsageFilter(&f.UsageFilter); err != nil {
 		return err
 	}

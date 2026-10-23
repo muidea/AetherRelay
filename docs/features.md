@@ -95,6 +95,7 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 工具调用统一归 `api_key_id=builtin-local`。临时会话和搜索历史仍按管理员 owner 隔离，二者不是同一个维度。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
 - Provider 准入阶段返回 503 时，明细、CSV 与汇总日志保留安全的 `failure_class`、`retryable` 和 `retry_after_seconds`，并通过 Event ID 关联；Prometheus 按有界原因累计本地准入拒绝。
+- ChatGPT Web 本地参数拒绝保留具体 `unsupported_features` 和 `failure_class`，错误响应、用量详情与交互归档保持一致；例如不支持的 `response_format` 仍返回 400，且不会发起上游请求。历史缺失字段不回填。
 - CSV 仅用于导出当前用量；不提供旧 `usage.csv` 导入或启动期数据升级。
 
 ## Admin 管理页
@@ -119,6 +120,8 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 ### 使用统计
 
 查询 DuckDB 用量并按多维度筛选。最近调用列表保留时间、API Key、模型、接口、输入/输出/总 Token、缓存使用率、TPS、最终状态和耗时；TPS 固定显示两位小数，并紧邻缓存使用率。Token 按输入 / 输出 / 总量行内排列，Provider、错误分类及估算/部分输出/缓冲标记通过提示及完整详情查看，列表不显示技术标记。宽屏使用紧凑的可换行表格，窄屏自动改为带字段标签的卡片，保留字段不截断或隐藏。点击调用或使用 Enter / 空格可打开完整详情，查看 Event ID、转换和上游诊断信息。
+
+使用统计页面可见时，每 15 秒按 Event ID 批量刷新已加载的待完成记录，并同步已打开的详情；保持当前筛选及分页游标。模型、结果等字段结算后不再符合筛选的记录自动移出列表；迟到响应不能覆盖新筛选或已完成状态。刷新失败保留快照，下次继续重试。新增调用通过手动刷新列表获取。管理接口 `GET /api/usage/events` 支持重复 `event_id` 精确查询，每次最多 100 项，沿用管理鉴权和其他查询条件。
 
 ### 系统信息
 

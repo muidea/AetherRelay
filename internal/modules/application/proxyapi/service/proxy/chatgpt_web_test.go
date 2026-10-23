@@ -6,12 +6,16 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelayusage"
@@ -399,5 +403,95 @@ func TestChatGPTWebTextClientWriteSettlesUsage(t *testing.T) {
 	}
 	if ev.Provider != "chatgptweb" || !ev.Estimated {
 		t.Fatalf("event=%+v", ev)
+	}
+}
+
+// CP-OBS-016: pending status refresh and local rejection diagnostics.
+func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
+	for _, durable := range []bool{false, true} {
+		name := "memory without archive"
+		if durable {
+			name = "duckdb with archive"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			var store usage.Store = usage.NewMemoryStore()
+			storeConfig := config.UsageStoreConfig{Path: filepath.Join(root, "usage.duckdb"), MemoryLimit: "256MB", Threads: 1}
+			if durable {
+				var err error
+				store, err = usage.OpenDuckDB(storeConfig)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			cfg := mustHandlerConfig(config.Config{InteractionDir: filepath.Join(root, "interactions"), ArchiveInteractions: durable, ArchiveFullContent: durable})
+			var recorder *archive.Recorder
+			if durable {
+				var err error
+				recorder, err = archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			h := NewHandler(cfg, store, recorder, nil).WithChatGPTTextExecutor(chatGPTTextExecutorStub{complete: func(context.Context, chatgpttext.Request) (chatgpttext.Result, error) {
+				calls++
+				return chatgpttext.Result{}, nil
+			}})
+			if durable {
+				withClientKey(h, "test-client", "test-client-key")
+			}
+			h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "auto"}}, time.Now().UTC().Format(time.RFC3339)))
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"return JSON"}],"response_format":{"type":"json_object"},"temperature":0.2}`))
+			req.Header.Set("Authorization", "Bearer test-client-key")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			var response APIErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != 400 || calls != 0 || response.Error.Feature != "response_format" || response.Error.FailureClass != ErrorCodeConversionUnsupported || strings.Join(response.Error.UnsupportedFeatures, ",") != "response_format" {
+				t.Fatalf("status=%d calls=%d response=%s", rec.Code, calls, rec.Body.String())
+			}
+			if durable {
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				store, err = usage.OpenDuckDB(storeConfig)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			events := usageEvents(t, store)
+			if len(events) != 1 {
+				t.Fatalf("events=%+v", events)
+			}
+			e := events[0]
+			if e.State != usage.StateCompleted || e.HTTPStatus != 400 || e.ErrorCode != ErrorCodeConversionUnsupported || e.FailureClass != response.Error.FailureClass || strings.Join(e.UnsupportedFeatures, ",") != "response_format" || e.UpstreamStatus != 0 || e.AccountID != "" || e.TotalTokens != 0 {
+				t.Fatalf("incomplete rejection diagnostic: %+v", e)
+			}
+			if durable {
+				paths, err := filepath.Glob(filepath.Join(cfg.InteractionDir, "*", "*", "metadata.json"))
+				if err != nil || len(paths) != 1 {
+					t.Fatalf("metadata=%v err=%v", paths, err)
+				}
+				raw, err := os.ReadFile(paths[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				var meta struct {
+					FailureClass        string   `json:"failure_class"`
+					UnsupportedFeatures []string `json:"unsupported_features"`
+				}
+				if err = json.Unmarshal(raw, &meta); err != nil {
+					t.Fatal(err)
+				}
+				if meta.FailureClass != e.FailureClass || strings.Join(meta.UnsupportedFeatures, ",") != "response_format" {
+					t.Fatalf("archive diagnostics=%s", raw)
+				}
+			}
+		})
 	}
 }

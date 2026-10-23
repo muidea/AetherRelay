@@ -94,6 +94,7 @@ type EventFilter struct {
 	UsageFilter
 	PageSize int
 	Cursor   string
+	EventIDs []string // Bounded exact IDs for refreshing already displayed events.
 }
 
 // Summary 是聚合统计口径。

@@ -320,3 +320,42 @@ func TestUsageFilterOptionsStoreFailureDegrades(t *testing.T) {
 		t.Fatalf("config keys missing on degrade: %#v", ids)
 	}
 }
+
+// CP-OBS-016: pending status refresh and local rejection diagnostics.
+func TestUsageEventsBoundedIDLookupAndAuthentication(t *testing.T) {
+	store := usage.NewMemoryStore()
+	at := time.Now().UTC().Add(-time.Minute)
+	for _, id := range []string{"target", "other"} {
+		if err := store.Start(context.Background(), usage.StartRecord{EventID: id, StartedAt: at, APIKeyID: "thought-flow"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHandlerWithUsage("", &fakeRuntime{}, store)
+	query := "/admin/api/usage/events?range=all&page_size=100&event_id=target&event_id=missing"
+	for _, tc := range []struct {
+		query, remote string
+		status        int
+	}{
+		{query, "127.0.0.1:1234", 200},
+		{query, "8.8.8.8:1234", 403},
+		{"/admin/api/usage/events?range=all&event_id=", "127.0.0.1:1234", 400},
+		{"/admin/api/usage/events?range=all" + strings.Repeat("&event_id=target", 101), "127.0.0.1:1234", 400},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.query, nil)
+		req.RemoteAddr = tc.remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Fatalf("status=%d want=%d body=%s", rec.Code, tc.status, rec.Body.String())
+		}
+		if rec.Code == 200 {
+			var page usage.EventPage
+			if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Events) != 1 || page.Events[0].EventID != "target" {
+				t.Fatalf("lookup=%+v", page)
+			}
+		}
+	}
+}

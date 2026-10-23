@@ -6,7 +6,9 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`18.0.1` 依据 2026-10-21 x800 账号快照，补齐 `prolite` 单周额度窗口的恢复判断：完整、新鲜且晚于额度失败的用量响应，在唯一 standard primary 为 604800 秒、明确允许、明确未耗尽且使用率已知低于 100% 时，可按既有来源校验清除账号级额度冷却。普通双窗口账号仍要求 primary/secondary 都健康；未知套餐、短窗口或缺失状态不作单窗口恢复推断。保留其他限流、模型失败及更新的额度失败，沿用持久化回滚。回归覆盖当前与旧版冷却记录、0/9→9/9 准入及重启保持、单窗口解析和负向证据边界；现场部署后须刷新用量复验。
+> 合同版本：`18.1.0` 根据 2026-10-23 x800 调用核对修复用量展示与本地拒绝诊断：使用统计可见时每 15 秒精确刷新已显示的 started 事件并同步打开的详情，保持筛选及分页，迟到响应不覆盖新快照；ChatGPT Web 本地 conversion 拒绝的具体能力与失败分类同步写入响应、用量和归档，不发起上游、不忽略原参数、不回填历史。回归覆盖成功/失败结算、并发响应顺序、分页与批量查询、管理鉴权、DuckDB 重开及归档一致性；线上须部署后复验。
+
+历史合同：`18.0.1` 依据 2026-10-21 x800 账号快照，补齐 `prolite` 单周额度窗口的恢复判断：完整、新鲜且晚于额度失败的用量响应，在唯一 standard primary 为 604800 秒、明确允许、明确未耗尽且使用率已知低于 100% 时，可按既有来源校验清除账号级额度冷却。普通双窗口账号仍要求 primary/secondary 都健康；未知套餐、短窗口或缺失状态不作单窗口恢复推断。保留其他限流、模型失败及更新的额度失败，沿用持久化回滚。回归覆盖当前与旧版冷却记录、0/9→9/9 准入及重启保持、单窗口解析和负向证据边界；现场部署后须刷新用量复验。
 
 历史合同：`18.0.0` 原管理“检测上游能力”整体替换为 ModelTrace 模型指纹检测，删除旧 Steering 管理接口、专用 WS 状态机和后备执行器。新 application/modeldetection Module 拥有任务/挑战/评分，Proxy 只提供 typed 严格采样端口；新任务仅管理员手动启动，严格绑定指定 Codex 槽位和 exact model；使用固定 Pages 中文三挑战、独立 HTTP/SSE 请求、CoreCompatible 解析及直接复制的 v0.2.0 Engine。每任务最多三次推理请求、180 秒、每次 1 MiB 接收正文及完成响应、全局一个任务；无换号、换模型、未知结果重放或自动补采。账号 owner 负责准入/受控刷新/真实额度；质量排名不写生产健康或路由。异步执行必须确认 worker 退出后才释放租约；取消及停止时仍允许窄清理合同。报告保留 30 分钟、重启丢失，绑定协议/解析器/bank/请求摘要和逐样本终态；概率仅为库内相对权重，不确认身份或能力回退。验收覆盖严格准入、三挑战、排名、有效样本诊断、幂等冲突、跨槽隔离、取消/排空/释放重试、凭据隔离、管理鉴权及 Web 转义。真实 OAuth 路径及质量校准仍须独立 live 验证。
 
@@ -523,6 +525,8 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-FAIL-020` OAuth refresh 的永久失败必须由账号 owner 持久化为 `credential_permanently_invalid`，立即停止该凭据参与路由，直到显式重新认证或 refresh 成功清除。它不阻止账号用量、额度的独立后台刷新，也不能等同于管理员手动 disabled。最后已知模型 membership 可在过期后继续保留为只读终态路由元数据，使重启、目录刷新和热重载后仍能返回可操作错误，但不得据此向失效凭据发送推理请求。若 exact model 的全部可调度凭据均处于该终态，HTTP 返回 503、`type=authentication_error`、`code=upstream_authentication_required`、`retryable=false`；WebSocket 返回同 code/type/retryable；Anthropic envelope 返回 `authentication_error` 并在 message 中携带稳定 code。并发槽占满返回 `accounts_busy`，冷却返回 `accounts_cooling` 和可计算的 Retry-After，其余本地准入失败保持 `provider_unavailable`。管理投影只显示布尔终态和安全错误类别，不暴露 token 或原始 OAuth 响应。
 
+`CP-OBS-016` 管理用量列表与打开的待完成详情按 Event ID 刷新持久化最新状态，不推测成功或重放请求；单次 ID 查询最多 100 项，沿用管理鉴权与查询条件。自动刷新保持当前筛选和分页游标，结算后不符合筛选的记录移出列表，旧筛选/分页响应与旧 started 快照不得覆盖新状态。ChatGPT Web 本地 `conversion_unsupported` / `conversion_limit_exceeded` 拒绝须将具体 `unsupported_features`、`failure_class` 一致投影到客户端、用量详情与启用的归档；保持 400 和零上游调用，不丢弃改变语义的参数，不回填历史。
+
 `CP-OBS-008` Codex 流失败记录有界阶段（start/pull/emit）、超时类别、首事件耗时、总耗时、事件数、字节数和最后事件时间；用量事件与归档 metadata 在首个有效 SSE data 到达时记录 `first_event_duration_ms`，并始终记录总 `duration_ms`。本地准入失败还必须在用量明细、CSV 和结构化汇总日志中保留安全的 `failure_class`、`retryable`、`retry_after_seconds`，汇总日志携带同一 Usage Event ID，且 Prometheus 以有界原因枚举统计准入拒绝。不输出请求正文、凭据、账号身份或原始网络错误。上下文取消必须保留取消/超时原因，不能统一改写成 upstream/network。
 
 `CP-OBS-006` Codex HTTP 执行逐次记录服务端 request_id、实际入站/上游模型、尝试序号、错误码、白名单 request_kind/compaction reason/phase，以及客户端实现身份的有界判定原因。身份原因只允许 `verified/absent/missing_user_agent/missing_originator/invalid_length/invalid_control_character/invalid_format/unsupported_family/family_mismatch/version_mismatch/unsupported_version`，不得记录原始 UA/Originator。客户端 metadata 只作为不可信诊断提示，不参与路由；不记录其任意值、完整上下文或凭据，不猜测 UI 目标模型。正常日志开关与归档开关不影响错误分类。证据：部署 `85aaabb` 的 round 58 为 Astra pre_turn compaction 成功，59–64 为 5.5 turn 404，65/74 为 5.5 comp_hash_changed/pre_turn compaction 404。
@@ -648,6 +652,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
+| 用量待完成刷新与 ChatGPT Web 本地参数拒绝诊断 | 18.1.0, CP-OBS-016 | implemented（本地）；待部署验收 | `web/admin/index.html`, `adminapi/service/admin/usage.go`, `aetherrelayusage`, `proxyapi/service/proxy/chatgpt_web.go` | `usage.test.cjs`, `event_lookup_test.go`, `TestUsageEventsBoundedIDLookupAndAuthentication`, `TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics` |
 | Codex metadata/commentary 响应投影、工具保序、错误用量与诊断归档 | 17.3.0, CP-OBS-011, CP-SEC-003 | implemented（本地）；待部署验收 | `proxyapi/service/proxy/codex_anthropic_projection.go`, `codex_messages.go`, `responses_anthropic.go`, `aetherrelayarchive/recorder.go` | `codex_anthropic_projection_test.go`；现场样本离线回放 |
 | 本地 conversion 对 Provider 熔断保持中性 | 17.3.0 | implemented（本地）；待部署验收 | `aetherrelaymetrics/registry.go` | `conversion_health_test.go`；`TestCodexProjectionFailuresDoNotBlockNativeResponses` |
 

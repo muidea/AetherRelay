@@ -3203,8 +3203,11 @@ async function loadUsageRuntime(){
 }
 async function loadUsage(resetEvents=true){
   loadUsageRuntime();
+  const key=usageParams().toString(),version=(state.usageLoadVersion||0)+1;state.usageLoadVersion=version;
+  const eventUpdate=resetEvents?loadEvents(true):refreshUsageEvents();
   try{
-    const data=await request(apiURL(`/api/usage/dashboard?${usageParams().toString()}`));
+    const data=await request(apiURL(`/api/usage/dashboard?${key}`));
+    if(version!==state.usageLoadVersion||key!==usageParams().toString())return;
     state.usage=data;
     const s=data.summary||{};
     $("uRequests").textContent=compact(s.requests);setLocalizedAttribute($("uRequests"),"title",()=>usageCardHint("requests",s));
@@ -3217,12 +3220,11 @@ async function loadUsage(resetEvents=true){
     renderCharts(data.daily||[]);
     $("uTPS").textContent=usageTPS(s);setLocalizedAttribute($("uTPS"),"title",()=>usageCardHint("tps",s));
     renderKeyTable(data.by_api_key||[]);
-    if(resetEvents){state.events=[];state.cursor="";await loadEvents(true)}
   }catch(e){
+    if(version!==state.usageLoadVersion||key!==usageParams().toString())return;
     $("keyTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
-    $("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
     toast(e.message,"error");
-  }
+  }finally{await eventUpdate}
 }
 function usageParams(){const p=new URLSearchParams();if(state.range!=="today")p.set("range",state.range);[["api_key_id",state.apiKeyFilter],["provider",state.providerFilter],["model",state.modelFilter],["outcome",state.outcomeFilter],["estimated",state.estimatedFilter],["from",state.from],["to",state.to]].forEach(([k,v])=>{if(v)p.set(k,v)});return p}
 function renderCharts(daily){
@@ -3323,26 +3325,79 @@ function renderUsageEventTable(events){
     return `<tr class="event-row ${status.className}" data-event="${i}" tabindex="0" aria-label="${esc(`${t("调用明细")} ${e.api_key_id||""} ${e.started_at||""}`)}">${cells.map((cell,j)=>`<td data-label="${esc(labels[j])}"${cell.title?` title="${esc(cell.title)}"`:""}><div class="usage-event-value${cell.numeric?" usage-event-number":""}">${cell.value}</div></td>`).join("")}</tr>`;
   }).join("")}</tbody></table></div>`;
 }
-async function loadEvents(reset=false){
-  try{
-    const params=usageParams();params.set("page_size","50");
-    if(state.cursor)params.set("cursor",state.cursor);
-    const page=await request(apiURL(`/api/usage/events?${params}`));
-    const list=page.events||[];
-    state.events=reset?list:state.events.concat(list);
-    state.cursor=page.next_cursor||"";
-    $("loadMoreEvents").disabled=!state.cursor;
-    $("eventTable").className="";
-    setLocalizedText($("eventMeta"),state.cursor?"{count} 条（可加载更多）":"{v0} 条",{count:state.events.length,v0:state.events.length});
-    if(!state.events.length){$("eventTable").innerHTML=`<div class="empty">暂无调用明细</div>`;return}
-    $("eventTable").innerHTML=renderUsageEventTable(state.events);
-    document.querySelectorAll("[data-event]").forEach(el=>{
-      const open=()=>showUsageEvent(state.events[Number(el.dataset.event)]);
-      el.onclick=open;
-      el.onkeydown=event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();open()}};
-    });
-  }catch(e){$("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+function renderUsageEvents(){
+  $("loadMoreEvents").disabled=!state.cursor;
+  $("eventTable").className="";
+  setLocalizedText($("eventMeta"),state.cursor?"{count} 条（可加载更多）":"{v0} 条",{count:state.events.length,v0:state.events.length});
+  $("eventTable").innerHTML=state.events.length?renderUsageEventTable(state.events):`<div class="empty">暂无调用明细</div>`;
+  document.querySelectorAll("[data-event]").forEach(el=>{
+    const open=()=>showUsageEvent(state.events[Number(el.dataset.event)]);
+    el.onclick=open;
+    el.onkeydown=event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();open()}};
+  });
 }
+function mergeUsageEvents(previous,incoming){
+  const events=new Map(previous.map(event=>[event.event_id,event]));
+  for(const event of incoming){
+    const old=events.get(event.event_id);
+    if(old?.state==="completed"&&event.state!=="completed")continue;
+    events.set(event.event_id,event);
+  }
+  return [...events.values()];
+}
+async function loadEvents(reset=false){
+  if(state.eventsLoadBusy&&!reset)return;
+  const key=usageParams().toString(),version=(state.eventsVersion||0)+1;state.eventsVersion=version;
+  state.eventsLoadBusy=true;
+  if(reset){state.events=[];state.cursor="";state.eventsFilterKey=key}
+  const cursor=state.cursor||"";
+  try{
+    const params=new URLSearchParams(key);params.set("page_size","50");
+    if(cursor)params.set("cursor",cursor);
+    const page=await request(apiURL(`/api/usage/events?${params}`));
+    if(version!==state.eventsVersion||key!==usageParams().toString())return;
+    state.events=mergeUsageEvents(reset?[]:state.events,page.events||[]);
+    state.cursor=page.next_cursor||"";
+    renderUsageEvents();
+  }catch(e){
+    if(version===state.eventsVersion&&key===usageParams().toString())$("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+  }finally{if(version===state.eventsVersion)state.eventsLoadBusy=false}
+}
+function usageEventMatchesFilters(event){
+  return [[state.apiKeyFilter,event.api_key_id],[state.providerFilter,event.provider],[state.modelFilter,event.model],[state.outcomeFilter,event.outcome]].every(([filter,value])=>!filter||filter===value)&&(!state.estimatedFilter||String(event.estimated)===state.estimatedFilter);
+}
+async function refreshUsageEvents(){
+  if(state.eventsRefreshBusy||state.eventsLoadBusy)return;
+  const key=usageParams().toString(),version=state.eventsVersion;
+  if(state.eventsFilterKey!==key)return;
+  const pending=state.events.filter(event=>event.state==="started");
+  if($("usageEventDialog").open&&state.usageEvent?.state==="started")pending.push(state.usageEvent);
+  const ids=[...new Set(pending.map(event=>event.event_id).filter(Boolean))];
+  if(!ids.length)return;
+  state.eventsRefreshBusy=true;
+  try{
+    const updates=new Map();
+    for(let offset=0;offset<ids.length;offset+=100){
+      const batch=ids.slice(offset,offset+100),params=new URLSearchParams({range:"all",page_size:"100"});
+      batch.forEach(id=>params.append("event_id",id));
+      const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
+      let page;
+      try{page=await request(apiURL(`/api/usage/events?${params}`),{signal:controller.signal})}finally{clearTimeout(timeout)}
+      if(version!==state.eventsVersion||key!==usageParams().toString())return;
+      for(const event of page.events||[])if(batch.includes(event.event_id))updates.set(event.event_id,event);
+    }
+    state.events=state.events.map(event=>{
+      const update=updates.get(event.event_id);
+      return update&&event.state!=="completed"?update:event;
+    }).filter(event=>usageEventMatchesFilters(event));
+    const detail=state.usageEvent,updated=updates.get(detail?.event_id);
+    if($("usageEventDialog").open&&detail?.state==="started"&&updated)showUsageEvent(updated);
+    renderUsageEvents();
+  }catch(e){
+    // Retain the last visible snapshot and retry on the next refresh tick.
+  }finally{state.eventsRefreshBusy=false}
+}
+
 function usageAccountLabel(event){if(event?.account_label)return event.account_label;if(event?.account_id)return event.account_id;return t(["codexoauth","chatgptweb"].includes(event?.provider)?"未记录":"不适用")}
 function showUsageEvent(event){state.usageEvent=event;const notice=$("usageEventModelNotice"),substituted=event?.provider==="codexoauth"&&event?.model_substituted===true;notice.style.display=substituted?"block":"none";notice.textContent=substituted?t("上游响应声明的模型与请求不一致：{request} → {response}。执行账号：{account}（槽位：{slot}）。仅记录模型差异，不代表账号健康异常。",{request:event.upstream_request_model||t("未记录"),response:event.response_model||t("未记录"),account:usageAccountLabel(event),slot:event.account_id||t("未记录")}):"";const labels={event_id:"Event ID",started_at:"开始时间",completed_at:"结束时间",api_key_id:"API Key ID",provider:"实际 Provider",account_label:"账号",account_id:"账号槽位 ID",model:"Model",upstream_request_model:"上游请求模型",response_model:"响应模型",operation:"Operation",route:"Route",client_endpoint:"客户端端点",client_protocol:"客户端协议",upstream_protocol:"上游协议",upstream_endpoint:"上游端点",conversion_mode:"转换模式",conversion_level:"转换等级",conversion_duration_ms:"转换耗时（秒）",conversion_degraded:"转换降级",ignored_features:"降级省略能力",unsupported_features:"拒绝能力",upstream_status:"上游 HTTP 状态",upstream_content_type:"上游 Content-Type",upstream_content_length:"上游 Content-Length",upstream_transfer_encoding:"上游 Transfer-Encoding",input_tokens:"输入 Token",output_tokens:"输出 Token",total_tokens:"总 Token",cached_input_tokens:"缓存读取 Token",cache_hit_rate:"缓存使用率",cache_creation_input_tokens:"缓存创建 Token",http_status:"HTTP 状态",outcome:"Outcome",error_code:"错误代码",failure_class:"失败分类",retryable:"可重试",retry_after_seconds:"建议等待（秒）",first_output_at:"首个实际输出时间",generation_duration_ms:"观测输出阶段耗时（秒）",tps:"TPS (Token/s)",observed_tps:"观测输出 TPS (Token/s)",output_tokens_known:"输出用量已知",generation_partial:"部分输出",generation_buffered:"上游明确缓冲",first_event_duration_ms:"首事件耗时（秒）",duration_ms:"总耗时（秒）",upstream_duration_ms:"上游响应头耗时（秒）",stream:"流式",estimated:"估算"},durationKeys=new Set(["conversion_duration_ms","first_event_duration_ms","duration_ms","upstream_duration_ms","generation_duration_ms"]);$("usageEventDetail").innerHTML=Object.entries(labels).map(([key,label])=>{const raw=event?.[key],value=["upstream_request_model","response_model"].includes(key)?(raw||t(event?.provider==="codexoauth"?"未记录":"不适用")):key==="account_label"?usageAccountLabel(event):key==="tps"?usageTPS(event):key==="observed_tps"?usageTPS({tps:event.observed_tps}):["input_tokens","output_tokens","total_tokens"].includes(key)?usageTokenValue(event,key):(key==="cached_input_tokens"||key==="cache_creation_input_tokens")?usageCacheTokens(event,key):key==="upstream_content_length"?(event.upstream_content_length_known===false?(event.upstream_status?t("未知"):t("未观测")):(raw??"—")):key==="cache_hit_rate"?usageCacheRate(event):durationKeys.has(key)?usageDurationSeconds(raw):key==="retryable"&&raw!=null?t(raw?"是":"否"):raw??"—";return `<dt>${esc(t(label))}</dt><dd data-i18n-ignore>${esc(value)}</dd>`}).join("");if(!$("usageEventDialog").open)$("usageEventDialog").showModal()}
 
@@ -4330,7 +4385,7 @@ Promise.allSettled([initAuthSession(),loadAdminPreferences()]).finally(()=>{
   applyChatGPTState(boot);
   setTaskMode(state.cg.tasks.mode||"generation",false);
   showTab(boot.tab);
-  state.usageTimer=setInterval(()=>{if(state.tab==="usage")loadUsage(false)},15000);
+  state.usageTimer=setInterval(()=>{if(state.tab==="usage"&&!document.hidden)loadUsage(false)},15000);
   state.usageRuntimeTimer=setInterval(()=>{if(state.tab==="usage"&&!document.hidden)loadUsageRuntime()},2000);
 });
 

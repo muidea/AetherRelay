@@ -369,6 +369,12 @@ func (s *DuckDBStore) Events(ctx context.Context, filter EventFilter) (EventPage
 
 	where, args := buildFilterWhere(filter.UsageFilter, from, to)
 
+	if len(filter.EventIDs) > 0 {
+		where += ` AND event_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(filter.EventIDs)), ",") + `)`
+		for _, id := range filter.EventIDs {
+			args = append(args, id)
+		}
+	}
 	// cursor: base64("rfc3339nano|event_id")
 	if filter.Cursor != "" {
 		curAt, curID, err := decodeEventCursor(filter.Cursor)

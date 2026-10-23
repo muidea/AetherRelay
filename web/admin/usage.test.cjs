@@ -21,7 +21,7 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'loadEvents', 'usageAccountLabel', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -375,4 +375,86 @@ test('Codex substitution shows response evidence and account while success stays
   c.showUsageEvent({provider:'chatgptweb'});assert.match(elements.usageEventDetail.innerHTML,/响应模型<\/dt><dd[^>]*>不适用/);
   assert.doesNotMatch(c.renderUsageEventTable([{...event,provider:'chatgptweb'}]),/上游模型替换/);
   for(const current of [{...event,model_substituted:false},{...event,provider:'chatgptweb'},{provider:'codexoauth'}]){c.showUsageEvent(current);assert.equal(elements.usageEventModelNotice.style.display,'none');assert.equal(elements.usageEventModelNotice.textContent,'');}
+});
+
+// CP-OBS-016: pending status refresh and local rejection diagnostics.
+test('automatic refresh completes loaded pending rows and the open detail without resetting pagination',async()=>{
+ const {context:c,elements}=harness();
+ c.state.apiKeyFilter='thought-flow';
+ const started={event_id:'pending',state:'started',api_key_id:'thought-flow',model:'',started_at:'2026-10-23T10:46:05Z'};
+ const older={event_id:'older',state:'completed',api_key_id:'thought-flow',http_status:200,outcome:'success'};
+ c.request=async()=>({events:[started,older],next_cursor:'older-page'});
+ await c.loadEvents(true);c.showUsageEvent(started);elements.usageEventDialog.open=true;
+ const completed={...started,state:'completed',model:'gpt-6',http_status:200,outcome:'success',duration_ms:28925,input_tokens:2940,output_tokens:1922,total_tokens:4862};
+ const urls=[];c.request=async url=>{urls.push(url);return {events:[completed]}};
+ await c.refreshUsageEvents();
+ assert.deepEqual(Array.from(c.state.events,e=>e.event_id),['pending','older']);
+ assert.equal(c.state.cursor,'older-page');assert.equal(c.state.apiKeyFilter,'thought-flow');
+ assert.equal(c.state.events[0].model,'gpt-6');assert.match(elements.eventTable.innerHTML,/200 成功/);
+ assert.doesNotMatch(elements.eventTable.innerHTML,/待完成/);assert.match(elements.usageEventDetail.innerHTML,/4,862|4862/);
+ assert.equal(c.state.usageEvent.http_status,200);
+ const params=new URLSearchParams(urls[0].split('?')[1]);
+ assert.deepEqual(params.getAll('event_id'),['pending']);assert.equal(params.get('range'),'all');
+ await c.refreshUsageEvents();assert.equal(urls.length,1);
+});
+
+test('automatic dashboard tick refreshes pending events even if the dashboard fails',async()=>{
+ const {context:c,elements}=harness();
+ const pending={event_id:'failed',state:'started'};
+ c.request=async()=>({events:[pending],next_cursor:'keep'});await c.loadEvents(true);
+ c.toast=()=>{};
+ c.request=async url=>{
+  if(url.includes('/runtime'))return {scope:'process',inflight:0};
+  if(url.includes('/dashboard'))throw new Error('dashboard unavailable');
+  return {events:[{...pending,state:'completed',http_status:400,outcome:'error',error_code:'conversion_unsupported',failure_class:'conversion_unsupported',unsupported_features:['response_format']}]};
+ };
+ await c.loadUsage(false);await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(c.state.events[0].state,'completed');assert.match(elements.eventTable.innerHTML,/400 调用失败/);assert.equal(c.state.cursor,'keep');
+});
+
+test('late refreshes cannot overwrite a new filter or reset and concurrent ticks do not overlap',async()=>{
+ const {context:c}=harness();
+ c.request=async()=>({events:[{event_id:'old',state:'started'}]});await c.loadEvents(true);
+ let finish,calls=0;c.request=()=>{calls++;return new Promise(resolve=>finish=resolve)};
+ const refreshing=c.refreshUsageEvents();await c.refreshUsageEvents();assert.equal(calls,1);
+ c.state.apiKeyFilter='new-key';c.request=async()=>({events:[{event_id:'new',state:'completed',api_key_id:'new-key'}],next_cursor:'new-page'});
+ await c.loadEvents(true);finish({events:[{event_id:'old',state:'completed',http_status:200}]});await refreshing;
+ assert.deepEqual(Array.from(c.state.events,e=>e.event_id),['new']);assert.equal(c.state.cursor,'new-page');
+ assert.equal(c.state.eventsRefreshBusy,false);
+});
+
+test('pagination deduplicates IDs and stale started snapshots do not regress completed rows',async()=>{
+ const {context:c}=harness();
+ c.request=async()=>({events:[{event_id:'same',state:'completed',http_status:200}],next_cursor:'next'});await c.loadEvents(true);
+ c.request=async()=>({events:[{event_id:'same',state:'started'},{event_id:'older',state:'completed',http_status:400}]});await c.loadEvents(false);
+ assert.equal(c.state.events.length,2);assert.equal(c.state.events[0].http_status,200);
+});
+
+test('old page and dashboard responses cannot replace a newer manual refresh',async()=>{
+ const {context:c,elements}=harness();
+ const finishes=[];c.request=()=>new Promise(resolve=>finishes.push(resolve));
+ const old=c.loadEvents(true);const fresh=c.loadEvents(true);
+ finishes[1]({events:[{event_id:'fresh',state:'completed'}]});await fresh;
+ finishes[0]({events:[{event_id:'old',state:'started'}]});await old;
+ assert.equal(c.state.events[0].event_id,'fresh');
+ c.loadUsageRuntime=()=>{};c.loadEvents=async()=>{};
+ const dashboards=[];c.request=()=>new Promise(resolve=>dashboards.push(resolve));
+ const oldDashboard=c.loadUsage(),newDashboard=c.loadUsage();
+ dashboards[1]({summary:{requests:20}});await newDashboard;
+ dashboards[0]({summary:{requests:1}});await oldDashboard;
+ assert.equal(elements.uRequests.textContent,'20');
+});
+
+test('pending refreshes use bounded batches, retain data on failure, and respect active result filters',async()=>{
+ const {context:c}=harness();
+ c.state.events=Array.from({length:105},(_,i)=>({event_id:`id-${i}`,state:'started',provider:'chatgptweb'}));
+ c.state.eventsFilterKey=c.usageParams().toString();c.state.cursor='preserved';
+ const urls=[];c.request=async url=>{urls.push(url);const ids=new URLSearchParams(url.split('?')[1]).getAll('event_id');return {events:ids.map(event_id=>({event_id,state:'completed',provider:'chatgptweb',http_status:200,outcome:'success'}))}};
+ await c.refreshUsageEvents();assert.equal(urls.length,2);
+ assert.equal(new URLSearchParams(urls[0].split('?')[1]).getAll('event_id').length,100);assert.equal(c.state.events.length,105);
+ c.state.events=[{event_id:'still-pending',state:'started'}];c.request=async()=>{throw new Error('offline')};
+ await c.refreshUsageEvents();assert.equal(c.state.events[0].state,'started');assert.equal(c.state.eventsRefreshBusy,false);
+ c.state.modelFilter='auto';c.state.events[0].model='auto';c.state.eventsFilterKey=c.usageParams().toString();
+ c.request=async()=>({events:[{event_id:'still-pending',model:'gpt-6',state:'completed',http_status:200}]});
+ await c.refreshUsageEvents();assert.equal(c.state.events.length,0);assert.equal(c.state.cursor,'preserved');
 });
