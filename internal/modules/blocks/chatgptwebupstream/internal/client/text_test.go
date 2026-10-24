@@ -246,3 +246,72 @@ func TestPartialTextReadFailurePreservesFrozenTiming(t *testing.T) {
 type generationTextReadError struct{}
 
 func (generationTextReadError) Read([]byte) (int, error) { return 0, fmt.Errorf("read failed") }
+
+// CP-FAIL-021: prove the submission boundary using real client request sequencing.
+func TestTextSubmissionEvidenceAndContext(t *testing.T) {
+	for _, stage := range []string{"bootstrap", "generation403", "generationEOF", "canceledBootstrap"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			doer := textBoundaryDoer{base: &textDoer{}, run: func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/" {
+					if stage == "bootstrap" {
+						r := textResponse("denied")
+						r.StatusCode = 403
+						return r, nil
+					}
+					if stage == "canceledBootstrap" {
+						cancel()
+						if req.Context() != ctx {
+							t.Error("bootstrap lost request context")
+						}
+						return nil, ctx.Err()
+					}
+				}
+				if req.URL.Path == "/backend-api/conversation" {
+					calls++
+					if stage == "generation403" {
+						r := textResponse("denied")
+						r.StatusCode = 403
+						return r, nil
+					}
+					if stage == "generationEOF" {
+						return nil, io.EOF
+					}
+				}
+				return nil, nil
+			}}
+			client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", doer)
+			result, err := client.CompleteText(ctx, TextRequest{Model: "gpt-6", Messages: []TextMessage{{Role: "user", Content: "test"}}})
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			before := stage == "bootstrap" || stage == "canceledBootstrap"
+			if result.GenerationNotSent != before {
+				t.Fatalf("submission evidence=%+v err=%v", result, err)
+			}
+			if before && calls != 0 {
+				t.Fatal("generation started during preparation failure")
+			}
+			if !before && calls != 1 {
+				t.Fatalf("generation calls=%d", calls)
+			}
+			if stage == "bootstrap" && (result.UpstreamStatus != 403 || result.ErrorOperation != "bootstrap") {
+				t.Fatalf("lost typed error: %+v", result)
+			}
+		})
+	}
+}
+
+type textBoundaryDoer struct {
+	base *textDoer
+	run  func(*http.Request) (*http.Response, error)
+}
+
+func (d textBoundaryDoer) Do(req *http.Request) (*http.Response, error) {
+	if r, err := d.run(req); r != nil || err != nil {
+		return r, err
+	}
+	return d.base.Do(req)
+}

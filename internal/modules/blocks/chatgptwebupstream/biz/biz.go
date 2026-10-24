@@ -38,6 +38,9 @@ type textStream struct {
 }
 
 type textStreamUpdate struct {
+	errorOperation     string
+	upstreamStatus     int
+	generationNotSent  bool
 	generation         generation.Sample
 	delta              string
 	done               bool
@@ -265,7 +268,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 	for _, message := range cmd.Messages {
 		messages = append(messages, upclient.TextMessage{Role: message.Role, Content: message.Content, Images: message.Images, Files: message.Files})
 	}
-	completed, err := s.completeText(client, upclient.TextRequest{
+	completed, err := s.completeText(ev.Context(), client, upclient.TextRequest{
 		Model:           cmd.Model,
 		Messages:        messages,
 		ThinkingEffort:  cmd.ThinkingEffort,
@@ -282,6 +285,9 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 			ActualModel:        completed.ActualModel,
 			Text:               completed.Text,
 			ErrorClass:         class,
+			ErrorOperation:     completed.ErrorOperation,
+			UpstreamStatus:     completed.UpstreamStatus,
+			GenerationNotSent:  completed.GenerationNotSent,
 		}, cd.NewError(cd.Unexpected, err.Error()))
 		return
 	}
@@ -291,6 +297,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		AssistantMessageID: completed.AssistantMessageID,
 		ActualModel:        completed.ActualModel,
 		Text:               completed.Text,
+		UpstreamStatus:     completed.UpstreamStatus,
 	}, nil)
 }
 
@@ -345,7 +352,7 @@ func searchErrorOperation(err error) string {
 // completeText converts an unexpected transport-library panic into the same
 // classified failure boundary as a returned upstream error. It deliberately
 // records no panic value because it can originate in a third-party transport.
-func (s *Upstream) completeText(client *upclient.Client, request upclient.TextRequest) (completed upclient.TextResult, err error) {
+func (s *Upstream) completeText(ctx context.Context, client *upclient.Client, request upclient.TextRequest) (completed upclient.TextResult, err error) {
 	defer func() {
 		if recover() != nil {
 			slog.Warn("chatgpt web text completion failed", "stage", "complete_text_panic")
@@ -353,7 +360,7 @@ func (s *Upstream) completeText(client *upclient.Client, request upclient.TextRe
 			return
 		}
 	}()
-	completed, err = client.CompleteText(context.Background(), request)
+	completed, err = client.CompleteText(ctx, request)
 	return completed, err
 }
 
@@ -367,13 +374,7 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 		return
 	}
 	streamID := uuid.NewString()
-	ctx, cancel := context.WithCancel(context.Background())
-	if cmd.TimeoutMillis > 0 {
-		if cmd.TimeoutMillis > 15*60*1000 {
-			cmd.TimeoutMillis = 15 * 60 * 1000
-		}
-		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(cmd.TimeoutMillis)*time.Millisecond)
-	}
+	ctx, cancel := textStreamContext(ev.Context(), cmd.TimeoutMillis)
 	stream := &textStream{cancel: cancel, updates: make(chan textStreamUpdate, 64)}
 	s.streamMu.Lock()
 	s.streams[streamID] = stream
@@ -387,6 +388,17 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.StartTextResult{StreamID: streamID}, nil)
+}
+
+// Ordinary proxy streams follow the request; managed temporary chats own their timeout.
+func textStreamContext(parent context.Context, timeoutMillis int) (context.Context, context.CancelFunc) {
+	if timeoutMillis <= 0 {
+		return context.WithCancel(parent)
+	}
+	if timeoutMillis > 15*60*1000 {
+		timeoutMillis = 15 * 60 * 1000
+	}
+	return context.WithTimeout(context.Background(), time.Duration(timeoutMillis)*time.Millisecond)
 }
 
 func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *textStream, cmd events.StartTextCommand) {
@@ -419,6 +431,7 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 	stream.setGeneration(final.Generation, true)
 	update := textStreamUpdate{
 		generation:         stream.generationSnapshot(time.Now()),
+		upstreamStatus:     final.UpstreamStatus,
 		done:               true,
 		conversationID:     final.ConversationID,
 		assistantMessageID: final.AssistantMessageID,
@@ -426,6 +439,7 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 	}
 	if err != nil {
 		update.errClass, update.errMessage = classifyError(err), err.Error()
+		update.errorOperation, update.upstreamStatus, update.generationNotSent = final.ErrorOperation, final.UpstreamStatus, final.GenerationNotSent
 	}
 	_ = s.publishTextUpdate(ctx, stream, update)
 }
@@ -470,6 +484,9 @@ func (s *Upstream) handlePullText(ev event.Event, result event.Result) {
 			ActualModel:        update.actualModel,
 			ErrorClass:         update.errClass,
 			ErrorMessage:       update.errMessage,
+			ErrorOperation:     update.errorOperation,
+			UpstreamStatus:     update.upstreamStatus,
+			GenerationNotSent:  update.generationNotSent,
 		}
 		if update.done {
 			s.removeTextStream(cmd.StreamID, false)

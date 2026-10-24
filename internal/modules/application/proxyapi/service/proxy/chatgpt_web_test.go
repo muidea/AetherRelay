@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,10 +16,12 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelayusage"
+	"aetherrelay/internal/pkg/chatgptattempt"
 )
 
 type chatGPTTextExecutorStub struct {
@@ -493,5 +496,89 @@ func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// CP-OBS-017: one usage settlement, final account/status, and separate archived attempts.
+func TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive(t *testing.T) {
+	for _, recovered := range []bool{false, true} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("recovered=%t/stream=%t", recovered, streaming), func(t *testing.T) {
+				store := usage.NewMemoryStore()
+				defer store.Close()
+				cfg := mustHandlerConfig(config.Config{InteractionDir: t.TempDir(), ArchiveInteractions: true, ArchiveFullContent: true})
+				recorder, err := archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				registry := metrics.NewRegistry()
+				calls := 0
+				execute := func(ctx context.Context) (chatgpttext.Result, error) {
+					calls++
+					usagetarget.Record(ctx, "chatgptweb", "first", "first@example.com")
+					usagetarget.RecordTextAttempt(ctx, chatgptattempt.Observation{Index: 1, AccountID: "first", AccountLabel: "first@example.com", Operation: "bootstrap", UpstreamStatus: 403, GenerationNotSent: true, FailureClass: "upstream"})
+					if !recovered {
+						return chatgpttext.Result{}, &chatgptfail.Failure{Kind: chatgptfail.KindUpstream, Operation: "bootstrap", UpstreamStatus: 403, GenerationNotSent: true, Cause: errors.New("denied")}
+					}
+					usagetarget.Record(ctx, "chatgptweb", "second", "second@example.com")
+					usagetarget.RecordTextAttempt(ctx, chatgptattempt.Observation{Index: 2, AccountID: "second", AccountLabel: "second@example.com", UpstreamStatus: 200, Success: true})
+					return chatgpttext.Result{Text: "hello", ActualModel: "auto"}, nil
+				}
+				h := NewHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(chatGPTTextExecutorStub{
+					complete: func(ctx context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
+						return execute(ctx)
+					},
+					stream: func(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
+						result, err := execute(ctx)
+						if err == nil {
+							err = emit(chatgpttext.Delta{Text: result.Text, ActualModel: result.ActualModel})
+						}
+						return result, err
+					},
+				})
+				h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "auto"}}, time.Now().UTC().Format(time.RFC3339)))
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(fmt.Sprintf(`{"model":"auto","messages":[{"role":"user","content":"hi"}],"stream":%t}`, streaming)))
+				req.Header.Set("Authorization", "Bearer test-client-key")
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				status, upstreamStatus, account, attempts := 502, 403, "first", 1
+				if recovered {
+					status, upstreamStatus, account, attempts = 200, 200, "second", 2
+				}
+				events := usageEvents(t, store)
+				if calls != 1 || rec.Code != status || len(events) != 1 {
+					t.Fatalf("calls=%d status=%d body=%s events=%+v", calls, rec.Code, rec.Body.String(), events)
+				}
+				e := events[0]
+				if e.State != usage.StateCompleted || e.AccountID != account || e.AccountLabel != account+"@example.com" || e.UpstreamStatus != upstreamStatus {
+					t.Fatalf("usage=%+v", e)
+				}
+				if recovered && (e.Outcome != "success" || e.FailureClass != "") {
+					t.Fatalf("old failure leaked into success: %+v", e)
+				}
+				paths, err := filepath.Glob(filepath.Join(cfg.InteractionDir, "*", "*", "metadata.json"))
+				if err != nil || len(paths) != 1 {
+					t.Fatalf("paths=%v err=%v", paths, err)
+				}
+				raw, err := os.ReadFile(paths[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				var meta archive.Metadata
+				if err = json.Unmarshal(raw, &meta); err != nil {
+					t.Fatal(err)
+				}
+				if meta.AccountID != e.AccountID || meta.UpstreamStatus != e.UpstreamStatus || len(meta.TextAttempts) != attempts {
+					t.Fatalf("archive mismatch: %s", raw)
+				}
+				if meta.TextAttempts[0].UpstreamStatus != 403 || meta.TextAttempts[0].AccountID != "first" {
+					t.Fatalf("first attempt lost: %s", raw)
+				}
+				stats := registry.Snapshot()
+				if stats.Cache.ByProvider["chatgptweb"].Miss != 0 {
+					t.Fatalf("estimated cache counted as miss: %+v", stats.Cache)
+				}
+			})
+		}
 	}
 }

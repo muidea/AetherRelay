@@ -6,7 +6,9 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`18.1.0` 根据 2026-10-23 x800 调用核对修复用量展示与本地拒绝诊断：使用统计可见时每 15 秒精确刷新已显示的 started 事件并同步打开的详情，保持筛选及分页，迟到响应不覆盖新快照；ChatGPT Web 本地 conversion 拒绝的具体能力与失败分类同步写入响应、用量和归档，不发起上游、不忽略原参数、不回填历史。回归覆盖成功/失败结算、并发响应顺序、分页与批量查询、管理鉴权、DuckDB 重开及归档一致性；线上须部署后复验。
+> 合同版本：`18.2.0` 根据 2026-10-24 x800 thought-flow 调用核对增加 ChatGPT Web 文本生成前有限恢复（CP-FAIL-021）：以结构化发送证据限制重试，最多两次执行，401 刷新与切号共用预算，保持 exact model 与账号出口绑定；记录逐次尝试和最终账号、上游状态。缓存未知及失败样本不参与缓存命中判断（CP-OBS-017）。参数拒绝保持原语义，客户端按能力构造请求。自动化验收与真实上游效果分别验证。
+
+历史合同：`18.1.0` 根据 2026-10-23 x800 调用核对修复用量展示与本地拒绝诊断：使用统计可见时每 15 秒精确刷新已显示的 started 事件并同步打开的详情，保持筛选及分页，迟到响应不覆盖新快照；ChatGPT Web 本地 conversion 拒绝的具体能力与失败分类同步写入响应、用量和归档，不发起上游、不忽略原参数、不回填历史。回归覆盖成功/失败结算、并发响应顺序、分页与批量查询、管理鉴权、DuckDB 重开及归档一致性；线上须部署后复验。
 
 历史合同：`18.0.1` 依据 2026-10-21 x800 账号快照，补齐 `prolite` 单周额度窗口的恢复判断：完整、新鲜且晚于额度失败的用量响应，在唯一 standard primary 为 604800 秒、明确允许、明确未耗尽且使用率已知低于 100% 时，可按既有来源校验清除账号级额度冷却。普通双窗口账号仍要求 primary/secondary 都健康；未知套餐、短窗口或缺失状态不作单窗口恢复推断。保留其他限流、模型失败及更新的额度失败，沿用持久化回滚。回归覆盖当前与旧版冷却记录、0/9→9/9 准入及重启保持、单窗口解析和负向证据边界；现场部署后须刷新用量复验。
 
@@ -523,7 +525,11 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-FAIL-019` 无可用账号、并发槽占满和账号冷却是本地准入失败：HTTP 保持 503，并在已知可恢复时间时返回向上取整的 `Retry-After`，不增加 Provider 健康失败或延长熔断。账号冷区必须同时计入两类可恢复事实：账号/model 级冷却条目与新鲜额度快照中 `limit_reached` 窗口的 `reset_at`，同一账号内取全部阻塞条件的最晚解除时间，再跨账号取最早者作为等待提示；仅被额度窗口阻塞（无冷却条目）时同样必须给出 `Retry-After`，额度阻塞期限不得超过快照 `expires_at`；缺失或非法的 `reset_at` 归一为未知，但按现有准入规则在快照过期时解除该快照的阻塞，不回落到其它窗口的较早重置时间。Provider 活跃熔断也应按最早可恢复候选提供 `Retry-After`，未知恢复时间不编造。保留最后真实上游错误。客户端取消/写失败、本地流最大时长到期不冷却账号、不污染 Provider 健康；上游首事件/空闲超时仍是可观察的可用性故障。首事件超时只附 5 秒 Retry-After，因其表明单次上游流静默而不是账号凭据失效；账号 owner 仍只按 exact model 与 credential-wide 事实计算冷却。
 
+`CP-FAIL-021` ChatGPT Web 无状态文本 HTTP/SSE 共用最多两次执行预算。只有 owner 返回明确 generation_not_sent 且失败发生在白名单准备阶段时，才允许一次同 exact model 的替代账号恢复；bootstrap 的 403、准备阶段 5xx/TLS/超时可恢复，429、内容策略、未知阶段、未知发送状态、已有输出/续接、取消或预算不足均禁止切号。401 保留一次受控刷新，但与切号共用执行预算，明确已发送的失败不得再重放；旧接口无发送证据的明确 401 仅保留既有认证刷新兼容。账号及代理均由号池裁决，优先不同已配置出口，候选检查有界且拒绝原账号。每个实际执行留下独立安全尝试记录；失败账号反馈先于替代选号，成功只结算一次，耗尽保留真实失败。不删除或自动重新认证 403 账号，历史记录不回填。
+
 `CP-FAIL-020` OAuth refresh 的永久失败必须由账号 owner 持久化为 `credential_permanently_invalid`，立即停止该凭据参与路由，直到显式重新认证或 refresh 成功清除。它不阻止账号用量、额度的独立后台刷新，也不能等同于管理员手动 disabled。最后已知模型 membership 可在过期后继续保留为只读终态路由元数据，使重启、目录刷新和热重载后仍能返回可操作错误，但不得据此向失效凭据发送推理请求。若 exact model 的全部可调度凭据均处于该终态，HTTP 返回 503、`type=authentication_error`、`code=upstream_authentication_required`、`retryable=false`；WebSocket 返回同 code/type/retryable；Anthropic envelope 返回 `authentication_error` 并在 message 中携带稳定 code。并发槽占满返回 `accounts_busy`，冷却返回 `accounts_cooling` 和可计算的 Retry-After，其余本地准入失败保持 `provider_unavailable`。管理投影只显示布尔终态和安全错误类别，不暴露 token 或原始 OAuth 响应。
+
+`CP-OBS-017` ChatGPT Web 文本执行逐次保存本地账号、阶段、真实上游状态、明确未发送证据及结果；最终账号在用量与归档一致，失败时保留真实状态，成功不能残留先前失败状态。缓存命中/未命中及缓存率仅接受成功且缓存观测明确已知的输入样本，未知和失败不作 miss，普通 Token 总量仍可保留估算；跨 EventHub 的指标投影同样携带 presence。
 
 `CP-OBS-016` 管理用量列表与打开的待完成详情按 Event ID 刷新持久化最新状态，不推测成功或重放请求；单次 ID 查询最多 100 项，沿用管理鉴权与查询条件。自动刷新保持当前筛选和分页游标，结算后不符合筛选的记录移出列表，旧筛选/分页响应与旧 started 快照不得覆盖新状态。ChatGPT Web 本地 `conversion_unsupported` / `conversion_limit_exceeded` 拒绝须将具体 `unsupported_features`、`failure_class` 一致投影到客户端、用量详情与启用的归档；保持 400 和零上游调用，不丢弃改变语义的参数，不回填历史。
 
@@ -652,6 +658,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
+| ChatGPT Web 文本生成前有限恢复与缓存观测 | 18.2.0, CP-FAIL-021, CP-OBS-017 | implemented（本地）；待部署验收 | `proxyapi/biz/chatgpt_text.go`, `chatgptwebupstream`, `aetherrelaymetrics`, `metricsruntime` | `chatgpt_text_recovery_test.go`, `TestTextSubmissionEvidenceAndContext`, `TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive`, `cache_observation_test.go`, `TestTokenObservationPresenceAcrossEventHub` |
 | 用量待完成刷新与 ChatGPT Web 本地参数拒绝诊断 | 18.1.0, CP-OBS-016 | implemented（本地）；待部署验收 | `web/admin/index.html`, `adminapi/service/admin/usage.go`, `aetherrelayusage`, `proxyapi/service/proxy/chatgpt_web.go` | `usage.test.cjs`, `event_lookup_test.go`, `TestUsageEventsBoundedIDLookupAndAuthentication`, `TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics` |
 | Codex metadata/commentary 响应投影、工具保序、错误用量与诊断归档 | 17.3.0, CP-OBS-011, CP-SEC-003 | implemented（本地）；待部署验收 | `proxyapi/service/proxy/codex_anthropic_projection.go`, `codex_messages.go`, `responses_anthropic.go`, `aetherrelayarchive/recorder.go` | `codex_anthropic_projection_test.go`；现场样本离线回放 |
 | 本地 conversion 对 Provider 熔断保持中性 | 17.3.0 | implemented（本地）；待部署验收 | `aetherrelaymetrics/registry.go` | `conversion_health_test.go`；`TestCodexProjectionFailuresDoNotBlockNativeResponses` |

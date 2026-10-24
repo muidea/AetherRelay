@@ -8,6 +8,8 @@ go test ./internal/modules/application/proxyapi/service/proxy ./internal/modules
 go test -race ./internal/modules/application/proxyapi/service/proxy ./internal/modules/application/proxyapi/biz ./internal/modules/blocks/codexaccountpool/biz ./internal/modules/blocks/codexupstream ./internal/modules/blocks/codexupstream/biz ./internal/modules/application/modeldetection/... ./internal/pkg/modeltrace/... ./internal/modules/application/adminapi/biz ./internal/modules/application/adminapi/service/admin
 go test -race ./internal/modules/blocks/codexaccountpool/internal/store ./internal/modules/application/proxyapi/pkg/codexresponses
 go test -race ./internal/pkg/aetherrelaycodex ./internal/pkg/aetherrelaygeneration ./internal/pkg/aetherrelayusage
+go test ./internal/modules/blocks/chatgptwebupstream/... ./internal/modules/blocks/metricsruntime/... ./internal/pkg/aetherrelaymetrics
+go test -race ./internal/modules/blocks/chatgptwebupstream/... ./internal/modules/blocks/metricsruntime/... ./internal/pkg/aetherrelaymetrics
 node --test web/admin/accounts.test.cjs web/admin/models.test.cjs web/admin/usage.test.cjs web/admin/modeltrace.test.cjs
 go vet ./...
 git diff --check

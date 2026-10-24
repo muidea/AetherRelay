@@ -157,6 +157,9 @@ type CompleteTextCommand struct {
 }
 
 type CompleteTextResult struct {
+	ErrorOperation     string
+	UpstreamStatus     int
+	GenerationNotSent  bool
 	Generation         generation.Sample
 	ConversationID     string
 	AssistantMessageID string
@@ -216,6 +219,9 @@ type PullTextCommand struct {
 }
 
 type PullTextResult struct {
+	ErrorOperation     string
+	UpstreamStatus     int
+	GenerationNotSent  bool
 	Generation         generation.Sample
 	Delta              string
 	Done               bool

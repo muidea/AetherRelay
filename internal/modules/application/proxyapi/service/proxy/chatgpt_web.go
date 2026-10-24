@@ -232,6 +232,12 @@ func (h *Handler) settleChatGPTWeb(round *archive.Round, r *http.Request, provid
 			TransportModeNative,
 		)
 	}
+	if round != nil && fail != nil {
+		var typed *chatgptfail.Failure
+		if errors.As(fail.Err, &typed) {
+			round.UpstreamStatus = typed.UpstreamStatus
+		}
+	}
 	outcome := outcomeFromStreamFail(fail, status)
 	h.recordAndPrintFail(round, r, provider, model, stream, status, duration, tok, fail)
 	msg := ""

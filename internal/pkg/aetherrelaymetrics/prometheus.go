@@ -190,9 +190,9 @@ type prometheusSnapshot struct {
 }
 
 func computeCacheHitRateLocked(r *Registry) map[tokenKey]float64 {
-	out := make(map[tokenKey]float64, len(r.inputTokens))
-	for k, in := range r.inputTokens {
-		cached := r.cachedInputTokens[k]
+	out := make(map[tokenKey]float64, len(r.cacheInputKnown))
+	for k, in := range r.cacheInputKnown {
+		cached := r.cacheTokensKnown[k]
 		if in == 0 {
 			continue
 		}

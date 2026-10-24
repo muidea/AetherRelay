@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -43,6 +44,9 @@ type TextRequest struct {
 // TextResult is the bounded final state collected from an upstream SSE
 // conversation. The response body never escapes the upstream owner.
 type TextResult struct {
+	ErrorOperation     string
+	UpstreamStatus     int
+	GenerationNotSent  bool
 	Generation         generation.Sample
 	ConversationID     string
 	AssistantMessageID string
@@ -71,11 +75,26 @@ func (c *Client) CompleteText(ctx context.Context, request TextRequest) (TextRes
 // StreamText keeps all transport handles inside the upstream client while
 // exposing bounded text deltas and a frozen generation sample to its owner.
 // finishGeneration runs before response-body cleanup, including on read failure.
-func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(TextDelta) error, finishGeneration func(generation.Sample)) (TextResult, error) {
+func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(TextDelta) error, finishGeneration func(generation.Sample)) (result TextResult, resultErr error) {
+	notSent := true
+	observedStatus := 0
+	defer func() {
+		result.UpstreamStatus = observedStatus
+		if resultErr != nil {
+			result.GenerationNotSent = notSent
+			var failure *Error
+			if errors.As(resultErr, &failure) {
+				result.ErrorOperation = failure.Operation
+				if failure.StatusCode != 0 {
+					result.UpstreamStatus = failure.StatusCode
+				}
+			}
+		}
+	}()
 	if err := validateTextRequest(request); err != nil {
 		return TextResult{}, err
 	}
-	requirements, err := c.ChatRequirements()
+	requirements, err := c.ChatRequirementsContext(ctx)
 	if err != nil {
 		return TextResult{}, err
 	}
@@ -95,10 +114,12 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 		ctx = context.Background()
 	}
 	req = req.WithContext(ctx)
+	notSent = false // Once Do starts, transport errors may hide a submitted generation.
 	response, err := c.doer.Do(req)
 	if err != nil {
 		return TextResult{}, classifyTransport("text_conversation", err)
 	}
+	observedStatus = response.StatusCode
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return TextResult{}, classifyStatusResponse("text_conversation", response.StatusCode, response.Body)

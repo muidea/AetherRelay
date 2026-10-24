@@ -3060,9 +3060,13 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 	outcome := outcomeFromStreamFail(fail, status)
 	if round != nil && r != nil {
 		target := usagetarget.Snapshot(r.Context())
-		if target.Provider == "codexoauth" && target.Provider == provider {
+		if target.Provider != "" && target.Provider == provider {
 			round.Observation = target.Observation
 			round.AccountID, round.AccountLabel = target.AccountID, target.AccountLabel
+			round.TextAttempts = target.TextAttempts
+			if len(target.TextAttempts) > 0 {
+				round.UpstreamStatus = target.TextAttempts[len(target.TextAttempts)-1].UpstreamStatus
+			}
 		}
 	}
 	if status == 0 && outcome == string(streamKindClientCanceled) {
@@ -3128,7 +3132,11 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 		} else if provider == effectivecatalog.BuiltinProviderID && fail != nil && fail.CountUpstream {
 			h.metricsRegistry.RecordUpstreamError(provider, -1) // -1 = ChatGPT Web upstream failure
 		}
-		h.metricsRegistry.RecordTokens(provider, model, tok.PromptTokens, tok.CompletionTokens, tok.CachedInputTokens, tok.CacheCreationInputTokens)
+		if reporter, ok := h.metricsRegistry.(metricsport.TokenObservationReporter); ok {
+			reporter.RecordTokensObserved(provider, model, tok.PromptTokens, tok.CompletionTokens, tok.CachedInputTokens, tok.CacheCreationInputTokens, tok.CachedInputTokensKnown, outcome == "success")
+		} else {
+			h.metricsRegistry.RecordTokens(provider, model, tok.PromptTokens, tok.CompletionTokens, tok.CachedInputTokens, tok.CacheCreationInputTokens)
+		}
 		if usageCompleted && round != nil && round.ConversionMode != "" && round.ConversionMode != TransportModeNative {
 			if reporter, ok := h.metricsRegistry.(metricsport.ConversionReporter); ok {
 				reporter.RecordConversion(provider, model, round.ClientProtocol, round.UpstreamProtocol, round.ConversionMode, round.ConversionLevel, round.UpstreamStatus, round.ConversionDuration, round.ConversionDegraded, tok.Estimated, round.IgnoredFeatures, round.UnsupportedFeatures)
@@ -3188,6 +3196,7 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 	if round != nil {
 		meta.Observation = round.Observation
 		meta.AccountID, meta.AccountLabel = round.AccountID, round.AccountLabel
+		meta.TextAttempts = round.TextAttempts
 		meta.RequestID = round.RequestID
 		meta.ErrorCode = round.ErrorCode
 		meta.EventID = round.EventID

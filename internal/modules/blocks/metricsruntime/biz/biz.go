@@ -137,7 +137,11 @@ func (s *MetricsRuntime) handleRecord(ev event.Event, _ event.Result) {
 	case metricsevents.Conversion:
 		registry.RecordConversion(command.Provider, command.Model, command.ClientProtocol, command.UpstreamProtocol, command.ConversionMode, command.ConversionLevel, command.UpstreamStatus, command.Duration, command.Degraded, command.Estimated, command.IgnoredFeatures, command.UnsupportedFeatures)
 	case metricsevents.Tokens:
-		registry.RecordTokens(command.Provider, command.Model, command.Input, command.Output, command.Cached, command.CacheCreation)
+		if command.CacheKnown != nil {
+			registry.RecordTokensObserved(command.Provider, command.Model, command.Input, command.Output, command.Cached, command.CacheCreation, *command.CacheKnown, command.Successful)
+		} else {
+			registry.RecordTokens(command.Provider, command.Model, command.Input, command.Output, command.Cached, command.CacheCreation)
+		}
 	case metricsevents.UpstreamAttempt:
 		registry.RecordUpstreamAttempt(command.Provider, command.Duration, command.AttemptKind)
 	case metricsevents.UpstreamError:

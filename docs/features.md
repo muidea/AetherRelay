@@ -95,7 +95,9 @@ Chat Completions↔Messages 的兼容路径只保证纯文本和纯文本 SSE。
 - ChatGPT Web 相关调用写入同一用量权威：代理文本/受限 responses 为本地估计 token（`estimated=true`），`/v1/images/*` 有上游 Usage 则 `estimated=false`；Admin 工具调用统一归 `api_key_id=builtin-local`。临时会话和搜索历史仍按管理员 owner 隔离，二者不是同一个维度。
 - Codex OAuth 原生 Responses 记录 `upstream_protocol=codexoauth` 与上游 Response `usage`（缺失时本地估算）。
 - Provider 准入阶段返回 503 时，明细、CSV 与汇总日志保留安全的 `failure_class`、`retryable` 和 `retry_after_seconds`，并通过 Event ID 关联；Prometheus 按有界原因累计本地准入拒绝。
+- ChatGPT Web 文本 HTTP/SSE 对明确尚未发送生成请求的准备阶段故障支持一次同模型替代账号恢复，401 刷新与切号共用最多两次执行预算；已有输出、发送结果未知、取消或预算不足不重放。实际尝试分别归档，最终账号与上游状态同步到用量记录，详见[ChatGPT Web 设计](design/chatgpt-web.md#文本调用的有限恢复与观测)。
 - ChatGPT Web 本地参数拒绝保留具体 `unsupported_features` 和 `failure_class`，错误响应、用量详情与交互归档保持一致；例如不支持的 `response_format` 仍返回 400，且不会发起上游请求。历史缺失字段不回填。
+- 缓存命中指标和 SLO 仅使用成功且缓存用量已知的样本；未知不记为未命中，失败估算不参与缓存率。
 - CSV 仅用于导出当前用量；不提供旧 `usage.csv` 导入或启动期数据升级。
 
 ## Admin 管理页

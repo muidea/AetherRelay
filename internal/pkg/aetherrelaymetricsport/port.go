@@ -42,6 +42,11 @@ type ConversionReporter interface {
 	RecordConversion(provider, model, clientProtocol, upstreamProtocol, conversionMode string, conversionLevel, upstreamStatus int, duration time.Duration, degraded, estimated bool, ignoredFeatures, unsupportedFeatures []string)
 }
 
+// TokenObservationReporter preserves cache presence and request success across owners.
+type TokenObservationReporter interface {
+	RecordTokensObserved(provider, model string, input, output, cached, cacheCreation int, cacheKnown, successful bool)
+}
+
 type Reader interface {
 	Prometheus() ([]byte, error)
 	StatsJSON() ([]byte, error)

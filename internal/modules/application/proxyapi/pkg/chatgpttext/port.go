@@ -31,6 +31,7 @@ type Request struct {
 // ActualModel may still be populated when the upstream produced useful partial
 // state before the terminal error.
 type Result struct {
+	UpstreamStatus int
 	Generation     generation.Sample
 	ConversationID string
 	ActualModel    string

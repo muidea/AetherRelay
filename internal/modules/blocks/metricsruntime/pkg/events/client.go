@@ -12,6 +12,8 @@ import (
 	"github.com/muidea/magicCommon/event"
 )
 
+var _ metricsport.TokenObservationReporter = client{}
+
 // RequestPort returns an EventHub-backed Metrics Block port without exposing
 // the block's registry to other owners.
 func RequestPort(ctx context.Context, hub event.Hub, source string) (metricsport.Port, error) {
@@ -94,6 +96,10 @@ func (c client) RecordConversion(provider, model, clientProtocol, upstreamProtoc
 
 func (c client) RecordTokens(provider, model string, input, output, cached, cacheCreation int) {
 	c.record(RecordCommand{Kind: Tokens, Provider: provider, Model: model, Input: input, Output: output, Cached: cached, CacheCreation: cacheCreation})
+}
+
+func (c client) RecordTokensObserved(provider, model string, input, output, cached, cacheCreation int, cacheKnown, successful bool) {
+	c.record(RecordCommand{Kind: Tokens, Provider: provider, Model: model, Input: input, Output: output, Cached: cached, CacheCreation: cacheCreation, CacheKnown: &cacheKnown, Successful: successful})
 }
 
 func (c client) RecordUpstreamAttempt(provider string, duration time.Duration, kind metrics.AttemptLatencyKind) {

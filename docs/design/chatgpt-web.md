@@ -31,6 +31,20 @@
 - ChatGPT Web 只返回 raster（PNG/JPEG/GIF 等可验证栅格）。它没有真正的 SVG/vector 输出协议；SVG 容器包裹 raster 也不是真矢量，因此显式 `svg`、`response_format: svg` 或“导出矢量文件”请求会在访问上游前明确拒绝。vector-like/raster illustration 等仅描述视觉风格的提示仍可生成栅格图。
 - 韧性：`rate_limit` / TLS / 超时 / 上游故障生成 60 秒生图冷却；`invalid_token` 先触发一次 OAuth 刷新，仅尚未创建 conversation 时重投一次，已有 conversation 永不盲重投。文本 token 为稳定本地估计，不可当上游账单。
 
+### 文本调用的有限恢复与观测
+
+- 普通文本的 Chat Completions 与受限 Responses 共用执行器，HTTP/SSE 每个请求最多两次执行；401 凭据刷新与替代账号共用这个预算，不叠加重试。
+- 上游明确返回 `generation_not_sent=true`，且失败阶段为 `bootstrap`、`requirements_prepare`、`requirements_finalize` 时，准备阶段的 5xx/TLS/超时可尝试一次替代账号；403 仅在 bootstrap 阶段适用。429、内容策略、未知发送状态/阶段、已有输出、续接、取消和剩余预算不足均不切号。生成请求进入 HTTP `Do` 后即视为可能已提交，不能因结果为空推断可重放。
+- 候选仍由账号池按原模型、能力和冷却裁决，排除已失败凭据和账号，最多检查 8 个候选，优先选择不同已配置代理端点；没有不同出口时最多使用一个其他账号，不改写账号代理。没有候选时保留最初的真实失败。403 不等同于凭据永久失效。
+- `metadata.json` 的 `chatgpt_text_attempts` 最多记录两次实际执行的账号、阶段、真实 HTTP 状态、未发送证据及结果；用量仅结算一次，最终账号和上游状态与归档一致。没有真实上游响应时不编造 HTTP 状态；历史记录不回填。
+- 文本准备阶段沿用请求 context，取消和超时传播到 bootstrap / requirements HTTP 请求。缓存用量未知以及失败请求不参与缓存命中率/SLO；普通估算 Token 仍保留，不能当作上游账单。
+
+### 客户端参数适配
+
+- ChatGPT Web Chat/Responses 不支持 `response_format` / 严格 JSON Schema。客户端应按实际 Provider 路径配置该能力；同名模型可能来自不同 Provider，不能仅按模型名记忆支持状态。
+- 普通文本不携带 `response_format`；依赖严格 JSON 输出时选择明确支持的 Provider。允许降级的业务须由客户端显式决定、验证返回 JSON，并按端点/凭据作用域/模型缓存有界的能力结果，配置或路由变化时失效，避免每次先失败再重试。
+- 代理保留 `conversion_unsupported`、`feature`、`unsupported_features`，不静默删除语义参数。此次恢复逻辑不会对本地参数拒绝触发刷新或切号。thought-flow 客户端的独立待收口方案见[2026-10-24 客户端方案](thought-flow-client-closure-plan-2026-10-24.md)。
+
 ## 图片任务与图片库
 
 - **图片任务**：`api_key_id` 缺省时使用内建 `builtin-local`，显式值必须对应已存在客户端 Key；它是任务查询、取消、删除与恢复的隔离边界，切换 Key 清空旧列表与轮询。`size` 只接受 `auto` 或正整数 `WIDTHxHEIGHT`（最大边 8192、总像素 4000 万），`quality` 仍按上游能力传递。ChatGPT Web 没有原生尺寸字段，任务完成后由本地栅格规范化保证明确 `WxH` 的实际结果尺寸；详情和图片库展示实际宽、高、格式。SVG/vector 文件请求明确失败，不伪装成 SVG。所有任务开放详情，`queued` / `running` 可取消，终态记录可删除。取消先持久化 `cancelled`，再传播任务级 context 取消；状态机拒绝迟到进度、成功或失败覆盖该终态。该取消是协作式的，上游已经受理时不承诺停止执行或免除额度消耗。删除只处理任务记录，图片库资产由图片库独立管理。已有会话的失败任务走恢复轮询（`extra_timeout_secs=30`，不重新提交生成），仅 bootstrap 阶段失败的未建会话任务可重新提交，其它失败不开放通用重试。

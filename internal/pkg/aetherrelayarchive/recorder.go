@@ -16,6 +16,7 @@ import (
 	"time"
 
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	"aetherrelay/internal/pkg/chatgptattempt"
 )
 
 type Recorder struct {
@@ -34,6 +35,7 @@ func NewObservationRound() *Round {
 }
 
 type Round struct {
+	TextAttempts []chatgptattempt.Observation
 	ResponseProjectionObservation
 	codexmodel.Observation
 	AccountID    string
@@ -251,6 +253,7 @@ func (r *Round) SetIgnoredFeatures(features []string) {
 }
 
 type Metadata struct {
+	TextAttempts []chatgptattempt.Observation `json:"chatgpt_text_attempts,omitempty"`
 	ResponseProjectionObservation
 	codexmodel.Observation
 	AccountID                     string    `json:"account_id,omitempty"`

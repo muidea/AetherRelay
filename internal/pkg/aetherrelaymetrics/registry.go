@@ -102,6 +102,8 @@ type Registry struct {
 	outputTokens        map[tokenKey]uint64
 	cachedInputTokens   map[tokenKey]uint64
 	cacheCreationTokens map[tokenKey]uint64
+	cacheInputKnown     map[tokenKey]uint64
+	cacheTokensKnown    map[tokenKey]uint64
 	cacheHits           map[tokenKey]uint64
 	cacheMisses         map[tokenKey]uint64
 	cachedTokenSumHits  map[tokenKey]uint64
@@ -178,6 +180,8 @@ func NewRegistry() *Registry {
 		outputTokens:              map[tokenKey]uint64{},
 		cachedInputTokens:         map[tokenKey]uint64{},
 		cacheCreationTokens:       map[tokenKey]uint64{},
+		cacheInputKnown:           map[tokenKey]uint64{},
+		cacheTokensKnown:          map[tokenKey]uint64{},
 		cacheHits:                 map[tokenKey]uint64{},
 		cacheMisses:               map[tokenKey]uint64{},
 		cachedTokenSumHits:        map[tokenKey]uint64{},
@@ -571,6 +575,11 @@ func (r *Registry) ResetProviderHealth(provider string) {
 // RecordTokens 累计 token 用量,并按 cached_input_tokens>0 判定 cache hit/miss。
 // input <= 0 时不计入 hit/miss(避免零值干扰 hit rate)。
 func (r *Registry) RecordTokens(provider, model string, input, output, cached, cacheCreation int) {
+	r.RecordTokensObserved(provider, model, input, output, cached, cacheCreation, true, true)
+}
+
+// RecordTokensObserved separates token accounting from known successful cache evidence.
+func (r *Registry) RecordTokensObserved(provider, model string, input, output, cached, cacheCreation int, cacheKnown, successful bool) {
 	if r == nil {
 		return
 	}
@@ -590,8 +599,10 @@ func (r *Registry) RecordTokens(provider, model string, input, output, cached, c
 	if cacheCreation > 0 {
 		r.cacheCreationTokens[key] += uint64(cacheCreation)
 	}
-	if input > 0 {
+	if input > 0 && cacheKnown && successful {
+		r.cacheInputKnown[key] += uint64(input)
 		if cached > 0 {
+			r.cacheTokensKnown[key] += uint64(cached)
 			r.cacheHits[key]++
 			r.cachedTokenSumHits[key] += uint64(cached)
 		} else {

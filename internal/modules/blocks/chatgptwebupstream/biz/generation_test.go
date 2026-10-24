@@ -47,3 +47,19 @@ func TestTextCancelReturnsUpstreamGenerationProgress(t *testing.T) {
 		t.Fatal(value, ctx.Err())
 	}
 }
+
+// CP-FAIL-021: proxy cancellation must reach preparation without ending managed chat jobs.
+func TestTextStreamCancellationScope(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	proxy, stopProxy := textStreamContext(parent, 0)
+	defer stopProxy()
+	managed, stopManaged := textStreamContext(parent, 60_000)
+	defer stopManaged()
+	cancel()
+	if proxy.Err() != context.Canceled {
+		t.Fatal("proxy stream outlived canceled request")
+	}
+	if managed.Err() != nil {
+		t.Fatal("managed job inherited short control-request context")
+	}
+}

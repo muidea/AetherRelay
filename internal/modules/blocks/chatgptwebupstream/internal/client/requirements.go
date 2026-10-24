@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -24,7 +25,11 @@ type Requirements struct {
 // Arkose challenges remain an explicit unsupported result rather than silently
 // sending an incomplete finalize request.
 func (c *Client) ChatRequirements() (Requirements, error) {
-	if err := c.Bootstrap(); err != nil {
+	return c.ChatRequirementsContext(context.Background())
+}
+
+func (c *Client) ChatRequirementsContext(ctx context.Context) (Requirements, error) {
+	if err := c.BootstrapContext(ctx); err != nil {
 		return Requirements{}, err
 	}
 	config := requirementsConfig(c.userAgent, c.scriptSources, c.dataBuild)
@@ -32,7 +37,7 @@ func (c *Client) ChatRequirements() (Requirements, error) {
 	if err != nil {
 		return Requirements{}, err
 	}
-	prepareBody, err := c.postJSON("/backend-api/sentinel/chat-requirements/prepare", mustJSON(struct {
+	prepareBody, err := c.postJSONContext(ctx, "/backend-api/sentinel/chat-requirements/prepare", mustJSON(struct {
 		P string `json:"p"`
 	}{legacy}), "requirements_prepare")
 	if err != nil {
@@ -82,7 +87,7 @@ func (c *Client) ChatRequirements() (Requirements, error) {
 		ProofToken     string `json:"proof_token"`
 		TurnstileToken string `json:"turnstile_token"`
 	}{prepare.PrepareToken, proof, turnstile}
-	finalizeBody, err := c.postJSON("/backend-api/sentinel/chat-requirements/finalize", mustJSON(finalizePayload), "requirements_finalize")
+	finalizeBody, err := c.postJSONContext(ctx, "/backend-api/sentinel/chat-requirements/finalize", mustJSON(finalizePayload), "requirements_finalize")
 	if err != nil {
 		return Requirements{}, err
 	}

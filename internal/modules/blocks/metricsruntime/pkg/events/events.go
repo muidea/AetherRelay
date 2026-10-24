@@ -42,6 +42,8 @@ const (
 )
 
 type RecordCommand struct {
+	CacheKnown          *bool
+	Successful          bool
 	Kind                RecordKind
 	Provider            string
 	Model               string

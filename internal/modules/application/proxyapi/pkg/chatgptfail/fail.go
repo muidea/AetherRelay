@@ -23,8 +23,11 @@ const (
 
 // Failure is a typed proxy-local error. Callers use errors.As for classification.
 type Failure struct {
-	Kind  Kind
-	Cause error
+	Operation         string
+	UpstreamStatus    int
+	GenerationNotSent bool
+	Kind              Kind
+	Cause             error
 }
 
 func (f *Failure) Error() string {

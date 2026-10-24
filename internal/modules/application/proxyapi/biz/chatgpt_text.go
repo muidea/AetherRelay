@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"time"
 
 	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
 	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
@@ -14,74 +16,166 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	"aetherrelay/internal/pkg/chatgptattempt"
 	"github.com/muidea/magicCommon/event"
 )
 
-func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (out chatgpttext.Result, err error) {
-	account, err := s.acquireChatGPTTextToken(ctx, request.Model)
-	if err != nil {
-		slog.Warn("chatgpt text execution failed", "stage", "acquire_account")
-		return chatgpttext.Result{}, err
-	}
-	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
-
-	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
-	out, err = s.completeChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request)
-	if !isInvalidChatGPTTextFailure(err) {
-		return out, err
-	}
-	if contextErr := ctx.Err(); contextErr != nil {
-		return out, mapContextError(contextErr)
-	}
-	refreshed, permanentFailure, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
-	if refreshErr != nil {
-		// The original 401 is not sufficient evidence to retire an account if
-		// its OAuth refresh endpoint is temporarily unavailable. Return the
-		// refresh failure instead so the final result records a transient model
-		// cooldown rather than invalidating the credential.
-		return out, refreshErr
-	}
-	if permanentFailure {
-		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
-		return out, err
-	}
-	usagetarget.Record(ctx, "chatgptweb", refreshed.Account.ID, refreshed.Account.Email)
-	out, err = s.completeChatGPTTextOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request)
-	if isInvalidChatGPTTextFailure(err) {
-		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)
-	}
-	return out, err
+func (s *Proxy) Complete(ctx context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
+	return s.executeChatGPTText(ctx, request, func(account accevents.AcquireTextTokenResult) (chatgpttext.Result, bool, error) {
+		out, err := s.completeChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request)
+		return out, false, err
+	})
 }
 
-func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (out chatgpttext.Result, err error) {
+func (s *Proxy) Stream(ctx context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
+	return s.executeChatGPTText(ctx, request, func(account accevents.AcquireTextTokenResult) (chatgpttext.Result, bool, error) {
+		return s.streamChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request, emit)
+	})
+}
+
+// CP-FAIL-021: authentication recovery and account failover share two executions.
+func (s *Proxy) executeChatGPTText(ctx context.Context, request chatgpttext.Request, execute func(accevents.AcquireTextTokenResult) (chatgpttext.Result, bool, error)) (chatgpttext.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return chatgpttext.Result{}, mapContextError(err)
+	}
 	account, err := s.acquireChatGPTTextToken(ctx, request.Model)
 	if err != nil {
+		if ctx.Err() != nil {
+			return chatgpttext.Result{}, mapContextError(ctx.Err())
+		}
 		return chatgpttext.Result{}, err
 	}
-	defer func() { s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err) }()
+	refreshedToken := false
+	var lastOut chatgpttext.Result
+	var lastErr error
+	for index := 1; index <= 2; index++ {
+		if err := ctx.Err(); err != nil {
+			return lastOut, mapContextError(err)
+		}
+		if index > 1 && !textRetryBudgetAvailable(ctx) {
+			return lastOut, lastErr
+		}
+		usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
+		out, emitted, executionErr := execute(account)
+		var transportFailure *chatgptfail.Failure
+		errors.As(executionErr, &transportFailure)
+		if executionErr != nil && ctx.Err() != nil {
+			executionErr = mapContextError(ctx.Err())
+		}
+		lastOut, lastErr = out, executionErr
+		observation := chatgptattempt.Observation{Index: index, AccountID: account.Account.ID, AccountLabel: account.Account.Email, Success: executionErr == nil, UpstreamStatus: out.UpstreamStatus}
+		var failure *chatgptfail.Failure
+		if errors.As(executionErr, &failure) {
+			observation.FailureClass = string(failure.Kind)
+		}
+		if transportFailure != nil {
+			observation.Operation, observation.GenerationNotSent = transportFailure.Operation, transportFailure.GenerationNotSent
+			if transportFailure.UpstreamStatus != 0 {
+				observation.UpstreamStatus = transportFailure.UpstreamStatus
+			}
+		}
+		usagetarget.RecordTextAttempt(ctx, observation)
+		hasOutput := emitted || out.Text != "" || out.ConversationID != "" || !out.Generation.FirstOutputAt.IsZero()
+		if executionErr != nil && isInvalidChatGPTTextFailure(executionErr) && !hasOutput && index == 1 && textRetryBudgetAvailable(ctx) && (failure.Operation == "" || failure.GenerationNotSent) {
+			refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
+			if refreshErr == nil && !permanent {
+				account.AccessToken, account.Account, refreshedToken = refreshed.AccessToken, refreshed.Account, true
+				continue
+			}
+			if permanent {
+				s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
+			}
+			if refreshErr != nil {
+				executionErr = refreshErr
+			}
+			s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, executionErr)
+			return out, executionErr
+		}
+		if refreshedToken && isInvalidChatGPTTextFailure(executionErr) && !hasOutput {
+			s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
+		}
+		s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, executionErr)
+		if index == 2 || hasOutput || !textRetryBudgetAvailable(ctx) || !retryableTextPrepareFailure(executionErr) {
+			return out, executionErr
+		}
+		alternate, alternateErr := s.acquireAlternativeTextAccount(ctx, request.Model, account)
+		if alternateErr != nil {
+			if ctx.Err() != nil {
+				return out, mapContextError(ctx.Err())
+			}
+			return out, executionErr
+		}
+		account = alternate
+	}
+	return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("text execution budget exhausted"))
+}
 
-	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
-	out, emitted, err := s.streamChatGPTTextOnce(ctx, account.AccessToken, account.Account.Proxy, request, emit)
-	if !isInvalidChatGPTTextFailure(err) || emitted {
-		return out, err
+func textRetryBudgetAvailable(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
 	}
-	if contextErr := ctx.Err(); contextErr != nil {
-		return out, mapContextError(contextErr)
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) > time.Second
+}
+
+func retryableTextPrepareFailure(err error) bool {
+	var failure *chatgptfail.Failure
+	if !errors.As(err, &failure) || !failure.GenerationNotSent {
+		return false
 	}
-	refreshed, permanentFailure, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
-	if refreshErr != nil {
-		return out, refreshErr
+	switch failure.Operation {
+	case "bootstrap", "requirements_prepare", "requirements_finalize":
+	default:
+		return false
 	}
-	if permanentFailure {
-		s.removeInvalidChatGPTTextToken(ctx, account.AccessToken)
-		return out, err
+	switch failure.Kind {
+	case chatgptfail.KindTLS, chatgptfail.KindTimeout:
+		return true
+	case chatgptfail.KindUpstream:
+		return failure.UpstreamStatus >= 500 && failure.UpstreamStatus <= 599 || failure.Operation == "bootstrap" && failure.UpstreamStatus == 403
+	default:
+		return false
 	}
-	usagetarget.Record(ctx, "chatgptweb", refreshed.Account.ID, refreshed.Account.Email)
-	out, _, err = s.streamChatGPTTextOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request, emit)
-	if isInvalidChatGPTTextFailure(err) {
-		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)
+}
+
+// Only owner-selected accounts are considered; never mutate account proxy bindings.
+func (s *Proxy) acquireAlternativeTextAccount(ctx context.Context, model string, failed accevents.AcquireTextTokenResult) (accevents.AcquireTextTokenResult, error) {
+	excluded := []string{strings.TrimSpace(failed.AccessToken)}
+	var sameExit *accevents.AcquireTextTokenResult
+	for scan := 0; scan < 8 && textRetryBudgetAvailable(ctx); scan++ {
+		candidate, err := s.acquireChatGPTTextTokenExcluding(ctx, model, excluded)
+		if err != nil {
+			break
+		}
+		token := strings.TrimSpace(candidate.AccessToken)
+		if slices.Contains(excluded, token) {
+			break
+		}
+		excluded = append(excluded, token)
+		if candidate.Account.ID == "" || candidate.Account.ID == failed.Account.ID {
+			continue
+		}
+		if !sameChatGPTProxyEndpoint(failed.Account.Proxy, candidate.Account.Proxy) && !(strings.TrimSpace(failed.Account.Proxy) == "" && strings.TrimSpace(candidate.Account.Proxy) == "") {
+			return candidate, nil
+		}
+		if sameExit == nil {
+			copy := candidate
+			sameExit = &copy
+		}
 	}
-	return out, err
+	if sameExit != nil && textRetryBudgetAvailable(ctx) {
+		return *sameExit, nil
+	}
+	return accevents.AcquireTextTokenResult{}, chatgptfail.New(chatgptfail.KindProviderUnavailable, fmt.Errorf("no alternative text account"))
+}
+
+func textAttemptFailure(class upevents.ErrorClass, cause error, operation string, status int, notSent bool) error {
+	failure := mapUpstreamTextFailure(class, cause)
+	var typed *chatgptfail.Failure
+	if errors.As(failure, &typed) {
+		typed.Operation, typed.UpstreamStatus, typed.GenerationNotSent = operation, status, notSent
+	}
+	return failure
 }
 
 func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy string, request chatgpttext.Request) (chatgpttext.Result, error) {
@@ -93,9 +187,9 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy string
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_complete", "event_error_code", eventErr.Code, "has_partial_result", value != nil, "partial_result_type_match", isPartial)
 		out := chatgpttext.Result{}
 		if isPartial {
-			out = chatgpttext.Result{ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text, Generation: partial.Generation}
+			out = chatgpttext.Result{ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text, Generation: partial.Generation, UpstreamStatus: partial.UpstreamStatus}
 			if partial.ErrorClass != "" {
-				return out, mapUpstreamTextFailure(partial.ErrorClass, eventErr)
+				return out, textAttemptFailure(partial.ErrorClass, eventErr, partial.ErrorOperation, partial.UpstreamStatus, partial.GenerationNotSent)
 			}
 		}
 		return out, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt text completion failed"))
@@ -104,9 +198,9 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy string
 	if !ok {
 		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text completion result"))
 	}
-	out := chatgpttext.Result{ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text, Generation: completed.Generation}
+	out := chatgpttext.Result{ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text, Generation: completed.Generation, UpstreamStatus: completed.UpstreamStatus}
 	if completed.ErrorClass != "" {
-		return out, mapUpstreamTextFailure(completed.ErrorClass, fmt.Errorf("chatgpt text completion failed"))
+		return out, textAttemptFailure(completed.ErrorClass, fmt.Errorf("chatgpt text completion failed"), completed.ErrorOperation, completed.UpstreamStatus, completed.GenerationNotSent)
 	}
 	return out, nil
 }
@@ -143,6 +237,9 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, 
 		if !ok {
 			return result, emitted, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text stream update"))
 		}
+		if update.UpstreamStatus != 0 {
+			result.UpstreamStatus = update.UpstreamStatus
+		}
 		if !update.Generation.FirstOutputAt.IsZero() {
 			result.Generation = update.Generation
 		}
@@ -164,7 +261,7 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy string, 
 		}
 		if update.Done {
 			if update.ErrorClass != "" {
-				return result, emitted, mapUpstreamTextFailure(update.ErrorClass, fmt.Errorf("chatgpt text stream failed"))
+				return result, emitted, textAttemptFailure(update.ErrorClass, fmt.Errorf("chatgpt text stream failed"), update.ErrorOperation, update.UpstreamStatus, update.GenerationNotSent)
 			}
 			result.Text = builder.String()
 			return result, emitted, nil

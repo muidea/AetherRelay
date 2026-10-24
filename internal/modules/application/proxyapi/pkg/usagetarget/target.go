@@ -4,14 +4,17 @@ package usagetarget
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	"aetherrelay/internal/pkg/chatgptattempt"
 )
 
 type Target struct {
 	codexmodel.Observation
+	TextAttempts []chatgptattempt.Observation
 	Provider     string
 	AccountID    string
 	AccountLabel string
@@ -38,7 +41,11 @@ func Record(ctx context.Context, provider, localAccountID, label string) {
 	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	tracker.target = Target{Provider: strings.TrimSpace(provider), AccountID: strings.TrimSpace(localAccountID), AccountLabel: strings.TrimSpace(label)}
+	attempts := tracker.target.TextAttempts
+	if provider != "chatgptweb" {
+		attempts = nil
+	}
+	tracker.target = Target{TextAttempts: attempts, Provider: strings.TrimSpace(provider), AccountID: strings.TrimSpace(localAccountID), AccountLabel: strings.TrimSpace(label)}
 	tracker.model = codexmodel.Observer{}
 }
 
@@ -49,7 +56,9 @@ func Snapshot(ctx context.Context) Target {
 	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	return tracker.target
+	target := tracker.target
+	target.TextAttempts = slices.Clone(target.TextAttempts)
+	return target
 }
 
 // BeginCodexAttempt also resets evidence for retries using the same account.
@@ -91,5 +100,18 @@ func SetCodexModels(ctx context.Context, observation codexmodel.Observation) {
 	defer tracker.mu.Unlock()
 	if tracker.target.Provider == "codexoauth" {
 		tracker.target.Observation = codexmodel.New(observation.UpstreamRequestModel, observation.ResponseModel)
+	}
+}
+
+// RecordTextAttempt preserves bounded attempts across credential refresh/failover.
+func RecordTextAttempt(ctx context.Context, observation chatgptattempt.Observation) {
+	tracker, _ := ctx.Value(contextKey{}).(*Tracker)
+	if tracker == nil {
+		return
+	}
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if tracker.target.Provider == "chatgptweb" && len(tracker.target.TextAttempts) < 2 {
+		tracker.target.TextAttempts = append(tracker.target.TextAttempts, observation)
 	}
 }
