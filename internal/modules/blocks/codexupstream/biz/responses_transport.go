@@ -22,7 +22,7 @@ import (
 
 // Both native WS sessions and HTTP/SSE entry points use the same handshake.
 func dialResponsesWebsocket(ctx context.Context, cmd events.WSOpenCommand) (*wsclient.Conn, events.WSOpenResult, []byte) {
-	if err := ctx.Err(); err != nil {
+	if err := websocketContextError(ctx); err != nil {
 		return nil, events.WSOpenResult{ErrorClass: classifyRequestTransport(ctx, err)}, nil
 	}
 	dialer, err := newWebsocketDialer(cmd.Proxy)
@@ -46,12 +46,12 @@ func dialResponsesWebsocket(ctx context.Context, cmd events.WSOpenCommand) (*wsc
 	releaseHandshake := guardWebsocketHandshake(ctx, dialer)
 	conn, response, err := dialer.DialContext(ctx, responsesWebsocketURL, headers)
 	releaseHandshake()
-	if ctx.Err() != nil {
+	if contextErr := websocketContextError(ctx); contextErr != nil {
 		if conn != nil {
 			_ = conn.Close()
 			conn = nil
 		}
-		err = ctx.Err()
+		err = contextErr
 	}
 	attempt.Response.DurationMS = time.Since(requestAt).Milliseconds()
 	if err != nil {
@@ -71,7 +71,7 @@ func dialResponsesWebsocket(ctx context.Context, cmd events.WSOpenCommand) (*wsc
 			}
 		}
 		class := classifyRequestTransport(ctx, err)
-		if status > 0 && ctx.Err() == nil {
+		if status > 0 && websocketContextError(ctx) == nil {
 			class = errorClassWithBody(status, responseBody, observation)
 		}
 		attempt.Response.Transport = "websocket"
@@ -145,7 +145,7 @@ func guardWebsocketHandshake(ctx context.Context, dialer *wsclient.Dialer) func(
 // model and request rejections must retain their meaning rather than switch
 // transports. Canceled requests never start another network operation.
 func websocketFallbackReason(ctx context.Context, opened events.WSOpenResult) string {
-	if ctx.Err() != nil || opened.ErrorClass == "" {
+	if websocketContextError(ctx) != nil || opened.ErrorClass == "" {
 		return ""
 	}
 	switch opened.ErrorClass {
@@ -165,6 +165,19 @@ func websocketFallbackReason(ctx context.Context, opened events.WSOpenResult) st
 		}
 	}
 	return ""
+}
+
+// Socket deadlines and the context timer are scheduled independently. An I/O
+// timeout can arrive at the request deadline before Err/Done reflect expiry.
+// Never spend that exhausted request budget on another transport operation.
+func websocketContextError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func websocketCreateBody(body []byte, profile codexRequestProfile) ([]byte, error) {
@@ -194,7 +207,7 @@ func fullResponsesInput(body []byte) bool {
 // metadata, output projection, usage and timeout handling. The reader runs in
 // the existing Block-owned command/stream task, without an extra goroutine.
 func performResponses(ctx context.Context, token, accountID, proxy string, body []byte, profile codexRequestProfile, preferWS bool, maxMessage int64) (*http.Response, events.HTTPAttempt, events.ErrorClass, int, error) {
-	if err := ctx.Err(); err != nil {
+	if err := websocketContextError(ctx); err != nil {
 		return nil, events.HTTPAttempt{}, classifyRequestTransport(ctx, err), 0, err
 	}
 	if !preferWS {
@@ -213,7 +226,7 @@ func performResponses(ctx context.Context, token, accountID, proxy string, body 
 		TurnMetadata: profile.turnMetadata, ArchiveUnredactedHeaders: profile.archiveUnredacted, ArchiveFullContent: profile.archiveFullContent,
 	})
 	if opened.ErrorClass != "" {
-		if err := ctx.Err(); err != nil {
+		if err := websocketContextError(ctx); err != nil {
 			return nil, opened.Attempt, classifyRequestTransport(ctx, err), 0, err
 		}
 		reason := websocketFallbackReason(ctx, opened)

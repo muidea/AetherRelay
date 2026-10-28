@@ -35,6 +35,8 @@ HTTP/JSON/SSE 每个请求创建并关闭一个上游 WS，沿用现有请求租
 
 握手阶段的 caller context 取消必须关闭底层连接，覆盖直接连接、HTTP/HTTPS 代理 CONNECT 与 Upgrade 响应头等待；不能依赖 30 秒握手超时兜底。成功握手移交会话前须解除并等待取消回调，后续 WSOpen 命令 context 结束不能关闭已建立会话。取消或停机排空时不得启动 HTTP 回退。
 
+握手返回及回退准入同时核对 `ctx.Err()` 与请求绝对截止时间：socket deadline 可能先于 context 定时器生效，`Err()` 暂未更新不表示仍有预算。已到请求截止时间时返回 timeout，既不发 HTTP 请求，也不创建原生 HTTP fallback 会话；请求预算尚有余量时，连接自身的握手超时仍可按既有规则回退。测试用延迟 Err/Done 更新的 context 配合本地握手 socket deadline，稳定覆盖这一窗口。
+
 ## 记录与验收
 
 每个原生 response.create 独立建立 EventID、usage completion 和归档 round，共享原始连接 request ID 以便关联。每轮分别保存请求、响应帧、账号、模型、用量、首事件与终态，正文遵循归档开关，避免一条长连接只结算第一轮。首轮沿用已开始的握手 usage event；未发送 create 就关闭的连接显式结算为取消、空闲超时、生命周期超时或消息超限，不进入固定 500 的异常兜底，也不算生成成功。握手拒绝保留真实 HTTP 状态和 invalid_request；升级后的本地校验拒绝保留 HTTP 101 与帧内错误码。握手的 response.meta.json 只属于首轮，后续帧没有新的 HTTP 握手，结算状态由各轮 metadata.json 记录。每轮重新建立账号/响应模型观测，未实际输出不能标记部分输出。
