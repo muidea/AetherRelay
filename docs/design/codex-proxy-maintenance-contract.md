@@ -6,7 +6,9 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`18.2.0` 根据 2026-10-24 x800 thought-flow 调用核对增加 ChatGPT Web 文本生成前有限恢复（CP-FAIL-021）：以结构化发送证据限制重试，最多两次执行，401 刷新与切号共用预算，保持 exact model 与账号出口绑定；记录逐次尝试和最终账号、上游状态。缓存未知及失败样本不参与缓存命中判断（CP-OBS-017）。参数拒绝保持原语义，客户端按能力构造请求。自动化验收与真实上游效果分别验证。
+> 合同版本：`18.2.1` 根据 2026-10-28 x800 输出后中断事件补齐 Codex WS 诊断（CP-OBS-012）：保留读/解码/写阶段、关闭码及是否收到远端 Close、实际接收限制和最后成功读取消息长度。首个故障不被清理取消覆盖，日志与元数据归档不依赖完整正文。原生 WS 读循环结束后保留待消费更新最多 30 秒，消费终态、显式关闭和停机立即回收。保持错误分类、账号反馈、重试/回退、超时、消息限制与身份不变。本地验收与线上部署分别记录，历史事件不能回填原因。
+
+历史合同：`18.2.0` 根据 2026-10-24 x800 thought-flow 调用核对增加 ChatGPT Web 文本生成前有限恢复（CP-FAIL-021）：以结构化发送证据限制重试，最多两次执行，401 刷新与切号共用预算，保持 exact model 与账号出口绑定；记录逐次尝试和最终账号、上游状态。缓存未知及失败样本不参与缓存命中判断（CP-OBS-017）。参数拒绝保持原语义，客户端按能力构造请求。自动化验收与真实上游效果分别验证。
 
 历史合同：`18.1.0` 根据 2026-10-23 x800 调用核对修复用量展示与本地拒绝诊断：使用统计可见时每 15 秒精确刷新已显示的 started 事件并同步打开的详情，保持筛选及分页，迟到响应不覆盖新快照；ChatGPT Web 本地 conversion 拒绝的具体能力与失败分类同步写入响应、用量和归档，不发起上游、不忽略原参数、不回填历史。回归覆盖成功/失败结算、并发响应顺序、分页与批量查询、管理鉴权、DuckDB 重开及归档一致性；线上须部署后复验。
 
@@ -591,7 +593,9 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `usage_codex_model` 附属表和用量事件、已有账号快照在同一事务写入；API Key 删除同步清理；明细 API、Web、CSV 与交互 metadata 展示安全观测，关闭正文归档仍有效。历史缺失不回填。Web 调用列表在最终状态列同时保留 HTTP/调用结果与简短“上游模型替换”提示，不增加列数或列宽；请求/响应模型差异仅放在悬停提示和单条明细，模型列只显示请求模型；单条调用明细顶部提示上游声明模型与请求的差异、执行邮箱和本地槽位，并明确不代表账号健康异常；一致、未知、ChatGPT Web 与普通 Provider 不显示此提示。模型不一致 WARN 在尝试/回合完成时输出，含 request_id（可用时）、account_attempt、Provider、本地 account_id 与当时 account_label、请求/响应模型；依据本次用户要求仅此限频诊断允许安全邮箱标签，正常日志和指标不添加邮箱。按账号/请求/响应模型组合 10 分钟最多一次，缓存最多 1024 组；限频不影响每条调用记录，不以 WARN 次数统计替换数量。不得输出凭据、上游账号头、session、正文。
 
-`CP-OBS-012` Codex HTTP/SSE/compact 的传输失败必须由 `codexupstream` owner 提取有界 `transport_reason`：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`http2_stream_error`、`http2_stream_cancel`、`http2_refused_stream`、`http2_goaway`、`http2_connection_error`、`sse_line_limit`、`unknown`。HTTP/2 错误只提取类型和有界枚举，不泄漏 DebugData/Cause；SSE 行超限归协议错误。只依据结构化错误链识别，不从原始错误字符串猜测；未识别错误与非法投影值归为 `unknown`，无传输失败时字段为空/省略。typed attempt/result 向 proxyapi 传递安全枚举，逐次失败与流终止日志关联 request_id/account_attempt，`upstream_response[_NNN].json` 按同一 attempt 记录该字段；关闭归档仍有失败日志。握手与流终态更新不得丢失原因或伪造上游响应；合法终态后的正常 EOF 不记为失败。该诊断不参与错误分类、冷却、健康、重试或客户端错误 envelope，不持久化原始错误、代理地址、凭据、账号身份和会话值。
+`CP-OBS-012` Codex HTTP/SSE/compact 及原生 WebSocket 的传输失败必须由 `codexupstream` owner 提取有界 `transport_reason`：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`http2_stream_error`、`http2_stream_cancel`、`http2_refused_stream`、`http2_goaway`、`http2_connection_error`、`sse_line_limit`、`websocket_close`、`websocket_message_limit`、`websocket_invalid_json`、`websocket_read_error`、`websocket_write_error`、`unknown`。HTTP/2 错误只提取类型和有界枚举，不泄漏 DebugData/Cause；SSE 行超限归协议错误。只依据结构化错误链识别，不从原始错误字符串猜测；未识别错误与非法投影值归为 `unknown`，无传输失败时字段为空/省略。typed attempt/result 向 proxyapi 传递安全枚举，逐次失败与流终止日志关联 request_id/account_attempt，`upstream_response[_NNN].json` 按同一 attempt 记录该字段；关闭归档仍有失败日志。握手与流终态更新不得丢失原因或伪造上游响应；合法终态后的正常 EOF 不记为失败。该诊断不参与错误分类、冷却、健康、重试或客户端错误 envelope，不持久化原始错误、代理地址、凭据、账号身份和会话值。
+
+WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 `websocket_error_type`、`websocket_close_code`、`websocket_close_received`、`websocket_message_limit_bytes`、`websocket_last_message_observed`、`websocket_last_message_bytes`、`websocket_json_error_offset`。1006/1015 是本地合成关闭码，不代表远端发送 Close；空 Close 对应 1005。长度只记录最后成功读取的整条 WS 消息，不把请求大小、累计流字节数或该值当作被拒绝超限消息的大小。首个诊断冻结到日志与归档，清理 Cancel 和迟到握手不能覆盖；普通日志不记录关闭文本或帧正文。原生路径对非法 JSON 仅补观测，沿用已有转发/错误策略；已终结回合后的连接关闭不新增回合诊断，下一回合重置观测，后续增量不重复携带请求正文。原生读循环退出后，待消费队列继续按 session ID 可取，最终 Done 被取走、显式关闭或停机即回收；放弃消费的队列最多保留 30 秒且继续计入原容量上限，HTTP fallback 与仍存活的多回合连接不使用该保留流程。
 
 `CP-OBS-009` 交互归档的 header 保真由 `server.archive_unredacted_headers` 控制，默认关闭。关闭时四类信息（客户端请求、上游请求、上游响应、客户端响应）按 `CP-HDR-018` 的同一名单脱敏。显式开启后，这四类信息的**全部 header 按原值落盘**，包括凭据、账号身份、会话与 turn 原值——该开关只在受控排障期间使用，且必须满足：只影响 `archive_interactions=true` 时的归档文件，日志、指标、错误响应、管理视图与普通凭据导出继续脱敏；Codex 上游 attempt 的脱敏默认发生在 `codexupstream` Block 边界，开关必须由入站命令显式携带，零值表示保持脱敏；开启时启动日志必须给出明确的明文凭据告警；关闭归档时该开关不产生任何文件。实现必须同时覆盖两条归档写入路径（proxyapi 的 header 投影与 `codexupstream` 的 attempt 观测），不得只放开其中一层。
 
@@ -704,7 +708,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 | 能力 | 规则 | 状态 | 实现 | 验收 |
 | --- | --- | --- | --- | --- |
-| 有界传输原因与逐次失败关联 | CP-OBS-012 / CP-OBS-003 | implemented（本地）；线上待部署复验 | `codexupstream/biz/transport_diagnostics.go`, `codexupstream/pkg/events`, `aetherrelaytransport/diagnostics.go`, `proxyapi/biz/codex_diagnostics.go`, `proxyapi/service/proxy/debug.go` | `codexupstream/biz/transport_diagnostics_test.go`, `proxyapi/biz/codex_diagnostics_test.go`, `codex_stream_timeout_test.go`, `proxyapi/service/proxy/transport_diagnostics_test.go` |
+| 有界传输原因与逐次失败关联（含 WS 关闭/超限/解码诊断与终态队列回收） | CP-OBS-012 / CP-OBS-003 | implemented（本地）；线上待部署复验 | `codexupstream/biz/transport_diagnostics.go`, `codexupstream/biz/websocket_diagnostics.go`, `codexupstream/biz/biz.go`, `codexupstream/pkg/events`, `aetherrelaytransport/websocket.go`, `proxyapi/biz/codex_diagnostics.go`, `proxyapi/service/proxy/debug.go` | `codexupstream/biz/transport_diagnostics_test.go`, `codexupstream/biz/websocket_diagnostics_test.go`, `aetherrelaytransport/websocket_test.go`, `proxyapi/biz/codex_diagnostics_test.go`, `codex_stream_timeout_test.go`, `proxyapi/service/proxy/transport_diagnostics_test.go` |
 
 `12.2.0` 新增实施追踪：
 

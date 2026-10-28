@@ -177,7 +177,7 @@ func TestChatGPTDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T
 			t.Fatalf("refresh command=%#v", ev.Data())
 		}
 		refreshes++
-		result.Set(accevents.RefreshTextTokenResult{AccessToken: "fresh-token", Account: accevents.AccountView{ID: "account-1", Proxy: "http://fresh-proxy.invalid:8080"}, Refreshed: true}, nil)
+		result.Set(accevents.RefreshTextTokenResult{AccessToken: "fresh-token", Account: accevents.AccountView{ID: "account-1", DeviceID: "stable-device", Proxy: "http://fresh-proxy.invalid:8080"}, Refreshed: true}, nil)
 	})
 	accounts.Subscribe(accevents.TopicPutModelSnapshot, func(ev event.Event, result event.Result) {
 		command, ok := ev.Data().(accevents.PutModelSnapshotCommand)
@@ -196,6 +196,9 @@ func TestChatGPTDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T
 	upstream.Subscribe(upevents.TopicListModels, func(ev event.Event, result event.Result) {
 		command := ev.Data().(upevents.ListModelsCommand)
 		requests++
+		if command.DeviceID != "stable-device" {
+			t.Fatal("discovery lost device identity")
+		}
 		switch command.AccessToken {
 		case "expired-token":
 			result.Set(upevents.ListModelsResult{ErrorClass: upevents.ErrClassInvalidToken}, nil)
@@ -210,7 +213,7 @@ func TestChatGPTDiscoveryRefreshesInvalidCredentialBeforeQuarantine(t *testing.T
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}}}
-	proxy.discoverOneAccount(context.Background(), accevents.DiscoveryCandidate{AccountID: "account-1", AccessToken: "expired-token", Proxy: "http://old-proxy.invalid:8080"})
+	proxy.discoverOneAccount(context.Background(), accevents.DiscoveryCandidate{AccountID: "account-1", DeviceID: "stable-device", AccessToken: "expired-token", Proxy: "http://old-proxy.invalid:8080"})
 	if refreshes != 1 || requests != 2 || len(snapshot.Models) != 1 || snapshot.Models[0].ID != "gpt-5" {
 		t.Fatalf("refreshes=%d requests=%d snapshot=%+v", refreshes, requests, snapshot)
 	}

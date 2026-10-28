@@ -116,9 +116,9 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
 	defer s.releaseChatGPTImageSlot(ctx, account.AccessToken)
 
-	activeToken, activeProxy := account.AccessToken, account.Account.Proxy
+	activeToken, activeProxy, activeDeviceID := account.AccessToken, account.Account.Proxy, account.Account.DeviceID
 	for attempt := 0; attempt < 2; attempt++ {
-		value, upstreamErr := s.executeChatGPTImageOnce(ctx, activeToken, activeProxy, request, edit)
+		value, upstreamErr := s.executeChatGPTImageOnce(ctx, activeToken, activeProxy, activeDeviceID, request, edit)
 		outputs, usage, conversationID, class, valid := imageUpstreamResult(value, edit)
 		if upstreamErr == nil && valid && class == "" && len(outputs) > 0 {
 			// A completed generation consumes account quota even when local image
@@ -156,7 +156,7 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 				return oneImageResult{Usage: usage, ConversationID: conversationID, AccountID: account.Account.ID}, mapUpstreamImageFailure(class, fmt.Errorf("chatgpt image credential is invalid"))
 			}
 			if conversationID == "" {
-				activeToken, activeProxy = refreshed.AccessToken, refreshed.Account.Proxy
+				activeToken, activeProxy, activeDeviceID = refreshed.AccessToken, refreshed.Account.Proxy, refreshed.Account.DeviceID
 				continue
 			}
 			// The refreshed credential is kept for subsequent resume/recovery, but
@@ -174,11 +174,11 @@ func (s *Proxy) runOneChatGPTImage(ctx context.Context, request chatgptimage.Req
 	return oneImageResult{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("chatgpt image retry exhausted"))
 }
 
-func (s *Proxy) executeChatGPTImageOnce(ctx context.Context, token, proxy string, request chatgptimage.Request, edit bool) (any, *cd.Error) {
+func (s *Proxy) executeChatGPTImageOnce(ctx context.Context, token, proxy, deviceID string, request chatgptimage.Request, edit bool) (any, *cd.Error) {
 	if edit {
-		return s.SendEvent(event.NewEventWithContext(upevents.TopicEditImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.EditImageCommand{AccessToken: token, Proxy: proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality, Images: request.Images})).Get()
+		return s.SendEvent(event.NewEventWithContext(upevents.TopicEditImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.EditImageCommand{AccessToken: token, Proxy: proxy, DeviceID: deviceID, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality, Images: request.Images})).Get()
 	}
-	return s.SendEvent(event.NewEventWithContext(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.GenerateImageCommand{AccessToken: token, Proxy: proxy, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality})).Get()
+	return s.SendEvent(event.NewEventWithContext(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.GenerateImageCommand{AccessToken: token, Proxy: proxy, DeviceID: deviceID, Prompt: request.Prompt, Model: request.Model, Size: request.Size, Quality: request.Quality})).Get()
 }
 
 func imageUpstreamResult(value any, edit bool) ([]upevents.ImageOutput, *tokenusage.Usage, string, upevents.ErrorClass, bool) {

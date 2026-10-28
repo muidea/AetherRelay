@@ -40,6 +40,7 @@ type ModelDescriptor struct {
 }
 
 type ListModelsCommand struct {
+	DeviceID    string
 	AccessToken string
 	Proxy       string
 }
@@ -67,6 +68,7 @@ const (
 )
 
 type GetUserInfoCommand struct {
+	DeviceID    string
 	AccessToken string
 	Proxy       string
 }
@@ -79,6 +81,7 @@ type GetUserInfoResult struct {
 }
 
 type GenerateImageCommand struct {
+	DeviceID    string
 	AccessToken string
 	Proxy       string
 	Prompt      string
@@ -106,6 +109,7 @@ type GenerateImageResult struct {
 }
 
 type EditImageCommand struct {
+	DeviceID    string
 	AccessToken string
 	Proxy       string
 	Prompt      string
@@ -123,6 +127,7 @@ type EditImageResult struct {
 }
 
 type ResumeImageCommand struct {
+	DeviceID       string
 	AccessToken    string
 	Proxy          string
 	ConversationID string
@@ -147,6 +152,7 @@ type TextMessage struct {
 }
 
 type CompleteTextCommand struct {
+	DeviceID        string
 	AccessToken     string
 	Proxy           string
 	Model           string
@@ -172,6 +178,7 @@ type CompleteTextResult struct {
 // It deliberately accepts only a single textual query: conversation history,
 // tool loops and browser/plugin state are not representable by this contract.
 type SearchCommand struct {
+	DeviceID    string
 	AccessToken string
 	Proxy       string
 	Model       string
@@ -199,6 +206,7 @@ type SearchResult struct {
 }
 
 type StartTextCommand struct {
+	DeviceID        string
 	AccessToken     string
 	Proxy           string
 	Model           string

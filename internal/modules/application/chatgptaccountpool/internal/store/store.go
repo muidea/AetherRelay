@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -18,6 +19,8 @@ import (
 	"aetherrelay/internal/pkg/accountidentity"
 	"aetherrelay/internal/pkg/aetherrelaycredential"
 	"aetherrelay/internal/pkg/aetherrelaystate"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -44,6 +47,7 @@ const (
 
 type Account struct {
 	ID           string `json:"id"`
+	DeviceID     string `json:"web_device_id"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Email        string `json:"email,omitempty"`
@@ -110,6 +114,12 @@ func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aet
 	if err := s.load(); err != nil {
 		_ = documents.Close()
 		return nil, fmt.Errorf("load account state: %w", err)
+	}
+	// Migrate old records before publishing the store to any caller. Device
+	// values become visible only after the encrypted transaction commits.
+	if err := s.saveLocked(); err != nil {
+		_ = documents.Close()
+		return nil, fmt.Errorf("initialize account device identity: %w", err)
 	}
 	return s, nil
 }
@@ -180,6 +190,9 @@ func (s *Store) loadEncrypted() error {
 		if acc.ID == "" || acc.ID != row.ID || acc.AccessToken == "" || !validStatus(acc.Status) || acc.SourceType == "" || acc.CreatedAt == "" {
 			return fmt.Errorf("account %q is not encoded with the final document schema", row.ID)
 		}
+		if reason := deviceIdentityError(acc); reason != "" {
+			slog.Warn("chatgpt web account excluded from scheduling", "account_id", acc.ID, "error_class", reason)
+		}
 		s.items[acc.AccessToken] = acc
 		s.order = append(s.order, acc.AccessToken)
 	}
@@ -189,6 +202,7 @@ func (s *Store) loadEncrypted() error {
 func mapToAccount(m map[string]any) *Account {
 	acc := &Account{
 		ID:           asString(m["id"]),
+		DeviceID:     asString(m["web_device_id"]),
 		AccessToken:  asString(m["access_token"]),
 		RefreshToken: asString(m["refresh_token"]),
 		Email:        asString(m["email"]),
@@ -216,6 +230,7 @@ func (s *Store) saveLocked() error {
 func (s *Store) saveEncryptedLocked() error {
 	upserts := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
 	next := make(map[string]secureDocumentRevision, len(s.order))
+	initialized := make(map[*Account]string)
 	for position, token := range s.order {
 		acc := s.items[token]
 		if acc == nil {
@@ -224,7 +239,16 @@ func (s *Store) saveEncryptedLocked() error {
 		if strings.TrimSpace(acc.ID) == "" {
 			return fmt.Errorf("account document id is required")
 		}
-		payload, err := json.Marshal(accountToMap(acc))
+		deviceID := acc.DeviceID
+		if deviceID == "" && deviceIdentityError(acc) == "" {
+			deviceID = uuid.NewString()
+			initialized[acc] = deviceID
+		}
+		document := accountToMap(acc)
+		if deviceIdentityError(acc) == "" {
+			document["web_device_id"] = deviceID
+		}
+		payload, err := json.Marshal(document)
 		if err != nil {
 			return err
 		}
@@ -245,8 +269,14 @@ func (s *Store) saveEncryptedLocked() error {
 			deletes = append(deletes, id)
 		}
 	}
+	if len(upserts) == 0 && len(deletes) == 0 {
+		return nil
+	}
 	if err := s.documents.ApplySecureDocuments(secureDocumentScope, upserts, deletes); err != nil {
 		return err
+	}
+	for acc, deviceID := range initialized {
+		acc.DeviceID = deviceID
 	}
 	s.persisted = next
 	return nil
@@ -282,6 +312,12 @@ func accountToMap(acc *Account) map[string]any {
 		ret = map[string]any{}
 	}
 	ret["id"] = acc.ID
+	ret["web_device_id"] = acc.DeviceID
+	if raw, present := acc.Extra["web_device_id"]; present {
+		if _, ok := raw.(string); !ok {
+			ret["web_device_id"] = raw
+		}
+	}
 	ret["access_token"] = acc.AccessToken
 	ret["refresh_token"] = acc.RefreshToken
 	ret["email"] = acc.Email
@@ -451,7 +487,7 @@ func (s *Store) ClaimDueRefreshCandidates(now time.Time, interval time.Duration,
 	due := make([]dueAccount, 0, limit)
 	for _, token := range s.order {
 		acc := s.items[token]
-		if acc == nil || !isWebCompatibleSource(acc.SourceType) || acc.Status == StatusAbnormal {
+		if acc == nil || deviceIdentityError(acc) != "" || !isWebCompatibleSource(acc.SourceType) || accountStatus(acc) == StatusAbnormal {
 			continue
 		}
 		restore, restoreKnown := extraTime(acc, "restore_at")
@@ -460,7 +496,7 @@ func (s *Store) ClaimDueRefreshCandidates(now time.Time, interval time.Duration,
 			continue
 		}
 		priority := 1
-		active := acc.Status == StatusNormal || acc.Status == StatusLimited
+		active := accountStatus(acc) == StatusNormal || accountStatus(acc) == StatusLimited
 		if active {
 			priority = 5
 		}
@@ -547,7 +583,7 @@ func nextAccountRefreshAt(acc *Account, now time.Time, interval time.Duration) t
 	if interval <= 0 {
 		interval = 15 * time.Minute
 	}
-	if acc.Status == StatusDisabled && interval < time.Hour {
+	if accountStatus(acc) == StatusDisabled && interval < time.Hour {
 		interval = time.Hour
 	}
 	if lastUsed, ok := parseTime(acc.LastUsedAt); !ok || now.Sub(lastUsed) > 24*time.Hour {
@@ -618,14 +654,14 @@ func (s *Store) refreshCandidatesLocked(tokens []string) []events.AccountView {
 		if hasSelection && !selected[token] {
 			continue
 		}
-		if acc == nil || !isWebCompatibleSource(acc.SourceType) {
+		if acc == nil || deviceIdentityError(acc) != "" || !isWebCompatibleSource(acc.SourceType) {
 			continue
 		}
 		// Disabling an account controls routing admission only. Scheduled quota
 		// reconciliation continues for disabled accounts, while an explicit
 		// selection may additionally retry an abnormal account after its
 		// credential or network issue has been fixed.
-		if acc.Status != StatusNormal && acc.Status != StatusLimited && acc.Status != StatusDisabled && (!hasSelection || acc.Status != StatusAbnormal) {
+		if accountStatus(acc) != StatusNormal && accountStatus(acc) != StatusLimited && accountStatus(acc) != StatusDisabled && (!hasSelection || accountStatus(acc) != StatusAbnormal) {
 			continue
 		}
 		out = append(out, toView(acc, true))
@@ -660,7 +696,7 @@ func (s *Store) TokenRefreshCandidates(now time.Time, refreshSkew, keepaliveAfte
 	keepalive := make([]TokenRefreshCandidate, 0, keepaliveLimit)
 	for _, token := range s.order {
 		acc := s.items[token]
-		if acc == nil || acc.Status == StatusAbnormal || trim(acc.RefreshToken) == "" {
+		if acc == nil || deviceIdentityError(acc) != "" || accountStatus(acc) == StatusAbnormal || trim(acc.RefreshToken) == "" {
 			continue
 		}
 		candidate := TokenRefreshCandidate{AccessToken: token, RefreshToken: acc.RefreshToken, Proxy: acc.Proxy}
@@ -696,7 +732,7 @@ func (s *Store) OAuthRefreshCredentialFor(token string) (OAuthRefreshCredential,
 	defer s.mu.Unlock()
 	token = s.resolveTokenLocked(trim(token))
 	acc := s.items[token]
-	if acc == nil || trim(acc.RefreshToken) == "" {
+	if acc == nil || deviceIdentityError(acc) != "" || trim(acc.RefreshToken) == "" {
 		return OAuthRefreshCredential{}, false
 	}
 	return OAuthRefreshCredential{AccessToken: token, RefreshToken: acc.RefreshToken, Proxy: acc.Proxy}, true
@@ -736,6 +772,10 @@ func (s *Store) PasswordLoginCandidates(tokens []string) ([]PasswordLoginCandida
 		acc := s.items[token]
 		if acc == nil {
 			skipped = append(skipped, PasswordLoginSkip{Reason: "account not found"})
+			continue
+		}
+		if reason := deviceIdentityError(acc); reason != "" {
+			skipped = append(skipped, PasswordLoginSkip{AccountID: acc.ID, Reason: reason})
 			continue
 		}
 		if trim(acc.Email) == "" || trim(acc.Password) == "" {
@@ -923,10 +963,10 @@ func (s *Store) ApplyUpstreamInfo(token, email, planType string, quota int, rest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	acc, ok := s.items[token]
-	if !ok || acc.Status == StatusAbnormal {
+	if !ok || accountStatus(acc) == StatusAbnormal {
 		return false, nil
 	}
-	preserveDisabled := acc.Status == StatusDisabled
+	preserveDisabled := accountStatus(acc) == StatusDisabled
 	if email = trim(email); email != "" {
 		acc.Email = email
 	}
@@ -1509,7 +1549,7 @@ func (s *Store) AcquireImageToken(planType, sourceType string, exclude []string,
 		if acc == nil {
 			continue
 		}
-		if acc.Status != StatusNormal {
+		if accountStatus(acc) != StatusNormal {
 			continue
 		}
 		if acc.Quota <= 0 {
@@ -1551,7 +1591,7 @@ func (s *Store) AcquireImageAccount(accountID string) (events.AccountView, bool)
 		if acc == nil || acc.ID != accountID {
 			continue
 		}
-		if acc.Status != StatusNormal || acc.Quota <= 0 || s.imageInflight[token] >= s.concurrency {
+		if accountStatus(acc) != StatusNormal || acc.Quota <= 0 || s.imageInflight[token] >= s.concurrency {
 			return events.AccountView{}, false
 		}
 		s.imageInflight[token]++
@@ -1652,7 +1692,7 @@ func (s *Store) AcquireTextToken(exclude []string, model, capability string) (ev
 		if acc == nil {
 			continue
 		}
-		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+		if accountStatus(acc) == StatusDisabled || accountStatus(acc) == StatusAbnormal {
 			continue
 		}
 		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
@@ -1682,7 +1722,7 @@ func (s *Store) AcquireTextAccount(accountID, model, capability string) (events.
 		if acc == nil || acc.ID != accountID {
 			continue
 		}
-		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+		if accountStatus(acc) == StatusDisabled || accountStatus(acc) == StatusAbnormal {
 			return events.AccountView{}, false
 		}
 		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
@@ -1851,7 +1891,7 @@ func (s *Store) Health() events.HealthResult {
 	var h events.HealthResult
 	h.Total = len(s.items)
 	for _, acc := range s.items {
-		switch acc.Status {
+		switch accountStatus(acc) {
 		case StatusNormal:
 			h.Normal++
 		case StatusLimited:
@@ -1872,7 +1912,8 @@ func toView(acc *Account, withToken bool) events.AccountView {
 		Email:                      acc.Email,
 		Type:                       acc.Type,
 		SourceType:                 acc.SourceType,
-		Status:                     acc.Status,
+		Status:                     accountStatus(acc),
+		DeviceIdentityError:        deviceIdentityError(acc),
 		Quota:                      acc.Quota,
 		RestoreAt:                  extraString(acc, "restore_at"),
 		Success:                    extraInt(acc, "success"),
@@ -1895,6 +1936,7 @@ func toView(acc *Account, withToken bool) events.AccountView {
 	}
 	if withToken {
 		v.AccessToken = acc.AccessToken
+		v.DeviceID = acc.DeviceID
 	}
 	return v
 }
@@ -1986,7 +2028,7 @@ func (s *Store) ListDiscoveryCandidates() (events.ListDiscoveryCandidatesResult,
 		if acc == nil {
 			continue
 		}
-		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+		if accountStatus(acc) == StatusDisabled || accountStatus(acc) == StatusAbnormal {
 			continue
 		}
 		needs := acc.ModelSnapshot == nil || snapshotExpired(acc.ModelSnapshot, now)
@@ -1995,6 +2037,7 @@ func (s *Store) ListDiscoveryCandidates() (events.ListDiscoveryCandidatesResult,
 		hasFailure := extraString(acc, "model_discovery_error_class") != ""
 		out.Candidates = append(out.Candidates, events.DiscoveryCandidate{
 			AccountID:          acc.ID,
+			DeviceID:           acc.DeviceID,
 			AccessToken:        acc.AccessToken,
 			Proxy:              acc.Proxy,
 			Status:             acc.Status,
@@ -2108,7 +2151,7 @@ func (s *Store) CatalogSnapshot() events.CatalogSnapshotResult {
 		if acc == nil {
 			continue
 		}
-		if acc.Status == StatusDisabled || acc.Status == StatusAbnormal {
+		if accountStatus(acc) == StatusDisabled || accountStatus(acc) == StatusAbnormal {
 			continue
 		}
 		available++

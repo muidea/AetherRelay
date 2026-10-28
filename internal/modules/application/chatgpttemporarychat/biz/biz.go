@@ -490,7 +490,7 @@ func (s *TemporaryChat) startLegacyTurn(cmd events.StartTurnCommand, started sto
 	}
 	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content, Images: started.Images, Files: started.Files})
 	startCommand := upevents.StartTextCommand{
-		AccessToken: account.AccessToken, Proxy: account.Account.Proxy, Model: started.Model, Messages: messages,
+		AccessToken: account.AccessToken, Proxy: account.Account.Proxy, DeviceID: account.Account.DeviceID, Model: started.Model, Messages: messages,
 		ThinkingEffort: started.ThinkingEffort, ConversationID: started.UpstreamConversationID, ParentMessageID: started.ParentMessageID,
 		TimeoutMillis: int(s.turnTimeout / time.Millisecond),
 	}
@@ -754,6 +754,7 @@ func (s *TemporaryChat) retryTurnAfterInvalidToken(runtime *turnRuntime) (bool, 
 	command := runtime.startCommand
 	command.AccessToken = refreshed.AccessToken
 	command.Proxy = refreshed.Account.Proxy
+	command.DeviceID = refreshed.Account.DeviceID
 	streamID, startErr := s.startTextStream(command)
 	if startErr != nil {
 		return false, upevents.ErrClassUpstream

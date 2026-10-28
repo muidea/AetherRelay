@@ -2,6 +2,8 @@
 
 功能域：ChatGPT Web 账号池与内建 Provider、文本/图片代理、图片任务与图片库、临时对话、在线搜索与管理页。对应正式合同见[配置参考](../configuration.md)、[功能说明](../features.md)与[运维与发布](../operations.md)。
 
+收口记录：[浏览器访问一致性完善方案（2026-10-28）](../archive/chatgpt-web-upstream-closure-plan-2026-10-28.md)。本次实现固定新加坡环境、导航/API 请求头区分及账号设备身份持久化；UA/TLS 与独立 Cookie Jar 边界沿用现有行为。验证进度及暂缓候选见该记录。
+
 ## 设计目标
 
 - 无需官方 API Key：通过 ChatGPT 网页账号凭据提供文本对话、图片生成与联网搜索。
@@ -19,9 +21,18 @@
 - 进程始终注入只读内建 Provider `chatgptweb`；`config.yaml` 不声明任何 Provider。
 - 模型来自账号池对 `/backend-api/models` 的枚举并集，并与 Provider 精确模型合成同一有效目录；`model_metadata` 为同 ID 模型补充容量与可选 reasoning 能力声明。同名来源保留全部候选，`priority` 默认 `10` 且不作为回退候选。
 - 账号列表返回稳定本地 ID、邮箱、状态、结果计数、冷却与最近刷新状态；token、账号代理与原始 OAuth 错误绝不返回。
+- 设备身份缺失或空字符串时，首次持久化生成 UUIDv4；已有非法格式或非字符串值保持原样，并通过 `device_identity_error=invalid_device_identity` 显示账号本地异常。该账号停止文本/图片调度、任务恢复、发现和自动刷新，不影响其它 Web 账号或 Codex 号池启动。启用或更新凭据不解除设备身份限制；共享存储的加载、解密与写入故障仍明确报错。
 - 账号导出是唯一有意返回明文 token 的接口：固定返回可直接作为 `accounts` 重新导入的 JSON 数组，二次确认、`Cache-Control: no-store`、不写 Web Storage、Blob 即用即销。导入同时支持纯 access token 和完整 OAuth 对象；完整对象保留 refresh/id token 与账号代理，不会退化为单 token。OAuth 授权 URL、callback 与 session 仅存页面内存态，完成或取消后销毁。
 - 账号行重新认证时 OAuth session 绑定稳定本地 ID；通用 OAuth 入口按精确上游 `account_id`（缺失时仅按唯一邮箱）识别 token 轮换。更新保留本地元数据并清理旧凭据失败，不会合并不同 `account_id` 的同邮箱 workspace。新增或重新认证成功后立即为该本地 ID 提交后台账号信息刷新，OAuth 完成响应返回刷新进度 ID，管理页静默轮询并重载额度与状态；刷新任务无法启动或上游信息刷新失败不回滚已经成功写入的 OAuth 凭据。
 - `provider_enabled` 只控制内建 Provider 是否参与路由（可热更新）；不影响账号刷新、图片或临时对话。
+
+## 浏览器通讯环境与设备身份
+
+- UA、Client Hints 和 TLS 档位继续使用固定 Windows Chrome 133 环境。语言以现有中文环境为基准；时间、文本/搜索/图片的 `timezone` 统一使用 `Asia/Singapore`，UTC+08:00，`timezone_offset_min=-480`。日期转换到当地时间，Unix 时间戳保持绝对时刻。
+- 首页 bootstrap 模拟直接导航：导航 Priority/缓存语义，不携带 API Bearer、Origin、Referer 或 oai-* 头。JSON GET 保留认证与同源 Fetch Metadata，省略 Origin；JSON POST 保留 Origin 与 JSON Content-Type；生成 SSE 的专用 token、路由与头保持既有规则。
+- 账号池在启动迁移和新账号保存时初始化密码学随机 UUIDv4，以 `web_device_id` 存入加密账号文档。事务提交成功后才发布；同主体凭据刷新和重启延续设备值，正常请求不按 token 重新生成。上游命令只接收不可变设备值；缺少或非法设备值明确失败，不随机降级。
+- 每次独立执行尝试新建 Client、Session ID 和 Cookie Jar；同次链路保留 Cookie，安全重试按既有预算新建尝试并重新准备临时 token，同账号设备值延续。上游设置的设备 Cookie 保留在当前 Jar，不合成为额外头、不覆盖本地设备，也不跨操作共享。
+- 普通凭据导出和整体账号 bundle 不包含设备身份。导入新账号生成本实例设备，更新已有账号保留目标设备；完整数据库备份恢复保留设备。模型快照失效、冷却、重试和账号状态策略维持既有合同。
 
 ## 文本与图片代理
 
@@ -30,6 +41,7 @@
 - `/v1/images/generations` / `/v1/images/edits`：上游生图代理。ChatGPT Web conversation 协议没有 OpenAI Images API 的原生 `size` / `response_format` 字段；旧实现把尺寸附加到 prompt，只能表达意图，不能保证像素尺寸。现在请求只接受 `auto` 或受限的正整数 `WIDTHxHEIGHT`，并在拿到认证后的上游栅格 bytes 后本地中心裁切/双线性缩放；明确 `WxH` 才保证精确像素，`auto` 保留上游尺寸，无法解码 bytes 时失败而不虚报成功。图片字节只存本地文件系统，DuckDB 只存元数据与索引；interaction archive 对 data URI / `b64_json` 只存 MIME、字节数与 SHA-256 摘要。
 - ChatGPT Web 只返回 raster（PNG/JPEG/GIF 等可验证栅格）。它没有真正的 SVG/vector 输出协议；SVG 容器包裹 raster 也不是真矢量，因此显式 `svg`、`response_format: svg` 或“导出矢量文件”请求会在访问上游前明确拒绝。vector-like/raster illustration 等仅描述视觉风格的提示仍可生成栅格图。
 - 韧性：`rate_limit` / TLS / 超时 / 上游故障生成 60 秒生图冷却；`invalid_token` 先触发一次 OAuth 刷新，仅尚未创建 conversation 时重投一次，已有 conversation 永不盲重投。文本 token 为稳定本地估计，不可当上游账单。
+- HTTP 200 中的 SSE 明确错误同样属于失败：文本、搜索、图片统一识别 `error` / `error_code`，限额代码（包括 `usage_limit`）归入 `rate_limit`，保留有界原始码和提示，未知码归入 `upstream`；不检查消息正文中的同名字段。SSE 错误不会成为凭据失效判据。已有会话、图片引用、文本及输出观测保留为失败的部分结果；流式错误提示继续传递到代理日志。实际 HTTP 状态仍可为 200，不伪造上游 429。
 
 ### 文本调用的有限恢复与观测
 
@@ -65,6 +77,7 @@
 
 - **请求边界**：Chat/Responses 仅接受唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具（或 `web_search_options`）；只取最后一条纯文本 user 消息为 query；图片、文件、function、混合工具与工具循环一律 `conversion_unsupported`；`web_search_options` 调优字段仅记受限降级。
 - **上游执行与恢复边界**：prepare → `force_use_search=true` conversation → 有界 poll；每次搜索生成独立的随机 `parent_message_id`，prepare 与 conversation 仅共享本次请求的根，并在两步都发送 `history_and_training_disabled=true`，不复用固定根或历史网页会话。单次尝试中的 prepare、conversation 与 poll 共用账号级 TLS client；仅当 `search_prepare` 在尚未取得 conversation ID 时分类为 TLS/超时，才会短暂退避并重建 TLS client 重试一次。该重试仍失败后，最多切换一次到不同账号且不同已配置代理端点；conversation 已开始、SSE 或 poll 阶段绝不重投，避免重复搜索或答案。结果仅投影受限答案、实际模型与去重来源（标题/URL/摘要），均有大小上限；429/网络/超时/上游失败触发模型级冷却，首个 401 单飞刷新后仅重试一次。
+- conversation ID 只表示已提交；搜索读取有界 SSE 至 `[DONE]`/EOF，识别 ID 之后的失败再决定是否进入 poll。SSE 明确错误不进入轮询；轮询收到 HTTP 429 或明确 JSON 错误立即失败，保留会话 ID 和已有结果并反馈冷却。瞬态 404/409/423/5xx 沿用既有有界轮询，不重投搜索。
 - ChatGPT Web 是非公开网页逆向接口；上述字段只能阻止代理主动携带历史，不能覆盖上游账号级 Memory/Reference chat history 等服务端策略。若账号仍注入跨主题内容，应在 ChatGPT 账号侧关闭相关记忆能力，或将该账号标记为不保证严格隔离。
 - 排查污染时，先以管理页会话 ID 对照 DuckDB 中当前会话的消息，再按 `var/interactions/{api_key_id}/{round_id}/` 的 request/response 与 `metadata.json` 核对实际发送的消息；若本地请求未携带异会话内容而上游仍返回跨主题文本，问题位于上游账号记忆/网页会话策略，不应回写或拼接到其它本地会话。
 - **响应形态**：Chat 非流式追加来源与 OpenAI `url_citation` annotations；流式在搜索完成后发送单个完整 delta 与 `[DONE]`（兼容 SSE，不是增量搜索流）；Responses 返回 `web_search_call` 与带 citations 的 `output_text`。

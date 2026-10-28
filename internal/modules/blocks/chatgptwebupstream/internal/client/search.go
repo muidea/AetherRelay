@@ -102,7 +102,7 @@ func (c *Client) searchOnce(ctx context.Context, request SearchRequest) (SearchR
 	}
 	conversationID, err := c.startSearch(ctx, request.Model, query, conduit, rootMessageID, requirements)
 	if err != nil {
-		return SearchResult{}, err
+		return SearchResult{ConversationID: conversationID}, err
 	}
 	return c.pollSearch(ctx, conversationID)
 }
@@ -159,7 +159,7 @@ func (c *Client) prepareSearch(ctx context.Context, model, query, rootMessageID 
 	}
 	p := payload{
 		Action: "next", ParentMessageID: strings.TrimSpace(rootMessageID), Model: textModelSlug(model), ClientPrepareState: "success",
-		TimezoneOffsetMins: -480, Timezone: "Asia/Shanghai", SystemHints: []string{"search"}, SupportsBuffering: true,
+		TimezoneOffsetMins: browserTimezoneOffsetMinutes, Timezone: browserTimezone, SystemHints: []string{"search"}, SupportsBuffering: true,
 		SupportedEncodings: []string{"v1"}, HistoryAndTrainingDisabled: true,
 	}
 	if p.ParentMessageID == "" {
@@ -252,7 +252,7 @@ func (c *Client) startSearch(ctx context.Context, model, query, conduit, rootMes
 	msg.Metadata.SerializationMetadata.CustomSymbolOffsets = []int{}
 	p := payload{
 		Action: "next", Messages: []message{msg}, ParentMessageID: strings.TrimSpace(rootMessageID), Model: textModelSlug(model),
-		ClientPrepareState: "success", TimezoneOffsetMins: -480, Timezone: "Asia/Shanghai", EnableFollowups: true,
+		ClientPrepareState: "success", TimezoneOffsetMins: browserTimezoneOffsetMinutes, Timezone: browserTimezone, EnableFollowups: true,
 		SystemHints: []string{}, SupportsBuffering: true, SupportedEncodings: []string{"v1"}, ForceUseSearch: true,
 		ClientReportedSource: "conversation_composer_web_icon", ParagenOverride: "allow", ForceParallelSwitch: "auto",
 	}
@@ -294,11 +294,12 @@ func (c *Client) startSearch(ctx context.Context, model, query, conduit, rootMes
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", classifyStatusResponse("search_conversation", response.StatusCode, response.Body)
 	}
-	conversationID, err := parseSearchConversationID(ctx, io.LimitReader(response.Body, maxSearchSSEBytes))
-	if err != nil {
-		return "", err
+	reader := &io.LimitedReader{R: response.Body, N: maxSearchSSEBytes + 1}
+	conversationID, parseErr := parseSearchConversationID(ctx, reader)
+	if parseErr == nil && reader.N == 0 {
+		parseErr = &Error{Class: Upstream, Operation: "search_conversation", Detail: fmt.Sprintf("response exceeds %d MiB", maxSearchSSEBytes>>20)}
 	}
-	return conversationID, nil
+	return conversationID, parseErr
 }
 
 func (c *Client) searchRequest(ctx context.Context, method, path string, body []byte, requirements Requirements, conduit, accept, operation string) ([]byte, error) {
@@ -335,29 +336,38 @@ func parseSearchConversationID(ctx context.Context, reader io.Reader) (string, e
 	scanner.Buffer(make([]byte, 64<<10), maxTextSSELineBytes)
 	dataLines := make([]string, 0, 2)
 	conversationID := ""
-	flush := func() {
-		if len(dataLines) == 0 || conversationID != "" {
-			dataLines = dataLines[:0]
-			return
+	done := false
+	flush := func() error {
+		if len(dataLines) == 0 {
+			return nil
 		}
 		payload := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
+		if payload == "[DONE]" {
+			done = true
+			return nil
+		}
 		var value any
-		if json.Unmarshal([]byte(payload), &value) == nil {
+		if conversationID == "" && json.Unmarshal([]byte(payload), &value) == nil {
 			conversationID = searchString(value, "conversation_id")
 		}
+		return parseSSEError("search_conversation", payload)
 	}
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return conversationID, ctx.Err()
 		default:
 		}
 		line := scanner.Text()
 		if line == "" {
-			flush()
-			if conversationID != "" {
-				return conversationID, nil
+			// A conversation ID only acknowledges submission. Consume through
+			// DONE/EOF so a subsequent explicit failure cannot become a poll.
+			if err := flush(); err != nil {
+				return conversationID, err
+			}
+			if done {
+				break
 			}
 			continue
 		}
@@ -366,9 +376,11 @@ func parseSearchConversationID(ctx context.Context, reader io.Reader) (string, e
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read search SSE: %w", err)
+		return conversationID, fmt.Errorf("read search SSE: %w", err)
 	}
-	flush()
+	if err := flush(); err != nil {
+		return conversationID, err
+	}
 	if conversationID == "" {
 		return "", fmt.Errorf("search conversation: conversation ID not found in SSE")
 	}
@@ -377,21 +389,21 @@ func parseSearchConversationID(ctx context.Context, reader io.Reader) (string, e
 
 func (c *Client) pollSearch(ctx context.Context, conversationID string) (SearchResult, error) {
 	deadline := time.Now().Add(5 * time.Minute)
-	var last SearchResult
+	last := SearchResult{ConversationID: bounded(conversationID, 512)}
 	stable := 0
 	for {
 		if err := ctx.Err(); err != nil {
-			return SearchResult{}, err
+			return last, err
 		}
 		document, err := c.searchRequest(ctx, http.MethodGet, "/backend-api/conversation/"+url.PathEscape(conversationID), nil, Requirements{}, "", "application/json", "search_poll")
 		if err != nil {
 			if !retryableSearchPollError(err) {
-				return SearchResult{}, err
+				return last, err
 			}
 		} else {
 			result, terminal, parseErr := parseSearchDocument(conversationID, document)
 			if parseErr != nil {
-				return SearchResult{}, parseErr
+				return last, parseErr
 			}
 			if result.Text != "" {
 				if terminal {
@@ -412,10 +424,10 @@ func (c *Client) pollSearch(ctx context.Context, conversationID string) (SearchR
 			if last.Text != "" {
 				return last, nil
 			}
-			return SearchResult{}, fmt.Errorf("search poll: timed out waiting for result")
+			return last, fmt.Errorf("search poll: timed out waiting for result")
 		}
 		if err := waitForPoll(ctx, minDuration(3*time.Second, time.Until(deadline))); err != nil {
-			return SearchResult{}, fmt.Errorf("search poll: %w", err)
+			return last, fmt.Errorf("search poll: %w", err)
 		}
 	}
 }
@@ -425,13 +437,13 @@ func retryableSearchPollError(err error) bool {
 	if !ok {
 		return false
 	}
-	if upstream.Class == RateLimit {
-		return true
-	}
 	return upstream.Class == Upstream && (upstream.StatusCode == 404 || upstream.StatusCode == 409 || upstream.StatusCode == 423 || upstream.StatusCode >= 500)
 }
 
 func parseSearchDocument(conversationID string, document []byte) (SearchResult, bool, error) {
+	if err := parseSSEError("search_poll", string(document)); err != nil {
+		return SearchResult{ConversationID: bounded(conversationID, 512)}, false, err
+	}
 	var root map[string]any
 	if err := json.Unmarshal(document, &root); err != nil {
 		return SearchResult{}, false, fmt.Errorf("decode search conversation: %w", err)

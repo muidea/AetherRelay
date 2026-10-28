@@ -78,7 +78,7 @@ func (c *Client) GenerateImage(ctx context.Context, request ImageRequest, option
 	}
 	stream, err := c.StartImageConversation(request, requirements, conduitToken)
 	if err != nil {
-		return ImageGenerationResult{}, err
+		return ImageGenerationResult{ConversationID: stream.ConversationID, RevisedPrompt: stream.RevisedPrompt}, err
 	}
 	if stream.ConversationID == "" {
 		return ImageGenerationResult{}, fmt.Errorf("image conversation: conversation ID not found in SSE")
@@ -205,8 +205,8 @@ func (c *Client) PrepareImageConversation(request ImageRequest, requirements Req
 		ParentMessageID:       uuid.NewString(),
 		Model:                 imageModelSlug(request.Model),
 		ClientPrepareState:    "success",
-		TimezoneOffsetMinutes: -480,
-		Timezone:              "Asia/Shanghai",
+		TimezoneOffsetMinutes: browserTimezoneOffsetMinutes,
+		Timezone:              browserTimezone,
 		SystemHints:           []string{"picture_v2"},
 		SupportsBuffering:     true,
 		SupportedEncodings:    []string{"v1"},
@@ -308,7 +308,7 @@ func (c *Client) newImageRequest(method, path string, body []byte, requirements 
 	req.Header.Set("origin", c.baseURL)
 	req.Header.Set("referer", c.baseURL+"/")
 	req.Header.Set("user-agent", c.userAgent)
-	req.Header.Set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7")
+	req.Header.Set("accept-language", browserAcceptLanguage)
 	req.Header.Set("cache-control", "no-cache")
 	req.Header.Set("pragma", "no-cache")
 	req.Header.Set("priority", "u=1, i")
@@ -322,7 +322,7 @@ func (c *Client) newImageRequest(method, path string, body []byte, requirements 
 	req.Header.Set("sec-fetch-site", "same-origin")
 	req.Header.Set("oai-device-id", c.deviceID)
 	req.Header.Set("oai-session-id", c.sessionID)
-	req.Header.Set("oai-language", "zh-CN")
+	req.Header.Set("oai-language", browserLanguage)
 	req.Header.Set("x-openai-target-path", path)
 	req.Header.Set("x-openai-target-route", path)
 	if conduitToken != "" {
@@ -489,8 +489,8 @@ func imageConversationPayload(request ImageRequest) any {
 		ParentMessageID:     uuid.NewString(),
 		Model:               imageModelSlug(request.Model),
 		ClientPrepareState:  "sent",
-		TimezoneOffsetMins:  -480,
-		Timezone:            "Asia/Shanghai",
+		TimezoneOffsetMins:  browserTimezoneOffsetMinutes,
+		Timezone:            browserTimezone,
 		EnableFollowups:     true,
 		SystemHints:         []string{"picture_v2"},
 		SupportsBuffering:   true,
@@ -547,13 +547,13 @@ func ParseImageSSE(reader io.Reader) (ImageStreamResult, error) {
 			return nil // upstream can emit non-JSON progress/keepalive frames.
 		}
 		collectImageStreamValues(decoded, &result)
-		return nil
+		return parseSSEError("image_conversation", payload)
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			if err := flush(); err != nil {
-				return ImageStreamResult{}, err
+				return result, err
 			}
 			if result.Done {
 				return result, nil
@@ -567,10 +567,10 @@ func ParseImageSSE(reader io.Reader) (ImageStreamResult, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return ImageStreamResult{}, fmt.Errorf("read image SSE: %w", err)
+		return result, fmt.Errorf("read image SSE: %w", err)
 	}
 	if err := flush(); err != nil {
-		return ImageStreamResult{}, err
+		return result, err
 	}
 	return result, nil
 }

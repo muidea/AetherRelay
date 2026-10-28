@@ -8,6 +8,10 @@ import (
 )
 
 func transportReason(err error) transport.Reason {
+	var ws *websocketDiagnosticError
+	if errors.As(err, &ws) {
+		return ws.reason.Safe()
+	}
 	if errors.Is(err, errSSELineLimit) {
 		return transport.SSELineLimit
 	}

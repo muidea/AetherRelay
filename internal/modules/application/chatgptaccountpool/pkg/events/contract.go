@@ -44,21 +44,27 @@ const (
 )
 
 type AccountView struct {
-	ID            string `json:"id"`
-	IdentityKey   string `json:"identity_key,omitempty"`
-	Email         string `json:"email,omitempty"`
-	Type          string `json:"type,omitempty"`
-	SourceType    string `json:"source_type,omitempty"`
-	Status        string `json:"status"`
-	Quota         int    `json:"quota"`
-	RestoreAt     string `json:"restore_at,omitempty"`
-	ImageInflight int    `json:"image_inflight"`
-	Success       int    `json:"success"`
-	Fail          int    `json:"fail"`
-	CreatedAt     string `json:"created_at,omitempty"`
-	AccessToken   string `json:"access_token,omitempty"`
-	Proxy         string `json:"proxy,omitempty"`
-	LastUsedAt    string `json:"last_used_at,omitempty"`
+	// DeviceID is an internal execution identity, not a management projection
+	// or an ordinary credential export field.
+	DeviceID string `json:"-"`
+	// DeviceIdentityError is a derived local admission failure, not an
+	// upstream credential error. It never includes the stored identity value.
+	DeviceIdentityError string `json:"device_identity_error,omitempty"`
+	ID                  string `json:"id"`
+	IdentityKey         string `json:"identity_key,omitempty"`
+	Email               string `json:"email,omitempty"`
+	Type                string `json:"type,omitempty"`
+	SourceType          string `json:"source_type,omitempty"`
+	Status              string `json:"status"`
+	Quota               int    `json:"quota"`
+	RestoreAt           string `json:"restore_at,omitempty"`
+	ImageInflight       int    `json:"image_inflight"`
+	Success             int    `json:"success"`
+	Fail                int    `json:"fail"`
+	CreatedAt           string `json:"created_at,omitempty"`
+	AccessToken         string `json:"access_token,omitempty"`
+	Proxy               string `json:"proxy,omitempty"`
+	LastUsedAt          string `json:"last_used_at,omitempty"`
 	// Token refresh fields are safe, read-only account-health projections for
 	// operators. They never include a refresh token, account proxy, or raw
 	// upstream error text.
@@ -238,6 +244,7 @@ type AccountModelSnapshot struct {
 // credential needed by the discovery orchestrator. Credentials must stay on
 // the EventHub path and never appear in Admin HTTP responses.
 type DiscoveryCandidate struct {
+	DeviceID       string
 	AccountID      string
 	AccessToken    string
 	Proxy          string

@@ -15,6 +15,7 @@ import (
 
 	events "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	fhttp "github.com/bogdanfinn/fhttp"
 	wsclient "github.com/bogdanfinn/websocket"
 )
@@ -89,6 +90,7 @@ func dialResponsesWebsocket(ctx context.Context, cmd events.WSOpenCommand) (*wsc
 		limit = 1 << 20
 	}
 	conn.SetReadLimit(limit)
+	attempt.Response.WebsocketMessageLimitBytes = limit
 	attempt.Response.Transport = "websocket"
 	return conn, events.WSOpenResult{Headers: responseHeader, Attempt: attempt}, nil
 }
@@ -250,9 +252,12 @@ func performResponses(ctx context.Context, token, accountID, proxy string, body 
 	if err := conn.WriteMessage(wsclient.TextMessage, payload); err != nil {
 		stop()
 		_ = conn.Close()
-		return nil, attempt, classifyRequestTransport(ctx, err), 0, err
+		observed := websocketFailure(ctx, "write", err, attempt.Response.WebsocketDiagnostics)
+		attempt.Response.WebsocketDiagnostics = observed.diagnostic
+		attempt.Response.TransportReason = observed.reason
+		return nil, attempt, classifyRequestTransport(ctx, err), 0, observed
 	}
-	reader := &responsesWebsocketBody{conn: conn, stop: stop}
+	reader := &responsesWebsocketBody{conn: conn, stop: stop, ctx: ctx, diagnostic: attempt.Response.WebsocketDiagnostics}
 	header := make(http.Header)
 	for _, value := range opened.Headers {
 		header.Add(value.Name, value.Value)
@@ -288,11 +293,13 @@ func requestBodyModel(body []byte) string {
 }
 
 type responsesWebsocketBody struct {
-	conn      *wsclient.Conn
-	stop      func() bool
-	pending   []byte
-	terminal  bool
-	closeOnce sync.Once
+	ctx        context.Context
+	diagnostic transport.WebsocketDiagnostics
+	conn       *wsclient.Conn
+	stop       func() bool
+	pending    []byte
+	terminal   bool
+	closeOnce  sync.Once
 }
 
 func normalizeResponsesWSEvent(payload []byte) ([]byte, bool, error) {
@@ -324,8 +331,10 @@ func (b *responsesWebsocketBody) Read(dst []byte) (int, error) {
 		_ = b.conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		kind, payload, err := b.conn.ReadMessage()
 		if err != nil {
-			return 0, err
+			return 0, websocketFailure(b.ctx, "read", err, b.diagnostic)
 		}
+		b.diagnostic.WebsocketLastMessageObserved = true
+		b.diagnostic.WebsocketLastMessageBytes = int64(len(payload))
 		if kind != wsclient.TextMessage {
 			continue
 		}
@@ -336,7 +345,7 @@ func (b *responsesWebsocketBody) Read(dst []byte) (int, error) {
 		for _, document := range documents {
 			normalized, terminal, err := normalizeResponsesWSEvent(document)
 			if err != nil {
-				return 0, err
+				return 0, websocketFailure(b.ctx, "decode", err, b.diagnostic)
 			}
 			b.pending = append(b.pending, "data: "...)
 			b.pending = append(b.pending, normalized...)

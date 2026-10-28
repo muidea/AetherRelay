@@ -38,6 +38,7 @@ func logCodexAttempt(request codexresponses.Request, failure *codexresponses.Fai
 		"compaction_phase", request.Diagnostics.CompactionPhase}
 	if failure != nil {
 		attrs = append(attrs, codexTransportDetails(failure.Attempt)...)
+		attrs = append(attrs, failure.Attempt.Response.WebsocketDiagnostics.LogAttrs()...)
 		status := failure.HTTPStatus
 		if failure.Attempt.Response.Observed {
 			status = failure.Attempt.Response.Status

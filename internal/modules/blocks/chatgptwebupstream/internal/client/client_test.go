@@ -120,7 +120,7 @@ func TestGetUserInfoUsesAuthenticatedWebSequence(t *testing.T) {
 		t.Fatalf("requests=%d", len(doer.requests))
 	}
 	bootstrap := doer.requests[0]
-	if bootstrap.Header.Get("Sec-Fetch-Dest") != "document" || bootstrap.Header.Get("Sec-Fetch-Mode") != "navigate" || bootstrap.Header.Get("Oai-Device-Id") == "" || bootstrap.Header.Get("Oai-Session-Id") == "" || bootstrap.Header.Get("X-Openai-Target-Path") != "" {
+	if bootstrap.Header.Get("Sec-Fetch-Dest") != "document" || bootstrap.Header.Get("Sec-Fetch-Mode") != "navigate" || bootstrap.Header.Get("Oai-Device-Id") != "" || bootstrap.Header.Get("Oai-Session-Id") != "" || bootstrap.Header.Get("X-Openai-Target-Path") != "" {
 		t.Fatalf("bootstrap headers=%v", bootstrap.Header)
 	}
 	request := doer.requests[1]

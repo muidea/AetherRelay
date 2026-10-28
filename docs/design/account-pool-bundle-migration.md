@@ -68,6 +68,7 @@ accountidentity.Key(account_id, email)
 - 槽位的 `account_id`、`identity_key` 保留上游/源实例信息，但不作为目标实例的本地 ID。
 - `codex_cli.fingerprint_mode` 只允许 `off/scoped`；缺失视为 `scoped`。它是账号级行为设置，随凭据迁移但不包含任何派生 ID 或私有 fingerprint seed；因此导入为新账号时会生成新的账号投影身份。数据库级加密归档恢复会保留内部 seed。
 - 凭据字段只允许出现在明确的凭据导出接口响应中；导出文件必须按凭据文件处理，禁止写入日志。
+- ChatGPT Web 的内部 `web_device_id` 不进入凭据槽位或 bundle。导入新账号生成本实例设备，更新已有目标账号保留目标设备；数据库级加密备份恢复才保留源设备，避免凭据复制到并行实例时复制设备身份。
 - 不导出状态、额度、刷新错误、冷却、模型快照、用量、Provider、API Key、图片和交互记录。
 
 ## 导出文件名

@@ -92,7 +92,13 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 					if tc.name == "cleanup_delay" {
 						reason = transport.ConnectionReset
 					}
-					result.Set(upevents.PullResult{Done: true, ErrorClass: class, TransportReason: reason}, nil)
+					progress := upevents.HTTPResponseObservation{}
+					if tc.name == "cleanup_delay" {
+						reason = transport.WebsocketClose
+						progress.WebsocketDiagnostics = transport.WebsocketDiagnostics{WebsocketFailureStage: "read", WebsocketErrorType: "close", WebsocketCloseCode: 1011, WebsocketCloseReceived: true, WebsocketMessageLimitBytes: 1024, WebsocketLastMessageObserved: true, WebsocketLastMessageBytes: 50}
+						progress.TransportReason = reason
+					}
+					result.Set(upevents.PullResult{Done: true, ErrorClass: class, TransportReason: reason, Progress: progress}, nil)
 					return
 				}
 				if tc.name == "first" || (tc.name == "idle" && n > 1) {
@@ -118,6 +124,9 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			up.Subscribe(upevents.TopicCancel, func(_ event.Event, result event.Result) {
 				if tc.name == "cleanup_delay" {
 					time.Sleep(200 * time.Millisecond)
+					canceled.Add(1)
+					result.Set(upevents.CancelResult{Progress: upevents.HTTPResponseObservation{TransportReason: transport.Canceled, WebsocketDiagnostics: transport.WebsocketDiagnostics{WebsocketFailureStage: "read", WebsocketErrorType: "canceled"}}}, nil)
+					return
 				}
 				canceled.Add(1)
 				result.Set(upevents.CancelResult{}, nil)
@@ -135,9 +144,11 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			defer cancel()
 			var firstEvent time.Duration
 			var finalReason transport.Reason
+			var finalDiagnostic transport.WebsocketDiagnostics
 			err := proxy.StreamCodexResponses(ctx, codexresponses.Request{Model: "gpt-test", Body: []byte(`{"model":"gpt-test"}`), ObserveAttempt: func(attempt codexresponses.HTTPAttempt, err error) {
 				if err != nil {
 					finalReason = attempt.Response.TransportReason
+					finalDiagnostic = attempt.Response.WebsocketDiagnostics
 				}
 				if err == nil && attempt.Response.Observed && attempt.Response.Status == 200 {
 					headersObserved.Store(true)
@@ -164,13 +175,16 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			if tc.name == "network_before_output" || tc.name == "cleanup_delay" {
 				wantReason := transport.ConnectionRefused
 				if tc.name == "cleanup_delay" {
-					wantReason = transport.ConnectionReset
+					wantReason = transport.WebsocketClose
 				}
 				if failure.Attempt.Response.TransportReason != wantReason || finalReason != wantReason {
 					t.Fatalf("reason=%q observed=%q want=%q", failure.Attempt.Response.TransportReason, finalReason, wantReason)
 				}
 				if tc.name == "cleanup_delay" && (!failure.Attempt.Response.Observed || failure.Attempt.Response.Status != 200) {
 					t.Fatal("lost observed HTTP 200")
+				}
+				if tc.name == "cleanup_delay" && (finalDiagnostic.WebsocketCloseCode != 1011 || !finalDiagnostic.WebsocketCloseReceived || finalDiagnostic.WebsocketLastMessageBytes != 50 || failure.Attempt.Response.WebsocketDiagnostics != finalDiagnostic) {
+					t.Fatalf("cleanup overwrote first WS failure: %+v", finalDiagnostic)
 				}
 			}
 			if tc.name == "progress" && firstEvent <= 0 {

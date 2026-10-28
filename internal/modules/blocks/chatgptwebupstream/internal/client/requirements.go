@@ -110,7 +110,7 @@ func requirementsConfig(userAgent string, sources []string, dataBuild string) []
 		source = sources[0]
 	}
 	now := time.Now()
-	return []any{4480, now.UTC().Format("Mon Jan 02 2006 15:04:05") + " GMT-0500 (Eastern Standard Time)", 4294705152, 1, userAgent, source, dataBuild, "en-US", "en-US,es-US,en,es", 0.5, "webdriver−false", "location", "window", float64(now.UnixMilli()), uuid.NewString(), "", 16, float64(now.UnixMilli()), 0, 0, 0, 0, 0, 0, 0, 0}
+	return []any{4480, browserDate(now), 4294705152, 1, userAgent, source, dataBuild, browserLanguage, browserLanguages, 0.5, "webdriver−false", "location", "window", float64(now.UnixMilli()), uuid.NewString(), "", 16, float64(now.UnixMilli()), 0, 0, 0, 0, 0, 0, 0, 0}
 }
 
 var scriptSrcPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)`)

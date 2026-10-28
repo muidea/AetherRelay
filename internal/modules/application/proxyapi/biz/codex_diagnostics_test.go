@@ -86,3 +86,21 @@ func TestStreamFailureReasonPreservesResponseObservation(t *testing.T) {
 		t.Fatalf("failure=%+v", failure)
 	}
 }
+
+func TestWebsocketFactsReachAttemptLog(t *testing.T) {
+	previous := slog.Default()
+	defer slog.SetDefault(previous)
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	failure := codexresponses.NewFailure(codexresponses.KindNetwork, 0, nil)
+	d := transport.WebsocketDiagnostics{WebsocketFailureStage: "read", WebsocketErrorType: "close", WebsocketCloseCode: 1006, WebsocketMessageLimitBytes: 1024, WebsocketLastMessageObserved: true, WebsocketLastMessageBytes: 50}
+	failure.Attempt = toCodexHTTPAttempt(upevents.HTTPAttempt{Response: upevents.HTTPResponseObservation{WebsocketDiagnostics: d, TransportReason: transport.WebsocketClose}})
+	logCodexAttempt(codexresponses.Request{Model: "gpt-test", Diagnostics: codexresponses.Diagnostics{RequestID: "ws-test"}}, failure)
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["websocket_close_code"] != float64(1006) || got["websocket_close_received"] != false || got["websocket_last_message_bytes"] != float64(50) || got["websocket_message_limit_bytes"] != float64(1024) || got["request_id"] != "ws-test" || got["transport_reason"] != string(transport.WebsocketClose) || got["error_class"] != "network" {
+		t.Fatalf("lost diagnostic or changed business failure: %v", got)
+	}
+}

@@ -57,7 +57,7 @@ type chatGPTSearchAttempt struct {
 
 func (s *Proxy) searchChatGPTWithAccount(ctx context.Context, account accevents.AcquireTextTokenResult, request chatgptsearch.Request) (chatGPTSearchAttempt, error) {
 	usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
-	attempt, err := s.searchChatGPTOnce(ctx, account.AccessToken, account.Account.Proxy, request)
+	attempt, err := s.searchChatGPTOnce(ctx, account.AccessToken, account.Account.Proxy, account.Account.DeviceID, request)
 	if !isInvalidChatGPTTextFailure(err) {
 		return attempt, err
 	}
@@ -73,17 +73,17 @@ func (s *Proxy) searchChatGPTWithAccount(ctx context.Context, account accevents.
 		return attempt, err
 	}
 	usagetarget.Record(ctx, "chatgptweb", refreshed.Account.ID, refreshed.Account.Email)
-	attempt, err = s.searchChatGPTOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, request)
+	attempt, err = s.searchChatGPTOnce(ctx, refreshed.AccessToken, refreshed.Account.Proxy, refreshed.Account.DeviceID, request)
 	if isInvalidChatGPTTextFailure(err) {
 		s.removeInvalidChatGPTTextToken(ctx, refreshed.AccessToken)
 	}
 	return attempt, err
 }
 
-func (s *Proxy) searchChatGPTOnce(ctx context.Context, token, proxy string, request chatgptsearch.Request) (chatGPTSearchAttempt, error) {
+func (s *Proxy) searchChatGPTOnce(ctx context.Context, token, proxy, deviceID string, request chatgptsearch.Request) (chatGPTSearchAttempt, error) {
 	attempt := chatGPTSearchAttempt{accessToken: strings.TrimSpace(token), proxy: strings.TrimSpace(proxy)}
 	value, eventErr := s.SendEvent(event.NewEventWithContext(upevents.TopicSearch, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.SearchCommand{
-		AccessToken: token, Proxy: proxy, Model: request.Model, Query: request.Query,
+		AccessToken: token, Proxy: proxy, DeviceID: deviceID, Model: request.Model, Query: request.Query,
 	})).Get()
 	if eventErr != nil {
 		partial, isPartial := value.(upevents.SearchResult)

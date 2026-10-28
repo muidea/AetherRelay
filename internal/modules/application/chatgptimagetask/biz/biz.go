@@ -463,10 +463,11 @@ func (s *ImageTask) runGeneration(ctx context.Context, ownerID, taskID, prompt, 
 // generateWithBootstrapRetry retries only the first, pre-conversation
 // bootstrap transport failure. Once a conversation may exist, a blind retry
 // could create a duplicate image and remains an explicit operator action.
-func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, proxy, prompt, model, size, quality string) (any, *cd.Error) {
+func (s *ImageTask) generateWithBootstrapRetry(ownerID, taskID, token, proxy, deviceID, prompt, model, size, quality string) (any, *cd.Error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		result := s.SendEvent(event.NewEvent(upevents.TopicGenerateImage, s.ID(), upcommon.UnitID, nil, upevents.GenerateImageCommand{
 			AccessToken: token,
+			DeviceID:    deviceID,
 			Proxy:       proxy,
 			Prompt:      prompt,
 			Model:       model,
@@ -559,7 +560,7 @@ func (s *ImageTask) runResumePoll(ctx context.Context, ownerID, taskID, conversa
 	}()
 
 	s.store.MarkProgress(ownerID, taskID, "resuming_poll")
-	resumeRes := s.SendEvent(event.NewEventWithContext(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, ConversationID: conversationID, Size: size, ExtraTimeoutSecs: extraTimeoutSecs}))
+	resumeRes := s.SendEvent(event.NewEventWithContext(upevents.TopicResumeImage, s.ID(), upcommon.UnitID, event.NewHeader(), ctx, upevents.ResumeImageCommand{AccessToken: token, Proxy: accOut.Account.Proxy, DeviceID: accOut.Account.DeviceID, ConversationID: conversationID, Size: size, ExtraTimeoutSecs: extraTimeoutSecs}))
 	resumeVal, resumeErr := resumeRes.Get()
 	if resumeErr != nil {
 		if partial, ok := resumeVal.(upevents.ResumeImageResult); ok && partial.ConversationID != "" {
@@ -653,9 +654,9 @@ func editFailure(value any) (string, upevents.ErrorClass) {
 	return "", ""
 }
 
-func (s *ImageTask) executeEdit(token, proxy, prompt, model, size, quality string, images [][]byte) (any, *cd.Error) {
+func (s *ImageTask) executeEdit(token, proxy, deviceID, prompt, model, size, quality string, images [][]byte) (any, *cd.Error) {
 	return s.SendEvent(event.NewEvent(upevents.TopicEditImage, s.ID(), upcommon.UnitID, nil, upevents.EditImageCommand{
-		AccessToken: token, Proxy: proxy, Prompt: prompt, Model: model, Size: size, Quality: quality, Images: images,
+		AccessToken: token, Proxy: proxy, DeviceID: deviceID, Prompt: prompt, Model: model, Size: size, Quality: quality, Images: images,
 	})).Get()
 }
 

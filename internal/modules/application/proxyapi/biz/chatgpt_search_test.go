@@ -26,13 +26,13 @@ func TestSearchRefreshesInvalidCredentialOnceAndRecordsFinalResult(t *testing.T)
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old", Account: accevents.AccountView{ID: "account-1", Proxy: "http://old.invalid"}}, nil)
+		result.Set(accevents.AcquireTextTokenResult{AccessToken: "old", Account: accevents.AccountView{ID: "account-1", DeviceID: "stable-device", Proxy: "http://old.invalid"}}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRefreshTextToken, func(ev event.Event, result event.Result) {
 		if ev.Data().(accevents.RefreshTextTokenCommand).AccessToken != "old" {
 			t.Fatal("unexpected refresh token")
 		}
-		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new", Refreshed: true, Account: accevents.AccountView{ID: "account-1", Proxy: "http://new.invalid"}}, nil)
+		result.Set(accevents.RefreshTextTokenResult{AccessToken: "new", Refreshed: true, Account: accevents.AccountView{ID: "account-1", DeviceID: "stable-device", Proxy: "http://new.invalid"}}, nil)
 	})
 	recorded := make(chan accevents.RecordTextResultCommand, 1)
 	accounts.Subscribe(accevents.TopicRecordTextResult, func(ev event.Event, result event.Result) {
@@ -45,13 +45,13 @@ func TestSearchRefreshesInvalidCredentialOnceAndRecordsFinalResult(t *testing.T)
 	upstream.Subscribe(upevents.TopicSearch, func(ev event.Event, result event.Result) {
 		cmd := ev.Data().(upevents.SearchCommand)
 		if attempts.Add(1) == 1 {
-			if cmd.AccessToken != "old" || cmd.Proxy != "http://old.invalid" {
+			if cmd.DeviceID != "stable-device" || cmd.AccessToken != "old" || cmd.Proxy != "http://old.invalid" {
 				t.Fatalf("first command=%+v", cmd)
 			}
 			result.Set(upevents.SearchResult{ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired"))
 			return
 		}
-		if cmd.AccessToken != "new" || cmd.Proxy != "http://new.invalid" || cmd.Query != "today news" {
+		if cmd.DeviceID != "stable-device" || cmd.AccessToken != "new" || cmd.Proxy != "http://new.invalid" || cmd.Query != "today news" {
 			t.Fatalf("retry command=%+v", cmd)
 		}
 		result.Set(upevents.SearchResult{Text: "answer", Sources: []upevents.SearchSource{{URL: "https://example.test"}}}, nil)

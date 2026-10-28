@@ -162,13 +162,13 @@ func (s *Proxy) runDiscoveryRound(ctx context.Context, dueOnly bool) {
 func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.DiscoveryCandidate) {
 	var refreshDiscoveryCause error
 	stage := "list_models"
-	listed, failureClass, err := s.listChatGPTModels(ctx, candidate.AccessToken, candidate.Proxy)
+	listed, failureClass, err := s.listChatGPTModels(ctx, candidate.AccessToken, candidate.Proxy, candidate.DeviceID)
 	if err != nil && failureClass == upevents.ErrClassInvalidToken {
 		refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, candidate.AccessToken)
 		refreshDiscoveryCause = refreshErr
 		switch {
 		case refreshErr == nil && !permanent && refreshed.Refreshed && strings.TrimSpace(refreshed.AccessToken) != "":
-			listed, failureClass, err = s.listChatGPTModels(ctx, refreshed.AccessToken, refreshed.Account.Proxy)
+			listed, failureClass, err = s.listChatGPTModels(ctx, refreshed.AccessToken, refreshed.Account.Proxy, refreshed.Account.DeviceID)
 		case permanent:
 			stage = "refresh_token"
 			listed = upevents.ListModelsResult{}
@@ -218,12 +218,13 @@ func (s *Proxy) discoverOneAccount(ctx context.Context, candidate accevents.Disc
 	}
 }
 
-func (s *Proxy) listChatGPTModels(ctx context.Context, accessToken, proxy string) (upevents.ListModelsResult, upevents.ErrorClass, error) {
+func (s *Proxy) listChatGPTModels(ctx context.Context, accessToken, proxy, deviceID string) (upevents.ListModelsResult, upevents.ErrorClass, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
 	value, eventErr := s.SendEvent(event.NewEventWithContext(upevents.TopicListModels, s.ID(), upcommon.UnitID, event.NewHeader(), reqCtx, upevents.ListModelsCommand{
 		AccessToken: accessToken,
 		Proxy:       proxy,
+		DeviceID:    deviceID,
 	})).Get()
 	listed, ok := value.(upevents.ListModelsResult)
 	if !ok {

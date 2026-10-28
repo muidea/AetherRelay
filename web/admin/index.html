@@ -773,6 +773,7 @@ Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集
 Object.assign(enUS,{"刷新所选额度/凭据":"Refresh selected quota/credentials","同步图片额度和账号状态，必要时续期 OAuth 凭证":"Synchronize image quota and account status, renewing OAuth credentials when needed","强制续期 OAuth 凭证；成功后自动同步模型与上游用量":"Force-renew OAuth credentials, then synchronize models and upstream usage","凭据刷新完成：成功 {succeeded}，失败 {failed}；模型与用量同步已启动":"Credential refresh complete: {succeeded} succeeded, {failed} failed; model and usage synchronization started"});
 Object.assign(enUS,{"等待手工刷新":"Awaiting manual refresh","刷新失败时间：{failed}；下次重试：{retry}":"Refresh failed at {failed}; next retry {retry}","自动刷新失败 · 重试 {time}":"Automatic refresh failed · retry {time}","手工":"Manual","自动":"Automatic","上游":"Upstream","响应头":"Response headers","最近刷新：{last}；来源：{source}":"Last refreshed {last}; source: {source}","下次刷新 {time}":"Next refresh {time}","最近刷新 {time}":"Last refreshed {time}"});
 Object.assign(enUS,{"总耗时 {duration}":"Total duration {duration}"});
+Object.assign(enUS,{"设备身份异常 · 已停止调度":"Invalid device identity · scheduling stopped","设备身份数据异常；请核对账号数据。更新凭据或启用账号不会解除此限制。":"The stored device identity is invalid. Check the account data. Updating credentials or enabling the account will not remove this restriction."});
 Object.assign(enUS,{
   "输入 / 输出 Token":"Input / output tokens","成功请求":"Successful requests",
   "当前筛选范围内的请求数，含成功与失败。":"Requests matching the current filters, including successes and failures.",
@@ -1240,6 +1241,10 @@ function tokenRefreshBadge(account){
   const when=formatAccountDate(refreshedAt);
   const title=t("最近凭据刷新成功：{v0}",{v0:when});
   return `<div class="account-refresh-state"><span class="tag tag-refresh-ok" title="${esc(title)}">${esc(t("凭据已刷新 · {v0}",{v0:when}))}</span></div>`;
+}
+function webDeviceIdentityBadge(account){
+  if(!account?.device_identity_error)return "";
+  return `<div class="account-refresh-state"><span class="tag tag-refresh-failure" title="${esc(t("设备身份数据异常；请核对账号数据。更新凭据或启用账号不会解除此限制。"))}">${esc(t("设备身份异常 · 已停止调度"))}</span></div>`;
 }
 function accountRefreshScheduleBadge(account,kind){
   const next=String((kind==="codex"?account?.next_usage_refresh_at:account?.next_account_refresh_at)||"").trim();
@@ -1808,7 +1813,7 @@ function unifiedWebSlot(account){
   if(!account)return `<div class="unified-slot-empty">尚未配置 ChatGPT Web 凭据</div>`;
   const restore=formatRestoreAt(account.restore_at);
   const blocked=unifiedCredentialActionBlocked("web",account,"quota");
-  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div>${unifiedCredentialToggle("web",account)}</div><div class="unified-slot-primary"><span class="unified-slot-primary-value">${localizedHTML("图片额度 {count}",{count:Math.max(0,Number(account.quota)||0)})}</span>${restore.relative?`<span class="subtle">${localizedHTML("恢复 {time}",{time:restore.relative})}</span>`:""}</div><div class="help">${esc(t("模型指纹检测暂不适用于 ChatGPT Web 槽位"))}</div>${tokenRefreshBadge(account)}${accountRefreshScheduleBadge(account,"web")}${modelDiscoveryBadge(account)}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}" title="${esc(t("同步图片额度和账号状态，必要时续期 OAuth 凭证"))}" ${blocked?"disabled":""}>${esc(t("刷新额度/凭据"))}</button><button class="link-btn" data-ua-web-reauth="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>删除槽位</button></div></div>`;
+  return `<div class="unified-slot"><div class="unified-slot-head"><div class="unified-slot-title"><span class="tag tag-purple">ChatGPT Web</span>${statusTag(account.status)}</div>${unifiedCredentialToggle("web",account)}</div><div class="unified-slot-primary"><span class="unified-slot-primary-value">${localizedHTML("图片额度 {count}",{count:Math.max(0,Number(account.quota)||0)})}</span>${restore.relative?`<span class="subtle">${localizedHTML("恢复 {time}",{time:restore.relative})}</span>`:""}</div><div class="help">${esc(t("模型指纹检测暂不适用于 ChatGPT Web 槽位"))}</div>${webDeviceIdentityBadge(account)}${tokenRefreshBadge(account)}${accountRefreshScheduleBadge(account,"web")}${modelDiscoveryBadge(account)}<div class="actions"><button class="link-btn" data-ua-web-refresh="${esc(account.id)}" title="${esc(t("同步图片额度和账号状态，必要时续期 OAuth 凭证"))}" ${blocked?"disabled":""}>${esc(t("刷新额度/凭据"))}</button><button class="link-btn" data-ua-web-reauth="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>${esc(t("重新认证"))}</button><button class="link-btn link-danger" data-ua-web-delete="${esc(account.id)}" ${state.unified.updating.has(unifiedCredentialKey("web",account.id))?"disabled":""}>删除槽位</button></div></div>`;
 }
 function unifiedCodexSummary(account){
   const models=Array.isArray(account?.model_snapshot?.models)?account.model_snapshot.models:[];
@@ -2331,7 +2336,7 @@ function renderChatGPTAccounts(){
       <td><input type="checkbox" data-acc-check="${esc(a.id)}" ${checked}></td>
       <td>${chatGPTAccountIdentity(a)}</td>
       <td>${chatGPTAccountOrigin(a)}</td>
-      <td class="account-status-cell">${statusTag(a.status)}${textCooldownBadges(a.text_cooldowns)}${imageCooldownBadges(a.image_cooldowns)}${tokenRefreshBadge(a)}${accountRefreshScheduleBadge(a,"web")}${modelDiscoveryBadge(a)}</td>
+      <td class="account-status-cell">${statusTag(a.status)}${textCooldownBadges(a.text_cooldowns)}${imageCooldownBadges(a.image_cooldowns)}${webDeviceIdentityBadge(a)}${tokenRefreshBadge(a)}${accountRefreshScheduleBadge(a,"web")}${modelDiscoveryBadge(a)}</td>
       <td>${chatGPTAccountQuota(quota,restore,a.restore_at)}</td>
       <td class="cg-account-task ${inflight>0?"account-inflight":"subtle"}" title="${inflight>0?"当前图片任务数量。账号池空闲时该值持续大于 0，可能表示并发槽位未释放。":"当前无进行中的图片任务"}">${inflight}</td>
       <td>${chatGPTAccountActivity(success,fail)}</td>

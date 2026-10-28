@@ -34,6 +34,7 @@ type HTTPRequestObservation struct {
 }
 
 type HTTPResponseObservation struct {
+	transport.WebsocketDiagnostics
 	Transport            string // http or websocket
 	FallbackReason       string // bounded pre-send fallback reason
 	WebsocketRequestSent bool   // a failed read after create must not replay

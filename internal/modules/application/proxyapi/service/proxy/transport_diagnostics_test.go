@@ -41,11 +41,14 @@ func TestTransportReasonArchiveUpdatesSameAttempt(t *testing.T) {
 			}
 			failure := codexresponses.NewFailure(codexresponses.KindNetwork, 0, nil)
 			attempt.Response.TransportReason = reason
+			attempt.Response.WebsocketDiagnostics = transport.WebsocketDiagnostics{WebsocketFailureStage: "read", WebsocketErrorType: "close", WebsocketCloseCode: 1006, WebsocketMessageLimitBytes: 1024, WebsocketLastMessageObserved: true, WebsocketLastMessageBytes: 50}
+			wantDiagnostic := attempt.Response.WebsocketDiagnostics
 			failure.Attempt = attempt
 			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, failure)
 			// Duplicate settlement and a late handshake must retain the cause.
 			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, failure)
 			attempt.Response.TransportReason = ""
+			attempt.Response.WebsocketDiagnostics = transport.WebsocketDiagnostics{}
 			h.archiveCodexUpstreamAttempt(round, r, "codexoauth", attempt, empty)
 			if len(round.UpstreamAttempts) != 1 {
 				t.Fatal("terminal update created another attempt")
@@ -62,6 +65,9 @@ func TestTransportReasonArchiveUpdatesSameAttempt(t *testing.T) {
 				if got.TransportReason != reason.Safe() || got.FailureClass != "network" || got.Status != attempt.Response.Status || got.Attempt != 1 || strings.Contains(string(data), "private-") {
 					t.Fatalf("archive=%s", data)
 				}
+				if got.WebsocketDiagnostics != wantDiagnostic {
+					t.Fatalf("metadata-only archive lost WS failure: %+v", got.WebsocketDiagnostics)
+				}
 			}
 		}
 	}
@@ -73,6 +79,9 @@ func TestTransportReasonDoesNotChangeClientError(t *testing.T) {
 	for _, reason := range []transport.Reason{"", transport.ConnectionReset, "private-proxy:private-password"} {
 		failure := codexresponses.NewFailure(codexresponses.KindNetwork, 0, nil)
 		failure.Attempt.Response.TransportReason = reason
+		if reason != "" {
+			failure.Attempt.Response.WebsocketDiagnostics = transport.WebsocketDiagnostics{WebsocketFailureStage: "decode", WebsocketErrorType: "json_syntax", WebsocketJSONErrorOffset: 17, WebsocketMessageLimitBytes: 1024}
+		}
 		response := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/v1/responses", nil)
 		h.writeCodexResponsesError(response, r, nil, time.Now(), "codexoauth", "gpt-test", false, failure)

@@ -30,6 +30,7 @@ type Config struct {
 	BaseURL     string
 	AccessToken string
 	Proxy       string
+	DeviceID    string
 }
 
 type UserInfo struct {
@@ -69,6 +70,9 @@ func New(config Config) (*Client, error) {
 	}
 	if strings.TrimSpace(config.AccessToken) == "" {
 		return nil, fmt.Errorf("access token is required")
+	}
+	if err := validateDeviceID(config.DeviceID); err != nil {
+		return nil, err
 	}
 	proxyURL, err := resolveProxyURL(config.Proxy)
 	if err != nil {
@@ -120,12 +124,15 @@ func resolveProxyURL(accountProxy string) (string, error) {
 }
 
 func newWithDoer(config Config, baseURL string, doer doer) *Client {
+	if config.DeviceID == "" {
+		config.DeviceID = uuid.NewString()
+	}
 	return &Client{
 		doer:        doer,
 		baseURL:     strings.TrimRight(baseURL, "/"),
 		accessToken: strings.TrimSpace(config.AccessToken),
 		userAgent:   defaultUserAgent,
-		deviceID:    uuid.NewString(),
+		deviceID:    config.DeviceID,
 		sessionID:   uuid.NewString(),
 	}
 }
@@ -159,11 +166,11 @@ func (c *Client) GetUserInfoContext(ctx context.Context) (UserInfo, error) {
 	if err != nil {
 		return UserInfo{}, err
 	}
-	initBody, err := c.postJSONContext(ctx, "/backend-api/conversation/init", `{"gizmo_id":null,"requested_default_model":null,"conversation_id":null,"timezone_offset_min":-480}`, "conversation_init")
+	initBody, err := c.postJSONContext(ctx, "/backend-api/conversation/init", fmt.Sprintf(`{"gizmo_id":null,"requested_default_model":null,"conversation_id":null,"timezone_offset_min":%d}`, browserTimezoneOffsetMinutes), "conversation_init")
 	if err != nil {
 		return UserInfo{}, err
 	}
-	accountBody, err := c.getContext(ctx, "/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-480", "account_check")
+	accountBody, err := c.getContext(ctx, "/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min="+strconv.Itoa(browserTimezoneOffsetMinutes), "account_check")
 	if err != nil {
 		return UserInfo{}, err
 	}
@@ -342,43 +349,7 @@ func (c *Client) requestContext(ctx context.Context, method, path string, body i
 		return nil, fmt.Errorf("%s request: %w", operation, err)
 	}
 	req = req.WithContext(ctx)
-	req.Header.Set("authorization", "Bearer "+c.accessToken)
-	req.Header.Set("origin", c.baseURL)
-	req.Header.Set("referer", c.baseURL+"/")
-	req.Header.Set("user-agent", c.userAgent)
-	req.Header.Set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7")
-	req.Header.Set("cache-control", "no-cache")
-	req.Header.Set("pragma", "no-cache")
-	req.Header.Set("priority", "u=1, i")
-	req.Header.Set("sec-ch-ua", `"Google Chrome";v="133", "Chromium";v="133", "Not_A Brand";v="24"`)
-	req.Header.Set("sec-ch-ua-arch", `"x86"`)
-	req.Header.Set("sec-ch-ua-bitness", `"64"`)
-	req.Header.Set("sec-ch-ua-mobile", "?0")
-	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
-	req.Header.Set("sec-fetch-site", "same-origin")
-	req.Header.Set("oai-device-id", c.deviceID)
-	req.Header.Set("oai-session-id", c.sessionID)
-	req.Header.Set("oai-language", "zh-CN")
-	if operation == "bootstrap" {
-		req.Header.Set("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-		req.Header.Set("sec-fetch-dest", "document")
-		req.Header.Set("sec-fetch-mode", "navigate")
-		req.Header.Set("sec-fetch-site", "none")
-		req.Header.Set("sec-fetch-user", "?1")
-		req.Header.Set("upgrade-insecure-requests", "1")
-	} else {
-		req.Header.Set("accept", "application/json, text/plain, */*")
-		req.Header.Set("sec-fetch-dest", "empty")
-		req.Header.Set("sec-fetch-mode", "cors")
-		req.Header.Set("x-openai-target-path", path)
-		req.Header.Set("x-openai-target-route", strings.Split(path, "?")[0])
-	}
-	if c.cookie != "" {
-		req.Header.Set("cookie", c.cookie)
-	}
-	if method == http.MethodPost {
-		req.Header.Set("content-type", "application/json")
-	}
+	c.setRequestHeaders(req, path, operation == "bootstrap")
 	resp, err := c.doer.Do(req)
 	if err != nil {
 		return nil, classifyTransport(operation, err)

@@ -351,7 +351,7 @@ func (c *Client) downloadImage(downloadURL string) ([]byte, error) {
 	req.Header.Set("origin", c.baseURL)
 	req.Header.Set("referer", c.baseURL+"/")
 	req.Header.Set("user-agent", c.userAgent)
-	req.Header.Set("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7")
+	req.Header.Set("accept-language", browserAcceptLanguage)
 	req.Header.Set("cache-control", "no-cache")
 	req.Header.Set("pragma", "no-cache")
 	req.Header.Set("priority", "u=1, i")
@@ -365,7 +365,7 @@ func (c *Client) downloadImage(downloadURL string) ([]byte, error) {
 	req.Header.Set("sec-fetch-site", "same-origin")
 	req.Header.Set("oai-device-id", c.deviceID)
 	req.Header.Set("oai-session-id", c.sessionID)
-	req.Header.Set("oai-language", "zh-CN")
+	req.Header.Set("oai-language", browserLanguage)
 	if c.cookie != "" {
 		req.Header.Set("cookie", c.cookie)
 	}

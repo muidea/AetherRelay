@@ -37,6 +37,17 @@ function harness(options={}){
   return {context,requests,messages,reloads};
 }
 
+test('Web device identity failure stays visible without changing healthy account badges',()=>{
+  const {context:c}=harness();
+  vm.runInContext(functionSource('webDeviceIdentityBadge'),c);
+  assert.equal(c.webDeviceIdentityBadge({id:'healthy'}),'');
+  const rendered=c.webDeviceIdentityBadge({device_identity_error:'invalid_device_identity'});
+  assert.match(rendered,/设备身份异常 · 已停止调度/);
+  assert.match(rendered,/更新凭据或启用账号不会解除此限制/);
+  assert.match(source,/webDeviceIdentityBadge\(account\)/);
+  assert.match(source,/webDeviceIdentityBadge\(a\)/);
+});
+
 test('unified account fingerprint control exposes off and scoped modes',()=>{
   const {context:c}=harness();
   const off=c.codexFingerprintControl({id:'codex-1',fingerprint_mode:'off'});

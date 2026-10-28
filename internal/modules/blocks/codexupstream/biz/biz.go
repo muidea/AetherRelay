@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -86,17 +87,20 @@ type websocketUpdate struct {
 }
 
 type websocketSession struct {
-	observationMu      sync.Mutex
-	handshake          events.HTTPAttempt
-	attempt            events.HTTPAttempt
-	turn               *responseStream
-	published          bool
-	archiveFullContent bool
-	fallback           *httpWebsocketSession
-	conn               *wsclient.Conn
-	cancel             context.CancelFunc
-	updates            chan websocketUpdate
-	writeMu            sync.Mutex
+	observationMu       sync.Mutex
+	handshake           events.HTTPAttempt
+	attempt             events.HTTPAttempt
+	turn                *responseStream
+	published           bool
+	diagnosticPublished bool
+	archiveFullContent  bool
+	fallback            *httpWebsocketSession
+	conn                *wsclient.Conn
+	cancel              context.CancelFunc
+	updates             chan websocketUpdate
+	writeMu             sync.Mutex
+	// Protected by Upstream.mu; only closed native readers have a drain timer.
+	drainTimer *time.Timer
 }
 
 type Upstream struct {
@@ -183,7 +187,11 @@ func (s *Upstream) BeginShutdown(context.Context) *cd.Error {
 	for _, cancel := range s.active {
 		cancelers = append(cancelers, cancel)
 	}
-	for _, session := range s.websockets {
+	for id, session := range s.websockets {
+		if session.drainTimer != nil {
+			session.drainTimer.Stop()
+			delete(s.websockets, id)
+		}
 		cancelers = append(cancelers, session.cancel)
 		if session.conn != nil {
 			conn := session.conn
@@ -319,6 +327,9 @@ func (s *Upstream) handleWSSend(ev event.Event, result event.Result) {
 	err := session.conn.WriteMessage(wsclient.TextMessage, payload)
 	session.writeMu.Unlock()
 	if err != nil {
+		session.noteWebsocketFailure(ev.Context(), "write", err)
+		attempt = session.observePayload(nil, true)
+		slog.WarnContext(ev.Context(), "Codex websocket write failed", append([]any{"error_class", classifyRequestTransport(ev.Context(), err), "transport_reason", attempt.Response.TransportReason}, attempt.Response.WebsocketDiagnostics.LogAttrs()...)...)
 		result.Set(events.WSSendResult{Attempt: attempt, ErrorClass: classifyRequestTransport(ev.Context(), err)}, nil)
 		return
 	}
@@ -346,8 +357,12 @@ func (s *Upstream) handleWSPull(ev event.Event, result event.Result) {
 	select {
 	case update, open := <-session.updates:
 		if !open {
+			s.closeWebsocket(cmd.SessionID)
 			result.Set(events.WSPullResult{Done: true}, nil)
 			return
+		}
+		if update.done {
+			s.closeWebsocket(cmd.SessionID)
 		}
 		result.Set(events.WSPullResult{Attempt: update.attempt, Payload: update.payload, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
 	case <-time.After(timeout):
@@ -404,23 +419,29 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 	defer func() {
 		session.cancel()
 		<-pingDone
-		s.mu.Lock()
-		if s.websockets[id] == session {
-			delete(s.websockets, id)
-		}
-		s.mu.Unlock()
 		close(session.updates)
+		s.retainWebsocketUpdates(id, session, 30*time.Second)
 	}()
 	for {
 		_ = session.conn.SetReadDeadline(time.Now().Add(upstreamIdleTimeout))
 		messageType, payload, err := session.conn.ReadMessage()
 		if err != nil {
+			session.noteWebsocketFailure(ctx, "read", err)
+			attempt := session.observePayload(nil, true)
+			diagnostic := attempt.Response.WebsocketDiagnostics
+			if diagnostic.WebsocketFailureStage == "" {
+				diagnostic = websocketFailure(ctx, "read", err, session.handshake.Response.WebsocketDiagnostics).diagnostic
+			}
+			if attempt.Request.URL != "" && attempt.Response.TerminalEvent == "" {
+				slog.WarnContext(ctx, "Codex websocket read failed", append([]any{"error_class", classifyTransport(err), "transport_reason", attempt.Response.TransportReason}, diagnostic.LogAttrs()...)...)
+			}
 			select {
-			case session.updates <- websocketUpdate{attempt: session.observePayload(nil, true), done: true, errorClass: classifyTransport(err)}:
+			case session.updates <- websocketUpdate{attempt: attempt, done: true, errorClass: classifyTransport(err)}:
 			case <-ctx.Done():
 			}
 			return
 		}
+		session.noteWebsocketMessage(payload)
 		if messageType != wsclient.TextMessage {
 			continue
 		}
@@ -429,6 +450,15 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 			documents = [][]byte{payload}
 		}
 		for _, document := range documents {
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(document, &envelope); err != nil {
+				// Preserve native forwarding/error policy; observe the invalid frame.
+				session.noteWebsocketFailure(ctx, "decode", err)
+				observed := websocketFailure(ctx, "decode", err, transport.WebsocketDiagnostics{WebsocketMessageLimitBytes: session.handshake.Response.WebsocketMessageLimitBytes, WebsocketLastMessageObserved: true, WebsocketLastMessageBytes: int64(len(payload))})
+				slog.WarnContext(ctx, "Codex websocket decode failed", append([]any{"diagnostic_only", true, "transport_reason", observed.reason}, observed.diagnostic.LogAttrs()...)...)
+			}
 			class, observation := websocketTerminalFailure(document)
 			select {
 			case session.updates <- websocketUpdate{attempt: session.observePayload(document, false), payload: document, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation}:
@@ -444,10 +474,36 @@ func (s *Upstream) websocket(id string) *websocketSession {
 	defer s.mu.Unlock()
 	return s.websockets[id]
 }
+
+// Keep buffered frames and the final read failure addressable until Pull drains
+// them. The timer bounds abandoned sessions; completed turns on a live socket
+// never enter this path. Retained sessions still count toward local capacity.
+func (s *Upstream) retainWebsocketUpdates(id string, session *websocketSession, retention time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.websockets[id] != session {
+		return
+	}
+	if s.stopping {
+		delete(s.websockets, id)
+		return
+	}
+	session.drainTimer = time.AfterFunc(retention, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.websockets[id] == session {
+			delete(s.websockets, id)
+		}
+	})
+}
+
 func (s *Upstream) closeWebsocket(id string) bool {
 	s.mu.Lock()
 	session := s.websockets[id]
 	delete(s.websockets, id)
+	if session != nil && session.drainTimer != nil {
+		session.drainTimer.Stop()
+	}
 	s.mu.Unlock()
 	if session == nil {
 		return false
@@ -496,6 +552,7 @@ func (s *Upstream) completeBounded(ev event.Event, result event.Result, maxWireB
 	}
 	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes, &attempt.Response)
 	if err != nil {
+		attempt.Response.WebsocketDiagnostics = attempt.Response.WebsocketDiagnostics.Merge(websocketDiagnostic(err))
 		attempt.Response.TransportReason = completedTransportReason(class, err)
 		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
 		return
@@ -713,6 +770,7 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 				sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorProtocol, transportReason: transport.EOF})
 				return
 			}
+			stream.observeWebsocketFailure(err)
 			sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: classifyRequestTransport(ctx, err), transportReason: transportReason(err)})
 			return
 		}

@@ -23,16 +23,24 @@ type Error struct {
 	Class      ErrorClass
 	Operation  string
 	StatusCode int
+	Code       string
 	Detail     string
 	Cause      error
 }
 
 func (e *Error) Error() string {
+	detail := e.Detail
+	if e.Code != "" {
+		detail = strings.TrimSpace(e.Code + ": " + detail)
+	}
 	if e.StatusCode != 0 {
-		if e.Detail != "" {
-			return fmt.Sprintf("%s: HTTP %d (%s): %s", e.Operation, e.StatusCode, e.Class, e.Detail)
+		if detail != "" {
+			return fmt.Sprintf("%s: HTTP %d (%s): %s", e.Operation, e.StatusCode, e.Class, detail)
 		}
 		return fmt.Sprintf("%s: HTTP %d (%s)", e.Operation, e.StatusCode, e.Class)
+	}
+	if detail != "" {
+		return fmt.Sprintf("%s: %s: %s", e.Operation, e.Class, detail)
 	}
 	return fmt.Sprintf("%s: %s: %v", e.Operation, e.Class, e.Cause)
 }

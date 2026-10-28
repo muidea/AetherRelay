@@ -124,11 +124,13 @@ func TestSearchUsesDifferentRootForEachRequest(t *testing.T) {
 func TestSearchRetriesPrepareWithFreshClient(t *testing.T) {
 	first := &prepareEOFDoer{}
 	second := &searchDoer{}
-	client := newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", first)
+	client := newWithDoer(Config{AccessToken: "token", DeviceID: testDeviceID}, "https://chatgpt.com", first)
 	created := 0
+	var retryClient *Client
 	client.newSearchClient = func() (*Client, error) {
 		created++
-		return newWithDoer(Config{AccessToken: "token"}, "https://chatgpt.com", second), nil
+		retryClient = newWithDoer(Config{AccessToken: "token", DeviceID: testDeviceID}, "https://chatgpt.com", second)
+		return retryClient, nil
 	}
 
 	result, err := client.Search(context.Background(), SearchRequest{Model: "gpt-5", Query: "retry once"})
@@ -137,6 +139,9 @@ func TestSearchRetriesPrepareWithFreshClient(t *testing.T) {
 	}
 	if first.prepareCalls != 1 || created != 1 || second.prepare == nil {
 		t.Fatalf("first_prepare=%d fresh_clients=%d second_prepare=%v", first.prepareCalls, created, second.prepare != nil)
+	}
+	if retryClient == nil || retryClient.deviceID != client.deviceID || retryClient.sessionID == client.sessionID {
+		t.Fatal("safe retry must keep device but create a new session")
 	}
 }
 

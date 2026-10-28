@@ -102,7 +102,7 @@ func TestCompletePropagatesValidatedImagesToUpstream(t *testing.T) {
 
 	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
 	accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
-		result.Set(accevents.AcquireTextTokenResult{AccessToken: "test-token", Account: accevents.AccountView{ID: "account-1"}}, nil)
+		result.Set(accevents.AcquireTextTokenResult{AccessToken: "test-token", Account: accevents.AccountView{ID: "account-1", DeviceID: "text-device"}}, nil)
 	})
 	accounts.Subscribe(accevents.TopicRecordTextResult, func(_ event.Event, result event.Result) {
 		result.Set(accevents.RecordTextResultResult{}, nil)
@@ -110,7 +110,7 @@ func TestCompletePropagatesValidatedImagesToUpstream(t *testing.T) {
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	upstream.Subscribe(upevents.TopicCompleteText, func(ev event.Event, result event.Result) {
 		command := ev.Data().(upevents.CompleteTextCommand)
-		if len(command.Messages) != 1 || len(command.Messages[0].Images) != 1 || string(command.Messages[0].Images[0]) != "image-bytes" {
+		if command.DeviceID != "text-device" || len(command.Messages) != 1 || len(command.Messages[0].Images) != 1 || string(command.Messages[0].Images[0]) != "image-bytes" {
 			t.Fatalf("command=%+v", command)
 		}
 		result.Set(upevents.CompleteTextResult{Text: "ok"}, nil)
@@ -363,7 +363,7 @@ func TestChatGPTEmitFailureUsesCancelTimingBeforeAccountSettlement(t *testing.T)
 		result.Set(upevents.CancelTextResult{Cancelled: true, Generation: sample}, nil)
 	})
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
-	out, emitted, err := proxy.streamChatGPTTextOnce(context.Background(), "token", "", chatgpttext.Request{Model: "model"}, func(chatgpttext.Delta) error { return errors.New("client write failed") })
+	out, emitted, err := proxy.streamChatGPTTextOnce(context.Background(), "token", "", "test-device", chatgpttext.Request{Model: "model"}, func(chatgpttext.Delta) error { return errors.New("client write failed") })
 	if err == nil || !emitted || out.Text != "hello" || out.Generation != sample {
 		t.Fatal(out, emitted, err)
 	}

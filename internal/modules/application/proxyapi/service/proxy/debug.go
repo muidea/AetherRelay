@@ -51,6 +51,7 @@ type upstreamDebugInfo struct {
 }
 
 type upstreamResponseDebugInfo struct {
+	transport.WebsocketDiagnostics
 	Transport            string `json:"upstream_transport,omitempty"`
 	FallbackReason       string `json:"transport_fallback_reason,omitempty"`
 	WebsocketRequestSent bool   `json:"websocket_request_sent,omitempty"`
@@ -348,7 +349,8 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		round.SetUpstreamHeaders(0, "", -1, "", 0)
 	}
 	responseInfo := upstreamResponseDebugInfo{
-		Transport: attempt.Response.Transport, FallbackReason: attempt.Response.FallbackReason, WebsocketRequestSent: attempt.Response.WebsocketRequestSent,
+		WebsocketDiagnostics: attempt.Response.WebsocketDiagnostics.Safe(),
+		Transport:            attempt.Response.Transport, FallbackReason: attempt.Response.FallbackReason, WebsocketRequestSent: attempt.Response.WebsocketRequestSent,
 		Observation:                attempt.Response.Observation,
 		GenerationBuffered:         attempt.Response.GenerationBuffered,
 		FirstClientEventDurationMS: attempt.Response.FirstClientEventDurationMS, ReadObserved: attempt.Response.ReadObserved,

@@ -1018,6 +1018,7 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		}
 		if failure != nil {
 			mergeCodexStreamProgress(&failure.Attempt, upevents.HTTPResponseObservation{ReadObserved: observedAttempt.Response.ReadObserved,
+				WebsocketDiagnostics: observedAttempt.Response.WebsocketDiagnostics,
 				FirstOutputAt:        observedAttempt.Response.FirstOutputAt,
 				GenerationDuration:   observedAttempt.Response.GenerationDuration,
 				GenerationPartial:    observedAttempt.Response.GenerationPartial,
@@ -1309,6 +1310,7 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 			EventCount:           attempt.Response.EventCount,
 			WireBytes:            attempt.Response.WireBytes,
 			TransportReason:      attempt.Response.TransportReason.Safe(),
+			WebsocketDiagnostics: attempt.Response.WebsocketDiagnostics.Safe(),
 			Observed:             attempt.Response.Observed, At: attempt.Response.At, Status: attempt.Response.Status,
 			ContentLength: attempt.Response.ContentLength, DurationMS: attempt.Response.DurationMS,
 			Headers: toCodexHeaders(attempt.Response.Headers),
@@ -1401,6 +1403,10 @@ func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure
 }
 
 func mergeCodexStreamProgress(attempt *codexresponses.HTTPAttempt, progress upevents.HTTPResponseObservation) {
+	attempt.Response.WebsocketDiagnostics = attempt.Response.WebsocketDiagnostics.Merge(progress.WebsocketDiagnostics)
+	if attempt.Response.TransportReason == "" && progress.TransportReason != "" {
+		attempt.Response.TransportReason = progress.TransportReason.Safe()
+	}
 	if progress.UpstreamRequestModel != "" {
 		attempt.Response.Observation = progress.Observation
 	}

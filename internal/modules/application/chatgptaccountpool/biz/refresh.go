@@ -239,6 +239,7 @@ func (s *Account) refreshAccount(account events.AccountView, source string) erro
 	defer cancel()
 	result := s.SendEvent(event.NewEventWithContext(upevents.TopicGetUserInfo, s.ID(), upcommon.UnitID, nil, ctx, upevents.GetUserInfoCommand{
 		AccessToken: account.AccessToken,
+		DeviceID:    account.DeviceID,
 		Proxy:       account.Proxy,
 	}))
 	value, err := result.Get()

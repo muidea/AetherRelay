@@ -232,8 +232,8 @@ func textConversationPayload(request TextRequest, inputs []preparedTextMessage) 
 		ParentMessageID:            parentMessageID,
 		ForceUseSSE:                true,
 		HistoryAndTrainingDisabled: true,
-		Timezone:                   "Asia/Shanghai",
-		TimezoneOffsetMins:         -480,
+		Timezone:                   browserTimezone,
+		TimezoneOffsetMins:         browserTimezoneOffsetMinutes,
 		VariantPurpose:             "comparison_implicit",
 		WebsocketRequestID:         uuid.NewString(),
 		Suggestions:                []string{},
@@ -370,6 +370,23 @@ func parseTextSSEObserved(ctx context.Context, reader io.Reader, emit func(TextD
 		if payload == "[DONE]" {
 			clock.Finish(at)
 			result.Done = true
+			return
+		}
+		if failure := parseSSEError("text_conversation", payload); failure != nil {
+			var anchor struct {
+				ConversationID string `json:"conversation_id"`
+				Value          struct {
+					ConversationID string `json:"conversation_id"`
+				} `json:"v"`
+			}
+			_ = json.Unmarshal([]byte(payload), &anchor)
+			if result.ConversationID == "" {
+				result.ConversationID = bounded(anchor.ConversationID, 512)
+				if result.ConversationID == "" {
+					result.ConversationID = bounded(anchor.Value.ConversationID, 512)
+				}
+			}
+			emitErr = failure
 			return
 		}
 		var patch textSSEPatch

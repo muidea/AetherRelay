@@ -110,7 +110,7 @@ func (c *Client) putUpload(uploadURL string, data []byte, mimeType string) error
 	req.Header.Set("referer", c.baseURL+"/")
 	req.Header.Set("user-agent", c.userAgent)
 	req.Header.Set("accept", "application/json, text/plain, */*")
-	req.Header.Set("accept-language", "en-US,en;q=0.9")
+	req.Header.Set("accept-language", browserAcceptLanguage)
 	response, err := c.doer.Do(req)
 	if err != nil {
 		return classifyTransport("image_upload_put", err)
