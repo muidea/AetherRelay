@@ -151,10 +151,12 @@ func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.
 		ObservedAt: now.Format(time.RFC3339Nano),
 		ExpiresAt:  now.Add(codexUsageSnapshotTTL).Format(time.RFC3339Nano),
 		Windows:    make([]codexevents.UsageWindow, 0, len(usage.Windows)),
+		Groups:     usage.Groups,
 	}
 	for _, window := range usage.Windows {
 		snapshot.Windows = append(snapshot.Windows, codexevents.UsageWindow{
 			ID:                window.ID,
+			GroupID:           window.GroupID,
 			Label:             window.Label,
 			Scope:             window.Scope,
 			Model:             window.Model,

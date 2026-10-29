@@ -1,7 +1,11 @@
 // Package events defines the Codex OAuth account-pool owner's typed EventHub contract.
 package events
 
-import "time"
+import (
+	"time"
+
+	"aetherrelay/internal/pkg/aetherrelaycodex"
+)
 
 const (
 	TopicList                      = "aetherrelay.codex.accountpool.command.list"
@@ -116,10 +120,14 @@ type CooldownView struct {
 // ModelAvailabilityView is current Responses admission, not a live probe or
 // a promise of upstream access/available concurrency.
 type ModelAvailabilityView struct {
-	Model     string `json:"model"`
-	Available bool   `json:"available"`
-	Reason    string `json:"reason,omitempty"`
-	Until     string `json:"until,omitempty"`
+	Model                   string `json:"model"`
+	Available               bool   `json:"available"`
+	Reason                  string `json:"reason,omitempty"`
+	Until                   string `json:"until,omitempty"`
+	UsageLimitScope         string `json:"usage_limit_scope,omitempty"`
+	UsageLimitWindow        string `json:"usage_limit_window,omitempty"`
+	UsageLimitWindowSeconds int    `json:"usage_limit_window_seconds,omitempty"`
+	UsageLimitResetAt       string `json:"usage_limit_reset_at,omitempty"`
 }
 
 // QuotaObservation is an upstream-observed limit state. An empty Model denotes
@@ -334,8 +342,11 @@ type AccountModelSnapshot struct {
 // UsageWindow is a bounded projection of one upstream Codex usage window.
 // It conveys relative utilization, not token or request counts. ID and Label
 // are presentation metadata; no raw upstream payload crosses this contract.
+// Endpoint projections derive window status from known utilization; raw group
+// allowance is retained separately in AccountUsageSnapshot.Groups.
 type UsageWindow struct {
 	ID                string  `json:"id"`
+	GroupID           string  `json:"group_id,omitempty"`
 	Label             string  `json:"label,omitempty"`
 	Scope             string  `json:"scope,omitempty"`
 	Model             string  `json:"model,omitempty"`
@@ -353,16 +364,17 @@ type UsageWindow struct {
 }
 
 // AccountUsageSnapshot is the durable, redacted usage observation for a
-// single account. Window expiry controls admission; failed refreshes retain
+// single account. Window/group expiry controls admission; failed refreshes retain
 // prior observations. Complete denotes a full usage-endpoint response, not
 // response headers. StartedAt is captured before issuing that observation.
 type AccountUsageSnapshot struct {
-	StartedAt  string        `json:"started_at,omitempty"`
-	Complete   bool          `json:"complete,omitempty"`
-	PlanType   string        `json:"plan_type,omitempty"`
-	Windows    []UsageWindow `json:"windows,omitempty"`
-	ObservedAt string        `json:"observed_at"`
-	ExpiresAt  string        `json:"expires_at,omitempty"`
+	StartedAt  string                             `json:"started_at,omitempty"`
+	Complete   bool                               `json:"complete,omitempty"`
+	PlanType   string                             `json:"plan_type,omitempty"`
+	Windows    []UsageWindow                      `json:"windows,omitempty"`
+	Groups     []aetherrelaycodex.UsageLimitGroup `json:"groups,omitempty"`
+	ObservedAt string                             `json:"observed_at"`
+	ExpiresAt  string                             `json:"expires_at,omitempty"`
 }
 
 type DiscoveryCandidate struct {

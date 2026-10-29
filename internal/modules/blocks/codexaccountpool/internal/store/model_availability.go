@@ -127,6 +127,9 @@ func modelAvailability(item *account, model string, now time.Time) events.ModelA
 		}
 		if view.Reason == "" && usageLimitCooling(item, now, model) {
 			view.Reason = "usage_limit"
+			detail := usageLimitDetails(item, model, now)
+			view.UsageLimitScope, view.UsageLimitWindow = detail.UsageLimitScope, detail.UsageLimitWindow
+			view.UsageLimitWindowSeconds, view.UsageLimitResetAt = detail.UsageLimitWindowSeconds, detail.UsageLimitResetAt
 		}
 		view.Available = view.Reason == ""
 	}

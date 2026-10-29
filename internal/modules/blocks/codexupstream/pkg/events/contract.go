@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"aetherrelay/internal/pkg/aetherrelaycodex"
+
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
@@ -392,6 +394,7 @@ type GetUsageCommand struct {
 
 type UsageWindow struct {
 	ID                string
+	GroupID           string
 	Label             string
 	Scope             string
 	Model             string
@@ -408,5 +411,6 @@ type UsageWindow struct {
 type GetUsageResult struct {
 	PlanType   string
 	Windows    []UsageWindow
+	Groups     []aetherrelaycodex.UsageLimitGroup
 	ErrorClass ErrorClass
 }

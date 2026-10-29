@@ -19,6 +19,7 @@ import (
 	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	codexupcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	codexupevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -551,8 +552,8 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 		if !ok || command.AccessToken != "token-1" || command.AccountIDHeader != "upstream-account" || command.Proxy != "http://proxy.invalid:8080" || command.ClientIdentity.Version != "0.162.1" {
 			t.Fatalf("usage command=%#v", ev.Data())
 		}
-		result.Set(codexupevents.GetUsageResult{PlanType: "pro", Windows: []codexupevents.UsageWindow{{
-			ID: "standard-primary", UsedPercent: 40, UsedPercentKnown: true, WindowSeconds: 18000, Allowed: true, AllowedKnown: true,
+		result.Set(codexupevents.GetUsageResult{PlanType: "pro", Groups: []aetherrelaycodex.UsageLimitGroup{{ID: "standard", Scope: "standard", AllowedKnown: true, Allowed: true}}, Windows: []codexupevents.UsageWindow{{
+			ID: "standard-primary", GroupID: "standard", UsedPercent: 40, UsedPercentKnown: true, WindowSeconds: 18000, Allowed: true, AllowedKnown: true,
 		}}}, nil)
 	})
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background), config: config.Config{CodexOAuth: config.CodexOAuthConfig{}}, codexUsageJobs: map[string]proxyevents.CodexUsageProgress{}}
@@ -570,7 +571,7 @@ func TestManualCodexUsageRefreshUsesAccountScopedCredentials(t *testing.T) {
 			if progress.Total != 1 || progress.Processed != 1 || progress.Succeeded != 1 || progress.Failed != 0 || len(snapshots) != 1 {
 				t.Fatalf("progress=%+v snapshots=%+v", progress, snapshots)
 			}
-			if snapshot := snapshots[0].Snapshot; !snapshot.Complete || snapshot.StartedAt == "" || snapshot.PlanType != "pro" || len(snapshot.Windows) != 1 || snapshot.Windows[0].UsedPercent != 40 || snapshot.ExpiresAt == "" {
+			if snapshot := snapshots[0].Snapshot; !snapshot.Complete || snapshot.StartedAt == "" || snapshot.PlanType != "pro" || len(snapshot.Windows) != 1 || snapshot.Windows[0].UsedPercent != 40 || snapshot.Windows[0].GroupID != "standard" || len(snapshot.Groups) != 1 || !snapshot.Groups[0].AllowedKnown || !snapshot.Groups[0].Allowed || snapshot.ExpiresAt == "" {
 				t.Fatalf("snapshot=%+v", snapshot)
 			}
 			return

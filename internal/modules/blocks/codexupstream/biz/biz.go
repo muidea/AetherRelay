@@ -703,12 +703,12 @@ func (s *Upstream) handleGetUsage(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex usage command"))
 		return
 	}
-	planType, windows, class, err := getUsage(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.ClientIdentity)
+	planType, windows, groups, class, err := getUsage(ev.Context(), cmd.AccessToken, cmd.AccountIDHeader, cmd.Proxy, cmd.ClientIdentity)
 	if err != nil {
 		result.Set(events.GetUsageResult{ErrorClass: class}, nil)
 		return
 	}
-	result.Set(events.GetUsageResult{PlanType: planType, Windows: windows}, nil)
+	result.Set(events.GetUsageResult{PlanType: planType, Windows: windows, Groups: groups}, nil)
 }
 
 func (s *Upstream) runStream(ctx context.Context, streamID string, stream *responseStream, body io.ReadCloser, maxLine int64) {
@@ -969,15 +969,15 @@ func listModels(ctx context.Context, accessToken, accountID, proxy string, ident
 	return models, "", nil
 }
 
-func getUsage(ctx context.Context, accessToken, accountID, proxy string, identities ...events.ClientIdentity) (string, []events.UsageWindow, events.ErrorClass, error) {
+func getUsage(ctx context.Context, accessToken, accountID, proxy string, identities ...events.ClientIdentity) (string, []events.UsageWindow, []aetherrelaycodex.UsageLimitGroup, events.ErrorClass, error) {
 	identity := firstClientIdentity(identities)
 	client, err := newHTTPClient(proxy)
 	if err != nil {
-		return "", nil, events.ErrorProtocol, err
+		return "", nil, nil, events.ErrorProtocol, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
 	if err != nil {
-		return "", nil, events.ErrorProtocol, err
+		return "", nil, nil, events.ErrorProtocol, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
@@ -990,24 +990,24 @@ func getUsage(ctx context.Context, accessToken, accountID, proxy string, identit
 	}
 	response, err := client.Do(req)
 	if err != nil {
-		return "", nil, classifyTransport(err), err
+		return "", nil, nil, classifyTransport(err), err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", nil, classifyStatus(response.StatusCode), fmt.Errorf("Codex usage request returned %d", response.StatusCode)
+		return "", nil, nil, classifyStatus(response.StatusCode), fmt.Errorf("Codex usage request returned %d", response.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil {
-		return "", nil, classifyTransport(err), err
+		return "", nil, nil, classifyTransport(err), err
 	}
 	if len(body) > 1<<20 {
-		return "", nil, events.ErrorProtocol, fmt.Errorf("Codex usage response exceeds limit")
+		return "", nil, nil, events.ErrorProtocol, fmt.Errorf("Codex usage response exceeds limit")
 	}
-	planType, windows, err := parseUsage(body, time.Now().UTC())
+	planType, windows, groups, err := parseUsage(body, time.Now().UTC())
 	if err != nil {
-		return "", nil, events.ErrorProtocol, err
+		return "", nil, nil, events.ErrorProtocol, err
 	}
-	return planType, windows, "", nil
+	return planType, windows, groups, "", nil
 }
 
 func firstClientIdentity(values []events.ClientIdentity) events.ClientIdentity {
@@ -1058,18 +1058,19 @@ type usageRawWindow struct {
 	ResetAtCamel            json.RawMessage `json:"resetAt"`
 }
 
-func parseUsage(body []byte, now time.Time) (string, []events.UsageWindow, error) {
+func parseUsage(body []byte, now time.Time) (string, []events.UsageWindow, []aetherrelaycodex.UsageLimitGroup, error) {
 	var payload usageResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", nil, fmt.Errorf("decode Codex usage: %w", err)
+		return "", nil, nil, fmt.Errorf("decode Codex usage: %w", err)
 	}
 	planType := strings.TrimSpace(payload.PlanType)
 	if planType == "" {
 		planType = strings.TrimSpace(payload.PlanTypeCamel)
 	}
 	windows := make([]events.UsageWindow, 0, 8)
-	appendUsageWindows(&windows, "standard", "", firstUsageRateLimit(payload.RateLimit, payload.RateLimitCamel), now)
-	appendUsageWindows(&windows, "code-review", "", firstUsageRateLimit(payload.CodeReviewRateLimit, payload.CodeReviewRateLimitCamel), now)
+	groups := make([]aetherrelaycodex.UsageLimitGroup, 0, 4)
+	appendUsageWindows(&windows, &groups, "standard", "", firstUsageRateLimit(payload.RateLimit, payload.RateLimitCamel), now)
+	appendUsageWindows(&windows, &groups, "code-review", "", firstUsageRateLimit(payload.CodeReviewRateLimit, payload.CodeReviewRateLimitCamel), now)
 	additional := payload.AdditionalRateLimits
 	if len(additional) == 0 {
 		additional = payload.AdditionalRateLimitsCamel
@@ -1079,8 +1080,8 @@ func parseUsage(body []byte, now time.Time) (string, []events.UsageWindow, error
 		if name == "" {
 			name = fmt.Sprintf("additional-%d", index+1)
 		}
-		firstWindow := len(windows)
-		appendUsageWindows(&windows, "additional-"+usageIdentifier(name, index+1), name, firstUsageRateLimit(item.RateLimit, item.RateLimitCamel), now)
+		firstWindow, firstGroup := len(windows), len(groups)
+		appendUsageWindows(&windows, &groups, "additional-"+usageIdentifier(name, index+1), name, firstUsageRateLimit(item.RateLimit, item.RateLimitCamel), now)
 		// Only an explicit exact model identifies an additional quota's scope.
 		// Labels such as "extra credits" are not account-wide restrictions.
 		model := firstNonEmpty(item.MeteredFeature, item.MeteredFeatureCamel)
@@ -1088,13 +1089,20 @@ func parseUsage(body []byte, now time.Time) (string, []events.UsageWindow, error
 			for i := firstWindow; i < len(windows); i++ {
 				windows[i].Model = model
 			}
+			for i := firstGroup; i < len(groups); i++ {
+				groups[i].Model = model
+			}
 		}
 	}
-	if len(windows) == 0 {
-		return "", nil, fmt.Errorf("Codex usage response has no usage windows")
+	hasGroupStatus := false
+	for _, group := range groups {
+		hasGroupStatus = hasGroupStatus || group.AllowedKnown || group.LimitReachedKnown
+	}
+	if len(windows) == 0 && !hasGroupStatus {
+		return "", nil, nil, fmt.Errorf("Codex usage response has no usage windows")
 	}
 	sort.Slice(windows, func(i, j int) bool { return windows[i].ID < windows[j].ID })
-	return planType, windows, nil
+	return planType, windows, groups, nil
 }
 
 func firstUsageRateLimit(values ...*usageRateLimit) *usageRateLimit {
@@ -1115,15 +1123,13 @@ func firstUsageWindow(values ...*usageRawWindow) *usageRawWindow {
 	return nil
 }
 
-func appendUsageWindows(target *[]events.UsageWindow, scope, label string, limit *usageRateLimit, now time.Time) {
+func appendUsageWindows(target *[]events.UsageWindow, groups *[]aetherrelaycodex.UsageLimitGroup, scope, label string, limit *usageRateLimit, now time.Time) {
 	if limit == nil {
 		return
 	}
 	allowed, allowedKnown := rawBool(limit.Allowed)
 	limitReached, limitKnown := rawBool(firstRaw(limit.LimitReached, limit.LimitReachedCamel))
-	if allowedKnown && !allowed {
-		limitReached = true
-	}
+	*groups = append(*groups, aetherrelaycodex.UsageLimitGroup{ID: scope, Scope: usageWindowScope(scope), Allowed: allowed, AllowedKnown: allowedKnown, LimitReached: limitReached, LimitReachedKnown: limitKnown})
 	for _, item := range []struct {
 		name   string
 		window *usageRawWindow
@@ -1136,25 +1142,24 @@ func appendUsageWindows(target *[]events.UsageWindow, scope, label string, limit
 		}
 		usedPercent, usedKnown := rawFloat(firstRaw(item.window.UsedPercent, item.window.UsedPercentCamel))
 		resetAt := usageResetAt(item.window, now)
-		if !usedKnown && limitReached && resetAt != "" {
-			usedPercent, usedKnown = 100, true
-		}
+		// Group rejection never fabricates utilization for either window.
 		windowSeconds, _ := rawPositiveInt(firstRaw(item.window.LimitWindowSeconds, item.window.LimitWindowSecondsCamel))
 		if windowSeconds > int64(366*24*60*60) {
 			windowSeconds = 0
 		}
 		*target = append(*target, events.UsageWindow{
 			ID:                scope + "-" + item.name,
+			GroupID:           scope,
 			Label:             label,
 			Scope:             usageWindowScope(scope),
 			UsedPercent:       clampPercent(usedPercent),
 			UsedPercentKnown:  usedKnown,
 			WindowSeconds:     int(windowSeconds),
 			ResetAt:           resetAt,
-			Allowed:           allowed,
-			AllowedKnown:      allowedKnown,
-			LimitReached:      limitReached,
-			LimitReachedKnown: limitKnown || allowedKnown,
+			Allowed:           usedKnown && usedPercent < 100,
+			AllowedKnown:      usedKnown,
+			LimitReached:      usedKnown && usedPercent >= 100,
+			LimitReachedKnown: usedKnown,
 		})
 	}
 }

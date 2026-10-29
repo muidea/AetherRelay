@@ -195,3 +195,43 @@ test('credential switches patch only their matching account-pool owner',async()=
   assert.deepEqual(messages.map(item=>item.message),['ChatGPT Web 凭证已禁用','Codex CLI 凭证已启用']);
   assert.equal(c.state.unified.updating.size,0);
 });
+
+test('known five-hour and weekly utilization takes priority over legacy copied group flags',()=>{
+  const {context:c}=harness();c.formatAccountDate=value=>value;
+  for(const name of ['codexUsageWindowLabel','codexUsageSnapshotBadge'])vm.runInContext(functionSource(name),c);
+  const expires_at=new Date(Date.now()+60000).toISOString();
+  const out=c.codexUsageSnapshotBadge({usage_snapshot:{expires_at,windows:[
+    {id:'standard-primary',window_seconds:18000,used_percent_known:true,used_percent:0,allowed_known:true,allowed:false,limit_reached:true},
+    {id:'standard-secondary',window_seconds:604800,used_percent_known:true,used_percent:100,allowed_known:true,allowed:false,limit_reached:true,reset_at:'weekly-reset'},
+  ]}});
+  assert.match(out,/5 小时/);assert.match(out,/剩余 100%/);
+  assert.match(out,/剩余 0% · 已达上限/);
+  assert.match(out,/预计重置于 weekly-reset/);
+  assert.equal((out.match(/已达上限/g)||[]).length,1);
+});
+test('unknown group restriction preserves unknown percentages and its own freshness',()=>{
+  const {context:c}=harness();c.formatAccountDate=value=>value;
+  for(const name of ['codexUsageWindowLabel','codexUsageSnapshotBadge'])vm.runInContext(functionSource(name),c);
+  const fresh=new Date(Date.now()+60000).toISOString(),old=new Date(Date.now()-60000).toISOString();
+  const out=c.codexUsageSnapshotBadge({usage_snapshot:{expires_at:fresh,windows:[
+    {id:'standard-primary',group_id:'standard',used_percent_known:false,reset_at:'metadata-only'},
+    {id:'additional-unknown',used_percent_known:false,limit_reached:true},
+  ],groups:[{id:'standard',scope:'standard',allowed_known:true,allowed:false,expires_at:old},{id:'extra',scope:'additional',model:'<unsafe>',limit_reached_known:true,limit_reached:true,expires_at:fresh}]}});
+  assert.match(out,/用量未知/);assert.match(out,/主窗口/);
+  assert.doesNotMatch(out,/剩余 [01]00?%|width:0%/);
+  assert.match(out,/普通模型 · 额度受限（未明确耗尽窗口） · 缓存已过期/);
+  assert.match(out,/&lt;unsafe&gt;/);assert.doesNotMatch(out,/<unsafe>/);
+});
+
+test('partial headers preserve the original group window explanation in the usage view',()=>{
+  const {context:c}=harness();c.formatAccountDate=value=>value;
+  for(const name of ['codexUsageWindowLabel','codexUsageSnapshotBadge'])vm.runInContext(functionSource(name),c);
+  const expires_at=new Date(Date.now()+60000).toISOString();
+  const out=c.codexUsageSnapshotBadge({usage_snapshot:{expires_at,windows:[
+    {id:'standard-secondary',used_percent_known:true,used_percent:20,observed_at:'new-header'},
+  ],groups:[{id:'standard',scope:'standard',allowed_known:true,allowed:false,observed_at:'full-query',expires_at,exhausted_window_id:'standard-secondary',exhausted_window_seconds:604800,reset_at:'original-weekly-reset'}]}});
+  assert.match(out,/剩余 80%/);
+  assert.match(out,/普通模型 · 周 · 已达上限 · 预计重置于 original-weekly-reset/);
+  assert.match(out,/上次观测 full-query/);
+  assert.doesNotMatch(out,/未明确耗尽窗口/);
+});

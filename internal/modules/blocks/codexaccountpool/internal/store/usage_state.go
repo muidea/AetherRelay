@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 )
 
 // Each window carries its own observation interval. A partial response cannot
@@ -31,6 +32,7 @@ func normalizeUsageSnapshot(snapshot events.AccountUsageSnapshot) events.Account
 			}
 		}
 		window.Label = bounded(window.Label, 128)
+		window.GroupID = bounded(window.GroupID, 96)
 		window.Model = bounded(window.Model, 128)
 		window.Source = bounded(window.Source, 32)
 		window.Scope = bounded(window.Scope, 32)
@@ -75,6 +77,7 @@ func normalizeUsageSnapshot(snapshot events.AccountUsageSnapshot) events.Account
 		out.Windows = append(out.Windows, window)
 	}
 	sort.Slice(out.Windows, func(i, j int) bool { return out.Windows[i].ID < out.Windows[j].ID })
+	out.Groups = normalizeUsageGroups(snapshot.Groups, out)
 	return out
 }
 
@@ -90,6 +93,13 @@ func prepareUsageSnapshot(snapshot events.AccountUsageSnapshot, source string) e
 	// Observation metadata belongs to the incoming request, not to caller-
 	// supplied per-window timestamps or a composite snapshot.
 	snapshot.Windows = append([]events.UsageWindow(nil), snapshot.Windows...)
+	snapshot.Groups = append([]aetherrelaycodex.UsageLimitGroup(nil), snapshot.Groups...)
+	for i := range snapshot.Groups {
+		snapshot.Groups[i].Source = strings.TrimSpace(source)
+		snapshot.Groups[i].ObservedAt, snapshot.Groups[i].ExpiresAt = "", ""
+		snapshot.Groups[i].ExhaustedWindowID, snapshot.Groups[i].ResetAt = "", ""
+		snapshot.Groups[i].ExhaustedWindowSeconds = 0
+	}
 	for i := range snapshot.Windows {
 		snapshot.Windows[i].Source = strings.TrimSpace(source)
 		snapshot.Windows[i].ObservedAt = ""
@@ -137,6 +147,21 @@ func mergeUsageObservations(previous *events.AccountUsageSnapshot, incoming even
 			existing.Windows = append(existing.Windows, window)
 		}
 	}
+	for _, group := range incoming.Groups {
+		found := false
+		for i, previous := range existing.Groups {
+			if group.ID == previous.ID {
+				found = true
+				if newerUsageGroup(group, previous) {
+					existing.Groups[i] = group
+				}
+				break
+			}
+		}
+		if !found {
+			existing.Groups = append(existing.Groups, group)
+		}
+	}
 	if usageObservationStart(incoming).After(usageObservationStart(existing)) {
 		existing.StartedAt = incoming.StartedAt
 		existing.ObservedAt = incoming.ObservedAt
@@ -153,7 +178,7 @@ func mergeUsageObservations(previous *events.AccountUsageSnapshot, incoming even
 func usageWindowApplies(window events.UsageWindow, model string) bool {
 	switch window.Scope {
 	case "standard":
-		return true
+		return model != "codex-auto-review"
 	case "code-review":
 		return model == "codex-auto-review"
 	case "additional":
@@ -175,7 +200,14 @@ func freshUsageSnapshot(item *account, now time.Time) (events.AccountUsageSnapsh
 		}
 	}
 	snapshot.Windows = fresh
-	return snapshot, len(fresh) > 0
+	freshGroups := snapshot.Groups[:0]
+	for _, group := range snapshot.Groups {
+		if expiry, ok := parseExpiry(group.ExpiresAt); ok && expiry.After(now) {
+			freshGroups = append(freshGroups, group)
+		}
+	}
+	snapshot.Groups = freshGroups
+	return snapshot, len(fresh) > 0 || len(freshGroups) > 0
 }
 
 func usageWindowBlocks(window events.UsageWindow, now time.Time) bool {
@@ -208,6 +240,21 @@ func usageLimitResetAt(item *account, now time.Time, models ...string) (time.Tim
 			latest = reset
 		}
 	}
+	for _, group := range snapshot.Groups {
+		if !usageWindowApplies(events.UsageWindow{Scope: group.Scope, Model: group.Model}, model) || !usageGroupBlocks(group, now) {
+			continue
+		}
+		// Group evidence survives partial replacement of its original child.
+		// Unknown group causes provide only the cache re-evaluation hint.
+		expiry, _ := parseExpiry(group.ExpiresAt)
+		reset, ok := parseExpiry(group.ResetAt)
+		if !ok || reset.After(expiry) {
+			reset = expiry
+		}
+		if reset.After(latest) {
+			latest = reset
+		}
+	}
 	return latest, !latest.IsZero()
 }
 
@@ -221,6 +268,15 @@ func windowHasHeadroom(window events.UsageWindow) bool {
 func freshQuotaHeadroom(item *account, now time.Time, model string) bool {
 	snapshot, _ := freshUsageSnapshot(item, now)
 	positive := false
+	for _, group := range snapshot.Groups {
+		if !usageWindowApplies(events.UsageWindow{Scope: group.Scope, Model: group.Model}, model) {
+			continue
+		}
+		if usageGroupBlocks(group, now) {
+			return false
+		}
+		positive = positive || group.AllowedKnown && group.Allowed
+	}
 	for _, window := range snapshot.Windows {
 		if !usageWindowApplies(window, model) {
 			continue
@@ -249,6 +305,13 @@ func singleWeeklyQuotaRecovery(snapshot events.AccountUsageSnapshot) bool {
 	if snapshot.PlanType != "prolite" {
 		return false
 	}
+	// Current endpoint projections retain raw group allowance separately;
+	// known utilization alone must not weaken the single-window contract.
+	for _, group := range snapshot.Groups {
+		if group.Scope == "standard" && (!group.AllowedKnown || !group.Allowed || !group.LimitReachedKnown || group.LimitReached) {
+			return false
+		}
+	}
 	var primary events.UsageWindow
 	count := 0
 	for _, window := range snapshot.Windows {
@@ -267,6 +330,11 @@ func reconcileQuotaRecovery(item *account, incoming events.AccountUsageSnapshot,
 	finished, completeTime := parseExpiry(incoming.ObservedAt)
 	if !incoming.Complete || !valid || !completeTime || finished.Before(started) || finished.After(now) || usageLimitCooling(item, now) {
 		return
+	}
+	for _, group := range incoming.Groups {
+		if (group.Scope == "standard" || group.Scope == "unknown" || group.Scope == "additional" && group.Model == "") && usageGroupDenied(group) {
+			return
+		}
 	}
 	// Require both healthy ordinary windows unless the full response proves
 	// the known single-weekly-window shape. Empty/partial 200s are not recovery.

@@ -33,3 +33,30 @@ test('CP-CAP-010 unknown, empty, expired snapshots and untrusted IDs',()=>{
   account.model_availability=[{model:account.model_snapshot.models[0].id,available:true}];
   out=c.codexAccountModelList(account);assert.match(out,/可用模型 0\/1/);assert.match(out,/模型快照已过期/);
 });
+
+test('quota model reason shows the exhausted weekly window and upstream reset, not cache expiry',()=>{
+  const c=harness();
+  const account={model_snapshot:{models:[{id:'gpt-6.1-sol'},{id:'blocked'},{id:'cooling'}]},model_availability:[
+    {model:'gpt-6.1-sol',reason:'usage_limit',usage_limit_scope:'standard',usage_limit_window:'standard-secondary',usage_limit_window_seconds:604800,usage_limit_reset_at:'2026-11-04T06:59:27Z',until:'cache-expiry'},
+    {model:'blocked',reason:'model_blocked'},
+    {model:'cooling',reason:'network',until:'network-retry'},
+  ]};
+  const out=c.codexAccountModelList(account);
+  assert.match(out,/周额度耗尽 · 预计重置于 2026-11-04T06:59:27Z/);
+  assert.doesNotMatch(out,/cache-expiry/);
+  assert.match(out,/管理员已禁止/);
+  assert.match(out,/网络冷却 · 恢复于 network-retry/);
+  account.model_snapshot.expires_at='2000-01-01T00:00:00Z';
+  assert.match(c.codexAccountModelList(account),/管理员已禁止/);
+});
+test('unexplained group restriction invents no reset; independent review quota is labeled and escaped',()=>{
+  const c=harness();
+  const account={model_snapshot:{models:[{id:'gpt-6.1-sol'},{id:'codex-auto-review'}]},model_availability:[
+    {model:'gpt-6.1-sol',reason:'usage_limit'},
+    {model:'codex-auto-review',reason:'usage_limit',usage_limit_scope:'code-review',usage_limit_window:'review-primary',usage_limit_window_seconds:18000,usage_limit_reset_at:'<unsafe>'},
+  ]};
+  const out=c.codexAccountModelList(account);
+  assert.match(out,/额度受限（未明确耗尽窗口）/);
+  assert.match(out,/代码审查 · 5 小时额度耗尽 · 预计重置于 &lt;unsafe&gt;/);
+  assert.doesNotMatch(out,/<unsafe>/);
+});

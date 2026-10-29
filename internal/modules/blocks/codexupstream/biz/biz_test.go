@@ -1187,9 +1187,12 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 	usageURL = server.URL + "/usage"
 	t.Cleanup(func() { usageURL = previousURL })
 
-	plan, windows, class, err := getUsage(context.Background(), "access-token", "account-header", "", selected)
+	plan, windows, groups, class, err := getUsage(context.Background(), "access-token", "account-header", "", selected)
 	if err != nil || class != "" || plan != "pro" || len(windows) != 4 {
 		t.Fatalf("usage plan=%q windows=%+v class=%q err=%v", plan, windows, class, err)
+	}
+	if len(groups) != 3 || groups[1].Scope != "code-review" || !groups[1].AllowedKnown || groups[1].Allowed {
+		t.Fatalf("groups=%+v", groups)
 	}
 	byID := map[string]events.UsageWindow{}
 	for _, window := range windows {
@@ -1198,7 +1201,7 @@ func TestGetUsageUsesAccountHeadersAndProjectsBoundedWindows(t *testing.T) {
 	if window := byID["standard-primary"]; window.Scope != "standard" || !window.LimitReachedKnown || !window.UsedPercentKnown || window.UsedPercent != 25 || window.WindowSeconds != 18000 || window.ResetAt == "" || !window.AllowedKnown || !window.Allowed {
 		t.Fatalf("standard primary=%+v", window)
 	}
-	if window := byID["code-review-primary"]; window.Scope != "code-review" || !window.LimitReachedKnown || !window.LimitReached || !window.UsedPercentKnown || window.UsedPercent != 100 || window.Allowed {
+	if window := byID["code-review-primary"]; window.Scope != "code-review" || window.LimitReachedKnown || window.LimitReached || window.UsedPercentKnown || window.AllowedKnown {
 		t.Fatalf("code-review primary=%+v", window)
 	}
 	if window := byID["additional-extra-credits-primary"]; window.Label != "extra credits" || !window.UsedPercentKnown || window.UsedPercent != 10 {
@@ -1212,8 +1215,8 @@ func TestParseUsagePreservesSingleWeeklyProliteWindow(t *testing.T) {
 		`{"plan_type":"prolite","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_after_seconds":604800}}}`,
 		`{"planType":"prolite","rateLimit":{"allowed":true,"limitReached":false,"primaryWindow":{"usedPercent":0,"limitWindowSeconds":604800,"resetAfterSeconds":604800},"secondaryWindow":null}}`,
 	} {
-		plan, windows, err := parseUsage([]byte(body), time.Now().UTC())
-		if err != nil || plan != "prolite" || len(windows) != 1 {
+		plan, windows, groups, err := parseUsage([]byte(body), time.Now().UTC())
+		if err != nil || plan != "prolite" || len(windows) != 1 || len(groups) != 1 || !groups[0].AllowedKnown || !groups[0].Allowed || !groups[0].LimitReachedKnown || groups[0].LimitReached {
 			t.Fatalf("single weekly usage plan=%q windows=%+v err=%v", plan, windows, err)
 		}
 		window := windows[0]
@@ -1226,11 +1229,11 @@ func TestParseUsagePreservesSingleWeeklyProliteWindow(t *testing.T) {
 }
 
 func TestAdditionalUsageNeedsExplicitModelScope(t *testing.T) {
-	_, windows, err := parseUsage([]byte(`{"additional_rate_limits":[
+	_, windows, groups, err := parseUsage([]byte(`{"additional_rate_limits":[
 		{"limit_name":"reserve quota","metered_feature":"gpt-reserve","rate_limit":{"allowed":false,"primary_window":{"used_percent":100}}},
 		{"limit_name":"extra credits","rate_limit":{"primary_window":{"used_percent":10}}}
 	]}`), time.Now().UTC())
-	if err != nil || len(windows) != 2 {
+	if err != nil || len(windows) != 2 || len(groups) != 2 || groups[0].Model != "gpt-reserve" || groups[1].Model != "" {
 		t.Fatalf("windows=%+v err=%v", windows, err)
 	}
 	for _, window := range windows {
@@ -1240,7 +1243,7 @@ func TestAdditionalUsageNeedsExplicitModelScope(t *testing.T) {
 		if window.Label == "reserve quota" && (window.Model != "gpt-reserve" || !window.LimitReachedKnown || !window.LimitReached) {
 			t.Fatalf("explicit model restriction lost: %+v", window)
 		}
-		if window.Label == "extra credits" && (window.Model != "" || window.LimitReachedKnown) {
+		if window.Label == "extra credits" && (window.Model != "" || !window.LimitReachedKnown || window.LimitReached) {
 			t.Fatalf("unknown metadata turned into a model/limit assertion: %+v", window)
 		}
 	}

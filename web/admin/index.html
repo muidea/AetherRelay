@@ -767,6 +767,7 @@ Object.assign(enUS,{
   "查看当前服务版本、运行状态、外部接入方式和已开放的数据面 API。":"View the service version, runtime status, external access methods, and exposed data-plane APIs.","当前版本":"Version","运行时间":"Uptime","启动时间":"Started at","Go 版本":"Go version","服务信息":"Service information","当前支持的接入方式":"Supported access methods","开放的 API 端点":"Exposed API endpoints","实际注册路由":"Registered routes","正在加载系统信息…":"Loading system information…","服务名称":"Service name","访问基址":"Base URL","服务器时间":"Server time","认证方式":"Authentication","协议":"Protocol","远程访问":"Remote access","说明":"Description","无需认证":"None","客户端 API Key":"Client API key","网络策略":"Network policy","监听地址可达":"Available on listener","仅本机":"Loopback only","已允许远程访问":"Remote access enabled","配置的网络范围":"Configured networks","无法加载系统信息":"Could not load system information","天":"d","小时":"h","分钟":"m","秒":"s"
 });
 Object.assign(enUS,{"刷新所选账号":"Refresh selected accounts","刷新账号":"Refresh account","重新认证":"Reauthenticate"});
+Object.assign(enUS,{"周额度耗尽": "Weekly quota exhausted", "5 小时额度耗尽": "5-hour quota exhausted", "额度窗口耗尽": "Quota window exhausted", "额度受限（未明确耗尽窗口）": "Quota limited (exhausted window unspecified)", "预计重置于 {time}": "Expected reset at {time}", "已达上限 · 用量未知": "Limit reached · utilization unknown", "用量未知": "Utilization unknown", "主窗口": "Primary window", "次窗口": "Secondary window", "{value} 秒窗口": "{value}-second window", "普通模型": "Standard models", "额度": "Quota"});
 Object.assign(enUS,{"上游模型不可用":"Upstream model unavailable","模型快照已过期":"Model snapshot expired","账号已禁用":"Account disabled","账号异常":"Account abnormal","缺少凭据":"Credentials missing","额度受限":"Quota limited","超时冷却":"Timeout cooldown","网络冷却":"Network cooldown","上游错误冷却":"Upstream error cooldown","可用性未知":"Availability unknown","恢复于 {time}":"Retry after {time}","可用模型 {available}/{total} · 展开核对":"Available models {available}/{total} · Expand to inspect","根据当前快照与冷却判断，不保证上游调用成功；刷新列表更新状态。":"Based on current snapshots and cooldowns, not a guarantee of upstream access. Reload the list to update status."});
 Object.assign(enUS,{"允许按邮箱替换已有的不同上游账号":"Allow replacing an existing slot with a different upstream account","默认保留不同 account_id 的工作区；仅在确认目标槽位应按唯一邮箱替换时启用。":"Different account_id workspaces are preserved by default; enable this only to replace a target selected by a unique email.","仅接受 aetherrelay.account-pool-bundle v2；同类型槽位的 account_id 重名时后者覆盖，同邮箱不同账号仍会保留。":"Only aetherrelay.account-pool-bundle v2 is accepted. For slots of the same type, the last duplicate account_id wins; distinct accounts sharing an email are preserved.","目标实例同名 Provider 处理方式":"Same-name Provider handling on target","同名覆盖（推荐）":"Overwrite same name (recommended)","仅接受 aetherrelay.provider-bundle v1；文件内同名 Provider 后者覆盖前者。安全配置更新已有 Provider 时保留原密钥。":"Only aetherrelay.provider-bundle v1 is accepted. The last same-name Provider in the file wins; safe imports preserve the existing key when updating.","导出响应缺少有效 exported_at":"Export response is missing a valid exported_at"});
 Object.assign(enUS,{"统一账号池":"Unified account pool","按真实账号集中展示 ChatGPT Web 与 Codex CLI 两个独立凭据槽；每个槽只使用对应 OAuth client 续期。":"Manage separate ChatGPT Web and Codex CLI credential slots under one account identity. Each slot is renewed only by its matching OAuth client.","统一账号 / 双凭据账号":"Unified / dual-credential accounts","ChatGPT Web / Codex CLI 凭据":"ChatGPT Web / Codex CLI credentials","可用图片额度":"Available image quota","凭据刷新失败（Web / Codex）":"Credential refresh failures (Web / Codex)","导入 Web 凭据":"Import Web credentials","导入 Codex 凭据":"Import Codex credentials","ChatGPT Web 凭据槽":"ChatGPT Web credential slot","Codex CLI 凭据槽":"Codex CLI credential slot","未配置 ChatGPT Web 凭据":"ChatGPT Web credentials not configured","未配置 Codex CLI 凭据":"Codex CLI credentials not configured","刷新额度/凭据":"Refresh quota/credentials","删除槽位":"Delete slot","启用或禁用 {label} 凭证":"Enable or disable {label} credentials","{label} 凭证已启用":"{label} credentials enabled","{label} 凭证已禁用":"{label} credentials disabled","导入账号 ▾":"Import credentials ▾","选择账号类型和导入方式":"Choose a credential type and import method","导入整体账号池":"Import account pool bundle","账号池迁移 ▾":"Account pool migration ▾","整体账号池文件":"Account pool bundle file","导出整体账号池":"Export account pool bundle","整体账号池 JSON":"Account pool bundle JSON","仅接受 aetherrelay.account-pool-bundle v2；文件包含 ChatGPT Web 和 Codex 两类槽位，最大 1 MiB、最多 1000 个统一账号。":"Only aetherrelay.account-pool-bundle v2 is accepted. The file may contain ChatGPT Web and Codex slots; the limit is 1 MiB and 1,000 unified accounts.","请选择整体账号池 JSON 文件":"Choose an account pool bundle JSON file","JSON 文件不能超过 1 MiB":"The JSON file must not exceed 1 MiB","只支持 aetherrelay.account-pool-bundle v2":"Only aetherrelay.account-pool-bundle v2 is supported","整体账号池 accounts 数量无效":"The account pool bundle accounts count is invalid","整体导入部分完成":"Account pool bundle import partially completed","整体导入完成":"Account pool bundle import completed","整体导入存在":"Account pool bundle import has","项冲突，请修正后重试":"conflicts. Fix them and try again","整体账号池导出文件已开始下载":"The account pool bundle export has started downloading"});
@@ -1566,8 +1567,15 @@ function codexAccountModelList(account){
   const unavailableHTML=unavailable.map(item=>{
     const entry=availability.get(item.id)||{};
     const reason=entry.reason==="model_blocked"?entry.reason:(stale?"snapshot_expired":entry.reason);
-    const label=labels[reason]?t(labels[reason]):t("可用性未知");
-    const recovery=entry.until?` · ${t("恢复于 {time}",{time:formatAccountDate(entry.until)})}`:"";
+    let label=labels[reason]?t(labels[reason]):t("可用性未知");
+    let recovery=entry.until?` · ${t("恢复于 {time}",{time:formatAccountDate(entry.until)})}`:"";
+    if(reason==="usage_limit"){
+      const seconds=Number(entry.usage_limit_window_seconds)||0;
+      label=seconds===604800?t("周额度耗尽"):seconds===18000?t("5 小时额度耗尽"):entry.usage_limit_window?t("额度窗口耗尽"):t("额度受限（未明确耗尽窗口）");
+      if(entry.usage_limit_scope==="code-review")label=`${t("代码审查")} · ${label}`;
+      if(entry.usage_limit_scope==="additional")label=`${t("附加用量")} · ${label}`;
+      recovery=entry.usage_limit_reset_at?` · ${t("预计重置于 {time}",{time:formatAccountDate(entry.usage_limit_reset_at)})}`:"";
+    }
     return `<div><code>${esc(item.id)}</code><span class="subtle"> · ${esc(label+recovery)}</span></div>`;
   }).join("");
   return `<details class="account-model-list"><summary>${esc(t("可用模型 {available}/{total} · 展开核对",{available:available.length,total:models.length}))}</summary><div style="max-height:240px;overflow:auto;overflow-wrap:anywhere"><div class="subtle">${esc(t("根据当前快照与冷却判断，不保证上游调用成功；刷新列表更新状态。"))}</div><div class="tags">${availableHTML||esc(t("暂无可用模型"))}</div>${unavailableHTML}</div></details>`;
@@ -1588,7 +1596,7 @@ function codexUsageWindowLabel(window){
   const seconds=Number(window?.window_seconds)||0;
   const isReview=id.startsWith("code-review-");
   if(id.startsWith("additional-"))return String(window?.label||t("附加用量"));
-  let base=seconds===18000?t("5 小时"):seconds===604800?t("周"):id.endsWith("secondary")?t("周"):t("5 小时");
+  let base=seconds===18000?t("5 小时"):seconds===604800?t("周"):seconds>0?t("{value} 秒窗口",{value:seconds}):id.endsWith("secondary")?t("次窗口"):t("主窗口");
   if(isReview)base=`${t("代码审查")} · ${base}`;
   return base;
 }
@@ -1610,20 +1618,33 @@ function codexUsageSnapshotBadge(account){
     const stale=windowExpired(window);
     const usedKnown=Boolean(window?.used_percent_known);
     const used=Math.max(0,Math.min(100,Number(window?.used_percent)||0));
-    const exhausted=Boolean(window?.limit_reached)||(Boolean(window?.allowed_known)&&window?.allowed===false);
-    const remaining=usedKnown?Math.max(0,100-used):(exhausted?0:null);
+    const exhausted=usedKnown?used>=100:Boolean(window?.limit_reached)||(Boolean(window?.allowed_known)&&window?.allowed===false);
+    const remaining=usedKnown?Math.max(0,100-used):null;
     const level=exhausted?"exhausted":remaining!==null&&remaining<=30?"warning":"";
-    const value=exhausted?t("已达上限"):remaining===null?"—":t("剩余 {value}%",{value:Math.round(remaining)});
-    const reset=window?.reset_at?` · ${t("恢复于 {time}",{time:formatAccountDate(window.reset_at)})}`:"";
+    const value=remaining!==null?t("剩余 {value}%",{value:Math.round(remaining)})+(exhausted?` · ${t("已达上限")}`:""):exhausted?t("已达上限 · 用量未知"):t("用量未知");
+    const reset=window?.reset_at?` · ${t("预计重置于 {time}",{time:formatAccountDate(window.reset_at)})}`:"";
     const meter=remaining===null?"":`<div class="codex-usage-meter"><i style="width:${Math.round(remaining)}%"></i></div>`;
     const age=stale?`<span class="tag tag-cooldown">${esc(t("缓存已过期"))}</span>`:"";
     const sampled=window?.observed_at?` · ${t("上次观测 {time}",{time:formatAccountDate(window.observed_at)})}`:"";
     return `<div class="codex-usage-window ${level}"><span class="codex-usage-window-label" title="${esc(codexUsageWindowLabel(window)+sampled)}">${esc(codexUsageWindowLabel(window))}</span><span class="codex-usage-window-value">${esc(value)}${age}</span>${meter}</div>${reset?`<div class="codex-usage-meta">${esc(reset.trim().replace(/^·\s*/,""))}</div>`:""}`;
   }).join("");
+  const groups=(Array.isArray(snapshot.groups)?snapshot.groups:[]).filter(group=>{
+    if(!(group.limit_reached_known&&group.limit_reached||group.allowed_known&&group.allowed===false))return false;
+    // A known exhausted child already explains the group restriction. Group
+    // status alone cannot assign a utilization percentage or a reset to it.
+    return !windows.some(window=>window.group_id===group.id&&window.observed_at===group.observed_at&&window.used_percent_known&&Number(window.used_percent)>=100);
+  }).map(group=>{
+    const scope=group.scope==="standard"?t("普通模型"):group.scope==="code-review"?t("代码审查"):group.scope==="additional"?(group.model||t("附加用量")):t("额度");
+    const stale=windowExpired(group)?` · ${t("缓存已过期")}`:"";
+    const cause=group.exhausted_window_id?codexUsageWindowLabel({id:group.exhausted_window_id,window_seconds:group.exhausted_window_seconds})+" · "+t("已达上限"):t("额度受限（未明确耗尽窗口）");
+    const reset=group.exhausted_window_id&&group.reset_at?` · ${t("预计重置于 {time}",{time:formatAccountDate(group.reset_at)})}`:"";
+    const sampled=group.observed_at?t("上次观测 {time}",{time:formatAccountDate(group.observed_at)}):"";
+    return `<div class="codex-usage-meta" title="${esc(sampled)}">${esc(scope+" · "+cause+reset+stale)}</div>`;
+  }).join("");
   const more=windows.length>5?`<div class="codex-usage-meta">+${windows.length-5}</div>`:"";
   const observed=snapshot.observed_at?`<div class="codex-usage-meta">${esc(t("上次观测 {time}",{time:formatAccountDate(snapshot.observed_at)}))}</div>`:"";
   const error=refreshError?`<div class="account-refresh-state"><span class="tag tag-refresh-failure" title="${esc(formatAccountDate(refreshErrorAt))}">${esc(t("用量刷新失败：{error}",{error:refreshError}))}</span></div>`:"";
-  return `<div class="codex-usage"><div class="codex-usage-head">${head}</div>${visible||`<div class="subtle">${esc(t("用量窗口暂不可用"))}</div>`}${more}${observed}${error}</div>`;
+  return `<div class="codex-usage"><div class="codex-usage-head">${head}</div>${visible||`<div class="subtle">${esc(t("用量窗口暂不可用"))}</div>`}${groups}${more}${observed}${error}</div>`;
 }
 function renderCodexDiscoveryProgress(progress){
   const box=$("codexDiscoveryProgress");
