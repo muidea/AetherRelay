@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 )
 
 // streamKind 描述流式/请求结束后的业务结果，用于 metrics outcome。
@@ -49,6 +51,7 @@ type terminalResult struct {
 // Kind 驱动 metrics outcome；ErrorCode 可独立于 Kind（例如 outcome=upstream_failed
 // 而 ErrorCode=invalid_token）。ErrorCode 为空时回退为 string(Kind)。
 type streamFail struct {
+	aetherrelaycodex.UpstreamError
 	Kind              streamKind
 	ErrorCode         string // usage ErrorCode；空则回退 Kind
 	FailureClass      string // 安全、有界的失败分类

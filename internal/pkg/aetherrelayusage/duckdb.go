@@ -341,6 +341,13 @@ WHERE event_id = ?
 		// 缺失或重复 Complete:不降级健康(业务一致性问题),但返回错误。
 		return ErrEventNotStarted
 	}
+	diagnostic := rec.UpstreamError.Bounded()
+	if diagnostic.UpstreamErrorType != "" || diagnostic.UpstreamErrorCode != "" || diagnostic.UpstreamErrorParam != "" || diagnostic.UpstreamErrorMessage != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_upstream_error (event_id,upstream_error_type,upstream_error_code,upstream_error_param,upstream_error_message) VALUES (?,?,?,?,?)`, rec.EventID, diagnostic.UpstreamErrorType, diagnostic.UpstreamErrorCode, diagnostic.UpstreamErrorParam, diagnostic.UpstreamErrorMessage); err != nil {
+			s.markDegraded()
+			return fmt.Errorf("%w: save upstream error: %v", ErrStoreUnavailable, err)
+		}
+	}
 	if rec.Provider == "codexoauth" && rec.UpstreamRequestModel != "" {
 		o := codexmodel.New(rec.UpstreamRequestModel, rec.ResponseModel)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_codex_model (event_id, upstream_request_model, response_model, model_substituted) VALUES (?, ?, ?, ?)`, rec.EventID, o.UpstreamRequestModel, o.ResponseModel, o.ModelSubstituted); err != nil {

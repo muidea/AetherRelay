@@ -405,7 +405,7 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
-    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known
+    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message
 FROM ` + targetEvents + `
 WHERE ` + where + `
 ORDER BY started_at DESC, event_id DESC
@@ -446,7 +446,7 @@ LIMIT ?`
 			&httpStatus, &e.Outcome, &e.ErrorCode,
 			&e.FailureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &contentLength, &e.UpstreamTransferEncoding,
-			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered, &e.OutputTokensKnown,
+			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered, &e.OutputTokensKnown, &e.UpstreamErrorType, &e.UpstreamErrorCode, &e.UpstreamErrorParam, &e.UpstreamErrorMessage,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
 		}

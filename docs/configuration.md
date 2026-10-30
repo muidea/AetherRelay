@@ -156,6 +156,8 @@ state:
 
 Usage runtime 启动时只幂等创建最终表及索引，并校验已有表的运行期必需字段，包括 `usage_events` 的缓存读取/创建 `*_known` 观测标志和 `client_api_key_metadata.hint`。不执行 ALTER、补列、表重命名、兼容升级或历史数据回填；缺少必需字段的旧布局明确启动失败，保留原结构和数据，不重置数据库。已有最终 schema 直接复用，观测标志原值保留；`hint` 列允许 NULL，空 hint 的已有 Key 不在启动时补值，仅在轮换生成新 Key 时同步更新。观测与 Key hint 均不新增配置，归档开关不影响管理页用量统计。
 
+Codex 结构化上游错误使用独立附属表 `usage_upstream_error`：启动只幂等创建并校验，旧事件无观测时保持为空，不 ALTER `usage_events` 或回填历史。它与最终结算共用事务，随客户端 Key 用量一起删除；管理详情和 CSV 不依赖交互正文归档开关。该表及新增诊断字段不改变账号健康、路由或重试策略。
+
 Admin「功能集 → 在线搜索」仅将成功结果保存到该历史表。历史以登录管理员用户名隔离；未启用 Admin 登录时使用稳定的本地 `admin` 作用域。每个作用域最多保留 200 条，自动清理 30 天前的记录；答案、查询和来源始终只保存在服务器 DuckDB，不写入浏览器存储。`POST /v1/search` 及协议内的单次搜索保持无状态，不会创建这些历史记录。
 
 工作区固定包含图片目录与 DuckDB 文件；只有 `archive_interactions=true` 时才会创建 `interactions/`。原始图片仍保存在文件系统，数据库只保存其元数据与索引；交互归档目录为 `interactions/{api_key_id}/{round_id}/`。图片任务与图片资产同样以客户端 API Key ID 作用域隔离：磁盘目录为 `images/{安全作用域}/{日期路径}` 和 `image_thumbnails/{安全作用域}/{日期路径}.png`，数据库索引与标签主键为 `(api_key_id, path)`；Admin 图片任务/图片库缺省使用 `builtin-local`，显式作用域仍需是已存在的 Key。整个目录应由运行用户以私有权限持有，且不得提交到版本库。

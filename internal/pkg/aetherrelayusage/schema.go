@@ -46,6 +46,9 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	if _, err := tx.ExecContext(ctx, `SELECT event_id, upstream_request_model, response_model, model_substituted FROM usage_codex_model LIMIT 0`); err != nil {
 		return fmt.Errorf("verify Codex model schema: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `SELECT event_id, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message FROM usage_upstream_error LIMIT 0`); err != nil {
+		return fmt.Errorf("verify upstream error schema: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
 	}
@@ -54,6 +57,7 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 
 func createSchema(ctx context.Context, tx *sql.Tx) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS usage_upstream_error (event_id VARCHAR PRIMARY KEY, upstream_error_type VARCHAR NOT NULL, upstream_error_code VARCHAR NOT NULL, upstream_error_param VARCHAR NOT NULL, upstream_error_message VARCHAR NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_codex_model (event_id VARCHAR PRIMARY KEY, upstream_request_model VARCHAR NOT NULL, response_model VARCHAR NOT NULL, model_substituted BOOLEAN NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_account_selection (event_id VARCHAR PRIMARY KEY, account_id VARCHAR NOT NULL, account_label VARCHAR NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_output_observation (event_id VARCHAR PRIMARY KEY, known BOOLEAN NOT NULL)`,

@@ -135,6 +135,7 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.CacheHitRate = cacheHitRate(e.CachedInputTokens, e.InputTokens)
 	e.HTTPStatus = rec.HTTPStatus
 	e.Outcome = rec.Outcome
+	e.UpstreamError = rec.UpstreamError.Bounded()
 	e.ErrorCode = rec.ErrorCode
 	e.FailureClass = rec.FailureClass
 	e.Retryable = cloneBoolPointer(rec.Retryable)
@@ -524,6 +525,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 		}
 		row = append(row, tpsCSV(e.GenerationSample)...)
 		row = append(row, e.AccountID, e.AccountLabel, e.UpstreamRequestModel, e.ResponseModel, strconv.FormatBool(e.ModelSubstituted))
+		row = append(row, e.UpstreamErrorType, e.UpstreamErrorCode, e.UpstreamErrorParam, e.UpstreamErrorMessage)
 		if err := cw.Write(row); err != nil {
 			return err
 		}

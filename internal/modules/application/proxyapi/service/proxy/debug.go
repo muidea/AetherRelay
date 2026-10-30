@@ -372,7 +372,10 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 	if attemptErr != nil {
 		responseInfo.Error = attemptErr.Error()
 		if failure, ok := codexresponses.AsFailure(attemptErr); ok {
-			responseInfo.FailureClass = string(failure.Kind)
+			responseInfo.FailureClass = codexFailureClass(failure)
+			if responseInfo.FailureClass == "" {
+				responseInfo.FailureClass = string(failure.Kind)
+			}
 			responseInfo.RetryAfterSeconds = failure.RetryAfterSeconds
 			responseInfo.UpstreamErrorCode = failure.UpstreamCode
 			responseInfo.UpstreamErrorType = failure.UpstreamType

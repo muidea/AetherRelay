@@ -33,6 +33,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
@@ -811,7 +812,7 @@ func (h *Handler) completePendingUsage(r *http.Request, round *archive.Round) {
 }
 
 // completeUsage 结算已 Start 的 event;失败只记日志/降级,不改变已写出的 HTTP 响应。
-func (h *Handler) completeUsage(r *http.Request, requestID string, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, outcome, errorCode, failureClass string, retryable *bool, retryAfterSeconds int, round *archive.Round) bool {
+func (h *Handler) completeUsage(r *http.Request, requestID string, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, outcome, errorCode, failureClass string, retryable *bool, retryAfterSeconds int, round *archive.Round, upstreamErrors ...aetherrelaycodex.UpstreamError) bool {
 	if h.usageStore == nil || requestID == "" {
 		return false
 	}
@@ -842,6 +843,9 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 		Duration:                      duration,
 		Stream:                        stream,
 		Estimated:                     tok.Estimated,
+	}
+	if len(upstreamErrors) > 0 {
+		rec.UpstreamError = upstreamErrors[0].Bounded()
 	}
 	if r != nil {
 		target := usagetarget.Snapshot(r.Context())
@@ -3053,6 +3057,7 @@ func (h *Handler) recordAndPrint(round *archive.Round, r *http.Request, provider
 
 func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, provider, model string, stream bool, status int, duration time.Duration, tok tokenUsage, fail *streamFail) {
 	if round != nil && fail != nil {
+		round.UpstreamError = fail.UpstreamError.Bounded()
 		round.FailureClass = fail.FailureClass
 		round.Retryable = fail.Retryable
 		round.RetryAfterSeconds = fail.RetryAfterSeconds
@@ -3106,13 +3111,18 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 		retryable = fail.Retryable
 		retryAfterSeconds = fail.RetryAfterSeconds
 	}
-	usageCompleted := h.completeUsage(r, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, failureClass, retryable, retryAfterSeconds, round)
+	upstreamError := aetherrelaycodex.UpstreamError{}
+	if fail != nil {
+		upstreamError = fail.UpstreamError.Bounded()
+	}
+	usageCompleted := h.completeUsage(r, eventID, provider, model, stream, status, duration, tok, outcome, errorCode, failureClass, retryable, retryAfterSeconds, round, upstreamError)
 	if usageCompleted && h.metricsRegistry != nil && r != nil {
 		h.metricsRegistry.RecordClientUsage(clientauth.ClientIdentityFromContext(r.Context()).KeyID, tok.PromptTokens, tok.CompletionTokens)
 	}
 
 	if h.metricsRegistry != nil {
-		if failureClass != "" {
+		// Upstream overload is execution feedback, not a local admission denial.
+		if failureClass != "" && failureClass != "upstream_overloaded" {
 			if reporter, ok := h.metricsRegistry.(metricsport.AdmissionReporter); ok {
 				reporter.RecordAdmissionDenial(provider, model, failureClass)
 			}
@@ -3216,6 +3226,7 @@ func (h *Handler) writeArchiveMetadata(round *archive.Round, provider, model str
 		meta.UnsupportedFeatures = append([]string(nil), round.UnsupportedFeatures...)
 		meta.ConversionErrorPath = round.ConversionErrorPath
 		meta.ResponseProjectionObservation = round.ResponseProjectionObservation
+		meta.UpstreamError = round.UpstreamError.Bounded()
 		meta.FailureClass = round.FailureClass
 		meta.Retryable = round.Retryable
 		meta.RetryAfterSeconds = round.RetryAfterSeconds

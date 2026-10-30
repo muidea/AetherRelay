@@ -458,3 +458,21 @@ test('pending refreshes use bounded batches, retain data on failure, and respect
  c.request=async()=>({events:[{event_id:'still-pending',model:'gpt-6',state:'completed',http_status:200}]});
  await c.refreshUsageEvents();assert.equal(c.state.events.length,0);assert.equal(c.state.cursor,'preserved');
 });
+
+test('Codex overload details retain the cause, partial outcome and unknown token usage',()=>{
+  const {context:c,elements}=harness();
+  const event={provider:'codexoauth',http_status:200,upstream_status:101,outcome:'upstream_truncated',error_code:'upstream',failure_class:'upstream_overloaded',retryable:false,generation_partial:true,output_tokens_known:false,cached_input_tokens_known:false,cache_creation_input_tokens_known:false,input_tokens:0,output_tokens:0,total_tokens:0,upstream_error_type:'service_unavailable_error',upstream_error_code:'server_is_overloaded',upstream_error_message:'Our servers are currently overloaded. Please try again later.'};
+  c.showUsageEvent(event);
+  const out=elements.usageEventDetail.innerHTML;
+  for(const value of ['server_is_overloaded','service_unavailable_error','上游服务过载',event.upstream_error_message,'upstream_truncated','未取得'])assert.ok(out.includes(value),value);
+  assert.match(out,/错误代码<\/dt><dd[^>]*>upstream<\/dd>/);
+  assert.match(out,/可重试<\/dt><dd[^>]*>否<\/dd>/);
+  assert.match(out,/部分输出<\/dt><dd[^>]*>true<\/dd>/);
+  assert.match(c.eventStatusMeta(event).label,/200.*输出中断/);
+  c.showUsageEvent({...event,upstream_error_code:'<unsafe>',upstream_error_message:'<img src=x onerror=alert(1)>'});
+  assert.match(elements.usageEventDetail.innerHTML,/&lt;img/);
+  assert.doesNotMatch(elements.usageEventDetail.innerHTML,/<img|上游服务过载/);
+  c.showUsageEvent({error_code:'upstream',http_status:200,outcome:'upstream_truncated'});
+  assert.match(elements.usageEventDetail.innerHTML,/上游错误代码<\/dt><dd[^>]*>—<\/dd>/);
+  assert.doesNotMatch(elements.usageEventDetail.innerHTML,/上游服务过载/);
+});

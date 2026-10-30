@@ -11,6 +11,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	archivepkg "aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 )
 
 var codexCompactHeartbeatInterval = 15 * time.Second
@@ -578,11 +579,24 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind, countUpstream = streamKind("provider_unavailable"), false
 	}
 	result := newStreamFailWithCode(kind, string(failure.Kind), failure.Error(), failure, countUpstream)
-	result.FailureClass = failure.UnavailableReason
+	result.UpstreamError = aetherrelaycodex.UpstreamError{UpstreamErrorType: failure.UpstreamType, UpstreamErrorCode: failure.UpstreamCode, UpstreamErrorParam: failure.UpstreamParam, UpstreamErrorMessage: failure.UpstreamMessage}.Bounded()
+	result.FailureClass = codexFailureClass(failure)
 	if failure.RequestBudgetExceeded {
 		result.FailureClass = "request_budget_exceeded"
 	}
 	result.Retryable = failure.Retryable
 	result.RetryAfterSeconds = failure.RetryAfterSeconds
 	return result
+}
+
+// Classification is diagnostic only. Keep overload recognition exact and
+// separate from admission, account feedback, retries and client wire errors.
+func codexFailureClass(failure *codexresponses.Failure) string {
+	if failure.UnavailableReason != "" {
+		return failure.UnavailableReason
+	}
+	if failure.Kind == codexresponses.KindUpstream && failure.UpstreamCode == "server_is_overloaded" {
+		return "upstream_overloaded"
+	}
+	return ""
 }

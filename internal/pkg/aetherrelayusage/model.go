@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 )
 
@@ -34,6 +35,7 @@ type StartRecord struct {
 
 // CompleteRecord 是请求退出路径上的最终结算。
 type CompleteRecord struct {
+	aetherrelaycodex.UpstreamError
 	codexmodel.Observation
 	OutputTokensKnown             bool
 	FirstOutputAt                 time.Time
@@ -189,6 +191,7 @@ type ScopeInfo struct {
 
 // Event 是一条安全明细(无正文/密钥)。
 type Event struct {
+	aetherrelaycodex.UpstreamError
 	codexmodel.Observation
 	GenerationSample
 	CachedInputTokensKnown        bool       `json:"cached_input_tokens_known"`

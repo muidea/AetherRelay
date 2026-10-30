@@ -53,6 +53,7 @@ var csvExportHeader = []string{
 	"cache_creation_input_tokens_known",
 	"first_output_at", "generation_duration_ms", "tps", "generation_partial", "generation_buffered", "observed_tps", "output_tokens_known",
 	"account_id", "account_label", "upstream_request_model", "response_model", "model_substituted",
+	"upstream_error_type", "upstream_error_code", "upstream_error_param", "upstream_error_message",
 }
 
 // ExportCSV 按筛选条件流式写出 CSV。
@@ -91,7 +92,7 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state,
-    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, account_id, account_label, upstream_request_model, response_model, model_substituted
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, account_id, account_label, upstream_request_model, response_model, model_substituted, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message
 FROM ` + targetEvents + `
 WHERE ` + where + `
 ORDER BY started_at ASC, event_id ASC`
@@ -129,6 +130,7 @@ ORDER BY started_at ASC, event_id ASC`
 		)
 		var accountID, accountLabel, upstreamRequestModel, responseModel string
 		var modelSubstituted bool
+		var upstreamErrorType, upstreamErrorCode, upstreamErrorParam, upstreamErrorMessage string
 		var firstOutputAt sql.NullTime
 		var generationNS sql.NullInt64
 		var partial, buffered, outputKnown bool
@@ -147,7 +149,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&failureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
-			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered, &outputKnown, &accountID, &accountLabel, &upstreamRequestModel, &responseModel, &modelSubstituted,
+			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered, &outputKnown, &accountID, &accountLabel, &upstreamRequestModel, &responseModel, &modelSubstituted, &upstreamErrorType, &upstreamErrorCode, &upstreamErrorParam, &upstreamErrorMessage,
 		); err != nil {
 			return ErrStoreUnavailable
 		}
@@ -231,6 +233,7 @@ ORDER BY started_at ASC, event_id ASC`
 		sample.TPS = outputRate(outputTok, float64(durationMS.Int64)/1000, state == StateCompleted && outputKnown)
 		row = append(row, tpsCSV(sample)...)
 		row = append(row, accountID, accountLabel, upstreamRequestModel, responseModel, strconv.FormatBool(modelSubstituted))
+		row = append(row, upstreamErrorType, upstreamErrorCode, upstreamErrorParam, upstreamErrorMessage)
 		if err := cw.Write(row); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}

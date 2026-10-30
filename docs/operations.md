@@ -230,6 +230,8 @@ CSV 仅用于导出当前用量，不提供旧 CSV 导入。交互归档默认�
 
 `response.meta.json` 的 `status` 是 HTTP 层实际定型的值，与 `metadata.json` 的业务结算状态可能不同（例如响应已写出 200 后客户端取消，metadata 记 499）；`at` 是响应首次定型的时刻，不是落盘时刻。Codex Responses WebSocket 的协议升级只记录 101 与升级前网关已设置的 header，`hijacked: true` 标明握手响应行由升级方直接写到底层连接、不经过网关的 ResponseWriter。
 
+Codex 调用详情另外展示 `upstream_error_type/code/param/message`，来自现有上游结构化错误的有界投影。精确收到 `server_is_overloaded` 时提示“上游服务过载”，失败分类为 `upstream_overloaded`；已有输出后仍为 HTTP 200 / `upstream_truncated`，不可自动重放本次请求，不代表账号额度耗尽或永久不可用。通用 `error_code=upstream` 保留；未知 Token 继续显示未取得。开启归档后，`metadata.json` 和上游响应元数据保留相同错误原因；关闭归档仍可在用量详情与 CSV 查看。新建的 `usage_upstream_error` 附属表与最终结算共用事务，不修改原事件表、回填旧事件或增加配置，字段沿用既有长度与错误内容输出规则。
+
 ## 备份与维护
 
 不要直接复制正在写入的 DuckDB 文件。建议流程：停止接收新请求、等待当前写入完成、执行 checkpoint、复制 `state.database`，并将需要保留的 `state.dir/interactions/`、`state.dir/images/` 与 `state.dir/image_thumbnails/` 一并复制，随后恢复服务。数据库与整个 `state.dir` 必须由同一个实例独占。

@@ -1879,7 +1879,10 @@ func safeUpstreamError(body []byte) events.SafeError {
 	if errorValue.Type == "" && errorValue.Code == "" && errorValue.Message == "" && !rawPresent(errorValue.Param) {
 		errorValue = payload.Response.Error
 	}
-	param := strings.Trim(strings.TrimSpace(string(errorValue.Param)), `"`)
+	param := ""
+	if rawPresent(errorValue.Param) {
+		param = strings.Trim(strings.TrimSpace(string(errorValue.Param)), `"`)
+	}
 	return events.SafeError{
 		Type:    safeErrorToken(errorValue.Type, 64),
 		Code:    safeErrorToken(errorValue.Code, 96),
@@ -1888,36 +1891,8 @@ func safeUpstreamError(body []byte) events.SafeError {
 	}
 }
 
-func safeErrorToken(value string, limit int) string {
-	value = strings.TrimSpace(value)
-	if len(value) > limit {
-		value = value[:limit]
-	}
-	for _, char := range value {
-		if !(char == '_' || char == '-' || char == '.' || char == '[' || char == ']' || char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z') {
-			return ""
-		}
-	}
-	return value
-}
-
-func safeErrorText(value string, limit int) string {
-	value = strings.Map(func(char rune) rune {
-		if char < 0x20 || char == 0x7f {
-			return ' '
-		}
-		return char
-	}, strings.TrimSpace(value))
-	for _, marker := range []string{"bearer ", "authorization", "api_key", "access_token", "refresh_token", "cookie", "sk-", "sess-"} {
-		if strings.Contains(strings.ToLower(value), marker) {
-			return ""
-		}
-	}
-	if len(value) > limit {
-		value = value[:limit]
-	}
-	return strings.TrimSpace(value)
-}
+func safeErrorToken(value string, limit int) string { return aetherrelaycodex.ErrorToken(value, limit) }
+func safeErrorText(value string, limit int) string  { return aetherrelaycodex.ErrorText(value, limit) }
 
 func rateLimitObservation(body []byte, now time.Time) events.RateLimitObservation {
 	var payload struct {

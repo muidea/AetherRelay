@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"aetherrelay/internal/pkg/aetherrelaycodex"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"aetherrelay/internal/pkg/chatgptattempt"
 )
@@ -35,6 +36,7 @@ func NewObservationRound() *Round {
 }
 
 type Round struct {
+	aetherrelaycodex.UpstreamError
 	TextAttempts []chatgptattempt.Observation
 	ResponseProjectionObservation
 	codexmodel.Observation
@@ -253,6 +255,7 @@ func (r *Round) SetIgnoredFeatures(features []string) {
 }
 
 type Metadata struct {
+	aetherrelaycodex.UpstreamError
 	TextAttempts []chatgptattempt.Observation `json:"chatgpt_text_attempts,omitempty"`
 	ResponseProjectionObservation
 	codexmodel.Observation

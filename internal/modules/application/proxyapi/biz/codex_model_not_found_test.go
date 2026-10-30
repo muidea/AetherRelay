@@ -128,6 +128,15 @@ func TestCodexModelNotFoundBoundedSameModelFailover(t *testing.T) {
 }
 
 func TestCodexModelNotFoundStreamAfterOutputDoesNotRetry(t *testing.T) {
+	testCodexStreamAfterOutputDoesNotRetry(t, upevents.ErrorModelNotFound, "model_not_found", codexresponses.KindModelNotFound, 404)
+}
+
+func TestCodexOverloadStreamAfterOutputDoesNotRetry(t *testing.T) {
+	testCodexStreamAfterOutputDoesNotRetry(t, upevents.ErrorUpstream, "server_is_overloaded", codexresponses.KindUpstream, 0)
+}
+
+func testCodexStreamAfterOutputDoesNotRetry(t *testing.T, class upevents.ErrorClass, code string, kind codexresponses.ErrorKind, status int) {
+	t.Helper()
 	// CP-STREAM-003 / CP-FAIL-018: neither SSE failure nor client cancellation
 	// may trigger a replay once business output has been delivered.
 	hub := event.NewHub(24)
@@ -142,7 +151,7 @@ func TestCodexModelNotFoundStreamAfterOutputDoesNotRetry(t *testing.T) {
 	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { releases++; result.Set(accevents.ReleaseResult{}, nil) })
 	accounts.Subscribe(accevents.TopicRecordResult, func(ev event.Event, result event.Result) {
 		records++
-		if ev.Data().(accevents.RecordResultCommand).ErrorClass != accevents.ErrorModelNotFound {
+		if ev.Data().(accevents.RecordResultCommand).ErrorClass != string(class) {
 			t.Error("missing typed record")
 		}
 		result.Set(accevents.RecordResultResult{}, nil)
@@ -154,7 +163,7 @@ func TestCodexModelNotFoundStreamAfterOutputDoesNotRetry(t *testing.T) {
 		if pulls == 1 {
 			result.Set(upevents.PullResult{Data: []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n")}, nil)
 		} else {
-			result.Set(upevents.PullResult{Done: true, ErrorClass: upevents.ErrorModelNotFound, SafeError: upevents.SafeError{Code: "model_not_found"}}, nil)
+			result.Set(upevents.PullResult{Done: true, ErrorClass: class, SafeError: upevents.SafeError{Code: code}}, nil)
 		}
 	})
 	up.Subscribe(upevents.TopicCancel, func(_ event.Event, result event.Result) {
@@ -166,7 +175,7 @@ func TestCodexModelNotFoundStreamAfterOutputDoesNotRetry(t *testing.T) {
 	emitted := 0
 	err := proxy.StreamCodexResponses(context.Background(), codexresponses.Request{Model: "gpt-5.5", Body: []byte(`{"model":"gpt-5.5"}`)}, nil, func([]byte) error { emitted++; return nil })
 	failure, ok := codexresponses.AsFailure(err)
-	if !ok || failure.Kind != codexresponses.KindModelNotFound || failure.HTTPStatus != 404 || attempts != 1 || releases != 1 || records != 1 || emitted != 1 {
+	if !ok || failure.Kind != kind || failure.HTTPStatus != status || failure.UpstreamCode != code || attempts != 1 || releases != 1 || records != 1 || emitted != 1 {
 		t.Fatalf("err=%v attempts=%d releases=%d records=%d emitted=%d", err, attempts, releases, records, emitted)
 	}
 }
