@@ -138,6 +138,8 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
 
+调用明细与结构化异常诊断固定保留最近 3 个自然月，启动时清理并每小时复查；无需新增配置。交互归档同时受 3 个月时间上限与既有条数限制约束。详见[明细保留与磁盘维护](operations.md#调用明细保留与磁盘维护)。
+
 ## 统一状态工作区
 
 ```yaml

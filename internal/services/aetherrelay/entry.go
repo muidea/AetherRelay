@@ -84,7 +84,9 @@ func Run(version string) int {
 // Each attempt has an independent budget. Never turn an incomplete drain into
 // permission to exit or release the remaining database owners.
 func shutdownUntilComplete(shutdown func(context.Context) error, budget, retryDelay time.Duration) {
-	for {
+	for attempt := 1; ; attempt++ {
+		started := time.Now()
+		slog.Info("AetherRelay shutdown attempt", "attempt", attempt, "budget", budget)
 		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		err := shutdown(ctx)
 		cancel()
@@ -92,7 +94,7 @@ func shutdownUntilComplete(shutdown func(context.Context) error, budget, retryDe
 			slog.Info("AetherRelay shutdown completed")
 			return
 		}
-		slog.Error("AetherRelay shutdown incomplete; retaining resources and retrying", slog.Any("error", err))
+		slog.Error("AetherRelay shutdown incomplete; retaining resources and retrying", "attempt", attempt, "elapsed", time.Since(started), slog.Any("error", err))
 		time.Sleep(retryDelay)
 	}
 }

@@ -603,6 +603,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		identity, finishClientRequest, err = h.resolveClientIdentity(r.Header, true)
 		if err != nil {
+			slog.WarnContext(r.Context(), "authentication rejected", "method", r.Method, "path", r.URL.Path, "auth_type", "client_api_key", "reason", "missing_or_invalid_key")
 			writeClientProtocolError(w, http.StatusUnauthorized, clientProtocolFromRequest(r), APIError{
 				Code:           ErrorCodeAuthenticationFailed,
 				Message:        "missing or invalid client api key",
@@ -614,6 +615,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer finishClientRequest()
 	if strings.TrimSpace(identity.KeyID) == "" {
+		slog.WarnContext(r.Context(), "authentication rejected", "method", r.Method, "path", r.URL.Path, "auth_type", "client_api_key", "reason", "missing_or_invalid_key")
 		writeClientProtocolError(w, http.StatusUnauthorized, clientProtocolFromRequest(r), APIError{
 			Code:           ErrorCodeAuthenticationFailed,
 			Message:        "missing or invalid client api key",

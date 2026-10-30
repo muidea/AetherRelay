@@ -25,7 +25,9 @@ func NewRuntime(bootstrap configevents.Bootstrap) (*Runtime, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	return &Runtime{store: store}, nil
+	runtime := &Runtime{store: store}
+	runtime.pruneDetails(context.Background(), time.Now())
+	return runtime, nil
 }
 
 func (r *Runtime) Store() usage.Store {

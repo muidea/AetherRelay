@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,17 +18,19 @@ import (
 
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	retention "aetherrelay/internal/pkg/aetherrelayretention"
 	"aetherrelay/internal/pkg/chatgptattempt"
 )
 
 type Recorder struct {
-	root          string
-	maxRounds     int
-	fullContent   bool
-	scopeByAPIKey bool
-	mu            sync.Mutex
-	next          int
-	active        map[int]struct{}
+	root           string
+	maxRounds      int
+	fullContent    bool
+	scopeByAPIKey  bool
+	mu             sync.Mutex
+	next           int
+	active         map[int]struct{}
+	lastAgeCleanup time.Time
 }
 
 // NewObservationRound retains request statistics without creating archive files.
@@ -650,6 +653,23 @@ func (r *Recorder) finish(id int) error {
 }
 
 func (r *Recorder) cleanupLocked() error {
+	return r.cleanupAt(context.Background(), time.Now())
+}
+
+// Prune also runs during idle periods; active rounds are always protected.
+func (r *Recorder) Prune(ctx context.Context, now time.Time) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Scheduled sweeps must not be skipped because startup or a request's
+	// opportunistic cleanup happened less than one hour ago.
+	r.lastAgeCleanup = time.Time{}
+	return r.cleanupAt(ctx, now)
+}
+
+func (r *Recorder) cleanupAt(ctx context.Context, now time.Time) error {
 	if r == nil || r.maxRounds <= 0 {
 		return nil
 	}
@@ -658,9 +678,27 @@ func (r *Recorder) cleanupLocked() error {
 		return err
 	}
 	byScope := map[string][]archiveDir{}
+	checkAge := r.lastAgeCleanup.IsZero() || now.Sub(r.lastAgeCleanup) >= retention.Interval
+	cutoff := retention.Cutoff(now)
 	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, ok := r.active[dir.id]; ok {
 			continue
+		}
+		if checkAge {
+			path := filepath.Join(r.root, dir.scope, dir.name)
+			started, err := archiveTime(path)
+			if err != nil {
+				return err
+			}
+			if started.Before(cutoff) {
+				if err := os.RemoveAll(path); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		byScope[dir.scope] = append(byScope[dir.scope], dir)
 	}
@@ -670,6 +708,9 @@ func (r *Recorder) cleanupLocked() error {
 		}
 		sort.Slice(scoped, func(i, j int) bool { return scoped[i].id < scoped[j].id })
 		for _, dir := range scoped[:len(scoped)-r.maxRounds] {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			path := filepath.Join(r.root, dir.name)
 			if dir.scope != "" {
 				path = filepath.Join(r.root, dir.scope, dir.name)
@@ -679,7 +720,31 @@ func (r *Recorder) cleanupLocked() error {
 			}
 		}
 	}
+	if checkAge {
+		r.lastAgeCleanup = now
+	}
 	return nil
+}
+
+func archiveTime(path string) (time.Time, error) {
+	// Read only the timestamp; archive bodies and credentials are never needed
+	// for retention. Directory mtime covers legacy/missing/broken metadata.
+	var metadata struct {
+		StartedAt time.Time `json:"started_at"`
+	}
+	file, err := os.Open(filepath.Join(path, "metadata.json"))
+	if err == nil {
+		err = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&metadata)
+		_ = file.Close()
+		if err == nil && !metadata.StartedAt.IsZero() {
+			return metadata.StartedAt, nil
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return info.ModTime(), nil
 }
 
 func (r *Recorder) recoverIncompleteLocked() error {

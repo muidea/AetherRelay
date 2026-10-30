@@ -1262,7 +1262,7 @@ func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success
 	if strings.TrimSpace(id) == "" || (!success && (class == string(codexresponses.KindProviderUnavailable) || class == string(codexresponses.KindClientCanceled) || class == string(codexresponses.KindClientWrite) || class == string(codexresponses.KindStreamLifetime) || class == string(codexresponses.KindConversion))) {
 		return
 	}
-	availabilityNeutral := !success && class == string(codexresponses.KindFirstEventTimeout) && !quotaExhausted
+	availabilityNeutral := !success && (class == string(codexresponses.KindServiceShutdown) || class == string(codexresponses.KindFirstEventTimeout) && !quotaExhausted)
 	if class == string(codexresponses.KindFirstEventTimeout) || class == string(codexresponses.KindIdleTimeout) {
 		class = accevents.ErrorTimeout
 	}
@@ -1338,6 +1338,8 @@ func toCodexHTTPAttempt(attempt upevents.HTTPAttempt) codexresponses.HTTPAttempt
 func failureFromUpstream(class upevents.ErrorClass, retryAfter int, rateLimit upevents.RateLimitObservation, httpStatus int, safeErrors ...upevents.SafeError) *codexresponses.Failure {
 	var failure *codexresponses.Failure
 	switch class {
+	case upevents.ErrorServiceShutdown:
+		failure = codexServiceShutdownFailure()
 	case upevents.ErrorCanceled:
 		failure = codexresponses.NewFailure(codexresponses.KindClientCanceled, 0, fmt.Errorf("Codex request canceled"))
 	case upevents.ErrorModelNotFound:
@@ -1401,6 +1403,9 @@ func codexRequestContext(ctx context.Context, timeout time.Duration) (context.Co
 // A rejected/expired command with no upstream result is local admission failure,
 // not evidence against the credential or provider.
 func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure {
+	if errors.Is(err, upevents.ErrServiceShutdown) {
+		return codexServiceShutdownFailure()
+	}
 	if ctx.Err() == context.Canceled {
 		failure, _ := codexresponses.AsFailure(clientFailure(ctx.Err()))
 		return failure
@@ -1415,6 +1420,15 @@ func codexCommandFailure(ctx context.Context, err error) *codexresponses.Failure
 		failure.UnavailableReason = "queue_timeout"
 	}
 	retryable := true
+	failure.Retryable = &retryable
+	return failure
+}
+
+func codexServiceShutdownFailure() *codexresponses.Failure {
+	failure := codexresponses.NewFailure(codexresponses.KindServiceShutdown, 0, upevents.ErrServiceShutdown)
+	failure.UnavailableReason = "service_shutdown"
+	// Execution may already have started. Do not promise safe replay.
+	retryable := false
 	failure.Retryable = &retryable
 	return failure
 }

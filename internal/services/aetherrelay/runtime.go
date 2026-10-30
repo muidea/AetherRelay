@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	registrycommon "aetherrelay/internal/initiators/routeregistry/pkg/common"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
@@ -14,7 +16,6 @@ import (
 
 	frameworkapplication "github.com/muidea/magicCommon/framework/application"
 	"github.com/muidea/magicCommon/framework/plugin/initiator"
-	frameworkservice "github.com/muidea/magicCommon/framework/service"
 )
 
 // Runtime 是进程级 service，不是业务 module。它选择并驱动 framework lifecycle；
@@ -22,6 +23,7 @@ import (
 type Runtime struct {
 	application frameworkapplication.Application
 	bootstrap   configevents.Bootstrap
+	service     *shutdownService
 }
 
 func NewRuntime(cfg configevents.Bootstrap) *Runtime {
@@ -42,7 +44,8 @@ func (r *Runtime) Startup(ctx context.Context) error {
 		return fmt.Errorf("AetherRelay runtime is not initialized")
 	}
 	aetherrelaybootstrap.Configure(r.bootstrap)
-	if err := r.application.Startup(ctx, frameworkservice.DefaultService()); err != nil {
+	r.service = newShutdownService()
+	if err := r.application.Startup(ctx, r.service); err != nil {
 		return err
 	}
 	return nil
@@ -74,9 +77,20 @@ func startGateway() error {
 
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	if r != nil && r.application != nil {
+		started := time.Now()
+		slog.Info("application shutdown started")
+		watchdog := time.AfterFunc(3*time.Second, func() {
+			stage := "application.shutdown"
+			if r.service != nil {
+				stage = r.service.phase.Load().(string)
+			}
+			slog.Warn("application shutdown still waiting", "stage", stage, "elapsed", time.Since(started))
+		})
+		defer watchdog.Stop()
 		if err := r.application.ShutdownChecked(ctx); err != nil {
 			return err
 		}
+		slog.Info("application shutdown finished", "elapsed", time.Since(started))
 	}
 	return nil
 }

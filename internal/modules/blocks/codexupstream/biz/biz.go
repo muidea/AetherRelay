@@ -179,6 +179,9 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 func (s *Upstream) Run(context.Context) *cd.Error { return nil }
 func (s *Upstream) BeginShutdown(context.Context) *cd.Error {
 	s.mu.Lock()
+	if !s.stopping {
+		slog.Info("Codex upstream admission stopped", "active_commands", len(s.active), "streams", len(s.streams), "websocket_sessions", len(s.websockets), "probes", len(s.samples))
+	}
 	s.stopping = true
 	var cancelers []context.CancelFunc
 	for _, probe := range s.samples {
@@ -216,10 +219,18 @@ func (s *Upstream) Quiesce(ctx context.Context) *cd.Error {
 	}
 	done := s.drained
 	s.mu.Unlock()
+	logPending := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		slog.Warn("Codex upstream shutdown still waiting", "stage", "codex.quiesce", "active_commands", len(s.active), "streams", len(s.streams), "websocket_sessions", len(s.websockets), "probes", len(s.samples))
+	}
+	watchdog := time.AfterFunc(3*time.Second, logPending)
+	defer watchdog.Stop()
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		logPending()
 		return cd.NewError(cd.Timeout, "Codex upstream has not drained")
 	}
 }

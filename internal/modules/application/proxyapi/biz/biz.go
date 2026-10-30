@@ -21,6 +21,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelaymetricsport"
+	retention "aetherrelay/internal/pkg/aetherrelayretention"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 
 	cd "github.com/muidea/magicCommon/def"
@@ -156,6 +157,15 @@ func (s *Proxy) archiveUnredactedHeaders() bool {
 
 func (s *Proxy) Run(ctx context.Context) *cd.Error {
 	s.Timer(ctx, 200*time.Millisecond, 0, s.tickModelTrace)
+	if s.recorder != nil {
+		s.Timer(ctx, retention.Interval, 0, func() {
+			cleanupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := s.recorder.Prune(cleanupCtx, time.Now()); err != nil {
+				slog.Warn("interaction archive retention incomplete", "error", err)
+			}
+		})
+	}
 	s.startModelDiscovery(ctx)
 	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
 		s.Timer(ctx, min(interval, time.Minute), 0, s.startScheduledCodexUsageRefresh)

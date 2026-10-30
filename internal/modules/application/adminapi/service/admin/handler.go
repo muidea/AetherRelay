@@ -298,7 +298,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if isPage && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			if h.sessionFromRequest(r) == nil {
 				if r.Method == http.MethodHead {
-					writeAdminAuthError(w, http.StatusUnauthorized, "admin_authentication_required", "admin login is required")
+					writeAdminAuthError(w, r, http.StatusUnauthorized, "admin_authentication_required", "admin login is required")
 					return
 				}
 				http.Redirect(w, r, base+"/login", http.StatusSeeOther)
@@ -306,7 +306,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if h.sessionFromRequest(r) == nil {
 			if isAPI || strings.HasPrefix(rel, "/api") {
-				writeAdminAuthError(w, http.StatusUnauthorized, "admin_authentication_required", "admin login is required")
+				writeAdminAuthError(w, r, http.StatusUnauthorized, "admin_authentication_required", "admin login is required")
 				return
 			}
 			http.Redirect(w, r, base+"/login", http.StatusSeeOther)

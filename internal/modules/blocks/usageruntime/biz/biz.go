@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	basebiz "aetherrelay/internal/modules/base/biz"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	usagecommon "aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
 	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
+	retention "aetherrelay/internal/pkg/aetherrelayretention"
 	usage "aetherrelay/internal/pkg/aetherrelayusage"
 
 	cd "github.com/muidea/magicCommon/def"
@@ -63,7 +65,10 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	return biz, nil
 }
 
-func (s *UsageRuntime) Run(context.Context) *cd.Error { return nil }
+func (s *UsageRuntime) Run(ctx context.Context) *cd.Error {
+	s.Timer(ctx, retention.Interval, 0, func() { s.runtime.pruneDetails(ctx, time.Now()) })
+	return nil
+}
 
 func (s *UsageRuntime) Teardown(ctx context.Context) {
 	s.UnsubscribeFunc(usageevents.TopicAcquire)

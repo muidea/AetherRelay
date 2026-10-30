@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -25,14 +26,16 @@ func init() { initiator.MustRegister(New()) }
 
 // routeRegistry 是进程级技术资源 owner。业务状态和业务路由策略不应放在这里。
 type routeRegistry struct {
-	routes   enginehttp.RouteRegistry
-	handler  http.Handler
-	server   *http.Server
-	listener net.Listener
-	done     chan error
-	mu       sync.Mutex
-	started  bool
-	stopping bool
+	routes          enginehttp.RouteRegistry
+	handler         http.Handler
+	server          *http.Server
+	listener        net.Listener
+	done            chan error
+	mu              sync.Mutex
+	started         bool
+	stopping        bool
+	requests        map[uint64]pendingRequest
+	requestSequence uint64
 }
 
 var routeRegistryListen = net.Listen
@@ -72,7 +75,7 @@ func (r *routeRegistry) Setup(_ context.Context, _ event.Hub, _ task.BackgroundR
 	r.handler = handler
 	r.server = &http.Server{
 		Addr:              bootstrap.Config.ListenAddr,
-		Handler:           handler,
+		Handler:           r.trackRequests(handler),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 	}
@@ -118,6 +121,9 @@ func (r *routeRegistry) Start() error {
 func (r *routeRegistry) BeginShutdown(context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.stopping {
+		slog.Info("HTTP admission stopped", "pending_requests", len(r.requests))
+	}
 	r.stopping = true
 	if r.server != nil {
 		r.server.SetKeepAlivesEnabled(false)
@@ -137,7 +143,10 @@ func (r *routeRegistry) Quiesce(ctx context.Context) *cd.Error {
 	server := r.server
 	r.mu.Unlock()
 	if server != nil {
+		watchdog := time.AfterFunc(3*time.Second, r.logPendingRequests)
+		defer watchdog.Stop()
 		if err := server.Shutdown(ctx); err != nil {
+			r.logPendingRequests()
 			return cd.NewError(cd.Timeout, "HTTP requests have not drained: "+err.Error())
 		}
 	}

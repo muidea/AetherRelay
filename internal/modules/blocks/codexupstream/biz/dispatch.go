@@ -52,7 +52,8 @@ func (s *Upstream) commandHandler(handler event.ObserverFunc) event.ObserverFunc
 			return
 		}
 		control := ev.ID() == events.TopicCancel || ev.ID() == events.TopicWSClose || ev.ID() == events.TopicSampleClose
-		ctx, cancel := context.WithCancel(context.WithValue(ev.Context(), dispatchWaitKey{}, events.QueueWait(ev.Context())))
+		ctx, cancelCause := context.WithCancelCause(context.WithValue(ev.Context(), dispatchWaitKey{}, events.QueueWait(ev.Context())))
+		cancel := func() { cancelCause(context.Canceled) }
 		lifetime := &commandLifetime{cancel: cancel}
 		ctx = context.WithValue(ctx, commandLifetimeKey{}, lifetime)
 		defer func() {
@@ -62,9 +63,14 @@ func (s *Upstream) commandHandler(handler event.ObserverFunc) event.ObserverFunc
 		}()
 		id := uuid.NewString()
 		s.mu.Lock()
-		// Probe cleanup is part of the proxy module's checked shutdown barrier.
-		// Keep the existing data-plane stopping contract unchanged.
-		if (s.stopping && ev.ID() != events.TopicSampleClose) || (!control && len(s.active) >= maxConcurrentCommands) {
+		// Stop new work while allowing cancellation and close commands to
+		// release existing streams during the checked shutdown barrier.
+		if s.stopping && !control {
+			s.mu.Unlock()
+			result.Set(nil, cd.WrapError(cd.InvalidOperation, events.ErrServiceShutdown, "Codex command rejected"))
+			return
+		}
+		if !control && len(s.active) >= maxConcurrentCommands {
 			s.mu.Unlock()
 			result.Set(nil, cd.NewError(cd.ResourceExhausted, "Codex upstream local capacity unavailable"))
 			return
@@ -73,15 +79,18 @@ func (s *Upstream) commandHandler(handler event.ObserverFunc) event.ObserverFunc
 			s.active = map[string]context.CancelFunc{}
 		}
 		s.workWG.Add(1)
-		s.active[id] = cancel
+		s.active[id] = func() { cancelCause(events.ErrServiceShutdown) }
 		s.mu.Unlock()
 		defer func() { s.mu.Lock(); delete(s.active, id); s.mu.Unlock(); s.workWG.Done() }()
 		ev.BindContext(ctx)
-		handler(ev, result)
+		handler(ev, shutdownResult{Result: result, ctx: ctx})
 	}
 }
 
 func classifyRequestTransport(ctx context.Context, err error) events.ErrorClass {
+	if ctx != nil && errors.Is(context.Cause(ctx), events.ErrServiceShutdown) {
+		return events.ErrorServiceShutdown
+	}
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return events.ErrorTimeout
 	}

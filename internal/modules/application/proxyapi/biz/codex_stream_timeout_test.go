@@ -32,6 +32,8 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 		availabilityNeutral bool
 	}{
 		{name: "progress"},
+		{name: "shutdown_before_output", want: codexresponses.KindServiceShutdown, availabilityNeutral: true},
+		{name: "shutdown_after_output", want: codexresponses.KindServiceShutdown, availabilityNeutral: true},
 		{name: "cleanup_delay", want: codexresponses.KindNetwork, availabilityNeutral: true},
 		{name: "network_before_output", want: codexresponses.KindNetwork},
 		{name: "rate_limit_after_output", want: codexresponses.KindRateLimit},
@@ -66,6 +68,10 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			})
 			up := event.NewSimpleObserver(upcommon.UnitID, hub)
 			up.Subscribe(upevents.TopicStart, func(ev event.Event, result event.Result) {
+				if tc.name == "shutdown_before_output" {
+					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorServiceShutdown}, nil)
+					return
+				}
 				if tc.name == "network_before_output" {
 					result.Set(upevents.StartResult{ErrorClass: upevents.ErrorNetwork, Attempt: upevents.HTTPAttempt{Request: upevents.HTTPRequestObservation{At: time.Now(), URL: "https://example.test/responses"}, Response: upevents.HTTPResponseObservation{TransportReason: transport.ConnectionRefused}}}, nil)
 					return
@@ -83,6 +89,10 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 			})
 			up.Subscribe(upevents.TopicPull, func(ev event.Event, result event.Result) {
 				n := pulls.Add(1)
+				if tc.name == "shutdown_after_output" && n > 1 {
+					result.Set(nil, cd.WrapError(cd.Unexpected, upevents.ErrServiceShutdown, "pull interrupted"))
+					return
+				}
 				if (tc.name == "cleanup_delay" || tc.name == "rate_limit_after_output") && n > 1 {
 					class := upevents.ErrorNetwork
 					if tc.name == "rate_limit_after_output" {
@@ -194,7 +204,7 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 				t.Fatalf("retry after=%d", failure.RetryAfterSeconds)
 			}
 			wantCancels := int32(1)
-			if tc.name == "headers" || tc.name == "network_before_output" {
+			if tc.name == "headers" || tc.name == "network_before_output" || tc.name == "shutdown_before_output" {
 				wantCancels = 0
 			}
 			if released.Load() != 1 || canceled.Load() != wantCancels {
@@ -217,6 +227,9 @@ func TestCodexStreamTimeoutAndFeedback(t *testing.T) {
 				select {
 				case r := <-recorded:
 					wantClass := accevents.ErrorTimeout
+					if tc.want == codexresponses.KindServiceShutdown {
+						wantClass = string(codexresponses.KindServiceShutdown)
+					}
 					if tc.name == "cleanup_delay" || tc.name == "network_before_output" {
 						wantClass = accevents.ErrorNetwork
 					} else if tc.name == "rate_limit_after_output" {

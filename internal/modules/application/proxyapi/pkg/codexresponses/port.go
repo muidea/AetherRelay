@@ -247,6 +247,7 @@ const (
 	KindConversion          ErrorKind = "conversion"
 	KindClientWrite         ErrorKind = "client_write"
 	KindClientCanceled      ErrorKind = "client_canceled"
+	KindServiceShutdown     ErrorKind = "service_shutdown"
 )
 
 type Failure struct {

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -350,7 +351,14 @@ func clearSessionCookie(w http.ResponseWriter, basePath string, secure bool) {
 	})
 }
 
-func writeAdminAuthError(w http.ResponseWriter, status int, code, message string) {
+func writeAdminAuthError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	if status == http.StatusUnauthorized {
+		authType := "admin_session"
+		if code == "admin_authentication_failed" {
+			authType = "admin_password"
+		}
+		slog.WarnContext(r.Context(), "authentication rejected", "method", r.Method, "path", r.URL.Path, "auth_type", authType, "reason", code)
+	}
 	writeJSON(w, status, map[string]any{
 		"error": map[string]string{
 			"code":    code,
@@ -362,7 +370,7 @@ func writeAdminAuthError(w http.ResponseWriter, status int, code, message string
 func (h *Handler) requireSession(w http.ResponseWriter, r *http.Request) *adminSession {
 	sess := h.sessionFromRequest(r)
 	if sess == nil {
-		writeAdminAuthError(w, http.StatusUnauthorized, "admin_authentication_required", "admin login is required")
+		writeAdminAuthError(w, r, http.StatusUnauthorized, "admin_authentication_required", "admin login is required")
 		return nil
 	}
 	return sess
@@ -386,11 +394,11 @@ func (h *Handler) requireCSRF(w http.ResponseWriter, r *http.Request, sess *admi
 	}
 	token := strings.TrimSpace(r.Header.Get(adminCSRFHeader))
 	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(sess.CSRFToken)) != 1 {
-		writeAdminAuthError(w, http.StatusForbidden, "admin_csrf_invalid", "invalid csrf token")
+		writeAdminAuthError(w, r, http.StatusForbidden, "admin_csrf_invalid", "invalid csrf token")
 		return false
 	}
 	if !originAllowed(r) {
-		writeAdminAuthError(w, http.StatusForbidden, "admin_origin_invalid", "invalid origin")
+		writeAdminAuthError(w, r, http.StatusForbidden, "admin_origin_invalid", "invalid origin")
 		return false
 	}
 	return true
@@ -423,7 +431,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if retry, ok := h.auth.checkLoginAllowed(r.RemoteAddr); !ok {
 		w.Header().Set("Retry-After", formatRetryAfter(retry))
-		writeAdminAuthError(w, http.StatusTooManyRequests, "admin_login_rate_limited", "too many login attempts")
+		writeAdminAuthError(w, r, http.StatusTooManyRequests, "admin_login_rate_limited", "too many login attempts")
 		return
 	}
 	var input loginRequest
@@ -436,13 +444,13 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !userOK || !passOK {
 		h.auth.recordLoginFailure(r.RemoteAddr)
 		// 统一错误,不区分账号/密码。
-		writeAdminAuthError(w, http.StatusUnauthorized, "admin_authentication_failed", "invalid username or password")
+		writeAdminAuthError(w, r, http.StatusUnauthorized, "admin_authentication_failed", "invalid username or password")
 		return
 	}
 	h.auth.clearLoginFailures(r.RemoteAddr)
 	sess, err := h.auth.createSession(authCfg.Username)
 	if err != nil {
-		writeAdminAuthError(w, http.StatusServiceUnavailable, "admin_session_unavailable", "unable to create session")
+		writeAdminAuthError(w, r, http.StatusServiceUnavailable, "admin_session_unavailable", "unable to create session")
 		return
 	}
 	maxAge := authCfg.SessionTTLSeconds

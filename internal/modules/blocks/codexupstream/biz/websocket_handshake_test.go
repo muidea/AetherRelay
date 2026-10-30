@@ -154,7 +154,7 @@ func TestWebsocketPendingHandshakeCancellation(t *testing.T) {
 			}
 			if mode == "shutdown" {
 				opened, err := event.GetAs[events.WSOpenResult](result)
-				if err != nil || opened.ErrorClass != events.ErrorCanceled || opened.SessionID != "" {
+				if err != nil || opened.ErrorClass != events.ErrorServiceShutdown || opened.SessionID != "" {
 					t.Fatalf("shutdown opened a session: %+v err=%v", opened, err)
 				}
 				drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)

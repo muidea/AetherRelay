@@ -102,15 +102,16 @@ type CodexFingerprint struct {
 type ErrorClass string
 
 const (
-	ErrorInvalidRequest ErrorClass = "invalid_request"
-	ErrorModelNotFound  ErrorClass = "model_not_found"
-	ErrorInvalidToken   ErrorClass = "invalid_token"
-	ErrorRateLimit      ErrorClass = "rate_limit"
-	ErrorTimeout        ErrorClass = "timeout"
-	ErrorCanceled       ErrorClass = "canceled"
-	ErrorNetwork        ErrorClass = "network"
-	ErrorUpstream       ErrorClass = "upstream"
-	ErrorProtocol       ErrorClass = "protocol"
+	ErrorInvalidRequest  ErrorClass = "invalid_request"
+	ErrorModelNotFound   ErrorClass = "model_not_found"
+	ErrorInvalidToken    ErrorClass = "invalid_token"
+	ErrorRateLimit       ErrorClass = "rate_limit"
+	ErrorTimeout         ErrorClass = "timeout"
+	ErrorCanceled        ErrorClass = "canceled"
+	ErrorServiceShutdown ErrorClass = "service_shutdown"
+	ErrorNetwork         ErrorClass = "network"
+	ErrorUpstream        ErrorClass = "upstream"
+	ErrorProtocol        ErrorClass = "protocol"
 	// ErrorEndpoint identifies a route/CDN/proxy-level response (for example an
 	// HTML 403) that must not be treated as an account credential failure.
 	ErrorEndpoint ErrorClass = "endpoint"

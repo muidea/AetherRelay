@@ -436,6 +436,9 @@ func (h *Handler) writeCodexResponsesError(w http.ResponseWriter, r *http.Reques
 	case string(codexresponses.KindProviderUnavailable):
 		status = http.StatusServiceUnavailable
 		code = ErrorCodeProviderUnavailable
+	case string(codexresponses.KindServiceShutdown):
+		status = http.StatusServiceUnavailable
+		code = string(codexresponses.KindServiceShutdown)
 	case string(codexresponses.KindAuthentication):
 		status = http.StatusServiceUnavailable
 		code = ErrorCodeUpstreamAuthRequired
@@ -548,6 +551,8 @@ func streamFailFromCodex(failure *codexresponses.Failure) *streamFail {
 		kind = streamKindError
 	case codexresponses.KindProviderUnavailable:
 		kind = streamKind("provider_unavailable")
+	case codexresponses.KindServiceShutdown:
+		kind = streamKind("service_shutdown")
 	case codexresponses.KindAuthentication:
 		kind = streamKind("upstream_authentication_required")
 	case codexresponses.KindStreamLifetime:

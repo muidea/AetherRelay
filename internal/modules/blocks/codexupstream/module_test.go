@@ -59,8 +59,8 @@ func TestFrameworkRegistersAndRunsCodexUpstream(t *testing.T) {
 	if err := mgr.BeginShutdown(ctx); err != nil {
 		t.Fatalf("begin shutdown: %v", err)
 	}
-	if _, err := sendCancel(); err == nil || err.Code != cd.ResourceExhausted {
-		t.Fatalf("shutdown must close admission: %v", err)
+	if _, err := sendCancel(); err != nil {
+		t.Fatalf("shutdown must retain cleanup commands: %v", err)
 	}
 	if err := mgr.Quiesce(ctx); err != nil {
 		t.Fatalf("quiesce: %v", err)
