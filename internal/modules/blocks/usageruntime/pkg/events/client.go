@@ -8,6 +8,7 @@ import (
 
 	"aetherrelay/internal/modules/blocks/usageruntime/pkg/common"
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 
 	"github.com/muidea/magicCommon/event"
@@ -285,4 +286,56 @@ func send(hub event.Hub, ev event.Event, name string) (event.Result, error) {
 		return nil, fmt.Errorf("%s command failed: %s", name, err.Message)
 	}
 	return result, nil
+}
+
+func (c client) WriteTrace(ctx context.Context, id string, value trace.Trace) error {
+	result, err := send(c.hub, event.NewEventWithContext(TopicWriteTrace, c.source, common.UnitID, event.NewHeader(), ctx, WriteTraceCommand{EventID: id, Value: value}), "usage write trace")
+	if err != nil {
+		return err
+	}
+	data, e := result.Get()
+	if e != nil {
+		return fmt.Errorf("usage write trace: %s", e.Message)
+	}
+	response, ok := data.(WriteTraceResult)
+	if !ok {
+		return fmt.Errorf("invalid usage write trace response")
+	}
+	if response.EventNotStarted {
+		return usage.ErrEventNotStarted
+	}
+	return nil
+}
+func (c client) ExecutionTrace(ctx context.Context, id string) (*trace.Trace, error) {
+	result, err := send(c.hub, event.NewEventWithContext(TopicExecutionTrace, c.source, common.UnitID, event.NewHeader(), ctx, ExecutionTraceCommand{EventID: id}), "usage execution trace")
+	if err != nil {
+		return nil, err
+	}
+	data, e := result.Get()
+	if e != nil {
+		return nil, fmt.Errorf("usage execution trace: %s", e.Message)
+	}
+	response, ok := data.(ExecutionTraceResult)
+	if !ok {
+		return nil, fmt.Errorf("invalid usage execution trace response")
+	}
+	if !response.Found {
+		return nil, nil
+	}
+	return &response.Value, nil
+}
+func (c client) Anomalies(ctx context.Context, f usage.UsageFilter, group string) (usage.AnomalyDashboard, error) {
+	result, err := send(c.hub, event.NewEventWithContext(TopicAnomalies, c.source, common.UnitID, event.NewHeader(), ctx, AnomaliesCommand{Filter: f, GroupBy: group}), "usage anomalies")
+	if err != nil {
+		return usage.AnomalyDashboard{}, err
+	}
+	data, e := result.Get()
+	if e != nil {
+		return usage.AnomalyDashboard{}, fmt.Errorf("usage anomalies: %s", e.Message)
+	}
+	response, ok := data.(AnomaliesResult)
+	if !ok {
+		return usage.AnomalyDashboard{}, fmt.Errorf("invalid usage anomalies response")
+	}
+	return response.Value, nil
 }

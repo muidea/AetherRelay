@@ -8,6 +8,8 @@ import (
 	"io"
 	"strconv"
 	"time"
+
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 )
 
 // csvExportHeader 是导出固定列;不含正文与任何密钥。
@@ -54,6 +56,7 @@ var csvExportHeader = []string{
 	"first_output_at", "generation_duration_ms", "tps", "generation_partial", "generation_buffered", "observed_tps", "output_tokens_known",
 	"account_id", "account_label", "upstream_request_model", "response_model", "model_substituted",
 	"upstream_error_type", "upstream_error_code", "upstream_error_param", "upstream_error_message",
+	"trace_state", "attempt_count", "failed_attempts", "had_anomaly", "primary_cause", "trace_transport", "trace_revision", "trace_request_id",
 }
 
 // ExportCSV 按筛选条件流式写出 CSV。
@@ -92,10 +95,10 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     stream, estimated, state,
-    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, account_id, account_label, upstream_request_model, response_model, model_substituted, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message
-FROM ` + targetEvents + `
+    coalesce(cached_input_tokens_known, false), coalesce(cache_creation_input_tokens_known, false), first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, account_id, account_label, upstream_request_model, response_model, model_substituted, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message, trace_state,attempt_count,failed_attempts,had_anomaly,primary_cause,trace_transport,trace_revision,trace_request_id
+FROM ` + anomalyEventSource + `
 WHERE ` + where + `
-ORDER BY started_at ASC, event_id ASC`
+ORDER BY started_at ASC, event_id ASC LIMIT 10001`
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -108,7 +111,13 @@ ORDER BY started_at ASC, event_id ASC`
 		return fmt.Errorf("write csv header: %w", err)
 	}
 
+	count := 0
 	for rows.Next() {
+		count++
+		if count > 10000 {
+			return fmt.Errorf("export limited to 10000 events")
+		}
+		var traceSummary trace.Summary
 		var (
 			eventID, apiKeyID, provider, model, operation, route string
 			clientEndpoint, clientProtocol                       string
@@ -150,6 +159,7 @@ ORDER BY started_at ASC, event_id ASC`
 			&durationMS, &firstEventMS, &upstreamMS,
 			&stream, &estimated, &state,
 			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered, &outputKnown, &accountID, &accountLabel, &upstreamRequestModel, &responseModel, &modelSubstituted, &upstreamErrorType, &upstreamErrorCode, &upstreamErrorParam, &upstreamErrorMessage,
+			&traceSummary.TraceState, &traceSummary.AttemptCount, &traceSummary.FailedAttempts, &traceSummary.HadAnomaly, &traceSummary.PrimaryCause, &traceSummary.TraceTransport, &traceSummary.TraceRevision, &traceSummary.TraceRequestID,
 		); err != nil {
 			return ErrStoreUnavailable
 		}
@@ -234,6 +244,7 @@ ORDER BY started_at ASC, event_id ASC`
 		row = append(row, tpsCSV(sample)...)
 		row = append(row, accountID, accountLabel, upstreamRequestModel, responseModel, strconv.FormatBool(modelSubstituted))
 		row = append(row, upstreamErrorType, upstreamErrorCode, upstreamErrorParam, upstreamErrorMessage)
+		row = append(row, traceCSV(traceSummary)...)
 		if err := cw.Write(row); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}
@@ -246,4 +257,17 @@ ORDER BY started_at ASC, event_id ASC`
 		return fmt.Errorf("flush csv: %w", err)
 	}
 	return nil
+}
+
+func traceCSV(s trace.Summary) []string {
+	state := s.TraceState
+	if state == "" {
+		state = "not_collected"
+	}
+	count, failed := "", ""
+	if state != "not_collected" {
+		count = strconv.Itoa(s.AttemptCount)
+		failed = strconv.Itoa(s.FailedAttempts)
+	}
+	return []string{state, count, failed, strconv.FormatBool(s.HadAnomaly), s.PrimaryCause, s.TraceTransport, s.TraceRevision, s.TraceRequestID}
 }

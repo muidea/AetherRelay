@@ -49,6 +49,9 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 	if _, err := tx.ExecContext(ctx, `SELECT event_id, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message FROM usage_upstream_error LIMIT 0`); err != nil {
 		return fmt.Errorf("verify upstream error schema: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `SELECT event_id, request_id, revision, instance, attempt_count, failed_attempts, had_anomaly, primary_cause, transport, evidence_state, payload FROM usage_execution_trace LIMIT 0`); err != nil {
+		return fmt.Errorf("verify execution trace schema: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema initialization: %w", err)
 	}
@@ -57,6 +60,8 @@ WHERE table_name IN ('usage_events', 'client_api_key_metadata', 'client_api_key_
 
 func createSchema(ctx context.Context, tx *sql.Tx) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS usage_execution_trace (event_id VARCHAR PRIMARY KEY, request_id VARCHAR NOT NULL, revision VARCHAR NOT NULL, instance VARCHAR NOT NULL, attempt_count INTEGER NOT NULL, failed_attempts INTEGER NOT NULL, had_anomaly BOOLEAN NOT NULL, primary_cause VARCHAR NOT NULL, transport VARCHAR NOT NULL, evidence_state VARCHAR NOT NULL, payload VARCHAR NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_trace_cause ON usage_execution_trace(primary_cause)`,
 		`CREATE TABLE IF NOT EXISTS usage_upstream_error (event_id VARCHAR PRIMARY KEY, upstream_error_type VARCHAR NOT NULL, upstream_error_code VARCHAR NOT NULL, upstream_error_param VARCHAR NOT NULL, upstream_error_message VARCHAR NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_codex_model (event_id VARCHAR PRIMARY KEY, upstream_request_model VARCHAR NOT NULL, response_model VARCHAR NOT NULL, model_substituted BOOLEAN NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS usage_account_selection (event_id VARCHAR PRIMARY KEY, account_id VARCHAR NOT NULL, account_label VARCHAR NOT NULL)`,

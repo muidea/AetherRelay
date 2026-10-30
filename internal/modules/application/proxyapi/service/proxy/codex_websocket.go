@@ -18,6 +18,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	"aetherrelay/internal/pkg/aetherrelayclientauth"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"github.com/gorilla/websocket"
 )
 
@@ -253,6 +254,9 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 				h.recordCodexWebsocketFailure(r, model, turnStarted, openErr)
 				return
 			}
+			if c := trace.FromContext(r.Context()); c != nil && opened.Attempt.Request.Method == http.MethodGet {
+				c.RememberHandshake(trace.Handshake{At: opened.Attempt.Request.At, Status: opened.Attempt.Response.Status, DurationMS: opened.Attempt.Response.DurationMS, TransportReason: opened.Attempt.Response.TransportReason.Safe()})
+			}
 			h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 			round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 			sessionID = opened.SessionID
@@ -343,6 +347,9 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 						writeCodexWebsocketFailure(conn, openErr, "upstream_unavailable", "Codex websocket replacement account is unavailable")
 						h.recordCodexWebsocketFailure(r, model, turnStarted, openErr)
 						return
+					}
+					if c := trace.FromContext(r.Context()); c != nil && opened.Attempt.Request.Method == http.MethodGet {
+						c.RememberHandshake(trace.Handshake{At: opened.Attempt.Request.At, Status: opened.Attempt.Response.Status, DurationMS: opened.Attempt.Response.DurationMS, TransportReason: opened.Attempt.Response.TransportReason.Safe()})
 					}
 					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 					round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
@@ -544,6 +551,7 @@ func (h *Handler) forwardCodexWebsocketTurn(r *http.Request, conn *websocket.Con
 			if update.Failure != nil {
 				attemptErr = update.Failure
 			}
+			update.Attempt.Finished = update.Done || update.Failure != nil || update.Attempt.Response.TerminalEvent != ""
 			h.archiveCodexUpstreamAttempt(archiveRoundFromContext(ctx), r, effectivecatalog.CodexOAuthProviderID, update.Attempt, attemptErr)
 		}
 		payload := update.Payload

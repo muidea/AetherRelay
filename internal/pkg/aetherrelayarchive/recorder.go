@@ -858,3 +858,40 @@ type nopWriteCloser struct{}
 
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
+
+// InspectEvidence checks known metadata; absence does not prove retention cleanup.
+func InspectEvidence(root, apiKeyID string, roundID int64) (metadataState, relativeDir string) {
+	if strings.TrimSpace(root) == "" || roundID <= 0 {
+		return "not_collected", ""
+	}
+	relativeDir = filepath.Join(archiveScope(apiKeyID), fmt.Sprintf("%06d", roundID))
+	return evidenceFileState(filepath.Join(root, relativeDir, "metadata.json")), relativeDir
+}
+
+// InspectErrorEvidence only opens a generated basename, never a supplied path.
+// Each attempt is checked individually; another attempt's file is not evidence.
+func InspectErrorEvidence(root, apiKeyID string, roundID int64, name string) string {
+	if strings.TrimSpace(root) == "" || roundID <= 0 || !strings.HasPrefix(name, "upstream_response_") || !strings.HasSuffix(name, ".error.body.txt") {
+		return "missing"
+	}
+	number := strings.TrimSuffix(strings.TrimPrefix(name, "upstream_response_"), ".error.body.txt")
+	if number == "" {
+		return "missing"
+	}
+	for _, c := range number {
+		if c < '0' || c > '9' {
+			return "missing"
+		}
+	}
+	return evidenceFileState(filepath.Join(root, archiveScope(apiKeyID), fmt.Sprintf("%06d", roundID), name))
+}
+func evidenceFileState(path string) string {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return "missing"
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return "read_failed"
+	}
+	return "saved"
+}

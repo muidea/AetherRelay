@@ -12,7 +12,7 @@ function harness() {
   const elements = {};
   const context = vm.createContext({
     state: {locale: 'zh-CN', range: 'today', events: []}, URLSearchParams, AbortController, setTimeout, clearTimeout,
-    $: id => elements[id] ||= {style: {}, showModal() {}},
+    $: id => elements[id] ||= {style: {}, classList:{toggle(){}}, showModal() {}},
     t: (s,params={}) => s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??'')), apiURL: s => s,
     setLocalizedText: (el,s,params={}) => {el.textContent=s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??''));},
     setLocalizedAttribute: (el,name,source) => {el[name]=typeof source==='function'?source():source;},
@@ -21,12 +21,13 @@ function harness() {
     toast: message => { throw new Error(message); },
   });
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel','formatUsageDate','usageInputISO','usageInputValue','usageCause','usageCauseLabel','usageEvidenceLabel','usageReplayLabel','setUsageTraceTab','renderUsageTrace','renderUsageEventFields', 'showUsageEvent']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
     vm.runInContext(match[0], context);
   }
+  context.loadUsageTrace=async()=>{};context.loadUsageDiagnostics=async()=>{};
   return {context, elements};
 }
 
@@ -154,8 +155,8 @@ test('usage event list keeps complete values and diagnostic fields in the dialog
   const event={event_id:'0123456789abcdef',started_at:'2026-10-09T07:00:00Z',api_key_id:'a-very-long-key-name',model:'a-very-long-model-name',provider:'codexoauth',operation:'responses',input_tokens:202648,output_tokens:1231,total_tokens:203879,tps:123456.78,http_status:502,outcome:'upstream_failed',conversion_mode:'anthropic_to_codex_responses',upstream_status:200};
   const table=c.renderUsageEventTable([event]);
   const headers=[...table.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map(m=>m[1]);
-  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','TPS','最终状态','耗时(s)']);
-  assert.equal((table.match(/data-label=/g)||[]).length,9);
+  assert.deepEqual(headers,['时间','Key','Model','Op','Tokens','缓存使用率','TPS','最终状态','异常原因','账号 / 尝试','耗时(s)']);
+  assert.equal((table.match(/data-label=/g)||[]).length,11);
   assert.match(table,/<th scope="col" title="输入 Token \/ 输出 Token \/ 总 Token">Tokens<\/th>/);
   for(const value of [event.api_key_id,event.model,event.operation,'202,648','1,231','203,879','123456.78','upstream_failed'])assert.ok(table.includes(value),value);
   assert.doesNotMatch(table,/text-overflow:ellipsis|0123456789abcdef|anthropic_to_codex_responses/);
@@ -169,7 +170,7 @@ test('usage event list keeps complete values and diagnostic fields in the dialog
 
 test('usage events remain keyboard accessible after loading', async () => {
   const {context:c,elements}=harness();
-  const row={dataset:{event:'0'}};
+  const row={dataset:{event:'0'},classList:{toggle(){}},setAttribute(){}};
   c.document.querySelectorAll=()=>[row];
   const event={event_id:'keyboard-event',http_status:200};
   c.request=async()=>({events:[event]});
@@ -365,7 +366,7 @@ test('Codex substitution shows response evidence and account while success stays
   const table=c.renderUsageEventTable([event]);
   assert.match(table,/上游模型替换/);assert.match(table,/gpt-6-luna&lt;script&gt;/);assert.match(table,/200.*成功/);assert.doesNotMatch(table,/<script>/);
   const cells=[...table.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(match=>match[1]);
-  assert.equal(cells.length,9);assert.doesNotMatch(cells[2],/上游模型替换|gpt-6-luna/);
+  assert.equal(cells.length,11);assert.doesNotMatch(cells[2],/上游模型替换|gpt-6-luna/);
   assert.match(cells[7],/200 成功/);assert.match(cells[7],/title="gpt-6.1-sol → gpt-6-luna&lt;script&gt;"/);
   assert.match(cells[7],/>上游模型替换<\/div>/);assert.doesNotMatch(cells[7].replace(/<[^>]*>/g,''),/gpt-6-luna|gpt-6.1-sol/);
   c.showUsageEvent(event);const detail=elements.usageEventDetail.innerHTML;
@@ -475,4 +476,63 @@ test('Codex overload details retain the cause, partial outcome and unknown token
   c.showUsageEvent({error_code:'upstream',http_status:200,outcome:'upstream_truncated'});
   assert.match(elements.usageEventDetail.innerHTML,/上游错误代码<\/dt><dd[^>]*>—<\/dd>/);
   assert.doesNotMatch(elements.usageEventDetail.innerHTML,/上游服务过载/);
+});
+
+function installUsageFunctions(context,names){
+ for(const name of names){const match=source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`,'m'));assert.ok(match,name);vm.runInContext(match[0],context);}
+}
+
+test('diagnostic dates and custom ranges always use UTC+8 regardless of browser timezone',()=>{
+ const {context:c}=harness();const old=process.env.TZ;
+ try{for(const zone of ['UTC','America/Los_Angeles','Asia/Singapore']){process.env.TZ=zone;assert.equal(c.usageInputISO('2026-10-30T00:00'),'2026-10-29T16:00:00.000Z');assert.equal(c.usageInputValue('2026-10-29T16:00:00Z'),'2026-10-30T00:00');assert.equal(c.usageParams().get('timezone'),'Asia/Singapore');}}
+ finally{if(old===undefined)delete process.env.TZ;else process.env.TZ=old;}
+});
+
+test('diagnostic rendering preserves missing observations and escapes evidence',()=>{
+ const {context:c,elements}=harness();
+ const event={event_id:'event',state:'completed',http_status:200,outcome:'upstream_truncated',generation_partial:true};
+ const trace={total_attempts:1,context:{request_id:'request'},attempts:[{id:1,failed:true,finished:true,event_count:0,wire_bytes:0,upstream_error_message:'<img src=x onerror=alert(1)>'}]};
+ c.renderUsageTrace({event,trace,evidence:[{field:'raw_error_body',state:'not_collected'}]});
+ assert.doesNotMatch(elements.usageTraceOverview.innerHTML,/0 \/ 0/);assert.match(elements.usageTraceOverview.innerHTML,/未采集/);assert.match(elements.usageTraceOverview.innerHTML,/未取得/);
+ assert.match(elements.usageTraceEvidence.innerHTML,/当时未采集/);assert.match(elements.usageTraceEvidence.innerHTML,/不等同于原始响应帧/);assert.match(elements.usageTraceEvidence.innerHTML,/&lt;img/);assert.doesNotMatch(elements.usageTraceEvidence.innerHTML,/<img/);
+ trace.attempts[0].read_observed=true;c.renderUsageTrace({event,trace});assert.match(elements.usageTraceOverview.innerHTML,/0 \/ 0/);
+ assert.match(c.eventStatusMeta({...event,outcome:'process_interrupted'}).label,/未知/);
+ assert.match(c.eventStatusMeta({...event,outcome:'success',had_anomaly:true}).label,/曾有异常/);
+});
+
+test('trace requests cannot overwrite a newly opened event',async()=>{
+ const {context:c,elements}=harness();installUsageFunctions(c,['loadUsageTrace']);
+ const pending=[];c.request=()=>new Promise(resolve=>pending.push(resolve));
+ const first={event_id:'first',state:'completed',outcome:'success'},last={event_id:'last',state:'completed',outcome:'error'};
+ c.state.usageEvent=first;const one=c.loadUsageTrace(first);c.state.usageEvent=last;const two=c.loadUsageTrace(last);
+ pending[1]({event:last,trace:null});await two;pending[0]({event:first,trace:null});await one;
+ assert.equal(c.state.usageTrace.event.event_id,'last');assert.match(elements.usageTraceSummary.innerHTML,/last/);assert.doesNotMatch(elements.usageTraceSummary.innerHTML,/first/);
+});
+
+test('diagnostic aggregation excludes unknown requests and ignores stale scopes',async()=>{
+ const {context:c,elements}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
+ const pending=[];c.request=()=>new Promise(resolve=>pending.push(resolve));
+ const one=c.loadUsageDiagnostics();c.state.searchFilter='new';const two=c.loadUsageDiagnostics();
+ const current={summary:{completed:4,success:3,failed:1,unknown:12,affected:1,rate:.25},groups:[],daily:[]};pending[1](current);await two;
+ pending[0]({summary:{completed:100,success:0}});await one;
+ assert.equal(elements.uSuccess.textContent,'75.0%');assert.match(elements.usageDiagnosticsHint.textContent,/结果未知不计入成功率分母/);
+ c.request=async()=>{throw Error('offline')};await c.loadUsageDiagnostics();assert.equal(elements.uSuccess.textContent,'—');assert.equal(elements.usageDiagnosticsSummary.innerHTML,'');
+});
+
+test('group drilldown distinguishes absent account from a literal unknown account',()=>{
+ const {context:c}=harness();installUsageFunctions(c,['setUsageView','usageDrill']);c.setHash=()=>{};c.loadUsage=()=>{};
+ c.usageDrill('account',{key:'',affected:1});assert.equal(c.state.accountFilter,'');assert.equal(c.state.missingDimension,'account');assert.equal(c.usageParams().get('missing_dimension'),'account');assert.equal(c.state.resultFilter,'anomaly');
+ assert.equal(c.usageEventMatchesFilters({state:'completed',outcome:'error',account_id:''}),true);assert.equal(c.usageEventMatchesFilters({state:'completed',outcome:'error',account_id:'unknown'}),false);
+ c.usageDrill('account',{key:'unknown',affected:1});assert.equal(c.state.missingDimension,'');assert.equal(c.state.accountFilter,'unknown');
+});
+
+test('CSV download uses the complete active diagnostic filter and JSON retains trace evidence',async()=>{
+ const {context:c,elements}=harness();installUsageFunctions(c,['downloadUsageCSV','downloadUsageDiagnostic']);Object.assign(c.state,{range:'all',accountFilter:'slot',resultFilter:'partial',searchFilter:'request-id',causeFilter:'server_is_overloaded',transportFilter:'websocket',revisionFilter:'revision'});
+ c.authHeaders=()=>({});c.saveUsageBlob=(name,blob)=>{c.saved={name,blob}};let url;c.fetch=async u=>{url=u;return {ok:true,blob:async()=>'csv'}};
+ await c.downloadUsageCSV();const query=new URLSearchParams(url.split('?')[1]);for(const [k,v]of c.usageParams())assert.equal(query.get(k),v);assert.equal(elements.usageListCSV.disabled,false);assert.equal(c.saved.name,'usage-events.csv');
+ c.Blob=Blob;c.state.usageTrace={event:{event_id:'id'},trace:{context:{request_id:'req'},attempts:[{failed:true}]}};c.downloadUsageDiagnostic();const diagnostic=JSON.parse(await c.saved.blob.text());assert.equal(diagnostic.trace.context.request_id,'req');assert.equal(diagnostic.trace.attempts[0].failed,true);
+});
+
+test('missing historical presence flags do not turn unavailable failure usage into zero tokens',()=>{
+ const {context:c}=harness();assert.equal(c.usageTokensUnavailable({state:'completed',outcome:'upstream_truncated',input_tokens:0,output_tokens:0,total_tokens:0}),true);assert.equal(c.usageTokensUnavailable({state:'completed',outcome:'success',input_tokens:0,output_tokens:0,total_tokens:0,output_tokens_known:true}),false);
 });

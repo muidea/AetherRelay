@@ -19,6 +19,7 @@ import (
 	upcommon "aetherrelay/internal/modules/blocks/codexupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/codexupstream/pkg/events"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 )
@@ -599,6 +600,7 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 			}
 			return codexresponses.Result{}, err
 		}
+		usagetarget.BeginCodexAttempt(ctx, request.Body)
 		fingerprint := resolveCodexFingerprint(account.FingerprintSeed, account.FingerprintMode, request.SessionHash, request.LogicalThreadHash, request.TurnMetadata)
 		turnState, turnStateSource := s.resolveCodexSessionTurnState(account.AccountID, fingerprint, request.SessionScope, request.TurnState)
 		request.TurnStateSource = turnStateSource
@@ -620,7 +622,9 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		}
 		if completed.ErrorClass == "" {
 			if request.ObserveAttempt != nil {
-				request.ObserveAttempt(toCodexHTTPAttempt(completed.Attempt), nil)
+				finalAttempt := toCodexHTTPAttempt(completed.Attempt)
+				finalAttempt.Finished = true
+				request.ObserveAttempt(finalAttempt, nil)
 			}
 			logCodexAttempt(request, nil)
 			s.mergeCodexUsageHeaders(ctx, account.AccountID, completed.Headers, completed.Attempt.Request.At, completed.Attempt.Response.At)
@@ -634,7 +638,9 @@ func (s *Proxy) CompleteCodexCompact(ctx context.Context, request codexresponses
 		failure.Attempt = toCodexHTTPAttempt(completed.Attempt)
 		failure.TurnStateSource = turnStateSource
 		if request.ObserveAttempt != nil {
-			request.ObserveAttempt(failure.Attempt, failure)
+			finalAttempt := failure.Attempt
+			finalAttempt.Finished = true
+			request.ObserveAttempt(finalAttempt, failure)
 		}
 		logCodexAttempt(request, failure)
 		lastFailure = failure
@@ -945,9 +951,13 @@ func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.Acquire
 		}
 		if request.ObserveAttempt != nil {
 			if failure != nil {
-				request.ObserveAttempt(failure.Attempt, failure)
+				finalAttempt := failure.Attempt
+				finalAttempt.Finished = true
+				request.ObserveAttempt(finalAttempt, failure)
 			} else {
-				request.ObserveAttempt(out.Attempt, nil)
+				finalAttempt := out.Attempt
+				finalAttempt.Finished = true
+				request.ObserveAttempt(finalAttempt, nil)
 			}
 		}
 	}()
@@ -1040,9 +1050,13 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		logCodexStreamAttempt(request, failure, phase, guard, observedAttempt)
 		if request.ObserveAttempt != nil {
 			if failure != nil {
-				request.ObserveAttempt(failure.Attempt, failure)
+				finalAttempt := failure.Attempt
+				finalAttempt.Finished = true
+				request.ObserveAttempt(finalAttempt, failure)
 			} else {
-				request.ObserveAttempt(observedAttempt, resultErr)
+				finalAttempt := observedAttempt
+				finalAttempt.Finished = true
+				request.ObserveAttempt(finalAttempt, resultErr)
 			}
 		}
 	}()
@@ -1215,6 +1229,9 @@ func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.R
 }
 
 func (s *Proxy) refreshCodexAccountWithinBudget(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {
+	if c := trace.FromContext(ctx); c != nil {
+		c.Action("credential_refresh", "invalid_token")
+	}
 	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshTokenCommand{AccountID: id})).Get()
 	result, ok := value.(accevents.RefreshTokenResult)
 	if !ok {

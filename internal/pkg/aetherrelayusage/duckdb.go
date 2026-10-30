@@ -377,6 +377,12 @@ WHERE event_id = ?
 			return fmt.Errorf("%w: save generation buffering: %v", ErrStoreUnavailable, err)
 		}
 	}
+	if rec.Trace != nil {
+		if err := saveExecutionTrace(ctx, tx, rec.EventID, *rec.Trace); err != nil {
+			s.markDegraded()
+			return fmt.Errorf("%w: save execution trace: %v", ErrStoreUnavailable, err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		s.markDegraded()
 		return fmt.Errorf("%w: commit completion: %v", ErrStoreUnavailable, err)

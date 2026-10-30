@@ -17,6 +17,11 @@ if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
 fi
 
 VERSION="${VERSION#v}"
+build_revision="${AETHERRELAY_BUILD_REVISION:-$(git rev-parse --verify HEAD 2>/dev/null || true)}"
+if [[ -n "$build_revision" && ! "$build_revision" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
+  echo "invalid AETHERRELAY_BUILD_REVISION (expected a Git commit hash)" >&2
+  exit 2
+fi
 GOOS="${GOOS:-$($GO_CMD env GOHOSTOS)}"
 GOARCH="${GOARCH:-$($GO_CMD env GOHOSTARCH)}"
 HOST_OS="$($GO_CMD env GOHOSTOS)"
@@ -44,7 +49,7 @@ trap 'rm -rf "$stage"' EXIT
 
 GOOS="$GOOS" GOARCH="$GOARCH" "$GO_CMD" build \
   -trimpath -buildvcs=false \
-  -ldflags "-s -w -X main.version=v$VERSION" \
+  -ldflags "-s -w -X main.version=v$VERSION -X aetherrelay/internal/pkg/aetherrelaytrace.BuildRevision=$build_revision" \
   -o "$stage/$binary" ./cmd/aetherrelay
 
 cp README.md config.example.yaml "$stage/"

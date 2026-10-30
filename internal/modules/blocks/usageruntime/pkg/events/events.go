@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
@@ -99,3 +100,23 @@ type ClientKeyAccessCommand struct {
 }
 type ClientKeyProviderRefsCommand struct{ ProviderID string }
 type ClientKeyProviderRefsResult struct{ IDs []string }
+
+const TopicWriteTrace = "aetherrelay.usage.command.write-trace"
+const TopicExecutionTrace = "aetherrelay.usage.command.execution-trace"
+const TopicAnomalies = "aetherrelay.usage.command.anomalies"
+
+type WriteTraceCommand struct {
+	EventID string
+	Value   trace.Trace
+}
+type WriteTraceResult struct{ EventNotStarted bool }
+type ExecutionTraceCommand struct{ EventID string }
+type ExecutionTraceResult struct {
+	Value trace.Trace
+	Found bool
+}
+type AnomaliesCommand struct {
+	Filter  usage.UsageFilter
+	GroupBy string
+}
+type AnomaliesResult struct{ Value usage.AnomalyDashboard }

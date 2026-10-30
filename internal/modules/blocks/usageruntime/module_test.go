@@ -13,6 +13,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelaybootstrap"
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 	"github.com/muidea/magicCommon/event"
 	plugincommon "github.com/muidea/magicCommon/framework/plugin/common"
@@ -69,9 +70,31 @@ func TestClientAPIKeyHintAndSettlementThroughEventHub(t *testing.T) {
 	if err := store.Start(ctx, usage.StartRecord{EventID: "request", APIKeyID: "key", StartedAt: at}); err != nil {
 		t.Fatal(err)
 	}
-	complete := usage.CompleteRecord{EventID: "request", CompletedAt: at.Add(time.Second), HTTPStatus: 200, Outcome: "success", OutputTokens: 7}
+
+	tr := trace.Trace{Context: trace.Context{RequestID: "request-id", Revision: "revision"}, Attempts: []trace.Attempt{{ID: 1, Finished: true, Failed: true, FailureClass: "network", Transport: "websocket"}, {ID: 2, Finished: true, Transport: "http"}}}
+	if err := store.WriteTrace(ctx, "request", tr); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.ExecutionTrace(ctx, "request")
+	if err != nil || checkpoint == nil || len(checkpoint.Attempts) != 2 {
+		t.Fatalf("typed checkpoint %+v %v", checkpoint, err)
+	}
+	checkpoint.Attempts[0].Failed = false
+	independent, _ := store.ExecutionTrace(ctx, "request")
+	if !independent.Attempts[0].Failed {
+		t.Fatal("EventHub shared trace owner memory")
+	}
+	complete := usage.CompleteRecord{EventID: "request", CompletedAt: at.Add(time.Second), HTTPStatus: 200, Outcome: "success", OutputTokens: 7, Trace: &tr}
 	if err := store.Complete(ctx, complete); err != nil {
 		t.Fatal(err)
+	}
+
+	if err := store.WriteTrace(ctx, "request", trace.Trace{}); !errors.Is(err, usage.ErrEventNotStarted) {
+		t.Fatalf("lost trace write sentinel %v", err)
+	}
+	dashboard, err := store.Anomalies(ctx, usage.UsageFilter{AllTime: true}, "cause")
+	if err != nil || dashboard.Summary.Recovered != 1 || dashboard.Summary.Completed != 1 || dashboard.Summary.FailedAttempts != 1 {
+		t.Fatalf("typed aggregation %+v %v", dashboard, err)
 	}
 	complete.OutputTokens = 99
 	if err := store.Complete(ctx, complete); !errors.Is(err, usage.ErrEventNotStarted) {

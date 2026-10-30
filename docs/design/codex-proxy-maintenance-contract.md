@@ -6,7 +6,9 @@
 
 2026-09-22 补充：客户端未声明会话身份时缓存身份由对话锚点派生，不再逐请求变化，见 `13.7.0`。跨协议转换的前缀可复用性必须可测且不得逐轮变化，缓存命中退化为公共头属客户端形态而非网关缺陷，见 `13.6.0`。协议内容块预算由 256 放宽到 512（其余结构预算不变），依据是当日 rounds 253/276 的线上拒绝记录；见 `13.5.0`。首事件超时属于请求等待预算，保留失败观测与504重试提示，但不得据此冷却共享账号或触发 provider 熔断；明确限流、额度耗尽不适用该豁免。Codex→Anthropic 响应中的 reasoning 不受下游是否声明 thinking 限制，按降级合同处理并记入省略能力；本地响应转换失败不得记作上游健康故障。已开始的 Anthropic SSE 失败须输出 error 终态，禁止伪造成功结束。结构化输出与独立 effort 的映射遵循双向转换设计。
 
-> 合同版本：`18.3.0` 根据 2026-10-30 x800 `9d2f5bd9f8e2c9fdd184c202bd4fa97b` 补齐 Codex 最终错误观测（CP-OBS-018）：将既有有界上游错误投影传递至最终用量、归档、管理详情及 CSV；精确 `server_is_overloaded` 分类为 `upstream_overloaded`，保留通用 error_code、HTTP 状态、outcome、未知用量与输出后禁止重放语义。新增独立观测表，不 ALTER 旧事件表、不回填历史。账号反馈、冷却、路由和客户端容量错误兼容映射不变。本地验收不代表已部署。
+> 合同版本：`18.4.0` 增加执行异常追踪与管理页闭环（CP-OBS-019）：有界逐次执行、请求开始时快照、持久化检查点、诊断证据完整性、同范围筛选导出与异常聚合。结果未知排除成功率/异常率分母，握手和生成发送不重复计算执行，追踪不参与路由/账号健康/冷却/重放决策。历史不回填；本地验收不代表已部署。
+
+历史合同：`18.3.0` 根据 2026-10-30 x800 `9d2f5bd9f8e2c9fdd184c202bd4fa97b` 补齐 Codex 最终错误观测（CP-OBS-018）：将既有有界上游错误投影传递至最终用量、归档、管理详情及 CSV；精确 `server_is_overloaded` 分类为 `upstream_overloaded`，保留通用 error_code、HTTP 状态、outcome、未知用量与输出后禁止重放语义。新增独立观测表，不 ALTER 旧事件表、不回填历史。账号反馈、冷却、路由和客户端容量错误兼容映射不变。本地验收不代表已部署。
 
 历史合同：`18.2.3` 区分 Codex 用量响应的额度组状态与子窗口使用率（CP-CAP-005）：保留原始组级 allowed/limit_reached 及 known 标志，窗口只按自身已知使用率判断耗尽，不复制组拒绝或推算缺失百分比。普通额度与代码审查额度按范围隔离，管理页明确受限窗口及上游预计重置时间；局部响应头不延长组观测寿命。凭据级真实调用失败和管理员禁用仍优先。旧快照不回填；本地回归通过不代表已经部署或刷新线上状态。
 
@@ -611,6 +613,8 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `usage_codex_model` 附属表和用量事件、已有账号快照在同一事务写入；API Key 删除同步清理；明细 API、Web、CSV 与交互 metadata 展示安全观测，关闭正文归档仍有效。历史缺失不回填。Web 调用列表在最终状态列同时保留 HTTP/调用结果与简短“上游模型替换”提示，不增加列数或列宽；请求/响应模型差异仅放在悬停提示和单条明细，模型列只显示请求模型；单条调用明细顶部提示上游声明模型与请求的差异、执行邮箱和本地槽位，并明确不代表账号健康异常；一致、未知、ChatGPT Web 与普通 Provider 不显示此提示。模型不一致 WARN 在尝试/回合完成时输出，含 request_id（可用时）、account_attempt、Provider、本地 account_id 与当时 account_label、请求/响应模型；依据本次用户要求仅此限频诊断允许安全邮箱标签，正常日志和指标不添加邮箱。按账号/请求/响应模型组合 10 分钟最多一次，缓存最多 1024 组；限频不影响每条调用记录，不以 WARN 次数统计替换数量。不得输出凭据、上游账号头、session、正文。
 
+`CP-OBS-019` 异常执行通过独立 `usage_execution_trace` 附属表关联 Event ID，保留请求时 revision、实例及读取/超时/归档配置快照，逐次记录实际执行目标、上游错误、传输阶段、终态与已观测事件/字节数。每请求最多 32 次执行与 64 项动作，保留总次数、末次执行和截断标志。既有日志/归档编号不等于执行编号，WS 握手与发送属于同次执行。检查点失败不改变客户端响应；最终 trace 与用量同事务提交，结算后拒绝迟到覆盖。缺失和未观测不显示成已知零，不反推历史原因/原始帧；原始内容沿用归档策略并逐文件核对。管理页提供时间线、尝试、证据、完整字段、JSON/筛选 CSV 和异常聚合；结果未知不作为失败，且排除率分母。既有重放、路由、账号反馈和冷却不变。详细合同见 [执行异常追踪与管理页](execution-anomaly-tracking.md)。
+
 `CP-OBS-012` Codex HTTP/SSE/compact 及原生 WebSocket 的传输失败必须由 `codexupstream` owner 提取有界 `transport_reason`：`dns`、`connection_refused`、`connection_reset`、`connection_aborted`、`broken_pipe`、`tls`、`eof`、`timeout`、`canceled`、`http2_stream_error`、`http2_stream_cancel`、`http2_refused_stream`、`http2_goaway`、`http2_connection_error`、`sse_line_limit`、`websocket_close`、`websocket_message_limit`、`websocket_invalid_json`、`websocket_read_error`、`websocket_write_error`、`unknown`。HTTP/2 错误只提取类型和有界枚举，不泄漏 DebugData/Cause；SSE 行超限归协议错误。只依据结构化错误链识别，不从原始错误字符串猜测；未识别错误与非法投影值归为 `unknown`，无传输失败时字段为空/省略。typed attempt/result 向 proxyapi 传递安全枚举，逐次失败与流终止日志关联 request_id/account_attempt，`upstream_response[_NNN].json` 按同一 attempt 记录该字段；关闭归档仍有失败日志。握手与流终态更新不得丢失原因或伪造上游响应；合法终态后的正常 EOF 不记为失败。该诊断不参与错误分类、冷却、健康、重试或客户端错误 envelope，不持久化原始错误、代理地址、凭据、账号身份和会话值。
 
 WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 `websocket_error_type`、`websocket_close_code`、`websocket_close_received`、`websocket_message_limit_bytes`、`websocket_last_message_observed`、`websocket_last_message_bytes`、`websocket_json_error_offset`。1006/1015 是本地合成关闭码，不代表远端发送 Close；空 Close 对应 1005。长度只记录最后成功读取的整条 WS 消息，不把请求大小、累计流字节数或该值当作被拒绝超限消息的大小。首个诊断冻结到日志与归档，清理 Cancel 和迟到握手不能覆盖；普通日志不记录关闭文本或帧正文。原生路径对非法 JSON 仅补观测，沿用已有转发/错误策略；已终结回合后的连接关闭不新增回合诊断，下一回合重置观测，后续增量不重复携带请求正文。原生读循环退出后，待消费队列继续按 session ID 可取，最终 Done 被取走、显式关闭或停机即回收；放弃消费的队列最多保留 30 秒且继续计入原容量上限，HTTP fallback 与仍存活的多回合连接不使用该保留流程。
@@ -681,6 +685,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
 | ChatGPT Web 文本生成前有限恢复与缓存观测 | 18.2.0, CP-FAIL-021, CP-OBS-017 | implemented（本地）；待部署验收 | `proxyapi/biz/chatgpt_text.go`, `chatgptwebupstream`, `aetherrelaymetrics`, `metricsruntime` | `chatgpt_text_recovery_test.go`, `TestTextSubmissionEvidenceAndContext`, `TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive`, `cache_observation_test.go`, `TestTokenObservationPresenceAcrossEventHub` |
+| 执行异常追踪与管理页闭环 | 18.4.0, CP-OBS-019 | implemented（本地）；待部署验收 | `aetherrelaytrace`, `aetherrelayusage`, `usageruntime`, `proxyapi`, `adminapi`, `web/admin` | `trace_test.go`, `execution_trace_test.go`, `usage_trace_test.go`, `TestInspectEvidenceChecksExactAttemptAndRetention`, `TestClientAPIKeyHintAndSettlementThroughEventHub`, `web/admin/usage.test.cjs` |
 | 用量待完成刷新与 ChatGPT Web 本地参数拒绝诊断 | 18.1.0, CP-OBS-016 | implemented（本地）；待部署验收 | `web/admin/index.html`, `adminapi/service/admin/usage.go`, `aetherrelayusage`, `proxyapi/service/proxy/chatgpt_web.go` | `usage.test.cjs`, `event_lookup_test.go`, `TestUsageEventsBoundedIDLookupAndAuthentication`, `TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics` |
 | Codex metadata/commentary 响应投影、工具保序、错误用量与诊断归档 | 17.3.0, CP-OBS-011, CP-SEC-003 | implemented（本地）；待部署验收 | `proxyapi/service/proxy/codex_anthropic_projection.go`, `codex_messages.go`, `responses_anthropic.go`, `aetherrelayarchive/recorder.go` | `codex_anthropic_projection_test.go`；现场样本离线回放 |
 | 本地 conversion 对 Provider 熔断保持中性 | 17.3.0 | implemented（本地）；待部署验收 | `aetherrelaymetrics/registry.go` | `conversion_health_test.go`；`TestCodexProjectionFailuresDoNotBlockNativeResponses` |

@@ -17,6 +17,7 @@
 | 功能域 | 设计文档 | 覆盖内容 |
 | --- | --- | --- |
 | 核心代理与路由 | [proxy-core.md](proxy-core.md) | 入站端点白名单、模型路由与候选链、转发矩阵、协议转换边界、typed error 与 envelope、统一流式 SSE |
+| 执行异常追踪 | [execution-anomaly-tracking.md](execution-anomaly-tracking.md) | 逐次执行、诊断证据、管理页查询导出与异常聚合 |
 | 安全与认证 | [security.md](security.md) | 客户端 API Key 身份与用量归属、Admin 账号密码登录、会话与 CSRF、访问控制边界 |
 | ChatGPT Web 能力 | [chatgpt-web.md](chatgpt-web.md) | 账号池与内建 Provider、文本/图片代理、图片任务与图片库、临时对话、在线搜索、管理页 |
 | Codex OAuth 账号池 | [codex-oauth.md](codex-oauth.md) | 独立账号域、模型发现、原生 Responses 代理、额度观察与账号韧性 |

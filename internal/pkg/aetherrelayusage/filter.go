@@ -55,6 +55,7 @@ func validateFilterStrings(f *UsageFilter) error {
 		{"provider", f.Provider},
 		{"model", f.Model},
 		{"outcome", f.Outcome},
+		{"account_id", f.AccountID}, {"search", f.Search}, {"cause", f.Cause}, {"revision", f.Revision},
 	} {
 		v := strings.TrimSpace(pair.value)
 		if v == "" {
@@ -69,6 +70,28 @@ func validateFilterStrings(f *UsageFilter) error {
 			}
 		}
 	}
+	if f.Timezone != "" && f.Timezone != "UTC" && f.Timezone != "Asia/Singapore" {
+		return fmt.Errorf("invalid timezone")
+	}
+	switch f.MissingDimension {
+	case "", "account", "model", "provider":
+	default:
+		return fmt.Errorf("invalid missing_dimension")
+	}
+	switch f.Result {
+	case "", "anomaly", "failed", "partial", "recovered", "unknown", "success":
+	default:
+		return fmt.Errorf("invalid result")
+	}
+	switch f.Transport {
+	case "", "http", "websocket", "unknown":
+	default:
+		return fmt.Errorf("invalid transport")
+	}
+	f.AccountID = strings.TrimSpace(f.AccountID)
+	f.Search = strings.TrimSpace(f.Search)
+	f.Cause = strings.TrimSpace(f.Cause)
+	f.Revision = strings.TrimSpace(f.Revision)
 	f.APIKeyID = strings.TrimSpace(f.APIKeyID)
 	f.Provider = strings.TrimSpace(f.Provider)
 	f.Model = strings.TrimSpace(f.Model)
@@ -120,6 +143,9 @@ func cacheHitRate(cached, input int64) float64 {
 
 // fillMissingDays 保证 [from,to) 内每个 UTC 日期都有桶(缺失补 0)。
 func fillMissingDays(from, to time.Time, got []DailyBucket) []DailyBucket {
+	return fillMissingDaysIn(from, to, got, time.UTC)
+}
+func fillMissingDaysIn(from, to time.Time, got []DailyBucket, loc *time.Location) []DailyBucket {
 	if from.IsZero() || to.IsZero() || !from.Before(to) {
 		return got
 	}
@@ -129,7 +155,8 @@ func fillMissingDays(from, to time.Time, got []DailyBucket) []DailyBucket {
 	}
 	var out []DailyBucket
 	// 按 UTC 日推进。
-	day := time.Date(from.UTC().Year(), from.UTC().Month(), from.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	start := from.In(loc)
+	day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
 	end := to.UTC()
 	for day.Before(end) {
 		key := day.Format("2006-01-02")

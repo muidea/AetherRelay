@@ -90,6 +90,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           # 两个架构各自一个缓存 scope，避免并发写同一个 gha 缓存互相覆盖。
           cache-from: type=gha,scope=container-${{ matrix.arch }}

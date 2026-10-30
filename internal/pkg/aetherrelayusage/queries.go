@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,26 +99,7 @@ func (c *dashboardCache) removeOrder(key string) {
 	}
 }
 
-func dashboardCacheKey(f UsageFilter) string {
-	est := "nil"
-	if f.Estimated != nil {
-		if *f.Estimated {
-			est = "1"
-		} else {
-			est = "0"
-		}
-	}
-	return strings.Join([]string{
-		f.From.UTC().Format(time.RFC3339Nano),
-		f.To.UTC().Format(time.RFC3339Nano),
-		f.APIKeyID,
-		f.Provider,
-		f.Model,
-		f.Outcome,
-		est,
-		strconv.FormatBool(f.AllTime),
-	}, "|")
-}
+func dashboardCacheKey(f UsageFilter) string { data, _ := json.Marshal(f); return string(data) }
 
 // Dashboard 聚合 summary / daily / by_api_key。
 func (s *DuckDBStore) Dashboard(ctx context.Context, filter UsageFilter) (Dashboard, error) {
@@ -151,7 +131,7 @@ func (s *DuckDBStore) Dashboard(ctx context.Context, filter UsageFilter) (Dashbo
 	if err != nil {
 		return Dashboard{}, err
 	}
-	daily, err := s.queryDaily(ctx, where, args)
+	daily, err := s.queryDaily(ctx, where, args, filter.Timezone)
 	if err != nil {
 		return Dashboard{}, err
 	}
@@ -161,14 +141,14 @@ func (s *DuckDBStore) Dashboard(ctx context.Context, filter UsageFilter) (Dashbo
 	}
 
 	if !filter.AllTime {
-		daily = fillMissingDays(from, to, daily)
+		daily = fillMissingDaysIn(from, to, daily, traceLocation(filter))
 	}
 
 	out := Dashboard{
 		Scope: ScopeInfo{
 			From:     from,
 			To:       to,
-			Timezone: "UTC",
+			Timezone: traceLocation(filter).String(),
 		},
 		Summary:  summary,
 		Daily:    daily,
@@ -242,10 +222,14 @@ WHERE ` + where
 	return sum, nil
 }
 
-func (s *DuckDBStore) queryDaily(ctx context.Context, where string, args []any) ([]DailyBucket, error) {
+func (s *DuckDBStore) queryDaily(ctx context.Context, where string, args []any, zone string) ([]DailyBucket, error) {
+	day := `cast(usage_date AS VARCHAR)`
+	if zone == "Asia/Singapore" {
+		day = `cast(cast(timezone('UTC',started_at)+INTERVAL '8 hours' AS DATE) AS VARCHAR)`
+	}
 	q := `
 SELECT
-    cast(usage_date AS VARCHAR) AS usage_date,
+    ` + day + ` AS bucket_date,
     count(*) AS requests,
     coalesce(sum(input_tokens), 0) AS input_tokens,
     coalesce(sum(output_tokens), 0) AS output_tokens,
@@ -257,8 +241,8 @@ SELECT
     coalesce(bool_or(coalesce(cache_creation_input_tokens_known, false)) FILTER (WHERE outcome = 'success'), false)` + tpsAggregates + `
 FROM ` + tpsEvents + `
 WHERE ` + where + `
-GROUP BY usage_date
-ORDER BY usage_date`
+GROUP BY bucket_date
+ORDER BY bucket_date`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, ErrStoreUnavailable
@@ -405,8 +389,8 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
-    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message
-FROM ` + targetEvents + `
+    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message, trace_state, attempt_count, failed_attempts, had_anomaly, primary_cause, trace_transport, trace_revision, trace_request_id
+FROM ` + anomalyEventSource + `
 WHERE ` + where + `
 ORDER BY started_at DESC, event_id DESC
 LIMIT ?`
@@ -447,6 +431,7 @@ LIMIT ?`
 			&e.FailureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &contentLength, &e.UpstreamTransferEncoding,
 			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered, &e.OutputTokensKnown, &e.UpstreamErrorType, &e.UpstreamErrorCode, &e.UpstreamErrorParam, &e.UpstreamErrorMessage,
+			&e.TraceState, &e.AttemptCount, &e.FailedAttempts, &e.HadAnomaly, &e.PrimaryCause, &e.TraceTransport, &e.TraceRevision, &e.TraceRequestID,
 		); err != nil {
 			return EventPage{}, ErrStoreUnavailable
 		}
@@ -595,6 +580,7 @@ func buildFilterWhere(f UsageFilter, from, to time.Time) (string, []any) {
 		parts = append(parts, "estimated = ?")
 		args = append(args, *f.Estimated)
 	}
+	parts, args = appendTraceFilters(parts, args, f)
 	return strings.Join(parts, " AND "), args
 }
 

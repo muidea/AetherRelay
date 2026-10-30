@@ -43,7 +43,7 @@ func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
 		h.usageRuntime(w, r)
 		return
 	}
-	if !((rel == "/api/usage/dashboard" || rel == "/api/usage/events" || rel == "/api/usage/filter-options") && r.Method == http.MethodGet) {
+	if !((rel == "/api/usage/dashboard" || rel == "/api/usage/events" || rel == "/api/usage/filter-options" || rel == "/api/usage/trace" || rel == "/api/usage/anomalies" || rel == "/api/usage/events.csv") && r.Method == http.MethodGet) {
 		http.NotFound(w, r)
 		return
 	}
@@ -52,6 +52,12 @@ func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
 		return
 	}
 	switch {
+	case rel == "/api/usage/trace":
+		h.usageTrace(w, r)
+	case rel == "/api/usage/anomalies":
+		h.usageAnomalies(w, r)
+	case rel == "/api/usage/events.csv":
+		h.usageEventsCSV(w, r)
 	case rel == "/api/usage/dashboard" && r.Method == http.MethodGet:
 		h.usageDashboard(w, r)
 	case rel == "/api/usage/events" && r.Method == http.MethodGet:
@@ -145,10 +151,18 @@ func (h *Handler) usageEvents(w http.ResponseWriter, r *http.Request) {
 func parseUsageFilter(r *http.Request) (usage.UsageFilter, error) {
 	q := r.URL.Query()
 	f := usage.UsageFilter{
-		APIKeyID: strings.TrimSpace(q.Get("api_key_id")),
-		Provider: strings.TrimSpace(q.Get("provider")),
-		Model:    strings.TrimSpace(q.Get("model")),
-		Outcome:  strings.TrimSpace(q.Get("outcome")),
+		MissingDimension: strings.TrimSpace(q.Get("missing_dimension")),
+		AccountID:        strings.TrimSpace(q.Get("account_id")),
+		Search:           strings.TrimSpace(q.Get("search")),
+		Result:           strings.TrimSpace(q.Get("result")),
+		Cause:            strings.TrimSpace(q.Get("cause")),
+		Transport:        strings.TrimSpace(q.Get("transport")),
+		Revision:         strings.TrimSpace(q.Get("revision")),
+		Timezone:         strings.TrimSpace(q.Get("timezone")),
+		APIKeyID:         strings.TrimSpace(q.Get("api_key_id")),
+		Provider:         strings.TrimSpace(q.Get("provider")),
+		Model:            strings.TrimSpace(q.Get("model")),
+		Outcome:          strings.TrimSpace(q.Get("outcome")),
 	}
 	if v := strings.TrimSpace(q.Get("estimated")); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -160,8 +174,12 @@ func parseUsageFilter(r *http.Request) (usage.UsageFilter, error) {
 	rangeKey := strings.TrimSpace(q.Get("range"))
 	fromRaw := strings.TrimSpace(q.Get("from"))
 	toRaw := strings.TrimSpace(q.Get("to"))
-	now := time.Now().UTC()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	zone := time.UTC
+	if f.Timezone == "Asia/Singapore" {
+		zone = time.FixedZone("Asia/Singapore", 8*3600)
+	}
+	now := time.Now().In(zone)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, zone).UTC()
 
 	switch {
 	case fromRaw != "" || toRaw != "":
@@ -281,6 +299,13 @@ func parseUsageFilterTimeOnly(r *http.Request) (usage.UsageFilter, error) {
 	f.Model = ""
 	f.Outcome = ""
 	f.Estimated = nil
+	f.AccountID = ""
+	f.MissingDimension = ""
+	f.Search = ""
+	f.Result = ""
+	f.Cause = ""
+	f.Transport = ""
+	f.Revision = ""
 	return f, nil
 }
 

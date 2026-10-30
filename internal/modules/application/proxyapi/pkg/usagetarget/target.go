@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/chatgptattempt"
 )
 
@@ -71,6 +72,9 @@ func BeginCodexAttempt(ctx context.Context, body []byte) {
 	defer tracker.mu.Unlock()
 	if tracker.target.Provider != "codexoauth" {
 		return
+	}
+	if c := trace.FromContext(ctx); c != nil {
+		c.Begin("codexoauth", tracker.target.AccountID, tracker.target.AccountLabel, codexmodel.RequestModel(body))
 	}
 	tracker.model = codexmodel.Observer{}
 	tracker.target.Observation = codexmodel.New(codexmodel.RequestModel(body), "")

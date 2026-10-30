@@ -14,10 +14,12 @@ import (
 	"time"
 
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 )
 
 // MemoryStore 是单测用内存 Store,实现与 DuckDBStore 相同接口语义。
 type MemoryStore struct {
+	traces           map[string]trace.Trace
 	mu               sync.Mutex
 	events           map[string]*Event
 	clientKeys       map[string]ClientAPIKeyMetadata
@@ -28,7 +30,7 @@ type MemoryStore struct {
 
 // NewMemoryStore 构造空内存 store。
 func NewMemoryStore() *MemoryStore {
-	s := &MemoryStore{events: make(map[string]*Event), clientKeys: make(map[string]ClientAPIKeyMetadata), clientKeyRecords: make(map[string]ClientAPIKeyRecord)}
+	s := &MemoryStore{traces: make(map[string]trace.Trace), events: make(map[string]*Event), clientKeys: make(map[string]ClientAPIKeyMetadata), clientKeyRecords: make(map[string]ClientAPIKeyRecord)}
 	s.healthy.Store(1)
 	return s
 }
@@ -72,6 +74,7 @@ func (s *MemoryStore) Start(_ context.Context, rec StartRecord) error {
 		ClientEndpoint: rec.ClientEndpoint,
 		ClientProtocol: rec.ClientProtocol,
 		State:          StateStarted,
+		Summary:        trace.Summary{TraceState: "not_collected"},
 	}
 	s.healthy.Store(1)
 	return nil
@@ -153,6 +156,11 @@ func (s *MemoryStore) Complete(_ context.Context, rec CompleteRecord) error {
 	e.UpstreamTransferEncoding = rec.UpstreamTransferEncoding
 	e.Stream = rec.Stream
 	e.Estimated = rec.Estimated
+	if rec.Trace != nil {
+		t := trace.Bounded(*rec.Trace)
+		s.traces[rec.EventID] = t
+		e.Summary = t.Summary()
+	}
 	e.State = StateCompleted
 	e.GenerationSample = generationSample(rec)
 	e.OutputTokensKnown = rec.OutputTokensKnown || rec.OutputTokens > 0
@@ -259,7 +267,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 			sum.FailedRequests++
 		}
 
-		day := e.StartedAt.UTC().Format("2006-01-02")
+		day := e.StartedAt.In(traceLocation(filter)).Format("2006-01-02")
 		b, ok := dailyMap[day]
 		if !ok {
 			b = &DailyBucket{Date: day}
@@ -320,7 +328,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 	}
 	sort.Slice(daily, func(i, j int) bool { return daily[i].Date < daily[j].Date })
 	if !filter.AllTime {
-		daily = fillMissingDays(from, to, daily)
+		daily = fillMissingDaysIn(from, to, daily, traceLocation(filter))
 	}
 
 	var byKey []KeySummary
@@ -336,7 +344,7 @@ func (s *MemoryStore) Dashboard(_ context.Context, filter UsageFilter) (Dashboar
 	})
 
 	return Dashboard{
-		Scope:    ScopeInfo{From: from, To: to, Timezone: "UTC"},
+		Scope:    ScopeInfo{From: from, To: to, Timezone: traceLocation(filter).String()},
 		Summary:  sum,
 		Daily:    daily,
 		ByAPIKey: byKey,
@@ -465,6 +473,9 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 	if err := cw.Write(csvExportHeader); err != nil {
 		return err
 	}
+	if len(list) > 10000 {
+		return fmt.Errorf("export limited to 10000 events")
+	}
 	for _, e := range list {
 		completed := ""
 		if e.CompletedAt != nil {
@@ -526,6 +537,7 @@ func (s *MemoryStore) ExportCSV(_ context.Context, filter UsageFilter, w io.Writ
 		row = append(row, tpsCSV(e.GenerationSample)...)
 		row = append(row, e.AccountID, e.AccountLabel, e.UpstreamRequestModel, e.ResponseModel, strconv.FormatBool(e.ModelSubstituted))
 		row = append(row, e.UpstreamErrorType, e.UpstreamErrorCode, e.UpstreamErrorParam, e.UpstreamErrorMessage)
+		row = append(row, traceCSV(e.Summary)...)
 		if err := cw.Write(row); err != nil {
 			return err
 		}
@@ -626,7 +638,7 @@ func matchEvent(e *Event, f UsageFilter, from, to time.Time) bool {
 	if f.Estimated != nil && e.Estimated != *f.Estimated {
 		return false
 	}
-	return true
+	return matchTraceFilters(e, f)
 }
 
 // 编译期接口断言。

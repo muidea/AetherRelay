@@ -482,3 +482,45 @@ func TestRecorderRecoversResponseMetaPath(t *testing.T) {
 		t.Fatalf("unexpected recovered metadata: %s", data)
 	}
 }
+
+func TestInspectEvidenceChecksExactAttemptAndRetention(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := NewRecorderOptions(root, RecorderOptions{FullContent: true, ScopeByAPIKey: true, MaxRounds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := recorder.StartForAPIKey("key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "upstream_response_002.error.body.txt"
+	if err = round.WriteResponse(name, []byte("failure")); err != nil {
+		t.Fatal(err)
+	}
+	if err = round.WriteMetadata(Metadata{HTTPStatus: 502}); err != nil {
+		t.Fatal(err)
+	}
+	state, relative := InspectEvidence(root, "key", int64(round.ID))
+	if state != "saved" || relative != filepath.Join("key", "000001") {
+		t.Fatal(state, relative)
+	}
+	if got := InspectErrorEvidence(root, "key", int64(round.ID), name); got != "saved" {
+		t.Fatal(got)
+	}
+	for _, file := range []string{"upstream_response_001.error.body.txt", "../upstream_response_002.error.body.txt", "upstream_response_../../metadata.json", "metadata.json"} {
+		if got := InspectErrorEvidence(root, "key", int64(round.ID), file); got != "missing" {
+			t.Fatalf("%s %s", file, got)
+		}
+	}
+	next, err := recorder.StartForAPIKey("key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = next.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = InspectEvidence(root, "key", int64(round.ID))
+	if state != "missing" || InspectErrorEvidence(root, "key", int64(round.ID), name) != "missing" {
+		t.Fatal("retained stale evidence", state)
+	}
+}

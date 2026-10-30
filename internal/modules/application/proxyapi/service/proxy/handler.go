@@ -38,6 +38,7 @@ import (
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelaymetricsport"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
@@ -135,6 +136,8 @@ type usageCompletionKey struct{}
 type internalFeatureIdentityKey struct{}
 
 type usageCompletion struct {
+	traceMu                 sync.Mutex
+	traceCheckpointAt       time.Time
 	budgetMu                sync.Mutex
 	completionBudget        codexCompletionBudget
 	generation              generation.Clock
@@ -157,7 +160,7 @@ func archiveRoundFromContext(ctx context.Context) *archive.Round {
 }
 
 func withUsageCompletion(ctx context.Context, completion *usageCompletion) context.Context {
-	return context.WithValue(usagetarget.WithTracker(ctx), usageCompletionKey{}, completion)
+	return context.WithValue(trace.WithCollector(usagetarget.WithTracker(ctx)), usageCompletionKey{}, completion)
 }
 
 func usageCompletionFromContext(ctx context.Context) *usageCompletion {
@@ -305,8 +308,6 @@ func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *
 			sum := sha256.Sum256([]byte("test-client-key"))
 			_ = ms.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()})
 		}
-	}
-	if usageStore != nil {
 	}
 	if err := requireResolvedConfig(cfg); err != nil {
 		panic("proxy.NewHandler: " + err.Error() + "; call config.Load or tests.MustHandlerConfig")
@@ -738,6 +739,7 @@ func (h *Handler) startUsage(r *http.Request, eventID string, round *archive.Rou
 		}
 		return err
 	}
+	h.startExecutionTrace(r)
 	if h.metricsRegistry != nil {
 		h.metricsRegistry.SetUsageStoreHealthy(h.usageStore.Healthy())
 	}
@@ -912,6 +914,7 @@ func (h *Handler) completeUsage(r *http.Request, requestID string, provider, mod
 			}
 		}
 	}
+	h.finishExecutionTrace(r, &rec)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.usageStore.Complete(ctx, rec); err != nil {

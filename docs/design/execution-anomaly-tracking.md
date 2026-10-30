@@ -1,0 +1,77 @@
+# 执行异常追踪与管理页
+
+本设计为已有调用明细补充可持久化的执行证据。HTTP 200、WebSocket 握手 101 和成功生成分别表示不同阶段；请求最终结果仍以用量事件的 `outcome` 为准。实现包含逐次执行追踪、诊断详情、筛选导出和异常聚合。历史记录不回填，本地验证不代表已部署到 x800。
+
+## 记录边界
+
+每次调用使用服务端生成的 Event ID 关联用量事件、请求 Request ID 和已有交互 round。请求开始时记录构建 revision（镜像 CI 用 `github.sha` 注入，发布脚本用当前 Git HEAD 或 `AETHERRELAY_BUILD_REVISION` 注入；普通 Go 构建回退 VCS 元数据，构建未携带则未知）、进程实例、超时和读取限制、归档开关；随后读取管理详情时不以当前配置覆盖该快照。实例由主机名和本进程随机 ID 组成，不收集任意配置、凭据、Cookie、原始会话或请求头正文。
+
+每次真正执行分别记录本地账号槽位、当时邮箱标签、Provider、请求与响应模型、传输、响应状态、阶段、排队/响应头/读取耗时、事件数和字节数、首次输出、最后事件、终态以及现有有界上游错误和 WS 关闭诊断。未观测的计数与时刻保持未知；没有原始帧时，仅展示结构化错误对象。记录到某个错误码不等于证明其最终根因。
+
+执行编号不同于归档文件编号。一次 WS 握手和一次生成发送属于同次执行；发出请求前的 WS → HTTP 回退保留在该执行上。同账号刷新凭据后的再次执行和切换账号后的执行分别编号。原生 WS 连接首回合保留开连接握手，后续回合使用各自追踪，不复制握手成新尝试。账号准入/转换拒绝未访问上游时不伪造执行。
+
+Codex HTTP/SSE、compact、原生 WS 和跨协议入口复用 typed observation。ChatGPT Web 文本记录现有有限恢复流程的执行结果；通用 HTTP Provider 记录实际请求和响应头，最终结果由已有结算补齐。未接入逐次观测的工具、图片后台任务与内部连接探测不冒充具有完整追踪，细粒度的 ChatGPT Web bootstrap/sentinel 子请求也未在此扩展。
+
+## 持久化和边界
+
+`aetherrelaytrace` 只包含有界 DTO 和请求内 collector；`usageruntime` 仍是用量 Store 的唯一运行 owner。新增 `WriteTrace`、`ExecutionTrace`、`Anomalies` typed EventHub 命令，应用端通过现有 Store 端口访问，不持有 owner 资源。
+
+新增 `usage_execution_trace` 附属表，以 Event ID 为主键，包含 JSON payload 和可索引/聚合的摘要。旧 `usage_events` 不 ALTER。首次采集前的记录返回 `not_collected`，不从归档反推历史版本、重试次数或结束原因。完成时证据和最终用量在同一事务提交；已结算请求拒绝迟到的检查点覆盖。删除客户端 Key 同步删除其用量和追踪。
+
+请求开始及已有观测回调处保存检查点；流进度检查点最多每 5 秒一次，终态和失败强制保存。检查点使用独立的 250ms 存储期限；失败仅记日志和历史保存失败标志，客户端业务响应沿用原行为。尚无观测回调时不会假定已有完整过程记录。进程退出后保留最后成功保存的检查点，沿用现有 `process_interrupted` 恢复语义，该结果表示未知。
+
+每次最多保留 32 次执行（溢出时保留前 31 次与最后一次）、64 项动作，保留总执行/已观测失败次数和截断标志；字符串、结构化上游错误及 WS 字段有界，payload 上限 256KiB。记录不参与重试、路由、冷却、额度或账号健康判断，不增加自动重放。已有输出后的失败继续禁止安全重放。
+
+结构化追踪随现有用量/客户端 Key 生命周期保留，不新增定时删除策略。原始错误内容仍受 `archive_interactions`、`archive_full_content` 与既有归档保留限制控制。只有文件实际写入成功才记已归档；详情读取时逐次核对生成文件名。文件缺失标记“已清理或丢失”，不声称已知删除原因；结构化字段继续保留。不开完整正文归档也能使用结构化追踪。
+
+## 管理页使用
+
+入口：**使用统计 → 最近调用明细 → 点击调用行**。
+
+- 列表保留 HTTP 与最终结果，补充原因、最终执行账号和尝试次数。HTTP 200 输出中断继续显示失败；最终成功但此前失败或传输回退显示“成功 · 曾有异常”。
+- 弹窗分为“概览与时间线”“尝试记录”“诊断证据”“完整字段”。固定头尾、内部滚动，长 Event ID、邮箱、错误说明可换行；缺失值、未知用量、未采集历史与已截断分别说明。
+- “同错误调用”保留当前查询范围并按主异常原因下钻；“复制 Event ID”“下载诊断 JSON”便于关联运行日志。JSON 保留原 UTC 时间、请求开始时快照、逐次证据及完整性状态。
+- “导出当前筛选 CSV”使用与列表相同的完整筛选，增加原因、版本、传输、尝试数、恢复标志与 Request ID。单次最多 10,000 行、32MiB、10 秒，超限需缩小查询范围，错误不发送部分成功文件。
+- “异常分析”按原因、最终账号、模型、请求时 revision、传输或 Provider 分组，并展示最终失败与恢复成功的每日趋势。每组可返回相关调用。账号维度指最终执行账号；前序失败账号在单次尝试记录内查看。
+
+筛选包含时间、Key ID、Provider、模型、outcome、估算标志、最终结果、最终账号槽位、搜索、原因、传输和版本。搜索覆盖 Event/Request ID、邮箱、槽位、Key ID、模型及错误码。缺失账号/模型/Provider 使用独立的缺失维度筛选，和实际值 `unknown` 区分。筛选随 URL hash 保存，CSV/聚合使用相同条件。
+
+时间显示和管理页日期边界统一使用 `Asia/Singapore`（UTC+8）；自定义日期也不依赖浏览器本地时区。持久化和导出时间保留 UTC。未指定 timezone 的旧 API 客户端沿用 UTC。
+
+## 聚合口径
+
+| 指标 | 口径 |
+| --- | --- |
+| 已完成 | `state=completed` 且 outcome 不是 `process_interrupted` |
+| 最终成功 | 已完成且 `outcome=success` |
+| 最终失败 | 已完成且 outcome 不是 success |
+| 其中：输出中断 | 最终失败中 partial 标志或 `upstream_truncated`；是子集 |
+| 成功 · 曾有异常 | 最终成功且追踪曾失败或传输回退 |
+| 异常请求 | 最终失败 + 成功但曾有异常；每请求一次 |
+| 结果未知 | started 或 `process_interrupted`；不计成功率/异常率分母 |
+| 成功率 | 最终成功 / 已完成 |
+| 异常率 | 异常请求 / 已完成 |
+| 尝试失败次数 | 单独累计，不作为请求失败数 |
+
+管理页成功率使用新诊断摘要的 completed 分母。既有 Dashboard API 的 `summary.success_rate/failed_requests` 保留旧合同，供兼容客户端使用；Key 用量表显示“成功 / 其他”，其中其他终态包含进程中断后的未知结果，不能替代诊断失败数。
+
+按主异常原因每请求只归一组；多个失败原因保留在尝试详情中。聚合直接查询摘要，不读取大 JSON 或归档。一个数据库读事务保证摘要、分组、每日趋势来自同一快照；最多返回 200 组并显式提示截断。历史缺追踪计数仅针对已完成记录；统计仍可按已有 outcome 判断历史最终结果。
+
+## 管理 API
+
+均位于现有 `<admin_base_path>/api/usage` 下，使用相同管理认证和访问控制：
+
+| GET | 参数 / 用途 |
+| --- | --- |
+| `/events`、`/dashboard` | 原参数加 `result/account_id/search/cause/transport/revision/missing_dimension/timezone` |
+| `/trace` | `event_id` 必填；`download=1` 返回 JSON 附件 |
+| `/anomalies` | 同列表筛选；`group_by=cause/account/model/revision/transport/provider` |
+| `/events.csv` | 同列表筛选的 CSV 附件 |
+
+`result`：`anomaly/failed/partial/recovered/unknown/success`；`transport`：`http/websocket/unknown`；`missing_dimension`：`account/model/provider`；timezone 仅 `UTC/Asia/Singapore`。非法枚举返回 400；未知 Event ID 返回 404；存储失败返回 503。诊断及导出使用 `Cache-Control: no-store`。原来关闭的 `/export.csv` 不恢复。
+
+## 验证与限制
+
+回归覆盖内存/DuckDB 查询一致性、SQL 字面量筛选、缺失维度、事务回滚、重启检查点、Key 删除、EventHub 往返、归档逐次证据与清理、导出限制、输出后中断不重放、恢复后最终账号、WS 多回合、保存失败不改变响应，以及前端异步过期响应、UTC+8、完整筛选导出和错误文本转义。本地浏览器以固定样本模拟管理 API，不调用真实上游、不调整 x800 配置。
+
+无法恢复上线前未记录的帧和过程；构建未注入 VCS revision 时版本保持未知；没有读取观测时不把默认零当作实际计数。诊断只记录可证实信息，不能消除上游过载或证明以后重试必定成功。

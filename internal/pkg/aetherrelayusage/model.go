@@ -8,6 +8,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayclientaccess"
 	"aetherrelay/internal/pkg/aetherrelaycodex"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 )
 
 // 持久化状态。
@@ -35,6 +36,7 @@ type StartRecord struct {
 
 // CompleteRecord 是请求退出路径上的最终结算。
 type CompleteRecord struct {
+	Trace *trace.Trace
 	aetherrelaycodex.UpstreamError
 	codexmodel.Observation
 	OutputTokensKnown             bool
@@ -81,14 +83,22 @@ type CompleteRecord struct {
 
 // UsageFilter 用于 Dashboard / 导出筛选。
 type UsageFilter struct {
-	From      time.Time
-	To        time.Time
-	APIKeyID  string
-	Provider  string
-	Model     string
-	Outcome   string
-	Estimated *bool
-	AllTime   bool
+	MissingDimension string // account, model, provider: explicitly filter absent values.
+	AccountID        string
+	Search           string
+	Result           string
+	Cause            string
+	Transport        string
+	Revision         string
+	Timezone         string
+	From             time.Time
+	To               time.Time
+	APIKeyID         string
+	Provider         string
+	Model            string
+	Outcome          string
+	Estimated        *bool
+	AllTime          bool
 }
 
 // EventFilter 用于明细分页。
@@ -191,6 +201,7 @@ type ScopeInfo struct {
 
 // Event 是一条安全明细(无正文/密钥)。
 type Event struct {
+	trace.Summary
 	aetherrelaycodex.UpstreamError
 	codexmodel.Observation
 	GenerationSample
@@ -277,6 +288,9 @@ type FilterOptionsResult struct {
 // Store 是用量持久化权威接口。
 type Store interface {
 	Start(context.Context, StartRecord) error
+	WriteTrace(context.Context, string, trace.Trace) error
+	ExecutionTrace(context.Context, string) (*trace.Trace, error)
+	Anomalies(context.Context, UsageFilter, string) (AnomalyDashboard, error)
 	Complete(context.Context, CompleteRecord) error
 	Dashboard(context.Context, UsageFilter) (Dashboard, error)
 	Count(context.Context, UsageFilter) (int64, error)

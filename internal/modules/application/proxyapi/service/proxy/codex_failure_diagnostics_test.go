@@ -81,6 +81,14 @@ func TestCodexOverloadDiagnosticsReachUsageAndArchive(t *testing.T) {
 				if afterOutput && (e.Retryable == nil || *e.Retryable || !e.GenerationPartial || !strings.Contains(response.Body.String(), "partial")) {
 					t.Fatalf("unsafe post-output failure: %+v", e)
 				}
+
+				tr, traceErr := handler.usageStore.ExecutionTrace(context.Background(), e.EventID)
+				if traceErr != nil || tr == nil || len(tr.Attempts) != 1 || !tr.Attempts[0].Failed || e.AttemptCount != 1 || e.FailedAttempts != 1 || tr.Attempts[0].UpstreamError != diagnostic || tr.Context.RequestID == "" || tr.Attempts[0].ErrorBodyState != "not_collected" {
+					t.Fatalf("execution trace=%+v event=%+v err=%v", tr, e, traceErr)
+				}
+				if afterOutput && tr.ReplaySuppressedReason != "business_output_already_delivered" {
+					t.Fatal(tr)
+				}
 				if archived {
 					paths, err := filepath.Glob(filepath.Join(dir, "*", "*", "metadata.json"))
 					if err != nil || len(paths) != 1 {

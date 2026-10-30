@@ -17,6 +17,8 @@ type Header struct{ Name, Value string }
 // interaction archival. Sensitive header values are already redacted at the
 // owning Block boundary and are sanitized again by the HTTP adapter.
 type HTTPAttempt struct {
+	// Finished distinguishes a final observation from an early header callback.
+	Finished bool
 	// Prior contains at most one WS handshake preceding a create or HTTP fallback.
 	Prior    []HTTPAttempt
 	Request  HTTPRequestObservation

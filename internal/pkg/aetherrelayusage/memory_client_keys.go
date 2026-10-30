@@ -229,6 +229,7 @@ func (s *MemoryStore) DeleteClientAPIKey(_ context.Context, id string) error {
 	for eventID, item := range s.events {
 		if item != nil && item.APIKeyID == id {
 			delete(s.events, eventID)
+			delete(s.traces, eventID)
 		}
 	}
 	return nil

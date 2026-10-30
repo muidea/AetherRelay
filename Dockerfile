@@ -15,10 +15,11 @@ COPY vendor/ vendor/
 COPY . .
 
 ARG VERSION=dev
+ARG REVISION=
 ENV CGO_ENABLED=1
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -mod=vendor -trimpath -buildvcs=false \
-      -ldflags "-s -w -X main.version=${VERSION}" \
+      -ldflags "-s -w -X main.version=${VERSION} -X aetherrelay/internal/pkg/aetherrelaytrace.BuildRevision=${REVISION}" \
       -o /out/AetherRelay ./cmd/aetherrelay
 
 FROM debian:bookworm-slim AS runtime

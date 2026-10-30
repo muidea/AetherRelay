@@ -65,6 +65,14 @@ AetherRelay admin set-credentials --username ops-admin --config config.yaml
 
 设计细节见[安全与认证设计](design/security.md#admin-登录可选)。
 
+## 调用异常追踪
+
+在“使用统计 → 最近调用明细”筛选异常、输出中断或成功但曾有异常的请求，点击一行查看时间线、尝试记录、诊断证据及完整字段。排查 HTTP 200 时同时核对 outcome、部分输出和终态；缺少输出 Token 不表示零消耗。
+
+详情可复制 Event ID、下载诊断 JSON，并用“同错误调用”查同范围记录。列表可按当前筛选导出 CSV（最多 10,000 行、32MiB），在“异常分析”按原因、最终账号、模型、请求时版本、传输或 Provider 查看失败与恢复趋势。页面时间统一东八区；下载保留 UTC 时间。结果未知不计入成功率分母。
+
+新结构化追踪独立于完整正文归档；历史不会回填，原始错误文件仍遵循现有归档开关和保留上限。文件缺失与上游未提供分别显示。详情见[执行异常追踪与管理页](design/execution-anomaly-tracking.md)。
+
 ## ChatGPT Web 用量统计
 
 ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`aetherrelayusage` / 使用统计页）：

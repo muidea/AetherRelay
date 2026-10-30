@@ -17,6 +17,7 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayarchive"
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
@@ -184,6 +185,7 @@ func (h *Handler) archiveAndLogTransportPlan(round *archive.Round, r *http.Reque
 }
 
 func (h *Handler) archiveAndLogUpstreamRequest(round *archive.Round, r *http.Request, providerName string, provider config.Provider, req *http.Request, bodyBytes int) {
+	h.beginHTTPExecution(r, providerName)
 	if round == nil || req == nil {
 		return
 	}
@@ -222,6 +224,7 @@ func (h *Handler) archiveAndLogUpstreamRequest(round *archive.Round, r *http.Req
 }
 
 func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Request, providerName string, provider config.Provider, resp *http.Response, duration time.Duration, err error) {
+	h.observeHTTPExecution(r, resp, duration, err)
 	if round == nil {
 		return
 	}
@@ -266,6 +269,9 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 // emitted by the codexupstream Block. The Block owns the transport and performs
 // first-pass redaction; the adapter sanitizes again before writing or logging.
 func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Request, providerName string, attempt codexresponses.HTTPAttempt, attemptErr error) {
+	if attempt.Request.Method != "GET" || attemptErr != nil {
+		h.observeCodexExecution(r, attempt, attemptErr)
+	}
 	// An optional *Failure can arrive through error as a non-nil interface.
 	if failure, typed := attemptErr.(*codexresponses.Failure); typed && failure == nil {
 		attemptErr = nil
@@ -390,6 +396,15 @@ func (h *Handler) archiveCodexUpstreamAttempt(round *archive.Round, r *http.Requ
 		name := fmt.Sprintf("upstream_response_%03d.error.body.txt", index)
 		if err := h.writeArchiveResponse(round, name, attempt.Response.ErrorBody); err == nil {
 			responseInfo.ErrorBodyPath = name
+			if r != nil {
+				if c := trace.FromContext(r.Context()); c != nil {
+					state := "archived"
+					if attempt.Response.ErrorBodyTruncated {
+						state = "archived_truncated"
+					}
+					c.ArchiveBodyState(state, name)
+				}
+			}
 		}
 	}
 	encoded, encodeErr := json.Marshal(responseInfo)

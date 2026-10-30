@@ -16,6 +16,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/chatgptattempt"
 	"github.com/muidea/magicCommon/event"
 )
@@ -56,6 +57,10 @@ func (s *Proxy) executeChatGPTText(ctx context.Context, request chatgpttext.Requ
 			return lastOut, lastErr
 		}
 		usagetarget.Record(ctx, "chatgptweb", account.Account.ID, account.Account.Email)
+		traceCollector := trace.FromContext(ctx)
+		if traceCollector != nil {
+			traceCollector.Begin("chatgptweb", account.Account.ID, account.Account.Email, request.Model)
+		}
 		out, emitted, executionErr := execute(account)
 		var transportFailure *chatgptfail.Failure
 		errors.As(executionErr, &transportFailure)
@@ -75,6 +80,22 @@ func (s *Proxy) executeChatGPTText(ctx context.Context, request chatgpttext.Requ
 			}
 		}
 		usagetarget.RecordTextAttempt(ctx, observation)
+		if traceCollector != nil {
+			stage := observation.Operation
+			if stage == "" {
+				stage = "complete"
+			}
+			a := trace.Attempt{ObservedAt: time.Now().UTC(), Finished: true, Failed: executionErr != nil, Stage: stage, Transport: "http", UpstreamStatus: observation.UpstreamStatus, FailureClass: observation.FailureClass, ErrorBodyState: "not_collected"}
+			if !out.Generation.FirstOutputAt.IsZero() {
+				at := out.Generation.FirstOutputAt
+				a.FirstOutputAt = &at
+			}
+			if observation.GenerationNotSent {
+				sent := false
+				a.RequestSent = &sent
+			}
+			traceCollector.Observe(a)
+		}
 		hasOutput := emitted || out.Text != "" || out.ConversationID != "" || !out.Generation.FirstOutputAt.IsZero()
 		if executionErr != nil && isInvalidChatGPTTextFailure(executionErr) && !hasOutput && index == 1 && textRetryBudgetAvailable(ctx) && (failure.Operation == "" || failure.GenerationNotSent) {
 			refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
