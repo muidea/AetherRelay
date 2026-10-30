@@ -34,6 +34,7 @@ RUN apt-get update \
 
 COPY --from=build /out/AetherRelay /usr/local/bin/AetherRelay
 COPY config.example.yaml /usr/share/aetherrelay/config.example.yaml
+COPY LICENSE /usr/share/aetherrelay/LICENSE
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN chmod 0755 /usr/local/bin/AetherRelay /usr/local/bin/docker-entrypoint.sh

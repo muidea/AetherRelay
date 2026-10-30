@@ -52,7 +52,7 @@ GOOS="$GOOS" GOARCH="$GOARCH" "$GO_CMD" build \
   -ldflags "-s -w -X main.version=v$VERSION -X aetherrelay/internal/pkg/aetherrelaytrace.BuildRevision=$build_revision" \
   -o "$stage/$binary" ./cmd/aetherrelay
 
-cp README.md config.example.yaml "$stage/"
+cp README.md LICENSE config.example.yaml "$stage/"
 archive="$OUT_DIR/$name.tar.gz"
 mkdir -p "$OUT_DIR"
 tar -C "$(dirname "$stage")" -czf "$archive" "$name"
