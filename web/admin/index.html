@@ -197,8 +197,11 @@
           <input id="usageAccountFilter" class="control" placeholder="最终账号槽位 ID" aria-label="最终账号槽位 ID">
           <input id="usageSearchFilter" class="control" placeholder="Event ID / Request ID / 错误代码 / 账号" aria-label="搜索调用">
           <button class="btn" id="usageApply">应用筛选</button>
+          <button class="btn" id="usageReset" type="button">重置筛选</button>
         </div>
         <div class="subtle" id="filterOptionsHint" style="margin:-8px 0 12px;min-height:18px"></div>
+        <div class="subtle hidden" id="usageDraftHint" role="status">筛选条件已修改，点击应用筛选生效</div>
+        <div class="subtle hidden" id="usageScopeHint" role="status" style="overflow-wrap:anywhere"></div>
       </section>
       <div id="usageOverviewContent">
       <section class="stats">
@@ -1048,9 +1051,9 @@ Object.assign(enUS,{
   "我":"Me",
   "系统":"System"
 });
-Object.assign(enUS,{"调用明细与异常诊断保留最近 3 个月，统计基于保留记录。":"Call details and diagnostics are kept for the latest 3 months. Statistics use retained records.","使用统计视图": "Usage views", "用量概览": "Usage overview", "异常分析": "Anomaly analysis", "最终结果": "Final result", "全部结果": "All results", "包含异常的请求": "Requests with anomalies", "最终失败": "Final failures", "输出中断": "Output interrupted", "成功 · 曾有异常": "Succeeded after an anomaly", "待完成 / 结果未知": "Pending / result unknown", "最终成功": "Final successes", "最终账号槽位 ID": "Final account slot ID", "Event ID / Request ID / 错误代码 / 账号": "Event ID / Request ID / error code / account", "搜索调用": "Search calls", "开始时间（Asia/Singapore · UTC+8）": "Start time (Asia/Singapore · UTC+8)", "结束时间（Asia/Singapore · UTC+8）": "End time (Asia/Singapore · UTC+8)", "成功请求 / 已完成请求；结果未知不计入分母": "Successful / completed requests; unknown results are excluded", "按 UTC+8 日期汇总全部请求，含待完成与结果未知；应用当前筛选。": "Requests by UTC+8 date, including successes and failures, with current filters.", "按 UTC+8 日期汇总输入与输出 Token；浅蓝为输入，深蓝为输出。": "Input and output tokens by UTC+8 date; light blue is input, dark blue is output.", "按 UTC+8 日期计算缓存使用率；仅统计缓存读取已知的成功请求。": "Cache usage by UTC+8 date; only successful requests with known cache reads are included.", "按 UTC+8 日期计算输出 Token 合计 / 请求总耗时合计；仅统计有效样本。": "Total output tokens / total request duration by UTC+8 date; valid samples only.", "概览与时间线": "Overview and timeline", "尝试记录": "Execution attempts", "诊断证据": "Diagnostic evidence", "完整字段": "All fields", "复制 Event ID": "Copy Event ID", "查看同类异常": "Find similar anomalies", "导出诊断 JSON": "Export diagnostic JSON", "导出当前筛选 CSV": "Export filtered CSV", "单次调用追踪": "Request trace", "异常原因": "Anomaly cause", "账号 / 尝试": "Account / attempts", "按原因": "By cause", "按账号": "By account", "按模型": "By model", "按版本": "By revision", "按传输": "By transport", "按 Provider": "By provider", "分组维度": "Group by", "最终账号": "Final account", "请求时版本": "Request revision", "传输方式": "Transport", "上游服务过载": "Upstream overloaded", "传输 / 网络中断": "Transport / network interruption", "请求能力不受支持": "Unsupported request capability", "认证异常": "Authentication error", "凭据失效": "Invalid credentials", "原因未确定": "Cause undetermined", "当时未采集": "Not collected at the time", "上游未提供": "Not provided by upstream", "未观测到": "Not observed", "已截断": "Truncated", "保存失败": "Save failed", "曾保存失败，当前追踪已保存": "Earlier save failed; current trace saved", "已归档，内容已截断": "Archived, content truncated", "未保存": "Not saved", "原始错误已截断且未保存": "Raw error truncated and not saved", "读取失败": "Read failed", "已归档": "Archived", "归档未找到": "Archive not found", "已清理或丢失": "Removed or missing", "已有业务输出，未安全重放": "Output delivered; replay is unsafe", "请求已发送，完成状态不确定": "Request sent; completion uncertain", "本次失败不可安全重试": "This failure cannot be safely retried", "未观测到后续执行": "No further execution observed", "未采集": "Not collected", "正在查询执行追踪…": "Loading execution trace…", "历史记录缺少 Event ID": "Historical record has no Event ID", "追踪查询失败，完整字段仍可查看": "Trace query failed; all fields remain available", "收到客户端请求": "Client request received", "开始执行尝试": "Execution attempt started", "协议握手": "Protocol handshake", "收到上游响应头": "Upstream headers received", "生成请求发送观测": "Generation request send observation", "首个上游业务输出": "First upstream business output", "首个实际客户端输出": "First output to client", "上游终止事件": "Upstream terminal event", "请求最终结算": "Final request settlement", "具体时刻未采集": "Exact time not collected", "关键时间线": "Key timeline", "详细时间线当时未采集": "Detailed timeline was not collected", "原因、证据与执行动作": "Cause, evidence, and actions", "上游错误说明": "Upstream error message", "上游执行尝试": "Upstream execution attempts", "已接收事件 / 字节": "Events / bytes received", "自动重放处理": "Automatic replay handling", "请求已完成": "Request completed", "HTTP 状态不代表请求最终完成": "HTTP status does not establish final completion", "本次不能安全重放不代表账号永久不可用": "Unsafe replay does not mean the account is permanently unavailable", "刷新凭据": "Refresh credentials", "同账号再次执行": "Re-execute on the same account", "切换账号或 Provider": "Switch account or provider", "尝试失败": "Attempt failed", "尝试完成": "Attempt finished", "执行中": "Executing", "请求 / 响应模型": "Request / response model", "执行阶段": "Execution stage", "传输 / 状态": "Transport / status", "传输降级原因": "Transport fallback reason", "排队 / 响应头耗时": "Queue / response header duration", "传输错误原因": "Transport failure reason", "WS 关闭码": "WS close code", "WS 关闭帧收到": "WS close frame received", "上游 Request ID": "Upstream request ID", "握手和生成发送属于同一次执行": "Handshake and generation send belong to one execution", "未观测到上游执行，可能在准入或转换阶段结束": "No upstream execution observed; request may have ended during admission or conversion", "历史执行尝试当时未采集": "Historical execution attempts were not collected", "检查点保存": "Checkpoint persistence", "执行追踪": "Execution trace", "请求开始时配置": "Request-start configuration", "结构化上游错误": "Structured upstream error", "原始错误内容": "Raw error content", "WebSocket 关闭信息": "WebSocket close diagnostics", "输出用量": "Output usage", "交互归档": "Interaction archive", "证据": "Evidence", "完整性状态": "Completeness", "来源": "Source", "证据状态正在查询": "Loading evidence state", "结构化错误对象": "Structured error object", "由已保存的结构化字段构成，不等同于原始响应帧": "Built from stored structured fields; this is not a raw response frame", "运行实例": "Process instance", "异常统计查询失败": "Anomaly query failed", "已完成请求": "Completed requests", "其中：输出中断": "Of which: interrupted output", "相同筛选范围内，异常请求": "Requests with anomalies in the current scope", "历史追踪未采集": "Historical traces not collected", "结果未知不计入成功率分母": "Unknown results are excluded from the success-rate denominator", "原因筛选": "Cause filter", "版本筛选": "Revision filter", "传输筛选": "Transport filter", "缺少字段筛选": "Missing field filter", "最终失败趋势": "Final failure trend", "恢复成功趋势": "Recovered success trend", "分组": "Group", "异常请求": "Requests with anomalies", "占全部已完成请求": "Share of all completed requests", "结果未知": "Result unknown", "查看相关调用": "View related requests", "当前范围没有异常": "No anomalies in this scope", "按主异常原因每请求归类一次，尝试级失败另行保留；相同错误不代表根因相同": "Each request is grouped once by its primary cause; attempt failures are kept separately. Matching errors do not prove matching root causes", "分组超过 200 项，已截断": "More than 200 groups; results truncated", "Event ID 已复制": "Event ID copied"});
+Object.assign(enUS,{"重置筛选":"Reset filters","筛选条件已修改，点击应用筛选生效":"Filters changed. Apply filters to update results.","已应用附加筛选":"Additional applied filters","自定义时间格式无效":"Invalid custom date and time","开始时间必须早于结束时间":"Start time must precede end time","调用明细与异常诊断保留最近 3 个月，统计基于保留记录。":"Call details and diagnostics are kept for the latest 3 months. Statistics use retained records.","使用统计视图": "Usage views", "用量概览": "Usage overview", "异常分析": "Anomaly analysis", "最终结果": "Final result", "全部结果": "All results", "包含异常的请求": "Requests with anomalies", "最终失败": "Final failures", "输出中断": "Output interrupted", "成功 · 曾有异常": "Succeeded after an anomaly", "待完成 / 结果未知": "Pending / result unknown", "最终成功": "Final successes", "最终账号槽位 ID": "Final account slot ID", "Event ID / Request ID / 错误代码 / 账号": "Event ID / Request ID / error code / account", "搜索调用": "Search calls", "开始时间（Asia/Singapore · UTC+8）": "Start time (Asia/Singapore · UTC+8)", "结束时间（Asia/Singapore · UTC+8）": "End time (Asia/Singapore · UTC+8)", "成功请求 / 已完成请求；结果未知不计入分母": "Successful / completed requests; unknown results are excluded", "按 UTC+8 日期汇总全部请求，含待完成与结果未知；应用当前筛选。": "Requests by UTC+8 date, including successes and failures, with current filters.", "按 UTC+8 日期汇总输入与输出 Token；浅蓝为输入，深蓝为输出。": "Input and output tokens by UTC+8 date; light blue is input, dark blue is output.", "按 UTC+8 日期计算缓存使用率；仅统计缓存读取已知的成功请求。": "Cache usage by UTC+8 date; only successful requests with known cache reads are included.", "按 UTC+8 日期计算输出 Token 合计 / 请求总耗时合计；仅统计有效样本。": "Total output tokens / total request duration by UTC+8 date; valid samples only.", "概览与时间线": "Overview and timeline", "尝试记录": "Execution attempts", "诊断证据": "Diagnostic evidence", "完整字段": "All fields", "复制 Event ID": "Copy Event ID", "查看同类异常": "Find similar anomalies", "导出诊断 JSON": "Export diagnostic JSON", "导出当前筛选 CSV": "Export filtered CSV", "单次调用追踪": "Request trace", "异常原因": "Anomaly cause", "账号 / 尝试": "Account / attempts", "按原因": "By cause", "按账号": "By account", "按模型": "By model", "按版本": "By revision", "按传输": "By transport", "按 Provider": "By provider", "分组维度": "Group by", "最终账号": "Final account", "请求时版本": "Request revision", "传输方式": "Transport", "上游服务过载": "Upstream overloaded", "传输 / 网络中断": "Transport / network interruption", "请求能力不受支持": "Unsupported request capability", "认证异常": "Authentication error", "凭据失效": "Invalid credentials", "原因未确定": "Cause undetermined", "当时未采集": "Not collected at the time", "上游未提供": "Not provided by upstream", "未观测到": "Not observed", "已截断": "Truncated", "保存失败": "Save failed", "曾保存失败，当前追踪已保存": "Earlier save failed; current trace saved", "已归档，内容已截断": "Archived, content truncated", "未保存": "Not saved", "原始错误已截断且未保存": "Raw error truncated and not saved", "读取失败": "Read failed", "已归档": "Archived", "归档未找到": "Archive not found", "已清理或丢失": "Removed or missing", "已有业务输出，未安全重放": "Output delivered; replay is unsafe", "请求已发送，完成状态不确定": "Request sent; completion uncertain", "本次失败不可安全重试": "This failure cannot be safely retried", "未观测到后续执行": "No further execution observed", "未采集": "Not collected", "正在查询执行追踪…": "Loading execution trace…", "历史记录缺少 Event ID": "Historical record has no Event ID", "追踪查询失败，完整字段仍可查看": "Trace query failed; all fields remain available", "收到客户端请求": "Client request received", "开始执行尝试": "Execution attempt started", "协议握手": "Protocol handshake", "收到上游响应头": "Upstream headers received", "生成请求发送观测": "Generation request send observation", "首个上游业务输出": "First upstream business output", "首个实际客户端输出": "First output to client", "上游终止事件": "Upstream terminal event", "请求最终结算": "Final request settlement", "具体时刻未采集": "Exact time not collected", "关键时间线": "Key timeline", "详细时间线当时未采集": "Detailed timeline was not collected", "原因、证据与执行动作": "Cause, evidence, and actions", "上游错误说明": "Upstream error message", "上游执行尝试": "Upstream execution attempts", "已接收事件 / 字节": "Events / bytes received", "自动重放处理": "Automatic replay handling", "请求已完成": "Request completed", "HTTP 状态不代表请求最终完成": "HTTP status does not establish final completion", "本次不能安全重放不代表账号永久不可用": "Unsafe replay does not mean the account is permanently unavailable", "刷新凭据": "Refresh credentials", "同账号再次执行": "Re-execute on the same account", "切换账号或 Provider": "Switch account or provider", "尝试失败": "Attempt failed", "尝试完成": "Attempt finished", "执行中": "Executing", "请求 / 响应模型": "Request / response model", "执行阶段": "Execution stage", "传输 / 状态": "Transport / status", "传输降级原因": "Transport fallback reason", "排队 / 响应头耗时": "Queue / response header duration", "传输错误原因": "Transport failure reason", "WS 关闭码": "WS close code", "WS 关闭帧收到": "WS close frame received", "上游 Request ID": "Upstream request ID", "握手和生成发送属于同一次执行": "Handshake and generation send belong to one execution", "未观测到上游执行，可能在准入或转换阶段结束": "No upstream execution observed; request may have ended during admission or conversion", "历史执行尝试当时未采集": "Historical execution attempts were not collected", "检查点保存": "Checkpoint persistence", "执行追踪": "Execution trace", "请求开始时配置": "Request-start configuration", "结构化上游错误": "Structured upstream error", "原始错误内容": "Raw error content", "WebSocket 关闭信息": "WebSocket close diagnostics", "输出用量": "Output usage", "交互归档": "Interaction archive", "证据": "Evidence", "完整性状态": "Completeness", "来源": "Source", "证据状态正在查询": "Loading evidence state", "结构化错误对象": "Structured error object", "由已保存的结构化字段构成，不等同于原始响应帧": "Built from stored structured fields; this is not a raw response frame", "运行实例": "Process instance", "异常统计查询失败": "Anomaly query failed", "已完成请求": "Completed requests", "其中：输出中断": "Of which: interrupted output", "相同筛选范围内，异常请求": "Requests with anomalies in the current scope", "历史追踪未采集": "Historical traces not collected", "结果未知不计入成功率分母": "Unknown results are excluded from the success-rate denominator", "原因筛选": "Cause filter", "版本筛选": "Revision filter", "传输筛选": "Transport filter", "缺少字段筛选": "Missing field filter", "最终失败趋势": "Final failure trend", "恢复成功趋势": "Recovered success trend", "分组": "Group", "异常请求": "Requests with anomalies", "占全部已完成请求": "Share of all completed requests", "结果未知": "Result unknown", "查看相关调用": "View related requests", "当前范围没有异常": "No anomalies in this scope", "按主异常原因每请求归类一次，尝试级失败另行保留；相同错误不代表根因相同": "Each request is grouped once by its primary cause; attempt failures are kept separately. Matching errors do not prove matching root causes", "分组超过 200 项，已截断": "More than 200 groups; results truncated", "Event ID 已复制": "Event ID copied"});
 Object.assign(enUS,{"成功 / 其他": "Success / other", "非成功终态含进程中断的未知结果；待完成另计": "Other terminal results include unknown outcomes after process interruption; pending requests are counted separately", "当前筛选范围内的全部请求，含待完成与结果未知。": "All requests in the current scope, including pending and unknown outcomes.", "按 UTC+8 日期汇总全部请求，含待完成与结果未知；应用当前筛选。": "All requests by UTC+8 date, including pending and unknown results, with current filters.", "进程中断后恢复登记，无法确认上游最终结果": "Recorded after process interruption; the final upstream result is unknown", "最终成功，已保留失败尝试或传输降级记录": "Final success; failed attempts or transport fallback have been retained"});
-const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeysLoadVersion:0,clientKeyModels:[],clientKeyModelsID:"",clientKeyModelsVersion:0,clientKeyModelsAbort:null,usageView:"overview",resultFilter:"",accountFilter:"",searchFilter:"",missingDimension:"",causeFilter:"",transportFilter:"",revisionFilter:"",usageTrace:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{loading:false,updating:new Set()},
+const state={locale:"zh-CN",localeSource:"fallback",preferences:null,providers:[],providerWritable:false,configWritable:false,editing:-1,builtinEditing:-1,query:"",tab:"providers",poolSub:"unified",featureSub:"chat",system:null,clientKeys:[],clientKeysLoadVersion:0,clientKeyModels:[],clientKeyModelsID:"",clientKeyModelsVersion:0,clientKeyModelsAbort:null,usageView:"overview",usageDraft:null,resultFilter:"",accountFilter:"",searchFilter:"",missingDimension:"",causeFilter:"",transportFilter:"",revisionFilter:"",usageTrace:null,range:"today",usage:null,events:[],cursor:"",usageTimer:null,apiKeyFilter:"",providerFilter:"",modelFilter:"",outcomeFilter:"",estimatedFilter:"",from:"",to:"",filterOptions:null,filterOptionsKey:"",filterOptionsWarned:false,exportPool:"chatgpt",unified:{loading:false,updating:new Set()},
   cg:{sub:"accounts",available:true,accounts:[],selected:new Set(),query:"",status:"",type:"",accountDeleteBusy:false,refresh:{progressId:"",timer:null,busy:false},
     oauth:{sessionId:"",authorizeURL:"",expiresIn:0,targetId:""},exportIDs:[],
     featureCatalog:null,featureCatalogVersion:0,featureCatalogRequest:null,featureModelLoads:{task:0,search:0,chat:0},
@@ -1348,12 +1351,13 @@ function parseHash(){
   const owner=tab==="features"&&featureSub==="tasks"?(ownerID||apiKeyID):ownerID;
   return {tab,cgSub,poolSub,featureSub,usageView:p.get("view")||"overview",resultFilter:p.get("result")||"",accountFilter:p.get("account_id")||"",searchFilter:p.get("search")||"",missingDimension:p.get("missing_dimension")||"",causeFilter:p.get("cause")||"",transportFilter:p.get("transport")||"",revisionFilter:p.get("revision")||"",range:p.get("range")||"today",apiKeyFilter:apiKeyID,providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner,conversationId:p.get("id")||""};
 }
-function setHash(){
+function setHash(silent=false){
   if(state.tab==="usage"){
     const q=new URLSearchParams();
     q.set("range",state.range);q.set("view",state.usageView||"overview");
     [["api_key_id",state.apiKeyFilter],["provider",state.providerFilter],["model",state.modelFilter],["outcome",state.outcomeFilter],["estimated",state.estimatedFilter],["from",state.from],["to",state.to], ["result",state.resultFilter],["account_id",state.accountFilter],["search",state.searchFilter],["missing_dimension",state.missingDimension],["cause",state.causeFilter],["transport",state.transportFilter],["revision",state.revisionFilter]].forEach(([k,v])=>{if(v)q.set(k,v)});
-    location.hash="#/usage?"+q.toString();
+    const hash="#/usage?"+q.toString();
+    if(silent){if(location.hash!==hash)history.pushState(null,"",hash)}else location.hash=hash;
     return;
   }
   if(state.tab==="account-pools"){
@@ -3178,6 +3182,73 @@ async function saveBuiltinProvider(name,payload,message,afterSave){if(!state.con
 async function removeProvider(index){const p=state.providers[index];if(p.builtin){toast("内建 Provider 不可删除","error");return}if(!confirm(t("确认删除 Provider “{v0}”？",{v0:p.name})))return;try{await request(apiURL(`/api/providers/${encodeURIComponent(p.name)}`),{method:"DELETE",headers:authHeaders()});invalidateFeatureCatalog();toast("Provider 已删除");await loadProviders()}catch(e){toast(e.message,"error");await loadProviders()}}
 function toast(message,type="success",params={}){const el=document.createElement("div");el.className=`toast toast-${type}`;el.innerHTML=`<span>${type==="success"?"✓":"!"}</span><div data-i18n-source="${esc(message)}" data-i18n-params="${esc(JSON.stringify(params))}">${esc(t(message,params))}</div>`;$("toasts").appendChild(el);setTimeout(()=>el.remove(),4200)}
 
+function usageFilterControls(){return {apiKeyFilter:"usageKeyFilter",providerFilter:"usageProviderFilter",modelFilter:"usageModelFilter",outcomeFilter:"usageOutcomeFilter",estimatedFilter:"usageEstimatedFilter",resultFilter:"usageResultFilter",accountFilter:"usageAccountFilter",searchFilter:"usageSearchFilter",from:"usageFrom",to:"usageTo"}}
+function usageDraftFromState(){
+  const draft={range:state.range||"today"};
+  for(const key of Object.keys(usageFilterControls()))draft[key]=["from","to"].includes(key)?usageInputValue(state[key]):state[key]||"";
+  return draft;
+}
+function captureUsageDraft(){
+  const draft={...(state.usageDraft||usageDraftFromState())};
+  for(const [key,id] of Object.entries(usageFilterControls()))draft[key]=$(id).value||"";
+  if(draft.from||draft.to)draft.range="custom";
+  state.usageDraft=draft;
+  renderUsageFilterHints();
+}
+function renderUsageFilterHints(){
+  const applied=usageDraftFromState(),draft=state.usageDraft||applied;
+  $("usageDraftHint").classList.toggle("hidden",Object.keys(applied).every(key=>applied[key]===draft[key]));
+  const extra=[["原因筛选",state.causeFilter],["版本筛选",state.revisionFilter],["传输筛选",state.transportFilter],["缺少字段筛选",state.missingDimension]].filter(([,value])=>value);
+  $("usageScopeHint").textContent=extra.length?t("已应用附加筛选")+"："+extra.map(([label,value])=>`${t(label)} ${value}`).join(" · "):"";
+  $("usageScopeHint").classList.toggle("hidden",!extra.length);
+  document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b.dataset.range===draft.range));
+}
+function renderUsageFilters(resetDraft=false){
+  if(resetDraft||!state.usageDraft)state.usageDraft=usageDraftFromState();
+  for(const [key,id] of Object.entries(usageFilterControls()))if(!["apiKeyFilter","providerFilter","modelFilter","outcomeFilter"].includes(key))$(id).value=state.usageDraft[key];
+  fillFilterOptions(state.filterOptions);
+  renderUsageFilterHints();
+}
+function reloadUsageQuery(forceOptions=false){
+  setHash(true);
+  loadFilterOptions(forceOptions);
+  return loadUsage(true);
+}
+function applyUsageFilters(){
+  captureUsageDraft();
+  const draft=state.usageDraft,from=draft.from===usageInputValue(state.from)?state.from||"":usageInputISO(draft.from),to=draft.to===usageInputValue(state.to)?state.to||"":usageInputISO(draft.to);
+  if($("usageFrom").validity?.badInput||$("usageTo").validity?.badInput||Boolean(draft.from)!==Boolean(draft.to)||(draft.from&&!from)||(draft.to&&!to)||(draft.range==="custom"&&!from&&!to)){
+    toast("自定义时间格式无效","error");return;
+  }
+  if(from&&to&&Date.parse(from)>=Date.parse(to)){toast("开始时间必须早于结束时间","error");return}
+  for(const key of Object.keys(usageFilterControls()))if(!["from","to"].includes(key))state[key]=draft[key].trim();
+  if(state.missingDimension&&({account:state.accountFilter,model:state.modelFilter,provider:state.providerFilter})[state.missingDimension])state.missingDimension="";
+  state.from=from;state.to=to;state.range=from||to?"custom":draft.range;
+  renderUsageFilters(true);
+  return reloadUsageQuery();
+}
+function resetUsageFilters(){
+  applyUsageState({usageView:state.usageView,range:"today"});
+  return reloadUsageQuery(true);
+}
+function setUsageRange(range){
+  if(!["today","7d","30d","custom"].includes(range))return;
+  if(!state.usageDraft)state.usageDraft=usageDraftFromState();
+  state.usageDraft.range=range;
+  if(range==="custom"){renderUsageFilterHints();return}
+  state.range=range;state.from="";state.to="";
+  state.usageDraft.from="";state.usageDraft.to="";
+  renderUsageFilters();
+  return reloadUsageQuery();
+}
+function commitUsageDrill(changes){
+  if(!state.usageDraft)state.usageDraft=usageDraftFromState();
+  Object.assign(state,changes);
+  for(const key of Object.keys(usageFilterControls()))if(key in changes)state.usageDraft[key]=changes[key];
+  setUsageView("calls");
+  renderUsageFilters();
+  return reloadUsageQuery();
+}
 function usageRangeParams(){const p=new URLSearchParams({timezone:"Asia/Singapore"});if(state.range!=="today")p.set("range",state.range);[["from",state.from],["to",state.to]].forEach(([k,v])=>{if(v)p.set(k,v)});return p}
 function filterOptionsCacheKey(){return [state.range||"today",state.from||"",state.to||""].join("|")}
 function fillSelect(el,placeholder,items,selected){
@@ -3199,10 +3270,11 @@ function fillFilterOptions(data){
   const providers=(data&&data.providers)||[];
   const models=(data&&data.models)||[];
   const outcomes=(data&&data.outcomes)||[];
-  fillSelect($("usageKeyFilter"),"全部 API Key",keys,state.apiKeyFilter);
-  fillSelect($("usageProviderFilter"),"全部 Provider",providers,state.providerFilter);
-  fillSelect($("usageModelFilter"),"全部 Model",models,state.modelFilter);
-  fillSelect($("usageOutcomeFilter"),"全部 Outcome",outcomes,state.outcomeFilter);
+  const draft=state.usageDraft||usageDraftFromState();
+  fillSelect($("usageKeyFilter"),"全部 API Key",keys,draft.apiKeyFilter);
+  fillSelect($("usageProviderFilter"),"全部 Provider",providers,draft.providerFilter);
+  fillSelect($("usageModelFilter"),"全部 Model",models,draft.modelFilter);
+  fillSelect($("usageOutcomeFilter"),"全部 Outcome",outcomes,draft.outcomeFilter);
   const trunc=data&&data.limits&&data.limits.truncated;
   const hint=$("filterOptionsHint");
   if(trunc&&(trunc.api_key_ids||trunc.providers||trunc.models))setLocalizedText(hint,"选项已截断至 200 项（当前时间范围内 distinct 值过多）");
@@ -3211,10 +3283,11 @@ function fillFilterOptions(data){
 async function loadFilterOptions(force=false){
   const key=filterOptionsCacheKey();
   if(!force&&state.filterOptions&&state.filterOptionsKey===key)return;
+  const version=(state.filterOptionsVersion||0)+1;state.filterOptionsVersion=version;
   try{
     const data=await request(apiURL(`/api/usage/filter-options?${usageRangeParams().toString()}`));
     // 时间范围变更后，过期请求不得覆盖当前下拉选项。
-    if(key!==filterOptionsCacheKey())return;
+    if(version!==state.filterOptionsVersion||key!==filterOptionsCacheKey())return;
     state.filterOptionsKey=key;
     fillFilterOptions(data);
     if(data&&data.history_query_ok===false&&!state.filterOptionsWarned){
@@ -3222,7 +3295,7 @@ async function loadFilterOptions(force=false){
       toast("历史筛选选项加载失败，已仅显示配置项","error");
     }
   }catch(e){
-    if(key!==filterOptionsCacheKey())return;
+    if(version!==state.filterOptionsVersion||key!==filterOptionsCacheKey())return;
     // 保留现有选项；注入 orphan 以保证当前筛选值可见
     fillFilterOptions(state.filterOptions||{api_key_ids:[],providers:[],models:[],outcomes:[]});
     if(!state.filterOptionsWarned){state.filterOptionsWarned=true;toast(e.message||"筛选选项加载失败","error")}
@@ -3459,13 +3532,11 @@ function usageCauseLabel(code){const names={upstream_overloaded:"上游服务过
 function usageEvidenceLabel(code){const names={saved:"已保存",not_collected:"当时未采集",not_provided:"上游未提供",not_observed:"未观测到",truncated:"已截断",save_failed:"保存失败",saved_after_checkpoint_failure:"曾保存失败，当前追踪已保存",archived_truncated:"已归档，内容已截断",not_saved:"未保存",truncated_not_saved:"原始错误已截断且未保存",read_failed:"读取失败",archived:"已归档",missing:"归档未找到",cleared_or_missing:"已清理或丢失"};return t(names[code]||code||"当时未采集")}
 function usageReplayLabel(code){const names={business_output_already_delivered:"已有业务输出，未安全重放",request_sent_completion_uncertain:"请求已发送，完成状态不确定",not_retryable:"本次失败不可安全重试",no_further_execution_observed:"未观测到后续执行"};return t(names[code]||code||"未采集")}
 function setUsageView(view){state.usageView=view;document.querySelectorAll("[data-usage-view]").forEach(b=>{b.classList.toggle("active",b.dataset.usageView===view);b.setAttribute("aria-selected",String(b.dataset.usageView===view))});$("usageOverviewContent").classList.toggle("hidden",view!=="overview");$("usageCallsContent").classList.toggle("hidden",view!=="calls");$("usageAnomaliesContent").classList.toggle("hidden",view!=="anomalies")}
-// Explicit tab navigation starts a fresh filter scope. Drilldowns keep using
-// setUsageView so their deliberate filters and shareable URLs remain intact.
+// Internal navigation preserves both the applied query and unsubmitted inputs.
 function switchUsageView(view){
-  if(view===state.usageView)return;
-  applyUsageState({usageView:view,range:state.range,from:state.from,to:state.to});
-  // The hashchange route reloads dashboard, events and diagnostics together.
-  setHash();
+  if(!["overview","calls","anomalies"].includes(view)||view===state.usageView)return;
+  setUsageView(view);
+  setHash(true);
 }
 function setUsageTraceTab(tab){state.usageTraceTab=tab;for(const [key,id] of Object.entries({overview:"usageTraceOverview",attempts:"usageTraceAttempts",evidence:"usageTraceEvidence",fields:"usageTraceFields"}))$(id).className="usage-trace-tab"+(key===tab?" active":"");document.querySelectorAll("[data-trace-tab]").forEach(b=>{b.classList.toggle("active",b.dataset.traceTab===tab);b.setAttribute("aria-selected",String(b.dataset.traceTab===tab))})}
 function showUsageEvent(event){renderUsageEventFields(event);state.usageTrace=null;setUsageTraceTab("overview");$("usageTraceDownload").disabled=true;renderUsageTrace({event,trace:null,timeline:[],evidence:[]});$("usageTraceOverview").innerHTML=`<div class="loading">${esc(t("正在查询执行追踪…"))}</div>`;loadUsageTrace(event)}
@@ -3499,20 +3570,29 @@ async function loadUsageDiagnostics(){
   const key=usageParams().toString(),group=$("usageAnomalyGroup").value||"cause",version=(state.usageDiagnosticsVersion||0)+1;state.usageDiagnosticsVersion=version;
   try{
     const data=await request(apiURL(`/api/usage/anomalies?${key}&group_by=${encodeURIComponent(group)}`));
-    if(version!==state.usageDiagnosticsVersion||key!==usageParams().toString())return;
+    if(version!==state.usageDiagnosticsVersion||key!==usageParams().toString()||group!==($("usageAnomalyGroup").value||"cause"))return;
     state.usageDiagnostics=data;renderUsageDiagnostics(data);
-  }catch(e){if(version===state.usageDiagnosticsVersion){$("usageDiagnosticsSummary").innerHTML="";$("usageDiagnosticsHint").textContent=t("异常统计查询失败")+"："+e.message;$("usageAnomalyBody").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
+  }catch(e){if(version===state.usageDiagnosticsVersion&&key===usageParams().toString()&&group===($("usageAnomalyGroup").value||"cause")){$("usageDiagnosticsSummary").innerHTML="";$("usageDiagnosticsHint").textContent=t("异常统计查询失败")+"："+e.message;$("usageAnomalyBody").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 }
 function renderUsageDiagnostics(data){
   const s=data.summary||{};$("uSuccess").textContent=s.completed?((s.success||0)/s.completed*100).toFixed(1)+"%":"—";setLocalizedAttribute($("uSuccess"),"title",t("成功请求 / 已完成请求；结果未知不计入分母"));const metrics=[["已完成请求",s.completed],["最终失败",s.failed],["其中：输出中断",s.partial],["成功 · 曾有异常",s.recovered],["待完成 / 结果未知",s.unknown]];
   $("usageDiagnosticsSummary").innerHTML=metrics.map(([label,n])=>`<div class="stat"><div class="stat-label">${esc(t(label))}</div><div class="stat-value">${formatNumber(n)}</div></div>`).join("");
-  $("usageDiagnosticsHint").textContent=`${t("相同筛选范围内，异常请求")} ${formatNumber(s.affected)} / ${formatNumber(s.completed)} (${((s.rate||0)*100).toFixed(2)}%) · ${t("历史追踪未采集")} ${formatNumber(s.missing_trace)} · ${t("结果未知不计入成功率分母")}${state.missingDimension?` · ${t("缺少字段筛选")} ${state.missingDimension}`:""}${state.causeFilter?` · ${t("原因筛选")} ${state.causeFilter}`:""}${state.revisionFilter?` · ${t("版本筛选")} ${state.revisionFilter}`:""}${state.transportFilter?` · ${t("传输筛选")} ${state.transportFilter}`:""}`;
+  $("usageDiagnosticsHint").textContent=`${t("相同筛选范围内，异常请求")} ${formatNumber(s.affected)} / ${formatNumber(s.completed)} (${((s.rate||0)*100).toFixed(2)}%) · ${t("历史追踪未采集")} ${formatNumber(s.missing_trace)} · ${t("结果未知不计入成功率分母")}`;
   const rows=Array.isArray(data.groups)?data.groups:[],daily=Array.isArray(data.daily)?data.daily:[],labels=daily.map(d=>d.key.slice(5));
   $("usageAnomalyBody").innerHTML=`<div class="usage-anomaly-grid"><div class="card chart-card"><h4>${esc(t("最终失败趋势"))}</h4><div class="usage-anomaly-chart">${svgBars(daily.map(d=>d.failed||0),labels,"#ff7875",1,daily.map(d=>`${d.key} · ${d.failed||0}`))}</div></div><div class="card chart-card"><h4>${esc(t("恢复成功趋势"))}</h4><div class="usage-anomaly-chart">${svgBars(daily.map(d=>d.recovered||0),labels,"#69b1ff",1,daily.map(d=>`${d.key} · ${d.recovered||0}`))}</div></div></div><div class="card"><div class="table-wrap"><table class="usage-trace-table"><thead><tr>${["分组","异常请求","占全部已完成请求","最终失败","其中：输出中断","成功 · 曾有异常","结果未知","操作"].map(l=>`<th>${esc(t(l))}</th>`).join("")}</tr></thead><tbody>${rows.map((row,i)=>`<tr><td data-i18n-ignore>${esc(data.group_by==="cause"?usageCauseLabel(row.key):(row.key||t("未采集")))}${data.group_by==="cause"?`<div class="subtle">${esc(row.key)}</div>`:""}</td><td>${formatNumber(row.affected)}</td><td>${s.completed?((row.affected||0)/s.completed*100).toFixed(2)+"%":"—"}</td><td>${formatNumber(row.failed)}</td><td>${formatNumber(row.partial)}</td><td>${formatNumber(row.recovered)}</td><td>${formatNumber(row.unknown)}</td><td><button class="link-btn" data-anomaly-drill="${i}">${esc(t("查看相关调用"))}</button></td></tr>`).join("")||`<tr><td colspan="8" class="empty">${esc(t("当前范围没有异常"))}</td></tr>`}</tbody></table></div><p class="usage-diagnostics-hint" style="padding:0 14px">${esc(t("按主异常原因每请求归类一次，尝试级失败另行保留；相同错误不代表根因相同"))}${data.truncated?` · ${esc(t("分组超过 200 项，已截断"))}`:""}</p></div>`;
   document.querySelectorAll("[data-anomaly-drill]").forEach(b=>b.onclick=()=>usageDrill(data.group_by,rows[Number(b.dataset.anomalyDrill)]));
 }
-function usageDrill(group,row){if(!row)return;const map={cause:"causeFilter",account:"accountFilter",model:"modelFilter",revision:"revisionFilter",transport:"transportFilter",provider:"providerFilter"};state.missingDimension="";if(!row.key&&["account","model","provider"].includes(group)){state[map[group]]="";state.missingDimension=group}else state[map[group]]=row.key;state.resultFilter=row.affected?"anomaly":"unknown";setUsageView("calls");setHash();loadUsage(true)}
-function usageRelated(){const e=state.usageEvent;if(!e)return;state.causeFilter=usageCause(e);state.resultFilter="anomaly";$("usageEventDialog").close();setUsageView("calls");setHash();loadUsage(true)}
+function usageDrill(group,row){
+  const map={cause:"causeFilter",account:"accountFilter",model:"modelFilter",revision:"revisionFilter",transport:"transportFilter",provider:"providerFilter"};
+  if(!row||!map[group])return;
+  const changes={[map[group]]:row.key,resultFilter:row.affected?"anomaly":"unknown"};
+  if(["account","model","provider"].includes(group)){
+    if(!row.key){changes[map[group]]="";changes.missingDimension=group}
+    else if(state.missingDimension===group)changes.missingDimension="";
+  }
+  return commitUsageDrill(changes);
+}
+function usageRelated(){const e=state.usageEvent;if(!e)return;$("usageEventDialog").close();return commitUsageDrill({causeFilter:usageCause(e),resultFilter:"anomaly"})}
 function saveUsageBlob(name,blob){const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function downloadUsageDiagnostic(){if(!state.usageTrace)return;saveUsageBlob("execution-diagnostic.json",new Blob([JSON.stringify(state.usageTrace,null,2)],{type:"application/json"}))}
 async function downloadUsageCSV(){
@@ -3554,7 +3634,9 @@ $("clientKeyModelsSearch").oninput=renderClientKeyModels;
 $("closeClientSecret").onclick=()=>$("clientSecretDialog").close();
 $("copyClientSecret").onclick=async()=>{try{await navigator.clipboard.writeText($("clientSecret").value);toast("已复制") }catch(e){$("clientSecret").select()}};
 $("loadMoreEvents").onclick=()=>loadEvents(false);
-$("usageApply").onclick=()=>{const prevKey=filterOptionsCacheKey();state.apiKeyFilter=$("usageKeyFilter").value.trim();state.providerFilter=$("usageProviderFilter").value.trim();state.modelFilter=$("usageModelFilter").value.trim();state.outcomeFilter=$("usageOutcomeFilter").value.trim();state.estimatedFilter=$("usageEstimatedFilter").value;state.resultFilter=$("usageResultFilter").value;state.accountFilter=$("usageAccountFilter").value.trim();state.searchFilter=$("usageSearchFilter").value.trim();state.causeFilter="";state.missingDimension="";state.transportFilter="";state.revisionFilter="";state.from=usageInputISO($("usageFrom").value);state.to=usageInputISO($("usageTo").value);if(state.from||state.to)state.range="custom";setHash();if(filterOptionsCacheKey()!==prevKey)loadFilterOptions(true);loadUsage(true)};
+$("usageApply").onclick=()=>applyUsageFilters();
+$("usageReset").onclick=()=>resetUsageFilters();
+Object.values(usageFilterControls()).forEach(id=>{$(id).oninput=$(id).onchange=()=>captureUsageDraft()});
 $("closeUsageEvent").onclick=()=>$("usageEventDialog").close();
 $("usageEventDialog").addEventListener("close",()=>{state.usageTraceVersion=(state.usageTraceVersion||0)+1;if(state.usageTraceAbort)state.usageTraceAbort.abort()});
 document.querySelectorAll("[data-usage-view]").forEach(b=>b.onclick=()=>switchUsageView(b.dataset.usageView));
@@ -3566,32 +3648,15 @@ $("usageTraceDownload").onclick=()=>downloadUsageDiagnostic();
 $("usageListCSV").onclick=()=>downloadUsageCSV();
 
 $("closeImageTaskDetail").onclick=()=>$("imageTaskDetailDialog").close();
-document.querySelectorAll("#rangeGroup .btn").forEach(btn=>btn.onclick=()=>{state.range=btn.dataset.range;if(state.range!=="custom"){state.from="";state.to=""}document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b===btn));setHash();loadFilterOptions(true);loadUsage(true)});
+document.querySelectorAll("#rangeGroup .btn").forEach(btn=>btn.onclick=()=>setUsageRange(btn.dataset.range));
 function applyUsageState(p){
   state.usageView=["overview","calls","anomalies"].includes(p.usageView)?p.usageView:"overview";
-  for(const key of ["resultFilter","accountFilter","searchFilter","causeFilter","transportFilter","revisionFilter","missingDimension"])state[key]=p[key]||"";
-  $("usageResultFilter").value=state.resultFilter;$("usageAccountFilter").value=state.accountFilter;$("usageSearchFilter").value=state.searchFilter;
-  setUsageView(state.usageView);
+  for(const key of [...Object.keys(usageFilterControls()),"causeFilter","transportFilter","revisionFilter","missingDimension"])state[key]=p[key]||"";
   state.range=p.range||"today";
-  state.apiKeyFilter=p.apiKeyFilter||"";
-  state.providerFilter=p.providerFilter||"";
-  state.modelFilter=p.modelFilter||"";
-  state.outcomeFilter=p.outcomeFilter||"";
-  state.estimatedFilter=p.estimatedFilter||"";
-  state.from=p.from||"";
-  state.to=p.to||"";
-  $("usageEstimatedFilter").value=state.estimatedFilter;
-  $("usageFrom").value=usageInputValue(state.from);
-  $("usageTo").value=usageInputValue(state.to);
-  document.querySelectorAll("#rangeGroup .btn").forEach(b=>b.classList.toggle("active",b.dataset.range===state.range));
-  if(state.filterOptions)fillFilterOptions(state.filterOptions);
-  else{
-    fillSelect($("usageKeyFilter"),"全部 API Key",[],state.apiKeyFilter);
-    fillSelect($("usageProviderFilter"),"全部 Provider",[],state.providerFilter);
-    fillSelect($("usageModelFilter"),"全部 Model",[],state.modelFilter);
-    fillSelect($("usageOutcomeFilter"),"全部 Outcome",[],state.outcomeFilter);
-  }
+  setUsageView(state.usageView);
+  renderUsageFilters(true);
 }
+
 function applyChatGPTState(p){
   if(p.poolSub==="chatgptweb"||p.poolSub==="codex")state.poolSub=p.poolSub;
   if(p.featureSub==="tasks"||p.featureSub==="images"||p.featureSub==="search"||p.featureSub==="chat")state.featureSub=p.featureSub;

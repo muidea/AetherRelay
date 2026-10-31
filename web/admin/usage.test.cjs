@@ -11,8 +11,8 @@ const source = scripts.at(-1);
 function harness() {
   const elements = {};
   const context = vm.createContext({
-    state: {locale: 'zh-CN', range: 'today', events: []}, URLSearchParams, AbortController, setTimeout, clearTimeout,
-    $: id => elements[id] ||= {style: {}, classList:{toggle(){}}, showModal() {}},
+    state: {locale: 'zh-CN', tab:'usage', usageView:'overview', range: 'today', events: []}, location:{hash:'#/usage?range=today&view=overview'}, URLSearchParams, AbortController, setTimeout, clearTimeout,
+    $: id => elements[id] ||= {style: {}, value:'', classList:{values:new Set(),toggle(name,force){if(force===undefined)force=!this.values.has(name);force?this.values.add(name):this.values.delete(name);return force},contains(name){return this.values.has(name)}}, showModal() {}},
     t: (s,params={}) => s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??'')), apiURL: s => s,
     setLocalizedText: (el,s,params={}) => {el.textContent=s.replace(/\{(\w+)\}/g,(_,key)=>String(params[key]??''));},
     setLocalizedAttribute: (el,name,source) => {el[name]=typeof source==='function'?source():source;},
@@ -20,8 +20,9 @@ function harness() {
     document: {querySelectorAll: () => []},
     toast: message => { throw new Error(message); },
   });
+  context.history={entries:[],pushState(_state,_title,hash){this.entries.push(hash);context.location.hash=hash}};
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel','formatUsageDate','usageInputISO','usageInputValue','usageCause','usageCauseLabel','usageEvidenceLabel','usageReplayLabel','setUsageTraceTab','renderUsageTrace','renderUsageEventFields', 'showUsageEvent']) {
+  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel','formatUsageDate','usageInputISO','usageInputValue','usageCause','usageCauseLabel','usageEvidenceLabel','usageReplayLabel','setUsageTraceTab','renderUsageTrace','renderUsageEventFields', 'showUsageEvent','usageFilterControls','usageDraftFromState','captureUsageDraft','renderUsageFilterHints','renderUsageFilters','reloadUsageQuery','applyUsageFilters','resetUsageFilters','setUsageRange','commitUsageDrill','usageRangeParams','filterOptionsCacheKey','fillSelect','fillFilterOptions','loadFilterOptions','applyUsageState','setUsageView','switchUsageView','parseHash','setHash']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -522,7 +523,7 @@ test('diagnostic aggregation excludes unknown requests and ignores stale scopes'
 });
 
 test('group drilldown distinguishes absent account from a literal unknown account',()=>{
- const {context:c}=harness();installUsageFunctions(c,['setUsageView','usageDrill']);c.setHash=()=>{};c.loadUsage=()=>{};
+ const {context:c}=harness();installUsageFunctions(c,['setUsageView','usageDrill']);c.setHash=()=>{};c.loadUsage=()=>{};c.loadFilterOptions=()=>{};
  c.usageDrill('account',{key:'',affected:1});assert.equal(c.state.accountFilter,'');assert.equal(c.state.missingDimension,'account');assert.equal(c.usageParams().get('missing_dimension'),'account');assert.equal(c.state.resultFilter,'anomaly');
  assert.equal(c.usageEventMatchesFilters({state:'completed',outcome:'error',account_id:''}),true);assert.equal(c.usageEventMatchesFilters({state:'completed',outcome:'error',account_id:'unknown'}),false);
  c.usageDrill('account',{key:'unknown',affected:1});assert.equal(c.state.missingDimension,'');assert.equal(c.state.accountFilter,'unknown');
@@ -537,4 +538,139 @@ test('CSV download uses the complete active diagnostic filter and JSON retains t
 
 test('missing historical presence flags do not turn unavailable failure usage into zero tokens',()=>{
  const {context:c}=harness();assert.equal(c.usageTokensUnavailable({state:'completed',outcome:'upstream_truncated',input_tokens:0,output_tokens:0,total_tokens:0}),true);assert.equal(c.usageTokensUnavailable({state:'completed',outcome:'success',input_tokens:0,output_tokens:0,total_tokens:0,output_tokens_known:true}),false);
+});
+
+test('usage tabs share the applied query and keep drafts, loaded rows and pagination',()=>{
+ const {context:c,elements}=harness();
+ c.applyUsageState({usageView:'overview',range:'custom',from:'2026-10-29T16:00:00Z',to:'2026-10-30T16:00:00Z',apiKeyFilter:'key',providerFilter:'codexoauth',modelFilter:'model',outcomeFilter:'success',estimatedFilter:'false',resultFilter:'recovered',accountFilter:'slot',searchFilter:'applied',causeFilter:'network',transportFilter:'websocket',revisionFilter:'revision'});
+ const query=c.usageParams().toString();c.state.events=[{event_id:'loaded'}];c.state.cursor='next-page';
+ elements.usageSearchFilter.value='unapplied';elements.usageModelFilter.value='draft-model';elements.usageFrom.value='2026-10-28T00:00';c.captureUsageDraft();
+ let requests=0;c.request=()=>{requests++;throw Error('tab switch must not query')};
+ for(const view of ['calls','anomalies','overview','overview']){
+  c.switchUsageView(view);
+  assert.equal(c.state.usageView,view);assert.equal(c.usageParams().toString(),query);
+  assert.equal(elements.usageSearchFilter.value,'unapplied');assert.equal(elements.usageModelFilter.value,'draft-model');assert.equal(elements.usageFrom.value,'2026-10-28T00:00');
+  assert.equal(c.state.cursor,'next-page');assert.equal(c.state.events[0].event_id,'loaded');
+  const p=new URLSearchParams(c.location.hash.split('?')[1]);assert.equal(p.get('view'),view);assert.equal(p.get('search'),'applied');assert.equal(p.get('model'),'model');
+ }
+ assert.equal(requests,0);assert.equal(c.history.entries.length,3);
+ assert.equal(elements.usageDraftHint.classList.contains('hidden'),false);
+ assert.match(elements.usageScopeHint.textContent,/network.*revision.*websocket/);
+});
+
+test('late filter options preserve every unsubmitted selection, including absent options',async()=>{
+ const {context:c,elements}=harness();c.applyUsageState({apiKeyFilter:'applied-key',modelFilter:'old-model'});
+ let finish;c.request=()=>new Promise(resolve=>finish=resolve);const pending=c.loadFilterOptions(true);
+ for(const [id,value] of Object.entries({usageKeyFilter:'draft-key',usageProviderFilter:'draft-provider',usageModelFilter:'draft-model',usageOutcomeFilter:'draft-outcome',usageEstimatedFilter:'true',usageResultFilter:'partial',usageAccountFilter:'draft-slot',usageSearchFilter:'draft-search',usageFrom:'2026-10-29T00:00',usageTo:'2026-10-30T00:00'}))elements[id].value=value;
+ c.captureUsageDraft();finish({api_key_ids:['applied-key'],models:['old-model'],providers:[],outcomes:[]});await pending;
+ assert.equal(elements.usageKeyFilter.value,'draft-key');assert.match(elements.usageKeyFilter.innerHTML,/draft-key/);
+ assert.equal(elements.usageModelFilter.value,'draft-model');assert.equal(elements.usageProviderFilter.value,'draft-provider');assert.equal(elements.usageOutcomeFilter.value,'draft-outcome');
+ assert.equal(elements.usageSearchFilter.value,'draft-search');assert.equal(elements.usageFrom.value,'2026-10-29T00:00');
+ assert.equal(c.state.modelFilter,'old-model');assert.equal(c.state.apiKeyFilter,'applied-key');
+ c.state.filterOptionsWarned=true;c.request=async()=>{throw Error('offline')};await c.loadFilterOptions(true);
+ assert.equal(elements.usageKeyFilter.value,'draft-key');assert.equal(elements.usageModelFilter.value,'draft-model');
+});
+
+test('same-range option requests reject older successes and failures after reset',async()=>{
+ const {context:c,elements}=harness();c.applyUsageState({});
+ const pending=[];c.request=()=>new Promise((resolve,reject)=>pending.push({resolve,reject}));
+ const first=c.loadFilterOptions(true),second=c.loadFilterOptions(true);
+ pending[1].resolve({models:['current']});await second;pending[0].resolve({models:['obsolete']});await first;
+ assert.match(elements.usageModelFilter.innerHTML,/current/);assert.doesNotMatch(elements.usageModelFilter.innerHTML,/obsolete/);
+ const stale=c.loadFilterOptions(true),latest=c.loadFilterOptions(true);pending[3].resolve({models:['latest']});await latest;
+ pending[2].reject(Error('old failure'));await stale;assert.match(elements.usageModelFilter.innerHTML,/latest/);assert.equal(c.state.filterOptionsWarned,undefined);
+});
+
+test('apply retains drilldown filters, updates all queries once and normalizes UTC+8 input',async()=>{
+ const {context:c,elements}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
+ c.applyUsageState({usageView:'anomalies',causeFilter:'network',transportFilter:'websocket',revisionFilter:'revision',missingDimension:'account'});
+ for(const [id,value]of Object.entries({usageKeyFilter:'key',usageProviderFilter:'codexoauth',usageModelFilter:'model',usageOutcomeFilter:'error',usageEstimatedFilter:'false',usageResultFilter:'partial',usageAccountFilter:' slot ',usageSearchFilter:' search ',usageFrom:'2026-10-29T00:00',usageTo:'2026-10-30T00:00'}))elements[id].value=value;
+ const urls=[];c.request=async url=>{urls.push(url);return url.includes('/runtime')?{scope:'process',inflight:0}:url.includes('/events?')?{events:[],next_cursor:''}:{summary:{},groups:[],daily:[]}};
+ await c.applyUsageFilters();
+ assert.equal(c.state.accountFilter,'slot');assert.equal(c.state.searchFilter,'search');assert.equal(c.state.from,'2026-10-28T16:00:00.000Z');assert.equal(c.state.to,'2026-10-29T16:00:00.000Z');assert.equal(c.state.range,'custom');
+ assert.equal(c.state.missingDimension,'');assert.equal(c.state.causeFilter,'network');assert.equal(c.state.transportFilter,'websocket');assert.equal(c.state.revisionFilter,'revision');
+ assert.equal(elements.usageDraftHint.classList.contains('hidden'),true);
+ for(const endpoint of ['dashboard','events','anomalies']){
+  const matches=urls.filter(url=>url.includes('/'+endpoint+'?'));assert.equal(matches.length,1,endpoint);
+  const p=new URLSearchParams(matches[0].split('?')[1]);for(const [k,v]of c.usageParams())assert.equal(p.get(k),v,endpoint+':'+k);
+ }
+ assert.equal(c.history.entries.length,1);assert.equal(c.parseHash().searchFilter,'search');
+});
+
+test('reset clears drafts and hidden scope, restores today, keeps view and anomaly grouping',async()=>{
+ const {context:c,elements}=harness();
+ c.applyUsageState({usageView:'anomalies',range:'custom',from:'2026-10-29T16:00:00Z',to:'2026-10-30T16:00:00Z',apiKeyFilter:'key',providerFilter:'provider',modelFilter:'model',outcomeFilter:'error',estimatedFilter:'false',resultFilter:'partial',accountFilter:'slot',searchFilter:'search',causeFilter:'network',transportFilter:'websocket',revisionFilter:'revision',missingDimension:'model'});
+ elements.usageAnomalyGroup=c.$('usageAnomalyGroup');elements.usageAnomalyGroup.value='transport';
+ elements.usageSearchFilter.value='unapplied';c.captureUsageDraft();c.state.events=[{event_id:'old'}];c.state.cursor='old-cursor';
+ const urls=[];c.request=async url=>{urls.push(url);return url.includes('/runtime')?{scope:'process',inflight:0}:url.includes('/events?')?{events:[],next_cursor:''}:{summary:{}}};
+ await c.resetUsageFilters();
+ assert.equal(c.state.usageView,'anomalies');assert.equal(elements.usageAnomalyGroup.value,'transport');assert.equal(c.state.range,'today');
+ for(const [key,id]of Object.entries(c.usageFilterControls())){assert.equal(c.state[key],'',key);assert.equal(elements[id].value,'',id)}
+ for(const key of ['causeFilter','transportFilter','revisionFilter','missingDimension'])assert.equal(c.state[key],'',key);
+ assert.equal(c.state.events.length,0);assert.equal(c.state.cursor,'');assert.equal(elements.usageDraftHint.classList.contains('hidden'),true);assert.equal(elements.usageScopeHint.classList.contains('hidden'),true);
+ assert.equal(c.location.hash,'#/usage?range=today&view=anomalies');
+ assert.equal(urls.filter(url=>url.includes('/events?')).length,1);assert.equal(urls.filter(url=>url.includes('/dashboard?')).length,1);
+ const repeated=c.resetUsageFilters();await repeated;assert.equal(c.history.entries.length,1);assert.equal(urls.filter(url=>url.includes('/events?')).length,2);
+});
+
+test('drilldown updates the target controls, preserves unrelated drafts and explicit missing dimensions',()=>{
+ const {context:c,elements}=harness();installUsageFunctions(c,['usageDrill','usageRelated']);c.reloadUsageQuery=()=>{};
+ c.applyUsageState({range:'30d',searchFilter:'applied',revisionFilter:'revision',missingDimension:'account'});
+ elements.usageSearchFilter.value='draft';c.captureUsageDraft();
+ c.usageDrill('cause',{key:'network',affected:1});
+ assert.equal(c.state.missingDimension,'account');assert.equal(c.state.causeFilter,'network');assert.equal(c.state.searchFilter,'applied');assert.equal(elements.usageSearchFilter.value,'draft');assert.equal(elements.usageResultFilter.value,'anomaly');
+ assert.match(elements.usageScopeHint.textContent,/network.*revision.*account/);
+ c.usageDrill('account',{key:'unknown',affected:1});assert.equal(c.state.accountFilter,'unknown');assert.equal(elements.usageAccountFilter.value,'unknown');assert.equal(c.state.missingDimension,'');
+ c.state.usageEvent={outcome:'error',error_code:'upstream'};c.$('usageEventDialog').close=()=>{};c.usageRelated();assert.equal(c.state.causeFilter,'upstream');assert.equal(elements.usageSearchFilter.value,'draft');
+});
+
+test('preset range preserves dimension drafts while route restoration discards them',()=>{
+ const {context:c,elements}=harness();c.reloadUsageQuery=()=>{};c.applyUsageState({range:'30d',searchFilter:'applied',causeFilter:'network'});
+ elements.usageSearchFilter.value='draft';c.captureUsageDraft();c.setUsageRange('7d');
+ assert.equal(c.state.range,'7d');assert.equal(c.state.searchFilter,'applied');assert.equal(elements.usageSearchFilter.value,'draft');assert.equal(c.state.causeFilter,'network');
+ c.setHash(true);const hash=c.location.hash;c.setUsageRange('custom');assert.equal(c.state.range,'7d');assert.equal(c.state.usageDraft.range,'custom');assert.equal(c.location.hash,hash);
+ c.applyUsageState(c.parseHash());assert.equal(c.state.range,'7d');assert.equal(elements.usageSearchFilter.value,'applied');assert.equal(elements.usageDraftHint.classList.contains('hidden'),true);
+});
+
+test('invalid custom range does not mutate applied filters or navigation',()=>{
+ const {context:c,elements}=harness();c.applyUsageState({range:'7d',searchFilter:'applied'});const messages=[];c.toast=m=>messages.push(m);
+ elements.usageSearchFilter.value='draft';elements.usageFrom.value='2026-10-30T00:00';elements.usageTo.value='2026-10-29T00:00';c.applyUsageFilters();
+ assert.equal(c.state.range,'7d');assert.equal(c.state.searchFilter,'applied');assert.equal(c.history.entries.length,0);assert.match(messages[0],/开始时间/);
+ elements.usageTo.value='';c.applyUsageFilters();assert.equal(messages.length,2);assert.equal(c.state.searchFilter,'applied');assert.equal(elements.usageSearchFilter.value,'draft');
+});
+
+test('applying a shared URL compares custom times by instant and preserves timestamp precision',async()=>{
+ const {context:c}=harness();c.reloadUsageQuery=()=>{};
+ const from='2026-10-30T00:00:00.123+08:00',to='2026-10-29T17:00:00.456Z';
+ c.applyUsageState({range:'custom',from,to});
+ await c.applyUsageFilters();
+ assert.equal(c.state.from,from);assert.equal(c.state.to,to);
+});
+
+test('reset rejects late successes and failures even when the previous query has the same filters',async()=>{
+ for(const fail of [false,true]){
+  const {context:c,elements}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
+  c.applyUsageState({});c.loadUsageRuntime=()=>{};
+  const messages=[],pending=[];c.toast=message=>messages.push(message);
+  c.request=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));
+  const oldOptions=c.loadFilterOptions(true),oldQuery=c.loadUsage(true);
+  const reset=c.resetUsageFilters();assert.equal(pending.length,8);
+  function response(url,current){
+   if(url.includes('/filter-options?'))return {models:[current?'current-model':'old-model']};
+   if(url.includes('/events?'))return {events:[{event_id:current?'current-event':'old-event',state:'completed'}],next_cursor:current?'current-cursor':'old-cursor'};
+   if(url.includes('/anomalies?'))return {summary:{completed:current?2:100,success:1},groups:[],daily:[]};
+   return {summary:{requests:current?2:100}};
+  }
+  for(const request of pending.slice(4))request.resolve(response(request.url,true));
+  await reset;
+  for(const request of pending.slice(0,4)){
+   if(fail)request.reject(Error('obsolete failure'));else request.resolve(response(request.url,false));
+  }
+  await Promise.all([oldOptions,oldQuery]);
+  assert.equal(elements.uRequests.textContent,'2');assert.equal(elements.uSuccess.textContent,'50.0%');
+  assert.equal(c.state.events[0].event_id,'current-event');assert.equal(c.state.cursor,'current-cursor');
+  assert.equal(c.state.usageDiagnostics.summary.completed,2);
+  assert.match(elements.usageModelFilter.innerHTML,/current-model/);assert.doesNotMatch(elements.usageModelFilter.innerHTML,/old-model/);
+  assert.doesNotMatch(elements.eventTable.innerHTML,/obsolete failure/);assert.deepEqual(messages,[]);
+ }
 });
