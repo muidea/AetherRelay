@@ -1863,11 +1863,16 @@ function codexStandardUsageBadge(account){
   const snapshot=account?.usage_snapshot;
   if(!snapshot)return `<span class="unified-slot-meta-text">${esc(t("用量未同步"))}</span>`;
   const standard=item=>item&&(item.scope?item.scope==="standard":/^(standard-|header-)|^(primary|secondary)$/.test(item.id||""));
-  const windows=(Array.isArray(snapshot.windows)?snapshot.windows:[]).filter(standard);
-  const groups=(Array.isArray(snapshot.groups)?snapshot.groups:[]).filter(standard);
+  const observedWindows=(Array.isArray(snapshot.windows)?snapshot.windows:[]).filter(standard);
+  const observedGroups=(Array.isArray(snapshot.groups)?snapshot.groups:[]).filter(standard);
   const known=window=>Boolean(window.used_percent_known)&&Number.isFinite(Number(window.used_percent??0));
   const used=window=>Math.max(0,Math.min(100,Number(window.used_percent??0)));
   const now=Date.now(),fresh=item=>Date.parse(item.expires_at||snapshot.expires_at)>now;
+  const currentWindows=observedWindows.filter(fresh),groups=observedGroups.filter(fresh);
+  const hasCurrent=currentWindows.length>0||groups.length>0;
+  // Retained historical windows must not change the percentage or freshness
+  // of a current observation. Only fall back to history when all evidence aged out.
+  const windows=hasCurrent?currentWindows:observedWindows;
   const beforeReset=item=>!item.reset_at||Date.parse(item.reset_at)>now;
   const laterReset=(a,b)=>a.reset_at&&b.reset_at?Date.parse(b.reset_at)-Date.parse(a.reset_at):a.reset_at?1:b.reset_at?-1:0;
   const measured=windows.filter(known).sort((a,b)=>used(b)-used(a)||laterReset(a,b));
@@ -1887,7 +1892,7 @@ function codexStandardUsageBadge(account){
     detail=seconds===604800?t("周额度耗尽"):seconds===18000?t("5 小时额度耗尽"):blocked.id?t("额度窗口耗尽"):t("额度受限（未明确耗尽窗口）");
   }else if(limiting)detail=codexUsageWindowLabel(limiting);
   if(limiting?.reset_at&&(!blocked||blocked.id))detail+=` · ${t("预计重置于 {time}",{time:formatAccountDate(limiting.reset_at)})}`;
-  const stale=windows.some(window=>!fresh(window)||known(window)&&used(window)>=100&&!beforeReset(window))||(!windows.length&&(groups.length?groups.every(group=>!fresh(group)):!fresh(snapshot)));
+  const stale=!hasCurrent&&(observedWindows.length>0||observedGroups.length>0||!fresh(snapshot));
   const usageClass=remaining===null?"":remaining<=0?" exhausted":remaining<=30?" warning":"";
   const meter=remaining===null?"":`<div class="unified-usage-meter${usageClass}"><i style="width:${Math.round(remaining)}%"></i></div>`;
   return `<div class="unified-usage"><div class="unified-usage-head"><span>${esc(t("普通模型"))}</span><strong>${esc(usage)}</strong></div>${meter}${detail?`<div class="subtle">${esc(detail)}</div>`:""}${stale?`<span class="tag tag-cooldown">${esc(t("缓存已过期"))}</span>`:""}</div>`;

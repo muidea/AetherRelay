@@ -302,6 +302,33 @@ test('summary labels stale observations, ignores expired group denial, and suppo
   assert.match(c.codexStandardUsageBadge({}),/用量未同步/);
 });
 
+test('a refreshed weekly quota excludes retained expired windows from both the percentage and cache badge',()=>{
+  const c=usageSummaryHarness(),fresh=new Date(Date.now()+60000).toISOString(),old=new Date(Date.now()-60000).toISOString();
+  const weekly={id:'standard-primary',window_seconds:604800,used_percent_known:true,used_percent:32,expires_at:fresh,reset_at:new Date(Date.now()+6*86400000).toISOString()};
+  for(const used_percent of [0,100]){
+    const historical={id:'standard-secondary',window_seconds:18000,used_percent_known:true,used_percent,expires_at:old};
+    for(const windows of [[weekly,historical],[historical,weekly]]){
+      const out=c.codexStandardUsageBadge({usage_snapshot:{expires_at:fresh,windows}});
+      assert.match(out,/剩余 68%/);assert.match(out,/周 · 预计重置于/);
+      assert.doesNotMatch(out,/缓存已过期|剩余 0%|5 小时/);
+    }
+  }
+});
+
+test('fresh unknown windows or groups cannot borrow percentages from expired observations',()=>{
+  const c=usageSummaryHarness(),fresh=new Date(Date.now()+60000).toISOString(),old=new Date(Date.now()-60000).toISOString();
+  const historical={id:'standard-secondary',window_seconds:604800,used_percent_known:true,used_percent:100,expires_at:old};
+  const snapshot={expires_at:fresh,windows:[historical,{id:'standard-primary',used_percent_known:false,expires_at:fresh}]};
+  let out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|缓存已过期/);
+  snapshot.windows=[historical];snapshot.groups=[{id:'standard',scope:'standard',allowed_known:true,allowed:true,expires_at:fresh}];
+  out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|缓存已过期/);
+  Object.assign(snapshot.groups[0],{allowed:false,exhausted_window_id:'standard-secondary',exhausted_window_seconds:604800,reset_at:new Date(Date.now()+86400000).toISOString()});
+  out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/周额度耗尽/);assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|缓存已过期/);
+});
+
 test('simultaneously exhausted windows report the last reset and keep an unknown reset unknown',()=>{
   const c=usageSummaryHarness(),expires_at=new Date(Date.now()+60000).toISOString();
   const earlier=new Date(Date.now()+3600000).toISOString(),later=new Date(Date.now()+86400000).toISOString();
@@ -325,7 +352,8 @@ test('known percentages override legacy copied denial flags and unknown exhausti
   snapshot.windows.push({id:'secondary',window_seconds:604800,used_percent_known:false,limit_reached:true});
   const out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
   assert.match(out,/周额度耗尽/);assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|unified-usage-meter/);
-  snapshot.windows[1]={id:'secondary',used_percent_known:true,used_percent:100,expires_at:new Date(Date.now()-60000).toISOString(),reset_at:'<unsafe>'};
+  snapshot.windows[1]={id:'secondary',used_percent_known:true,used_percent:100,expires_at,reset_at:new Date(Date.now()+60000).toISOString()};
+  c.formatAccountDate=()=>'<unsafe>';
   assert.match(c.codexStandardUsageBadge({usage_snapshot:snapshot}),/&lt;unsafe&gt;/);
   assert.doesNotMatch(c.codexStandardUsageBadge({usage_snapshot:snapshot}),/<unsafe>/);
 });
