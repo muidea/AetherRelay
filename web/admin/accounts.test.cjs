@@ -235,3 +235,97 @@ test('partial headers preserve the original group window explanation in the usag
   assert.match(out,/上次观测 full-query/);
   assert.doesNotMatch(out,/未明确耗尽窗口/);
 });
+
+function usageSummaryHarness(){
+  const {context:c}=harness();c.formatAccountDate=value=>value;
+  for(const name of ['codexUsageWindowLabel','codexStandardUsageBadge','unifiedCodexSummary','codexAccountModelList'])vm.runInContext(functionSource(name),c);
+  for(const name of ['codexRefreshBadge','accountRefreshScheduleBadge','modelDiscoveryBadge'])c[name]=()=>'';
+  return c;
+}
+
+test('unified Codex summary shows weekly exhaustion even with a full five-hour window and available review model',()=>{
+  const c=usageSummaryHarness(),expires_at=new Date(Date.now()+60000).toISOString(),reset_at=new Date(Date.now()+2*86400000).toISOString();
+  const account={usage_snapshot:{expires_at,windows:[
+    {id:'standard-primary',scope:'standard',window_seconds:18000,used_percent_known:true,used_percent:0},
+    {id:'standard-secondary',scope:'standard',window_seconds:604800,used_percent_known:true,used_percent:100,reset_at},
+    {id:'code-review-primary',scope:'code-review',used_percent_known:true,used_percent:0},
+  ]},model_snapshot:{expires_at,models:[{id:'gpt-6.1-sol'},{id:'codex-auto-review'}]},model_availability:[
+    {model:'gpt-6.1-sol',available:false,reason:'usage_limit',usage_limit_scope:'standard',usage_limit_window:'standard-secondary',usage_limit_window_seconds:604800,usage_limit_reset_at:reset_at},
+    {model:'codex-auto-review',available:true},
+  ]};
+  const out=c.unifiedCodexSummary(account);
+  assert.match(out,/普通模型/);assert.match(out,/剩余 0%/);assert.match(out,/周额度耗尽/);assert.match(out,new RegExp('预计重置于 '+reset_at.replaceAll('.','\\.')));
+  assert.match(out,/unified-usage-meter exhausted/);assert.doesNotMatch(out,/剩余 100%|width:100%/);
+  assert.match(out,/可用模型 1\/2/);assert.match(out,/tag tag-purple">codex-auto-review/);
+});
+
+test('summary uses the tightest standard window independently of array order and other quota scopes',()=>{
+  const c=usageSummaryHarness(),expires_at=new Date(Date.now()+60000).toISOString();
+  const windows=[
+    {id:'code-review-primary',scope:'code-review',used_percent_known:true,used_percent:100},
+    {id:'additional-reserve-primary',scope:'additional',used_percent_known:true,used_percent:100},
+    {id:'standard-primary',scope:'standard',window_seconds:18000,used_percent_known:true,used_percent:75},
+    {id:'standard-secondary',scope:'standard',window_seconds:604800,used_percent_known:true,used_percent:20},
+  ];
+  for(const ordered of [windows,[...windows].reverse()]){
+    const out=c.codexStandardUsageBadge({usage_snapshot:{expires_at,windows:ordered}});
+    assert.match(out,/剩余 25%/);assert.match(out,/5 小时/);assert.match(out,/unified-usage-meter warning/);
+    assert.doesNotMatch(out,/额度耗尽|剩余 0%/);
+  }
+  const onlyReview=c.codexStandardUsageBadge({usage_snapshot:{expires_at,windows:windows.slice(0,2)}});
+  assert.match(onlyReview,/用量未知/);assert.doesNotMatch(onlyReview,/剩余|unified-usage-meter/);
+});
+
+test('unknown standard utilization and group denial cannot appear as healthy remaining quota',()=>{
+  const c=usageSummaryHarness(),expires_at=new Date(Date.now()+60000).toISOString();
+  const snapshot={expires_at,windows:[
+    {id:'standard-primary',used_percent_known:true,used_percent:0},
+    {id:'standard-secondary',used_percent_known:false},
+  ]};
+  let out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|unified-usage-meter/);
+  snapshot.windows.pop();snapshot.groups=[{id:'standard',scope:'standard',allowed_known:true,allowed:false}];
+  out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/用量未知/);assert.match(out,/额度受限（未明确耗尽窗口）/);assert.doesNotMatch(out,/剩余|预计重置/);
+  snapshot.groups[0].exhausted_window_id='standard-secondary';snapshot.groups[0].exhausted_window_seconds=604800;snapshot.groups[0].reset_at=new Date(Date.now()+3600000).toISOString();
+  out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/周额度耗尽/);assert.match(out,/预计重置于/);assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|unified-usage-meter/);
+});
+
+test('summary labels stale observations, ignores expired group denial, and supports a single weekly window',()=>{
+  const c=usageSummaryHarness(),fresh=new Date(Date.now()+60000).toISOString(),old=new Date(Date.now()-60000).toISOString();
+  const snapshot={expires_at:fresh,windows:[{id:'standard-primary',window_seconds:604800,used_percent_known:true,used_percent:40}],groups:[{id:'standard',scope:'standard',allowed_known:true,allowed:false,expires_at:old}]};
+  let out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/剩余 60%/);assert.match(out,/周/);assert.doesNotMatch(out,/额度受限|缓存已过期/);
+  snapshot.windows[0].expires_at=old;out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/缓存已过期/);
+  assert.match(c.codexStandardUsageBadge({}),/用量未同步/);
+});
+
+test('simultaneously exhausted windows report the last reset and keep an unknown reset unknown',()=>{
+  const c=usageSummaryHarness(),expires_at=new Date(Date.now()+60000).toISOString();
+  const earlier=new Date(Date.now()+3600000).toISOString(),later=new Date(Date.now()+86400000).toISOString();
+  const windows=[
+    {id:'standard-primary',window_seconds:18000,used_percent_known:true,used_percent:100,reset_at:earlier},
+    {id:'standard-secondary',window_seconds:604800,used_percent_known:true,used_percent:100,reset_at:later},
+  ];
+  for(const ordered of [windows,[...windows].reverse()]){
+    const out=c.codexStandardUsageBadge({usage_snapshot:{expires_at,windows:ordered}});
+    assert.match(out,/剩余 0%/);assert.match(out,/周额度耗尽/);assert.ok(out.includes(later));assert.ok(!out.includes(earlier));
+  }
+  windows[0].reset_at='';
+  const out=c.codexStandardUsageBadge({usage_snapshot:{expires_at,windows}});
+  assert.match(out,/5 小时额度耗尽/);assert.doesNotMatch(out,/预计重置于/);
+});
+
+test('known percentages override legacy copied denial flags and unknown exhaustion never invents a percentage',()=>{
+  const c=usageSummaryHarness(),expires_at=new Date(Date.now()+60000).toISOString();
+  const snapshot={expires_at,windows:[{id:'primary',used_percent_known:true,used_percent:0,allowed_known:true,allowed:false,limit_reached:true}]};
+  assert.match(c.codexStandardUsageBadge({usage_snapshot:snapshot}),/剩余 100%/);
+  snapshot.windows.push({id:'secondary',window_seconds:604800,used_percent_known:false,limit_reached:true});
+  const out=c.codexStandardUsageBadge({usage_snapshot:snapshot});
+  assert.match(out,/周额度耗尽/);assert.match(out,/用量未知/);assert.doesNotMatch(out,/剩余|unified-usage-meter/);
+  snapshot.windows[1]={id:'secondary',used_percent_known:true,used_percent:100,expires_at:new Date(Date.now()-60000).toISOString(),reset_at:'<unsafe>'};
+  assert.match(c.codexStandardUsageBadge({usage_snapshot:snapshot}),/&lt;unsafe&gt;/);
+  assert.doesNotMatch(c.codexStandardUsageBadge({usage_snapshot:snapshot}),/<unsafe>/);
+});
