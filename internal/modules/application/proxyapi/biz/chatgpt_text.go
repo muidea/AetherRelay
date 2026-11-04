@@ -16,6 +16,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/usagetarget"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	trace "aetherrelay/internal/pkg/aetherrelaytrace"
 	"aetherrelay/internal/pkg/chatgptattempt"
 	"github.com/muidea/magicCommon/event"
@@ -85,19 +86,27 @@ func (s *Proxy) executeChatGPTText(ctx context.Context, request chatgpttext.Requ
 			if stage == "" {
 				stage = "complete"
 			}
-			a := trace.Attempt{ObservedAt: time.Now().UTC(), Finished: true, Failed: executionErr != nil, Stage: stage, Transport: "http", UpstreamStatus: observation.UpstreamStatus, FailureClass: observation.FailureClass, ErrorBodyState: "not_collected"}
+			a := trace.Attempt{
+				TextCompletion: out.Completion, ReadObserved: out.Completion.SSEBytes > 0,
+				HeadersObserved: out.UpstreamStatus != 0, WireBytes: out.Completion.SSEBytes,
+				EventCount: out.Completion.Events, TerminalEvent: out.Completion.Terminal,
+				ResponseModel: out.ActualModel, ObservedAt: time.Now().UTC(),
+				Finished: true, Failed: executionErr != nil, Stage: stage, Transport: "http",
+				UpstreamStatus: observation.UpstreamStatus, FailureClass: observation.FailureClass,
+				ErrorBodyState: "not_collected",
+			}
 			if !out.Generation.FirstOutputAt.IsZero() {
 				at := out.Generation.FirstOutputAt
 				a.FirstOutputAt = &at
 			}
-			if observation.GenerationNotSent {
-				sent := false
+			if observation.GenerationNotSent || observation.Operation == "text_conversation" || out.Completion.Events > 0 {
+				sent := !observation.GenerationNotSent
 				a.RequestSent = &sent
 			}
 			traceCollector.Observe(a)
 		}
 		hasOutput := emitted || out.Text != "" || out.ConversationID != "" || !out.Generation.FirstOutputAt.IsZero()
-		if executionErr != nil && isInvalidChatGPTTextFailure(executionErr) && !hasOutput && index == 1 && textRetryBudgetAvailable(ctx) && (failure.Operation == "" || failure.GenerationNotSent) {
+		if executionErr != nil && isInvalidChatGPTTextFailure(executionErr) && !hasOutput && index == 1 && textRetryBudgetAvailable(ctx) && failure.GenerationNotSent {
 			refreshed, permanent, refreshErr := s.refreshChatGPTTextToken(ctx, account.AccessToken)
 			if refreshErr == nil && !permanent {
 				account.AccessToken, account.Account, refreshedToken = refreshed.AccessToken, refreshed.Account, true
@@ -208,7 +217,7 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy, devic
 		slog.Warn("chatgpt text execution failed", "stage", "upstream_complete", "event_error_code", eventErr.Code, "has_partial_result", value != nil, "partial_result_type_match", isPartial)
 		out := chatgpttext.Result{}
 		if isPartial {
-			out = chatgpttext.Result{ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text, Generation: partial.Generation, UpstreamStatus: partial.UpstreamStatus}
+			out = chatgpttext.Result{Completion: partial.Completion, ConversationID: partial.ConversationID, ActualModel: partial.ActualModel, Text: partial.Text, Generation: partial.Generation, UpstreamStatus: partial.UpstreamStatus}
 			if partial.ErrorClass != "" {
 				return out, textAttemptFailure(partial.ErrorClass, eventErr, partial.ErrorOperation, partial.UpstreamStatus, partial.GenerationNotSent)
 			}
@@ -219,11 +228,12 @@ func (s *Proxy) completeChatGPTTextOnce(ctx context.Context, token, proxy, devic
 	if !ok {
 		return chatgpttext.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("invalid chatgpt text completion result"))
 	}
-	out := chatgpttext.Result{ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text, Generation: completed.Generation, UpstreamStatus: completed.UpstreamStatus}
+	out := chatgpttext.Result{Completion: completed.Completion, ConversationID: completed.ConversationID, ActualModel: completed.ActualModel, Text: completed.Text, Generation: completed.Generation, UpstreamStatus: completed.UpstreamStatus}
 	if completed.ErrorClass != "" {
 		return out, textAttemptFailure(completed.ErrorClass, fmt.Errorf("chatgpt text completion failed"), completed.ErrorOperation, completed.UpstreamStatus, completed.GenerationNotSent)
 	}
-	return out, nil
+	err := chatgpttext.ValidateCompletion(&out, nil)
+	return out, err
 }
 
 func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy, deviceID string, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (result chatgpttext.Result, emitted bool, resultErr error) {
@@ -271,6 +281,9 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy, deviceI
 			result.ActualModel = update.ActualModel
 		}
 		if update.Delta != "" {
+			if builder.Len()+len(update.Delta) > completion.MaxTextBytes {
+				return result, emitted, chatgptfail.New(chatgptfail.KindTextBudget, fmt.Errorf("text output limit exceeded"))
+			}
 			emitted = true
 			builder.WriteString(update.Delta)
 			result.Text = builder.String()
@@ -281,6 +294,7 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy, deviceI
 			}
 		}
 		if update.Done {
+			result.Completion = update.Completion
 			if update.ErrorClass != "" {
 				message := strings.TrimSpace(update.ErrorMessage)
 				if message == "" {
@@ -289,7 +303,8 @@ func (s *Proxy) streamChatGPTTextOnce(ctx context.Context, token, proxy, deviceI
 				return result, emitted, textAttemptFailure(update.ErrorClass, errors.New(message), update.ErrorOperation, update.UpstreamStatus, update.GenerationNotSent)
 			}
 			result.Text = builder.String()
-			return result, emitted, nil
+			err := chatgpttext.ValidateCompletion(&result, nil)
+			return result, emitted, err
 		}
 	}
 }

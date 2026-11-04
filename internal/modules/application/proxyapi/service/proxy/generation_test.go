@@ -249,7 +249,7 @@ type generationTextExecutor struct {
 
 func (e generationTextExecutor) Complete(context.Context, chatgpttext.Request) (chatgpttext.Result, error) {
 	time.Sleep(e.returnDelay)
-	result := chatgpttext.Result{Text: "hello", ActualModel: "actual-model", Generation: e.sample}
+	result := chatgpttext.Result{Completion: textEvidence("hello"), Text: "hello", ActualModel: "actual-model", Generation: e.sample}
 	if e.fail {
 		return result, chatgptfail.New(chatgptfail.KindUpstream, errors.New("read failure"))
 	}
@@ -257,7 +257,7 @@ func (e generationTextExecutor) Complete(context.Context, chatgpttext.Request) (
 }
 func (e generationTextExecutor) Stream(ctx context.Context, r chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
 	if err := emit(chatgpttext.Delta{Text: "hello"}); err != nil {
-		return chatgpttext.Result{Text: "hello", Generation: e.sample}, err
+		return chatgpttext.Result{Completion: textEvidence("hello"), Text: "hello", Generation: e.sample}, err
 	}
 	return e.Complete(ctx, r)
 }

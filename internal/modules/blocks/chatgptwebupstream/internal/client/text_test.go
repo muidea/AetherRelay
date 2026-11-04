@@ -73,7 +73,7 @@ func TestParseTextSSERejectsEmptyAssistantResult(t *testing.T) {
 
 func TestParseTextSSERejectsMissingContinuationAnchors(t *testing.T) {
 	stream := "data: {\"message\":{\"author\":{\"role\":\"assistant\"},\"content\":{\"parts\":[\"Hello\"]}}}\n\ndata: [DONE]\n\n"
-	if _, err := ParseTextSSE(context.Background(), strings.NewReader(stream)); err == nil || !strings.Contains(err.Error(), "anchors") {
+	if _, err := ParseTextSSE(context.Background(), strings.NewReader(stream)); err == nil || !strings.Contains(err.Error(), "text_invalid_result") {
 		t.Fatalf("expected continuation-anchor failure, err=%v", err)
 	}
 }

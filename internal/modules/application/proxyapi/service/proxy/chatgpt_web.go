@@ -13,6 +13,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	"aetherrelay/internal/pkg/chatgptimageinput"
 	"aetherrelay/internal/pkg/chatgpttokenusage"
 )
@@ -62,6 +63,8 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 
 	if !stream {
 		result, execErr := executor.Complete(r.Context(), request)
+		execErr = chatgpttext.ValidateCompletion(&result, execErr)
+		recordTextCompletion(r.Context(), result.Completion, execErr)
 		recordGeneration(r.Context(), result.Generation)
 		billingModel := firstNonEmpty(result.ActualModel, settleModel)
 		tok := estimateChatGPTTextUsage(request, result.Text)
@@ -80,7 +83,7 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 			Object:  "chat.completion",
 			Created: time.Now().Unix(),
 			Model:   billingModel,
-			Choices: []openAIChatChoice{{Index: 0, Message: openAIChatMessage{Role: "assistant", Content: result.Text}, FinishReason: "stop"}},
+			Choices: []openAIChatChoice{{Index: 0, Message: openAIChatMessage{Role: "assistant", Content: result.Text}, FinishReason: result.Completion.FinishReason()}},
 		}
 		tok = estimateChatGPTTextUsage(request, result.Text)
 		w.Header().Set("Content-Type", "application/json")
@@ -115,6 +118,9 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 		if delta.Text == "" {
 			return nil
 		}
+		if builder.Len()+len(delta.Text) > completion.MaxTextBytes {
+			return chatgptfail.New(chatgptfail.KindTextBudget, fmt.Errorf("text output limit exceeded"))
+		}
 		builder.WriteString(delta.Text)
 		flusher := startSSE()
 		payload, err := json.Marshal(openAIChatChunk{
@@ -135,14 +141,19 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 		}
 		return nil
 	})
+	execErr = chatgpttext.ValidateCompletion(&result, execErr)
+	if execErr == nil && builder.String() != result.Text {
+		result.Completion.Completed = false
+		result.Completion.Reason = completion.Snapshot
+		execErr = chatgptfail.New(chatgptfail.KindTextProtocol, fmt.Errorf("text stream differs from final result"))
+	}
+	result.Completion.ResponseStarted = streamStarted
+	recordTextCompletion(r.Context(), result.Completion, execErr)
 	recordGeneration(r.Context(), result.Generation)
 	if result.ActualModel != "" {
 		actualModel = result.ActualModel
 	}
-	if result.Text != "" {
-		builder.Reset()
-		builder.WriteString(result.Text)
-	}
+
 	billingModel := firstNonEmpty(actualModel, settleModel)
 	tok := estimateChatGPTTextUsage(request, builder.String())
 	duration := time.Since(started)
@@ -158,13 +169,22 @@ func (h *Handler) handleChatGPTWebChatCompletions(w http.ResponseWriter, r *http
 			}, fail, tok)
 			return
 		}
-		// Headers already sent: keep HTTP 200, settle real outcome.
+		// Once headers are sent, emit a typed error without a success terminal.
+		if !errors.Is(execErr, context.Canceled) && fail.ErrorCode != string(chatgptfail.KindClientWrite) {
+			payload, _ := json.Marshal(map[string]any{"error": map[string]any{"type": "upstream_error", "code": chatGPTFailureCode(fail), "message": "chatgpt web stream failed"}})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
 		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, duration, tok, fail)
 		return
 	}
 
 	flusher := startSSE()
-	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+	reason := result.Completion.FinishReason()
+	terminal, _ := json.Marshal(openAIChatChunk{ID: "chatcmpl-chatgptweb", Object: "chat.completion.chunk", Created: time.Now().Unix(), Model: billingModel, Choices: []openAIChatChunkChoice{{Index: 0, Delta: openAIChatMessage{}, FinishReason: &reason}}})
+	if _, err := fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", terminal); err != nil {
 		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, duration, tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false))
 		return
 	}
@@ -197,6 +217,9 @@ func (h *Handler) writeChatGPTWebAPIError(w http.ResponseWriter, round *archive.
 		if round != nil {
 			round.SetUnsupportedFeatures(apiErr.UnsupportedFeatures)
 		}
+	}
+	if fail.ErrorCode == ErrorCodeInvalidRequest {
+		apiErr.Code = ErrorCodeInvalidRequest
 	}
 	if apiErr.ClientProtocol == "" {
 		apiErr.ClientProtocol = clientProtocolFromRequest(r)
@@ -273,9 +296,9 @@ func streamFailFromChatGPTErr(err error) *streamFail {
 		return streamFailFromKind(chatgptfail.KindClientCanceled, "client canceled", err)
 	}
 	if f, ok := chatgpttext.AsFailure(err); ok && f != nil {
-		return streamFailFromKind(f.Kind, f.Error(), f)
+		return streamFailFromKind(f.Kind, "chatgpt web request failed: "+string(f.Kind), f)
 	}
-	return streamFailFromKind(chatgptfail.KindUpstream, err.Error(), err)
+	return streamFailFromKind(chatgptfail.KindUpstream, "chatgpt web upstream request failed", err)
 }
 
 func streamFailFromKind(kind chatgptfail.Kind, message string, err error) *streamFail {

@@ -42,7 +42,7 @@ func TestCompleteMarksOnlyClassifiedInvalidAccount(t *testing.T) {
 	})
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	upstream.Subscribe(upevents.TopicCompleteText, func(_ event.Event, result event.Result) {
-		result.Set(upevents.CompleteTextResult{ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "invalid credential"))
+		result.Set(upevents.CompleteTextResult{GenerationNotSent: true, ErrorOperation: "requirements_finalize", ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "invalid credential"))
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
@@ -76,7 +76,7 @@ func TestCompleteRecordsFinalSuccessfulAccountResult(t *testing.T) {
 	})
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	upstream.Subscribe(upevents.TopicCompleteText, func(_ event.Event, result event.Result) {
-		result.Set(upevents.CompleteTextResult{ActualModel: "gpt-actual", Text: "ok"}, nil)
+		result.Set(upevents.CompleteTextResult{Completion: textEvidence("ok"), ActualModel: "gpt-actual", Text: "ok"}, nil)
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
@@ -113,7 +113,7 @@ func TestCompletePropagatesValidatedImagesToUpstream(t *testing.T) {
 		if command.DeviceID != "text-device" || len(command.Messages) != 1 || len(command.Messages[0].Images) != 1 || string(command.Messages[0].Images[0]) != "image-bytes" {
 			t.Fatalf("command=%+v", command)
 		}
-		result.Set(upevents.CompleteTextResult{Text: "ok"}, nil)
+		result.Set(upevents.CompleteTextResult{Completion: textEvidence("ok"), Text: "ok"}, nil)
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
@@ -159,13 +159,13 @@ func TestCompleteRefreshesInvalidOAuthTokenAndRetriesOnce(t *testing.T) {
 			if command.AccessToken != "old-token" || command.Proxy != "http://old-proxy.invalid:8080" {
 				t.Fatalf("first command=%+v", command)
 			}
-			result.Set(upevents.CompleteTextResult{ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired credential"))
+			result.Set(upevents.CompleteTextResult{GenerationNotSent: true, ErrorOperation: "requirements_finalize", ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired credential"))
 			return
 		}
 		if command.AccessToken != "new-token" || command.Proxy != "http://new-proxy.invalid:8080" {
 			t.Fatalf("retry command=%+v", command)
 		}
-		result.Set(upevents.CompleteTextResult{Text: "recovered"}, nil)
+		result.Set(upevents.CompleteTextResult{Completion: textEvidence("recovered"), Text: "recovered"}, nil)
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
@@ -219,7 +219,7 @@ func TestCompleteKeepsAccountOnTransientOAuthRefreshFailure(t *testing.T) {
 	})
 	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 	upstream.Subscribe(upevents.TopicCompleteText, func(_ event.Event, result event.Result) {
-		result.Set(upevents.CompleteTextResult{ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired credential"))
+		result.Set(upevents.CompleteTextResult{GenerationNotSent: true, ErrorOperation: "requirements_finalize", ErrorClass: upevents.ErrClassInvalidToken}, cd.NewError(cd.Unexpected, "expired credential"))
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
@@ -305,7 +305,7 @@ func TestChatGPTGenerationSurvivesProjectionAndAccountSettlement(t *testing.T) {
 				})
 				upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
 				upstream.Subscribe(upevents.TopicCompleteText, func(_ event.Event, result event.Result) {
-					out := upevents.CompleteTextResult{Text: "hello", ActualModel: "actual", Generation: sample}
+					out := upevents.CompleteTextResult{Completion: textEvidence("hello"), Text: "hello", ActualModel: "actual", Generation: sample}
 					if failed {
 						out.ErrorClass = upevents.ErrClassUpstream
 						result.Set(out, cd.NewError(cd.Unexpected, "read failure"))
@@ -322,7 +322,7 @@ func TestChatGPTGenerationSurvivesProjectionAndAccountSettlement(t *testing.T) {
 						result.Set(upevents.PullTextResult{Delta: "hello", Generation: generation.Sample{FirstOutputAt: sample.FirstOutputAt, Partial: true}}, nil)
 						return
 					}
-					out := upevents.PullTextResult{Done: true, Generation: sample}
+					out := upevents.PullTextResult{Completion: textEvidence("hello"), Done: true, Generation: sample}
 					if failed {
 						out.ErrorClass = upevents.ErrClassUpstream
 					}

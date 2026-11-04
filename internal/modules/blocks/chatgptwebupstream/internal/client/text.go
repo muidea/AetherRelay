@@ -1,14 +1,18 @@
 package client
 
 import (
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/chatattachment"
@@ -20,7 +24,7 @@ const (
 	maxTextSSELineBytes = 1 << 20
 	maxTextSSEBytes     = 16 << 20
 	maxTextMessages     = 64
-	maxTextContentBytes = 256 << 10
+	maxTextContentBytes = completion.MaxTextBytes
 )
 
 // TextMessage is a text-only Web conversation input. It deliberately has no
@@ -44,6 +48,7 @@ type TextRequest struct {
 // TextResult is the bounded final state collected from an upstream SSE
 // conversation. The response body never escapes the upstream owner.
 type TextResult struct {
+	Completion         completion.Text
 	ErrorOperation     string
 	UpstreamStatus     int
 	GenerationNotSent  bool
@@ -82,6 +87,9 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 		result.UpstreamStatus = observedStatus
 		if resultErr != nil {
 			result.GenerationNotSent = notSent
+			if !notSent {
+				result.ErrorOperation = "text_conversation"
+			}
 			var failure *Error
 			if errors.As(resultErr, &failure) {
 				result.ErrorOperation = failure.Operation
@@ -92,7 +100,7 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 		}
 	}()
 	if err := validateTextRequest(request); err != nil {
-		return TextResult{}, err
+		return TextResult{}, &Error{Class: InvalidRequest, Operation: "text_validate", Detail: "invalid text request", Cause: err}
 	}
 	requirements, err := c.ChatRequirementsContext(ctx)
 	if err != nil {
@@ -124,7 +132,7 @@ func (c *Client) StreamText(ctx context.Context, request TextRequest, emit func(
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return TextResult{}, classifyStatusResponse("text_conversation", response.StatusCode, response.Body)
 	}
-	return parseTextSSEObserved(ctx, io.LimitReader(response.Body, maxTextSSEBytes), emit, finishGeneration)
+	return parseTextSSEObserved(ctx, response.Body, emit, finishGeneration)
 }
 
 func (c *Client) newTextRequest(method, path string, body []byte, requirements Requirements) (*http.Request, error) {
@@ -344,35 +352,121 @@ func parseTextSSE(ctx context.Context, reader io.Reader, emit func(TextDelta) er
 	return parseTextSSEObserved(ctx, reader, emit, nil)
 }
 
-func parseTextSSEObserved(ctx context.Context, reader io.Reader, emit func(TextDelta) error, finishGeneration func(generation.Sample)) (out TextResult, resultErr error) {
-	result := TextResult{}
+// textLimits remain local policy; tests use small exact boundaries without
+// changing production defaults or allocating unbounded input.
+type textLimits struct {
+	total                        int64
+	line, event, content, output int
+}
+
+var defaultTextLimits = textLimits{maxTextSSEBytes, maxTextSSELineBytes, maxTextSSELineBytes, maxTextContentBytes, maxTextContentBytes}
+
+type textCompletionError struct {
+	reason completion.Reason
+	limit  int64
+}
+
+func (e *textCompletionError) Error() string            { return "text conversation: " + string(e.reason) }
+func (e *textCompletionError) TextFailureClass() string { return e.reason.FailureClass() }
+
+// budgetReader probes at most one byte past the boundary only if parsing needs
+// more input. A terminal event within the budget does not require draining EOF.
+type textBudgetReader struct {
+	reader           io.Reader
+	remaining, bytes int64
+}
+
+func (r *textBudgetReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if r.remaining == 0 {
+		var probe [1]byte
+		n, err := r.reader.Read(probe[:])
+		r.bytes += int64(n)
+		if n > 0 {
+			return 0, &textCompletionError{reason: completion.SSELimit}
+		}
+		return 0, err
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	n, err := r.reader.Read(p)
+	r.bytes += int64(n)
+	r.remaining -= int64(n)
+	return n, err
+}
+
+func parseTextSSEObserved(ctx context.Context, reader io.Reader, emit func(TextDelta) error, finishGeneration func(generation.Sample)) (TextResult, error) {
+	return parseTextSSELimited(ctx, reader, emit, finishGeneration, defaultTextLimits)
+}
+
+func parseTextSSELimited(ctx context.Context, reader io.Reader, emit func(TextDelta) error, finishGeneration func(generation.Sample), limits textLimits) (out TextResult, resultErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var result TextResult
 	var clock generation.Clock
 	var firstOutputAt time.Time
+	digest := sha256.New()
+	counted := &textBudgetReader{reader: io.TeeReader(reader, digest), remaining: limits.total}
+	fail := func(reason completion.Reason, limit int64) error {
+		return &textCompletionError{reason: reason, limit: limit}
+	}
 	defer func() {
 		at := time.Now()
+		if resultErr == nil {
+			clock.Finish(at)
+		}
 		clock.Stop(at)
 		out.Generation = clock.Snapshot(at)
+		out.Completion.SSEBytes = counted.bytes
+		out.Completion.SSESHA256 = fmt.Sprintf("%x", digest.Sum(nil))
+		out.Completion.TextBytes = len(out.Text)
+		out.Completion.TextSHA256 = completion.Hash(out.Text)
+		if resultErr != nil {
+			var failure *textCompletionError
+			if errors.As(resultErr, &failure) {
+				out.Completion.Reason = failure.reason
+				out.Completion.Limit = failure.limit
+			}
+			out.Done = false
+			out.Completion.Completed = false
+		}
 		if finishGeneration != nil {
 			finishGeneration(out.Generation)
 		}
 	}()
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64<<10), maxTextSSELineBytes)
-	dataLines := make([]string, 0, 2)
-	var emitErr error
-	flush := func() {
-		if len(dataLines) == 0 {
-			return
+	buffered := bufio.NewReaderSize(counted, 32<<10)
+	var data bytes.Buffer
+	var channel string
+	boundIdentity := false
+	flush := func() error {
+		if data.Len() == 0 {
+			return nil
 		}
-		at := time.Now()
-		payload := strings.Join(dataLines, "\n")
-		dataLines = dataLines[:0]
+		payload := strings.TrimSuffix(data.String(), "\n")
+		data.Reset()
+		result.Completion.Events++
+		if strings.TrimSpace(payload) == "" {
+			return nil
+		}
 		if payload == "[DONE]" {
-			clock.Finish(at)
+			result.Completion.Terminal = "done"
+			if strings.TrimSpace(result.Text) == "" || result.ConversationID == "" || result.AssistantMessageID == "" {
+				return fail(completion.InvalidResult, 0)
+			}
 			result.Done = true
-			return
+			result.Completion.Completed = true
+			result.Completion.Reason = completion.Stop
+			return nil
+		}
+		if !utf8.ValidString(payload) || !json.Valid([]byte(payload)) {
+			return fail(completion.Protocol, 0)
 		}
 		if failure := parseSSEError("text_conversation", payload); failure != nil {
+			result.Completion.Reason = completion.ReadError
 			var anchor struct {
 				ConversationID string `json:"conversation_id"`
 				Value          struct {
@@ -386,118 +480,218 @@ func parseTextSSEObserved(ctx context.Context, reader io.Reader, emit func(TextD
 					result.ConversationID = bounded(anchor.Value.ConversationID, 512)
 				}
 			}
-			emitErr = failure
-			return
+			return failure
 		}
 		var patch textSSEPatch
 		if err := json.Unmarshal([]byte(payload), &patch); err != nil {
-			return
+			return fail(completion.Protocol, 0)
 		}
-		if patch.ConversationID != "" && result.ConversationID == "" {
-			result.ConversationID = bounded(patch.ConversationID, 512)
+		// Only explicitly recognized control/metadata shapes may omit a message.
+		if patch.Message == nil {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal([]byte(payload), &fields) != nil || fields == nil {
+				return fail(completion.Protocol, 0)
+			}
+			for name := range fields {
+				switch name {
+				case "conversation_id", "type", "moderation_response", "is_completion", "conversation_signature", "server_response", "message_id":
+				default:
+					return fail(completion.Protocol, 0)
+				}
+			}
+			if patch.Type != "" {
+				switch patch.Type {
+				case "message_stream_complete", "moderation", "conversation_detail_metadata", "title_generation", "ping":
+				default:
+					return fail(completion.Protocol, 0)
+				}
+			}
+			if boundIdentity && patch.ConversationID != "" && patch.ConversationID != result.ConversationID {
+				return fail(completion.Snapshot, 0)
+			}
+			if !boundIdentity && patch.ConversationID != "" {
+				result.ConversationID = bounded(patch.ConversationID, 512)
+			}
+			return nil
 		}
-		if patch.Message != nil && patch.Message.Author.Role == "assistant" {
-			if messageID := strings.TrimSpace(patch.Message.ID); messageID != "" {
-				result.AssistantMessageID = bounded(messageID, 512)
+		message := patch.Message
+		if message.Author.Role != "assistant" {
+			switch message.Author.Role {
+			case "user", "system", "tool":
+				return nil
+			default:
+				return fail(completion.Protocol, 0)
 			}
-			if model := strings.TrimSpace(patch.Message.Metadata.ModelSlug); model != "" {
-				result.ActualModel = bounded(model, 256)
-			}
-			if text := patch.Message.Content.text(); text != "" {
-				next := bounded(text, maxTextContentBytes)
-				delta := next
-				if strings.HasPrefix(next, result.Text) {
-					delta = strings.TrimPrefix(next, result.Text)
-				}
-				if delta != "" {
-					clock.Output(at)
-					if firstOutputAt.IsZero() {
-						firstOutputAt = at
-					}
-				}
+		}
+		next, err := message.Content.text()
+		if err != nil {
+			return fail(completion.Protocol, 0)
+		}
+		if !utf8.ValidString(next) {
+			return fail(completion.Protocol, 0)
+		}
+		if len(next) > limits.content {
+			return fail(completion.ContentLimit, int64(limits.content))
+		}
+		conversationID := strings.TrimSpace(patch.ConversationID)
+		if conversationID == "" {
+			conversationID = result.ConversationID
+		}
+		messageID := strings.TrimSpace(message.ID)
+		// Metadata-only assistant updates must not rebind an answer either.
+		if boundIdentity && (conversationID != result.ConversationID || messageID != "" && messageID != result.AssistantMessageID || message.Channel != channel) {
+			return fail(completion.Snapshot, 0)
+		}
+		if !boundIdentity && next != "" {
+			if conversationID == "" || len(conversationID) > 512 || messageID == "" || len(messageID) > 512 {
 				result.Text = next
-				if delta != "" && emit != nil {
-					emitErr = emit(TextDelta{
-						Generation:         generation.Sample{FirstOutputAt: firstOutputAt, Duration: at.Sub(firstOutputAt), Partial: true},
-						ConversationID:     result.ConversationID,
-						AssistantMessageID: result.AssistantMessageID,
-						ActualModel:        result.ActualModel,
-						Text:               delta,
-					})
+				return fail(completion.InvalidResult, 0)
+			}
+			if message.Channel != "" && message.Channel != "final" {
+				return fail(completion.Protocol, 0)
+			}
+			result.ConversationID = conversationID
+			result.AssistantMessageID = messageID
+			channel = message.Channel
+			boundIdentity = true
+		}
+		if !boundIdentity {
+			return nil
+		}
+		if !strings.HasPrefix(next, result.Text) {
+			return fail(completion.Snapshot, 0)
+		}
+		delta := strings.TrimPrefix(next, result.Text)
+		if result.Completion.OutputBytes+len(delta) > limits.output {
+			return fail(completion.OutputLimit, int64(limits.output))
+		}
+		if model := strings.TrimSpace(message.Metadata.ModelSlug); model != "" {
+			result.ActualModel = bounded(model, 256)
+		}
+		result.Text = next
+		if delta != "" {
+			at := time.Now()
+			clock.Output(at)
+			if firstOutputAt.IsZero() {
+				firstOutputAt = at
+			}
+			// Count accepted append-only output, including non-streaming collection.
+			result.Completion.OutputBytes += len(delta)
+			if emit != nil {
+				if err := emit(TextDelta{Generation: generation.Sample{FirstOutputAt: firstOutputAt, Duration: at.Sub(firstOutputAt), Partial: true}, ConversationID: result.ConversationID, AssistantMessageID: result.AssistantMessageID, ActualModel: result.ActualModel, Text: delta}); err != nil {
+					result.Completion.Reason = completion.EmitError
+					return err
 				}
 			}
 		}
-	}
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
+		switch message.Metadata.FinishDetails.Type {
+		case "", "stop":
+		case "max_tokens", "length":
+			return fail(completion.ModelLength, 0)
 		default:
+			return fail(completion.Protocol, 0)
 		}
-		line := scanner.Text()
-		if line == "" {
-			flush()
-			if emitErr != nil {
-				return result, emitErr
+		return nil
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			result.Completion.Reason = completion.Canceled
+			return result, err
+		}
+		var line []byte
+		var readErr error
+		for {
+			fragment, err := buffered.ReadSlice('\n')
+			line = append(line, fragment...)
+			if len(line) > limits.line+2 {
+				return result, fail(completion.LineLimit, int64(limits.line))
+			}
+			if err == bufio.ErrBufferFull {
+				continue
+			}
+			readErr = err
+			break
+		}
+		if readErr != nil && readErr != io.EOF {
+			var failure *textCompletionError
+			if errors.As(readErr, &failure) {
+				return result, fail(failure.reason, limits.total)
+			}
+			result.Completion.Reason = completion.ReadError
+			return result, fmt.Errorf("read text SSE: %w", readErr)
+		}
+		raw := bytes.TrimSuffix(line, []byte("\n"))
+		raw = bytes.TrimSuffix(raw, []byte("\r"))
+		if len(raw) > limits.line {
+			return result, fail(completion.LineLimit, int64(limits.line))
+		}
+		if len(raw) == 0 {
+			if err := flush(); err != nil {
+				return result, err
+			}
+		} else if bytes.HasPrefix(raw, []byte("data:")) {
+			payload := bytes.TrimPrefix(raw, []byte("data:"))
+			payload = bytes.TrimPrefix(payload, []byte(" "))
+			if data.Len()+len(payload)+1 > limits.event {
+				return result, fail(completion.EventLimit, int64(limits.event))
+			}
+			data.Write(payload)
+			data.WriteByte('\n')
+		}
+		if result.Done {
+			return result, nil
+		}
+		if readErr != nil {
+			if err := flush(); err != nil {
+				return result, err
 			}
 			if result.Done {
-				return finishTextResult(result)
+				return result, nil
 			}
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			return result, fail(completion.EOF, 0)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return result, fmt.Errorf("read text SSE: %w", err)
-	}
-	flush()
-	if emitErr != nil {
-		return result, emitErr
-	}
-	return finishTextResult(result)
-}
-
-func finishTextResult(result TextResult) (TextResult, error) {
-	if strings.TrimSpace(result.Text) == "" {
-		return TextResult{}, fmt.Errorf("text conversation: assistant response not found in SSE")
-	}
-	if strings.TrimSpace(result.ConversationID) == "" || strings.TrimSpace(result.AssistantMessageID) == "" {
-		return TextResult{}, fmt.Errorf("text conversation: continuation anchors not found in SSE")
-	}
-	return result, nil
 }
 
 type textSSEPatch struct {
 	ConversationID string          `json:"conversation_id"`
+	Type           string          `json:"type"`
 	Message        *textSSEMessage `json:"message"`
 }
-
 type textSSEMessage struct {
-	ID     string `json:"id"`
-	Author struct {
+	ID      string `json:"id"`
+	Channel string `json:"channel"`
+	Author  struct {
 		Role string `json:"role"`
 	} `json:"author"`
 	Content  textSSEContent  `json:"content"`
 	Metadata textSSEMetadata `json:"metadata"`
 }
-
 type textSSEMetadata struct {
-	ModelSlug string `json:"model_slug"`
+	ModelSlug     string `json:"model_slug"`
+	FinishDetails struct {
+		Type string `json:"type"`
+	} `json:"finish_details"`
 }
-
 type textSSEContent struct {
+	Type  string            `json:"content_type"`
 	Parts []json.RawMessage `json:"parts"`
 }
 
-func (c textSSEContent) text() string {
+func (c textSSEContent) text() (string, error) {
+	if c.Type != "" && c.Type != "text" && c.Type != "multimodal_text" {
+		return "", fmt.Errorf("unsupported text content")
+	}
+	if c.Parts == nil {
+		return "", fmt.Errorf("missing text parts")
+	}
 	parts := make([]string, 0, len(c.Parts))
 	for _, raw := range c.Parts {
 		var value string
-		if json.Unmarshal(raw, &value) == nil {
-			parts = append(parts, value)
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &value) != nil {
+			return "", fmt.Errorf("unsupported text part")
 		}
+		parts = append(parts, value)
 	}
-	return strings.Join(parts, "")
+	return strings.Join(parts, ""), nil
 }

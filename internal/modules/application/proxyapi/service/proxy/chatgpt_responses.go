@@ -10,6 +10,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	"aetherrelay/internal/pkg/chatattachment"
 	"aetherrelay/internal/pkg/chatgptimageinput"
 )
@@ -60,6 +61,8 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 
 	if !stream {
 		result, execErr := executor.Complete(r.Context(), request)
+		execErr = chatgpttext.ValidateCompletion(&result, execErr)
+		recordTextCompletion(r.Context(), result.Completion, execErr)
 		recordGeneration(r.Context(), result.Generation)
 		billingModel := firstNonEmpty(result.ActualModel, model)
 		tok := estimateChatGPTTextUsage(request, result.Text)
@@ -122,6 +125,9 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		if delta.Text == "" {
 			return nil
 		}
+		if text.Len()+len(delta.Text) > completion.MaxTextBytes {
+			return chatgptfail.New(chatgptfail.KindTextBudget, fmt.Errorf("text output limit exceeded"))
+		}
 		if err := startStream(); err != nil {
 			return chatgptfail.New(chatgptfail.KindClientWrite, err)
 		}
@@ -134,14 +140,19 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	result, execErr := executor.Stream(r.Context(), request, emit)
+	execErr = chatgpttext.ValidateCompletion(&result, execErr)
+	if execErr == nil && text.String() != result.Text {
+		result.Completion.Completed = false
+		result.Completion.Reason = completion.Snapshot
+		execErr = chatgptfail.New(chatgptfail.KindTextProtocol, fmt.Errorf("text stream differs from final result"))
+	}
+	result.Completion.ResponseStarted = streamStarted
+	recordTextCompletion(r.Context(), result.Completion, execErr)
 	recordGeneration(r.Context(), result.Generation)
 	if result.ActualModel != "" {
 		actualModel = result.ActualModel
 	}
-	if result.Text != "" {
-		text.Reset()
-		text.WriteString(result.Text)
-	}
+
 	billingModel := firstNonEmpty(actualModel, model)
 	tok := estimateChatGPTTextUsage(request, text.String())
 	if execErr != nil {

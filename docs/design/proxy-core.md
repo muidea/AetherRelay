@@ -77,6 +77,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 - `/v1/chat/completions` 返回 OpenAI Chat Completions SSE（必要时转换 Anthropic 上游事件）；`/v1/messages` 返回 Anthropic Messages SSE（必要时转换 OpenAI 上游事件）。
 - 跨协议 SSE 事件统一转换，响应头与边界一致；转换只保证基础文本 delta。
 - 首包写出后 HTTP 状态不可改写，真实结束态用 **outcome**（`success`、`client_canceled`、`first_event_timeout`、`idle_timeout`、`limit_exceeded`、`upstream_truncated`、`upstream_failed`、`endpoint_drift`、`incomplete`、`client_write`、`protocol`、`conversion`、`error`）统一写入 DuckDB / Prometheus / `metadata.json`；客户端取消不得计为上游故障。
+- ChatGPT Web 文本适配器额外校验上游完成证据、正文摘要与流式累计正文；`/v1/chat/completions` 和 `/v1/responses` 分别验收。未确认完成、协议／快照损坏和本地超限不能生成成功终态；流式错误帧及预算细节见 [ChatGPT Web 文本合同](chatgpt-web.md#文本完成性与正文预算)。
 - 浏览器客户端应使用 `fetch()` + `ReadableStream`（POST + 认证 Header），不使用只支持 GET 的原生 `EventSource`。
 
 ## 观测合同

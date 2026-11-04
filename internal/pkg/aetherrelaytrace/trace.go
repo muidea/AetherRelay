@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aetherrelay/internal/pkg/aetherrelaycodex"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 )
 
@@ -41,6 +42,7 @@ type Handshake struct {
 }
 
 type Attempt struct {
+	TextCompletion completion.Text `json:"text_completion,omitzero"`
 	aetherrelaycodex.UpstreamError
 	transport.WebsocketDiagnostics
 	ID                   int              `json:"id"`
@@ -211,6 +213,10 @@ func Bounded(t Trace) Trace {
 		a.AccountLabel = short(a.AccountLabel, 320)
 		a.Model = short(a.Model, 256)
 		a.ResponseModel = short(a.ResponseModel, 256)
+		a.TextCompletion.Reason = completion.Reason(short(string(a.TextCompletion.Reason), 64))
+		a.TextCompletion.Terminal = short(a.TextCompletion.Terminal, 64)
+		a.TextCompletion.TextSHA256 = short(a.TextCompletion.TextSHA256, 64)
+		a.TextCompletion.SSESHA256 = short(a.TextCompletion.SSESHA256, 64)
 		a.ErrorCode = short(a.ErrorCode, 96)
 		a.FailureClass = short(a.FailureClass, 96)
 		a.UpstreamRequestID = short(a.UpstreamRequestID, 256)
@@ -369,4 +375,22 @@ func (c *Collector) RememberHandshake(h Handshake) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pendingHandshake = &h
+}
+
+// ObserveTextCompletion also records whether the HTTP adapter started writing.
+// It preserves the attempt identity and transport evidence collected by Biz.
+func (c *Collector) ObserveTextCompletion(result completion.Text, failureClass string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.trace.Attempts) > 0 {
+		attempt := &c.trace.Attempts[len(c.trace.Attempts)-1]
+		attempt.TextCompletion = result
+		if failureClass != "" {
+			if !attempt.Failed {
+				c.trace.ObservedFailures++
+			}
+			attempt.Finished, attempt.Failed = true, true
+			attempt.FailureClass, attempt.ErrorCode = failureClass, failureClass
+		}
+	}
 }

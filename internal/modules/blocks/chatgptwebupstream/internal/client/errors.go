@@ -12,11 +12,12 @@ import (
 type ErrorClass string
 
 const (
-	InvalidToken ErrorClass = "invalid_token"
-	RateLimit    ErrorClass = "rate_limit"
-	Timeout      ErrorClass = "timeout"
-	TLS          ErrorClass = "tls"
-	Upstream     ErrorClass = "upstream"
+	InvalidToken   ErrorClass = "invalid_token"
+	InvalidRequest ErrorClass = "invalid_request"
+	RateLimit      ErrorClass = "rate_limit"
+	Timeout        ErrorClass = "timeout"
+	TLS            ErrorClass = "tls"
+	Upstream       ErrorClass = "upstream"
 )
 
 type Error struct {

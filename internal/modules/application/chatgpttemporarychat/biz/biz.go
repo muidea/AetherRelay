@@ -20,6 +20,7 @@ import (
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
 	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelayusage"
 	"aetherrelay/internal/pkg/chatattachment"
@@ -652,13 +653,33 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 			runtime.actualModel = update.ActualModel
 		}
 		if update.Delta != "" {
+			if len(runtime.content)+len(update.Delta) > completion.MaxTextBytes {
+				s.cancelUpstream(runtime.streamID)
+				finalErrClass, finalErrMessage = "text_budget", "text output limit exceeded"
+				interrupted, recoveryRequired = true, true
+				break
+			}
 			runtime.content += update.Delta
 			_ = s.store.UpdateAssistantDelta(runtime.ownerID, runtime.conversationID, runtime.assistantSequence, runtime.content)
 			s.publishTurn(runtime, turnUpdate{delta: update.Delta, actualModel: runtime.actualModel})
 		}
 		if update.Done {
+			cancelled, stopping := s.turnFlags(runtime)
+			if cancelled && !stopping {
+				finalErrClass, finalErrMessage = "cancelled", "cancelled by user"
+				break
+			}
+			if stopping {
+				finalErrClass, finalErrMessage = "interrupted", "stream interrupted by process shutdown"
+				interrupted, recoveryRequired = true, true
+				break
+			}
+			if update.ErrorClass == "" && (!update.Completion.Valid(runtime.content) || strings.TrimSpace(finalConversationID) == "" || strings.TrimSpace(finalAssistantID) == "") {
+				update.ErrorClass = upevents.ErrClassTextIncomplete
+			}
 			if update.ErrorClass != "" {
-				if update.ErrorClass == upevents.ErrClassInvalidToken && runtime.content == "" && !runtime.refreshRetried {
+				slog.Warn("temporary text generation failed", "usage_event_id", runtime.usageEventID, "error_class", update.ErrorClass, "completion", update.Completion, "upstream_status", update.UpstreamStatus, "generation_not_sent", update.GenerationNotSent)
+				if update.ErrorClass == upevents.ErrClassInvalidToken && runtime.content == "" && finalConversationID == "" && finalAssistantID == "" && update.GenerationNotSent && !runtime.refreshRetried {
 					if restarted, retryFailure := s.retryTurnAfterInvalidToken(runtime); restarted {
 						// No assistant delta was exposed, so the caller can safely
 						// resume this same turn with the rotated access token.
@@ -673,7 +694,7 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 				}
 				finalErrClass = string(update.ErrorClass)
 				finalErrMessage = safeTurnError(finalErrClass)
-				recoveryRequired = requiresRecovery(finalErrClass)
+				recoveryRequired = requiresRecovery(finalErrClass) || !update.GenerationNotSent
 				interrupted = recoveryRequired
 			}
 			if update.ConversationID != "" {
@@ -713,7 +734,7 @@ func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
 			errorMessage: finalErrMessage,
 		})
 	}
-	if !cancelled && !interrupted {
+	if !cancelled && finalErrClass != "interrupted" {
 		s.recordTextResult(accountID, finalErrClass == "", finalErrClass)
 	}
 	outcome, errorCode := usageOutcomeFromTurn(finalErrClass, cancelled, interrupted)
@@ -779,7 +800,7 @@ func (s *TemporaryChat) turnFlags(runtime *turnRuntime) (cancelled, stopping boo
 
 func requiresRecovery(errorClass string) bool {
 	switch strings.ToLower(strings.TrimSpace(errorClass)) {
-	case "tls", "timeout", "upstream", "interrupted":
+	case "tls", "timeout", "upstream", "interrupted", "text_incomplete", "text_protocol", "text_budget", "text_model_length":
 		return true
 	default:
 		return false
@@ -798,6 +819,16 @@ func safeTurnError(errorClass string) string {
 		return "original account is rate limited"
 	case "content_policy":
 		return "upstream content policy rejected the request"
+	case "invalid_request":
+		return "text request parameters are unsupported"
+	case "text_model_length":
+		return "upstream model stopped at its output limit"
+	case "text_incomplete":
+		return "upstream text completion was not confirmed"
+	case "text_protocol":
+		return "upstream text protocol or snapshot was inconsistent"
+	case "text_budget":
+		return "local text processing budget was exceeded"
 	case "provider_unavailable":
 		return "no compatible provider completed the request"
 	default:
@@ -1018,6 +1049,14 @@ func (s *TemporaryChat) recordTextResult(accountID string, success bool, errorCl
 	if accountID == "" {
 		return
 	}
+	if !success {
+		switch errorClass {
+		case "invalid_token", "rate_limit", "tls", "timeout", "upstream":
+		default:
+			return
+		}
+	}
+
 	_, _ = s.SendEvent(event.NewEvent(accevents.TopicRecordTextResult, s.ID(), acccommon.UnitID, nil, accevents.RecordTextResultCommand{
 		AccountID:  accountID,
 		Success:    success,
@@ -1111,7 +1150,13 @@ func usageOutcomeFromTurn(errorClass string, cancelled, interrupted bool) (outco
 	if cancelled {
 		return "client_canceled", "client_canceled"
 	}
-	if interrupted || errorClass == "interrupted" {
+	switch errorClass {
+	case "text_budget", "invalid_request":
+		return "error", errorClass
+	case "text_protocol", "text_incomplete", "text_model_length":
+		return "upstream_failed", errorClass
+	}
+	if errorClass == "interrupted" || interrupted && errorClass == "" {
 		return "process_interrupted", "process_interrupted"
 	}
 	if errorClass == "" {

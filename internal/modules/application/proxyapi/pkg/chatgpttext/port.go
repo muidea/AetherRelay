@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"aetherrelay/internal/pkg/chatattachment"
 )
@@ -31,6 +32,7 @@ type Request struct {
 // ActualModel may still be populated when the upstream produced useful partial
 // state before the terminal error.
 type Result struct {
+	Completion     completion.Text
 	UpstreamStatus int
 	Generation     generation.Sample
 	ConversationID string
@@ -59,4 +61,18 @@ func AsFailure(err error) (*chatgptfail.Failure, bool) {
 		return f, true
 	}
 	return nil, false
+}
+
+// ValidateCompletion guards adapters against missing or inconsistent completion
+// evidence, even when a custom Executor incorrectly returns nil error.
+func ValidateCompletion(result *Result, err error) error {
+	if err != nil {
+		return err
+	}
+	if !result.Completion.Valid(result.Text) {
+		result.Completion.Completed = false
+		result.Completion.Reason = completion.InvalidResult
+		return chatgptfail.New(chatgptfail.KindTextIncomplete, errors.New("text completion evidence missing or inconsistent"))
+	}
+	return nil
 }

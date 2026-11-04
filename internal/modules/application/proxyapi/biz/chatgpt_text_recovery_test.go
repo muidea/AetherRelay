@@ -101,7 +101,7 @@ func TestTextRecoveryBeforeGenerationOnly(t *testing.T) {
 						cancelAttempt()
 					}
 					if calls == 2 && !tc.secondFails {
-						return upevents.CompleteTextResult{Text: "recovered", ActualModel: "gpt-6", UpstreamStatus: 206}
+						return upevents.CompleteTextResult{Completion: textEvidence("recovered"), Text: "recovered", ActualModel: "gpt-6", UpstreamStatus: 206}
 					}
 					r := upevents.CompleteTextResult{ErrorClass: tc.class, ErrorOperation: tc.operation, UpstreamStatus: tc.status, GenerationNotSent: tc.notSent}
 					if tc.partial {
@@ -131,7 +131,7 @@ func TestTextRecoveryBeforeGenerationOnly(t *testing.T) {
 				})
 				upstream.Subscribe(upevents.TopicPullText, func(ev event.Event, result event.Result) {
 					r := response()
-					result.Set(upevents.PullTextResult{Done: true, Delta: r.Text, ConversationID: r.ConversationID, ErrorClass: r.ErrorClass, ErrorOperation: r.ErrorOperation, UpstreamStatus: r.UpstreamStatus, GenerationNotSent: r.GenerationNotSent}, nil)
+					result.Set(upevents.PullTextResult{Completion: r.Completion, Done: true, Delta: r.Text, ConversationID: r.ConversationID, ErrorClass: r.ErrorClass, ErrorOperation: r.ErrorOperation, UpstreamStatus: r.UpstreamStatus, GenerationNotSent: r.GenerationNotSent}, nil)
 				})
 				upstream.Subscribe(upevents.TopicCancelText, func(ev event.Event, result event.Result) { result.Set(upevents.CancelTextResult{}, nil) })
 				proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}

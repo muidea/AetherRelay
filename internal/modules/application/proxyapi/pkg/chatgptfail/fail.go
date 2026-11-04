@@ -19,6 +19,11 @@ const (
 	KindTimeout             Kind = "timeout"
 	KindUpstream            Kind = "upstream"
 	KindInternal            Kind = "internal"
+	KindTextIncomplete      Kind = "text_incomplete"
+	KindTextProtocol        Kind = "text_protocol"
+	KindTextBudget          Kind = "text_budget"
+	KindTextModelLength     Kind = "text_model_length"
+	KindInvalidRequest      Kind = "invalid_request"
 )
 
 // Failure is a typed proxy-local error. Callers use errors.As for classification.
@@ -64,7 +69,9 @@ func Outcome(kind Kind) string {
 		return "client_write"
 	case KindProviderUnavailable, KindInvalidToken, KindRateLimit, KindContentPolicy, KindTLS, KindTimeout, KindUpstream:
 		return "upstream_failed"
-	case KindInternal:
+	case KindTextIncomplete, KindTextProtocol, KindTextModelLength:
+		return "upstream_failed"
+	case KindTextBudget, KindInternal, KindInvalidRequest:
 		return "error"
 	default:
 		return "error"
@@ -87,7 +94,7 @@ func ErrorCode(kind Kind) string {
 // increment provider upstream error metrics.
 func CountUpstream(kind Kind) bool {
 	switch kind {
-	case KindInvalidToken, KindRateLimit, KindTLS, KindTimeout, KindUpstream:
+	case KindInvalidToken, KindRateLimit, KindTLS, KindTimeout, KindUpstream, KindTextIncomplete, KindTextProtocol:
 		return true
 	default:
 		return false
@@ -98,6 +105,8 @@ func CountUpstream(kind Kind) bool {
 // Unknown classes become KindUpstream rather than internal, so local bugs stay distinct.
 func FromUpstreamClass(class string) Kind {
 	switch class {
+	case "invalid_request":
+		return KindInvalidRequest
 	case "invalid_token":
 		return KindInvalidToken
 	case "rate_limit":
@@ -108,6 +117,16 @@ func FromUpstreamClass(class string) Kind {
 		return KindTLS
 	case "timeout":
 		return KindTimeout
+	case "cancelled":
+		return KindClientCanceled
+	case "text_incomplete":
+		return KindTextIncomplete
+	case "text_protocol":
+		return KindTextProtocol
+	case "text_model_length":
+		return KindTextModelLength
+	case "text_budget":
+		return KindTextBudget
 	case "not_implemented":
 		return KindUpstream
 	case "upstream", "":

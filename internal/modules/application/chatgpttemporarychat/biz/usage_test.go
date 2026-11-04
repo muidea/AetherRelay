@@ -36,6 +36,10 @@ func TestUsageOutcomeFromTurn(t *testing.T) {
 		{"rate_limit", false, false, "upstream_failed", "rate_limit"},
 		{"invalid_token", false, false, "upstream_failed", "invalid_token"},
 		{"weird", false, false, "upstream_failed", "upstream"},
+		{"invalid_request", false, false, "error", "invalid_request"},
+		{"text_budget", false, true, "error", "text_budget"},
+		{"text_protocol", false, true, "upstream_failed", "text_protocol"},
+		{"invalid_token", false, true, "upstream_failed", "invalid_token"},
 	}
 	for _, tc := range cases {
 		outcome, code := usageOutcomeFromTurn(tc.class, tc.cancelled, tc.interrupted)
@@ -318,7 +322,7 @@ func TestStartTurnSuccessStartsUsageThenWorkerCompletes(t *testing.T) {
 			return
 		}
 		result.Set(upevents.PullTextResult{
-			Delta: "there", Done: true, ConversationID: "up-1", AssistantMessageID: "as-1", ActualModel: "gpt-5-actual",
+			Completion: textEvidence("hi there"), Delta: "there", Done: true, ConversationID: "up-1", AssistantMessageID: "as-1", ActualModel: "gpt-5-actual",
 		}, nil)
 	})
 	upObs.Subscribe(upevents.TopicCancelText, func(_ event.Event, result event.Result) {
@@ -433,14 +437,14 @@ func TestTemporaryTurnRefreshesInvalidTokenBeforeFirstDelta(t *testing.T) {
 		command := ev.Data().(upevents.PullTextCommand)
 		switch command.StreamID {
 		case "stream-old":
-			result.Set(upevents.PullTextResult{Done: true, ErrorClass: upevents.ErrClassInvalidToken}, nil)
+			result.Set(upevents.PullTextResult{Done: true, GenerationNotSent: true, ErrorOperation: "requirements_finalize", ErrorClass: upevents.ErrClassInvalidToken}, nil)
 		case "stream-new":
 			newPulls++
 			if newPulls == 1 {
 				result.Set(upevents.PullTextResult{Delta: "recovered"}, nil)
 				return
 			}
-			result.Set(upevents.PullTextResult{Done: true, ConversationID: "up-1", AssistantMessageID: "message-1"}, nil)
+			result.Set(upevents.PullTextResult{Completion: textEvidence("recovered"), Done: true, ConversationID: "up-1", AssistantMessageID: "message-1"}, nil)
 		default:
 			t.Fatalf("unexpected stream=%q", command.StreamID)
 		}

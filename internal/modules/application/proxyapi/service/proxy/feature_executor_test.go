@@ -63,7 +63,7 @@ func TestExecuteFeatureTextSendsFilesThroughResponses(t *testing.T) {
 	var received chatgpttext.Request
 	exec := chatGPTTextExecutorStub{complete: func(_ context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
 		received = request
-		return chatgpttext.Result{Text: "done", ActualModel: "gpt-5"}, nil
+		return chatgpttext.Result{Completion: textEvidence("done"), Text: "done", ActualModel: "gpt-5"}, nil
 	}}
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), exec)
 	catalog := h.FeatureCatalog(context.Background())

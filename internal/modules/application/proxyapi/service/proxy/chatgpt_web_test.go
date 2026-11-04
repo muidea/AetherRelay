@@ -33,7 +33,7 @@ func (s chatGPTTextExecutorStub) Complete(ctx context.Context, req chatgpttext.R
 	if s.complete != nil {
 		return s.complete(ctx, req)
 	}
-	return chatgpttext.Result{ConversationID: "conversation-1", ActualModel: "gpt-5-actual", Text: "hello"}, nil
+	return chatgpttext.Result{Completion: textEvidence("hello"), ConversationID: "conversation-1", ActualModel: "gpt-5-actual", Text: "hello"}, nil
 }
 
 func (s chatGPTTextExecutorStub) Stream(ctx context.Context, req chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
@@ -43,7 +43,7 @@ func (s chatGPTTextExecutorStub) Stream(ctx context.Context, req chatgpttext.Req
 	if emit != nil {
 		_ = emit(chatgpttext.Delta{Text: "hello", ActualModel: "gpt-5-actual"})
 	}
-	return chatgpttext.Result{ConversationID: "conversation-1", ActualModel: "gpt-5-actual", Text: "hello"}, nil
+	return chatgpttext.Result{Completion: textEvidence("hello"), ConversationID: "conversation-1", ActualModel: "gpt-5-actual", Text: "hello"}, nil
 }
 
 func newChatGPTWebHandler(t *testing.T, store usage.Store, exec chatgpttext.Executor) *Handler {
@@ -109,7 +109,7 @@ func TestChatGPTWebPassesImagePartsToExecutor(t *testing.T) {
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{
 		complete: func(_ context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
 			received = request
-			return chatgpttext.Result{Text: "ok"}, nil
+			return chatgpttext.Result{Completion: textEvidence("ok"), Text: "ok"}, nil
 		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}}]}]}`))
@@ -145,7 +145,7 @@ func TestChatGPTWebResponsesProjectsBoundedInputAndSSE(t *testing.T) {
 	h := newChatGPTWebHandler(t, store, chatGPTTextExecutorStub{
 		complete: func(_ context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
 			received = request
-			return chatgpttext.Result{ConversationID: "conv-1", ActualModel: "gpt-5-actual", Text: "done"}, nil
+			return chatgpttext.Result{Completion: textEvidence("done"), ConversationID: "conv-1", ActualModel: "gpt-5-actual", Text: "done"}, nil
 		},
 		stream: func(_ context.Context, request chatgpttext.Request, emit func(chatgpttext.Delta) error) (chatgpttext.Result, error) {
 			received = request
@@ -155,7 +155,7 @@ func TestChatGPTWebResponsesProjectsBoundedInputAndSSE(t *testing.T) {
 			if err := emit(chatgpttext.Delta{Text: "lo"}); err != nil {
 				return chatgpttext.Result{}, err
 			}
-			return chatgpttext.Result{ActualModel: "gpt-5-actual", Text: "hello"}, nil
+			return chatgpttext.Result{Completion: textEvidence("hello"), ActualModel: "gpt-5-actual", Text: "hello"}, nil
 		},
 	})
 	body := `{"model":"gpt-5","instructions":"be concise","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}]}],"temperature":0.5}`
@@ -522,7 +522,7 @@ func TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive(t *testing.T) {
 					}
 					usagetarget.Record(ctx, "chatgptweb", "second", "second@example.com")
 					usagetarget.RecordTextAttempt(ctx, chatgptattempt.Observation{Index: 2, AccountID: "second", AccountLabel: "second@example.com", UpstreamStatus: 200, Success: true})
-					return chatgpttext.Result{Text: "hello", ActualModel: "auto"}, nil
+					return chatgpttext.Result{Completion: textEvidence("hello"), Text: "hello", ActualModel: "auto"}, nil
 				}
 				h := NewHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(chatGPTTextExecutorStub{
 					complete: func(ctx context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {

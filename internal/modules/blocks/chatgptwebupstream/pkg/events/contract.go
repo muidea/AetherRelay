@@ -2,6 +2,7 @@
 package events
 
 import (
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	transport "aetherrelay/internal/pkg/aetherrelaytransport"
 	"aetherrelay/internal/pkg/chatattachment"
@@ -58,13 +59,18 @@ type ListModelsResult struct {
 type ErrorClass string
 
 const (
-	ErrClassInvalidToken   ErrorClass = "invalid_token"
-	ErrClassRateLimit      ErrorClass = "rate_limit"
-	ErrClassContentPolicy  ErrorClass = "content_policy"
-	ErrClassTLS            ErrorClass = "tls"
-	ErrClassTimeout        ErrorClass = "timeout"
-	ErrClassUpstream       ErrorClass = "upstream"
-	ErrClassNotImplemented ErrorClass = "not_implemented"
+	ErrClassInvalidToken    ErrorClass = "invalid_token"
+	ErrClassRateLimit       ErrorClass = "rate_limit"
+	ErrClassContentPolicy   ErrorClass = "content_policy"
+	ErrClassTLS             ErrorClass = "tls"
+	ErrClassTimeout         ErrorClass = "timeout"
+	ErrClassUpstream        ErrorClass = "upstream"
+	ErrClassNotImplemented  ErrorClass = "not_implemented"
+	ErrClassTextIncomplete  ErrorClass = "text_incomplete"
+	ErrClassTextProtocol    ErrorClass = "text_protocol"
+	ErrClassTextBudget      ErrorClass = "text_budget"
+	ErrClassTextModelLength ErrorClass = "text_model_length"
+	ErrClassInvalidRequest  ErrorClass = "invalid_request"
 )
 
 type GetUserInfoCommand struct {
@@ -163,6 +169,7 @@ type CompleteTextCommand struct {
 }
 
 type CompleteTextResult struct {
+	Completion         completion.Text
 	ErrorOperation     string
 	UpstreamStatus     int
 	GenerationNotSent  bool
@@ -227,6 +234,7 @@ type PullTextCommand struct {
 }
 
 type PullTextResult struct {
+	Completion         completion.Text
 	ErrorOperation     string
 	UpstreamStatus     int
 	GenerationNotSent  bool

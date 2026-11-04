@@ -12,6 +12,7 @@ import (
 	upclient "aetherrelay/internal/modules/blocks/chatgptwebupstream/internal/client"
 	"aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	events "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	generation "aetherrelay/internal/pkg/aetherrelaygeneration"
 	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
@@ -24,9 +25,10 @@ import (
 // gate; production registration remains deferred until live acceptance passes.
 type Upstream struct {
 	basebiz.Base
-	topics   []string
-	streamMu sync.Mutex
-	streams  map[string]*textStream
+	topics        []string
+	streamMu      sync.Mutex
+	streams       map[string]*textStream
+	newTextClient func(upclient.Config) (*upclient.Client, error)
 }
 
 type textStream struct {
@@ -35,9 +37,11 @@ type textStream struct {
 	generationFinished bool
 	cancel             context.CancelFunc
 	updates            chan textStreamUpdate
+	final              textStreamUpdate
 }
 
 type textStreamUpdate struct {
+	completion         completion.Text
 	errorOperation     string
 	upstreamStatus     int
 	generationNotSent  bool
@@ -258,7 +262,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid complete text command"))
 		return
 	}
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy, DeviceID: cmd.DeviceID})
+	client, err := s.textClient(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy, DeviceID: cmd.DeviceID})
 	if err != nil {
 		slog.Warn("chatgpt web text completion failed", "stage", "create_client")
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
@@ -279,6 +283,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		class := classifyError(err)
 		slog.Warn("chatgpt web text completion failed", "error_class", class)
 		result.Set(events.CompleteTextResult{
+			Completion:         completed.Completion,
 			Generation:         completed.Generation,
 			ConversationID:     completed.ConversationID,
 			AssistantMessageID: completed.AssistantMessageID,
@@ -292,6 +297,7 @@ func (s *Upstream) handleCompleteText(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.CompleteTextResult{
+		Completion:         completed.Completion,
 		Generation:         completed.Generation,
 		ConversationID:     completed.ConversationID,
 		AssistantMessageID: completed.AssistantMessageID,
@@ -393,7 +399,7 @@ func (s *Upstream) handleStartText(ev event.Event, result event.Result) {
 // Ordinary proxy streams follow the request; managed temporary chats own their timeout.
 func textStreamContext(parent context.Context, timeoutMillis int) (context.Context, context.CancelFunc) {
 	if timeoutMillis <= 0 {
-		return context.WithCancel(parent)
+		return context.WithTimeout(parent, 15*time.Minute)
 	}
 	if timeoutMillis > 15*60*1000 {
 		timeoutMillis = 15 * 60 * 1000
@@ -402,8 +408,9 @@ func textStreamContext(parent context.Context, timeoutMillis int) (context.Conte
 }
 
 func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *textStream, cmd events.StartTextCommand) {
+	defer stream.cancel()
 	var final upclient.TextResult
-	client, err := upclient.New(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy, DeviceID: cmd.DeviceID})
+	client, err := s.textClient(upclient.Config{AccessToken: cmd.AccessToken, Proxy: cmd.Proxy, DeviceID: cmd.DeviceID})
 	if err == nil {
 		messages := make([]upclient.TextMessage, 0, len(cmd.Messages))
 		for _, message := range cmd.Messages {
@@ -430,6 +437,7 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 	}
 	stream.setGeneration(final.Generation, true)
 	update := textStreamUpdate{
+		completion:         final.Completion,
 		generation:         stream.generationSnapshot(time.Now()),
 		upstreamStatus:     final.UpstreamStatus,
 		done:               true,
@@ -441,7 +449,8 @@ func (s *Upstream) runTextStream(ctx context.Context, streamID string, stream *t
 		update.errClass, update.errMessage = classifyError(err), err.Error()
 		update.errorOperation, update.upstreamStatus, update.generationNotSent = final.ErrorOperation, final.UpstreamStatus, final.GenerationNotSent
 	}
-	_ = s.publishTextUpdate(ctx, stream, update)
+	stream.final = update
+	close(stream.updates)
 }
 
 func (s *Upstream) publishTextUpdate(ctx context.Context, stream *textStream, update textStreamUpdate) error {
@@ -474,8 +483,12 @@ func (s *Upstream) handlePullText(ev event.Event, result event.Result) {
 		timeout = time.Second
 	}
 	select {
-	case update := <-stream.updates:
+	case update, open := <-stream.updates:
+		if !open {
+			update = stream.final
+		}
 		out := events.PullTextResult{
+			Completion:         update.completion,
 			Generation:         update.generation,
 			Delta:              update.delta,
 			Done:               update.done,
@@ -528,11 +541,23 @@ func (s *Upstream) removeTextStream(streamID string, cancel bool) bool {
 }
 
 func classifyError(err error) events.ErrorClass {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return events.ErrClassTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return events.ErrorClass("cancelled")
+	}
+	var textFailure interface{ TextFailureClass() string }
+	if errors.As(err, &textFailure) {
+		return events.ErrorClass(textFailure.TextFailureClass())
+	}
 	var upstreamErr *upclient.Error
 	if !errors.As(err, &upstreamErr) {
 		return events.ErrClassUpstream
 	}
 	switch upstreamErr.Class {
+	case upclient.InvalidRequest:
+		return events.ErrClassInvalidRequest
 	case upclient.InvalidToken:
 		return events.ErrClassInvalidToken
 	case upclient.RateLimit:
@@ -570,4 +595,11 @@ func (s *textStream) generationSnapshot(at time.Time) generation.Sample {
 		sample.Partial = true
 	}
 	return sample
+}
+
+func (s *Upstream) textClient(config upclient.Config) (*upclient.Client, error) {
+	if s.newTextClient != nil {
+		return s.newTextClient(config)
+	}
+	return upclient.New(config)
 }
