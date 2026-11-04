@@ -189,9 +189,7 @@ func serveConvertedSSEWithTimeouts(ctx context.Context, w http.ResponseWriter, i
 				return fmt.Errorf("conversion SSE exceeds %d bytes", maxConversionSSEBytes)
 			}
 			if !headersWritten {
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("Cache-Control", "no-cache")
-				w.Header().Set("Connection", "keep-alive")
+				prepareSSEHeaders(w.Header())
 				w.WriteHeader(http.StatusOK)
 				headersWritten = true
 				state.HeadersWritten = true

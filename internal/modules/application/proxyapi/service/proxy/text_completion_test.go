@@ -27,8 +27,8 @@ func textEvidence(text string) completion.Text {
 	return completion.Text{Completed: true, Reason: completion.Stop, Terminal: "done", TextBytes: len(text), OutputBytes: len(text), TextSHA256: completion.Hash(text)}
 }
 
-func TestTextCompletionBothAPIsRejectPartialAndUnknown(t *testing.T) {
-	for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
+func TestTextCompletionResponsesRejectsPartialAndUnknown(t *testing.T) {
+	for _, path := range []string{"/v1/responses"} {
 		for _, stream := range []bool{false, true} {
 			for _, state := range []string{"complete", "unknown", "eof", "protocol", "budget", "mismatched_text"} {
 				for _, partial := range []bool{false, true} {
@@ -80,10 +80,7 @@ func TestTextCompletionBothAPIsRejectPartialAndUnknown(t *testing.T) {
 						registry := metrics.NewRegistry()
 						h := NewHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(exec)
 						h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-11-04T00:00:00Z"))
-						body := fmt.Sprintf(`{"model":"gpt-5","stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream)
-						if path == "/v1/responses" {
-							body = fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":"hi"}`, stream)
-						}
+						body := fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":"hi"}`, stream)
 						req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 						req.Header.Set("Authorization", "Bearer test-client-key")
 						req.Header.Set("Content-Type", "application/json")
@@ -95,9 +92,6 @@ func TestTextCompletionBothAPIsRejectPartialAndUnknown(t *testing.T) {
 							if response.Code != 200 {
 								t.Fatal(response.Code, payload)
 							}
-							if stream && path == "/v1/chat/completions" && (!strings.Contains(payload, `"finish_reason":"stop"`) || !strings.Contains(payload, "[DONE]")) {
-								t.Fatal(payload)
-							}
 						} else {
 							if strings.Contains(payload, "[DONE]") || strings.Contains(payload, "response.completed") || strings.Contains(payload, `"finish_reason":"stop"`) || strings.Contains(payload, `"status":"completed"`) {
 								t.Fatal("false success", payload)
@@ -106,7 +100,7 @@ func TestTextCompletionBothAPIsRejectPartialAndUnknown(t *testing.T) {
 								if response.Code != 200 || !strings.Contains(payload, `"error"`) {
 									t.Fatal(response.Code, payload)
 								}
-								if path == "/v1/responses" && !strings.Contains(payload, "response.failed") {
+								if !strings.Contains(payload, "response.failed") {
 									t.Fatal(payload)
 								}
 							} else if response.Code < 400 {

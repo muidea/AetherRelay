@@ -67,7 +67,7 @@ func usageEvents(t *testing.T, store usage.Store) []usage.Event {
 
 func TestChatGPTWebBuiltinChatDoesNotRequireStaticProvider(t *testing.T) {
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -80,30 +80,6 @@ func TestChatGPTWebBuiltinChatDoesNotRequireStaticProvider(t *testing.T) {
 	}
 }
 
-func TestChatGPTTextRequestAcceptsTextAndDataURLImageParts(t *testing.T) {
-	request, err := chatGPTTextRequest("gpt-5", map[string]any{"messages": []any{map[string]any{
-		"role": "user",
-		"content": []any{
-			map[string]any{"type": "text", "text": "what is this?"},
-			map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}},
-		},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(request.Messages) != 1 || request.Messages[0].Content != "what is this?" || len(request.Messages[0].Images) != 1 || len(request.Messages[0].Images[0]) == 0 {
-		t.Fatalf("request=%+v", request)
-	}
-	for _, body := range []map[string]any{
-		{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/a.png"}}}}}},
-		{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_audio"}}}}},
-	} {
-		if _, err := chatGPTTextRequest("gpt-5", body); err == nil {
-			t.Fatalf("unsupported multimodal payload unexpectedly accepted: %#v", body)
-		}
-	}
-}
-
 func TestChatGPTWebPassesImagePartsToExecutor(t *testing.T) {
 	var received chatgpttext.Request
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{
@@ -112,30 +88,13 @@ func TestChatGPTWebPassesImagePartsToExecutor(t *testing.T) {
 			return chatgpttext.Result{Completion: textEvidence("ok"), Text: "ok"}, nil
 		},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}}]}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":[{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}]}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
 	h.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || len(received.Messages) != 1 || received.Messages[0].Content != "inspect" || len(received.Messages[0].Images) != 1 {
 		t.Fatalf("status=%d request=%+v body=%s", resp.Code, received, resp.Body.String())
-	}
-}
-
-func TestChatGPTWebCompatibilityRejectsToolsAndRecordsIgnoredControls(t *testing.T) {
-	ignored, apiErr := chatGPTWebChatCompatibility(map[string]any{
-		"model": "gpt-5", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
-		"temperature": 0.2, "top_p": 0.9, "user": "client-1",
-	})
-	if apiErr != nil || strings.Join(ignored, ",") != "temperature,top_p,user" {
-		t.Fatalf("ignored=%v apiErr=%+v", ignored, apiErr)
-	}
-	_, apiErr = chatGPTWebChatCompatibility(map[string]any{
-		"model": "gpt-5", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
-		"tools": []any{map[string]any{"type": "function"}},
-	})
-	if apiErr == nil || apiErr.Code != ErrorCodeConversionUnsupported || apiErr.Feature != "tools" {
-		t.Fatalf("tools apiErr=%+v", apiErr)
 	}
 }
 
@@ -158,7 +117,7 @@ func TestChatGPTWebResponsesProjectsBoundedInputAndSSE(t *testing.T) {
 			return chatgpttext.Result{Completion: textEvidence("hello"), ActualModel: "gpt-5-actual", Text: "hello"}, nil
 		},
 	})
-	body := `{"model":"gpt-5","instructions":"be concise","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}]}],"temperature":0.5}`
+	body := `{"model":"gpt-5","instructions":"be concise","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLz4QAAAABJRU5ErkJggg=="}]}],"user":"compat-user"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -229,7 +188,7 @@ func TestChatGPTWebResponsesRejectsUndeclaredReasoningBeforeUpstream(t *testing.
 func TestChatGPTWebTextSuccessSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	h := newChatGPTWebHandler(t, store, chatGPTTextExecutorStub{})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hello world"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":[{"role":"user","content":"hello world"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -267,7 +226,7 @@ func TestChatGPTWebTextUpstreamFailureSettlesUsage(t *testing.T) {
 		},
 	}
 	h := newChatGPTWebHandler(t, store, exec)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -305,7 +264,7 @@ func TestChatGPTWebTextUpstreamFailureSettlesUsage(t *testing.T) {
 func TestChatGPTWebTextStreamSuccessSettlesUsage(t *testing.T) {
 	store := usage.NewMemoryStore()
 	h := newChatGPTWebHandler(t, store, chatGPTTextExecutorStub{})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","stream":true,"input":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -313,7 +272,7 @@ func TestChatGPTWebTextStreamSuccessSettlesUsage(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(resp.Body.String(), "data:") || !strings.Contains(resp.Body.String(), "[DONE]") {
+	if !strings.Contains(resp.Body.String(), "data:") || !strings.Contains(resp.Body.String(), "response.completed") {
 		t.Fatalf("body=%s", resp.Body.String())
 	}
 	events := usageEvents(t, store)
@@ -337,7 +296,7 @@ func TestChatGPTWebTextClientCancelSettlesUsage(t *testing.T) {
 		},
 	}
 	h := newChatGPTWebHandler(t, store, exec)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","stream":true,"input":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -388,7 +347,7 @@ func TestChatGPTWebTextClientWriteSettlesUsage(t *testing.T) {
 		},
 	}
 	h := newChatGPTWebHandler(t, store, exec)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","stream":true,"input":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	resp := httptest.NewRecorder()
@@ -446,7 +405,7 @@ func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
 				withClientKey(h, "test-client", "test-client-key")
 			}
 			h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "auto"}}, time.Now().UTC().Format(time.RFC3339)))
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"return JSON"}],"response_format":{"type":"json_object"},"temperature":0.2}`))
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"auto","input":[{"role":"user","content":"return JSON"}],"text":{"format":{"type":"json_object"}}}`))
 			req.Header.Set("Authorization", "Bearer test-client-key")
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
@@ -454,7 +413,7 @@ func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
-			if rec.Code != 400 || calls != 0 || response.Error.Feature != "response_format" || response.Error.FailureClass != ErrorCodeConversionUnsupported || strings.Join(response.Error.UnsupportedFeatures, ",") != "response_format" {
+			if rec.Code != 400 || calls != 0 || response.Error.Feature != "text.format" || response.Error.FailureClass != ErrorCodeConversionUnsupported || strings.Join(response.Error.UnsupportedFeatures, ",") != "text.format" {
 				t.Fatalf("status=%d calls=%d response=%s", rec.Code, calls, rec.Body.String())
 			}
 			if durable {
@@ -472,7 +431,7 @@ func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
 				t.Fatalf("events=%+v", events)
 			}
 			e := events[0]
-			if e.State != usage.StateCompleted || e.HTTPStatus != 400 || e.ErrorCode != ErrorCodeConversionUnsupported || e.FailureClass != response.Error.FailureClass || strings.Join(e.UnsupportedFeatures, ",") != "response_format" || e.UpstreamStatus != 0 || e.AccountID != "" || e.TotalTokens != 0 {
+			if e.State != usage.StateCompleted || e.HTTPStatus != 400 || e.ErrorCode != ErrorCodeConversionUnsupported || e.FailureClass != response.Error.FailureClass || strings.Join(e.UnsupportedFeatures, ",") != "text.format" || e.UpstreamStatus != 0 || e.AccountID != "" || e.TotalTokens != 0 {
 				t.Fatalf("incomplete rejection diagnostic: %+v", e)
 			}
 			if durable {
@@ -491,7 +450,7 @@ func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
 				if err = json.Unmarshal(raw, &meta); err != nil {
 					t.Fatal(err)
 				}
-				if meta.FailureClass != e.FailureClass || strings.Join(meta.UnsupportedFeatures, ",") != "response_format" {
+				if meta.FailureClass != e.FailureClass || strings.Join(meta.UnsupportedFeatures, ",") != "text.format" {
 					t.Fatalf("archive diagnostics=%s", raw)
 				}
 			}
@@ -537,7 +496,7 @@ func TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive(t *testing.T) {
 					},
 				})
 				h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "auto"}}, time.Now().UTC().Format(time.RFC3339)))
-				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(fmt.Sprintf(`{"model":"auto","messages":[{"role":"user","content":"hi"}],"stream":%t}`, streaming)))
+				req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"auto","input":[{"role":"user","content":"hi"}],"stream":%t}`, streaming)))
 				req.Header.Set("Authorization", "Bearer test-client-key")
 				rec := httptest.NewRecorder()
 				h.ServeHTTP(rec, req)

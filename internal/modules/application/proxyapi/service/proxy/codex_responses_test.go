@@ -1250,138 +1250,6 @@ func TestCodexCompactStreamHeartbeatsAndFailsInBand(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsRoutesToCodexResponsesWithTools(t *testing.T) {
-	var received codexresponses.Request
-	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
-		received = request
-		return codexresponses.Result{Body: []byte(`{"id":"resp_chat","model":"gpt-5.2-codex","status":"completed","output":[{"type":"function_call","call_id":"fc_lookup","name":"lookup","arguments":"{\"q\":\"x\"}"}],"usage":{"input_tokens":4,"output_tokens":2}}`)}, nil
-	}})
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-5.2-codex","messages":[{"role":"developer","content":"be brief"},{"role":"user","content":"lookup x"}],"tools":[{"type":"function","function":{"name":"lookup","description":"lookup","parameters":{"type":"object"}}}]}`))
-	request.Header.Set("Authorization", "Bearer test-client-key")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"finish_reason":"tool_calls"`) || !strings.Contains(response.Body.String(), `"tool_calls"`) {
-		t.Fatalf("CP-EP-007 status=%d body=%s", response.Code, response.Body.String())
-	}
-	var upstream map[string]any
-	if err := json.Unmarshal(received.Body, &upstream); err != nil {
-		t.Fatal(err)
-	}
-	tools, _ := upstream["tools"].([]any)
-	tool, _ := tools[0].(map[string]any)
-	if upstream["instructions"] != "be brief" || tool["name"] != "lookup" || tool["function"] != nil {
-		t.Fatalf("CP-EP-007 upstream=%s", received.Body)
-	}
-}
-
-func TestChatCompletionsStreamsCodexToolCallAndDone(t *testing.T) {
-	store := usage.NewMemoryStore()
-	handler := newCodexResponsesHandler(t, store, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, started func(codexresponses.StreamStart) error, emit func([]byte) error) error {
-		if err := started(codexresponses.StreamStart{FirstEventDuration: 275 * time.Millisecond}); err != nil {
-			return err
-		}
-		for _, line := range []string{
-			`data: {"type":"response.created","response":{"id":"resp_stream","model":"gpt-5.2-codex"}}` + "\n\n",
-			`data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"fc_lookup","name":"lookup"}}` + "\n\n",
-			`data: {"type":"response.function_call_arguments.delta","delta":"{\"q\":"}` + "\n\n",
-			`data: {"type":"response.function_call_arguments.delta","delta":"\"x\"}"}` + "\n\n",
-			`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}` + "\n\n",
-		} {
-			if err := emit([]byte(line)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}})
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-5.2-codex","stream":true,"messages":[{"role":"user","content":"lookup x"}]}`))
-	request.Header.Set("Authorization", "Bearer test-client-key")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"finish_reason":"tool_calls"`) || !strings.Contains(response.Body.String(), `data: [DONE]`) || !strings.Contains(response.Body.String(), `"arguments":"{\"q\":"`) {
-		t.Fatalf("CP-EP-007 status=%d body=%s", response.Code, response.Body.String())
-	}
-	events := usageEvents(t, store)
-	if len(events) != 1 || events[0].FirstEventDurationMS != 275 {
-		t.Fatalf("chat first-event usage=%+v", events)
-	}
-}
-
-func TestCodexChatToolArgumentsDoneFallbackAndParallelIndexes(t *testing.T) {
-	state := &codexChatStreamState{Model: "gpt-test"}
-	send := func(payload string) [][]byte {
-		out, err := codexResponsesEventToChat([]byte(payload), state)
-		if err != nil {
-			t.Fatalf("event=%s err=%v", payload, err)
-		}
-		return out
-	}
-	send(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`)
-	first := send(`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_a","name":"a"}}`)
-	second := send(`{"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","call_id":"call_b","name":"b"}}`)
-	if !strings.Contains(string(first[0]), `"index":0`) || !strings.Contains(string(second[0]), `"index":1`) {
-		t.Fatalf("parallel chat indexes first=%s second=%s", first[0], second[0])
-	}
-	fallback := send(`{"type":"response.function_call_arguments.done","output_index":3,"arguments":"{\"q\":\"b\"}"}`)
-	if len(fallback) != 1 || !strings.Contains(string(fallback[0]), `"index":1`) || !strings.Contains(string(fallback[0]), `"arguments":"{\"q\":\"b\"}"`) {
-		t.Fatalf("done fallback=%q", fallback)
-	}
-	send(`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\":"}`)
-	if duplicate := send(`{"type":"response.function_call_arguments.done","output_index":1,"arguments":"{\"q\":\"a\"}"}`); len(duplicate) != 0 {
-		t.Fatalf("done duplicated prior delta: %q", duplicate)
-	}
-}
-
-func TestCodexChatRejectsEmptyIncomplete(t *testing.T) {
-	state := &codexChatStreamState{Model: "gpt-test"}
-	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.created","response":{"id":"resp_1"}}`), state)
-	if _, err := codexResponsesEventToChat([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","output":[],"usage":{"input_tokens":4,"output_tokens":0}}}`), state); err == nil {
-		t.Fatal("CP-STREAM-014 empty incomplete became a normal chat stop")
-	}
-	withReasoning := &codexChatStreamState{Model: "gpt-test"}
-	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.created","response":{"id":"resp_2"}}`), withReasoning)
-	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.reasoning.delta","delta":"analysis"}`), withReasoning)
-	if _, err := codexResponsesEventToChat([]byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":4,"output_tokens":0}}}`), withReasoning); err != nil {
-		t.Fatalf("reasoning output evidence was ignored: %v", err)
-	}
-}
-
-func TestCodexChatUsesOutputTextDoneFallbackOnce(t *testing.T) {
-	state := &codexChatStreamState{Model: "gpt-test"}
-	_, _ = codexResponsesEventToChat([]byte(`{"type":"response.created","response":{"id":"resp_1"}}`), state)
-	chunks, err := codexResponsesEventToChat([]byte(`{"type":"response.output_text.done","text":"answer"}`), state)
-	if err != nil || len(chunks) != 1 || !strings.Contains(string(chunks[0]), `"content":"answer"`) {
-		t.Fatalf("done fallback chunks=%q err=%v", chunks, err)
-	}
-	if chunks, err = codexResponsesEventToChat([]byte(`{"type":"response.output_text.done","text":"answer"}`), state); err != nil || len(chunks) != 0 {
-		t.Fatalf("done fallback duplicated chunks=%q err=%v", chunks, err)
-	}
-}
-
-func TestChatCompletionsMapsCodexIncompleteReasons(t *testing.T) {
-	for _, testCase := range []struct {
-		name, reason, finish string
-	}{
-		{name: "max output", reason: "max_output_tokens", finish: "length"},
-		{name: "content filter", reason: "content_filter", finish: "content_filter"},
-		{name: "unknown", reason: "unknown_reason", finish: "stop"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			body := []byte(`{"id":"resp_chat","status":"incomplete","output":[],"incomplete_details":{"reason":"` + testCase.reason + `"}}`)
-			converted, _, err := convertCodexResponsesToChat(body, "gpt-5.2-codex")
-			if err != nil || !bytes.Contains(converted, []byte(`"finish_reason":"`+testCase.finish+`"`)) {
-				t.Fatalf("CP-STREAM-007 converted=%s err=%v", converted, err)
-			}
-
-			state := &codexChatStreamState{Model: "gpt-5.2-codex"}
-			event := []byte(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"` + testCase.reason + `"}}}`)
-			chunks, err := codexResponsesEventToChat(event, state)
-			if err != nil || len(chunks) != 2 || !bytes.Contains(chunks[0], []byte(`"finish_reason":"`+testCase.finish+`"`)) {
-				t.Fatalf("CP-STREAM-007 chunks=%q err=%v", chunks, err)
-			}
-		})
-	}
-}
-
 func TestAnthropicMessagesRoutesToCodexResponsesWithTools(t *testing.T) {
 	var received codexresponses.Request
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{complete: func(_ context.Context, request codexresponses.Request) (codexresponses.Result, error) {
@@ -1467,7 +1335,7 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"primary": {
 				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 200,
-				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
@@ -1510,7 +1378,7 @@ func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"backup": {
 				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"gpt-shared"}, Priority: 20,
-				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{

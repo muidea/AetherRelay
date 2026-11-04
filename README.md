@@ -1,5 +1,7 @@
 # AetherRelay
 
+文本客户端使用 `/v1/responses` 或 `/v1/messages`；已移除 Chat Completions 与旧 Completions 入口，升级迁移见[配置参考](docs/configuration.md)。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 AetherRelay 是一个可自行部署的 AI 网关，通过统一地址接入多个 AI 服务商、ChatGPT Web 与 Codex OAuth 账号池。客户端使用 OpenAI 或 Anthropic 兼容接口，网关负责模型路由、权限校验、可恢复故障切换和用量记录。
@@ -10,9 +12,9 @@ AetherRelay 是一个可自行部署的 AI 网关，通过统一地址接入多�
 
 | 功能 | 说明 |
 | --- | --- |
-| 标准接口 | 支持 Chat Completions、Responses、Messages、Completions、Embeddings 和 Images；具体可用端点由模型目录发布 |
+| 标准接口 | 支持 Responses、Messages、Embeddings 和 Images；具体可用端点由模型目录发布 |
 | 模型路由 | 按精确模型 ID 匹配 Provider，支持优先级、健康检查、熔断和有界故障切换 |
-| 协议转换 | 提供 Chat Completions ↔ Messages 文本转换及按能力声明开放的 Responses ↔ Messages 转换 |
+| 协议转换 | 提供按能力声明开放的 Responses ↔ Messages 转换及 Messages → Codex Responses 适配 |
 | 客户端 Key | 创建、启停、轮换密钥，并按 Key 设置指定 Provider 或全部 Provider 的访问权限 |
 | 账号池 | 统一展示 ChatGPT Web / Codex CLI 账号，分别管理凭据、刷新状态、模型目录、额度和冷却，支持整体迁移 |
 | Codex OAuth | 提供 Responses HTTP/SSE/WebSocket、compact 和本地输入 Token 预估；上游优先 WebSocket，在可确认安全时回退 HTTP |

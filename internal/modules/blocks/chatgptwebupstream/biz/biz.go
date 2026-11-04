@@ -322,16 +322,17 @@ func (s *Upstream) handleSearch(ev event.Event, result event.Result) {
 		return
 	}
 	searched, err := s.search(client, ev.Context(), upclient.SearchRequest{Model: cmd.Model, Query: cmd.Query})
-	if err != nil {
-		class := classifyError(err)
-		result.Set(events.SearchResult{ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, ErrorClass: class, ErrorOperation: searchErrorOperation(err)}, cd.NewError(cd.Unexpected, err.Error()))
-		return
-	}
+
 	sources := make([]events.SearchSource, 0, len(searched.Sources))
 	for _, source := range searched.Sources {
 		sources = append(sources, events.SearchSource{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
 	}
-	result.Set(events.SearchResult{ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, Sources: sources}, nil)
+	if err != nil {
+		class := classifyError(err)
+		result.Set(events.SearchResult{Completion: searched.Completion, ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, Sources: sources, ErrorClass: class, ErrorOperation: searchErrorOperation(err)}, cd.NewError(cd.Unexpected, err.Error()))
+		return
+	}
+	result.Set(events.SearchResult{Completion: searched.Completion, ConversationID: searched.ConversationID, ActualModel: searched.ActualModel, Text: searched.Text, Sources: sources}, nil)
 }
 
 // search keeps the same panic boundary as regular Web text execution. The

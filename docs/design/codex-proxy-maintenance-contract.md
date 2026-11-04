@@ -216,7 +216,7 @@
 | `CP-EP-004` | POST/GET | `/backend-api/codex/responses` | retired | 旧参考实现别名；固定返回 404 | rejected |
 | `CP-EP-005` | POST | `/backend-api/codex/responses/compact` | retired | 旧参考实现别名；固定返回 404 | rejected |
 | `CP-EP-006` | GET/POST | `/backend-api/codex/models` | retired | 旧参考实现别名；固定返回 404 | rejected |
-| `CP-EP-007` | POST | `/v1/chat/completions` | AetherRelay adapter | 可转换到 Codex Responses | implemented |
+| `CP-EP-007` | POST | `/v1/chat/completions` | 已退役（2026-11-04） | 无路由、无适配 | retired |
 | `CP-EP-008` | POST | `/v1/messages` | AetherRelay adapter | 可转换到 Codex Responses | implemented |
 | `CP-EP-012` | GET | `/v1/responses/ws` | retired | 无生产路由证据；固定返回 404 | rejected |
 | `CP-EP-013` | GET | `/v1/models` | core | 自定义 Provider 模式的模型发现；与有效目录同代 | implemented |
@@ -678,7 +678,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 | --- | --- | --- | --- | --- |
 | output item 附带信息共享投影、未知业务字段拒绝及参数完成一致性 | 17.3.1 | implemented（本地）；待 live 验收 | `proxyapi/service/proxy/responses_output_projection.go`, `codex_anthropic_projection.go`, `responses_anthropic.go` | `responses_output_projection_test.go`, `codex_anthropic_projection_test.go` |
 | 无输出样本时保留明确缓冲观测 | 17.3.1 | implemented（本地）；待 live 验收 | `aetherrelayusage/duckdb.go`, `tps.go`, `queries.go`, `export.go` | `tps_buffering_test.go`, `proxyapi/service/proxy/generation_test.go` |
-| WS 附加事件兼容与缺 usage 的输出观测 | 17.5.2, CP-STREAM-019 | implemented（本地）；待 live 验收 | `aetherrelaycodex/observation.go`, `proxy/codex_chat.go`, `proxy/codex_anthropic_projection.go`, `codexupstream/biz`, `aetherrelayusage/tps.go` | `proxy/codex_observation_test.go`, `codexupstream/biz/observations_test.go`, `tps_buffering_test.go` |
+| WS 附加事件兼容与缺 usage 的输出观测 | 17.5.2, CP-STREAM-019 | implemented（本地）；待 live 验收 | `aetherrelaycodex/observation.go`, `proxy/codex_anthropic_projection.go`, `codexupstream/biz`, `aetherrelayusage/tps.go` | `proxy/codex_observation_test.go`, `codexupstream/biz/observations_test.go`, `tps_buffering_test.go` |
 
 `17.3.0` 新增实施追踪：
 
@@ -686,7 +686,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 | --- | --- | --- | --- | --- |
 | ChatGPT Web 文本生成前有限恢复与缓存观测 | 18.2.0, CP-FAIL-021, CP-OBS-017 | implemented（本地）；待部署验收 | `proxyapi/biz/chatgpt_text.go`, `chatgptwebupstream`, `aetherrelaymetrics`, `metricsruntime` | `chatgpt_text_recovery_test.go`, `TestTextSubmissionEvidenceAndContext`, `TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive`, `cache_observation_test.go`, `TestTokenObservationPresenceAcrossEventHub` |
 | 执行异常追踪与管理页闭环 | 18.4.0, CP-OBS-019 | implemented（本地）；待部署验收 | `aetherrelaytrace`, `aetherrelayusage`, `usageruntime`, `proxyapi`, `adminapi`, `web/admin` | `trace_test.go`, `execution_trace_test.go`, `usage_trace_test.go`, `TestInspectEvidenceChecksExactAttemptAndRetention`, `TestClientAPIKeyHintAndSettlementThroughEventHub`, `web/admin/usage.test.cjs` |
-| 用量待完成刷新与 ChatGPT Web 本地参数拒绝诊断 | 18.1.0, CP-OBS-016 | implemented（本地）；待部署验收 | `web/admin/index.html`, `adminapi/service/admin/usage.go`, `aetherrelayusage`, `proxyapi/service/proxy/chatgpt_web.go` | `usage.test.cjs`, `event_lookup_test.go`, `TestUsageEventsBoundedIDLookupAndAuthentication`, `TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics` |
+| 用量待完成刷新与 ChatGPT Web 本地参数拒绝诊断 | 18.1.0, CP-OBS-016 | implemented（本地）；待部署验收 | `web/admin/index.html`, `adminapi/service/admin/usage.go`, `aetherrelayusage`, `proxyapi/service/proxy/chatgpt_web_common.go` | `usage.test.cjs`, `event_lookup_test.go`, `TestUsageEventsBoundedIDLookupAndAuthentication`, `TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics` |
 | Codex metadata/commentary 响应投影、工具保序、错误用量与诊断归档 | 17.3.0, CP-OBS-011, CP-SEC-003 | implemented（本地）；待部署验收 | `proxyapi/service/proxy/codex_anthropic_projection.go`, `codex_messages.go`, `responses_anthropic.go`, `aetherrelayarchive/recorder.go` | `codex_anthropic_projection_test.go`；现场样本离线回放 |
 | 本地 conversion 对 Provider 熔断保持中性 | 17.3.0 | implemented（本地）；待部署验收 | `aetherrelaymetrics/registry.go` | `conversion_health_test.go`；`TestCodexProjectionFailuresDoNotBlockNativeResponses` |
 
@@ -816,7 +816,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 | 流停止诊断及原因保真 | CP-OBS-008 | implemented | `proxyapi/biz/codex_stream_timeout.go`, `proxyapi/biz/codex_responses.go` | `proxyapi/biz/codex_stream_timeout_test.go`（含清理延迟超过总时限仍保留原网络故障） |
 | 非流式总预算及下游取消 | CP-STREAM-018 | implemented | `proxyapi/biz/codex_responses.go`, `proxy/codex_completion_timeout.go`, `proxy/handler.go` | `proxyapi/biz/codex_completion_timeout_test.go`, `proxy/codex_completion_timeout_test.go` |
 | 最后业务事件及终结观察 | CP-OBS-013 | implemented | `codexupstream/biz/biz.go`, `codexupstream/biz/dispatch.go`, `proxy/debug.go`, `web/admin/index.html` | `codexupstream/biz/completion_observation_test.go`, `web/admin/usage.test.cjs` |
-| 非流式预算与请求规模诊断 | CP-OBS-014 | implemented（本地）；线上待部署复验 | `proxy/codex_completion_timeout.go`, `proxy/codex_messages.go`, `proxy/codex_chat.go`, `proxy/codex_responses.go` | `proxy/codex_completion_timeout_test.go` |
+| 非流式预算与请求规模诊断 | CP-OBS-014 | implemented（本地）；线上待部署复验 | `proxy/codex_completion_timeout.go`, `proxy/codex_messages.go`, `proxy/codex_responses.go` | `proxy/codex_completion_timeout_test.go` |
 | 输出后断流不冷却账号 | CP-STREAM-017 | implemented | `proxyapi/biz/codex_responses.go`, `proxyapi/service/proxy/codex_responses.go`, `proxyapi/service/proxy/responses_anthropic.go` | `proxyapi/biz/codex_stream_timeout_test.go`, `proxyapi/service/proxy/codex_responses_test.go`, `proxyapi/service/proxy/responses_anthropic_test.go` |
 
 以上为离线回归证据；真实上游与部署后的长流恢复按 CP-DOD-006 单独验证。
@@ -844,7 +844,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| 转换结构预算拆分与内容块放宽到 512 | CP-REQ-037 | implemented（本地）；线上待部署复验 | `proxyapi/service/proxy/conversion_limits.go`, `proxyapi/service/proxy/responses_anthropic.go`, `proxyapi/service/proxy/codex_chat.go` | `proxyapi/service/proxy/conversion_limits_test.go` |
+| 转换结构预算拆分与内容块放宽到 512 | CP-REQ-037 | implemented（本地）；线上待部署复验 | `proxyapi/service/proxy/conversion_limits.go`, `proxyapi/service/proxy/responses_anthropic.go` | `proxyapi/service/proxy/conversion_limits_test.go` |
 
 
 `5.0.0` 新增实施追踪：
@@ -864,7 +864,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 
 | 能力 | 规则 | 状态 | 实现证据 | 测试证据 |
 | --- | --- | --- | --- | --- |
-| Responses HTTP/SSE 与长流保活 | CP-EP-001, CP-STREAM-001..016 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_chat.go`, `proxy/responses_anthropic.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `responses_anthropic_test.go`, `web_search_test.go` |
+| Responses HTTP/SSE 与长流保活 | CP-EP-001, CP-STREAM-001..016 | implemented | `codexupstream/biz/biz.go`, `proxy/responses_anthropic.go` | `codex_responses_test.go`, `codexupstream/biz/biz_test.go`, `responses_anthropic_test.go`, `web_search_test.go` |
 | OAuth refresh/429 切换 | CP-FAIL-003, CP-FAIL-006, CP-FAIL-016..017 | implemented | `codexupstream/biz/biz.go`, `proxyapi/biz/codex_responses.go`, `codexaccountpool/internal/store/store.go` | `codexupstream/biz/biz_test.go`, `proxyapi/biz/codex_responses_test.go`, `codexaccountpool/internal/store/store_test.go` |
 | 核心端点 | CP-EP-001..003, CP-EP-013, CP-EP-015 | implemented | `proxy/routes.go`, `proxy/handler.go`, `proxy/models.go`, `proxy/responses_input_tokens.go` | `codex_responses_test.go`, `codex_websocket_test.go`, `models_test.go`, `responses_input_tokens_test.go` |
 | 历史端点拒绝 | CP-EP-004..006, CP-EP-011..012, CP-EP-014 | implemented | `proxy/routes.go`, `proxy/handler.go` | `models_test.go` |
@@ -884,7 +884,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 | HTTPS 账号代理 ALPN | CP-SEC-002, CP-SEC-004 | implemented | `aetherrelayproxy/transport.go`, `codexupstream/biz/biz.go` | `aetherrelayproxy/transport_test.go`, `codexupstream/biz/biz_test.go` |
 | Responses WebSocket | CP-EP-002, CP-WS-001..018 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/responses_transport.go`, `codexupstream/biz/websocket_http_fallback.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_observation_test.go`, `codex_websocket_replay_test.go`, `codex_websocket_fallback_test.go`, `codexupstream/biz/websocket_handshake_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
 | 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |
-| Chat/Messages 转 Codex | CP-EP-007..008 | implemented | `proxy/codex_chat.go`, `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
+| Messages 转 Codex（Chat 已退役） | CP-EP-008；CP-EP-007 已退役 | implemented | `proxy/codex_messages.go` | `codex_responses_test.go`, `models_test.go` |
 | ChatGPT Web 模型级能力 | CP-CAP-011 | implemented | `proxyapi/biz/discovery.go`, `effectivecatalog/catalog.go` | `effectivecatalog/catalog_test.go`, `proxy/chatgpt_images_test.go` |
 | 离线规范化 corpus | CP-DOD-001 | implemented | `proxy/testdata/codex_normalization_golden.json` | `TestCodexNormalizationGoldenCorpus` |
 | 真实上游差分 corpus | CP-DOD-002 | planned | - | - |

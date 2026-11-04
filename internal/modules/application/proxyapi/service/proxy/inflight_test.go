@@ -53,9 +53,9 @@ func TestInflightCoversStreamsAndClientCancellation(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"text/event-stream"}},
 			Body: &gatedStream{
-				first: strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"),
+				first: strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"),
 				ctx:   r.Context(), waiting: waiting, release: release,
-				last: strings.NewReader("data: [DONE]\n\n"),
+				last: strings.NewReader("data: {\"type\":\"response.completed\"}\n\n"),
 			},
 		}, nil
 	})
@@ -84,7 +84,7 @@ func TestInflightCoversStreamsAndClientCancellation(t *testing.T) {
 	done := make([]chan struct{}, 2)
 	var cancel context.CancelFunc
 	for i := range 2 {
-		r := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+		r := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 		if i == 0 {
 			ctx, stop := context.WithCancel(r.Context())
 			cancel = stop
@@ -103,7 +103,7 @@ func TestInflightCoversStreamsAndClientCancellation(t *testing.T) {
 	releaseOnce.Do(func() { close(release) })
 	wait(done[1])
 	assertInflight(0)
-	for _, path := range []string{"/healthz", "/unknown", "/v1/chat/completions"} {
+	for _, path := range []string{"/healthz", "/unknown", "/v1/responses"} {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
 		h.ServeHTTP(newResponseRecorder(), r)
 		assertInflight(0)

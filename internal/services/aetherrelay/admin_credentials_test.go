@@ -19,7 +19,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: test-key
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -77,7 +77,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: test-key
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 model_metadata:
   gpt-4o:

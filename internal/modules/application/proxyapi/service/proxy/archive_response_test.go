@@ -1,6 +1,10 @@
 package proxy
 
 import (
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 	"bufio"
 	"errors"
 	"net"
@@ -10,11 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"aetherrelay/internal/pkg/aetherrelayarchive"
-	"aetherrelay/internal/pkg/aetherrelayconfig"
-	"aetherrelay/internal/pkg/aetherrelaymetrics"
-	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
 func newArchiveTestRound(t *testing.T) *archive.Round {
@@ -140,14 +139,14 @@ func TestArchiveResponseWriterUnwrapReachesUnderlyingWriter(t *testing.T) {
 
 func TestArchiveResponseMetaRecordsClientAndUpstreamHeaders(t *testing.T) {
 	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`), nil
+		return jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
 
-	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/responses",
+		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	responseMeta := filepath.Join(interactionDir, "response.meta.json")
@@ -164,7 +163,7 @@ func TestArchiveResponseMetaRecordsClientAndUpstreamHeaders(t *testing.T) {
 // 方向都脱敏,同时保住 x-ratelimit-* 这类排查限流所必需的诊断头。
 func TestArchiveRedactsSensitiveHeadersButKeepsRateLimit(t *testing.T) {
 	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
-		response := jsonResponse(`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+		response := jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`)
 		response.Header.Set("Set-Cookie", "sid=upstream-secret")
 		response.Header.Set("WWW-Authenticate", `Bearer realm="upstream-secret"`)
 		response.Header.Set("X-RateLimit-Remaining-Requests", "42")
@@ -174,8 +173,8 @@ func TestArchiveRedactsSensitiveHeadersButKeepsRateLimit(t *testing.T) {
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
 
-	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/responses",
+		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	for _, name := range []string{"response.meta.json", "upstream_response.json"} {
@@ -190,11 +189,11 @@ func TestArchiveRedactsSensitiveHeadersButKeepsRateLimit(t *testing.T) {
 func TestArchiveSSEResponseMetaKeepsNegotiatedHeaders(t *testing.T) {
 	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return sseResponse(strings.Join([]string{
-			`data: {"choices":[{"delta":{"content":"he"}}]}`,
+			`data: {"type":"response.output_text.delta","delta":"he"}`,
 			"",
-			`data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`,
+			`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}`,
 			"",
-			"data: [DONE]",
+			"data: {\"type\":\"response.completed\"}",
 			"",
 		}, "\n")), nil
 	})
@@ -203,8 +202,8 @@ func TestArchiveSSEResponseMetaKeepsNegotiatedHeaders(t *testing.T) {
 	handler.client.Transport = transport
 
 	response := newResponseRecorder()
-	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/responses",
+		`{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`))
 
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	responseMeta := filepath.Join(interactionDir, "response.meta.json")
@@ -214,7 +213,7 @@ func TestArchiveSSEResponseMetaKeepsNegotiatedHeaders(t *testing.T) {
 	assertFileContains(t, responseMeta, `"X-Accel-Buffering"`)
 	assertFileNotContains(t, responseMeta, `"Content-Length"`)
 	// Flush 透传未破坏原始流式归档。
-	assertFileContains(t, filepath.Join(interactionDir, "response.sse"), "data: [DONE]")
+	assertFileContains(t, filepath.Join(interactionDir, "response.sse"), "response.completed")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"response_meta_path": "response.meta.json"`)
 }
 
@@ -226,8 +225,8 @@ func TestArchiveResponseMetaSurvivesEarlyReturnWithoutMetadata(t *testing.T) {
 	handler.usageStore = nil
 
 	response := newResponseRecorder()
-	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/responses",
+		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.meta.json"), `"status": 503`)
@@ -255,11 +254,11 @@ func TestArchiveHeadersWithoutFullContent(t *testing.T) {
 	}
 	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`), nil
 	})
 
-	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/responses",
+		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
 	interactionDir := filepath.Join(cfg.InteractionDir, "test-client", "000001")
 	for _, name := range []string{"request.meta.json", "upstream_request.json", "upstream_response.json", "response.meta.json", "metadata.json"} {
@@ -288,12 +287,12 @@ func TestArchiveDisabledLeavesResponseUntouched(t *testing.T) {
 	// recorder 为 nil ⇔ archive_interactions 关闭。
 	handler := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`), nil
 	})
 
 	response := newResponseRecorder()
-	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/chat/completions",
-		`{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/responses",
+		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())

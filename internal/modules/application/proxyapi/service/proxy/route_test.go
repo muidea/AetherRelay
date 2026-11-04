@@ -20,19 +20,17 @@ func testRouteConfig() config.Config {
 				APIKey:   "k",
 				Models:   []string{"gpt-*", "gpt-test", "text-embedding-*", "text-embedding-test"},
 				Endpoints: []string{
-					config.ProviderEndpointChatCompletions,
 					config.ProviderEndpointResponses,
-					config.ProviderEndpointCompletions,
 					config.ProviderEndpointEmbeddings,
 				},
 			},
-			"openai-chat-only": {
-				Name:      "openai-chat-only",
+			"openai-images-only": {
+				Name:      "openai-images-only",
 				Protocol:  "openai",
-				BaseURL:   "https://openai-chat.test/v1",
+				BaseURL:   "https://openai-images.test/v1",
 				APIKey:    "k",
-				Models:    []string{"chat-only-*", "chat-only-model"},
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Models:    []string{"images-only-*", "images-only-model"},
+				Endpoints: []string{config.ProviderEndpointImages},
 			},
 			"openai-responses-only": {
 				Name: "openai-responses-only", Protocol: "openai", BaseURL: "https://responses.test/v1", APIKey: "k",
@@ -49,13 +47,13 @@ func testRouteConfig() config.Config {
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
-				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
+				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 1, Text: true}},
 			},
 			"text-embedding-test": {
 				ID: "text-embedding-test", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
 			},
-			"chat-only-model": {
-				ID: "chat-only-model", ContextWindowTokens: 32000, MaxOutputTokens: 4096,
+			"images-only-model": {
+				ID: "images-only-model", ContextWindowTokens: 32000, MaxOutputTokens: 4096,
 			},
 			"responses-only-model": {
 				ID: "responses-only-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
@@ -116,14 +114,14 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 		wantCode         string
 	}{
 		{
-			name: "openai chat native",
+			name: "retired chat endpoint",
 			path: "/v1/chat/completions", model: "gpt-test",
-			wantMode: TransportModeNative, wantUpstreamPath: "/v1/chat/completions", wantOwner: "openai-full",
+			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
-			name: "openai chat to anthropic conversion",
-			path: "/v1/chat/completions", model: "claude-test",
-			wantMode: TransportModeOpenAIToAnthropic, wantUpstreamPath: "/v1/messages", wantOwner: "anthropic",
+			name: "responses to anthropic conversion",
+			path: "/v1/responses", model: "claude-test",
+			wantMode: TransportModeResponsesToAnthropic, wantUpstreamPath: "/v1/messages", wantOwner: "anthropic",
 		},
 		{
 			name: "anthropic messages native",
@@ -133,10 +131,10 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 		{
 			name: "anthropic messages to openai conversion",
 			path: "/v1/messages", model: "gpt-test",
-			wantMode: TransportModeAnthropicToOpenAI, wantUpstreamPath: "/v1/chat/completions", wantOwner: "openai-full",
+			wantMode: TransportModeAnthropicToResponses, wantUpstreamPath: "/v1/responses", wantOwner: "openai-full",
 		},
 		{
-			name: "anthropic messages to responses is not implemented",
+			name: "anthropic messages to responses conversion",
 			path: "/v1/messages", model: "responses-only-model",
 			wantMode: TransportModeAnthropicToResponses, wantUpstreamPath: "/v1/responses", wantOwner: "openai-responses-only",
 		},
@@ -146,9 +144,9 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 			wantMode: TransportModeNative, wantUpstreamPath: "/v1/responses", wantOwner: "openai-full",
 		},
 		{
-			name: "completions native",
+			name: "retired completions endpoint",
 			path: "/v1/completions", model: "gpt-test",
-			wantMode: TransportModeNative, wantUpstreamPath: "/v1/completions", wantOwner: "openai-full",
+			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
 			name: "embeddings native",
@@ -156,14 +154,14 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 			wantMode: TransportModeNative, wantUpstreamPath: "/v1/embeddings", wantOwner: "openai-full",
 		},
 		{
-			name: "responses not available on chat-only endpoint",
-			path: "/v1/responses", model: "chat-only-model",
-			// RouteOwner 只声明 chat_completions，没有 responses endpoint。
+			name: "responses not available on images-only endpoint",
+			path: "/v1/responses", model: "images-only-model",
+			// RouteOwner 只声明 images，没有 responses endpoint。
 			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
-			name: "embeddings not available on chat-only endpoint",
-			path: "/v1/embeddings", model: "chat-only-model",
+			name: "embeddings not available on images-only endpoint",
+			path: "/v1/embeddings", model: "images-only-model",
 			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
@@ -172,7 +170,7 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 			wantCode: ErrorCodeEndpointUnsupported,
 		},
 		{
-			name: "responses not available via anthropic",
+			name: "responses available via declared anthropic conversion",
 			path: "/v1/responses", model: "claude-test",
 			wantMode: TransportModeResponsesToAnthropic, wantUpstreamPath: "/v1/messages", wantOwner: "anthropic",
 		},
@@ -190,18 +188,18 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 		},
 		{
 			name: "model required",
-			path: "/v1/chat/completions", model: "",
+			path: "/v1/responses", model: "",
 			wantCode: ErrorCodeModelRequired,
 		},
 		{
 			name: "model not found",
-			path: "/v1/chat/completions", model: "missing-model",
+			path: "/v1/responses", model: "missing-model",
 			wantCode: ErrorCodeModelNotFound,
 		},
 		{
 			name: "provider endpoint determines model serviceability",
-			path: "/v1/chat/completions", model: "text-embedding-test",
-			wantMode: TransportModeNative, wantUpstreamPath: "/v1/chat/completions", wantOwner: "openai-full",
+			path: "/v1/responses", model: "text-embedding-test",
+			wantMode: TransportModeNative, wantUpstreamPath: "/v1/responses", wantOwner: "openai-full",
 		},
 	}
 
@@ -244,15 +242,15 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 		Providers: map[string]config.Provider{
 			"primary": {
 				Name: "primary", Protocol: "openai", BaseURL: "https://primary.test", APIKey: "k", Models: []string{"shared"}, Priority: 200,
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 			"backup": {
 				Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k", Models: []string{"shared"}, Priority: 20,
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 			"standby-disabled": {
 				Name: "standby-disabled", Protocol: "openai", BaseURL: "https://disabled.test", APIKey: "k", Models: []string{"shared"}, Priority: 10,
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
@@ -261,7 +259,7 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 			},
 		},
 	}
-	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/chat/completions", "shared")
+	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/responses", "shared")
 	if apiErr != nil {
 		t.Fatalf("ResolveTransportPlans: %#v", apiErr)
 	}
@@ -275,98 +273,6 @@ func TestResolveTransportPlansOrdersCandidatesAndHonorsFallbackPolicy(t *testing
 	}
 	if plans[0].Priority != 200 || plans[1].Priority != 20 || plans[2].Priority != 10 {
 		t.Fatalf("priorities=%+v", plans)
-	}
-}
-
-func TestValidateConversionRequestRejectsFeatures(t *testing.T) {
-	plan := TransportPlan{
-		ModelID:          "claude-test",
-		RouteOwner:       "anthropic",
-		ClientProtocol:   ClientProtocolOpenAI,
-		ClientEndpoint:   "/v1/chat/completions",
-		UpstreamProtocol: "anthropic",
-		UpstreamEndpoint: "/v1/messages",
-		Mode:             TransportModeOpenAIToAnthropic,
-	}
-
-	cases := []struct {
-		name    string
-		body    map[string]any
-		feature string
-	}{
-		{
-			name: "tools",
-			body: map[string]any{
-				"model": "claude-test",
-				"messages": []any{
-					map[string]any{"role": "user", "content": "hi"},
-				},
-				"tools": []any{map[string]any{"type": "function"}},
-			},
-			feature: "tools",
-		},
-		{
-			name: "response_format",
-			body: map[string]any{
-				"model":           "claude-test",
-				"messages":        []any{map[string]any{"role": "user", "content": "hi"}},
-				"response_format": map[string]any{"type": "json_object"},
-			},
-			feature: "response_format",
-		},
-		{
-			name: "image content",
-			body: map[string]any{
-				"model": "claude-test",
-				"messages": []any{
-					map[string]any{
-						"role": "user",
-						"content": []any{
-							map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://x"}},
-						},
-					},
-				},
-			},
-			feature: "image_url",
-		},
-		{
-			name: "tool role",
-			body: map[string]any{
-				"model": "claude-test",
-				"messages": []any{
-					map[string]any{"role": "tool", "content": "result"},
-				},
-			},
-			feature: "tool role",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			apiErr := ValidateConversionRequest(plan, tc.body)
-			if apiErr == nil {
-				t.Fatal("expected conversion_unsupported")
-			}
-			if apiErr.Code != ErrorCodeConversionUnsupported {
-				t.Fatalf("code = %q", apiErr.Code)
-			}
-			if apiErr.Feature == "" && !strings.Contains(apiErr.Message, tc.feature) {
-				t.Fatalf("feature/message missing %q: feature=%q msg=%s", tc.feature, apiErr.Feature, apiErr.Message)
-			}
-			if len(apiErr.UnsupportedFeatures) != 1 || apiErr.UnsupportedFeatures[0] == "" {
-				t.Fatalf("unsupported_features = %#v, want one bounded feature", apiErr.UnsupportedFeatures)
-			}
-			if apiErr.ClientEndpoint != plan.ClientEndpoint {
-				t.Fatalf("client_endpoint = %q", apiErr.ClientEndpoint)
-			}
-		})
-	}
-
-	// native plan 不做 conversion preflight
-	native := plan
-	native.Mode = TransportModeNative
-	if err := ValidateConversionRequest(native, map[string]any{"tools": []any{}}); err != nil {
-		t.Fatalf("native plan should not reject tools in ValidateConversionRequest: %#v", err)
 	}
 }
 
@@ -405,33 +311,6 @@ func TestResolveTransportPlansPrefersNativeResponsesOverHigherPriorityConversion
 	}
 	if plans[0].Mode != TransportModeNative || plans[0].RouteOwner != "native" || plans[1].Mode != TransportModeResponsesToAnthropic {
 		t.Fatalf("plans=%+v, want native before conversion", plans)
-	}
-}
-
-func TestResolveTransportPlansExposesResponsesConversionBeforeLegacyChatForFullOpenAIProvider(t *testing.T) {
-	const modelID = "gpt-full"
-	cfg := config.Config{
-		Providers: map[string]config.Provider{
-			"openai": {
-				Name: "openai", Protocol: "openai", Models: []string{modelID},
-				Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
-			},
-		},
-		ModelMetadata: map[string]config.ModelMetadata{
-			modelID: {ID: modelID, ConversionCapabilities: map[string]config.ConversionCapability{
-				config.ProviderEndpointResponses: {Level: 3, Text: true, Tools: true, Streaming: true},
-			}},
-		},
-	}
-	plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, "/v1/messages", modelID)
-	if apiErr != nil || len(plans) != 2 {
-		t.Fatalf("plans=%+v err=%+v", plans, apiErr)
-	}
-	if plans[0].Mode != TransportModeAnthropicToResponses || plans[0].UpstreamEndpoint != "/v1/responses" || plans[0].ConversionLevel != 3 {
-		t.Fatalf("first plan=%+v, want released Level 3 Responses conversion", plans[0])
-	}
-	if plans[1].Mode != TransportModeAnthropicToOpenAI || plans[1].UpstreamEndpoint != "/v1/chat/completions" {
-		t.Fatalf("fallback plan=%+v, want legacy Chat conversion", plans[1])
 	}
 }
 
@@ -476,7 +355,7 @@ func TestClientProtocolForPath(t *testing.T) {
 	if got := ClientProtocolForPath("/v1/messages"); got != ClientProtocolAnthropic {
 		t.Fatalf("messages protocol = %q", got)
 	}
-	if got := ClientProtocolForPath("/v1/chat/completions"); got != ClientProtocolOpenAI {
+	if got := ClientProtocolForPath("/v1/responses"); got != ClientProtocolOpenAI {
 		t.Fatalf("chat protocol = %q", got)
 	}
 	if got := ClientProtocolForPath("/v1/embeddings"); got != ClientProtocolOpenAI {
@@ -493,7 +372,7 @@ func TestConvertUpstreamErrorForClient(t *testing.T) {
 		ClientProtocol:   ClientProtocolAnthropic,
 		ClientEndpoint:   "/v1/messages",
 		UpstreamProtocol: "openai",
-		Mode:             TransportModeAnthropicToOpenAI,
+		Mode:             TransportModeAnthropicToResponses,
 	}
 	body, ct := convertUpstreamErrorForClient(plan, 429, []byte(`{"error":{"message":"rate limited","type":"rate_limit"}}`), "openai-full")
 	if ct != "application/json" {

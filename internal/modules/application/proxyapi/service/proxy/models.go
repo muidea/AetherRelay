@@ -36,10 +36,32 @@ type ModelRecord struct {
 }
 
 type ModelCapabilities struct {
+	ChatGPTWeb  *ChatGPTWebCapabilities `json:"chatgptweb,omitempty"`
 	Reasoning   *ReasoningCapability    `json:"reasoning,omitempty"`
 	Native      *NativeCapabilities     `json:"native,omitempty"`
 	Codex       *CodexCapabilities      `json:"codex,omitempty"`
 	Conversions *ConversionCapabilities `json:"conversions,omitempty"`
+}
+
+// Provider-scoped flags describe the bounded Web adapter even when a model ID
+// also has native OpenAI/Codex candidates with different capabilities.
+type ChatGPTWebCapabilities struct {
+	Responses ChatGPTWebResponsesCapabilities `json:"responses"`
+}
+
+type ChatGPTWebResponsesCapabilities struct {
+	Text                  bool   `json:"text"`
+	Images                bool   `json:"images"`
+	Documents             bool   `json:"documents"`
+	Streaming             bool   `json:"streaming"`
+	WebSearch             bool   `json:"web_search"`
+	SearchSingleUserQuery bool   `json:"search_single_user_query"`
+	FunctionTools         bool   `json:"function_tools"`
+	StructuredOutput      bool   `json:"structured_output"`
+	Continuation          bool   `json:"continuation"`
+	Background            bool   `json:"background"`
+	MaxOutputTokens       bool   `json:"max_output_tokens"`
+	Usage                 string `json:"usage"`
 }
 
 type CodexCapabilities struct {
@@ -458,13 +480,21 @@ func buildModelsListResponse(snap effectivecatalog.Snapshot, policy clientaccess
 				Compact: "supported", Websocket: "supported", FunctionTools: "unknown", ParallelTools: "unknown", ImageInput: "unknown",
 			}}
 		}
+		if modelHasWebResponsesCandidate(snap, id, policy) {
+			if rec.Capabilities == nil {
+				rec.Capabilities = &ModelCapabilities{}
+			}
+			rec.Capabilities.ChatGPTWeb = &ChatGPTWebCapabilities{Responses: ChatGPTWebResponsesCapabilities{
+				Text: true, Images: true, Documents: true, Streaming: true, WebSearch: true, SearchSingleUserQuery: true, Usage: "estimated_text_only",
+			}}
+		}
 		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.ReasoningDeclared {
 			if rec.Capabilities == nil {
 				rec.Capabilities = &ModelCapabilities{}
 			}
 			rec.Capabilities.Reasoning = &ReasoningCapability{Supported: metadata.ReasoningSupported, DefaultEffort: metadata.ReasoningDefaultEffort, Efforts: append([]string(nil), metadata.ReasoningEfforts...)}
 		}
-		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.NativeResponsesDeclared {
+		if metadata, ok := snap.ModelMetadata[route.ModelID]; ok && metadata.NativeResponsesDeclared && modelHasNativeResponsesCandidate(snap, id, policy) {
 			if rec.Capabilities == nil {
 				rec.Capabilities = &ModelCapabilities{}
 			}
@@ -532,6 +562,26 @@ func modelHasRouteOwner(snap effectivecatalog.Snapshot, modelID, owner string, p
 	return false
 }
 
+func modelHasWebResponsesCandidate(snap effectivecatalog.Snapshot, modelID string, policy clientaccess.Policy) bool {
+	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
+		if candidate.RouteOwner == effectivecatalog.BuiltinProviderID && containsString(candidate.SupportedEndpoints, "/v1/responses") {
+			return true
+		}
+	}
+	return false
+}
+
+func modelHasNativeResponsesCandidate(snap effectivecatalog.Snapshot, modelID string, policy clientaccess.Policy) bool {
+	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
+		if candidate.RouteOwner == effectivecatalog.CodexOAuthProviderID || (!candidate.Builtin && !containsString(candidate.ConversionModes, config.ConversionDirectionResponsesToAnthropic)) {
+			if containsString(candidate.SupportedEndpoints, "/v1/responses") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func modelHasConversionDirection(snap effectivecatalog.Snapshot, modelID, direction string, policy clientaccess.Policy) bool {
 	for _, candidate := range snap.CandidatesForAccess(modelID, policy) {
 		for _, mode := range candidate.ConversionModes {
@@ -567,8 +617,8 @@ func modelSupportedEndpoints(snap effectivecatalog.Snapshot, modelID string, pol
 		seen["/v1/responses/input_tokens"] = true
 	}
 	paths := []string{
-		"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/search",
-		"/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits",
+		"/v1/messages", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/search",
+		"/v1/embeddings", "/v1/images/generations", "/v1/images/edits",
 	}
 	result := make([]string, 0, len(paths))
 	for _, path := range paths {

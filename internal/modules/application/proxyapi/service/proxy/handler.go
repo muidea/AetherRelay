@@ -490,7 +490,7 @@ func requireResolvedConfig(cfg config.Config) error {
 		}
 		if provider.Protocol == "chatgptweb" {
 			for _, capName := range provider.Endpoints {
-				if capName != config.ProviderEndpointChatCompletions && capName != config.ProviderEndpointResponses && capName != config.ProviderEndpointImages {
+				if capName != config.ProviderEndpointResponses && capName != config.ProviderEndpointImages {
 					return fmt.Errorf("provider %q: endpoints %q invalid for chatgptweb protocol", name, capName)
 				}
 			}
@@ -524,12 +524,10 @@ func requireResolvedConfig(cfg config.Config) error {
 
 func knownProviderEndpoints() map[string]int {
 	return map[string]int{
-		config.ProviderEndpointChatCompletions: 0,
-		config.ProviderEndpointMessages:        1,
-		config.ProviderEndpointResponses:       2,
-		config.ProviderEndpointCompletions:     3,
-		config.ProviderEndpointEmbeddings:      4,
-		config.ProviderEndpointImages:          5,
+		config.ProviderEndpointMessages:   1,
+		config.ProviderEndpointResponses:  2,
+		config.ProviderEndpointEmbeddings: 4,
+		config.ProviderEndpointImages:     5,
 	}
 }
 
@@ -676,8 +674,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer h.completePendingUsage(r, round)
 
 	switch {
-	case r.URL.Path == "/v1/chat/completions" && r.Method == http.MethodPost:
-		h.handleChatCompletions(w, r, requestID)
 	case (r.URL.Path == "/v1/images/generations" || r.URL.Path == "/v1/images/edits") && r.Method == http.MethodPost:
 		h.handleImages(w, r, requestID)
 	case r.URL.Path == "/v1/messages" && r.Method == http.MethodPost:
@@ -693,7 +689,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/v1/search" && r.Method == http.MethodPost:
 		h.handleSearch(w, r, requestID)
 	default:
-		// OpenAI 白名单透传:/v1/responses,/v1/completions,/v1/embeddings
+		// OpenAI 白名单透传:/v1/responses,/v1/embeddings
 		h.forwardRaw(w, r, requestID)
 	}
 }
@@ -1116,120 +1112,13 @@ func isSupportedInbound(method, path string) bool {
 	switch path {
 	case "/v1/responses":
 		return method == http.MethodPost || method == http.MethodGet
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
+	case "/v1/messages", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/search":
 		return method == http.MethodPost
 	case "/v1/models":
 		return method == http.MethodGet
 	default:
 		return false
 	}
-}
-
-func (h *Handler) handleChatCompletions(w http.ResponseWriter, r *http.Request, requestID string) {
-	start := time.Now()
-	round := archiveRoundFromContext(r.Context())
-	bodyBytes, err := h.readLimitedBody(w, r)
-	if err != nil {
-		status := http.StatusBadRequest
-		code := ErrorCodeInvalidRequest
-		if isRequestTooLarge(err) {
-			status = http.StatusRequestEntityTooLarge
-			code = ErrorCodeRequestTooLarge
-		}
-		h.writeArchivedAPIError(w, round, r, start, "", "", false, status, APIError{
-			Code: code, Message: err.Error(), ClientProtocol: clientProtocolFromRequest(r),
-			ClientEndpoint: NormalizeClientEndpoint(r.URL.Path),
-		})
-		return
-	}
-	defer r.Body.Close()
-
-	if len(bodyBytes) > 0 {
-		stableHash, fingerprint := ComputeRequestFingerprint(bodyBytes)
-		round.SetFingerprint(stableHash, fingerprint)
-	}
-	if err := h.writeArchiveRequest(round, bodyBytes); err != nil {
-		log.Printf("archive request: %v", err)
-	}
-	h.archiveAndLogClientRequest(round, r, len(bodyBytes))
-
-	var body map[string]any
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
-		h.writeArchivedError(w, round, r, start, "", "", false, http.StatusBadRequest, "invalid JSON request body")
-		return
-	}
-
-	model, _ := body["model"].(string)
-	stream, _ := body["stream"].(bool)
-	plans, apiErr := h.resolveTransportPlans(r, model)
-	if apiErr != nil {
-		h.writeArchivedAPIError(w, round, r, start, "", model, stream, statusForAPIError(apiErr), *apiErr)
-		return
-	}
-	plan := plans[0]
-	if round != nil && plan.IsConversion() {
-		round.SetTransportPlan(RouteLabel(r), plan.ClientEndpoint, plan.ClientProtocol, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
-		round.SetConversionLevel(plan.ConversionLevel)
-	}
-	if plan.UpstreamProtocol == effectivecatalog.BuiltinProviderID {
-		// chatgptweb is an in-memory builtin provider, never a static
-		// cfg.Providers entry. Route it before looking up static providers.
-		h.archiveAndLogTransportPlan(round, r, plan, effectivecatalog.BuiltinProviderView(), stream)
-		h.handleChatGPTWebChatCompletions(w, r, start, plan.RouteOwner, model, stream, body)
-		return
-	}
-	if plan.Mode == TransportModeChatToCodex && plan.UpstreamProtocol == effectivecatalog.CodexOAuthProviderID {
-		h.handleChatToCodex(w, r, start, plan, model, stream, body)
-		return
-	}
-	candidates, preflightErr := h.prepareOpenAIChatCandidates(plans, bodyBytes, body, stream, r.URL.RawQuery, r.Method)
-	if len(candidates) == 0 {
-		if preflightErr != nil {
-			h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, statusForAPIError(preflightErr), *preflightErr)
-			return
-		}
-		h.writeArchivedAPIError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadRequest, APIError{Code: ErrorCodeEndpointUnsupported, Message: fmt.Sprintf("no compatible HTTP provider can serve %s", plan.ClientEndpoint), Model: model, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol})
-		return
-	}
-	result, selected, err := h.doPreparedHTTPCandidates(r, round, candidates)
-	if err != nil {
-		if errors.Is(err, context.Canceled) && errors.Is(r.Context().Err(), context.Canceled) {
-			h.recordAndPrint(round, r, plan.RouteOwner, model, stream, 0, time.Since(start), tokenUsage{}, "client_canceled")
-			return
-		}
-		h.writeArchivedError(w, round, r, start, plan.RouteOwner, model, stream, http.StatusBadGateway, err.Error())
-		return
-	}
-	resp := result.Response
-	providerName := result.ProviderName
-	provider := result.Provider
-	selectedPlan := selected.Plan
-	h.archiveAndLogTransportPlan(round, r, selectedPlan, provider, stream)
-	if result.Cancel != nil {
-		defer result.Cancel()
-	}
-	defer resp.Body.Close()
-	if !stream && isEventStreamContentType(resp.Header.Get("Content-Type")) {
-		h.writeArchivedError(w, round, r, start, providerName, model, stream, http.StatusBadGateway, "upstream_protocol_error: stream=false request returned event-stream")
-		return
-	}
-	if selectedPlan.Mode == TransportModeOpenAIToAnthropic {
-		if resp.StatusCode >= http.StatusBadRequest {
-			h.writeConversionUpstreamError(w, r, resp, round, start, selectedPlan, providerName, model, stream)
-			return
-		}
-		if stream {
-			h.handleAnthropicStream(w, r, resp, round, start, providerName, model, body, r.Context(), result.Cancel)
-			return
-		}
-		h.handleAnthropicBuffered(w, r, resp, round, start, providerName, model, body)
-		return
-	}
-	if stream && resp.StatusCode < http.StatusBadRequest {
-		h.handleStreamResponse(w, resp, round, start, providerName, model, body, r.Context(), result.Cancel, r)
-		return
-	}
-	h.handleBufferedResponse(w, resp, round, start, providerName, model, stream, body, r)
 }
 
 func (h *Handler) startRound(apiKeyID string) (*archive.Round, error) {
@@ -1410,7 +1299,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			// defer default-effort injection until we know the selected plan is
 			// native. A conversion candidate must not receive a synthetic
 			// reasoning field that it is required to reject.
-			if _, present := request["reasoning"]; present {
+			if reasoning, present := request["reasoning"]; present && reasoning != nil {
 				if err := h.applyModelReasoning(rawModel, request); err != nil {
 					h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
 					return
@@ -1418,11 +1307,15 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 			}
 		}
 	}
+	if len(body) > 0 {
+		stableHash, fingerprint := ComputeRequestFingerprint(body)
+		round.SetFingerprint(stableHash, fingerprint)
+	}
 	if err := h.writeArchiveRequest(round, body); err != nil {
 		log.Printf("archive raw request: %v", err)
 	}
 	h.archiveAndLogClientRequest(round, r, len(body))
-	// responses/completions/embeddings 仅允许矩阵中的 native 组合;TransportPlan 统一裁决。
+	// TransportPlan 统一裁决原生路径与已发布的 Responses 转换。
 	plans, apiErr := h.resolveTransportPlans(r, rawModel)
 	if apiErr != nil {
 		h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, statusForAPIError(apiErr), *apiErr)
@@ -1849,97 +1742,6 @@ func (h *Handler) handleBufferedResponse(w http.ResponseWriter, resp *http.Respo
 	h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, usage, responsePath, "", "", "")
 }
 
-func (h *Handler) handleStreamResponse(w http.ResponseWriter, resp *http.Response, round *archive.Round, start time.Time, providerName, model string, requestBody map[string]any, requestContext context.Context, cancel context.CancelFunc, r *http.Request) {
-	copyResponseHeader(w.Header(), resp.Header)
-	prepareSSEHeaders(w.Header())
-	w.WriteHeader(resp.StatusCode)
-	flusher, _ := w.(http.Flusher)
-	archiveWriter, err := h.createArchiveResponseWriter(round, "response.sse")
-	if err != nil {
-		log.Printf("archive stream response: %v", err)
-	}
-	if archiveWriter != nil {
-		defer archiveWriter.Close()
-	}
-
-	reader := bufio.NewReader(resp.Body)
-	accumulator := newOpenAIStreamAccumulator(model)
-	maxStream, maxLine := h.streamLimits()
-	accumulator.SetMaxContent(maxStream)
-	idleTimer, stopIdleTimer := h.startStreamIdleTimer(cancel)
-	defer stopIdleTimer()
-	var streamErr *streamFail
-	var totalBytes int64
-	sawTerminal := false
-	proto := streamProtocolForPath(r.URL.Path)
-	for {
-		line, err := readSSELine(reader, maxLine)
-		observeGenerationSSE(requestContext, line, err)
-		if len(line) > 0 {
-			resetStreamIdleTimer(idleTimer, h.currentConfig().StreamIdleTimeout)
-			totalBytes += int64(len(line))
-			if totalBytes > maxStream {
-				streamErr = h.logStreamIssue(round, providerName, model, "read upstream stream limit", fmt.Errorf("stream exceeds limit of %d bytes", maxStream), requestContext, nil)
-				break
-			}
-			term := parseTerminalSSELine(proto, line)
-			if term.Terminal {
-				sawTerminal = true
-				if fail := streamFailFromTerminal(term); fail != nil {
-					streamErr = fail
-				}
-			}
-			accumulator.TrackSSELine(line)
-			if _, writeErr := w.Write(line); writeErr != nil {
-				streamErr = h.logStreamIssue(round, providerName, model, "write client stream", writeErr, requestContext, nil)
-				break
-			}
-			if archiveWriter != nil {
-				if _, writeErr := archiveWriter.Write(line); writeErr != nil {
-					h.logStreamIssue(round, providerName, model, "write archive stream", writeErr, nil, nil)
-				}
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			if sawTerminal {
-				break
-			}
-		}
-		if err != nil {
-			if err != io.EOF {
-				streamErr = h.logStreamIssue(round, providerName, model, "read upstream stream", err, requestContext, idleTimer)
-			} else if requiresTerminalEvent(proto) && !sawTerminal {
-				// 干净 EOF 但未收到协议终止事件:视为上游截断。
-				streamErr = h.logStreamIssue(round, providerName, model, "read upstream stream", fmt.Errorf("upstream stream ended without terminal event"), requestContext, idleTimer)
-			}
-			break
-		}
-	}
-
-	usage := accumulator.FinalizeUsage(requestBody)
-	if accumulator.Truncated() && streamErr == nil {
-		streamErr = newStreamFail(streamKindLimitExceeded, fmt.Sprintf("stream full response truncated at %d bytes", maxStream), fmt.Errorf("truncated at %d bytes", maxStream), false)
-	}
-	fullPath := ""
-	if streamErr == nil && !accumulator.Truncated() {
-		if fullResponse, err := accumulator.ResponseJSON(); err != nil {
-			log.Printf("build stream full response: %v", err)
-		} else if err := h.writeArchiveResponse(round, "response.json", append(fullResponse, '\n')); err != nil {
-			log.Printf("archive stream full response: %v", err)
-		} else {
-			fullPath = "response.json"
-		}
-	}
-	duration := time.Since(start)
-	errMsg := ""
-	if streamErr != nil {
-		errMsg = streamErr.Error()
-	}
-	h.recordAndPrintFail(round, r, providerName, model, true, resp.StatusCode, duration, usage, streamErr)
-	h.writeArchiveMetadata(round, providerName, model, true, resp.StatusCode, duration, usage, "response.sse", errMsg, fullPath, outcomeFromStreamFail(streamErr, resp.StatusCode))
-}
-
 func parseRawRequestBody(body []byte) (map[string]any, string, bool) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -1958,7 +1760,6 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 	if archiveWriter != nil {
 		defer archiveWriter.Close()
 	}
-	var openAIAccumulator *openAIStreamAccumulator
 	var responsesAccumulator *responsesStreamAccumulator
 	var anthropicAccumulator *anthropicRawStreamAccumulator
 	maxStream, maxLine := h.streamLimits()
@@ -1976,9 +1777,6 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 	case proto == streamProtoResponses:
 		responsesAccumulator = newResponsesStreamAccumulator(model)
 		responsesAccumulator.SetMaxContent(maxStream)
-	default:
-		openAIAccumulator = newOpenAIStreamAccumulator(model)
-		openAIAccumulator.SetMaxContent(maxStream)
 	}
 
 	reader := bufio.NewReader(resp.Body)
@@ -2003,9 +1801,6 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 				if fail := streamFailFromTerminal(term); fail != nil {
 					streamErr = fail
 				}
-			}
-			if openAIAccumulator != nil {
-				openAIAccumulator.TrackSSELine(line)
 			}
 			if responsesAccumulator != nil {
 				responsesAccumulator.TrackSSELine(line)
@@ -2040,29 +1835,15 @@ func (h *Handler) copyAndArchiveRawStream(w http.ResponseWriter, resp *http.Resp
 		}
 	}
 
-	if openAIAccumulator != nil {
-		usage := openAIAccumulator.FinalizeUsage(requestBody)
-		if openAIAccumulator.Truncated() && streamErr == nil {
-			streamErr = newStreamFail(streamKindLimitExceeded, fmt.Sprintf("stream full response truncated at %d bytes", maxStream), fmt.Errorf("truncated at %d bytes", maxStream), false)
-		}
-		fullPath := ""
-		if streamErr == nil && !openAIAccumulator.Truncated() && proto == streamProtoChatCompletions {
-			if fullResponse, err := openAIAccumulator.ResponseJSON(); err != nil {
-				log.Printf("build raw stream full response: %v", err)
-			} else if err := h.writeArchiveResponse(round, "response.json", append(fullResponse, '\n')); err != nil {
-				log.Printf("archive raw stream full response: %v", err)
-			} else {
-				fullPath = "response.json"
-			}
-		}
-		return usage, fullPath, streamErr
-	}
 	if responsesAccumulator != nil {
 		usage := responsesAccumulator.FinalizeUsage(requestBody)
 		if responsesAccumulator.Truncated() && streamErr == nil {
 			streamErr = newStreamFail(streamKindLimitExceeded, fmt.Sprintf("stream full response truncated at %d bytes", maxStream), fmt.Errorf("truncated at %d bytes", maxStream), false)
 		}
 		return usage, "", streamErr
+	}
+	if anthropicAccumulator == nil {
+		return tokenUsage{}, "", streamErr
 	}
 	usage := anthropicAccumulator.FinalizeUsage(requestBody)
 	if anthropicAccumulator.Truncated() && streamErr == nil {
@@ -2104,50 +1885,6 @@ type preparedHTTPCandidate struct {
 	DegradedFeatures     []string
 }
 
-func (h *Handler) prepareOpenAIChatCandidates(plans []TransportPlan, raw []byte, body map[string]any, stream bool, rawQuery, method string) ([]preparedHTTPCandidate, *APIError) {
-	result := make([]preparedHTTPCandidate, 0, len(plans))
-	var firstErr *APIError
-	for _, plan := range plans {
-		provider, ok := h.currentConfig().Providers[plan.RouteOwner]
-		if !ok || provider.Disabled {
-			continue
-		}
-		switch plan.Mode {
-		case TransportModeNative:
-			if plan.UpstreamProtocol != "openai" {
-				continue
-			}
-			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: raw, Stream: stream, RawQuery: rawQuery, Method: method})
-		case TransportModeOpenAIToAnthropic:
-			if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
-				if firstErr == nil {
-					copyErr := *apiErr
-					firstErr = &copyErr
-				}
-				continue
-			}
-			payload, err := buildAnthropicRequest(body, plan.ModelID, stream)
-			if err != nil {
-				apiErr := conversionAPIError(plan, err)
-				if firstErr == nil {
-					firstErr = &apiErr
-				}
-				continue
-			}
-			encoded, err := json.Marshal(payload)
-			if err != nil {
-				apiErr := APIError{Code: ErrorCodeProxyInternalError, Message: err.Error(), Model: plan.ModelID, ClientEndpoint: plan.ClientEndpoint, ClientProtocol: plan.ClientProtocol, UpstreamProtocol: plan.UpstreamProtocol}
-				if firstErr == nil {
-					firstErr = &apiErr
-				}
-				continue
-			}
-			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost})
-		}
-	}
-	return result, firstErr
-}
-
 func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw []byte, body map[string]any, stream bool, rawQuery, method string) ([]preparedHTTPCandidate, *APIError) {
 	result := make([]preparedHTTPCandidate, 0, len(plans))
 	var firstErr *APIError
@@ -2162,23 +1899,6 @@ func (h *Handler) prepareAnthropicMessageCandidates(plans []TransportPlan, raw [
 				continue
 			}
 			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: raw, Stream: stream, RawQuery: rawQuery, Method: method})
-		case TransportModeAnthropicToOpenAI:
-			if apiErr := ValidateConversionRequest(plan, body); apiErr != nil {
-				if firstErr == nil {
-					copyErr := *apiErr
-					firstErr = &copyErr
-				}
-				continue
-			}
-			encoded, err := buildOpenAIChatFromAnthropic(body, plan.ModelID, stream)
-			if err != nil {
-				apiErr := conversionAPIError(plan, err)
-				if firstErr == nil {
-					firstErr = &apiErr
-				}
-				continue
-			}
-			result = append(result, preparedHTTPCandidate{Plan: plan, Provider: provider, Body: encoded, Stream: stream, Method: http.MethodPost})
 		case TransportModeAnthropicToResponses:
 			if err := h.validateDeclaredConversionCapability(plan, body, stream); err != nil {
 				apiErr := conversionAPIError(plan, err)

@@ -89,3 +89,34 @@ func TestRegisterRoutesExcludesRetiredCodexCompatibilityEndpoints(t *testing.T) 
 		}
 	}
 }
+
+func TestRetiredCompletionEndpointsCannotReachUpstream(t *testing.T) {
+	routes := enginehttp.NewRouteRegistry()
+	RegisterRoutes(routes, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	handler := testHandler("https://upstream.test", t.TempDir(), "openai")
+	calls := 0
+	handler.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return jsonResponse(`{"id":"unexpected"}`), nil
+	})
+	for _, path := range []string{"/v1/chat/completions", "/v1/completions"} {
+		if routes.ExistHandler(path, http.MethodPost) {
+			t.Fatalf("retired route registered: %s", path)
+		}
+		if ClientProtocolForPath(path) != "" || isSupportedInbound(http.MethodPost, path) {
+			t.Fatalf("retired inbound accepted: %s", path)
+		}
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			request := httptest.NewRequest(method, path, strings.NewReader(`{"model":"gpt-test","input":"hello"}`))
+			request.Header.Set("Authorization", "Bearer test-client-key")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("%s %s: %d %s", method, path, response.Code, response.Body.String())
+			}
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("retired endpoints reached upstream %d times", calls)
+	}
+}

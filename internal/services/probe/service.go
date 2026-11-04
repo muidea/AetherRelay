@@ -22,7 +22,7 @@ import (
 func Main() {
 	configPath := flag.String("config", os.Getenv("AETHERRELAY_CONFIG"), "config file path")
 	providerName := flag.String("provider", "", "provider name")
-	endpoint := flag.String("endpoint", "", "direct endpoint (chat_completions|messages|responses|completions|embeddings)")
+	endpoint := flag.String("endpoint", "", "direct endpoint (messages|responses|embeddings)")
 	model := flag.String("model", "", "model id (exact)")
 	timeout := flag.Duration("timeout", 30*time.Second, "request timeout")
 	stream := flag.Bool("stream", false, "also probe streaming when endpoint supports it")
@@ -125,17 +125,6 @@ func Check(ctx context.Context, cfg config.Config, providerName string) (Result,
 
 func buildProbeRequest(endpoint, model string, stream bool) (path string, body []byte, err error) {
 	switch endpoint {
-	case config.ProviderEndpointChatCompletions:
-		path = "/v1/chat/completions"
-		payload := map[string]any{
-			"model": model,
-			"messages": []map[string]string{
-				{"role": "user", "content": "ping"},
-			},
-			"max_tokens": 8,
-			"stream":     stream,
-		}
-		body, err = json.Marshal(payload)
 	case config.ProviderEndpointMessages:
 		path = "/v1/messages"
 		payload := map[string]any{
@@ -155,15 +144,6 @@ func buildProbeRequest(endpoint, model string, stream bool) (path string, body [
 		payload := map[string]any{
 			"model": model,
 			"input": "ping",
-		}
-		body, err = json.Marshal(payload)
-	case config.ProviderEndpointCompletions:
-		path = "/v1/completions"
-		payload := map[string]any{
-			"model":      model,
-			"prompt":     "ping",
-			"max_tokens": 8,
-			"stream":     stream,
 		}
 		body, err = json.Marshal(payload)
 	case config.ProviderEndpointResponses:

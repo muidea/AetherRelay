@@ -183,7 +183,7 @@ func TestAnthropicResponsesLevel3RoundTripThroughHTTP(t *testing.T) {
 	}))
 	defer upstream.Close()
 	cfg := config.Config{Providers: map[string]config.Provider{
-		"openai": {Name: "openai", Protocol: "openai", BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses}},
+		"openai": {Name: "openai", Protocol: "openai", BaseURL: upstream.URL, APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointResponses}},
 	}, ModelMetadata: map[string]config.ModelMetadata{
 		"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 32, ConversionCapabilities: map[string]config.ConversionCapability{
 			config.ProviderEndpointResponses: {Level: 3, Text: true, Tools: true},

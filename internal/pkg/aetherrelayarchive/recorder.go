@@ -198,12 +198,10 @@ func (r *Round) SetTransportPlan(operation, clientEndpoint, clientProtocol, upst
 	r.ConversionMode = conversionMode
 	if conversionMode == "responses_to_anthropic" || conversionMode == "anthropic_to_responses" {
 		r.ConversionLevel = 1
-	} else if conversionMode == "openai_to_anthropic" || conversionMode == "anthropic_to_openai" {
-		r.ConversionLevel = 1
 	} else {
 		r.ConversionLevel = 0
 	}
-	if conversionMode == "anthropic_to_codex_responses" || conversionMode == "chat_to_codex_responses" {
+	if conversionMode == "anthropic_to_codex_responses" {
 		r.ConversionLevel = 2
 	}
 }

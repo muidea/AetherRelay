@@ -22,7 +22,7 @@ func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"text-primary": {
 				Name: "text-primary", Protocol: "openai", Models: []string{"shared-text"}, Priority: 200,
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 			"text-backup": {
 				Name: "text-backup", Protocol: "anthropic", Models: []string{"shared-text"}, Priority: 100,
@@ -35,7 +35,7 @@ func TestFeatureCatalogUsesCapabilityCompatibleProviderChains(t *testing.T) {
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"shared-text": {
-				ID: "shared-text", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
+				ID: "shared-text", ContextWindowTokens: 8192, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 1, Text: true}},
 			},
 			"image-model": {
 				ID: "image-model", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
@@ -80,7 +80,7 @@ func TestExecuteFeatureSearchUsesDedicatedSearchEndpoint(t *testing.T) {
 	var received chatgptsearch.Request
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
 		received = request
-		return chatgptsearch.Result{ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test"}}}, nil
+		return chatgptsearch.Result{Completion: searchEvidence("Answer"), ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test"}}}, nil
 	}})
 	out, err := h.ExecuteFeatureSearch(context.Background(), proxyevents.ExecuteFeatureSearchCommand{OwnerID: "admin", Model: "gpt-5", Query: "latest news"})
 	if err != nil || out.Provider != "chatgptweb" || out.ActualModel != "gpt-5-search" || out.Text != "Answer" || len(out.Sources) != 1 || received.Query != "latest news" {
@@ -92,7 +92,7 @@ func TestExecuteFeatureTextSearchIgnoresHistoricalAttachments(t *testing.T) {
 	var received chatgptsearch.Request
 	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
 		received = request
-		return chatgptsearch.Result{ActualModel: "gpt-5-search", Text: "Answer"}, nil
+		return chatgptsearch.Result{Completion: searchEvidence("Answer"), ActualModel: "gpt-5-search", Text: "Answer"}, nil
 	}})
 	out, err := h.ExecuteFeatureText(context.Background(), proxyevents.ExecuteFeatureTextCommand{
 		OwnerID: "admin", Model: "gpt-5", WebSearch: true,

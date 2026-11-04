@@ -21,11 +21,6 @@ func TestCodexTurnStateAdaptersKeepClientValue(t *testing.T) {
 		body string
 	}{
 		{
-			name: "chat completions",
-			path: "/v1/chat/completions",
-			body: `{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`,
-		},
-		{
 			name: "anthropic messages",
 			path: "/v1/messages",
 			body: `{"model":"gpt-5.2-codex","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`,
@@ -90,10 +85,6 @@ func TestCodexClientIdentityReachesExecutor(t *testing.T) {
 			path: "/v1/responses", body: `{"model":"gpt-5.2-codex","input":"hello"}`,
 			userAgent: strings.Repeat("x", codexClientUserAgentLimit+1), originator: strings.Repeat("y", codexClientOriginatorLimit+1),
 			wantAgent: "", wantOriginat: "", wantReason: "invalid_length",
-		},
-		"chat adapter": {
-			path: "/v1/chat/completions", body: `{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`,
-			userAgent: clientAgent, originator: "codex-tui", wantAgent: "", wantOriginat: "", wantReason: "verified",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -165,7 +156,7 @@ func TestStatelessCodexRequestsUseIndependentServerScopes(t *testing.T) {
 // account is selected, exactly like on the native entrypoint.
 func TestCodexTurnStateAdaptersRejectInvalidValue(t *testing.T) {
 	handler := newCodexResponsesHandler(t, usage.NewMemoryStore(), codexResponsesExecutorStub{})
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"gpt-5.2-codex","messages":[{"role":"user","content":"hello"}]}`))
 	request.Header.Set("Authorization", "Bearer test-client-key")
 	request.Header.Set(codexTurnStateHeader, strings.Repeat("x", codexTurnStateLimit+1))
 	response := httptest.NewRecorder()

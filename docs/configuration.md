@@ -1,5 +1,7 @@
 # 配置参考
 
+自 2026-11-04 本次清理起，`/v1/chat/completions` 与 `/v1/completions` 已移除，调用返回 404。Provider 的 `chat_completions` / `completions` 声明会被配置校验拒绝（包括与有效端点混用）；应在确认上游支持后显式迁移到 `responses`，或删除不再使用的 Provider。历史用量和交互归档保留原始端点。
+
 本文描述当前 `AetherRelay` 的运行配置。完整可复制示例见仓库根目录的 [`config.example.yaml`](../config.example.yaml)。配置路径默认是 `config.yaml`，也可用 `-config` 或 `AETHERRELAY_CONFIG` 指定。
 
 `config.yaml` 只描述进程启动与静态模型元数据。管理页创建的 Provider 和两类账号池凭据使用 `AETHERRELAY_CREDENTIAL_KEY` 加密后写入 `state.database`，不会写回配置文件。
@@ -54,7 +56,7 @@ GPT 系列的客户端预算来自本机 Codex `0.153.4` 于 2026-09-07 获取�
 
 | 字段 | 层级 | 枚举 |
 | --- | --- | --- |
-| `providers.*.endpoints` | Provider 原生端点 | `chat_completions`、`messages`、`responses`、`completions`、`embeddings`、`images` |
+| `providers.*.endpoints` | Provider 原生端点 | `messages`、`responses`、`embeddings`、`images` |
 
 每个模型会解析为有序 Provider 候选链，而不是唯一 RouteOwner。启用 ChatGPT Web 或 Codex OAuth 后，运行时有效目录还会合成各自的内建模型并参与同一候选链。端点矩阵、转换限制与 typed error 以当前代码和自动化测试为准；设计背景见[核心代理与路由设计](design/proxy-core.md)。
 
@@ -128,12 +130,11 @@ Provider 目录以 DuckDB 为运行期 authority，并通过管理页维护。`c
 
 文本生成统一通过 SSE 增量输出。标准推理端点仅在 JSON 请求体包含 `"stream": true` 时进入流式生命周期；`Accept: text/event-stream` 不能单独开启流式响应。
 
-- `/v1/chat/completions` 返回 OpenAI Chat Completions SSE，必要时转换 Anthropic 上游事件；转换期间识别并省略上游 thinking 块及 delta，不将推理内容折叠为 assistant 文本。
 - `/v1/messages` 返回 Anthropic Messages SSE，必要时转换 OpenAI 上游事件。
 - `/v1/responses` 支持 OpenAI 协议 Provider 的原生 Responses；原生 Provider 的 JSON Schema 等高级能力不由 `responses` 端点标记自动推导，必须由独立 capability 验证并声明。内建 `chatgptweb` 额外提供无状态受限投影：基础文本、data-URI 图片输入、基础 SSE/output/usage。唯一工具例外是单个 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11`：它启动一次隔离的 ChatGPT Web 强制搜索会话，返回 `web_search_call`、来源和 `url_citation`。它不支持 function calling、混合工具、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。
 - `/v1/responses/input_tokens` 只要 exact model 在当前客户端 Key 的有效目录中支持 `/v1/responses` 即可调用。它在本地以 o200k/cl100k tokenizer 做稳定估算，不选账号、不读取 Provider 凭据、不访问上游；响应固定为 `response.input_tokens`，最小估算为 1。
 - `/v1/search` 是 AetherRelay 的非流式扩展端点，不是 OpenAI 官方端点别名。请求体仅接受 `model` 与纯文本 `query`；响应为 `search.result`，含 `output_text`、`sources` 与估算 `usage`。它只选择内建 `chatgptweb` 的已发现模型，管理型 Provider 即使有同名模型或更高优先级也不会接收该请求；无可用 ChatGPT Web 搜索能力时返回明确错误，不降级为普通文本生成。
-- 内建 `codexoauth` 服务原生 Responses HTTP/SSE、compact 与 WebSocket：请求与事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。WebSocket 入口是 `GET /v1/responses`；compact 使用 `/v1/responses/compact`。`/v1/chat/completions` 与 `/v1/messages` 通过受限、保留 function tools 的协议适配进入同一 Codex Responses 执行链。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；Realtime、网页会话和插件仍不支持。
+- 内建 `codexoauth` 服务原生 Responses HTTP/SSE、compact 与 WebSocket：请求与事件不经过 ChatGPT Web 消息树转换，非流式结果从上游 `response.completed` 提取原始 Response 对象。WebSocket 入口是 `GET /v1/responses`；compact 使用 `/v1/responses/compact`。`/v1/messages` 通过受限、保留 function tools 的协议适配进入同一 Codex Responses 执行链。它使用实现内固定的 Codex OAuth 上游 Responses、模型发现和用量端点，不支持通过 Provider 管理页切换 protocol、base URL 或 endpoints；Realtime、网页会话和插件仍不支持。
 - 跨协议转换按模型方向化 capability 开放：Level 1 为非流式文本，Level 2 增加纯文本 SSE，Level 3 增加非流式 function tools；流式工具、多模态、结构化输出、continuation 仍在访问上游前拒绝。thinking/reasoning 只有配置方向专用 adapter 时才以降级模式开放。最近调用、usage 与 Prometheus 请求指标会同时记录 `conversion_mode`、`conversion_level`、转换耗时和拒绝/降级能力。
 
 浏览器客户端应使用 `fetch()` + `ReadableStream` 发送 POST 请求和认证 Header，不使用只支持 GET 语义的原生 `EventSource`。完整合同见[核心代理与路由设计](design/proxy-core.md#统一流式-sse)。
@@ -196,8 +197,7 @@ chatgpt_web:
   - 消息查询、附件读取、turn 更新均要求 `owner_id + conversation_id`；构造每轮上游文本请求时只回放当前会话的成功历史，使用随机 `parent_message_id` 和 `history_and_training_disabled=true`。管理页切换/创建/删除会话时取消旧请求，迟到响应按会话代际丢弃。
 - 进程自动注入固定 ID 为 `chatgptweb` 的内建 Provider（不持久化到 YAML）。公开模型目录来自账号池对 ChatGPT Web `/backend-api/models` 的模型 ID 枚举并集；上游发现的模型特征只供账号池内部执行选择，不进入 `model_metadata` 或 `/v1/models`。
 - 临时对话会持久化创建时的请求模型；仅当 ChatGPT Web SSE 的 assistant `message.metadata.model_slug` 明确返回时，才记录并展示该轮上游实际模型。模型正文的自述不作为路由证据；上游未返回该字段时管理页显示“上游未返回”。
-- 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、`/v1/chat/completions`、受限 `/v1/responses`、`/v1/search`、`/v1/images/generations` 与 `/v1/images/edits`。管理型 Provider 目录不得创建 `chatgptweb` 路由；同 ID 的 `model_metadata` 只补充容量。
-- 对内建 `chatgptweb`，`/v1/chat/completions` 中唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具（或 `web_search_options`）会启动一次强制搜索；仅使用最后一条纯文本 user 消息作为 query。图片、文件、function/tool 调用、结构化输出和工具循环会在访问上游前返回 `conversion_unsupported`。非流式结果含来源和 `url_citation`；流式是在上游搜索完成后一次性发送完整 delta 的兼容 SSE，不是增量搜索流。
+- 自动发现结果只存在于进程内有效目录，驱动 `/v1/models`、受限 `/v1/responses`、`/v1/search`、`/v1/images/generations` 与 `/v1/images/edits`。管理型 Provider 目录不得创建 `chatgptweb` 路由；同 ID 的 `model_metadata` 只补充容量。
 - Admin「临时对话」的“联网搜索”是逐轮开关，且「功能集」提供独立的在线搜索页面；二者都使用 `/v1/search` 的强制 ChatGPT Web 选择规则。每次搜索的 prepare/start 请求使用独立随机根并显式发送 `history_and_training_disabled=true`，不复用固定网页根。启用时不接受图片/文件附件；它不创建持久搜索线程，也不承诺深度研究、网页插件或多轮工具调用。ChatGPT Web 账号级 Memory/Reference chat history 由上游控制，不能由代理完全屏蔽。
 - 自动模型与管理型 Provider 同名时会保留全部候选；管理型 Provider 默认优先级为 `100`，Codex OAuth 默认 `90`，ChatGPT Web 默认 `10` 且不作为回退。Provider 表提供内建 Provider 的路由启停与优先级控制，并显示重叠摘要。
 

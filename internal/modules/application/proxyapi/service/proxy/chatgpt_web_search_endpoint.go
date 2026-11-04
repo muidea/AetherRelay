@@ -59,6 +59,9 @@ func decodeWebSearchRequest(body []byte) (webSearchRequest, *APIError) {
 	if request.Query == "" {
 		return webSearchRequest{}, &APIError{Code: ErrorCodeInvalidRequest, Message: "query is required", Feature: "query"}
 	}
+	if len(request.Query) > chatgptsearch.MaxQueryBytes {
+		return webSearchRequest{}, invalidChatGPTResponseField("query", "web search query exceeds 64 KiB")
+	}
 	return request, nil
 }
 
@@ -130,6 +133,11 @@ func (h *Handler) handleChatGPTWebSearchEndpoint(w http.ResponseWriter, r *http.
 	}
 
 	result, err := executor.Search(r.Context(), chatgptsearch.Request{Model: request.Model, Query: request.Query})
+	err = chatgptsearch.ValidateCompletion(&result, err)
+	if err == nil && result.Completion.Incomplete(result.Text) {
+		err = chatgptfail.New(chatgptfail.KindTextModelLength, fmt.Errorf("search answer is incomplete"))
+	}
+	recordSearchCompletion(r.Context(), result.Completion, false, streamFailFromChatGPTErr(err))
 	billingModel := firstNonEmpty(result.ActualModel, request.Model)
 	usageRequest := chatgpttext.Request{Model: request.Model, Messages: []chatgpttext.Message{{Role: "user", Content: request.Query}}}
 	tok := estimateChatGPTTextUsage(usageRequest, result.Text)
@@ -150,6 +158,7 @@ func (h *Handler) handleChatGPTWebSearchEndpoint(w http.ResponseWriter, r *http.
 		Sources:    webSearchSources(result.Sources),
 		Usage:      tok,
 	}
+	setChatGPTUsageHeaders(w.Header())
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false))

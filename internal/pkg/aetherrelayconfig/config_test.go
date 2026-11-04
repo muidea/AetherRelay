@@ -32,19 +32,19 @@ providers:
     protocol: openai
     base_url: https://api.deepseek.com
     api_key: ${OPENAI_API_KEY}
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: deepseek*
   openai:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
   custom:
     protocol: openai
     base_url: https://custom.example
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: custom-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -193,12 +193,12 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
   deepseek:
     base_url: https://api.deepseek.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     enabled: false
     protocol: openai
 `), 0o644); err != nil {
@@ -349,7 +349,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*,DeepSeek*
 model_metadata:
   gpt-4o:
@@ -534,7 +534,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-test
 model_catalog:
   gpt-test:
@@ -557,7 +557,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -581,7 +581,7 @@ providers:
   local:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
-    endpoints: chat_completions
+    endpoints: responses
     models: local-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -607,7 +607,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -669,7 +669,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 default_provider: openai
 model_metadata:
@@ -695,7 +695,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -721,7 +721,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -748,7 +748,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -801,7 +801,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -826,7 +826,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -850,7 +850,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -885,7 +885,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -909,7 +909,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -932,7 +932,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -953,7 +953,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -977,7 +977,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -998,7 +998,7 @@ providers:
   custom:
     base_url: https://example.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     protocol: graphql
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1020,7 +1020,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     fallbacks: backup
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1058,7 +1058,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1086,7 +1086,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1109,7 +1109,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1131,7 +1131,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1164,7 +1164,7 @@ providers:
     protocol: openai
     base_url: not-a-url
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1185,7 +1185,7 @@ providers:
     protocol: openai
     base_url: ftp://example.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1217,7 +1217,7 @@ func TestLoadAllowsCaseDifferentModelMetadataIDs(t *testing.T) {
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://api.openai.com", APIKey: "a",
 				Models:    []string{"gpt-*", "GPT-*"},
-				Endpoints: []string{ProviderEndpointChatCompletions, ProviderEndpointEmbeddings},
+				Endpoints: []string{ProviderEndpointResponses, ProviderEndpointEmbeddings},
 			},
 		},
 		ModelMetadata: map[string]ModelMetadata{
@@ -1262,7 +1262,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1301,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1326,7 +1326,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1344,7 +1344,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-4o
 model_metadata:
   gpt-4o:
@@ -1366,7 +1366,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-4o
 model_metadata:
   gpt-4o:
@@ -1391,7 +1391,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoint_capabilities: chat_completions
+    endpoint_capabilities: responses
     models: gpt-4o
 `), 0o644); err != nil {
 			t.Fatal(err)
@@ -1410,13 +1410,13 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-4o
 model_metadata:
   gpt-4o:
     context_window_tokens: 128000
     max_output_tokens: 16384
-    operations: chat_completions
+    operations: responses
 `), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -1435,7 +1435,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 model_metadata:
   orphan-model:
@@ -1461,14 +1461,14 @@ providers:
     protocol: openai
     base_url: https://a.example
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: shared-*
     priority: 200
   backup:
     protocol: openai
     base_url: https://b.example
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: shared-*
     priority: 10
     fallback: true
@@ -1522,7 +1522,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions, responses, completions, embeddings
+    endpoints: responses, embeddings
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -1567,7 +1567,7 @@ providers:
     protocol: openai
     base_url: https://example.com
     api_key: test
-    endpoints: chat_completions, widgets
+    endpoints: responses, widgets
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -1590,7 +1590,7 @@ providers:
     protocol: openai
     base_url: https://example.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: emb-*
 model_metadata:
   emb-model:
@@ -1659,7 +1659,7 @@ providers:
     protocol: openai
     base_url: https://example.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 model_metadata:
   gpt-test:
@@ -1686,7 +1686,7 @@ providers:
     protocol: openai
     base_url: https://example.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-test
 model_metadata:
   gpt-test:
@@ -1711,20 +1711,20 @@ providers:
     protocol: openai
     base_url: https://example.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
     priority: 0
   defaulted:
     protocol: openai
     base_url: https://fallback.example
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
   no-fallback:
     protocol: openai
     base_url: https://no-fallback.example
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
     models: other-*
     fallback: false
 model_metadata:
@@ -1752,13 +1752,12 @@ model_metadata:
 func TestResolveProviderTransportsReturnsOrderedOpenAIMessagesCandidates(t *testing.T) {
 	provider := Provider{
 		Protocol:  "openai",
-		Endpoints: []string{ProviderEndpointChatCompletions, ProviderEndpointResponses},
+		Endpoints: []string{ProviderEndpointResponses},
 	}
 
 	got := ResolveProviderTransports(provider, "/v1/messages")
 	want := []ProviderTransport{
 		{UpstreamEndpoint: "/v1/responses", Mode: ConversionDirectionAnthropicToResponses},
-		{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("transports = %#v, want %#v", got, want)
@@ -1778,7 +1777,7 @@ providers:
     protocol: openai
     base_url: https://example.com
     api_key: test
-    endpoints: embeddings, chat_completions, embeddings, RESPONSES
+    endpoints: embeddings, responses, RESPONSES
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -1792,7 +1791,7 @@ model_metadata:
 		t.Fatal(err)
 	}
 	caps := cfg.Providers["custom-openai"].Endpoints
-	if len(caps) != 3 || caps[0] != ProviderEndpointChatCompletions || caps[1] != ProviderEndpointResponses || caps[2] != ProviderEndpointEmbeddings {
+	if len(caps) != 2 || caps[0] != ProviderEndpointResponses || caps[1] != ProviderEndpointEmbeddings {
 		t.Fatalf("caps = %#v", caps)
 	}
 }
@@ -1850,7 +1849,7 @@ providers:
   remote:
     protocol: openai
     base_url: https://api.example.com
-    endpoints: chat_completions
+    endpoints: responses
     models: m-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1869,7 +1868,7 @@ providers:
     protocol: openai
     base_url: https://api.example.com
     allow_unauthenticated: true
-    endpoints: chat_completions
+    endpoints: responses
     models: m-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1889,7 +1888,7 @@ providers:
     base_url: http://127.0.0.1:9000/v1
     api_key: should-not-be-set
     allow_unauthenticated: true
-    endpoints: chat_completions
+    endpoints: responses
     models: local-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1908,7 +1907,7 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
     api_key: local-key
-    endpoints: chat_completions
+    endpoints: responses
     models: local-*
 model_metadata:
   local-model:
@@ -1933,7 +1932,7 @@ providers:
   openai:
     base_url: https://api.openai.com
     api_key: test
-    endpoints: chat_completions
+    endpoints: responses
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1958,7 +1957,7 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
     api_key: local-key
-    endpoints: chat_completions
+    endpoints: responses
     models: local-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -1988,7 +1987,7 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:9000/v1
     api_key: local-key
-    endpoints: chat_completions
+    endpoints: responses
     models: local-*
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -2008,7 +2007,7 @@ providers:
   chatgptweb:
     enabled: true
     protocol: chatgptweb
-    endpoints: chat_completions, images
+    endpoints: responses, images
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -2033,7 +2032,7 @@ providers:
   my-web:
     enabled: true
     protocol: chatgptweb
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-*
 model_metadata:
   gpt-4o:
@@ -2100,5 +2099,27 @@ func TestLoadRejectsInvalidTemporaryChatRetention(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected retention_days validation failure")
+	}
+}
+
+func TestRetiredProviderEndpointsRequireExplicitMigration(t *testing.T) {
+	for _, endpoint := range []string{"chat_completions", "completions"} {
+		for _, values := range [][]string{{endpoint}, {ProviderEndpointResponses, endpoint}} {
+			if _, err := normalizeProviderEndpoints(values); err == nil || !strings.Contains(err.Error(), "retired") {
+				t.Fatalf("legacy declaration %v: %v", values, err)
+			}
+		}
+		provider := Provider{Protocol: "openai", Endpoints: []string{endpoint}}
+		if paths := ServiceableInboundPaths(provider); len(paths) != 0 {
+			t.Fatalf("legacy endpoint advertised paths: %v", paths)
+		}
+	}
+	for _, protocol := range []string{"openai", "anthropic", "chatgptweb", "codexoauth"} {
+		provider := Provider{Protocol: protocol, Endpoints: []string{ProviderEndpointResponses, ProviderEndpointMessages, ProviderEndpointImages}}
+		for _, path := range []string{"/v1/chat/completions", "/v1/completions"} {
+			if ProviderSupportsInboundPath(provider, path) {
+				t.Fatalf("%s still serves %s", protocol, path)
+			}
+		}
 	}
 }

@@ -8,7 +8,10 @@ import (
 	"errors"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 )
+
+const MaxQueryBytes = 64 << 10
 
 type Request struct {
 	Model string
@@ -22,6 +25,7 @@ type Source struct {
 }
 
 type Result struct {
+	Completion     completion.Search
 	ConversationID string
 	ActualModel    string
 	Text           string
@@ -37,4 +41,19 @@ type Executor interface {
 func AsFailure(err error) (*chatgptfail.Failure, bool) {
 	var f *chatgptfail.Failure
 	return f, errors.As(err, &f)
+}
+
+// ValidateCompletion also guards custom executors and owner contract changes.
+// Known model truncation remains an incomplete result for Responses; callers
+// that require a complete answer must reject it explicitly.
+func ValidateCompletion(result *Result, err error) error {
+	if err != nil {
+		return err
+	}
+	if result.Completion.Valid(result.Text) || result.Completion.Incomplete(result.Text) {
+		return nil
+	}
+	result.Completion.Completed = false
+	result.Completion.Reason = completion.InvalidResult
+	return chatgptfail.New(chatgptfail.KindTextIncomplete, errors.New("search completion evidence missing or inconsistent"))
 }

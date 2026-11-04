@@ -139,7 +139,7 @@ providers:
     protocol: openai
     base_url: https://api.openai.com/v1
     api_key: ${ADMIN_TEST_API_KEY}
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-4o
 model_metadata:
   gpt-4o:
@@ -273,6 +273,9 @@ func TestSystemInfoReportsVersionRuntimeAndRegisteredEndpoints(t *testing.T) {
 	}
 	foundHealth, foundResponses, foundSignedImage, foundSignedImageHead := false, false, false, false
 	for _, endpoint := range response.Endpoints {
+		if endpoint.Path == "/v1/chat/completions" || endpoint.Path == "/v1/completions" {
+			t.Fatalf("retired endpoint advertised: %+v", endpoint)
+		}
 		if endpoint.Method == http.MethodGet && endpoint.Path == "/healthz" && endpoint.Authentication == "none" {
 			foundHealth = true
 		}
@@ -450,7 +453,7 @@ func TestHandlerProbesProviderAndRecordsAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
+		if r.URL.Path != "/v1/responses" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer secret-value" {
@@ -529,7 +532,7 @@ func TestHandlerCreatesProviderWithoutRewritingConfigAndHotReloads(t *testing.T)
 		BaseURL:   "https://gateway.example.com/v1",
 		APIKey:    "gateway-secret",
 		Models:    []string{"gpt-*"},
-		Endpoints: []string{config.ProviderEndpointChatCompletions},
+		Endpoints: []string{config.ProviderEndpointResponses},
 		Priority:  &zeroPriority,
 		Enabled:   true,
 	})
@@ -599,7 +602,7 @@ func TestHandlerPatchesOnlyTargetProviderAndPreservesCredential(t *testing.T) {
 	}
 	cfg.Providers["other"] = config.Provider{
 		Name: "other", Protocol: "openai", BaseURL: "https://other.example/v1", APIKey: "other-secret",
-		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
+		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointResponses},
 	}
 	runtime := &testRuntime{cfg: cfg}
 	handler := NewHandler(path, runtime)
@@ -674,7 +677,7 @@ func TestHandlerDeletesOnlyTargetProvider(t *testing.T) {
 	}
 	cfg.Providers["other"] = config.Provider{
 		Name: "other", Protocol: "openai", BaseURL: "https://other.example/v1", APIKey: "other-secret",
-		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
+		Models: []string{"other-*"}, Endpoints: []string{config.ProviderEndpointResponses},
 	}
 	runtime := &testRuntime{cfg: cfg}
 	handler := NewHandlerWithUsage(path, runtime, usage.NewMemoryStore())

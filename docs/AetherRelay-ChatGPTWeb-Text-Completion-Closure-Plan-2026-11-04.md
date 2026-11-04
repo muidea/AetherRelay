@@ -1,5 +1,9 @@
 # AetherRelay ChatGPT Web 文本完成性收口方案
 
+后续接口清理：同日已决定移除 `/v1/chat/completions` 与 `/v1/completions`。本文中 Chat 双入口验收属于当时的历史记录；当前文本入口为 `/v1/responses`，文本完成性、预算、取消、归档与计费保护继续生效，临时对话统一使用 Responses。
+
+后续 Responses 适配收口：公共参数校验、搜索终态证据、完整 SSE 生命周期、平铺 citations 与 provider-scoped 能力声明见[同日 Responses 收口记录](AetherRelay-ChatGPTWeb-Responses-Closure-2026-11-04.md)。本文件中的历史 Chat 验收不再代表现行开放端点。
+
 - 日期：2026-11-04（UTC+08）。
 - 核对基线：`37ecbf6acc4e42a37484c461c246941ca492cb8f`。
 - 状态：代码已实施，本地全量测试、相关竞态检查与静态检查通过；实现、测试与文档纳入本次提交，CI 与部署验收仍待执行。实际结果见第 12 节。
@@ -69,7 +73,7 @@ E07/E08 证明仅补 EOF 和读取上限判定仍不足以保证正文完整；�
 | AR-TC01 | P1 | 上游完成判定与协议事件完整性 | `internal/modules/blocks/chatgptwebupstream/internal/client/text.go`：`parseTextSSEObserved`、`finishTextResult`、事件解码、`TextResult` |
 | AR-TC02 | P1 | 累计 SSE、事件、正文与累计输出上限；快照一致性 | 同文件：`StreamText` 的读取包装、scanner、正文限制及快照差量逻辑；核对下游正文拼接点 |
 | AR-TC03 | P1 | 完成状态跨层传递及全部消费者适配 | upstream `pkg/events/contract.go`、upstream `biz/`、proxyapi `pkg/chatgpttext/port.go`、proxyapi `biz/chatgpt_text.go`、`internal/modules/application/chatgpttemporarychat/biz/biz.go` 及相关持久化／结果合同 |
-| AR-TC04 | P1 | 两类 API 的 HTTP/SSE 成功与失败映射 | `internal/modules/application/proxyapi/service/proxy/chatgpt_web.go`、同目录 `chatgpt_responses.go` 及错误映射辅助代码 |
+| AR-TC04 | P1 | 两类 API 的 HTTP/SSE 成功与失败映射 | `internal/modules/application/proxyapi/service/proxy/chatgpt_web_common.go`、同目录 `chatgpt_responses.go`（Chat 入口后续移除） 及错误映射辅助代码 |
 | AR-TC05 | P1 回归门禁 | 已生成或结果未知时的重试约束及消费者兼容 | proxyapi `biz/chatgpt_text.go`、临时对话 `biz/biz.go` 及现有失败分类、账号反馈链路 |
 | AR-TC06 | P2 | 可关联的失败诊断与指标 | 现有 trace、interaction archive、usage、metrics 接线 |
 | AR-TC07 | P2 | 长响应预算与成功率评估 | 上游读取预算、正文预算及确定性快照基准 |

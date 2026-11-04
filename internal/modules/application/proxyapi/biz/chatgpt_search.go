@@ -25,13 +25,16 @@ func (s *Proxy) Search(ctx context.Context, request chatgptsearch.Request) (out 
 	if strings.TrimSpace(request.Query) == "" {
 		return chatgptsearch.Result{}, chatgptfail.New(chatgptfail.KindInternal, fmt.Errorf("search query is required"))
 	}
+	if len(strings.TrimSpace(request.Query)) > chatgptsearch.MaxQueryBytes {
+		return chatgptsearch.Result{}, chatgptfail.New(chatgptfail.KindInvalidRequest, fmt.Errorf("search query exceeds 64 KiB"))
+	}
 	account, err := s.acquireChatGPTTextToken(ctx, request.Model)
 	if err != nil {
 		return chatgptsearch.Result{}, err
 	}
 	attempt, err := s.searchChatGPTWithAccount(ctx, account, request)
 	out = attempt.result
-	s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, err)
+	s.recordChatGPTTextResult(ctx, account.Account.ID, request.Model, searchObservationError(out, err))
 	if err == nil || !retryableSearchPrepareFailure(attempt, err) {
 		return out, err
 	}
@@ -44,7 +47,7 @@ func (s *Proxy) Search(ctx context.Context, request chatgptsearch.Request) (out 
 	}
 	attempt, err = s.searchChatGPTWithAccount(ctx, fallback, request)
 	out = attempt.result
-	s.recordChatGPTTextResult(ctx, fallback.Account.ID, request.Model, err)
+	s.recordChatGPTTextResult(ctx, fallback.Account.ID, request.Model, searchObservationError(out, err))
 	return out, err
 }
 
@@ -108,7 +111,7 @@ func (s *Proxy) searchChatGPTOnce(ctx context.Context, token, proxy, deviceID st
 	if strings.TrimSpace(attempt.result.Text) == "" {
 		return attempt, chatgptfail.New(chatgptfail.KindUpstream, fmt.Errorf("chatgpt search returned no answer"))
 	}
-	return attempt, nil
+	return attempt, chatgptsearch.ValidateCompletion(&attempt.result, nil)
 }
 
 func retryableSearchPrepareFailure(attempt chatGPTSearchAttempt, err error) bool {
@@ -162,7 +165,7 @@ func sameChatGPTProxyEndpoint(left, right string) bool {
 }
 
 func searchResultFromUpstream(result upevents.SearchResult) chatgptsearch.Result {
-	out := chatgptsearch.Result{ConversationID: result.ConversationID, ActualModel: result.ActualModel, Text: result.Text}
+	out := chatgptsearch.Result{Completion: result.Completion, ConversationID: result.ConversationID, ActualModel: result.ActualModel, Text: result.Text}
 	if len(result.Sources) == 0 {
 		return out
 	}
@@ -171,4 +174,11 @@ func searchResultFromUpstream(result upevents.SearchResult) chatgptsearch.Result
 		out.Sources = append(out.Sources, chatgptsearch.Source{Title: source.Title, URL: source.URL, Snippet: source.Snippet})
 	}
 	return out
+}
+
+func searchObservationError(result chatgptsearch.Result, err error) error {
+	if err == nil && result.Completion.Incomplete(result.Text) {
+		return chatgptfail.New(chatgptfail.KindTextModelLength, nil)
+	}
+	return err
 }

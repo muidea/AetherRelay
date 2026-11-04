@@ -1,6 +1,10 @@
 package proxy
 
 import (
+	"aetherrelay/internal/pkg/aetherrelayarchive"
+	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetrics"
+	"aetherrelay/internal/pkg/aetherrelayusage"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,15 +14,11 @@ import (
 	"strings"
 	"testing"
 
-	"aetherrelay/internal/pkg/aetherrelayarchive"
-	"aetherrelay/internal/pkg/aetherrelayconfig"
-	"aetherrelay/internal/pkg/aetherrelaymetrics"
-	"aetherrelay/internal/pkg/aetherrelayusage"
-
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/openai/openai-go"
 	openaioption "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/responses"
 )
 
 // SDK 验收：官方 OpenAI / Anthropic Go SDK 对真实 AetherRelay HTTP server 的主路径与 typed error 可解析性。
@@ -45,14 +45,14 @@ func startProxySDKServer(t *testing.T, cfg config.Config, upstream http.RoundTri
 	return httptest.NewServer(h)
 }
 
-func TestOpenAISDKModelsChatEmbeddingsAndTypedError(t *testing.T) {
+func TestOpenAISDKModelsResponsesEmbeddingsAndTypedError(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	upstreamHits := 0
 	upstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamHits++
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
-			return jsonResponse(`{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`), nil
+		case strings.HasSuffix(r.URL.Path, "/responses"):
+			return jsonResponse(`{"id":"resp_1","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}],"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}`), nil
 		case strings.HasSuffix(r.URL.Path, "/embeddings"):
 			return jsonResponse(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,0.3]}],"model":"text-embedding-3-large","usage":{"prompt_tokens":2,"total_tokens":2}}`), nil
 		default:
@@ -66,14 +66,14 @@ func TestOpenAISDKModelsChatEmbeddingsAndTypedError(t *testing.T) {
 				Name: "openai", Protocol: "openai", BaseURL: "https://upstream.test/v1", APIKey: "upstream-key",
 				Models: []string{"gpt-test", "text-embedding-3-large"},
 				Endpoints: []string{
-					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointResponses,
 					config.ProviderEndpointEmbeddings,
 				},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
-				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
+				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 1, Text: true}},
 			},
 			"text-embedding-3-large": {
 				ID: "text-embedding-3-large", ContextWindowTokens: 8192, MaxOutputTokens: 8191,
@@ -97,19 +97,17 @@ func TestOpenAISDKModelsChatEmbeddingsAndTypedError(t *testing.T) {
 		t.Fatalf("models count = %d", len(page.Data))
 	}
 
-	// chat
-	chat, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model: "gpt-test",
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.UserMessage("Reply with exactly: pong"),
-		},
-		MaxTokens: openai.Int(16),
+	// Native Responses via the official SDK.
+	result, err := client.Responses.New(ctx, responses.ResponseNewParams{
+		Model:           "gpt-test",
+		Input:           responses.ResponseNewParamsInputUnion{OfString: openai.String("Reply with exactly: pong")},
+		MaxOutputTokens: openai.Int(16),
 	})
 	if err != nil {
-		t.Fatalf("Chat.Completions.New: %v", err)
+		t.Fatalf("Responses.New: %v", err)
 	}
-	if len(chat.Choices) == 0 || chat.Choices[0].Message.Content == "" {
-		t.Fatalf("empty chat response: %#v", chat)
+	if result.OutputText() != "pong" {
+		t.Fatalf("responses output=%q", result.OutputText())
 	}
 
 	// embeddings
@@ -191,26 +189,26 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 	convHits := 0
 	convUpstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		convHits++
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
 			t.Fatalf("conversion upstream path = %s", r.URL.Path)
 		}
 		// ensure anthropic headers not leaked
 		if r.Header.Get("Anthropic-Version") != "" || r.Header.Get("X-API-Key") != "" {
 			t.Fatalf("leaked anthropic headers: %v", r.Header)
 		}
-		return jsonResponse(`{"id":"chatcmpl-2","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`), nil
+		return jsonResponse(`{"id":"resp_1","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pong"}]}],"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}`), nil
 	})
 	convSrv := startProxySDKServer(t, config.Config{
 		Providers: map[string]config.Provider{
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://openai.upstream/v1", APIKey: "openai-key",
 				Models:    []string{"gpt-test"},
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
-				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
+				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 1, Text: true}},
 			},
 		},
 	}, convUpstream)
@@ -277,12 +275,12 @@ func TestAnthropicSDKMessagesNativeAndConversionAndTypedError(t *testing.T) {
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://openai.upstream/v1", APIKey: "openai-key",
 				Models:    []string{"gpt-test"},
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-test": {
-				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096,
+				ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 1, Text: true}},
 			},
 		},
 	}, errUpstream)

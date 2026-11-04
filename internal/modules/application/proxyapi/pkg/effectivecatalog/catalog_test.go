@@ -21,7 +21,7 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:8081
     api_key: test-key
-    endpoints: chat_completions
+    endpoints: responses
     models: static-model
 model_metadata:
   static-model:
@@ -56,7 +56,7 @@ providers:
     protocol: openai
     base_url: http://127.0.0.1:8081
     api_key: test-key
-    endpoints: chat_completions
+    endpoints: responses
     models: gpt-5.3-codex
 model_metadata:
   gpt-5.3-codex:
@@ -87,7 +87,7 @@ func TestBuildIncludesStaticAndBuiltinCandidatesForSameModel(t *testing.T) {
 			},
 		},
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-4o"}, Disabled: false, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-4o"}, Disabled: false, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 	}
 	snap := Build(cfg, 3, 2, []PoolModel{
@@ -165,7 +165,7 @@ func TestSnapshotScopesCandidatesAndModelsByProviderAccess(t *testing.T) {
 func TestMetadataDoesNotPublishModel(t *testing.T) {
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-*"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-*"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-ghost": {ID: "gpt-ghost", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
@@ -206,7 +206,7 @@ func TestReconfigurePreservesBuiltinModelsAcrossStaticConfigUpdate(t *testing.T)
 		ChatGPTWeb:    config.ChatGPTWebConfig{},
 		ModelMetadata: map[string]config.ModelMetadata{"gpt-5": {ID: "gpt-5"}},
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-5"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", Models: []string{"gpt-5"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 	}, initial)
 	if route, ok := updated.Lookup("gpt-5"); !ok || route.Builtin || route.RouteOwner != "openai" {
@@ -250,7 +250,7 @@ func TestChatGPTWebCandidatesRespectDiscoveredCapabilities(t *testing.T) {
 			}
 		}
 	}
-	text := []string{"/v1/chat/completions", "/v1/responses", "/v1/search"}
+	text := []string{"/v1/responses", "/v1/search"}
 	images := []string{"/v1/images/generations", "/v1/images/edits"}
 	assertEndpoints("text-only", text, images)
 	assertEndpoints("image-only", images, text)
@@ -277,7 +277,7 @@ func TestBuildEmptyStates(t *testing.T) {
 
 func TestBuiltinProviderViewEndpoints(t *testing.T) {
 	provider := BuiltinProviderView()
-	if provider.Protocol != BuiltinProviderID || len(provider.Endpoints) != 3 {
+	if provider.Protocol != BuiltinProviderID || len(provider.Endpoints) != 2 {
 		t.Fatalf("provider=%+v", provider)
 	}
 }

@@ -97,7 +97,7 @@ ChatGPT Web 相关调用写入与标准代理相同的 DuckDB 用量权威（`ae
 
 | 路径 | `provider` | `api_key_id` | token |
 | --- | --- | --- | --- |
-| 代理 `/v1/chat/completions` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
+| 代理 `/v1/responses` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
 | 代理受限 `/v1/responses` → chatgptweb | `chatgptweb` | 客户端 Key ID | 本地估计，`estimated=true` |
 | 代理 `/v1/images/*` → chatgptweb | `chatgptweb` | 客户端 Key ID | 上游 Usage（有则 `estimated=false`） |
 | Admin 工具集（临时对话、搜索、图片代理/任务） | `chatgptweb` | `builtin-local` | 本地估计或上游 Usage；图片任务详情另存任务级用量 |
@@ -169,7 +169,7 @@ Codex 模型不可用排查（`CP-FAIL-018` / `CP-CAP-010`）：
 
 进程始终注入只读内建 Provider `chatgptweb`（不写 YAML）。模型来自账号池发现结果；运维入口是 ChatGPT Web 账号池，而不是 Provider 编辑表单。`config.yaml` 不声明任何 Provider。
 
-`chatgptweb` 的公开 `POST /v1/chat/completions` 支持纯文本 `messages[].content`，以及 OpenAI content-part 数组中的 `text` 与 `image_url`。`image_url.url` 仅接受 PNG、JPEG、GIF、WebP 的 Base64 data URI；每个请求最多 4 张、合计不超过 20 MiB，且单图像素不得超过 4000 万。代理不会下载远程 URL，因此不会为该字段打开 SSRF 通道。图片仅可用于 `user` 消息；`input_audio`、`file`、工具调用和其他未列出的 content part 会返回 `invalid_request`。
+`chatgptweb` 的公开 `POST /v1/responses` 支持纯文本 `input` 与 message 数组中的 `input_text`、`input_image`。图片只接受 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图最多 4000 万像素；仅限 user 输入，不下载远程 URL。严格 JSON Schema、远程图片和 function tools 仍明确拒绝。
 
 公开 `POST /v1/responses` 是同一文本执行器的无状态受限投影：支持字符串或 message-array `input`、`instructions`、`reasoning.effort`、`input_text` 和 data-URI `input_image`，以及基础 buffered/SSE `output`、`usage`。它不会保存 Responses 会话，也不支持 tools/function calling、JSON Schema、`previous_response_id`、后台/realtime、远程图片 URL 或 file ID。常用采样、追踪和存储字段可兼容忽略，并在 interaction metadata 的 `ignored_features` 中可审计；会改变语义的字段会在访问账号和上游前返回 `conversion_unsupported`。
 
@@ -300,7 +300,7 @@ Probe 不会在服务启动时运行，可用于验证某个已配置 Provider �
 
 ```bash
 go run ./cmd/aetherrelay-probe -config config.yaml \
-  -provider <route-owner> -endpoint chat_completions -model <exact-model-id>
+  -provider <route-owner> -endpoint responses -model <exact-model-id>
 ```
 
 输出会脱敏，结论为 `success`、`credential_issue`、`endpoint_drift` 或 `environment_undetermined`。带日期的现场审计仅保留当时证据，不能替代对当前配置的重新探测。

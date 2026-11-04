@@ -115,7 +115,7 @@ responses_to_anthropic
 anthropic_to_responses
 ```
 
-它们与现有 `openai_to_anthropic`、`anthropic_to_openai` 分开。现有 Chat Completions 转换不能直接复用，因为 Responses 使用 `input/output[]` 与 Response 事件模型，而不是 `messages/choices` 模型。
+Responses 使用 `input/output[]` 与 Response 事件模型。旧 Chat Completions↔Messages 转换及其模式已移除（2026-11-04），当前仅保留 Responses↔Messages 与 Messages→Codex Responses。
 
 ## 3. 支持等级
 
@@ -497,7 +497,7 @@ client_canceled
 ## 21. 更新后的落地顺序
 
 1. 建立 Interaction IR 和方向化能力结构；默认仍只发布显式声明且通过实现门闩的等级。
-2. 将现有 Chat Completions↔Anthropic 转换迁移到 IR，保持行为兼容。
+2. 使用 IR 维护 Responses↔Anthropic 转换；Chat Completions 转换已移除，无需迁移。
 3. 实现 Responses↔Anthropic 非流式纯文本转换。
 4. 增加候选能力过滤、错误合同和 `/v1/models` conversion 能力发现。
 5. 实现双向纯文本 SSE 状态机。（当前直接转换状态机、失败分类和唯一结算已完成；迁移到统一事件 IR 与真实 Provider 回归仍待完成。）
@@ -509,7 +509,7 @@ client_canceled
 
 ## 22. 当前实现差距
 
-截至本文编写时，代码已具备 OpenAI Chat Completions↔Anthropic Messages 的部分转换能力、Responses↔Anthropic 的文本/SSE/function-tools 转换，以及 Responses 的 native、ChatGPT Web 和 Codex OAuth 路径；以下能力仍属于设计目标，不能在 `/v1/models` 中宣称已支持：
+当前代码具备 Responses↔Anthropic 的文本/SSE/function-tools 转换，以及 Responses 的 native、ChatGPT Web 和 Codex OAuth 路径；以下能力仍属于设计目标，不能在 `/v1/models` 中宣称已支持：
 
 | 能力 | 当前状态 | 交付条件 |
 | --- | --- | --- |

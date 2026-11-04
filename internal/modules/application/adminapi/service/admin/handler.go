@@ -1001,7 +1001,7 @@ func (h *Handler) builtinChatGPTProviderView(cfg config.Config) providerView {
 		Name:             effectivecatalog.BuiltinProviderID,
 		Protocol:         effectivecatalog.BuiltinProviderID,
 		BaseURL:          "(account pool)",
-		Endpoints:        []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses, config.ProviderEndpointImages},
+		Endpoints:        []string{config.ProviderEndpointResponses, config.ProviderEndpointImages},
 		Priority:         config.EffectiveChatGPTWebProviderPriority(cfg.ChatGPTWeb),
 		Fallback:         false,
 		Enabled:          config.EffectiveChatGPTWebProviderEnabled(cfg.ChatGPTWeb),

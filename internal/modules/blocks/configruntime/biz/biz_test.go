@@ -22,7 +22,7 @@ import (
 )
 
 func testProvider(name, key string) config.Provider {
-	provider := config.Provider{Name: name, Protocol: "openai", BaseURL: "https://example.com/v1", APIKey: key, Models: []string{"model"}, Endpoints: []string{config.ProviderEndpointChatCompletions}}
+	provider := config.Provider{Name: name, Protocol: "openai", BaseURL: "https://example.com/v1", APIKey: key, Models: []string{"model"}, Endpoints: []string{config.ProviderEndpointResponses}}
 	config.ConfigureProviderPolicy(&provider, 100, true)
 	return provider
 }

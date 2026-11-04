@@ -17,12 +17,9 @@ const (
 	ClientProtocolAnthropic = "anthropic"
 
 	TransportModeNative               = "native"
-	TransportModeOpenAIToAnthropic    = "openai_to_anthropic"
-	TransportModeAnthropicToOpenAI    = "anthropic_to_openai"
 	TransportModeResponsesToAnthropic = "responses_to_anthropic"
 	TransportModeAnthropicToResponses = "anthropic_to_responses"
 	TransportModeAnthropicToCodex     = "anthropic_to_codex_responses"
-	TransportModeChatToCodex          = "chat_to_codex_responses"
 	// TransportModeChatGPTWebResponses is a bounded, stateless Responses
 	// projection backed by the ChatGPT Web text executor. It intentionally is
 	// not a native upstream Responses implementation.
@@ -42,7 +39,7 @@ type TransportPlan struct {
 	RouteOwner       string
 	UpstreamProtocol string
 	UpstreamEndpoint string
-	Mode             string // native | openai_to_anthropic | anthropic_to_openai
+	Mode             string // One of the TransportMode constants above.
 	// ConversionLevel is copied from the validated model/direction metadata.
 	// Native plans always use level 0.
 	ConversionLevel int
@@ -52,7 +49,7 @@ type TransportPlan struct {
 
 // IsConversion 表示需要协议转换(非 native 直通)。
 func (p TransportPlan) IsConversion() bool {
-	return p.Mode == TransportModeOpenAIToAnthropic || p.Mode == TransportModeAnthropicToOpenAI || p.Mode == TransportModeResponsesToAnthropic || p.Mode == TransportModeAnthropicToResponses || p.Mode == TransportModeAnthropicToCodex || p.Mode == TransportModeChatToCodex
+	return p.Mode == TransportModeResponsesToAnthropic || p.Mode == TransportModeAnthropicToResponses || p.Mode == TransportModeAnthropicToCodex
 }
 
 // RouteLabel 把入站 HTTP 路径归一化为 Prometheus 标签使用的稳定 route 名。
@@ -63,8 +60,6 @@ func RouteLabel(r *http.Request) string {
 	}
 	path := strings.TrimRight(r.URL.Path, "/")
 	switch path {
-	case "/v1/chat/completions":
-		return "chat_completions"
 	case "/v1/messages":
 		return "messages"
 	case "/v1/responses":
@@ -75,8 +70,6 @@ func RouteLabel(r *http.Request) string {
 		return "responses_compact"
 	case "/v1/search":
 		return "search"
-	case "/v1/completions":
-		return "completions"
 	case "/v1/embeddings":
 		return "embeddings"
 	case "/v1/images/generations", "/v1/images/edits":
@@ -98,7 +91,7 @@ func ClientProtocolForPath(path string) string {
 	switch path {
 	case "/v1/messages":
 		return ClientProtocolAnthropic
-	case "/v1/chat/completions", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/completions", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
+	case "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact", "/v1/embeddings", "/v1/images/generations", "/v1/images/edits", "/v1/models", "/v1/search":
 		return ClientProtocolOpenAI
 	default:
 		return ""

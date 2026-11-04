@@ -3,7 +3,6 @@ package proxy
 import (
 	"encoding/json"
 	"math"
-	"strings"
 	"testing"
 
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
@@ -15,42 +14,6 @@ import (
 // incident: input_tokens=1533 with cache_read_input_tokens=176128 produced a
 // cache usage rate of 11489.1% because the denominator kept the raw input.
 const anthropicCacheIncidentUsage = `{"input_tokens":1533,"cache_creation_input_tokens":0,"cache_read_input_tokens":176128,"output_tokens":542,"service_tier":"standard"}`
-
-func TestAnthropicStreamUsageUpdatesAreCumulative(t *testing.T) {
-	acc := newAnthropicRawStreamAccumulator("model")
-	var usage tokenUsage
-	var content strings.Builder
-	id, model, finish := "", "model", ""
-	role := false
-	for _, step := range []struct {
-		event                        string
-		input, read, created, output int
-	}{
-		{`{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":0}}}`, 100, 0, 0, 0},
-		{`{"type":"message_delta","usage":{"cache_read_input_tokens":200,"cache_creation_input_tokens":30,"output_tokens":5}}`, 330, 200, 30, 5},
-		{`{"type":"message_delta","usage":{"cache_read_input_tokens":200,"cache_creation_input_tokens":30,"output_tokens":5}}`, 330, 200, 30, 5},
-		{`{"type":"message_delta","usage":{"output_tokens":8}}`, 330, 200, 30, 8},
-		{`{"type":"message_delta","usage":{"input_tokens":90,"cache_read_input_tokens":150,"cache_creation_input_tokens":0}}`, 240, 150, 0, 8},
-	} {
-		acc.TrackSSELine([]byte("data: " + step.event))
-		if _, err := anthropicStreamEvents(step.event, &id, &model, &usage, &content, &finish, &role, 0); err != nil {
-			t.Fatal(err)
-		}
-		if usage.PromptTokens != step.input || usage.CachedInputTokens != step.read || usage.CacheCreationInputTokens != step.created || usage.CompletionTokens != step.output {
-			t.Fatalf("converted usage=%+v step=%+v", usage, step)
-		}
-		if acc.InputTokens != step.input || acc.CachedInputTokens != step.read || acc.CacheCreationInputTokens != step.created || acc.OutputTokens != step.output {
-			t.Fatalf("raw accumulator differs at %+v", step)
-		}
-	}
-	final := acc.FinalizeUsage(nil)
-	if final.CacheHitRate() > 1 {
-		t.Fatalf("rate=%v", final.CacheHitRate())
-	}
-	if got := anthropicUsagePayload(final)["input_tokens"]; got != 90 {
-		t.Fatalf("archived input=%v", got)
-	}
-}
 
 func TestAnthropicUsageNormalizesCacheIntoInput(t *testing.T) {
 	var raw map[string]any
@@ -123,49 +86,6 @@ func TestUsageFromRawResponseNormalizesAnthropicCache(t *testing.T) {
 	openAI := usageFromRawResponse(config.Provider{Protocol: "openai"}, []byte(`{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":80}}}`), nil)
 	if openAI.PromptTokens != 100 || openAI.CachedInputTokens != 80 {
 		t.Fatalf("openai usage=%+v", openAI)
-	}
-}
-
-func TestOpenAIChatToAnthropicResponseDeclaresCacheReads(t *testing.T) {
-	// The reverse direction (OpenAI chat upstream, Anthropic client) must not
-	// leave the cache reads inside input_tokens, or the Anthropic client would
-	// count the prompt twice.
-	body := []byte(`{"id":"chatcmpl-1","model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":80}}}`)
-	encoded, usage, err := convertOpenAIChatToAnthropicResponse(body, "fallback-model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if usage.PromptTokens != 100 || usage.CompletionTokens != 5 || !usage.CachedInputTokensKnown || usage.CachedInputTokens != 80 {
-		t.Fatalf("usage=%+v", usage)
-	}
-	if usage.TotalTokens != 105 {
-		t.Fatalf("total tokens=%d", usage.TotalTokens)
-	}
-	var payload struct {
-		Usage map[string]any `json:"usage"`
-	}
-	if err := json.Unmarshal(encoded, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Usage["input_tokens"] != float64(20) || payload.Usage["output_tokens"] != float64(5) {
-		t.Fatalf("anthropic usage=%v", payload.Usage)
-	}
-	if payload.Usage["cache_read_input_tokens"] != float64(80) {
-		t.Fatalf("anthropic usage=%v", payload.Usage)
-	}
-	// Without cache details the projection keeps the plain prompt split.
-	plain, _, err := convertOpenAIChatToAnthropicResponse([]byte(`{"id":"chatcmpl-2","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":1}}`), "fallback-model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var plainPayload struct {
-		Usage map[string]any `json:"usage"`
-	}
-	if err := json.Unmarshal(plain, &plainPayload); err != nil {
-		t.Fatal(err)
-	}
-	if plainPayload.Usage["input_tokens"] != float64(7) || plainPayload.Usage["cache_read_input_tokens"] != nil {
-		t.Fatalf("plain anthropic usage=%v", plainPayload.Usage)
 	}
 }
 

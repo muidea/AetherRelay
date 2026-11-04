@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	http "github.com/bogdanfinn/fhttp"
 	"github.com/google/uuid"
 )
@@ -45,6 +46,7 @@ type SearchSource struct {
 }
 
 type SearchResult struct {
+	Completion     completion.Search
 	ConversationID string
 	ActualModel    string
 	Text           string
@@ -96,7 +98,7 @@ func (c *Client) searchOnce(ctx context.Context, request SearchRequest) (SearchR
 	if err != nil {
 		return SearchResult{}, err
 	}
-	requirements, err := c.ChatRequirements()
+	requirements, err := c.ChatRequirementsContext(ctx)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -388,9 +390,12 @@ func parseSearchConversationID(ctx context.Context, reader io.Reader) (string, e
 }
 
 func (c *Client) pollSearch(ctx context.Context, conversationID string) (SearchResult, error) {
-	deadline := time.Now().Add(5 * time.Minute)
+	return c.pollSearchWithPolicy(ctx, conversationID, 5*time.Minute, 3*time.Second)
+}
+
+func (c *Client) pollSearchWithPolicy(ctx context.Context, conversationID string, timeout, interval time.Duration) (SearchResult, error) {
+	deadline := time.Now().Add(timeout)
 	last := SearchResult{ConversationID: bounded(conversationID, 512)}
-	stable := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return last, err
@@ -402,31 +407,20 @@ func (c *Client) pollSearch(ctx context.Context, conversationID string) (SearchR
 			}
 		} else {
 			result, terminal, parseErr := parseSearchDocument(conversationID, document)
+			if result.Text != "" {
+				last = result
+			}
 			if parseErr != nil {
 				return last, parseErr
 			}
-			if result.Text != "" {
-				if terminal {
-					return result, nil
-				}
-				if result.Text == last.Text {
-					stable++
-				} else {
-					stable = 0
-				}
-				last = result
-				if stable >= 2 {
-					return result, nil
-				}
+			if terminal {
+				return last, nil
 			}
 		}
 		if time.Until(deadline) <= 0 {
-			if last.Text != "" {
-				return last, nil
-			}
-			return last, fmt.Errorf("search poll: timed out waiting for result")
+			return last, &Error{Class: Timeout, Operation: "search_poll", Detail: "timed out waiting for a completed search answer"}
 		}
-		if err := waitForPoll(ctx, minDuration(3*time.Second, time.Until(deadline))); err != nil {
+		if err := waitForPoll(ctx, minDuration(interval, time.Until(deadline))); err != nil {
 			return last, fmt.Errorf("search poll: %w", err)
 		}
 	}
@@ -458,7 +452,8 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 		message, _ := node["message"].(map[string]any)
 		author, _ := message["author"].(map[string]any)
 		role, _ := author["role"].(string)
-		if strings.ToLower(strings.TrimSpace(role)) != "assistant" {
+		channel := strings.TrimSpace(searchMapString(message, "channel"))
+		if strings.ToLower(strings.TrimSpace(role)) != "assistant" || (channel != "" && channel != "final") {
 			continue
 		}
 		created, _ := message["create_time"].(float64)
@@ -482,19 +477,83 @@ func parseSearchDocument(conversationID string, document []byte) (SearchResult, 
 	}
 	metadata, _ := latest["metadata"].(map[string]any)
 	answerText := searchMessageText(latest)
-	result := SearchResult{ConversationID: bounded(conversationID, 512), ActualModel: bounded(searchMapString(metadata, "model_slug"), 256), Text: bounded(answerText, maxSearchTextBytes)}
+	result := SearchResult{ConversationID: bounded(conversationID, 512), ActualModel: bounded(searchMapString(metadata, "model_slug"), 256)}
+	if len(answerText) > maxSearchTextBytes {
+		return result, false, &textCompletionError{reason: completion.OutputLimit, limit: maxSearchTextBytes}
+	}
+	result.Text = answerText
+	result.Completion = completion.Search{TextBytes: len(answerText), TextSHA256: completion.Hash(answerText)}
 	result.Sources = collectSearchSources(latest)
 	for _, found := range searchURLPattern.FindAllString(result.Text, -1) {
 		result.Sources = appendSearchSource(result.Sources, SearchSource{URL: found})
 	}
-	terminal := false
-	if finish, _ := metadata["finish_details"].(map[string]any); finish != nil {
-		terminal = strings.TrimSpace(searchMapString(finish, "type")) != ""
+	finish, ok := metadata["finish_details"].(map[string]any)
+	if metadata["finish_details"] != nil && !ok {
+		result.Completion.Reason = completion.Protocol
+		return result, false, &textCompletionError{reason: completion.Protocol}
 	}
-	if !terminal {
-		terminal = strings.TrimSpace(searchMapString(metadata, "status")) == "completed"
+	// Malformed finish evidence must not fall back to an apparently successful
+	// status. Keep partial text, but require the document contract to hold.
+	for _, field := range []struct {
+		object map[string]any
+		key    string
+	}{{finish, "type"}, {latest, "status"}, {metadata, "status"}} {
+		if raw := field.object[field.key]; raw != nil {
+			if _, ok := raw.(string); !ok {
+				result.Completion.Reason = completion.Protocol
+				return result, false, &textCompletionError{reason: completion.Protocol}
+			}
+		}
 	}
-	return result, terminal, nil
+	terminal := strings.TrimSpace(searchMapString(finish, "type"))
+	if terminal == "" {
+		terminal = strings.TrimSpace(searchMapString(latest, "status"))
+		if terminal == "" {
+			terminal = strings.TrimSpace(searchMapString(metadata, "status"))
+		}
+	}
+	// A finish marker cannot override a still-running or failed status. The
+	// document can be observed between updates, so keep polling pending states.
+	pending, truncated := "", ""
+	for _, marker := range []string{terminal, searchMapString(latest, "status"), searchMapString(metadata, "status")} {
+		switch marker {
+		case "", "stop", "completed", "finished_successfully":
+		case "in_progress", "incomplete":
+			pending = marker
+		case "max_tokens", "length":
+			truncated = marker
+		default:
+			result.Completion.Terminal = marker
+			result.Completion.Reason = completion.Protocol
+			return result, false, &textCompletionError{reason: completion.Protocol}
+		}
+	}
+	if truncated != "" {
+		terminal = truncated
+	}
+	if pending != "" {
+		terminal = pending
+	}
+	result.Completion.Terminal = terminal
+	switch terminal {
+	case "stop", "completed", "finished_successfully":
+		result.Completion.Completed = true
+		result.Completion.Reason = completion.Stop
+	case "max_tokens", "length":
+		result.Completion.Truncated = true
+		result.Completion.Reason = completion.ModelLength
+	case "", "in_progress", "incomplete":
+		return result, false, nil
+	default:
+		result.Completion.Reason = completion.Protocol
+		return result, false, &textCompletionError{reason: completion.Protocol}
+	}
+	if !result.Completion.Valid(result.Text) && !result.Completion.Incomplete(result.Text) {
+		result.Completion.Completed = false
+		result.Completion.Reason = completion.InvalidResult
+		return result, false, &textCompletionError{reason: completion.InvalidResult}
+	}
+	return result, true, nil
 }
 
 // isSearchInvocationPlaceholder identifies the assistant control message that

@@ -79,7 +79,7 @@ func (h *Handler) FeatureCatalog(ctx context.Context) proxyevents.FeatureCatalog
 	sort.Strings(ids)
 	result := proxyevents.FeatureCatalogResult{}
 	for _, id := range ids {
-		if providers := h.featureProvidersFor(ctx, id, []string{"/v1/chat/completions", "/v1/responses"}); len(providers) > 0 {
+		if providers := h.featureProvidersFor(ctx, id, []string{"/v1/responses"}); len(providers) > 0 {
 			result.TextModels = append(result.TextModels, proxyevents.FeatureModel{ID: id, Providers: providers})
 		}
 		if providers := h.featureProvidersFor(ctx, id, []string{"/v1/search"}); len(providers) > 0 {
@@ -178,18 +178,13 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		text, _ := presentChatGPTWebSearch(chatgptsearch.Result{Text: search.Text, Sources: sources})
 		return proxyevents.ExecuteFeatureTextResult{Provider: search.Provider, ActualModel: search.ActualModel, Text: text}, nil
 	}
-	endpoint := "/v1/chat/completions"
+	endpoint := "/v1/responses"
 	if hasFiles {
-		endpoint = "/v1/responses"
 		ctx = context.WithValue(ctx, featureFileAttachmentsKey{}, true)
 	}
 	probe, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	plans, apiErr := h.resolveTransportPlans(probe, model)
-	if !hasFiles && (apiErr != nil || len(plans) == 0) {
-		endpoint = "/v1/responses"
-		probe, _ = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
-		plans, apiErr = h.resolveTransportPlans(probe, model)
-	}
+
 	if apiErr != nil || len(plans) == 0 {
 		return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("no compatible provider can serve model %q", model)
 	}
@@ -200,25 +195,14 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		if len(message.Images) > 0 || len(message.Files) > 0 {
 			parts := []any{}
 			if message.Content != "" {
-				partType := "text"
-				if endpoint == "/v1/responses" {
-					partType = "input_text"
-				}
-				parts = append(parts, map[string]any{"type": partType, "text": message.Content})
+				parts = append(parts, map[string]any{"type": "input_text", "text": message.Content})
 			}
 			for _, image := range message.Images {
 				mime := http.DetectContentType(image)
 				dataURL := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(image)
-				if endpoint == "/v1/responses" {
-					parts = append(parts, map[string]any{"type": "input_image", "image_url": dataURL})
-				} else {
-					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL}})
-				}
+				parts = append(parts, map[string]any{"type": "input_image", "image_url": dataURL})
 			}
 			for _, file := range message.Files {
-				if endpoint != "/v1/responses" {
-					return proxyevents.ExecuteFeatureTextResult{}, fmt.Errorf("file attachments require a Responses-compatible provider")
-				}
 				dataURL := "data:" + file.ContentType + ";base64," + base64.StdEncoding.EncodeToString(file.Bytes)
 				parts = append(parts, map[string]any{"type": "input_file", "filename": file.Name, "file_data": dataURL})
 			}
@@ -226,28 +210,19 @@ func (h *Handler) ExecuteFeatureText(ctx context.Context, command proxyevents.Ex
 		}
 		messages = append(messages, map[string]any{"role": message.Role, "content": content})
 	}
-	body := map[string]any{"model": model, "stream": false}
+	body := map[string]any{"model": model, "stream": false, "input": messages}
 	if command.WebSearch {
 		body["tools"] = []any{map[string]any{"type": "web_search"}}
 	}
-	if endpoint == "/v1/responses" {
-		body["input"] = messages
-	} else {
-		body["messages"] = messages
-	}
 	if effort := strings.TrimSpace(command.ThinkingEffort); effort != "" {
-		if endpoint == "/v1/responses" {
-			body["reasoning"] = map[string]any{"effort": effort}
-		} else {
-			body["reasoning_effort"] = effort
-		}
+		body["reasoning"] = map[string]any{"effort": effort}
 	}
 	payload, _ := json.Marshal(body)
 	response, trace, err := h.executeFeatureRequest(ctx, command.OwnerID, endpoint, "application/json", payload)
 	if err != nil {
 		return proxyevents.ExecuteFeatureTextResult{Provider: trace.provider, ErrorClass: featureRequestFailureClass(err)}, err
 	}
-	text, actualModel, err := extractFeatureText(response, endpoint)
+	text, actualModel, err := extractFeatureText(response)
 	if err != nil {
 		return proxyevents.ExecuteFeatureTextResult{}, err
 	}
@@ -412,21 +387,7 @@ func featureRequestFailureClass(err error) string {
 	return strings.TrimSpace(requestErr.failureClass)
 }
 
-func extractFeatureText(body []byte, endpoint string) (string, string, error) {
-	if endpoint == "/v1/chat/completions" {
-		var payload struct {
-			Model   string `json:"model"`
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil || len(payload.Choices) == 0 {
-			return "", "", fmt.Errorf("invalid chat completion response")
-		}
-		return payload.Choices[0].Message.Content, payload.Model, nil
-	}
+func extractFeatureText(body []byte) (string, string, error) {
 	var payload struct {
 		Model      string `json:"model"`
 		OutputText string `json:"output_text"`

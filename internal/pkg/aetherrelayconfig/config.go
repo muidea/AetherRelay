@@ -375,7 +375,7 @@ type Provider struct {
 	// only configuration loading owns defaulting.
 	fallbackConfigured bool
 	// Endpoints 为 provider 显式声明的直通端点(非 protocol 推断)。
-	// 取值: chat_completions / messages / responses / completions / embeddings / images。
+	// 取值: messages / responses / embeddings / images。
 	Endpoints []string
 	Disabled  bool
 }
@@ -2153,12 +2153,10 @@ func MatchModelPattern(model, pattern string) bool {
 
 // Provider endpoint identifiers describe native upstream HTTP surfaces.
 const (
-	ProviderEndpointChatCompletions = "chat_completions"
-	ProviderEndpointMessages        = "messages"
-	ProviderEndpointResponses       = "responses"
-	ProviderEndpointCompletions     = "completions"
-	ProviderEndpointEmbeddings      = "embeddings"
-	ProviderEndpointImages          = "images"
+	ProviderEndpointMessages   = "messages"
+	ProviderEndpointResponses  = "responses"
+	ProviderEndpointEmbeddings = "embeddings"
+	ProviderEndpointImages     = "images"
 )
 
 func parseProviderEndpoints(value string) ([]string, error) {
@@ -2178,8 +2176,9 @@ func normalizeProviderEndpoints(values []string) ([]string, error) {
 			continue
 		}
 		switch endpoint {
-		case ProviderEndpointChatCompletions, ProviderEndpointMessages, ProviderEndpointResponses,
-			ProviderEndpointCompletions, ProviderEndpointEmbeddings, ProviderEndpointImages:
+		case "chat_completions", "completions":
+			return nil, fmt.Errorf("endpoint %q has been retired; declare responses only if the upstream supports /v1/responses", endpoint)
+		case ProviderEndpointMessages, ProviderEndpointResponses, ProviderEndpointEmbeddings, ProviderEndpointImages:
 		default:
 			return nil, fmt.Errorf("unknown endpoint %q", value)
 		}
@@ -2197,14 +2196,10 @@ func normalizeProviderEndpoints(values []string) ([]string, error) {
 
 func providerEndpointRank(endpoint string) int {
 	switch endpoint {
-	case ProviderEndpointChatCompletions:
-		return 0
 	case ProviderEndpointMessages:
 		return 1
 	case ProviderEndpointResponses:
 		return 2
-	case ProviderEndpointCompletions:
-		return 3
 	case ProviderEndpointEmbeddings:
 		return 4
 	case ProviderEndpointImages:
@@ -2219,22 +2214,22 @@ func validateProtocolEndpoints(protocol string, endpoints []string) error {
 		switch protocol {
 		case "openai":
 			switch endpoint {
-			case ProviderEndpointChatCompletions, ProviderEndpointResponses, ProviderEndpointCompletions, ProviderEndpointEmbeddings, ProviderEndpointImages:
+			case ProviderEndpointResponses, ProviderEndpointEmbeddings, ProviderEndpointImages:
 			case ProviderEndpointMessages:
-				return fmt.Errorf("endpoint messages is invalid for openai protocol (use chat_completions; conversion serves /v1/messages)")
+				return fmt.Errorf("endpoint messages is invalid for openai protocol (use responses; released conversion may serve /v1/messages)")
 			default:
 				return fmt.Errorf("unknown endpoint %q", endpoint)
 			}
 		case "anthropic":
 			switch endpoint {
 			case ProviderEndpointMessages:
-			case ProviderEndpointChatCompletions, ProviderEndpointResponses, ProviderEndpointCompletions, ProviderEndpointEmbeddings, ProviderEndpointImages:
-				return fmt.Errorf("endpoint %q is invalid for anthropic protocol (use messages; conversion may serve /v1/chat/completions)", endpoint)
+			case ProviderEndpointResponses, ProviderEndpointEmbeddings, ProviderEndpointImages:
+				return fmt.Errorf("endpoint %q is invalid for anthropic protocol (use messages; released conversion may serve /v1/responses)", endpoint)
 			default:
 				return fmt.Errorf("unknown endpoint %q", endpoint)
 			}
 		case "chatgptweb":
-			if endpoint != ProviderEndpointChatCompletions && endpoint != ProviderEndpointResponses && endpoint != ProviderEndpointImages {
+			if endpoint != ProviderEndpointResponses && endpoint != ProviderEndpointImages {
 				return fmt.Errorf("endpoint %q is invalid for chatgptweb protocol", endpoint)
 			}
 		}
@@ -2268,31 +2263,15 @@ func ResolveProviderTransports(provider Provider, path string) []ProviderTranspo
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
 	result := []ProviderTransport{}
 	switch path {
-	case "/v1/chat/completions":
-		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			result = append(result, ProviderTransport{UpstreamEndpoint: "chatgptweb", Mode: "native"})
-		}
-		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "native"})
-		}
-		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
-			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "openai_to_anthropic"})
-		}
-		if provider.Protocol == "codexoauth" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
-			result = append(result, ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "chat_to_codex_responses"})
-		}
 	case "/v1/messages":
 		if provider.Protocol == "anthropic" && ProviderHasDirectEndpoint(provider, ProviderEndpointMessages) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/messages", Mode: "native"})
 		}
-		// Prefer the released Responses conversion over the legacy text-only Chat
-		// conversion. Request-time release gates remove it when unavailable.
+		// Request-time release gates control the Responses conversion.
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/responses", Mode: "anthropic_to_responses"})
 		}
-		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
-			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/chat/completions", Mode: "anthropic_to_openai"})
-		}
+
 		if provider.Protocol == "codexoauth" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "anthropic_to_codex_responses"})
 		}
@@ -2310,12 +2289,8 @@ func ResolveProviderTransports(provider Provider, path string) []ProviderTranspo
 			result = append(result, ProviderTransport{UpstreamEndpoint: "codex_oauth_responses", Mode: "codex_oauth_responses"})
 		}
 	case "/v1/search":
-		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointChatCompletions) {
+		if provider.Protocol == "chatgptweb" && ProviderHasDirectEndpoint(provider, ProviderEndpointResponses) {
 			result = append(result, ProviderTransport{UpstreamEndpoint: "chatgptweb_search", Mode: "native"})
-		}
-	case "/v1/completions":
-		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointCompletions) {
-			result = append(result, ProviderTransport{UpstreamEndpoint: "/v1/completions", Mode: "native"})
 		}
 	case "/v1/embeddings":
 		if provider.Protocol == "openai" && ProviderHasDirectEndpoint(provider, ProviderEndpointEmbeddings) {
@@ -2350,11 +2325,9 @@ func ProviderSupportsInboundPath(provider Provider, path string) bool {
 // ServiceableInboundPaths 返回 provider 当前可服务的入站 path 列表(稳定排序)。
 func ServiceableInboundPaths(provider Provider) []string {
 	candidates := []string{
-		"/v1/chat/completions",
 		"/v1/messages",
 		"/v1/responses",
 		"/v1/search",
-		"/v1/completions",
 		"/v1/embeddings",
 		"/v1/images/generations",
 		"/v1/images/edits",

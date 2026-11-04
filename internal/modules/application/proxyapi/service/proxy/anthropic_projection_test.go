@@ -43,7 +43,7 @@ func TestClaudeEmbeddedSessionAdmission(t *testing.T) {
 }
 
 func TestConvertedCodexRequestsExcludeSourceIdentity(t *testing.T) {
-	for _, endpoint := range []string{"/v1/messages", "/v1/chat/completions"} {
+	for _, endpoint := range []string{"/v1/messages"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(endpoint+fmt.Sprint(stream), func(t *testing.T) {
 				calls := 0

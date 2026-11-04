@@ -36,8 +36,8 @@
 
 ## 文本与图片代理
 
-- `/v1/chat/completions`：纯文本与 OpenAI content-part 数组中的 `text` / `image_url`（仅 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图 ≤ 4000 万像素）；不下载远程 URL（无 SSRF 通道）；图片仅限 `user` 消息；`input_audio`、`file`、工具调用与其它 content part 返回 `invalid_request`。
-- `/v1/responses`：同一文本执行器的无状态受限投影（字符串/message-array `input`、`instructions`、`reasoning.effort`、`input_text`、data-URI `input_image`、基础 buffered/SSE）；不保存会话；可兼容忽略的字段在 `ignored_features` 中可审计，改变语义的字段返回 `conversion_unsupported`。
+- **文本代理**：`/v1/responses` 接受纯文本 `input`，或 message 数组中的 `input_text` / `input_image`（仅 PNG/JPEG/GIF/WebP Base64 data URI，最多 4 张、合计 20 MiB、单图 ≤4000 万像素）；不下载远程图片 URL，图片仅限 user 消息。
+- `/v1/responses`：同一文本执行器的无状态受限投影（字符串/message-array `input`、`instructions`、`reasoning.effort`、`input_text`、data-URI `input_image`、data-URI `input_file`、buffered/SSE）。文件限 PDF/TXT/Markdown/CSV，整次请求最多 4 份、合计 20 MiB。公共字段校验先于普通文本/搜索分流；未知字段或无法执行的语义返回 `conversion_unsupported`，不保存 Responses 会话。
 - `/v1/images/generations` / `/v1/images/edits`：上游生图代理。ChatGPT Web conversation 协议没有 OpenAI Images API 的原生 `size` / `response_format` 字段；旧实现把尺寸附加到 prompt，只能表达意图，不能保证像素尺寸。现在请求只接受 `auto` 或受限的正整数 `WIDTHxHEIGHT`，并在拿到认证后的上游栅格 bytes 后本地中心裁切/双线性缩放；明确 `WxH` 才保证精确像素，`auto` 保留上游尺寸，无法解码 bytes 时失败而不虚报成功。图片字节只存本地文件系统，DuckDB 只存元数据与索引；interaction archive 对 data URI / `b64_json` 只存 MIME、字节数与 SHA-256 摘要。
 - ChatGPT Web 只返回 raster（PNG/JPEG/GIF 等可验证栅格）。它没有真正的 SVG/vector 输出协议；SVG 容器包裹 raster 也不是真矢量，因此显式 `svg`、`response_format: svg` 或“导出矢量文件”请求会在访问上游前明确拒绝。vector-like/raster illustration 等仅描述视觉风格的提示仍可生成栅格图。
 - 韧性：`rate_limit` / TLS / 超时 / 上游故障生成 60 秒生图冷却；`invalid_token` 先触发一次 OAuth 刷新，仅尚未创建 conversation 时重投一次，已有 conversation 永不盲重投。文本 token 为稳定本地估计，不可当上游账单。
@@ -50,14 +50,14 @@
 - 累计 SSE 读取上限为 16 MiB，单行及聚合事件上限各为 1 MiB，候选正文与累计接受的追加正文上限各为 256 KiB。单行预算不包含 CR/LF；聚合事件按每条 `data` 载荷及一个拼接 LF 计数。读取边界最多探测一个额外字节以区分真实 EOF 和预算耗尽；终止证据在预算内时不继续排空连接。SSE 字节与摘要对应实际读取字节（含缓冲预读和必要的探测字节），并非仅已解析事件。
 - 所有正文限制均在发出新增正文前检查，不按字节截断后返回成功。成功结果的长度、SHA-256、累计追加字节与各消费者重建的正文必须一致。协议失败时保留此前已接受的部分正文和执行证据；已经尝试发出字节不等于客户端已收到。
 - 新失败分类为 `text_incomplete`（缺少完成证据，或消费者发现结果证据缺失／不一致）、`text_protocol`（协议、快照或结果证据不一致）、`text_budget`（本地读取／正文保护）。`finish_details.type=max_tokens/length` 明确返回 `text_model_length`，当前严格完成模式不将模型长度终止包装为正常成功正文；未知结束原因不冒充 `length`。这些失败不刷新令牌、不换账号重放，也不触发账号健康冷却；原有真实鉴权、上游限流和传输错误保持独立反馈。
-- 两类 API 分别校验完成证据。非流式失败返回类型化非 2xx 错误；Chat 流式失败在可写时发送 `data: {"error": ...}` 并关闭，不发送成功结束 chunk 或 `[DONE]`；Responses 流式失败发送 `response.failed`，不发送 `response.completed`。Chat 成功才发送 `finish_reason=stop` 的结束 chunk 与 `[DONE]`，Responses 成功才发送完成事件。HTTP 200 不作为流式成功依据。
+- Responses 与临时对话分别校验完成证据。普通文本非流式失败返回类型化非 2xx 错误；Responses 流式失败发送 `response.failed`，不发送 `response.completed`。HTTP 200 不作为流式成功依据。搜索另用 `aetherrelaycompletion.Search` 记录 document 的正常终态、模型截断、正文长度与 SHA-256，并贯穿 owner、Biz 和 HTTP；零值、证据与正文不一致不能授权成功。
 - 现有执行 trace 的 `attempts[].text_completion` 保存终止证据、稳定原因、限制类型与数值、SSE／正文／追加字节、摘要及 HTTP 是否已开始写出；同时填充已有事件数、wire bytes、模型与发送证据字段。SSE 摘要仅覆盖已读取字节；普通错误日志和错误响应只使用安全分类，不包含任意上游错误正文。详情仍遵循现有 trace／归档访问与清理合同。
 - 临时对话直接消费 owner 的完成证据，单独核对正文并持久化失败／中断状态。生成已发送或结果未知的失败要求恢复，禁止直接正常续聊；只有明确未发送、无正文／锚点且未超既有预算时才允许准备阶段凭据刷新恢复。用量保留真实错误类别，不将需要恢复的上游失败一律写成进程中断。
 - 传输完成不等于业务 JSON 合法。网关不修补、裁剪或重新生成业务正文，业务发布门禁由调用方执行。
 
 ### 文本调用的有限恢复与观测
 
-- 普通文本的 Chat Completions 与受限 Responses 共用执行器，HTTP/SSE 每个请求最多两次执行；401 凭据刷新与替代账号共用这个预算，不叠加重试。
+- 普通文本的受限 Responses 与临时对话共用执行器，HTTP/SSE 每个请求最多两次执行；401 凭据刷新与替代账号共用这个预算，不叠加重试。
 - 上游明确返回 `generation_not_sent=true`，且失败阶段为 `bootstrap`、`requirements_prepare`、`requirements_finalize` 时，准备阶段的 5xx/TLS/超时可尝试一次替代账号；403 仅在 bootstrap 阶段适用。429、内容策略、未知发送状态/阶段、已有输出、续接、取消和剩余预算不足均不切号。生成请求进入 HTTP `Do` 后即视为可能已提交，不能因结果为空推断可重放。
 - 候选仍由账号池按原模型、能力和冷却裁决，排除已失败凭据和账号，最多检查 8 个候选，优先选择不同已配置代理端点；没有不同出口时最多使用一个其他账号，不改写账号代理。没有候选时保留最初的真实失败。403 不等同于凭据永久失效。
 - `metadata.json` 的 `chatgpt_text_attempts` 最多记录两次实际执行的账号、阶段、真实 HTTP 状态、未发送证据及结果；用量仅结算一次，最终账号和上游状态与归档一致。没有真实上游响应时不编造 HTTP 状态；历史记录不回填。
@@ -65,9 +65,13 @@
 
 ### 客户端参数适配
 
-- ChatGPT Web Chat/Responses 不支持 `response_format` / 严格 JSON Schema。客户端应按实际 Provider 路径配置该能力；同名模型可能来自不同 Provider，不能仅按模型名记忆支持状态。
-- 普通文本不携带 `response_format`；依赖严格 JSON 输出时选择明确支持的 Provider。允许降级的业务须由客户端显式决定、验证返回 JSON，并按端点/凭据作用域/模型缓存有界的能力结果，配置或路由变化时失效，避免每次先失败再重试。
-- 代理保留 `conversion_unsupported`、`feature`、`unsupported_features`，不静默删除语义参数。此次恢复逻辑不会对本地参数拒绝触发刷新或切号。thought-flow 客户端的独立待收口方案见[2026-10-24 客户端方案](thought-flow-client-closure-plan-2026-10-24.md)。
+- 普通文本和搜索共用请求 allowlist，拒绝发生在账号选择和上游执行之前。未知顶层字段及已识别对象中的未知控制字段明确拒绝；`response_format`、非空 `max_output_tokens` / `temperature` / `top_p` / `service_tier`、严格 JSON Schema、函数工具、持久会话、后台执行均不支持，不按提示词模拟这些能力。
+- 接受 `text.format={"type":"text"}`、`tools:[]`、`tool_choice:"none"`（无工具时）、`background:false`、`parallel_tool_calls:false`、`store:false`、`include:[]`、`truncation:"disabled"` 及支持字段的可空默认值。`store:true` 无存储语义，明确拒绝。`metadata` 按字符串映射校验并回显；`user` / `safety_identifier` 仅作为兼容字段忽略并记入 `ignored_features`，不承诺上游安全识别。
+- `reasoning.effort` 必须同时满足模型声明及 Web 已实现映射：`low/medium/high` 保留，`xhigh/extended` 映射 Web `extended`；`none/minimal/max/ultra` 等没有 Web 映射的值拒绝。`reasoning.summary`、`text.verbosity` 的有效设置明确拒绝；搜索不能承载 effort，非空值也拒绝。
+- 非流式与流式共用响应对象和创建时间；SSE 使用单调递增 `sequence_number`，完整发出 response / output item / content part / text 生命周期。搜索正文为轮询完成后的单个 delta，不承诺上游 token 级搜索流。失败与截断均不发送 `response.completed`。
+- `GET /v1/models` 的 `capabilities.chatgptweb.responses` 发布 provider-scoped 边界（文本、受限图片/文件、流式、单查询搜索；函数工具、结构化输出、续接、后台和客户端输出 token 限制均为 false，`usage=estimated_text_only`），不继承同名其它 Provider 的原生能力。依赖严格 JSON 输出的客户端须选择明确支持的 Provider。
+- GPTWeb JSON/SSE 响应头 `X-AetherRelay-Usage-Estimated: true`、`X-AetherRelay-Usage-Scope: text-only` 表明 usage 只估算可见文本；图片、文件、隐藏推理及上游实际计费不在估算内。管理页用量详情同步说明，记录仍带 `estimated=true`，不伪造缓存或 reasoning token 数。
+- 代理保留 `conversion_unsupported`、`feature`、`unsupported_features`，本地参数拒绝不触发刷新或切号。此次 Responses 收口及回归门禁见[2026-11-04 Responses 收口记录](../AetherRelay-ChatGPTWeb-Responses-Closure-2026-11-04.md)。
 
 ## 图片任务与图片库
 
@@ -87,12 +91,13 @@
 
 ## 在线搜索
 
-- **请求边界**：Chat/Responses 仅接受唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具（或 `web_search_options`）；只取最后一条纯文本 user 消息为 query；图片、文件、function、混合工具与工具循环一律 `conversion_unsupported`；`web_search_options` 调优字段仅记受限降级。
+- **请求边界**：Responses 仅接受唯一的 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` 工具；只接受字符串 input 或唯一一条纯文本 user 消息，查询最多 64 KiB，超限在账号选择前拒绝；非空 instructions、多轮上下文、图片、文件、function、混合工具与工具循环一律 `conversion_unsupported`。工具只接受 type 声明，域名过滤、位置、搜索深度、离线搜索等未实现选项明确拒绝。`tool_choice` 可省略（选择该受限 Web 搜索即强制搜索），或为 `required` / 精确匹配的工具对象；显式 `auto` 无法承诺模型自主选择，明确拒绝。`web_search_options` 明确拒绝。
 - **上游执行与恢复边界**：prepare → `force_use_search=true` conversation → 有界 poll；每次搜索生成独立的随机 `parent_message_id`，prepare 与 conversation 仅共享本次请求的根，并在两步都发送 `history_and_training_disabled=true`，不复用固定根或历史网页会话。单次尝试中的 prepare、conversation 与 poll 共用账号级 TLS client；仅当 `search_prepare` 在尚未取得 conversation ID 时分类为 TLS/超时，才会短暂退避并重建 TLS client 重试一次。该重试仍失败后，最多切换一次到不同账号且不同已配置代理端点；conversation 已开始、SSE 或 poll 阶段绝不重投，避免重复搜索或答案。结果仅投影受限答案、实际模型与去重来源（标题/URL/摘要），均有大小上限；429/网络/超时/上游失败触发模型级冷却，首个 401 单飞刷新后仅重试一次。
 - conversation ID 只表示已提交；搜索读取有界 SSE 至 `[DONE]`/EOF，识别 ID 之后的失败再决定是否进入 poll。SSE 明确错误不进入轮询；轮询收到 HTTP 429 或明确 JSON 错误立即失败，保留会话 ID 和已有结果并反馈冷却。瞬态 404/409/423/5xx 沿用既有有界轮询，不重投搜索。
 - ChatGPT Web 是非公开网页逆向接口；上述字段只能阻止代理主动携带历史，不能覆盖上游账号级 Memory/Reference chat history 等服务端策略。若账号仍注入跨主题内容，应在 ChatGPT 账号侧关闭相关记忆能力，或将该账号标记为不保证严格隔离。
 - 排查污染时，先以管理页会话 ID 对照 DuckDB 中当前会话的消息，再按 `var/interactions/{api_key_id}/{round_id}/` 的 request/response 与 `metadata.json` 核对实际发送的消息；若本地请求未携带异会话内容而上游仍返回跨主题文本，问题位于上游账号记忆/网页会话策略，不应回写或拼接到其它本地会话。
-- **响应形态**：Chat 非流式追加来源与 OpenAI `url_citation` annotations；流式在搜索完成后发送单个完整 delta 与 `[DONE]`（兼容 SSE，不是增量搜索流）；Responses 返回 `web_search_call` 与带 citations 的 `output_text`。
+- **完成判定**：只接受已识别的 document 正常终态（`stop` / `completed` / `finished_successfully`）；正文连续不变、轮询普通 EOF 或超时有正文均不是完成依据。`max_tokens` / `length` 保留正文并返回 Responses `status=incomplete` / `response.incomplete`，用量记为 `text_model_length`，不计成功、不触发账号冷却或重投。未知结束原因、本地正文预算超限、超时明确失败；超限不按字节截断正文后返回成功。
+- **响应形态**：Responses 返回 `web_search_call` 与带平铺 `url_citation` annotations 的 `output_text`，引用索引对应最终正文的 Unicode 字符位置；失败保留已接受的部分正文，SSE 以 `response.failed` 结束。简化 `/v1/search` 及 Admin 功能要求完整答案，截断返回非 2xx，不写成功搜索历史。
 - **`POST /v1/search`**：非流式简化入口，请求体仅 `model` 与纯文本 `query`；只保留 ChatGPT Web 候选，管理型 Provider 同名模型不参与；无可用搜索能力时返回明确错误，不降级为普通文本生成。
 - **管理页「功能集 → 在线搜索」**：经 typed Proxy command 调用；成功结果写 owner-scoped DuckDB 历史（`chatgpt_web_search_history`），每管理员最多 200 条、保留 30 天，失败不写入；未启用 Admin 登录时使用稳定本地 `admin` 作用域。`POST /v1/search` 与协议内单次搜索保持无状态，不写历史。
 

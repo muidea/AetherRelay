@@ -13,6 +13,7 @@ import (
 	basebiz "aetherrelay/internal/modules/base/biz"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -54,7 +55,7 @@ func TestSearchRefreshesInvalidCredentialOnceAndRecordsFinalResult(t *testing.T)
 		if cmd.DeviceID != "stable-device" || cmd.AccessToken != "new" || cmd.Proxy != "http://new.invalid" || cmd.Query != "today news" {
 			t.Fatalf("retry command=%+v", cmd)
 		}
-		result.Set(upevents.SearchResult{Text: "answer", Sources: []upevents.SearchSource{{URL: "https://example.test"}}}, nil)
+		result.Set(upevents.SearchResult{Completion: searchEvidence("answer"), Text: "answer", Sources: []upevents.SearchSource{{URL: "https://example.test"}}}, nil)
 	})
 
 	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
@@ -118,7 +119,7 @@ func TestSearchFailsOverFromPrepareTLSWithoutReusingProxy(t *testing.T) {
 		case "token-a":
 			result.Set(upevents.SearchResult{ErrorClass: upevents.ErrClassTLS, ErrorOperation: "search_prepare"}, cd.NewError(cd.Unexpected, "EOF"))
 		case "token-c":
-			result.Set(upevents.SearchResult{Text: "recovered"}, nil)
+			result.Set(upevents.SearchResult{Completion: searchEvidence("recovered"), Text: "recovered"}, nil)
 		default:
 			t.Fatalf("unexpected upstream command=%+v", command)
 		}
@@ -178,4 +179,51 @@ func containsSearchToken(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestSearchIncompleteEvidenceDoesNotRecordSuccessCoolOrReplay(t *testing.T) {
+	for _, state := range []string{"length", "missing", "mismatch"} {
+		t.Run(state, func(t *testing.T) {
+			hub := event.NewHub(8)
+			background := task.NewBackgroundRoutine(8)
+			defer hub.Terminate(context.Background())
+			defer background.Shutdown(nil)
+			accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+			var acquires, records, attempts atomic.Int32
+			accounts.Subscribe(accevents.TopicAcquireTextToken, func(_ event.Event, result event.Result) {
+				acquires.Add(1)
+				result.Set(accevents.AcquireTextTokenResult{AccessToken: "token", Account: accevents.AccountView{ID: "account"}}, nil)
+			})
+			accounts.Subscribe(accevents.TopicRecordTextResult, func(_ event.Event, result event.Result) {
+				records.Add(1)
+				result.Set(accevents.RecordTextResultResult{}, nil)
+			})
+			evidence := searchEvidence("partial")
+			switch state {
+			case "length":
+				evidence.Completed = false
+				evidence.Truncated = true
+				evidence.Reason = completion.ModelLength
+				evidence.Terminal = "max_tokens"
+			case "missing":
+				evidence = completion.Search{}
+			case "mismatch":
+				evidence.TextSHA256 = completion.Hash("different")
+			}
+			upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+			upstream.Subscribe(upevents.TopicSearch, func(_ event.Event, result event.Result) {
+				attempts.Add(1)
+				result.Set(upevents.SearchResult{Completion: evidence, Text: "partial"}, nil)
+			})
+			proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+			result, err := proxy.Search(context.Background(), chatgptsearch.Request{Model: "gpt-search", Query: "query"})
+			if (err == nil) != (state == "length") || result.Text != "partial" || result.Completion.Completed || records.Load() != 0 || acquires.Load() != 1 || attempts.Load() != 1 {
+				t.Fatalf("result=%+v err=%v acquires=%d attempts=%d records=%d", result, err, acquires.Load(), attempts.Load(), records.Load())
+			}
+		})
+	}
+}
+
+func searchEvidence(text string) completion.Search {
+	return completion.Search{Completed: true, Reason: completion.Stop, Terminal: "stop", TextBytes: len(text), TextSHA256: completion.Hash(text)}
 }

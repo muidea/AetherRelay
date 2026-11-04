@@ -1,5 +1,7 @@
 # 核心代理与路由设计
 
+自 2026-11-04 本次清理起，`/v1/chat/completions` 与 `/v1/completions` 已移除，调用返回 404。Provider 的 `chat_completions` / `completions` 声明会被配置校验拒绝（包括与有效端点混用）；应在确认上游支持后显式迁移到 `responses`，或删除不再使用的 Provider。历史用量和交互归档保留原始端点。
+
 功能域：入站端点、模型路由、协议转换与统一流式。对应正式合同见[配置参考](../configuration.md)与[功能说明](../features.md)；本设计说明最终机制与关键合同。演进历史：早期设计（2026-07-15 Provider Capability Contract）曾以单一 RouteOwner 为路由目标，后演进为按 `priority` 排序的有序候选链与安全回退，见[演进记录](#演进记录)。
 
 候选链按客户端 Key 限定 Provider 访问范围的收口合同见[客户端 API Key、Provider 与模型联动收口设计](client-api-key-provider-access.md)。
@@ -14,7 +16,7 @@
 
 Client Protocol 只由 method + path 决定，不从 header 或 body 推断。其它 `/v1/*` 一律 404。
 
-- **OpenAI**：`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/completions`、`POST /v1/embeddings`，`GET /v1/models`
+- **OpenAI**：`POST /v1/responses`、`POST /v1/embeddings`，`GET /v1/models`
 - **Anthropic**：`POST /v1/messages`
 - **扩展**：`POST /v1/search`（AetherRelay 自有搜索端点）、`POST /v1/images/generations|edits`（ChatGPT Web 图片）
 
@@ -26,7 +28,7 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 | --- | --- |
 | `model_metadata` | 可选静态模型元数据：模型 ID exact 且严格区分大小写；容量字段与 reasoning 能力字段均可选，路由不依赖这些字段 |
 | `protocol` | 仅 `openai` / `anthropic`；必须显式声明，不得按 provider 名推断 |
-| `endpoints` | 仅表示上游 native endpoint（`chat_completions` / `messages` / `responses` / `completions` / `embeddings` / `images`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
+| `endpoints` | 仅表示上游 native endpoint（`messages` / `responses` / `embeddings` / `images`）；转换派生的可服务 path 不得写回该字段；必填、去重、稳定排序、不允许未知枚举 |
 
 `chatgptweb` 与 `codexoauth` 是保留且始终注入的内建 Provider ID，不能由管理型 Provider 目录创建。
 
@@ -43,20 +45,19 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 
 | 客户端 | 上游 protocol | Provider endpoint | 上游 path | 模式 |
 | --- | --- | --- | --- | --- |
-| `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
-| `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
-| `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
+| `/v1/messages` | codexoauth | `responses` | `codex_oauth_responses` | `anthropic_to_codex_responses` |
+| `/v1/messages` | openai | `responses`（已发布转换能力） | `/v1/responses` | `anthropic_to_responses` |
+| `/v1/responses` | anthropic | `messages`（已发布转换能力） | `/v1/messages` | `responses_to_anthropic` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
 | `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
 | `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
-| `/v1/completions` | openai | `completions` | 同 path | native |
 | `/v1/embeddings` | openai | `embeddings` | 同 path | native |
-| `/v1/search` | chatgptweb | `chat_completions` | `chatgptweb_search` | native |
+| `/v1/search` | chatgptweb | `responses` | `chatgptweb_search` | native |
 | `/v1/images/generations\|edits` | openai | `images` | 同入站 path | native |
 | `/v1/images/generations\|edits` | chatgptweb | `images` | `chatgptweb_images` | native |
 
-矩阵外组合统一 `endpoint_unsupported`，不得经转换隐式获得；`responses` / `completions` / `embeddings` 不能靠 chat/messages 转换派生。
+矩阵外组合统一 `endpoint_unsupported`；Responses↔Messages 只按方向化 capability 开放，embeddings 必须原生支持。
 
 ## 协议转换边界
 
@@ -74,10 +75,9 @@ Client Protocol 只由 method + path 决定，不从 header 或 body 推断。�
 ## 统一流式 SSE
 
 - 文本生成统一 SSE 增量输出；标准推理端点仅在请求体 `"stream": true` 时进入流式生命周期，`Accept: text/event-stream` 不能隐式改变请求模式。
-- `/v1/chat/completions` 返回 OpenAI Chat Completions SSE（必要时转换 Anthropic 上游事件）；`/v1/messages` 返回 Anthropic Messages SSE（必要时转换 OpenAI 上游事件）。
 - 跨协议 SSE 事件统一转换，响应头与边界一致；转换只保证基础文本 delta。
 - 首包写出后 HTTP 状态不可改写，真实结束态用 **outcome**（`success`、`client_canceled`、`first_event_timeout`、`idle_timeout`、`limit_exceeded`、`upstream_truncated`、`upstream_failed`、`endpoint_drift`、`incomplete`、`client_write`、`protocol`、`conversion`、`error`）统一写入 DuckDB / Prometheus / `metadata.json`；客户端取消不得计为上游故障。
-- ChatGPT Web 文本适配器额外校验上游完成证据、正文摘要与流式累计正文；`/v1/chat/completions` 和 `/v1/responses` 分别验收。未确认完成、协议／快照损坏和本地超限不能生成成功终态；流式错误帧及预算细节见 [ChatGPT Web 文本合同](chatgpt-web.md#文本完成性与正文预算)。
+- ChatGPT Web 文本适配器额外校验上游完成证据、正文摘要与流式累计正文；`/v1/responses` 与临时对话分别验收。未确认完成、协议／快照损坏和本地超限不能生成成功终态；流式错误帧及预算细节见 [ChatGPT Web 文本合同](chatgpt-web.md#文本完成性与正文预算)。
 - 浏览器客户端应使用 `fetch()` + `ReadableStream`（POST + 认证 Header），不使用只支持 GET 的原生 `EventSource`。
 
 ## 观测合同

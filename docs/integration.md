@@ -28,6 +28,8 @@ Anthropic-Version: 2023-06-01
 
 `codexoauth` 是账号池注入的只读内建 Provider，只提供固定 Codex OAuth 上游的原生 `/v1/responses`。业务端不能通过 Provider 配置切换其 protocol、base URL 或 endpoints；需要切换上游接入端点时，应使用独立的管理型直连 Provider。Codex OAuth 边界会把 Responses 标准字符串 `input` 等价展开为消息数组，并强制上游 `stream=true`、`store=false`；这些属于固定传输适配，不改变业务端发布的客户端端点。模型目录中的 `maxOutputTokens` 表示模型输出能力上限，不代表该固定 transport 接受客户端 `max_output_tokens` 参数；当前传入该字段会在上游调用前明确返回 400，不会静默省略。
 
+`chatgptweb` 通过独立适配支持受限 `/v1/responses`。调用前读取 `capabilities.chatgptweb.responses`，不能从同名模型的其它 Provider 能力推断 Web 路径。普通文本格式可显式设置 `text.format.type=text`；JSON Schema、`max_output_tokens`、sampling 控制等未实现语义会返回 400。Web 搜索仅支持一个纯文本 user 查询，不支持 instructions、多轮上下文或工具选项。SSE 必须按 `response.completed` / `response.incomplete` / `response.failed` 判定结果，不能只看 HTTP 200。用量估算边界见响应头 `X-AetherRelay-Usage-Estimated` 与 `X-AetherRelay-Usage-Scope`。
+
 Codex OAuth 的非流式聚合会从 SSE `output_item.done` 重建标准 `output`；若上游只提供文本 delta，则生成等价的 assistant/output_text item。流式工具调用已观察到固定上游在完整 `function_call_arguments.done` 后仅发送 `event: response.output_item.done` 并 clean EOF，未必提供 `response.completed` data。代理只在已收到 item done event 时将这种 EOF 结算为成功，不伪造缺失的 completion 对象；依赖严格 `response.completed` data 的应用应使用非流式工具调用。
 
 ### 1.1 SDK 配置
@@ -208,7 +210,7 @@ ChatGPT Web 使用 conversation 协议，而不是 OpenAI Images API；协议没
 
 Anthropic→Responses 转换中，省略 `thinking` 表示未启用 thinking。若目标模型的 `reasoning_efforts` 明确包含 `none`，代理会显式发送 `reasoning.effort=none`，避免目标模型的默认 reasoning 模式改变工具选择语义；显式 `thinking.type=adaptive` 仍按 capability 中固定的目标 effort 降级映射。反向 Responses→Anthropic 中，显式 `reasoning.effort=none` 映射为 `thinking.type=disabled`，其他 effort 映射为 adaptive + 配置的目标 effort。DeepSeek Anthropic 接入在 thinking 开启时拒绝命名 `tool_choice`，因此命名工具请求应显式使用 `reasoning.effort=none`。
 
-对于只实现 OpenAI Chat Completions 的旧应用，仅选择 `supported_endpoints` 包含 `/v1/chat/completions` 的模型。Chat→Anthropic 是基础文本兼容路径；Anthropic 返回的 thinking 块会被识别并省略，不会作为 assistant 文本暴露。不要把 Provider 配置中的 `responses`、`messages` 等名称拼成 URL。
+旧应用须迁移到 `/v1/responses`，使用 `input` 代替 `messages`，Structured Outputs 使用 `text.format`。只支持 Chat Completions 的上游不能继续作为文本 Provider；先核实上游的 Responses 能力，再修改 `endpoints`。不要仅改 URL 而保留旧请求体。
 
 `grok-4.5` 在 Krill Provider 上已分别通过 Anthropic Messages 与 OpenAI Responses transport 的文本、SSE、非流式 function tools、工具结果闭环及 reasoning/thinking 降级验证。当前模型元数据发布 `none/low/high/max`，转换固定降级目标为 `low`，图片与流式工具保持关闭。Krill 原生 Responses 接受 `store=false`、`reasoning.effort=high` 和 `text.verbosity=high`；但 hosted `web_search` 即使要求 `tool_choice=required` 也未产生真实搜索工具事件，因此 `web_search=live` 应由应用端工具能力负责，不能依据该配置推断上游已支持实时搜索。
 

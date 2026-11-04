@@ -1,8 +1,6 @@
 package proxy
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,7 +10,6 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptfail"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgpttext"
-	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 )
 
 var chatGPTWebSearchToolTypes = map[string]struct{}{
@@ -22,37 +19,18 @@ var chatGPTWebSearchToolTypes = map[string]struct{}{
 type chatGPTWebSearchInvocation struct {
 	Enabled bool
 	Query   string
-	Ignored []string
 }
 
 type openAIURLCitation struct {
-	Type        string `json:"type"`
-	URLCitation struct {
-		StartIndex int    `json:"start_index"`
-		EndIndex   int    `json:"end_index"`
-		URL        string `json:"url"`
-		Title      string `json:"title"`
-	} `json:"url_citation"`
-}
-
-// chatGPTWebChatSearchInvocation recognises the one tool semantic the Web
-// search upstream can faithfully perform. Mixed tools are rejected instead of
-// accepting a request and silently dropping function/plugin behaviour.
-func chatGPTWebChatSearchInvocation(body map[string]any) (chatGPTWebSearchInvocation, *APIError) {
-	invocation, apiErr := chatGPTWebSearchToolInvocation(body, true)
-	if apiErr != nil || !invocation.Enabled {
-		return invocation, apiErr
-	}
-	query, apiErr := lastChatGPTWebUserText(body["messages"], "messages")
-	if apiErr != nil {
-		return chatGPTWebSearchInvocation{}, apiErr
-	}
-	invocation.Query = query
-	return invocation, nil
+	Type       string `json:"type"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
 }
 
 func chatGPTWebResponsesSearchInvocation(body map[string]any) (chatGPTWebSearchInvocation, *APIError) {
-	invocation, apiErr := chatGPTWebSearchToolInvocation(body, false)
+	invocation, apiErr := chatGPTWebSearchToolInvocation(body)
 	if apiErr != nil || !invocation.Enabled {
 		return invocation, apiErr
 	}
@@ -60,78 +38,67 @@ func chatGPTWebResponsesSearchInvocation(body map[string]any) (chatGPTWebSearchI
 	if apiErr != nil {
 		return chatGPTWebSearchInvocation{}, apiErr
 	}
+	if len(query) > chatgptsearch.MaxQueryBytes {
+		return chatGPTWebSearchInvocation{}, invalidChatGPTResponseField("input", "web search query exceeds 64 KiB")
+	}
 	invocation.Query = query
 	return invocation, nil
 }
 
-func chatGPTWebSearchToolInvocation(body map[string]any, allowOptions bool) (chatGPTWebSearchInvocation, *APIError) {
+func chatGPTWebSearchToolInvocation(body map[string]any) (chatGPTWebSearchInvocation, *APIError) {
 	if body == nil {
-		return chatGPTWebSearchInvocation{}, &APIError{Code: ErrorCodeInvalidRequest, Message: "request body is required"}
+		return chatGPTWebSearchInvocation{}, invalidChatGPTResponseField("", "request body is required")
 	}
-	tools, hasTools := body["tools"]
-	_, hasOptions := body["web_search_options"]
-	if !hasTools && !hasOptions {
-		return chatGPTWebSearchInvocation{}, nil
-	}
-	if hasOptions && !allowOptions {
+	if _, present := body["web_search_options"]; present {
 		return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("web_search_options")
 	}
-	if hasTools {
-		items, ok := tools.([]any)
-		if !ok || len(items) != 1 {
-			return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tools")
+	var tools []any
+	if raw := body["tools"]; raw != nil {
+		var ok bool
+		tools, ok = raw.([]any)
+		if !ok {
+			return chatGPTWebSearchInvocation{}, invalidChatGPTResponseField("tools", "tools must be an array")
 		}
-		tool, ok := items[0].(map[string]any)
-		if !ok || !isChatGPTWebSearchTool(tool) {
-			return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tools")
-		}
-		if choice, present := body["tool_choice"]; present && !isChatGPTWebSearchToolChoice(choice) {
+	}
+	if len(tools) == 0 {
+		if choice := body["tool_choice"]; choice != nil && choice != "none" && choice != "auto" {
 			return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tool_choice")
 		}
-	} else if choice, present := body["tool_choice"]; present && !isChatGPTWebSearchToolChoice(choice) {
-		return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tool_choice")
+		return chatGPTWebSearchInvocation{}, nil
 	}
-	if _, present := body["parallel_tool_calls"]; present {
-		return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("parallel_tool_calls")
+	if len(tools) != 1 {
+		return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tools")
 	}
-	invocation := chatGPTWebSearchInvocation{Enabled: true}
-	if hasOptions {
-		// The options opt a Chat request into search, but upstream does not offer
-		// a stable mapping for its tuning knobs. Keep that limitation observable
-		// in archive metadata rather than claiming the fields were honoured.
-		invocation.Ignored = []string{"web_search_options.parameters"}
+	tool, ok := tools[0].(map[string]any)
+	if !ok || !isChatGPTWebSearchTool(tool) {
+		return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tools")
 	}
-	return invocation, nil
+	if err := rejectChatGPTFields(tool, "tools[0]", "type"); err != nil {
+		return chatGPTWebSearchInvocation{}, err
+	}
+	if choice := body["tool_choice"]; choice != nil {
+		if text, ok := choice.(string); ok {
+			// A forced Web search cannot implement the model's optional auto choice.
+			if text != "required" {
+				return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tool_choice")
+			}
+		} else {
+			selected, ok := choice.(map[string]any)
+			if !ok || selected["type"] != tool["type"] {
+				return chatGPTWebSearchInvocation{}, unsupportedChatGPTWebFeature("tool_choice")
+			}
+			if err := rejectChatGPTFields(selected, "tool_choice", "type"); err != nil {
+				return chatGPTWebSearchInvocation{}, err
+			}
+		}
+	}
+	return chatGPTWebSearchInvocation{Enabled: true}, nil
 }
 
 func isChatGPTWebSearchTool(tool map[string]any) bool {
 	typ, _ := tool["type"].(string)
-	_, ok := chatGPTWebSearchToolTypes[strings.TrimSpace(typ)]
+	_, ok := chatGPTWebSearchToolTypes[typ]
 	return ok
-}
-
-func isChatGPTWebSearchToolChoice(value any) bool {
-	tool, ok := value.(map[string]any)
-	return ok && isChatGPTWebSearchTool(tool)
-}
-
-func lastChatGPTWebUserText(raw any, feature string) (string, *APIError) {
-	messages, ok := raw.([]any)
-	if !ok || len(messages) == 0 {
-		return "", &APIError{Code: ErrorCodeInvalidRequest, Message: "messages is required", Feature: feature}
-	}
-	for index := len(messages) - 1; index >= 0; index-- {
-		message, ok := messages[index].(map[string]any)
-		if !ok {
-			continue
-		}
-		role, _ := message["role"].(string)
-		if strings.ToLower(strings.TrimSpace(role)) != "user" {
-			continue
-		}
-		return chatGPTWebSearchTextContent(message["content"], fmt.Sprintf("messages[%d].content", index), "text")
-	}
-	return "", &APIError{Code: ErrorCodeInvalidRequest, Message: "a non-empty user text message is required for web search", Feature: feature}
 }
 
 func lastChatGPTWebResponseUserText(raw any) (string, *APIError) {
@@ -139,27 +106,31 @@ func lastChatGPTWebResponseUserText(raw any) (string, *APIError) {
 		if strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text), nil
 		}
-		return "", &APIError{Code: ErrorCodeInvalidRequest, Message: "input text is required for web search", Feature: "input"}
+		return "", invalidChatGPTResponseField("input", "input text is required for web search")
 	}
 	items, ok := raw.([]any)
 	if !ok || len(items) == 0 {
-		return "", &APIError{Code: ErrorCodeInvalidRequest, Message: "input is required", Feature: "input"}
+		return "", invalidChatGPTResponseField("input", "input is required")
 	}
-	for index := len(items) - 1; index >= 0; index-- {
-		item, ok := items[index].(map[string]any)
-		if !ok {
-			continue
-		}
-		if typ, _ := item["type"].(string); typ != "" && strings.TrimSpace(typ) != "message" {
-			continue
-		}
-		role, _ := item["role"].(string)
-		if role != "" && strings.ToLower(strings.TrimSpace(role)) != "user" {
-			continue
-		}
-		return chatGPTWebSearchTextContent(item["content"], fmt.Sprintf("input[%d].content", index), "input_text")
+	if len(items) != 1 {
+		return "", unsupportedChatGPTWebFeature("input.history")
 	}
-	return "", &APIError{Code: ErrorCodeInvalidRequest, Message: "a non-empty user text message is required for web search", Feature: "input"}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		return "", invalidChatGPTResponseField("input", "input message is invalid")
+	}
+	if err := rejectChatGPTFields(item, "input[0]", "type", "role", "content"); err != nil {
+		return "", err
+	}
+	if rawType, present := item["type"]; present {
+		if typ, ok := rawType.(string); !ok || typ != "message" {
+			return "", unsupportedChatGPTWebFeature("input[0].type")
+		}
+	}
+	if role, _ := item["role"].(string); role != "user" {
+		return "", unsupportedChatGPTWebFeature("input[0].role")
+	}
+	return chatGPTWebSearchTextContent(item["content"], "input[0].content", "input_text")
 }
 
 func chatGPTWebSearchTextContent(raw any, feature, textType string) (string, *APIError) {
@@ -179,6 +150,9 @@ func chatGPTWebSearchTextContent(raw any, feature, textType string) (string, *AP
 		if !ok {
 			return "", &APIError{Code: ErrorCodeInvalidRequest, Message: "web search content part is invalid", Feature: fmt.Sprintf("%s[%d]", feature, index)}
 		}
+		if err := rejectChatGPTFields(part, fmt.Sprintf("%s[%d]", feature, index), "type", "text"); err != nil {
+			return "", err
+		}
 		typ, _ := part["type"].(string)
 		if strings.TrimSpace(typ) != textType {
 			return "", &APIError{Code: ErrorCodeConversionUnsupported, Message: "chatgpt web search only supports pure text user content", Feature: fmt.Sprintf("%s[%d].type", feature, index)}
@@ -195,7 +169,7 @@ func chatGPTWebSearchTextContent(raw any, feature, textType string) (string, *AP
 	return strings.TrimSpace(text.String()), nil
 }
 
-func (h *Handler) handleChatGPTWebSearchChat(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, invocation chatGPTWebSearchInvocation) {
+func (h *Handler) handleChatGPTWebSearchResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, invocation chatGPTWebSearchInvocation, body map[string]any) {
 	round := archiveRoundFromContext(r.Context())
 	h.cfgMu.RLock()
 	executor := h.chatGPTSearch
@@ -205,206 +179,122 @@ func (h *Handler) handleChatGPTWebSearchChat(w http.ResponseWriter, r *http.Requ
 		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusServiceUnavailable, apiErr, streamFailFromKind(chatgptfail.KindProviderUnavailable, apiErr.Code+": "+apiErr.Message, nil), tokenUsage{})
 		return
 	}
-	if round != nil {
-		round.SetIgnoredFeatures(invocation.Ignored)
+	response := newChatGPTResponse(body)
+	messageID := response.messageID()
+	searchID := "ws_" + strings.TrimPrefix(response.ID, "resp_")
+	usageRequest := chatgpttext.Request{Model: model, Messages: []chatgpttext.Message{{Role: "user", Content: invocation.Query}}}
+	events := chatGPTResponseStream{writer: w}
+	settleWriteFailure := func(err error, tok tokenUsage, billingModel string) {
+		fail := newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false)
+		_ = h.writeArchiveResponse(round, "response.sse", []byte(events.archive.String()))
+		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, fail)
 	}
-	request := chatgptsearch.Request{Model: model, Query: invocation.Query}
-	result, err := executor.Search(r.Context(), request)
+	if stream {
+		err := events.start(response, model)
+		if err == nil {
+			err = events.write("response.output_item.added", map[string]any{"output_index": 0, "item": chatGPTWebSearchCallItem(searchID, invocation.Query, "in_progress", nil)})
+		}
+		for _, kind := range []string{"response.web_search_call.in_progress", "response.web_search_call.searching"} {
+			if err == nil {
+				err = events.write(kind, map[string]any{"output_index": 0, "item_id": searchID})
+			}
+		}
+		if err != nil {
+			settleWriteFailure(err, tokenUsage{}, model)
+			return
+		}
+	}
+	result, execErr := executor.Search(r.Context(), chatgptsearch.Request{Model: model, Query: invocation.Query})
+	execErr = chatgptsearch.ValidateCompletion(&result, execErr)
 	billingModel := firstNonEmpty(result.ActualModel, model)
-	usageRequest := chatgpttext.Request{Model: model, Messages: []chatgpttext.Message{{Role: "user", Content: invocation.Query}}}
-	tok := estimateChatGPTTextUsage(usageRequest, result.Text)
-	if err != nil {
-		fail := streamFailFromChatGPTSearchErr(err)
-		h.writeChatGPTWebAPIError(w, round, r, started, provider, billingModel, stream, statusForChatGPTFailure(fail), APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt web search failed: " + chatGPTFailureCode(fail), Model: billingModel}, fail, tok)
-		return
-	}
 	text, annotations := presentChatGPTWebSearch(result)
-	tok = estimateChatGPTTextUsage(usageRequest, text)
-	if !stream {
-		payload := openAIChatCompletion{ID: "chatcmpl-" + firstNonEmpty(result.ConversationID, "chatgptweb-search"), Object: "chat.completion", Created: time.Now().Unix(), Model: billingModel, Choices: []openAIChatChoice{{Index: 0, Message: openAIChatMessage{Role: "assistant", Content: text, Annotations: annotations}, FinishReason: "stop"}}}
-		w.Header().Set("Content-Type", "application/json")
-		if encErr := json.NewEncoder(w).Encode(payload); encErr != nil {
-			h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", encErr, false))
-			return
-		}
-		if archived, marshalErr := json.Marshal(payload); marshalErr == nil {
-			_ = h.writeArchiveResponse(round, "response.json", append(archived, '\n'))
-		}
-		h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, nil)
-		return
+	if execErr == nil && text == "" {
+		execErr = chatgptfail.New(chatgptfail.KindTextIncomplete, fmt.Errorf("search answer has no visible text"))
 	}
-	prepareSSEHeaders(w.Header())
-	w.WriteHeader(http.StatusOK)
-	payload, marshalErr := json.Marshal(openAIChatChunk{ID: "chatcmpl-" + firstNonEmpty(result.ConversationID, "chatgptweb-search"), Object: "chat.completion.chunk", Created: time.Now().Unix(), Model: billingModel, Choices: []openAIChatChunkChoice{{Index: 0, Delta: openAIChatMessage{Role: "assistant", Content: text, Annotations: annotations}, FinishReason: nil}}})
-	if marshalErr == nil {
-		_, marshalErr = fmt.Fprintf(w, "data: %s\n\n", payload)
+	tok := estimateChatGPTTextUsage(usageRequest, text)
+	var fail *streamFail
+	status := "completed"
+	if execErr != nil {
+		fail = streamFailFromChatGPTSearchErr(execErr)
+		status = "failed"
+	} else if result.Completion.Incomplete(result.Text) {
+		status = "incomplete"
+		fail = streamFailFromKind(chatgptfail.KindTextModelLength, "chatgpt web search reached model length limit", nil)
 	}
-	if marshalErr == nil {
-		_, marshalErr = fmt.Fprint(w, "data: [DONE]\n\n")
+	recordSearchCompletion(r.Context(), result.Completion, events.started, fail)
+	itemStatus := status
+	if status == "failed" {
+		itemStatus = "incomplete"
 	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	if marshalErr != nil {
-		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", marshalErr, false))
-		return
-	}
-	// This is intentionally buffered: ChatGPT Web only exposes reliable search
-	// sources after its document poll completes, so the SSE is compatible but
-	// not token-incremental upstream streaming.
-	h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, nil)
-}
-
-func (h *Handler) handleChatGPTWebSearchResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, invocation chatGPTWebSearchInvocation) {
-	round := archiveRoundFromContext(r.Context())
-	h.cfgMu.RLock()
-	executor := h.chatGPTSearch
-	h.cfgMu.RUnlock()
-	if executor == nil {
-		apiErr := APIError{Code: ErrorCodeProviderUnavailable, Message: "chatgpt web search executor is unavailable", Model: model}
-		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusServiceUnavailable, apiErr, streamFailFromKind(chatgptfail.KindProviderUnavailable, apiErr.Code+": "+apiErr.Message, nil), tokenUsage{})
-		return
-	}
-	if round != nil {
-		round.SetIgnoredFeatures(invocation.Ignored)
-	}
-	usageRequest := chatgpttext.Request{Model: model, Messages: []chatgpttext.Message{{Role: "user", Content: invocation.Query}}}
-	if !stream {
-		result, err := executor.Search(r.Context(), chatgptsearch.Request{Model: model, Query: invocation.Query})
-		billingModel := firstNonEmpty(result.ActualModel, model)
-		tok := estimateChatGPTTextUsage(usageRequest, result.Text)
-		if err != nil {
-			h.writeChatGPTWebSearchResponseError(w, round, r, started, provider, billingModel, false, err, tok)
-			return
-		}
-		text, annotations := presentChatGPTWebSearch(result)
-		tok = estimateChatGPTTextUsage(usageRequest, text)
-		responseID := responseIdentifier(result.ConversationID)
-		searchItem := chatGPTWebSearchCallItem("ws_"+strings.TrimPrefix(responseID, "resp_"), invocation.Query, "completed", result.Sources)
-		messageItem := chatGPTSearchResponseOutputItem("msg_"+strings.TrimPrefix(responseID, "resp_"), text, annotations, "completed")
-		payload := chatGPTSearchResponsePayload(responseID, billingModel, []any{searchItem, messageItem}, tok, "completed")
-		w.Header().Set("Content-Type", "application/json")
-		if encErr := json.NewEncoder(w).Encode(payload); encErr != nil {
-			h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", encErr, false))
-			return
-		}
-		if archived, marshalErr := json.Marshal(payload); marshalErr == nil {
-			_ = h.writeArchiveResponse(round, "response.json", append(archived, '\n'))
-		}
-		h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, nil)
-		return
-	}
-
-	responseID := responseIdentifier("")
-	searchID := "ws_" + strings.TrimPrefix(responseID, "resp_")
-	messageID := "msg_" + strings.TrimPrefix(responseID, "resp_")
-	actualModel := model
-	var archiveSSE strings.Builder
-	streamStarted := false
-	writeEvent := func(eventType string, payload any) error {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		line := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, encoded)
-		archiveSSE.WriteString(line)
-		if _, err := fmt.Fprint(w, line); err != nil {
-			return err
-		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return nil
-	}
-	startStream := func() error {
-		if streamStarted {
-			return nil
-		}
-		prepareSSEHeaders(w.Header())
-		w.WriteHeader(http.StatusOK)
-		streamStarted = true
-		created := chatGPTSearchResponsePayload(responseID, actualModel, []any{}, tokenUsage{}, "in_progress")
-		return writeEvent("response.created", map[string]any{"type": "response.created", "response": created})
-	}
-	if err := startStream(); err != nil {
-		fail := newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false)
-		h.settleChatGPTWeb(round, r, provider, model, true, http.StatusOK, time.Since(started), tokenUsage{}, fail)
-		return
-	}
-	searchingItem := chatGPTWebSearchCallItem(searchID, invocation.Query, "in_progress", nil)
-	err := writeEvent("response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": 0, "item": searchingItem})
-	if err == nil {
-		err = writeEvent("response.web_search_call.in_progress", map[string]any{"type": "response.web_search_call.in_progress", "output_index": 0, "item_id": searchID})
-	}
-	if err == nil {
-		err = writeEvent("response.web_search_call.searching", map[string]any{"type": "response.web_search_call.searching", "output_index": 0, "item_id": searchID})
-	}
-	if err != nil {
-		fail := newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false)
-		_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
-		h.settleChatGPTWeb(round, r, provider, model, true, http.StatusOK, time.Since(started), tokenUsage{}, fail)
-		return
-	}
-	result, searchErr := executor.Search(r.Context(), chatgptsearch.Request{Model: model, Query: invocation.Query})
-	if result.ActualModel != "" {
-		actualModel = result.ActualModel
-	}
-	billingModel := firstNonEmpty(actualModel, model)
-	tok := estimateChatGPTTextUsage(usageRequest, result.Text)
-	if searchErr != nil {
-		fail := streamFailFromChatGPTSearchErr(searchErr)
-		_ = writeEvent("response.failed", map[string]any{"type": "response.failed", "response": chatGPTFailedResponse(responseID, billingModel, fail)})
-		_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
-		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, fail)
-		return
-	}
-	text, annotations := presentChatGPTWebSearch(result)
-	tok = estimateChatGPTTextUsage(usageRequest, text)
 	searchItem := chatGPTWebSearchCallItem(searchID, invocation.Query, "completed", result.Sources)
-	messageItem := chatGPTSearchResponseOutputItem(messageID, text, annotations, "completed")
-	err = writeEvent("response.web_search_call.completed", map[string]any{"type": "response.web_search_call.completed", "output_index": 0, "item_id": searchID})
-	if err == nil {
-		err = writeEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": searchItem})
+	messageItem := chatGPTResponseMessage(messageID, text, annotations, itemStatus)
+	output := []any{searchItem, messageItem}
+	payload := response.payload(billingModel, output, tok, status)
+	if status == "failed" {
+		searchItem = chatGPTWebSearchCallItem(searchID, invocation.Query, "failed", result.Sources)
+		output = []any{searchItem}
+		if text != "" {
+			output = append(output, messageItem)
+		}
+		payload = response.failed(billingModel, output, fail)
 	}
-	if err == nil {
-		err = writeEvent("response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": 1, "item": chatGPTSearchResponseOutputItem(messageID, "", annotations, "in_progress")})
-	}
-	if err == nil && text != "" {
-		err = writeEvent("response.output_text.delta", map[string]any{"type": "response.output_text.delta", "item_id": messageID, "output_index": 1, "content_index": 0, "delta": text})
-	}
-	if err == nil {
-		err = writeEvent("response.output_text.done", map[string]any{"type": "response.output_text.done", "item_id": messageID, "output_index": 1, "content_index": 0, "text": text})
-	}
-	if err == nil {
-		err = writeEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 1, "item": messageItem})
-	}
-	if err == nil {
-		completed := chatGPTSearchResponsePayload(responseID, billingModel, []any{searchItem, messageItem}, tok, "completed")
-		err = writeEvent("response.completed", map[string]any{"type": "response.completed", "response": completed})
-	}
-	_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
-	if err != nil {
-		fail := newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false)
-		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, fail)
+	if !stream {
+		httpStatus := http.StatusOK
+		if status == "failed" {
+			httpStatus = statusForChatGPTFailure(fail)
+		}
+		h.writeChatGPTResponseJSON(w, r, started, provider, billingModel, payload, httpStatus, tok, fail)
 		return
 	}
-	h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, nil)
+	if status == "failed" {
+		err := events.write("response.output_item.done", map[string]any{"output_index": 0, "item": searchItem})
+		if err == nil && text != "" {
+			err = events.addText(messageID, 1)
+			if err == nil {
+				err = events.delta(messageID, 1, text)
+			}
+		}
+		if err == nil {
+			err = events.write("response.failed", map[string]any{"response": payload})
+		}
+		if err != nil {
+			settleWriteFailure(err, tok, billingModel)
+			return
+		}
+	} else {
+		err := events.write("response.web_search_call.completed", map[string]any{"output_index": 0, "item_id": searchID})
+		if err == nil {
+			err = events.write("response.output_item.done", map[string]any{"output_index": 0, "item": searchItem})
+		}
+		if err == nil {
+			err = events.addText(messageID, 1)
+		}
+		if err == nil && text != "" {
+			err = events.delta(messageID, 1, text)
+		}
+		if err == nil {
+			err = events.finishText(messageID, 1, text, annotations, itemStatus)
+		}
+		if err == nil {
+			err = events.write("response."+status, map[string]any{"response": payload})
+		}
+		if err != nil {
+			settleWriteFailure(err, tok, billingModel)
+			return
+		}
+	}
+	_ = h.writeArchiveResponse(round, "response.sse", []byte(events.archive.String()))
+	h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, fail)
 }
 
 func streamFailFromChatGPTSearchErr(err error) *streamFail {
-	if f, ok := chatgptsearch.AsFailure(err); ok && f != nil {
-		return streamFailFromKind(f.Kind, f.Error(), f)
-	}
-	if err == context.Canceled {
-		return streamFailFromKind(chatgptfail.KindClientCanceled, "client canceled", err)
-	}
-	return streamFailFromKind(chatgptfail.KindUpstream, err.Error(), err)
+	return streamFailFromChatGPTErr(err)
 }
 
 func presentChatGPTWebSearch(result chatgptsearch.Result) (string, []openAIURLCitation) {
 	text := cleanChatGPTWebSearchText(result.Text)
 	annotations := make([]openAIURLCitation, 0, len(result.Sources))
-	if len(result.Sources) == 0 {
+	if text == "" || len(result.Sources) == 0 {
 		return text, annotations
 	}
 	if text != "" {
@@ -427,9 +317,9 @@ func presentChatGPTWebSearch(result chatgptsearch.Result) (string, []openAIURLCi
 				line += source.URL
 			}
 			citation := openAIURLCitation{Type: "url_citation"}
-			citation.URLCitation.StartIndex = start
-			citation.URLCitation.EndIndex = start + utf8.RuneCountInString(source.URL)
-			citation.URLCitation.URL, citation.URLCitation.Title = source.URL, title
+			citation.StartIndex = start
+			citation.EndIndex = start + utf8.RuneCountInString(source.URL)
+			citation.URL, citation.Title = source.URL, title
 			annotations = append(annotations, citation)
 		}
 		text += line + "\n"
@@ -476,22 +366,4 @@ func chatGPTWebSearchCallItem(itemID, query, status string, sources []chatgptsea
 		action["sources"] = urls
 	}
 	return map[string]any{"id": itemID, "type": "web_search_call", "status": status, "action": action}
-}
-
-func chatGPTSearchResponseOutputItem(itemID, text string, annotations []openAIURLCitation, status string) map[string]any {
-	return map[string]any{"id": itemID, "type": "message", "status": status, "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text, "annotations": searchResponseAnnotations(annotations)}}}
-}
-
-func chatGPTSearchResponsePayload(responseID, model string, output []any, tok tokenUsage, status string) map[string]any {
-	payload := map[string]any{"id": responseID, "object": "response", "created_at": time.Now().Unix(), "status": status, "model": model, "output": output}
-	if status == "completed" {
-		payload["completed_at"] = time.Now().Unix()
-		payload["usage"] = map[string]any{"input_tokens": tok.PromptTokens, "output_tokens": tok.CompletionTokens, "total_tokens": tok.TotalTokens}
-	}
-	return payload
-}
-
-func (h *Handler) writeChatGPTWebSearchResponseError(w http.ResponseWriter, round *archive.Round, r *http.Request, started time.Time, provider, model string, stream bool, err error, tok tokenUsage) {
-	fail := streamFailFromChatGPTSearchErr(err)
-	h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, statusForChatGPTFailure(fail), APIError{Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt web search failed: " + chatGPTFailureCode(fail), Model: model}, fail, tok)
 }

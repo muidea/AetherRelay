@@ -34,10 +34,9 @@ const (
 type streamProtocol string
 
 const (
-	streamProtoChatCompletions streamProtocol = "chat_completions" // [DONE]
-	streamProtoResponses       streamProtocol = "responses"        // response.completed / failed / incomplete
-	streamProtoAnthropic       streamProtocol = "anthropic"        // message_stop
-	streamProtoPassthrough     streamProtocol = "passthrough"      // 未知协议:不强制终止事件
+	streamProtoResponses   streamProtocol = "responses"   // response.completed / failed / incomplete
+	streamProtoAnthropic   streamProtocol = "anthropic"   // message_stop
+	streamProtoPassthrough streamProtocol = "passthrough" // 未知协议:不强制终止事件
 )
 
 // terminalResult 描述一次 SSE 行是否构成协议终止,以及对应业务结果。
@@ -172,8 +171,6 @@ func shouldCountUpstreamError(f *streamFail, stream bool) bool {
 // streamProtocolForPath 按入站 path 选择终止事件语义。
 func streamProtocolForPath(path string) streamProtocol {
 	switch path {
-	case "/v1/chat/completions", "/v1/completions":
-		return streamProtoChatCompletions
 	case "/v1/responses":
 		return streamProtoResponses
 	case "/v1/messages":
@@ -194,11 +191,6 @@ func parseTerminalSSELine(proto streamProtocol, line []byte) terminalResult {
 		return terminalResult{}
 	}
 	switch proto {
-	case streamProtoChatCompletions:
-		if payload == "[DONE]" {
-			return terminalResult{Terminal: true, Kind: streamKindSuccess}
-		}
-		return terminalResult{}
 	case streamProtoResponses:
 		return parseResponsesTerminal(payload)
 	case streamProtoAnthropic:
@@ -218,7 +210,7 @@ func isTerminalSSELine(proto streamProtocol, line []byte) bool {
 
 func requiresTerminalEvent(proto streamProtocol) bool {
 	switch proto {
-	case streamProtoChatCompletions, streamProtoResponses, streamProtoAnthropic:
+	case streamProtoResponses, streamProtoAnthropic:
 		return true
 	default:
 		return false
@@ -274,11 +266,6 @@ func isTerminalAnthropicPayload(payload string) bool {
 		return false
 	}
 	return event.Type == "message_stop"
-}
-
-// 兼容旧 helper。
-func isTerminalOpenAILine(line []byte) bool {
-	return isTerminalSSELine(streamProtoChatCompletions, line)
 }
 
 func isTerminalResponsesPayload(payload string) bool {

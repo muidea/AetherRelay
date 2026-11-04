@@ -18,26 +18,26 @@ import (
 // handleChatGPTWebResponses implements the deliberately small, stateless
 // subset of /v1/responses which can be projected onto a ChatGPT Web text
 // conversation. It never stores a Responses conversation ID and never claims
-// support for tools, structured output, background/realtime execution, or
+// support for function tools, structured output, background/realtime execution, or
 // remote image references.
 func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, stream bool, body map[string]any) {
 	round := archiveRoundFromContext(r.Context())
-	searchInvocation, searchErr := chatGPTWebResponsesSearchInvocation(body)
-	if searchErr != nil {
-		searchErr.Model = model
-		fail := newStreamFailWithCode(streamKindError, searchErr.Code, searchErr.Code+": "+searchErr.Message, fmt.Errorf("%s", searchErr.Message), false)
-		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *searchErr, fail, tokenUsage{})
-		return
+	request, ignored, apiErr := chatGPTResponsesRequest(model, body)
+	if apiErr == nil && request.ThinkingEffort != "" && !h.chatGPTWebReasoningSupported(model) {
+		apiErr = unsupportedChatGPTWebFeature("reasoning")
 	}
-	if searchInvocation.Enabled {
-		h.handleChatGPTWebSearchResponses(w, r, started, provider, model, stream, searchInvocation)
-		return
-	}
-	if _, present := body["reasoning"]; present && !h.chatGPTWebReasoningSupported(model) {
-		apiErr := unsupportedChatGPTWebFeature("reasoning")
+	if apiErr != nil {
 		apiErr.Model = model
 		fail := newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, fmt.Errorf("%s", apiErr.Message), false)
 		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *apiErr, fail, tokenUsage{})
+		return
+	}
+	if round != nil {
+		round.SetIgnoredFeatures(ignored)
+	}
+	searchInvocation, _ := chatGPTWebResponsesSearchInvocation(body)
+	if searchInvocation.Enabled {
+		h.handleChatGPTWebSearchResponses(w, r, started, provider, model, stream, searchInvocation, body)
 		return
 	}
 	h.cfgMu.RLock()
@@ -48,17 +48,7 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusServiceUnavailable, apiErr, streamFailFromKind(chatgptfail.KindProviderUnavailable, apiErr.Code+": "+apiErr.Message, nil), tokenUsage{})
 		return
 	}
-	request, ignored, apiErr := chatGPTResponsesRequest(model, body)
-	if apiErr != nil {
-		apiErr.Model = model
-		fail := newStreamFailWithCode(streamKindError, apiErr.Code, apiErr.Code+": "+apiErr.Message, fmt.Errorf("%s", apiErr.Message), false)
-		h.writeChatGPTWebAPIError(w, round, r, started, provider, model, stream, http.StatusBadRequest, *apiErr, fail, tokenUsage{})
-		return
-	}
-	if round != nil {
-		round.SetIgnoredFeatures(ignored)
-	}
-
+	response := newChatGPTResponse(body)
 	if !stream {
 		result, execErr := executor.Complete(r.Context(), request)
 		execErr = chatgpttext.ValidateCompletion(&result, execErr)
@@ -73,7 +63,8 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 			}, fail, tok)
 			return
 		}
-		payload := chatGPTResponsePayload(responseIdentifier(result.ConversationID), billingModel, result.Text, tok, "completed")
+		payload := response.payload(billingModel, []any{chatGPTResponseMessage(response.messageID(), result.Text, nil, "completed")}, tok, "completed")
+		setChatGPTUsageHeaders(w.Header())
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(payload); err != nil {
 			h.settleChatGPTWeb(round, r, provider, billingModel, false, http.StatusOK, time.Since(started), tok, newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false))
@@ -86,37 +77,20 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	responseID := responseIdentifier("")
-	itemID := "msg_" + strings.TrimPrefix(responseID, "resp_")
+	itemID := response.messageID()
 	actualModel := model
 	var text strings.Builder
-	var archiveSSE strings.Builder
-	streamStarted := false
-	writeEvent := func(eventType string, payload any) error {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
+	events := chatGPTResponseStream{writer: w}
+	textAdded := false
+	startStream := func() error {
+		if err := events.start(response, actualModel); err != nil {
 			return err
 		}
-		line := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, encoded)
-		archiveSSE.WriteString(line)
-		if _, err := fmt.Fprint(w, line); err != nil {
-			return err
-		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
+		if !textAdded {
+			textAdded = true
+			return events.addText(itemID, 0)
 		}
 		return nil
-	}
-	startStream := func() error {
-		if streamStarted {
-			return nil
-		}
-		prepareSSEHeaders(w.Header())
-		w.WriteHeader(http.StatusOK)
-		streamStarted = true
-		created := chatGPTResponsePayload(responseID, actualModel, "", tokenUsage{}, "in_progress")
-		created["output"] = []any{}
-		return writeEvent("response.created", map[string]any{"type": "response.created", "response": created})
 	}
 	emit := func(delta chatgpttext.Delta) error {
 		if delta.ActualModel != "" {
@@ -132,9 +106,7 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 			return chatgptfail.New(chatgptfail.KindClientWrite, err)
 		}
 		text.WriteString(delta.Text)
-		if err := writeEvent("response.output_text.delta", map[string]any{
-			"type": "response.output_text.delta", "item_id": itemID, "output_index": 0, "content_index": 0, "delta": delta.Text,
-		}); err != nil {
+		if err := events.delta(itemID, 0, delta.Text); err != nil {
 			return chatgptfail.New(chatgptfail.KindClientWrite, err)
 		}
 		return nil
@@ -146,7 +118,7 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		result.Completion.Reason = completion.Snapshot
 		execErr = chatgptfail.New(chatgptfail.KindTextProtocol, fmt.Errorf("text stream differs from final result"))
 	}
-	result.Completion.ResponseStarted = streamStarted
+	result.Completion.ResponseStarted = events.started
 	recordTextCompletion(r.Context(), result.Completion, execErr)
 	recordGeneration(r.Context(), result.Generation)
 	if result.ActualModel != "" {
@@ -157,14 +129,14 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 	tok := estimateChatGPTTextUsage(request, text.String())
 	if execErr != nil {
 		fail := streamFailFromChatGPTErr(execErr)
-		if !streamStarted {
+		if !events.started {
 			h.writeChatGPTWebAPIError(w, round, r, started, provider, billingModel, true, statusForChatGPTFailure(fail), APIError{
 				Code: ErrorCodeUpstreamUnavailable, Message: "chatgpt web response stream failed: " + chatGPTFailureCode(fail), Model: billingModel,
 			}, fail, tok)
 			return
 		}
-		_ = writeEvent("response.failed", map[string]any{"type": "response.failed", "response": chatGPTFailedResponse(responseID, billingModel, fail)})
-		_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
+		_ = events.write("response.failed", map[string]any{"response": response.failed(billingModel, []any{chatGPTResponseMessage(itemID, text.String(), nil, "incomplete")}, fail)})
+		_ = h.writeArchiveResponse(round, "response.sse", []byte(events.archive.String()))
 		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, fail)
 		return
 	}
@@ -174,24 +146,19 @@ func (h *Handler) handleChatGPTWebResponses(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	finalText := text.String()
-	item := chatGPTResponseOutputItem(itemID, finalText)
-	err := writeEvent("response.output_text.done", map[string]any{
-		"type": "response.output_text.done", "item_id": itemID, "output_index": 0, "content_index": 0, "text": finalText,
-	})
+	err := events.finishText(itemID, 0, finalText, nil, "completed")
 	if err == nil {
-		err = writeEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item})
+		payload := response.payload(billingModel, []any{chatGPTResponseMessage(itemID, finalText, nil, "completed")}, tok, "completed")
+		err = events.write("response.completed", map[string]any{"response": payload})
 	}
-	if err == nil {
-		completed := chatGPTResponsePayload(responseID, billingModel, finalText, tok, "completed")
-		err = writeEvent("response.completed", map[string]any{"type": "response.completed", "response": completed})
-	}
+
 	if err != nil {
 		fail := newStreamFailWithCode(streamKindClientWrite, chatgptfail.ErrorCode(chatgptfail.KindClientWrite), "client write failed", err, false)
-		_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
+		_ = h.writeArchiveResponse(round, "response.sse", []byte(events.archive.String()))
 		h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, fail)
 		return
 	}
-	_ = h.writeArchiveResponse(round, "response.sse", []byte(archiveSSE.String()))
+	_ = h.writeArchiveResponse(round, "response.sse", []byte(events.archive.String()))
 	h.settleChatGPTWeb(round, r, provider, billingModel, true, http.StatusOK, time.Since(started), tok, nil)
 }
 
@@ -202,50 +169,37 @@ func (h *Handler) chatGPTWebReasoningSupported(model string) bool {
 }
 
 func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Request, []string, *APIError) {
-	if body == nil {
-		return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "request body is required"}
+	ignored, apiErr := validateChatGPTResponsesFields(body)
+	if apiErr != nil {
+		return chatgpttext.Request{}, nil, apiErr
 	}
-	search, searchErr := chatGPTWebResponsesSearchInvocation(body)
-	if searchErr != nil {
-		return chatgpttext.Request{}, nil, searchErr
-	}
-	for _, feature := range []string{
-		"tool_choice", "parallel_tool_calls", "previous_response_id", "background", "conversation", "prompt", "include", "truncation",
-	} {
-		if _, present := body[feature]; present {
-			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature(feature)
-		}
-	}
-	if !search.Enabled {
-		if _, present := body["tools"]; present {
-			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature("tools")
-		}
-	}
-	if text, present := body["text"].(map[string]any); present {
-		if _, hasFormat := text["format"]; hasFormat {
-			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature("text.format")
-		}
+	search, apiErr := chatGPTWebResponsesSearchInvocation(body)
+	if apiErr != nil {
+		return chatgpttext.Request{}, nil, apiErr
 	}
 	request := chatgpttext.Request{Model: model}
-	if instructions, present := body["instructions"]; present {
+	if instructions := body["instructions"]; instructions != nil {
 		value, ok := instructions.(string)
 		if !ok {
 			return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "instructions must be a string", Feature: "instructions"}
 		}
 		if strings.TrimSpace(value) != "" {
+			if len(value) > completion.MaxTextBytes {
+				return chatgpttext.Request{}, nil, invalidChatGPTResponseField("instructions", "instructions exceed request limits")
+			}
 			request.Messages = append(request.Messages, chatgpttext.Message{Role: "system", Content: value})
 		}
 	}
 	if reasoning, ok := body["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok {
-			request.ThinkingEffort = effort
+			request.ThinkingEffort = strings.ToLower(strings.TrimSpace(effort))
 		}
 	}
 	input, present := body["input"]
 	if !present {
 		return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "input is required", Feature: "input"}
 	}
-	images, imageBytes := 0, 0
+	images, imageBytes, fileCount, fileBytes := 0, 0, 0, 0
 	appendMessage := func(role, content string, attachments [][]byte, files []chatattachment.File) *APIError {
 		role = strings.ToLower(strings.TrimSpace(role))
 		if role == "developer" {
@@ -270,6 +224,16 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 		if strings.TrimSpace(content) == "" && len(attachments) == 0 && len(files) == 0 {
 			return &APIError{Code: ErrorCodeInvalidRequest, Message: "input message requires content", Feature: "input.content"}
 		}
+		for _, file := range files {
+			fileCount++
+			fileBytes += len(file.Bytes)
+		}
+		if fileCount > chatattachment.MaxFileCount || fileBytes > chatattachment.MaxFileBytes {
+			return invalidChatGPTResponseField("input.content", "file attachments exceed request limits")
+		}
+		if len(request.Messages) >= 64 || len(content) > completion.MaxTextBytes {
+			return invalidChatGPTResponseField("input", "message count or content exceeds request limits")
+		}
 		request.Messages = append(request.Messages, chatgpttext.Message{Role: role, Content: content, Images: attachments, Files: files})
 		return nil
 	}
@@ -284,8 +248,13 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 			if !ok {
 				return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d] is invalid", index), Feature: "input"}
 			}
-			if typ, _ := item["type"].(string); strings.TrimSpace(typ) != "" && typ != "message" {
-				return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].type", index))
+			if rawType, present := item["type"]; present {
+				if typ, ok := rawType.(string); !ok || typ != "message" {
+					return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature(fmt.Sprintf("input[%d].type", index))
+				}
+			}
+			if err := rejectChatGPTFields(item, fmt.Sprintf("input[%d]", index), "type", "role", "content", "id", "status"); err != nil {
+				return chatgpttext.Request{}, nil, err
 			}
 			role, _ := item["role"].(string)
 			content, attachments, files, err := chatGPTResponsesContent(index, item["content"])
@@ -302,21 +271,15 @@ func chatGPTResponsesRequest(model string, body map[string]any) (chatgpttext.Req
 	if len(request.Messages) == 0 {
 		return chatgpttext.Request{}, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: "input is required", Feature: "input"}
 	}
-	known := map[string]struct{}{
-		"model": {}, "input": {}, "instructions": {}, "stream": {}, "reasoning": {}, "text": {},
-		"tools": {}, "tool_choice": {}, "parallel_tool_calls": {}, "previous_response_id": {}, "background": {}, "conversation": {}, "prompt": {}, "include": {}, "truncation": {},
-	}
-	ignored := make([]string, 0, len(body))
-	for field := range body {
-		if _, handled := known[field]; !handled {
-			ignored = append(ignored, field)
+	if search.Enabled {
+		if instructions, _ := body["instructions"].(string); strings.TrimSpace(instructions) != "" {
+			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature("instructions")
+		}
+		if request.ThinkingEffort != "" {
+			return chatgpttext.Request{}, nil, unsupportedChatGPTWebFeature("reasoning.effort")
 		}
 	}
-	for _, field := range []string{"temperature", "top_p", "max_output_tokens", "user", "metadata", "store", "service_tier", "safety_identifier"} {
-		if _, present := body[field]; present {
-			ignored = append(ignored, field)
-		}
-	}
+
 	return request, uniqueSortedFeatures(ignored), nil
 }
 
@@ -337,7 +300,35 @@ func chatGPTResponsesContent(messageIndex int, raw any) (string, [][]byte, []cha
 			return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d] is invalid", messageIndex, partIndex), Feature: "input.content"}
 		}
 		typ, _ := part["type"].(string)
-		switch strings.TrimSpace(typ) {
+		prefix := fmt.Sprintf("input[%d].content[%d]", messageIndex, partIndex)
+		var allowed []string
+		switch typ {
+		case "input_text":
+			allowed = []string{"type", "text"}
+		case "output_text":
+			allowed = []string{"type", "text", "annotations", "logprobs"}
+			for _, field := range []string{"annotations", "logprobs"} {
+				if val := part[field]; val != nil {
+					items, ok := val.([]any)
+					if !ok || len(items) != 0 {
+						return "", nil, nil, unsupportedChatGPTWebFeature(prefix + "." + field)
+					}
+				}
+			}
+		case "input_image":
+			allowed = []string{"type", "image_url", "detail"}
+			if detail := part["detail"]; detail != nil && detail != "auto" {
+				return "", nil, nil, unsupportedChatGPTWebFeature(prefix + ".detail")
+			}
+		case "input_file":
+			allowed = []string{"type", "filename", "file_data"}
+		}
+		if len(allowed) > 0 {
+			if err := rejectChatGPTFields(part, prefix, allowed...); err != nil {
+				return "", nil, nil, err
+			}
+		}
+		switch typ {
 		case "input_text", "output_text":
 			value, ok := part["text"].(string)
 			if !ok {
@@ -358,7 +349,7 @@ func chatGPTResponsesContent(messageIndex int, raw any) (string, [][]byte, []cha
 			name, _ := part["filename"].(string)
 			value, _ := part["file_data"].(string)
 			comma := strings.IndexByte(value, ',')
-			if comma < 0 || !strings.Contains(value[:comma], ";base64") {
+			if comma < 0 || !strings.HasPrefix(value, "data:") || !strings.HasSuffix(value[:comma], ";base64") {
 				return "", nil, nil, &APIError{Code: ErrorCodeInvalidRequest, Message: fmt.Sprintf("input[%d].content[%d].file_data must be a base64 data URL", messageIndex, partIndex), Feature: "input.content"}
 			}
 			data, err := base64.StdEncoding.DecodeString(value[comma+1:])
@@ -394,30 +385,4 @@ func responseIdentifier(conversationID string) string {
 		value = newRequestID()
 	}
 	return "resp_" + value
-}
-
-func chatGPTResponseOutputItem(itemID, text string) map[string]any {
-	return map[string]any{
-		"id": itemID, "type": "message", "status": "completed", "role": "assistant",
-		"content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}},
-	}
-}
-
-func chatGPTResponsePayload(responseID, model, text string, tok tokenUsage, status string) map[string]any {
-	payload := map[string]any{
-		"id": responseID, "object": "response", "created_at": time.Now().Unix(), "status": status, "model": model,
-		"output": []any{chatGPTResponseOutputItem("msg_"+strings.TrimPrefix(responseID, "resp_"), text)},
-	}
-	if status == "completed" {
-		payload["completed_at"] = time.Now().Unix()
-		payload["usage"] = map[string]any{"input_tokens": tok.PromptTokens, "output_tokens": tok.CompletionTokens, "total_tokens": tok.TotalTokens}
-	}
-	return payload
-}
-
-func chatGPTFailedResponse(responseID, model string, fail *streamFail) map[string]any {
-	return map[string]any{
-		"id": responseID, "object": "response", "created_at": time.Now().Unix(), "status": "failed", "model": model,
-		"error": map[string]any{"code": chatGPTFailureCode(fail), "message": firstNonEmpty(fail.Error(), "chatgpt web response failed")},
-	}
 }

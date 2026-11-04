@@ -38,7 +38,7 @@ func TestTextCompletionRealOwnerExecutorAndHTTP(t *testing.T) {
 	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
 		t.Setenv(name, "")
 	}
-	for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
+	for _, path := range []string{"/v1/responses"} {
 		for _, stream := range []bool{false, true} {
 			for _, state := range []string{"complete", "invalid_business_json", "eof", "malformed", "rewrite", "budget", "malformed_first", "budget_first", "eof_empty", "model_length", "invalid_request"} {
 				t.Run(fmt.Sprintf("%s/%v/%s", path, stream, state), func(t *testing.T) {
@@ -115,17 +115,10 @@ func TestTextCompletionRealOwnerExecutorAndHTTP(t *testing.T) {
 					store := usage.NewMemoryStore()
 					handler := proxyhttp.NewHandler(cfg, store, nil, nil).WithChatGPTTextExecutor(executor)
 					handler.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-11-04T00:00:00Z"))
-					body := fmt.Sprintf(`{"model":"gpt-5","stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream)
-					if path == "/v1/responses" {
-						body = fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":"hi"}`, stream)
-					}
+					body := fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":"hi"}`, stream)
 					if state == "invalid_request" {
 						messages := strings.TrimSuffix(strings.Repeat(`{"role":"user","content":"hi"},`, 65), ",")
-						if path == "/v1/responses" {
-							body = fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":[%s]}`, stream, messages)
-						} else {
-							body = fmt.Sprintf(`{"model":"gpt-5","stream":%v,"messages":[%s]}`, stream, messages)
-						}
+						body = fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":[%s]}`, stream, messages)
 					}
 					req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 					req.Header.Set("Authorization", "Bearer test-client-key")
@@ -137,9 +130,6 @@ func TestTextCompletionRealOwnerExecutorAndHTTP(t *testing.T) {
 					if success {
 						if response.Code != 200 || feedback.Load() != 1 {
 							t.Fatal(response.Code, payload, feedback.Load())
-						}
-						if stream && path == "/v1/chat/completions" && !strings.Contains(payload, `"finish_reason":"stop"`) {
-							t.Fatal(payload)
 						}
 					} else {
 						expectedStatus := 502
@@ -156,11 +146,11 @@ func TestTextCompletionRealOwnerExecutorAndHTTP(t *testing.T) {
 							t.Fatal(payload)
 						}
 					}
-					expectedGenerations := int32(1)
+					expectedGenerations, expectedAcquires := int32(1), int32(1)
 					if state == "invalid_request" {
-						expectedGenerations = 0
+						expectedGenerations, expectedAcquires = 0, 0
 					}
-					if generations.Load() != expectedGenerations || acquires.Load() != 1 || refreshes.Load() != 0 || failedFeedback.Load() != 0 {
+					if generations.Load() != expectedGenerations || acquires.Load() != expectedAcquires || refreshes.Load() != 0 || failedFeedback.Load() != 0 {
 						t.Fatal("replayed", generations.Load(), acquires.Load(), refreshes.Load())
 					}
 					page, e := store.Events(context.Background(), usage.EventFilter{PageSize: 10})

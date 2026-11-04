@@ -26,7 +26,7 @@ go test ./internal/pkg/aetherrelayconfig -run TestValidateModelRoutes -count=1
 
 # 上游 endpoint 现场探测（独立入口，不在服务启动时跑）
 go run ./cmd/aetherrelay-probe -config config.yaml \
-  -provider <route-owner> -endpoint chat_completions -model <exact-model-id>
+  -provider <route-owner> -endpoint responses -model <exact-model-id>
 ```
 
 配置：`cp config.example.yaml config.yaml`，密钥用 `${ENV}` 展开；**provider 条目本身必须写在配置文件中**，不能靠 env 注入创建 provider。
@@ -72,7 +72,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 入站白名单：
 
-- OpenAI：`POST /v1/chat/completions|responses|responses/compact|completions|embeddings`，Responses WebSocket `GET /v1/responses`，`GET /v1/models`
+- OpenAI：`POST /v1/responses|responses/compact|embeddings`，Responses WebSocket `GET /v1/responses`，`GET /v1/models`
 - Anthropic：`POST /v1/messages`
 - 其它 `/v1/*` → 404
 
@@ -82,20 +82,18 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 | Client | Upstream protocol | Provider endpoint | Upstream path | Mode |
 |---|---|---|---|---|
-| `/v1/chat/completions` | openai | `chat_completions` | 同 path | native |
-| `/v1/chat/completions` | anthropic | `messages` | `/v1/messages` | `openai_to_anthropic` |
 | `/v1/messages` | anthropic | `messages` | 同 path | native |
-| `/v1/messages` | openai | `chat_completions` | `/v1/chat/completions` | `anthropic_to_openai` |
+| `/v1/messages` | openai | `responses`（已发布转换能力） | `/v1/responses` | `anthropic_to_responses` |
+| `/v1/responses` | anthropic | `messages`（已发布转换能力） | `/v1/messages` | `responses_to_anthropic` |
 | `/v1/responses` | openai | `responses` | 同 path | native |
 | `/v1/responses` | chatgptweb | `responses` | `chatgptweb_responses` | `chatgptweb_responses` |
 | `/v1/responses` | codexoauth | `responses` | `codex_oauth_responses` | `codex_oauth_responses` |
-| `/v1/completions` | openai | `completions` | 同 path | native |
 | `/v1/embeddings` | openai | `embeddings` | 同 path | native |
-| `/v1/search` | chatgptweb | `chat_completions` | `chatgptweb_search` | native |
+| `/v1/search` | chatgptweb | `responses` | `chatgptweb_search` | native |
 | `/v1/images/generations\|edits` | openai | `images` | 同入站 path | native |
 | `/v1/images/generations\|edits` | chatgptweb | `images` | `chatgptweb_images` | native |
 
-转换仅保证基础文本与基础 SSE。tools / function calling / 多模态 / `response_format` 等 → 访问上游前 `conversion_unsupported`。responses / completions / embeddings **不能**靠 chat/messages 转换派生。标准推理端点只认请求体 `stream: true` 开启 SSE；`Accept: text/event-stream` 不得隐式改变请求模式。SSE 统一响应头与边界见 `docs/unified-sse-streaming-design-2026-07-23.md`。
+转换仅保证基础文本与基础 SSE。tools / function calling / 多模态 / `response_format` 等 → 访问上游前 `conversion_unsupported`。Responses↔Messages 只按方向化 capability 开放；embeddings 必须原生支持。标准推理端点只认请求体 `stream: true` 开启 SSE；`Accept: text/event-stream` 不得隐式改变请求模式。SSE 统一响应头与边界见 `docs/unified-sse-streaming-design-2026-07-23.md`。
 
 本地 typed error（访问上游前）：`model_required`、`model_not_found`、`endpoint_unsupported`、`conversion_unsupported`、`authentication_failed`、`route_contract_invalid`、`provider_unavailable` 等；envelope 按入站协议（OpenAI vs Anthropic）输出。
 

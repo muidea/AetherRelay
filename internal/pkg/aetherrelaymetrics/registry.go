@@ -887,7 +887,7 @@ func boundEndpointLabel(path string) string {
 	switch path {
 	case "", "unknown":
 		return "unknown"
-	case "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings", "/v1/models":
+	case "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/models":
 		return path
 	default:
 		return "other"
@@ -907,7 +907,7 @@ func boundProtocolLabel(p string) string {
 
 func boundModeLabel(m string) string {
 	switch strings.TrimSpace(m) {
-	case "native", "openai_to_anthropic", "anthropic_to_openai", "responses_to_anthropic", "anthropic_to_responses":
+	case "native", "responses_to_anthropic", "anthropic_to_responses":
 		return strings.TrimSpace(m)
 	case "":
 		return "unknown"

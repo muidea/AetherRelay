@@ -175,14 +175,19 @@ func estimateCompletionTokensFromResponse(body []byte) int {
 		return estimateTokens(string(body))
 	}
 	var builder strings.Builder
-	choices, _ := payload["choices"].([]any)
-	for _, item := range choices {
-		choice, _ := item.(map[string]any)
-		if message, ok := choice["message"].(map[string]any); ok {
-			builder.WriteString(flattenValue(message["content"]))
+	output, _ := payload["output"].([]any)
+	for _, item := range output {
+		message, _ := item.(map[string]any)
+		if message["type"] != "message" {
+			continue
 		}
-		if text, ok := choice["text"].(string); ok {
-			builder.WriteString(text)
+		content, _ := message["content"].([]any)
+		for _, rawPart := range content {
+			part, _ := rawPart.(map[string]any)
+			if part["type"] == "output_text" {
+				text, _ := part["text"].(string)
+				builder.WriteString(text)
+			}
 		}
 	}
 	if builder.Len() == 0 {

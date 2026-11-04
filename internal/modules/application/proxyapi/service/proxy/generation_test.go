@@ -72,7 +72,7 @@ func TestGenerationRetryResetAndReadFailure(t *testing.T) {
 	if s := completion.generation.Snapshot(time.Now()); !s.FirstOutputAt.IsZero() || !completion.generationObserved.FirstOutputAt.IsZero() || completion.generationObserved.Buffered {
 		t.Fatal("previous attempt timing leaked")
 	}
-	observeGenerationSSE(ctx, []byte(`data: {"choices":[{"delta":{"content":"hi"}}]}`), nil)
+	observeGenerationSSE(ctx, []byte(`data: {"type":"response.output_text.delta","delta":"hi"}`), nil)
 	observeGenerationSSE(ctx, nil, context.Canceled)
 	s := completion.generation.Snapshot(time.Now().Add(time.Hour))
 	if !s.Partial || s.Duration <= 0 || s.Duration > time.Second {
@@ -261,8 +261,8 @@ func (e generationTextExecutor) Stream(ctx context.Context, r chatgpttext.Reques
 	}
 	return e.Complete(ctx, r)
 }
-func TestChatGPTBothEndpointsAndModesUseFrozenUpstreamGeneration(t *testing.T) {
-	for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
+func TestChatGPTResponsesModesUseFrozenUpstreamGeneration(t *testing.T) {
+	for _, path := range []string{"/v1/responses"} {
 		for _, stream := range []bool{false, true} {
 			for _, fail := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/stream=%v/fail=%v", path, stream, fail), func(t *testing.T) {
@@ -276,13 +276,9 @@ func TestChatGPTBothEndpointsAndModesUseFrozenUpstreamGeneration(t *testing.T) {
 					if err := store.Start(context.Background(), usage.StartRecord{EventID: "event", APIKeyID: "key", StartedAt: at}); err != nil {
 						t.Fatal(err)
 					}
-					body := map[string]any{"model": "test-model", "messages": []any{map[string]any{"role": "user", "content": "hello"}}, "input": "hello"}
+					body := map[string]any{"model": "test-model", "input": "hello"}
 					writer := httptest.NewRecorder()
-					if path == "/v1/responses" {
-						h.handleChatGPTWebResponses(writer, req, at, "chatgptweb", "test-model", stream, body)
-					} else {
-						h.handleChatGPTWebChatCompletions(writer, req, at, "chatgptweb", "test-model", stream, body)
-					}
+					h.handleChatGPTWebResponses(writer, req, at, "chatgptweb", "test-model", stream, body)
 					page, err := store.Events(context.Background(), usage.EventFilter{UsageFilter: usage.UsageFilter{AllTime: true}})
 					if err != nil || len(page.Events) != 1 {
 						t.Fatal(page, err)

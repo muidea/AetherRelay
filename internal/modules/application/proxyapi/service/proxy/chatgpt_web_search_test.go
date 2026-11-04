@@ -9,6 +9,7 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/chatgptsearch"
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
+	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
 	"aetherrelay/internal/pkg/aetherrelaymetrics"
 	"aetherrelay/internal/pkg/aetherrelayusage"
@@ -22,40 +23,16 @@ func (s chatGPTSearchExecutorStub) Search(ctx context.Context, request chatgptse
 	if s.search != nil {
 		return s.search(ctx, request)
 	}
-	return chatgptsearch.Result{ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test"}}}, nil
-}
-
-func TestChatGPTWebSearchChatProjectsSourcesAndBufferedStream(t *testing.T) {
-	var received chatgptsearch.Request
-	h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
-		received = request
-		return chatgptsearch.Result{ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test"}}}, nil
-	}})
-	for _, stream := range []bool{false, true} {
-		body := `{"model":"gpt-5","messages":[{"role":"system","content":"concise"},{"role":"user","content":"latest news"}],"tools":[{"type":"web_search"}]}`
-		if stream {
-			body = strings.TrimSuffix(body, "}") + `,"stream":true}`
-		}
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer test-client-key")
-		resp := httptest.NewRecorder()
-		h.ServeHTTP(resp, req)
-		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), "https://example.test") || (stream && !strings.Contains(resp.Body.String(), "[DONE]")) {
-			t.Fatalf("stream=%v status=%d body=%s", stream, resp.Code, resp.Body.String())
-		}
-	}
-	if received.Model != "gpt-5" || received.Query != "latest news" {
-		t.Fatalf("request=%+v", received)
-	}
+	return chatgptsearch.Result{Completion: searchEvidence("Answer"), ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test"}}}, nil
 }
 
 func TestChatGPTWebSearchRejectsMixedToolsAndMultimodalQuery(t *testing.T) {
 	for _, body := range []string{
-		`{"model":"gpt-5","messages":[{"role":"user","content":"find"}],"tools":[{"type":"web_search"},{"type":"function","function":{"name":"x"}}]}`,
-		`{"model":"gpt-5","messages":[{"role":"user","content":[{"type":"text","text":"find"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}],"tools":[{"type":"web_search"}]}`,
+		`{"model":"gpt-5","input":[{"role":"user","content":"find"}],"tools":[{"type":"web_search"},{"type":"function","function":{"name":"x"}}]}`,
+		`{"model":"gpt-5","input":[{"role":"user","content":[{"type":"input_text","text":"find"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}],"tools":[{"type":"web_search"}]}`,
 	} {
 		h := newChatGPTWebHandler(t, usage.NewMemoryStore(), chatGPTTextExecutorStub{}).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{})
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-client-key")
 		resp := httptest.NewRecorder()
 		h.ServeHTTP(resp, req)
@@ -85,7 +62,7 @@ func TestChatGPTWebSearchEndpointForcesBuiltinProviderDespiteModelConflict(t *te
 		Providers: map[string]config.Provider{
 			"preferred-static": {
 				Name: "preferred-static", Protocol: "openai", Models: []string{"gpt-5"}, Priority: 1000,
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
@@ -94,7 +71,7 @@ func TestChatGPTWebSearchEndpointForcesBuiltinProviderDespiteModelConflict(t *te
 	})
 	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
 		received = request
-		return chatgptsearch.Result{ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test", Snippet: "source excerpt"}}}, nil
+		return chatgptsearch.Result{Completion: searchEvidence("Answer"), ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test", Snippet: "source excerpt"}}}, nil
 	}})
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-08-03T00:00:00Z"))
 
@@ -136,4 +113,8 @@ func TestChatGPTWebSearchEndpointReportsUnavailableAccountPool(t *testing.T) {
 	if resp.Code != http.StatusServiceUnavailable || !strings.Contains(resp.Body.String(), ErrorCodeProviderUnavailable) || !strings.Contains(resp.Body.String(), "no available chatgpt web accounts") {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+}
+
+func searchEvidence(text string) completion.Search {
+	return completion.Search{Completed: true, Reason: completion.Stop, Terminal: "stop", TextBytes: len(text), TextSHA256: completion.Hash(text)}
 }

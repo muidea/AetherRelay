@@ -73,7 +73,7 @@ func TestProviderBundleImportLastSameNameWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	existing := config.Provider{Name: "gateway", Protocol: "openai", BaseURL: "https://existing.example/v1", APIKey: "existing-gateway-secret", Models: []string{"existing-model"}, Endpoints: []string{"chat_completions"}, Priority: 10, Fallback: true}
+	existing := config.Provider{Name: "gateway", Protocol: "openai", BaseURL: "https://existing.example/v1", APIKey: "existing-gateway-secret", Models: []string{"existing-model"}, Endpoints: []string{"responses"}, Priority: 10, Fallback: true}
 	config.ConfigureProviderPolicy(&existing, existing.Priority, existing.Fallback)
 	cfg.Providers["gateway"] = existing
 	cfg, err = config.ReplaceProviders(cfg, cfg.Providers)
@@ -82,7 +82,7 @@ func TestProviderBundleImportLastSameNameWins(t *testing.T) {
 	}
 	runtime := &testRuntime{cfg: cfg}
 	h := NewHandler("", runtime)
-	body := `{"format":"aetherrelay.provider-bundle","schema_version":1,"providers":[{"name":" Gateway ","enabled":true},{"name":"gateway","protocol":"openai","base_url":"https://new.example/v1","api_key":"new-secret","models":["new-model"],"endpoints":["chat_completions"],"priority":42,"enabled":true}]}`
+	body := `{"format":"aetherrelay.provider-bundle","schema_version":1,"providers":[{"name":" Gateway ","enabled":true},{"name":"gateway","protocol":"openai","base_url":"https://new.example/v1","api_key":"new-secret","models":["new-model"],"endpoints":["responses"],"priority":42,"enabled":true}]}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers/import", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")

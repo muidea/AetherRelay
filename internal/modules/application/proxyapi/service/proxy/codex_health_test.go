@@ -4,6 +4,7 @@ import (
 	clientaccess "aetherrelay/internal/pkg/aetherrelayclientaccess"
 	clientauth "aetherrelay/internal/pkg/aetherrelayclientauth"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 	usage "aetherrelay/internal/pkg/aetherrelayusage"
 	"encoding/json"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	metrics "aetherrelay/internal/pkg/aetherrelaymetrics"
-	"aetherrelay/internal/pkg/aetherrelaymetricsport"
 )
 
 func TestCodexPermanentAuthenticationFailureContract(t *testing.T) {
@@ -62,7 +62,7 @@ func TestCodexModelBlacklistIs404AndHealthNeutral(t *testing.T) {
 	h := &Handler{metricsRegistry: metricsport.AsPort(registry)}
 	registry.RecordRequestPlan("codexoauth", "gpt-sol", "responses", 502, time.Second, "upstream_failed", "", "", "", "")
 	before := registry.ProviderHealthSnapshot()["codexoauth"]
-	for _, endpoint := range []string{"/v1/responses", "/v1/messages", "/v1/chat/completions"} {
+	for _, endpoint := range []string{"/v1/responses", "/v1/messages"} {
 		for _, streaming := range []bool{false, true} {
 			f := codexresponses.NewFailure(codexresponses.KindModelNotFound, 0, nil)
 			retryable := false

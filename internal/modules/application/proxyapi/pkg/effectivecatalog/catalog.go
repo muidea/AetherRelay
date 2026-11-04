@@ -429,7 +429,7 @@ func chatGPTWebServiceablePaths(provider config.Provider, capabilities []string)
 			if imageGeneration {
 				result = append(result, path)
 			}
-		case "/v1/chat/completions", "/v1/responses", "/v1/search":
+		case "/v1/responses", "/v1/search":
 			if textGeneration {
 				result = append(result, path)
 			}
@@ -544,7 +544,7 @@ func BuiltinProviderViewFor(owner string) config.Provider {
 	return config.Provider{
 		Name:      BuiltinProviderID,
 		Protocol:  BuiltinProviderID,
-		Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses, config.ProviderEndpointImages},
+		Endpoints: []string{config.ProviderEndpointResponses, config.ProviderEndpointImages},
 		Priority:  ChatGPTWebPriority,
 		Disabled:  false,
 	}

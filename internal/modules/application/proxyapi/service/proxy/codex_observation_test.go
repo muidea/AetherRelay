@@ -16,6 +16,7 @@ import (
 	"aetherrelay/internal/modules/application/proxyapi/pkg/codexresponses"
 	archive "aetherrelay/internal/pkg/aetherrelayarchive"
 	usage "aetherrelay/internal/pkg/aetherrelayusage"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -126,15 +127,13 @@ func TestCodexAncillaryPayloadCannotChangeBusinessState(t *testing.T) {
 	for _, typ := range []string{"response.metadata", "codex.response.metadata", "codex.rate_limits", "responsesapi.websocket_timing"} {
 		payload := []byte(fmt.Sprintf(`{"type":%q,"delta":"not output","response":{"status":"completed","usage":{"input_tokens":99,"output_tokens":74}},"usage":{"output_tokens":74},"error":{"code":"rate_limit"},"future":{"nested":[null,true]}}`, typ))
 		anthropic := &textConversionStreamState{}
-		chat := &codexChatStreamState{}
 		for range 2 { // Repeated observations produce one fixed ignored feature.
 			out, err := codexResponsesEventToAnthropic(projectionCapability)(payload, anthropic)
-			chunks, chatErr := codexResponsesEventToChat(payload, chat)
-			if err != nil || chatErr != nil || len(out) != 0 || len(chunks) != 0 || anthropic.Completed || chat.Done || chat.OutputEvidence || anthropic.tokenUsage().Known || chat.Usage.Known {
-				t.Fatalf("%s mutated response: anthropic=%+v chat=%+v errors=%v/%v", typ, anthropic, chat, err, chatErr)
+			if err != nil || len(out) != 0 || anthropic.Completed || anthropic.tokenUsage().Known {
+				t.Fatalf("%s mutated response: anthropic=%+v error=%v", typ, anthropic, err)
 			}
 		}
-		if len(anthropic.IgnoredFeatures) != 1 || len(chat.IgnoredFeatures) != 1 {
+		if len(anthropic.IgnoredFeatures) != 1 {
 			t.Fatal("ignored features were not bounded/deduplicated")
 		}
 		if usage := codexWebsocketUsage(payload, tokenUsage{}); usage.Known || usage.OutputTokensKnown {
@@ -147,7 +146,7 @@ func TestCodexAncillaryPayloadCannotChangeBusinessState(t *testing.T) {
 }
 
 func TestCodexAncillaryEventsAcrossHTTPInterfaces(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/chat/completions", "/v1/responses"} {
+	for _, path := range []string{"/v1/messages", "/v1/responses"} {
 		for _, stream := range []bool{false, true} {
 			for _, tool := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/stream=%t/tool=%t", path, stream, tool), func(t *testing.T) {
@@ -206,7 +205,7 @@ func TestCodexAncillaryEventsAcrossHTTPInterfaces(t *testing.T) {
 						if !slices.Contains(events[0].IgnoredFeatures, "websocket_timing") || strings.Contains(w.Body.String(), "timing_metrics") {
 							t.Fatal("projection leaked/lost timing observation")
 						}
-						if path == "/v1/messages" && !strings.Contains(w.Body.String(), "event: message_stop") || path == "/v1/chat/completions" && !strings.Contains(w.Body.String(), "data: [DONE]") {
+						if path == "/v1/messages" && !strings.Contains(w.Body.String(), "event: message_stop") {
 							t.Fatal("missing client completion")
 						}
 						raw, err := os.ReadFile(filepath.Join(root, "test-client", "000001", "upstream_response_001.projection.sse"))
@@ -224,7 +223,7 @@ func TestCodexAncillaryEventsAcrossHTTPInterfaces(t *testing.T) {
 }
 
 func TestCodexConvertedStreamsDoNotCompleteOnTelemetryOrUnknownBusiness(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/chat/completions"} {
+	for _, path := range []string{"/v1/messages"} {
 		for _, mode := range []string{"only_timing", "output_then_eof", "unknown_business", "failed"} {
 			t.Run(path+"/"+mode, func(t *testing.T) {
 				h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, _ func(codexresponses.StreamStart) error, emit func([]byte) error) error {
@@ -267,7 +266,7 @@ func TestCodexConvertedStreamsDoNotCompleteOnTelemetryOrUnknownBusiness(t *testi
 }
 
 func TestCodexConvertedFailureKeepsTypedClassificationAndUsage(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/chat/completions"} {
+	for _, path := range []string{"/v1/messages"} {
 		t.Run(path, func(t *testing.T) {
 			h, _ := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{stream: func(_ context.Context, _ codexresponses.Request, _ func(codexresponses.StreamStart) error, emit func([]byte) error) error {
 				for _, payload := range []string{

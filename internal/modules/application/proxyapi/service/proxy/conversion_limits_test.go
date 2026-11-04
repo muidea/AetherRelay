@@ -469,21 +469,6 @@ func TestSystemContentBlocksBudgetIsIndependent(t *testing.T) {
 	assertConversionLimit(t, err, "content_blocks", maxConversionSystemBlocks+1, maxConversionSystemBlocks)
 }
 
-// Chat→Responses 的顶层消息条数走消息预算,不随协议内容块放宽。
-func TestChatMessageBudgetStaysAtMessageLimit(t *testing.T) {
-	messages := make([]any, maxConversionMessages)
-	for i := range messages {
-		messages[i] = map[string]any{"role": "user", "content": "hello"}
-	}
-	if _, err := buildCodexResponsesFromChat(map[string]any{"model": "gpt-5.2-codex", "messages": messages}, "gpt-5.2-codex"); err != nil {
-		t.Fatalf("chat history at the message limit must be admitted: %v", err)
-	}
-	messages = append(messages, map[string]any{"role": "user", "content": "hello"})
-	if _, err := buildCodexResponsesFromChat(map[string]any{"model": "gpt-5.2-codex", "messages": messages}, "gpt-5.2-codex"); err == nil {
-		t.Fatal("chat history above the message limit must be rejected")
-	}
-}
-
 // 边界在 handler 层同样成立:达到上限调用上游,越过上限本地拒绝且不触上游。
 func TestContentBlockBudgetBoundaryReachesUpstream(t *testing.T) {
 	calls := 0

@@ -201,6 +201,7 @@ type SearchSource struct {
 }
 
 type SearchResult struct {
+	Completion     completion.Search
 	ConversationID string
 	ActualModel    string
 	Text           string

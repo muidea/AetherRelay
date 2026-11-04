@@ -48,9 +48,7 @@ func mustHandlerConfig(cfg config.Config) config.Config {
 				provider.Endpoints = []string{config.ProviderEndpointMessages}
 			} else {
 				provider.Endpoints = []string{
-					config.ProviderEndpointChatCompletions,
 					config.ProviderEndpointResponses,
-					config.ProviderEndpointCompletions,
 					config.ProviderEndpointEmbeddings,
 					config.ProviderEndpointImages,
 				}

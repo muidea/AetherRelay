@@ -64,7 +64,7 @@ func codexIgnoredHeaderNames(r *http.Request) []string {
 		return nil
 	}
 	switch strings.TrimRight(r.URL.Path, "/") {
-	case "/v1/responses", "/v1/responses/compact", "/v1/chat/completions", "/v1/messages":
+	case "/v1/responses", "/v1/responses/compact", "/v1/messages":
 	default:
 		return nil
 	}

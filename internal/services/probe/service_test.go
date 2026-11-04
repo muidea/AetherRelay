@@ -19,10 +19,8 @@ func TestBuildProbeRequest(t *testing.T) {
 		path     string
 		stream   bool
 	}{
-		{config.ProviderEndpointChatCompletions, "/v1/chat/completions", true},
 		{config.ProviderEndpointMessages, "/v1/messages", true},
 		{config.ProviderEndpointResponses, "/v1/responses", true},
-		{config.ProviderEndpointCompletions, "/v1/completions", true},
 		{config.ProviderEndpointEmbeddings, "/v1/embeddings", false},
 	}
 	for _, tt := range tests {
@@ -53,10 +51,10 @@ func TestBuildProbeRequest(t *testing.T) {
 
 func TestJoinURL(t *testing.T) {
 	tests := map[string]string{
-		"https://api.example.test|/v1/chat/completions":         "https://api.example.test/v1/chat/completions",
-		"https://api.example.test/v1/|/v1/chat/completions":     "https://api.example.test/v1/chat/completions",
-		"https://api.example.test/codex/v1|/v1/responses":       "https://api.example.test/codex/v1/responses",
-		"https://api.example.test/codex/v1|v1/chat/completions": "https://api.example.test/codex/v1/chat/completions",
+		"https://api.example.test|/v1/responses":          "https://api.example.test/v1/responses",
+		"https://api.example.test/v1/|/v1/responses":      "https://api.example.test/v1/responses",
+		"https://api.example.test/codex/v1|/v1/responses": "https://api.example.test/codex/v1/responses",
+		"https://api.example.test/codex/v1|v1/responses":  "https://api.example.test/codex/v1/responses",
 	}
 	for input, want := range tests {
 		parts := strings.SplitN(input, "|", 2)
@@ -102,7 +100,7 @@ func TestIsEndpointDriftResponse(t *testing.T) {
 
 func TestRunProbePopulatesContractFieldsAndOutput(t *testing.T) {
 	client := &http.Client{Transport: probeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/v1/chat/completions" {
+		if r.URL.Path != "/v1/responses" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer upstream-key" {
@@ -118,19 +116,19 @@ func TestRunProbePopulatesContractFieldsAndOutput(t *testing.T) {
 	provider := config.Provider{
 		Name: "display-name", Protocol: "openai", BaseURL: "https://upstream.test", APIKey: "upstream-key",
 	}
-	result := runProbe(client, "route-owner", config.ProviderEndpointChatCompletions,
-		"DeepSeek-V4-Flash", provider, "/v1/chat/completions", []byte(`{"model":"DeepSeek-V4-Flash"}`), time.Second, false)
+	result := runProbe(client, "route-owner", config.ProviderEndpointResponses,
+		"DeepSeek-V4-Flash", provider, "/v1/responses", []byte(`{"model":"DeepSeek-V4-Flash"}`), time.Second, false)
 	if !result.OK || result.Provider != "route-owner" || result.Protocol != "openai" ||
-		result.Endpoint != config.ProviderEndpointChatCompletions || result.Model != "DeepSeek-V4-Flash" ||
-		result.UpstreamPath != "/v1/chat/completions" || result.Status != http.StatusOK || result.Conclusion != "success" {
+		result.Endpoint != config.ProviderEndpointResponses || result.Model != "DeepSeek-V4-Flash" ||
+		result.UpstreamPath != "/v1/responses" || result.Status != http.StatusOK || result.Conclusion != "success" {
 		t.Fatalf("result = %#v", result)
 	}
 
 	var out bytes.Buffer
 	printResultTo(&out, result)
 	for _, field := range []string{
-		"provider=route-owner", "protocol=openai", "endpoint=chat_completions",
-		"model=DeepSeek-V4-Flash", "path=/v1/chat/completions", "status=200", "conclusion=success",
+		"provider=route-owner", "protocol=openai", "endpoint=responses",
+		"model=DeepSeek-V4-Flash", "path=/v1/responses", "status=200", "conclusion=success",
 	} {
 		if !strings.Contains(out.String(), field) {
 			t.Fatalf("output missing %q: %s", field, out.String())
@@ -154,7 +152,7 @@ func TestCheckUsesStableFirstCatalogModel(t *testing.T) {
 	defer upstream.Close()
 	cfg := config.Config{
 		Providers: map[string]config.Provider{
-			"route": {Protocol: "openai", BaseURL: upstream.URL, Models: []string{"z-model", "a-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"route": {Protocol: "openai", BaseURL: upstream.URL, Models: []string{"z-model", "a-model"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"z-model": {},
@@ -174,4 +172,12 @@ type probeRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f probeRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func TestProbeRejectsRetiredEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"chat_completions", "completions"} {
+		if _, _, err := buildProbeRequest(endpoint, "model", false); err == nil {
+			t.Fatalf("retired probe accepted: %s", endpoint)
+		}
+	}
 }

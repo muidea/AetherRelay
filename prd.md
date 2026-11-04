@@ -37,17 +37,17 @@
 
 ### G-03 标准端点与协议适配
 
-- **G-03.01** 支持 OpenAI Chat Completions 原生转发。
+- **G-03.01** 支持 OpenAI Responses 原生转发。
 - **G-03.02** 支持 OpenAI Responses 原生转发。
-- **G-03.03** 支持 OpenAI Completions 原生转发。
+- **G-03.03** 旧 OpenAI Completions 已退役，不提供入口及转发。
 - **G-03.04** 支持 OpenAI Embeddings 原生转发。
 - **G-03.05** 支持 Anthropic Messages 原生转发。
-- **G-03.06** 支持 OpenAI Chat 请求转换为 Anthropic Messages 请求。
-- **G-03.07** 支持 Anthropic Messages 请求转换为 OpenAI Chat 请求。
+- **G-03.06** 支持按方向化能力声明将 Responses 请求转换为 Anthropic Messages。
+- **G-03.07** 支持按方向化能力声明将 Anthropic Messages 请求转换为 Responses。
 - **G-03.08** 双向转换覆盖基础文本消息和常用生成参数。
 - **G-03.09** 双向转换覆盖基础 SSE 流式输出。
 - **G-03.10** 不受支持的转换特性必须在访问上游前被拒绝。
-- **G-03.11** Responses、Completions 和 Embeddings 不通过协议转换派生能力。
+- **G-03.11** Responses↔Messages 仅按方向化能力声明开放；Embeddings 必须原生支持。
 - **G-03.12** 本地模型列表不访问上游。
 
 ### G-04 稳定错误与流式结果
@@ -159,10 +159,10 @@
 - [x] **D-01.02** `/healthz` 返回 JSON `{"status":"ok"}`。
 - [x] **D-01.03** `/healthz` 在配置入站 API Key 后仍可匿名访问。
 - [x] **D-01.04** `/healthz` 响应包含透传或新生成的 `X-Request-ID`。
-- [x] **D-01.05** `POST /v1/chat/completions` 被识别为受支持入站接口。
+- [x] **D-01.05** `POST /v1/chat/completions` 已退役，返回 404，不访问上游。
 - [x] **D-01.06** `POST /v1/messages` 被识别为受支持入站接口。
 - [x] **D-01.07** `POST /v1/responses` 被识别为受支持入站接口。
-- [x] **D-01.08** `POST /v1/completions` 被识别为受支持入站接口。
+- [x] **D-01.08** `POST /v1/completions` 已退役，返回 404，不访问上游。
 - [x] **D-01.09** `POST /v1/embeddings` 被识别为受支持入站接口。
 - [x] **D-01.10** `GET /v1/models` 被识别为受支持入站接口。
 - [x] **D-01.11** `POST /v1/models` 作为无客户端依据的重复兼容端点返回 HTTP 404。
@@ -212,7 +212,7 @@
 - [x] **D-02.28** 每个 catalog 模型必须配置正数 `max_output_tokens`。
 - [x] **D-02.29** `max_output_tokens` 必须小于 `context_window_tokens`。
 - [x] **D-02.30** 每个 catalog 模型必须配置至少一个 operation。
-- [x] **D-02.31** operation 只允许 `chat_completions` 和 `embeddings`。
+- [x] **D-02.31** operation 只允许当前保留的 Provider endpoint。
 - [x] **D-02.32** operation 在加载时完成去重和稳定排序。
 - [x] **D-02.33** endpoint capability 在加载时完成去重和稳定排序。
 - [x] **D-02.34** catalog 模型未匹配 enabled provider 时启动失败。
@@ -276,12 +276,12 @@
 
 ### D-04 原生转发与协议转换
 
-- [x] **D-04.01** OpenAI Chat + OpenAI `chat_completions` 生成 native plan。
-- [x] **D-04.02** OpenAI Chat + Anthropic `messages` 生成 `openai_to_anthropic` plan。
+- [x] **D-04.01** OpenAI Responses + OpenAI `responses` 生成 native plan。
+- [x] **D-04.02** Responses + Anthropic `messages` 按发布的能力生成 `responses_to_anthropic` plan。
 - [x] **D-04.03** Anthropic Messages + Anthropic `messages` 生成 native plan。
-- [x] **D-04.04** Anthropic Messages + OpenAI `chat_completions` 生成 `anthropic_to_openai` plan。
+- [x] **D-04.04** Anthropic Messages + OpenAI `responses` 仅按已发布转换能力生成 `anthropic_to_responses` plan。
 - [x] **D-04.05** OpenAI Responses 只允许 OpenAI `responses` 原生转发。
-- [x] **D-04.06** OpenAI Completions 只允许 OpenAI `completions` 原生转发。
+- [x] **D-04.06** 旧 Completions 入口及原生转发已删除。
 - [x] **D-04.07** OpenAI Embeddings 只允许 OpenAI `embeddings` 原生转发。
 - [x] **D-04.08** Embeddings-only 模型拒绝 chat、messages、responses 和 completions 请求。
 - [x] **D-04.09** OpenAI → Anthropic 转换支持 system 文本。
@@ -302,7 +302,7 @@
 - [x] **D-04.24** Anthropic → OpenAI 非流式响应转换为 Anthropic-compatible 响应。
 - [x] **D-04.25** 转换路径的上游错误保留 HTTP 状态。
 - [x] **D-04.26** 转换路径的上游错误正文经过客户端协议安全封装。
-- [x] **D-04.27** OpenAI SDK 可调用 models、chat 和 embeddings 原生路径。
+- [x] **D-04.27** OpenAI SDK 可调用 models、responses 和 embeddings 原生路径。
 - [x] **D-04.28** Anthropic SDK 可调用 Messages 原生路径。
 - [x] **D-04.29** OpenAI SDK 可消费 OpenAI → Anthropic 转换结果。
 - [x] **D-04.30** Anthropic SDK 可消费 Anthropic → OpenAI 转换结果。
@@ -314,7 +314,7 @@
 
 - [x] **D-05.01** SSE 响应逐行写入客户端。
 - [x] **D-05.02** 每次写入 SSE 数据后执行 flush。
-- [x] **D-05.03** Chat Completions 和 Completions 使用 `[DONE]` 识别成功终止。
+- [x] **D-05.03** 旧 Chat Completions / Completions 的 `[DONE]` 终止适配已删除。
 - [x] **D-05.04** Anthropic Messages 使用 `message_stop` 识别成功终止。
 - [x] **D-05.05** Responses 使用 `response.completed` 识别成功终止。
 - [x] **D-05.06** Responses 使用 `response.failed` 识别上游显式失败。
@@ -556,10 +556,10 @@
 - [x] **D-11.10** probe 拒绝 provider 未声明的直连 capability。
 - [x] **D-11.11** probe 拒绝不在 catalog 中的模型。
 - [x] **D-11.12** probe 拒绝 RouteOwner 与指定 provider 不一致的模型。
-- [x] **D-11.13** probe 支持 chat_completions 最小请求。
+- [x] **D-11.13** probe 支持 responses 最小请求，拒绝 chat_completions。
 - [x] **D-11.14** probe 支持 messages 最小请求。
 - [x] **D-11.15** probe 支持 responses 最小请求。
-- [x] **D-11.16** probe 支持 completions 最小请求。
+- [x] **D-11.16** probe 拒绝已退役的 completions。
 - [x] **D-11.17** probe 支持 embeddings 最小请求。
 - [x] **D-11.18** probe 可选执行流式探测。
 - [x] **D-11.19** probe 输出 provider、protocol、capability、model、path、status、duration 和 conclusion。

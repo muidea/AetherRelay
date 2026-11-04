@@ -237,32 +237,6 @@ func TestCodexProjectionWebsocketMetadataIsObservational(t *testing.T) {
 	}
 }
 
-func TestCodexChatWebsocketObservationsPreserveOutputAndCompletion(t *testing.T) {
-	state := &codexChatStreamState{}
-	for _, typ := range []string{"response.metadata", "codex.response.metadata", "codex.rate_limits", "responsesapi.websocket_timing"} {
-		out, err := codexResponsesEventToChat(projectionJSON(map[string]any{"type": typ, "headers": map[string]any{"x-codex-turn-state": "opaque"}}), state)
-		if err != nil || len(out) != 0 || state.OutputEvidence || state.Started || state.Done || state.Usage != (tokenUsage{}) {
-			t.Fatalf("%s changed response state: out=%q state=%+v err=%v", typ, out, state, err)
-		}
-	}
-	for _, event := range []string{
-		`{"type":"response.created","response":{"id":"resp_chat","model":"gpt-6.1-sol"}}`,
-		`{"type":"response.output_text.delta","delta":"hello"}`,
-		`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}`,
-	} {
-		out, err := codexResponsesEventToChat([]byte(event), state)
-		if err != nil || len(out) == 0 {
-			t.Fatalf("event=%s out=%q err=%v", event, out, err)
-		}
-	}
-	if !state.Done || state.Usage.TotalTokens != 5 {
-		t.Fatalf("state=%+v", state)
-	}
-	if _, err := codexResponsesEventToChat([]byte(`{"type":"response.future_business_event"}`), &codexChatStreamState{}); err == nil {
-		t.Fatal("unknown business event accepted")
-	}
-}
-
 func TestCodexProjectionStopsUseTextBlockAfterTools(t *testing.T) {
 	_, fixture := projectionFixture()
 	mapper := withAnthropicStopMapper(codexResponsesEventToAnthropic(projectionCapability), []string{"afterX"})

@@ -197,12 +197,12 @@ func TestCodexAstraManifestHonorsExplicitMetadata(t *testing.T) {
 func TestModelSupportedEndpointsUsesTransportMatrix(t *testing.T) {
 	snap := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
 		"claude": {
-			{ModelID: "claude", RouteOwner: "anthropic", SupportedEndpoints: []string{"/v1/chat/completions", "/v1/messages"}},
+			{ModelID: "claude", RouteOwner: "anthropic", SupportedEndpoints: []string{"/v1/messages"}},
 			{ModelID: "claude", RouteOwner: "openai", SupportedEndpoints: []string{"/v1/responses"}},
 		},
 	}}
 	got := modelSupportedEndpoints(snap, "claude", clientaccess.All())
-	want := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens"}
+	want := []string{"/v1/messages", "/v1/responses", "/v1/responses/input_tokens"}
 	if len(got) != len(want) {
 		t.Fatalf("supported endpoints=%v, want %v", got, want)
 	}
@@ -217,7 +217,7 @@ func TestCodexModelSupportedEndpointsIncludeAdapterEntrypoints(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{})
 	snap := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}}})
 	got := modelSupportedEndpoints(snap, "gpt-codex", clientaccess.All())
-	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"} {
+	for _, path := range []string{"/v1/messages", "/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"} {
 		found := false
 		for _, item := range got {
 			if item == path {
@@ -241,10 +241,10 @@ func TestCodexModelSupportedEndpointsIncludeAdapterEntrypoints(t *testing.T) {
 
 func TestModelSupportedEndpointsIncludesChatGPTWebSearchAndImages(t *testing.T) {
 	snap := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
-		"gpt": {{ModelID: "gpt", RouteOwner: effectivecatalog.BuiltinProviderID, Builtin: true, SupportedEndpoints: []string{"/v1/chat/completions", "/v1/responses", "/v1/search", "/v1/images/generations", "/v1/images/edits"}}},
+		"gpt": {{ModelID: "gpt", RouteOwner: effectivecatalog.BuiltinProviderID, Builtin: true, SupportedEndpoints: []string{"/v1/responses", "/v1/search", "/v1/images/generations", "/v1/images/edits"}}},
 	}}
 	got := modelSupportedEndpoints(snap, "gpt", clientaccess.All())
-	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/search", "/v1/images/generations", "/v1/images/edits"} {
+	for _, path := range []string{"/v1/responses", "/v1/search", "/v1/images/generations", "/v1/images/edits"} {
 		found := false
 		for _, item := range got {
 			if item == path {
@@ -314,7 +314,7 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 		Providers: map[string]config.Provider{
 			"responses": {
 				Name: "responses", Protocol: "openai", BaseURL: "https://example.invalid", APIKey: "test",
-				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions, config.ProviderEndpointResponses},
+				Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
@@ -335,7 +335,7 @@ func TestModelsOnlyProjectsConversionDirectionsWithEligibleProviders(t *testing.
 	if conversions.ResponsesToAnthropic != nil {
 		t.Fatalf("responses_to_anthropic projected without an Anthropic provider: %#v", conversions)
 	}
-	wantEndpoints := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/responses/input_tokens"}
+	wantEndpoints := []string{"/v1/messages", "/v1/responses", "/v1/responses/input_tokens"}
 	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, wantEndpoints) {
 		t.Fatalf("supported endpoints = %v, want %v", response.Data[0].SupportedEndpoints, wantEndpoints)
 	}
@@ -346,7 +346,7 @@ func TestModelsAreScopedToAuthorizedProviders(t *testing.T) {
 		Candidates: map[string][]effectivecatalog.Candidate{
 			"shared": {
 				{ModelID: "shared", RouteOwner: "primary", ContextWindowTokens: 100, SupportedEndpoints: []string{"/v1/responses"}, ConversionModes: []string{"anthropic_to_responses"}},
-				{ModelID: "shared", RouteOwner: "backup", ContextWindowTokens: 50, SupportedEndpoints: []string{"/v1/chat/completions"}},
+				{ModelID: "shared", RouteOwner: "backup", ContextWindowTokens: 50, SupportedEndpoints: []string{"/v1/embeddings"}},
 			},
 			"private": {{ModelID: "private", RouteOwner: "primary", SupportedEndpoints: []string{"/v1/responses"}}},
 		},
@@ -364,7 +364,7 @@ func TestModelsAreScopedToAuthorizedProviders(t *testing.T) {
 	if len(response.Data) != 1 || response.Data[0].ID != "shared" {
 		t.Fatalf("models=%#v", response.Data)
 	}
-	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, []string{"/v1/chat/completions"}) {
+	if !reflect.DeepEqual(response.Data[0].SupportedEndpoints, []string{"/v1/embeddings"}) {
 		t.Fatalf("endpoints=%v", response.Data[0].SupportedEndpoints)
 	}
 	if response.Data[0].ContextWindowTokens != 50 {
@@ -372,5 +372,22 @@ func TestModelsAreScopedToAuthorizedProviders(t *testing.T) {
 	}
 	if response.Data[0].Capabilities != nil && response.Data[0].Capabilities.Conversions != nil {
 		t.Fatalf("unauthorized provider contributed conversion=%#v", response.Data[0].Capabilities.Conversions)
+	}
+}
+
+func TestModelsDeclaresWebResponsesBoundariesPerProvider(t *testing.T) {
+	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{"web": {ID: "web", NativeResponsesDeclared: true, NativeResponsesTools: true}}}
+	snap := effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "web"}}, "2026-11-04T00:00:00Z")
+	list := buildModelsListResponse(snap, clientaccess.All())
+	if len(list.Data) != 1 {
+		t.Fatalf("models=%+v", list)
+	}
+	capabilities := list.Data[0].Capabilities
+	if capabilities == nil || capabilities.ChatGPTWeb == nil || capabilities.Native != nil {
+		t.Fatalf("capabilities=%+v", capabilities)
+	}
+	web := capabilities.ChatGPTWeb.Responses
+	if !web.Text || !web.Streaming || !web.WebSearch || !web.SearchSingleUserQuery || web.FunctionTools || web.StructuredOutput || web.Continuation || web.Background || web.MaxOutputTokens || web.Usage != "estimated_text_only" {
+		t.Fatalf("web=%+v", web)
 	}
 }

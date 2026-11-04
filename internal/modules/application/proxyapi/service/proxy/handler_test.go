@@ -52,19 +52,19 @@ func TestPrepareClientKeyIndexExcludesBuiltinLocalScope(t *testing.T) {
 
 func TestOpenAICompatibleBufferedUsage(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/v1/chat/completions" {
+		if r.URL.Path != "/v1/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Fatalf("unexpected authorization: %s", got)
 		}
-		return jsonResponse(`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":4}}}`), nil
+		return jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10,"input_tokens_details":{"cached_tokens":4}},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`), nil
 	})
 
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -87,8 +87,8 @@ func TestOpenAICompatibleBufferedUsage(t *testing.T) {
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "request.json"), `"model": "gpt-test"`)
-	assertFileContains(t, filepath.Join(interactionDir, "request.meta.json"), `"path": "/v1/chat/completions"`)
-	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"url": "https://upstream.test/v1/chat/completions"`)
+	assertFileContains(t, filepath.Join(interactionDir, "request.meta.json"), `"path": "/v1/responses"`)
+	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"url": "https://upstream.test/v1/responses"`)
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_response.json"), `"status": 200`)
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"usage"`)
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"response_path": "response.json"`)
@@ -126,13 +126,13 @@ func TestOpenAICompatibleGzipResponseUsage(t *testing.T) {
 		if got := r.Header.Get("Accept-Encoding"); got != "" {
 			t.Fatalf("accept-encoding should not be forwarded upstream: %s", got)
 		}
-		return gzipJSONResponse(`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":27575,"completion_tokens":4293,"total_tokens":31868,"prompt_tokens_details":{"cached_tokens":13440},"prompt_cache_hit_tokens":13440,"prompt_cache_miss_tokens":14135}}`)
+		return gzipJSONResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":27575,"output_tokens":4293,"total_tokens":31868,"input_tokens_details":{"cached_tokens":13440}},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`)
 	})
 
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set("Accept-Encoding", "gzip")
 	response := newResponseRecorder()
 
@@ -164,20 +164,20 @@ func TestOpenAICompatibleGzipResponseUsage(t *testing.T) {
 		t.Fatalf("cache hit rate = %s", got)
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
-	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"prompt_tokens":27575`)
+	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"input_tokens":27575`)
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"cached_input_tokens": 13440`)
 }
 
 func TestOpenAICompatibleStreamingUsage(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		body := strings.Join([]string{
-			"data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}",
+			"data: {\"type\":\"response.output_text.delta\",\"delta\":\"he\"}",
 			"",
-			"data: {\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}",
+			"data: {\"type\":\"response.output_text.delta\",\"delta\":\"llo\"}",
 			"",
-			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":2}}}",
+			"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"total_tokens\":7,\"input_tokens_details\":{\"cached_tokens\":2}}}}",
 			"",
-			"data: [DONE]",
+			"data: {\"type\":\"response.completed\"}",
 			"",
 		}, "\n")
 		return sseResponse(body), nil
@@ -186,7 +186,7 @@ func TestOpenAICompatibleStreamingUsage(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -194,7 +194,7 @@ func TestOpenAICompatibleStreamingUsage(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if !strings.Contains(response.Body.String(), "data: [DONE]") {
+	if !strings.Contains(response.Body.String(), "response.completed") {
 		t.Fatalf("stream response was not forwarded: %s", response.Body.String())
 	}
 	assertUnifiedSSEHeaders(t, response.Header())
@@ -213,12 +213,8 @@ func TestOpenAICompatibleStreamingUsage(t *testing.T) {
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "request.json"), `"stream": true`)
-	assertFileContains(t, filepath.Join(interactionDir, "response.sse"), "data: [DONE]")
-	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"content": "hello"`)
-	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"total_tokens": 7`)
-	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"cached_tokens": 2`)
+	assertFileContains(t, filepath.Join(interactionDir, "response.sse"), "response.completed")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"response_path": "response.sse"`)
-	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"full_response_path": "response.json"`)
 }
 
 func TestOpenAIStreamingReadErrorLogsRoundAndMetadata(t *testing.T) {
@@ -240,7 +236,7 @@ func TestOpenAIStreamingReadErrorLogsRoundAndMetadata(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: &failingReadCloser{
-				chunks: [][]byte{[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")},
+				chunks: [][]byte{[]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")},
 				err:    errors.New("context deadline exceeded"),
 			},
 		}, nil
@@ -249,7 +245,7 @@ func TestOpenAIStreamingReadErrorLogsRoundAndMetadata(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -261,14 +257,14 @@ func TestOpenAIStreamingReadErrorLogsRoundAndMetadata(t *testing.T) {
 	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "STREAM") {
 		t.Fatalf("expected stream warning with WARN level and STREAM marker, got: %s", logs)
 	}
-	if !strings.Contains(logs, "read upstream stream: context deadline exceeded") {
+	if !strings.Contains(logs, "read raw stream: context deadline exceeded") {
 		t.Fatalf("expected upstream read error, got: %s", logs)
 	}
 	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "round=1") {
 		t.Fatalf("expected final warning with round=1, got: %s", logs)
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
-	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"error": "read upstream stream: context deadline exceeded"`)
+	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"error": "read raw stream: context deadline exceeded"`)
 }
 
 func TestOpenAIStreamingClientCancelIsIdentified(t *testing.T) {
@@ -291,7 +287,7 @@ func TestOpenAIStreamingClientCancelIsIdentified(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: &failingReadCloser{
-				chunks:    [][]byte{[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")},
+				chunks:    [][]byte{[]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")},
 				beforeErr: cancel,
 				err:       context.Canceled,
 			},
@@ -301,7 +297,7 @@ func TestOpenAIStreamingClientCancelIsIdentified(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 	ctx, cancelFunc := context.WithCancel(request.Context())
 	cancel = cancelFunc
 	request = request.WithContext(ctx)
@@ -314,75 +310,7 @@ func TestOpenAIStreamingClientCancelIsIdentified(t *testing.T) {
 		t.Fatalf("expected client cancel log, got: %s", logs)
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
-	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"error": "read upstream stream: client canceled downstream request"`)
-}
-
-func TestAnthropicBufferedConversion(t *testing.T) {
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/v1/messages" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		if got := r.Header.Get("X-API-Key"); got != "anthropic-key" {
-			t.Fatalf("unexpected api key: %s", got)
-		}
-		return jsonResponse(`{"id":"msg_1","model":"claude-test","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":4,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}`), nil
-	})
-
-	tempDir := t.TempDir()
-	interactionRecorder, err := archive.NewRecorder(filepath.Join(tempDir, "interactions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		ListenAddr:     ":0",
-		InteractionDir: filepath.Join(tempDir, "interactions"),
-		Providers: map[string]config.Provider{
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "anthropic-key"},
-		},
-	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"claude-test","messages":[{"role":"system","content":"brief"},{"role":"user","content":"hi"}]}`)
-	response := newResponseRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if got := payload["object"]; got != "chat.completion" {
-		t.Fatalf("object = %v", got)
-	}
-	// CP-OBS-007: the Anthropic input_tokens excludes the cache counters, so the
-	// OpenAI-shaped projection must report the cache-inclusive prompt.
-	usage, _ := payload["usage"].(map[string]any)
-	if usage["prompt_tokens"] != float64(18) || usage["total_tokens"] != float64(22) {
-		t.Fatalf("converted usage = %v", usage)
-	}
-	details, _ := usage["prompt_tokens_details"].(map[string]any)
-	if details["cached_tokens"] != float64(5) {
-		t.Fatalf("converted usage details = %v", usage)
-	}
-	records := readUsageFromStore(t, handler)
-	if got := csvField(t, records, 1, "input_tokens"); got != "18" {
-		t.Fatalf("input tokens = %s", got)
-	}
-	if got := csvField(t, records, 1, "output_tokens"); got != "4" {
-		t.Fatalf("output tokens = %s", got)
-	}
-	if got := csvField(t, records, 1, "cached_input_tokens"); got != "5" {
-		t.Fatalf("cached input tokens = %s", got)
-	}
-	if got := csvField(t, records, 1, "cache_creation_input_tokens"); got != "2" {
-		t.Fatalf("cache creation input tokens = %s", got)
-	}
-	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.2778" {
-		t.Fatalf("cache hit rate = %s", got)
-	}
+	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"error": "read raw stream: client canceled downstream request"`)
 }
 
 func TestAnthropicNativeAvoidsDuplicateV1AndArchives(t *testing.T) {
@@ -511,7 +439,7 @@ func TestUnmatchedModelWithoutDefaultProviderReturns400(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":2,"output_tokens":1}}`))}, nil
 	})
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"unknown-model","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"unknown-model","messages":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -547,7 +475,7 @@ func TestMultipleProvidersMatchingSameModelReturns400(t *testing.T) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
 	})
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"shared-model","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"shared-model","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -581,7 +509,7 @@ func TestDefaultProviderNoLongerRoutesUnknownModel(t *testing.T) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
 	})
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"healthcheck","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"healthcheck","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
@@ -663,7 +591,7 @@ func TestOpenAICompatibleProviderSelectionByExplicitModelPattern(t *testing.T) {
 		if r.URL.Host != "deepseek.test" {
 			t.Fatalf("unexpected host: %s", r.URL.Host)
 		}
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 
 	tmpDir := t.TempDir()
@@ -687,7 +615,7 @@ func TestOpenAICompatibleProviderSelectionByExplicitModelPattern(t *testing.T) {
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -704,7 +632,7 @@ func TestOpenAICompatibleProviderSelectionByConfiguredModelPattern(t *testing.T)
 		if r.URL.Host != "custom-openai.test" {
 			t.Fatalf("unexpected host: %s", r.URL.Host)
 		}
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 
 	tmpDir := t.TempDir()
@@ -722,7 +650,7 @@ func TestOpenAICompatibleProviderSelectionByConfiguredModelPattern(t *testing.T)
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"kimi-k2","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"kimi-k2","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -755,7 +683,7 @@ func TestProviderExceptionLogsAreProminent(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -814,65 +742,6 @@ func TestRawProxyUsesBodyModelToResolveProvider(t *testing.T) {
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"ok":true`)
 	records := readUsageFromStore(t, handler)
 	if got := csvField(t, records, 1, "provider"); got != "deepseek" {
-		t.Fatalf("provider = %s", got)
-	}
-}
-
-func TestAnthropicMessagesConvertsToOpenAIChat(t *testing.T) {
-	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.String() != "https://openai.test/v1/chat/completions" {
-			t.Fatalf("unexpected url: %s", r.URL.String())
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer openai-key" {
-			t.Fatalf("unexpected authorization: %s", got)
-		}
-		if got := r.Header.Get("X-API-Key"); got != "" {
-			t.Fatalf("x-api-key should not be forwarded to openai provider: %s", got)
-		}
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload["model"] != "gpt-5.4" {
-			t.Fatalf("model = %v", payload["model"])
-		}
-		return jsonResponse(`{"id":"chatcmpl-1","model":"gpt-5.4","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`), nil
-	})
-
-	tmpDir := t.TempDir()
-	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		ListenAddr:     ":0",
-		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		Providers: map[string]config.Provider{
-			"openai":    {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "openai-key", Models: []string{"gpt-*"}},
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key", Models: []string{"claude-*"}},
-		},
-	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/messages", `{"model":"gpt-5.4","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
-	response := newResponseRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `"type":"message"`) && !strings.Contains(response.Body.String(), `"type": "message"`) {
-		t.Fatalf("expected anthropic message response, got: %s", response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), "hello") {
-		t.Fatalf("expected converted content, got: %s", response.Body.String())
-	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
-	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "openai"`)
-	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `/v1/chat/completions`)
-	records := readUsageFromStore(t, handler)
-	if got := csvField(t, records, 1, "provider"); got != "openai" {
 		t.Fatalf("provider = %s", got)
 	}
 }
@@ -959,7 +828,7 @@ func TestExplicitProviderHeaderIsIgnored(t *testing.T) {
 		if r.URL.Host != "deepseek.test" {
 			t.Fatalf("unexpected host: %s", r.URL.Host)
 		}
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
@@ -976,7 +845,7 @@ func TestExplicitProviderHeaderIsIgnored(t *testing.T) {
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set("X-AI-Provider", "openai")
 	response := newResponseRecorder()
 
@@ -989,8 +858,8 @@ func TestExplicitProviderHeaderIsIgnored(t *testing.T) {
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "deepseek"`)
 }
 
-func TestRawOpenAIStreamArchivesFullResponse(t *testing.T) {
-	// 使用真实 Responses API SSE(response.completed 终止),而非 Chat Completions+[DONE]。
+func TestRawResponsesStreamArchivesEventsAndOutcome(t *testing.T) {
+	// Responses API SSE 以 response.completed 终止。
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/v1/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -1130,7 +999,7 @@ func TestDisabledProviderIsSkippedForModelSelection(t *testing.T) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
 	})
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
@@ -1155,7 +1024,7 @@ func TestDisabledProviderIsNotMatchedByModel(t *testing.T) {
 		},
 	}
 	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
@@ -1345,12 +1214,12 @@ func newResponseRecorder() *httptest.ResponseRecorder {
 
 func TestRequestIDPassesThroughClientHeader(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set(RequestIDHeader, "client-supplied-123")
 	response := newResponseRecorder()
 
@@ -1374,7 +1243,7 @@ func TestUsageCompletesWhenBodyReadFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.cfg.MaxRequestBodyBytes = 8
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"too large"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"too large"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -1395,12 +1264,12 @@ func TestUsageCompletesWhenBodyReadFails(t *testing.T) {
 
 func TestRequestIDGeneratedWhenAbsent(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -1452,7 +1321,7 @@ func TestRequestIDRawProxyAttachesToRound(t *testing.T) {
 
 func TestStablePrefixFingerprintAndDriftRecordedInMetadata(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
@@ -1460,12 +1329,12 @@ func TestStablePrefixFingerprintAndDriftRecordedInMetadata(t *testing.T) {
 
 	// 3 次不同内容的请求,触发漂移事件(阈值 3)
 	bodies := []string{
-		`{"model":"gpt-test","messages":[{"role":"user","content":"A"}]}`,
-		`{"model":"gpt-test","messages":[{"role":"user","content":"B"}]}`,
-		`{"model":"gpt-test","messages":[{"role":"user","content":"C"}]}`,
+		`{"model":"gpt-test","input":[{"role":"user","content":"A"}]}`,
+		`{"model":"gpt-test","input":[{"role":"user","content":"B"}]}`,
+		`{"model":"gpt-test","input":[{"role":"user","content":"C"}]}`,
 	}
 	for _, body := range bodies {
-		req := newRequest(http.MethodPost, "/v1/chat/completions", body)
+		req := newRequest(http.MethodPost, "/v1/responses", body)
 		handler.ServeHTTP(newResponseRecorder(), req)
 	}
 	interactionDir := filepath.Join(tmpDir, "interactions", "000003")
@@ -1476,13 +1345,13 @@ func TestStablePrefixFingerprintAndDriftRecordedInMetadata(t *testing.T) {
 
 func TestMetricsEndpointRecordedThroughHandler(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":30}}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150,"input_tokens_details":{"cached_tokens":30}},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
 	for i := 0; i < 2; i++ {
-		request := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+		request := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 		handler.ServeHTTP(newResponseRecorder(), request)
 	}
 
@@ -1526,9 +1395,9 @@ func TestMetricsEndpointRecordedThroughHandler(t *testing.T) {
 		t.Fatalf("metrics status = %d, want 200", metricsRec.Code)
 	}
 	body := metricsRec.Body.String()
-	wantMetric := `aetherrelay_requests_total{provider="openai",model="gpt-test",route="chat_completions",status="2xx",outcome="success",client_endpoint="/v1/chat/completions",upstream_protocol="openai",upstream_endpoint="/v1/chat/completions",conversion_mode="native",conversion_level="0"} 2`
+	wantMetric := `aetherrelay_requests_total{provider="openai",model="gpt-test",route="responses",status="2xx",outcome="success",client_endpoint="/v1/responses",upstream_protocol="openai",upstream_endpoint="/v1/responses",conversion_mode="native",conversion_level="0"} 2`
 	if !strings.Contains(body, wantMetric) {
-		t.Fatalf("expected chat_completions 2xx TransportPlan counter, got:\n%s", body)
+		t.Fatalf("expected responses 2xx TransportPlan counter, got:\n%s", body)
 	}
 	if !strings.Contains(body, `aetherrelay_cache_hit_rate{provider="openai",model="gpt-test"}`) {
 		t.Fatalf("expected cache_hit_rate metric, got:\n%s", body)
@@ -1540,11 +1409,11 @@ func TestClientAPIKeyIdentity(t *testing.T) {
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	withClientKey(handler, "test", "secret")
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 
 	// 未携带 Key → 401，不访问上游。
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	req.Header.Del("Authorization")
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1557,7 +1426,7 @@ func TestClientAPIKeyIdentity(t *testing.T) {
 		t.Fatal("upstream should not be called for unknown key")
 		return nil, nil
 	})
-	req = newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req = newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	req.Header.Set("Authorization", "Bearer unknown-secret")
 	rec = newResponseRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1570,9 +1439,9 @@ func TestClientAPIKeyIdentity(t *testing.T) {
 
 	// 已知 Bearer → 200
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
-	req = newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req = newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec = newResponseRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1581,7 +1450,7 @@ func TestClientAPIKeyIdentity(t *testing.T) {
 	}
 
 	// 已知 X-API-Key → 200
-	req = newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req = newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	req.Header.Del("Authorization")
 	req.Header.Set("X-API-Key", "secret")
 	rec = newResponseRecorder()
@@ -1606,7 +1475,7 @@ func TestRequestBodyLimit(t *testing.T) {
 		return nil, nil
 	})
 	body := `{"model":"gpt-test","messages":[{"role":"user","content":"` + strings.Repeat("x", 200) + `"}]}`
-	req := newRequest(http.MethodPost, "/v1/chat/completions", body)
+	req := newRequest(http.MethodPost, "/v1/responses", body)
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -1631,81 +1500,6 @@ func TestModelsPOSTIsRejectedBeforeBodyProcessing(t *testing.T) {
 	}
 }
 
-func TestProtocolConversionRejectsInvalidStopBeforeUpstream(t *testing.T) {
-	tmpDir := t.TempDir()
-	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler := NewHandler(mustHandlerConfig(config.Config{
-		ListenAddr:     ":0",
-		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		Providers: map[string]config.Provider{
-			"anthropic": {
-				Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "k",
-				Models: []string{"claude*"}, Endpoints: []string{config.ProviderEndpointMessages},
-			},
-		},
-		ModelMetadata: map[string]config.ModelMetadata{
-			"claude-test": {
-				ID: "claude-test", ContextWindowTokens: 8192, MaxOutputTokens: 4096,
-			},
-		},
-	}), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		t.Fatal("upstream should not be called for invalid stop")
-		return nil, nil
-	})
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"claude-test","messages":[{"role":"user","content":"hi"}],"stop":["END",1]}`)
-	rec := newResponseRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `"code":"conversion_unsupported"`) {
-		t.Fatalf("expected conversion_unsupported, body=%s", rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "stop") {
-		t.Fatalf("expected stop detail, body=%s", rec.Body.String())
-	}
-}
-
-func TestProtocolConversionRejectsTools(t *testing.T) {
-	tmpDir := t.TempDir()
-	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler := NewHandler(mustHandlerConfig(config.Config{
-		ListenAddr:     ":0",
-		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		VerboseLogging: true,
-		Providers: map[string]config.Provider{
-			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "k", Models: []string{"claude*"}},
-		},
-	}), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		t.Fatal("upstream should not be called for unsupported conversion")
-		return nil, nil
-	})
-	body := `{"model":"claude-test","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"x"}}]}`
-	req := newRequest(http.MethodPost, "/v1/chat/completions", body)
-	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	bodyOut := rec.Body.String()
-	if !strings.Contains(bodyOut, "conversion_unsupported") {
-		t.Fatalf("expected conversion_unsupported: %s", bodyOut)
-	}
-	if !strings.Contains(bodyOut, "tools") {
-		t.Fatalf("body should mention tools: %s", bodyOut)
-	}
-}
-
 func TestHealthzBypassesInboundAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
@@ -1722,14 +1516,14 @@ func TestInboundAPIKeyNotForwardedUpstream(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		gotXAPIKey = r.Header.Get("X-API-Key")
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	withClientKey(handler, "inbound", "inbound-secret")
 	// provider API key is test-key from testHandler
 	handler.client.Transport = transport
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	req.Header.Set("Authorization", "Bearer inbound-secret")
 	req.Header.Set("X-API-Key", "inbound-secret")
 	rec := newResponseRecorder()
@@ -1754,7 +1548,7 @@ func TestUpstreamResponseOversizeReturns502(t *testing.T) {
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.cfg.MaxUpstreamResponseBytes = 64
 	handler.client.Transport = transport
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
@@ -1785,7 +1579,7 @@ func TestPrimeStreamBodyTimeout(t *testing.T) {
 }
 
 func TestPrimeStreamBodyFirstLine(t *testing.T) {
-	body := io.NopCloser(strings.NewReader("data: {\"x\":1}\n\ndata: [DONE]\n\n"))
+	body := io.NopCloser(strings.NewReader("data: {\"x\":1}\n\ndata: {\"type\":\"response.completed\"}\n\n"))
 	resp := &http.Response{StatusCode: 200, Body: body, Header: make(http.Header)}
 	primed, err := primeStreamBody(resp, time.Second, 1024)
 	if err != nil {
@@ -1825,13 +1619,13 @@ func TestPrimeStreamBodyLineLimit(t *testing.T) {
 
 func TestStreamCleanEOFWithoutDONEIsTruncated(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		body := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+		body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"
 		return sseResponse(body), nil
 	})
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, req)
 	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "000001", "metadata.json"))
@@ -1858,7 +1652,7 @@ func TestNonStream5xxDoesNotDoubleCountUpstreamError(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	handler.ServeHTTP(newResponseRecorder(), req)
 
 	// 应只有一次 upstream error(真实 502),不应再追加 -2
@@ -1981,7 +1775,7 @@ func TestBufferedErrorMetadataOutcomeNotSuccess(t *testing.T) {
 	tmpDir := t.TempDir()
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = transport
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	handler.ServeHTTP(newResponseRecorder(), req)
 	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "000001", "metadata.json"))
 	if err != nil {
@@ -2125,15 +1919,15 @@ func TestAcceptEventStreamDoesNotEnableAnthropicSSEWithoutStreamFlag(t *testing.
 	}
 }
 
-func TestConversionStreamReturnsAfterDONEWithoutWaitingEOF(t *testing.T) {
-	// OpenAI→Anthropic:上游在 [DONE] 后保持连接,处理器应立即结束并补发终止事件。
+func TestResponsesToMessagesReturnsAfterCompletedWithoutWaitingEOF(t *testing.T) {
+	// Responses→Messages: 上游在 response.completed 后保持连接，处理器应立即结束。
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
 		chunks := []string{
-			`data: {"id":"chatcmpl-1","choices":[{"delta":{"role":"assistant"}}]}` + "\n\n",
-			`data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n",
-			`data: [DONE]` + "\n\n",
+			`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}` + "\n\n",
+			`data: {"type":"response.output_text.delta","delta":"hi"}` + "\n\n",
+			`data: {"type":"response.completed"}` + "\n\n",
 		}
 		for _, c := range chunks {
 			if _, err := pw.Write([]byte(c)); err != nil {
@@ -2153,6 +1947,7 @@ func TestConversionStreamReturnsAfterDONEWithoutWaitingEOF(t *testing.T) {
 		ListenAddr:        ":0",
 		InteractionDir:    filepath.Join(tmpDir, "interactions"),
 		StreamIdleTimeout: 5 * time.Second,
+		ModelMetadata:     map[string]config.ModelMetadata{"gpt-test": {ID: "gpt-test", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 2, Text: true, Streaming: true}}}},
 		Providers: map[string]config.Provider{
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://upstream.test", APIKey: "k", Models: []string{"gpt*"}},
 		},
@@ -2173,7 +1968,7 @@ func TestConversionStreamReturnsAfterDONEWithoutWaitingEOF(t *testing.T) {
 	var rec *httptest.ResponseRecorder
 	go func() {
 		defer close(done)
-		req := newRequest(http.MethodPost, "/v1/messages", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}`)
+		req := newRequest(http.MethodPost, "/v1/messages", `{"model":"gpt-test","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
 		rec = newResponseRecorder()
 		handler.ServeHTTP(rec, req)
 	}()
@@ -2182,7 +1977,7 @@ func TestConversionStreamReturnsAfterDONEWithoutWaitingEOF(t *testing.T) {
 	case <-done:
 		// ok: returned without waiting for pipe close
 	case <-time.After(1500 * time.Millisecond):
-		t.Fatal("conversion stream did not return after [DONE]; still waiting on upstream")
+		t.Fatal("conversion stream did not return after response.completed; still waiting on upstream")
 	}
 	if rec == nil || rec.Code != http.StatusOK {
 		t.Fatalf("status = %v", rec)
@@ -2215,14 +2010,16 @@ func TestLogStreamFailEmitsProtocolOutcome(t *testing.T) {
 	}
 }
 
-func TestAnthropicToOpenAIStreamReturnsAfterMessageStop(t *testing.T) {
-	// Anthropic 上游发送 message_stop 后保持连接;转换流应立即补发 [DONE] 并返回。
+func TestMessagesToResponsesReturnsAfterMessageStop(t *testing.T) {
+	// Anthropic 上游发送 message_stop 后保持连接;转换流应立即补发 response.completed 并返回。
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
 		chunks := []string{
 			`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-test","usage":{"input_tokens":3,"output_tokens":0}}}` + "\n\n",
-			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}` + "\n\n",
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}` + "\n\n",
+			`data: {"type":"content_block_stop","index":0}` + "\n\n",
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}` + "\n\n",
 			`data: {"type":"message_stop"}` + "\n\n",
 		}
@@ -2243,6 +2040,7 @@ func TestAnthropicToOpenAIStreamReturnsAfterMessageStop(t *testing.T) {
 		ListenAddr:        ":0",
 		InteractionDir:    filepath.Join(tmpDir, "interactions"),
 		StreamIdleTimeout: 5 * time.Second,
+		ModelMetadata:     map[string]config.ModelMetadata{"claude-test": {ID: "claude-test", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 2, Text: true, Streaming: true}}}},
 		Providers: map[string]config.Provider{
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "k", Models: []string{"claude*"}},
 		},
@@ -2264,7 +2062,7 @@ func TestAnthropicToOpenAIStreamReturnsAfterMessageStop(t *testing.T) {
 	go func() {
 		defer close(done)
 		// OpenAI 客户端路径 → Anthropic 上游转换流
-		req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"claude-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+		req := newRequest(http.MethodPost, "/v1/responses", `{"model":"claude-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 		rec = newResponseRecorder()
 		handler.ServeHTTP(rec, req)
 	}()
@@ -2279,8 +2077,8 @@ func TestAnthropicToOpenAIStreamReturnsAfterMessageStop(t *testing.T) {
 	}
 	assertUnifiedSSEHeaders(t, rec.Header())
 	body := rec.Body.String()
-	if !strings.Contains(body, "data: [DONE]") {
-		t.Fatalf("expected OpenAI [DONE] after conversion, got: %s", body)
+	if !strings.Contains(body, "response.completed") {
+		t.Fatalf("expected OpenAI response.completed after conversion, got: %s", body)
 	}
 }
 
@@ -2294,7 +2092,7 @@ func TestEndpointUnsupportedRejectsBeforeUpstream(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"gpt-chat"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"gpt-chat"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-chat": {
@@ -2347,9 +2145,9 @@ func TestSupportedOperationForwardsUpstream(t *testing.T) {
 		if r.URL.Host != "openai.test" {
 			t.Fatalf("host = %s", r.URL.Host)
 		}
-		return jsonResponse(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`), nil
+		return jsonResponse(`{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-chat","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-chat","input":[{"role":"user","content":"hi"}]}`)
 	resp := newResponseRecorder()
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
@@ -2406,7 +2204,7 @@ func TestDisablingProviderRefreshesModelsAndFeatureCatalog(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"only": {
 				Name: "only", Protocol: "openai", BaseURL: "https://only.test", APIKey: "k",
-				Models: []string{"only-model"}, Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Models: []string{"only-model"}, Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{"only-model": {ID: "only-model"}},
@@ -2527,7 +2325,7 @@ func TestModelsGETReturnsStableCatalogAndPOSTIsRejected(t *testing.T) {
 	}
 }
 
-func TestEmbeddingOnlyRejectsMessagesResponsesCompletions(t *testing.T) {
+func TestEmbeddingOnlyRejectsTextEndpoints(t *testing.T) {
 	tmpDir := t.TempDir()
 	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
 	if err != nil {
@@ -2552,7 +2350,7 @@ func TestEmbeddingOnlyRejectsMessagesResponsesCompletions(t *testing.T) {
 		t.Fatalf("upstream should not be called: %s", r.URL.Path)
 		return nil, nil
 	})
-	for _, path := range []string{"/v1/messages", "/v1/responses", "/v1/completions", "/v1/chat/completions"} {
+	for _, path := range []string{"/v1/messages", "/v1/responses"} {
 		rec := newResponseRecorder()
 		body := `{"model":"emb-only","messages":[{"role":"user","content":"hi"}],"input":"hi","prompt":"hi"}`
 		handler.ServeHTTP(rec, newRequest(http.MethodPost, path, body))
@@ -2576,7 +2374,7 @@ func TestAPIErrorDoesNotLeakSecrets(t *testing.T) {
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		Providers: map[string]config.Provider{
-			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: secret, Models: []string{"gpt-chat"}, Endpoints: []string{config.ProviderEndpointChatCompletions}},
+			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: secret, Models: []string{"gpt-chat"}, Endpoints: []string{config.ProviderEndpointResponses}},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
 			"gpt-chat": {
@@ -2618,7 +2416,7 @@ func TestNewHandlerAllowsEmptyCatalog(t *testing.T) {
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models:    []string{"gpt-*"},
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{},
@@ -2634,7 +2432,7 @@ func TestRequireResolvedConfigRejectsUnknownProtocol(t *testing.T) {
 		Providers: map[string]config.Provider{
 			"weird": {
 				Name: "weird", Protocol: "foo", BaseURL: "https://x", APIKey: "k",
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{},
@@ -2651,8 +2449,7 @@ func TestRequireResolvedConfigRejectsDuplicateEndpoints(t *testing.T) {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models: []string{"gpt-*"},
 				Endpoints: []string{
-					config.ProviderEndpointChatCompletions,
-					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointResponses, config.ProviderEndpointResponses,
 				},
 			},
 		},
@@ -2670,7 +2467,7 @@ func TestRequireResolvedConfigAcceptsOptionalMaxOutputTokens(t *testing.T) {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models: []string{"multi"},
 				Endpoints: []string{
-					config.ProviderEndpointChatCompletions,
+					config.ProviderEndpointResponses,
 					config.ProviderEndpointEmbeddings,
 				},
 			},
@@ -2692,7 +2489,7 @@ func TestRequireResolvedConfigAllowsEmptyCatalog(t *testing.T) {
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models:    []string{"gpt-*"},
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{},
@@ -2729,7 +2526,7 @@ func TestRetryableUpstreamErrorDoesNotSwitchProvider(t *testing.T) {
 		return testResponse(http.StatusBadGateway, "application/json", `{"error":"bad gateway"}`), nil
 	})
 	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -2765,10 +2562,10 @@ func TestRetryableUpstreamErrorFallsBackToLowerPriorityCandidate(t *testing.T) {
 		if r.URL.Host == "primary.test" {
 			return testResponse(http.StatusBadGateway, "application/json", `{"error":"bad gateway"}`), nil
 		}
-		return testResponse(http.StatusOK, "application/json", `{"id":"chatcmpl-backup","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`), nil
+		return testResponse(http.StatusOK, "application/json", `{"id":"chatcmpl-backup","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":0},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -2781,78 +2578,6 @@ func TestRetryableUpstreamErrorFallsBackToLowerPriorityCandidate(t *testing.T) {
 	}
 	if backup := health["backup"]; backup.SampleCount != 1 || backup.Successes != 1 || backup.Score != 100 {
 		t.Fatalf("backup health=%+v", backup)
-	}
-}
-
-func TestChatCompletionSkipsUnsupportedConversionForNativeFallback(t *testing.T) {
-	tmpDir := t.TempDir()
-	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	hosts := []string{}
-	cfg := mustHandlerConfig(config.Config{
-		ListenAddr:     ":0",
-		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		Providers: map[string]config.Provider{
-			"conversion": {Name: "conversion", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 200, Endpoints: []string{config.ProviderEndpointMessages}},
-			"native":     {Name: "native", Protocol: "openai", BaseURL: "https://native.test", APIKey: "k", Models: []string{"gpt-test"}, Priority: 100, Endpoints: []string{config.ProviderEndpointChatCompletions}},
-		},
-		ModelMetadata: map[string]config.ModelMetadata{
-			"gpt-test": {ID: "gpt-test", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
-		},
-	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		hosts = append(hosts, r.URL.Host)
-		if r.URL.Host != "native.test" {
-			return nil, fmt.Errorf("unexpected conversion upstream request to %q", r.URL.Host)
-		}
-		return testResponse(http.StatusOK, "application/json", `{"id":"chatcmpl-native","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
-	})
-	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if got, want := strings.Join(hosts, ","), "native.test"; got != want {
-		t.Fatalf("hosts=%q want %q", got, want)
-	}
-}
-
-func TestAnthropicMessagesSkipsUnsupportedConversionForNativeFallback(t *testing.T) {
-	tmpDir := t.TempDir()
-	interactionRecorder, err := archive.NewRecorder(filepath.Join(tmpDir, "interactions"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	hosts := []string{}
-	cfg := mustHandlerConfig(config.Config{
-		ListenAddr:     ":0",
-		InteractionDir: filepath.Join(tmpDir, "interactions"),
-		Providers: map[string]config.Provider{
-			"conversion": {Name: "conversion", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 200, Endpoints: []string{config.ProviderEndpointChatCompletions}},
-			"native":     {Name: "native", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "k", Models: []string{"shared-model"}, Priority: 100, Endpoints: []string{config.ProviderEndpointMessages}},
-		},
-		ModelMetadata: map[string]config.ModelMetadata{
-			"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
-		},
-	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
-	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		hosts = append(hosts, r.URL.Host)
-		if r.URL.Host != "anthropic.test" {
-			return nil, fmt.Errorf("unexpected conversion upstream request to %q", r.URL.Host)
-		}
-		return testResponse(http.StatusOK, "application/json", `{"id":"msg_native","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`), nil
-	})
-	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/messages", `{"model":"shared-model","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if got, want := strings.Join(hosts, ","), "anthropic.test"; got != want {
-		t.Fatalf("hosts=%q want %q", got, want)
 	}
 }
 
@@ -2882,7 +2607,7 @@ func TestNetworkErrorDoesNotSwitchProvider(t *testing.T) {
 		return nil, fmt.Errorf("connection refused")
 	})
 	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -2918,7 +2643,7 @@ func TestFirstStreamEventFailureDoesNotSwitchProvider(t *testing.T) {
 	})
 
 	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -2932,7 +2657,7 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 		Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 		Models: []string{"gpt-x", "multi"},
 		Endpoints: []string{
-			config.ProviderEndpointChatCompletions,
+			config.ProviderEndpointResponses,
 			config.ProviderEndpointEmbeddings,
 		},
 	}
@@ -2952,7 +2677,7 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 				Providers: map[string]config.Provider{
 					"weird": {
 						Name: "weird", Protocol: "foo", BaseURL: "https://x", APIKey: "k",
-						Endpoints: []string{config.ProviderEndpointChatCompletions},
+						Endpoints: []string{config.ProviderEndpointResponses},
 					},
 				},
 			},
@@ -2979,8 +2704,7 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 						Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 						Models: []string{"gpt-x"},
 						Endpoints: []string{
-							config.ProviderEndpointChatCompletions,
-							config.ProviderEndpointChatCompletions,
+							config.ProviderEndpointResponses, config.ProviderEndpointResponses,
 						},
 					},
 				},
@@ -2996,7 +2720,7 @@ func TestRequireResolvedConfigMalformedTable(t *testing.T) {
 						Models: []string{"gpt-x"},
 						Endpoints: []string{
 							config.ProviderEndpointEmbeddings,
-							config.ProviderEndpointChatCompletions,
+							config.ProviderEndpointResponses,
 						},
 					},
 				},
@@ -3074,7 +2798,7 @@ func TestSingleRouteOwnerDoesNotSwitchOnRetryableStatuses(t *testing.T) {
 				return testResponse(status, "application/json", `{"error":"retryable"}`), nil
 			})
 			rec := newResponseRecorder()
-			handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`))
+			handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 			if rec.Code != status {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
@@ -3091,7 +2815,7 @@ func TestRequireResolvedConfigAllowsCaseDifferentModelIDs(t *testing.T) {
 			"openai": {
 				Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k",
 				Models:    []string{"GPT-X", "gpt-x"},
-				Endpoints: []string{config.ProviderEndpointChatCompletions},
+				Endpoints: []string{config.ProviderEndpointResponses},
 			},
 		},
 		ModelMetadata: map[string]config.ModelMetadata{
@@ -3114,10 +2838,10 @@ func TestUpstreamHeaderAllowlistOpenAI(t *testing.T) {
 	handler := testHandler("https://upstream.test", tmpDir, "openai")
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		got = r.Header.Clone()
-		return jsonResponse(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`), nil
+		return jsonResponse(`{"id":"1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":0},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`), nil
 	})
 	withClientKey(handler, "inbound", "inbound-secret")
-	req := newRequest(http.MethodPost, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	req.Header.Set("Authorization", "Bearer inbound-secret")
 	req.Header.Set("X-API-Key", "inbound-secret")
 	req.Header.Set("Anthropic-Version", "2099-01-01")
@@ -3195,33 +2919,6 @@ func TestUpstreamHeaderAllowlistAnthropic(t *testing.T) {
 	}
 	if got.Get("Cookie") != "" {
 		t.Fatalf("Cookie leaked")
-	}
-}
-
-func TestUpstreamHeaderAllowlistConversionAnthropicToOpenAI(t *testing.T) {
-	var got http.Header
-	tmpDir := t.TempDir()
-	handler := testHandler("https://upstream.test", tmpDir, "openai")
-	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		got = r.Header.Clone()
-		return jsonResponse(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`), nil
-	})
-	withClientKey(handler, "inbound", "inbound-secret")
-	req := newRequest(http.MethodPost, "/v1/messages", `{"model":"gpt-test","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
-	req.Header.Set("Anthropic-Version", "2099-01-01")
-	req.Header.Set("Anthropic-Beta", "tools-2024")
-	req.Header.Set("X-API-Key", "inbound-secret")
-	req.Header.Set("Authorization", "Bearer inbound-secret")
-	rec := newResponseRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if got.Get("Anthropic-Version") != "" || got.Get("Anthropic-Beta") != "" || got.Get("X-API-Key") != "" {
-		t.Fatalf("openai conversion upstream must not receive anthropic headers: %v", got)
-	}
-	if got.Get("Authorization") != "Bearer test-key" {
-		t.Fatalf("Authorization = %q", got.Get("Authorization"))
 	}
 }
 
