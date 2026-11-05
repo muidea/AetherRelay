@@ -33,67 +33,54 @@ func recoveredSingleWeeklyUsage(started time.Time) events.AccountUsageSnapshot {
 }
 
 func TestSingleWeeklyUsageRecoveryRestoresAllModelsAndPersists(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		name := "current quota"
-		if legacy {
-			name = "legacy quota"
-		}
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "state.duckdb")
-			codec := encryptedTestCodec(t)
-			s, err := Open(path, "256MB", 1, codec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = s.Close() })
-			if _, _, _, err = s.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
-				t.Fatal(err)
-			}
-			id := s.List()[0].ID
-			models := []string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-reserve"}
-			now := time.Now().UTC()
-			modelSnapshot := events.AccountModelSnapshot{ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}
-			for _, model := range models {
-				modelSnapshot.Models = append(modelSnapshot.Models, events.AccountModelEntry{ID: model})
-			}
-			if _, _, err = s.PutModelSnapshot(id, modelSnapshot); err != nil {
-				t.Fatal(err)
-			}
-			reset := now.Add(5 * 24 * time.Hour)
-			if _, err = s.RecordResult(id, "gpt-6.1-sol", false, events.ErrorRateLimit, 3600, true, reset.Format(time.RFC3339), false); err != nil {
-				t.Fatal(err)
-			}
-			if legacy {
-				// Match the persisted pre-provenance cooldown observed on x800.
-				s.items[id].Cooldowns[""] = cooldown{Until: reset.Truncate(time.Second), ErrorClass: events.ErrorRateLimit}
-				s.items[id].QuotaObservations[""] = quotaObservation{State: "exhausted", ObservedAt: now.Add(-time.Minute).Format(time.RFC3339), ResetAt: reset.Format(time.RFC3339)}
-			}
-			if view, _ := s.View(id); len(view.AvailableModels) != 0 {
-				t.Fatalf("quota did not block all models: %+v", view.AvailableModels)
-			}
-			snapshot := recoveredSingleWeeklyUsage(time.Now().UTC())
-			snapshot.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			if _, err = s.PutUsageSnapshotWithSchedule(id, snapshot, "scheduled", now.Add(10*time.Minute).Format(time.RFC3339)); err != nil {
-				t.Fatal(err)
-			}
-			view, _ := s.View(id)
-			if len(view.AvailableModels) != len(models) || len(view.Cooldowns) != 0 || len(view.QuotaObservations) != 0 {
-				t.Fatalf("single-window refresh did not restore 9/9 models: %+v", view)
-			}
-			if _, err = s.Acquire("gpt-6.1-sol", nil); err != nil {
-				t.Fatalf("restored model still denied: %v", err)
-			}
-			if err = s.Close(); err != nil {
-				t.Fatal(err)
-			}
-			s, err = Open(path, "256MB", 1, codec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if view, _ = s.View(id); len(view.AvailableModels) != len(models) || len(view.Cooldowns) != 0 || len(view.QuotaObservations) != 0 {
-				t.Fatalf("restart resurrected old quota state: %+v", view)
-			}
-		})
+	path := filepath.Join(t.TempDir(), "state.duckdb")
+	codec := encryptedTestCodec(t)
+	s, err := Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if _, _, _, err = s.Import([]events.CredentialInput{{AccessToken: "access", RefreshToken: "refresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := s.List()[0].ID
+	models := []string{"codex-auto-review", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-reserve"}
+	now := time.Now().UTC()
+	modelSnapshot := events.AccountModelSnapshot{ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)}
+	for _, model := range models {
+		modelSnapshot.Models = append(modelSnapshot.Models, events.AccountModelEntry{ID: model})
+	}
+	if _, _, err = s.PutModelSnapshot(id, modelSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	reset := now.Add(5 * 24 * time.Hour)
+	if _, err = s.RecordResult(id, "gpt-6.1-sol", false, events.ErrorRateLimit, 3600, true, reset.Format(time.RFC3339), false); err != nil {
+		t.Fatal(err)
+	}
+	if view, _ := s.View(id); len(view.AvailableModels) != 0 {
+		t.Fatalf("quota did not block all models: %+v", view.AvailableModels)
+	}
+	snapshot := recoveredSingleWeeklyUsage(time.Now().UTC())
+	snapshot.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = s.PutUsageSnapshotWithSchedule(id, snapshot, "scheduled", now.Add(10*time.Minute).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	view, _ := s.View(id)
+	if len(view.AvailableModels) != len(models) || len(view.Cooldowns) != 0 || len(view.QuotaObservations) != 0 {
+		t.Fatalf("single-window refresh did not restore 9/9 models: %+v", view)
+	}
+	if _, err = s.Acquire("gpt-6.1-sol", nil); err != nil {
+		t.Fatalf("restored model still denied: %v", err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path, "256MB", 1, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view, _ = s.View(id); len(view.AvailableModels) != len(models) || len(view.Cooldowns) != 0 || len(view.QuotaObservations) != 0 {
+		t.Fatalf("restart resurrected old quota state: %+v", view)
 	}
 }
 
@@ -298,7 +285,7 @@ func TestRecoveryRequiresNewCompletePositiveEvidence(t *testing.T) {
 	}
 }
 
-func TestLegacyQuotaRecoveryRequiresMatchingProvenance(t *testing.T) {
+func TestQuotaRecoveryRequiresExplicitProvenance(t *testing.T) {
 	now := time.Now().UTC()
 	for _, tc := range []struct {
 		name          string
@@ -307,8 +294,8 @@ func TestLegacyQuotaRecoveryRequiresMatchingProvenance(t *testing.T) {
 		matchingReset bool
 		wantCooldown  bool
 	}{
-		{"verified legacy quota", "", events.ErrorRateLimit, true, false},
-		{"unmatched legacy rate limit", "", events.ErrorRateLimit, false, true},
+		{"matching reset without provenance", "", events.ErrorRateLimit, true, true},
+		{"unmatched reset without provenance", "", events.ErrorRateLimit, false, true},
 		{"explicit generic limit", "request_failure", events.ErrorRateLimit, true, true},
 		{"unrelated network", "", events.ErrorNetwork, true, true},
 	} {

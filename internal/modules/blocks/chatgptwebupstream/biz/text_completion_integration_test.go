@@ -2,6 +2,8 @@ package biz
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +24,7 @@ import (
 	upclient "aetherrelay/internal/modules/blocks/chatgptwebupstream/internal/client"
 	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
 	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
+	clientaccess "aetherrelay/internal/pkg/aetherrelayclientaccess"
 	config "aetherrelay/internal/pkg/aetherrelayconfig"
 	usage "aetherrelay/internal/pkg/aetherrelayusage"
 	"github.com/muidea/magicCommon/event"
@@ -113,6 +116,10 @@ func TestTextCompletionRealOwnerExecutorAndHTTP(t *testing.T) {
 					executor := &proxybiz.Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
 					cfg := config.Config{Providers: map[string]config.Provider{}, ModelMetadata: map[string]config.ModelMetadata{}}
 					store := usage.NewMemoryStore()
+					sum := sha256.Sum256([]byte("test-client-key"))
+					if err := store.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()}); err != nil {
+						t.Fatal(err)
+					}
 					handler := proxyhttp.NewHandler(cfg, store, nil, nil).WithChatGPTTextExecutor(executor)
 					handler.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-11-04T00:00:00Z"))
 					body := fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":"hi"}`, stream)

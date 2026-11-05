@@ -94,8 +94,6 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.topics = []string{
 		events.TopicList,
 		events.TopicAdd,
-		events.TopicDelete,
-		events.TopicUpdate,
 		events.TopicDeleteByID,
 		events.TopicUpdateByID,
 		events.TopicExportByID,
@@ -105,7 +103,6 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 		events.TopicReleaseImageSlot,
 		events.TopicMarkImageResult,
 		events.TopicAcquireTextToken,
-		events.TopicAcquireTextAccount,
 		events.TopicRecordTextResult,
 		events.TopicRefreshTextToken,
 		events.TopicRemoveInvalid,
@@ -122,8 +119,6 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	}
 	b.SubscribeFunc(events.TopicList, b.handleList)
 	b.SubscribeFunc(events.TopicAdd, b.handleAdd)
-	b.SubscribeFunc(events.TopicDelete, b.handleDelete)
-	b.SubscribeFunc(events.TopicUpdate, b.handleUpdate)
 	b.SubscribeFunc(events.TopicDeleteByID, b.handleDeleteByID)
 	b.SubscribeFunc(events.TopicUpdateByID, b.handleUpdateByID)
 	b.SubscribeFunc(events.TopicExportByID, b.handleExportByID)
@@ -133,7 +128,6 @@ func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Stor
 	b.SubscribeFunc(events.TopicReleaseImageSlot, b.handleReleaseSlot)
 	b.SubscribeFunc(events.TopicMarkImageResult, b.handleMarkImage)
 	b.SubscribeFunc(events.TopicAcquireTextToken, b.handleAcquireText)
-	b.SubscribeFunc(events.TopicAcquireTextAccount, b.handleAcquireTextAccount)
 	b.SubscribeFunc(events.TopicRecordTextResult, b.handleRecordTextResult)
 	b.SubscribeFunc(events.TopicRefreshTextToken, b.handleRefreshTextToken)
 	b.SubscribeFunc(events.TopicRemoveInvalid, b.handleRemoveInvalid)
@@ -413,23 +407,6 @@ func (s *Account) handleAdd(ev event.Event, result event.Result) {
 	result.Set(events.AddResult{Added: added, Updated: updated, Skipped: skipped}, nil)
 }
 
-func (s *Account) handleDelete(ev event.Event, result event.Result) {
-	if result == nil {
-		return
-	}
-	cmd, ok := ev.Data().(events.DeleteCommand)
-	if !ok {
-		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid delete command"))
-		return
-	}
-	deleted, err := s.store.Delete(cmd.Tokens)
-	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
-		return
-	}
-	result.Set(events.DeleteResult{Deleted: deleted}, nil)
-}
-
 func (s *Account) handleDeleteByID(ev event.Event, result event.Result) {
 	if result == nil {
 		return
@@ -445,27 +422,6 @@ func (s *Account) handleDeleteByID(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.DeleteResult{Deleted: deleted}, nil)
-}
-
-func (s *Account) handleUpdate(ev event.Event, result event.Result) {
-	if result == nil {
-		return
-	}
-	cmd, ok := ev.Data().(events.UpdateCommand)
-	if !ok {
-		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid update command"))
-		return
-	}
-	item, found, err := s.store.Update(cmd.AccessToken, cmd.Type, cmd.Status, cmd.Quota, cmd.Proxy)
-	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
-		return
-	}
-	if !found {
-		result.Set(nil, cd.NewError(cd.Unexpected, "account not found"))
-		return
-	}
-	result.Set(events.UpdateResult{Item: item}, nil)
 }
 
 func (s *Account) handleUpdateByID(ev event.Event, result event.Result) {
@@ -559,23 +515,6 @@ func (s *Account) handleMarkImage(ev event.Event, result event.Result) {
 		return
 	}
 	result.Set(events.MarkImageResultResult{Account: acc}, nil)
-}
-
-func (s *Account) handleAcquireTextAccount(ev event.Event, result event.Result) {
-	if result == nil {
-		return
-	}
-	cmd, ok := ev.Data().(events.AcquireTextAccountCommand)
-	if !ok || cmd.AccountID == "" {
-		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid acquire text account command"))
-		return
-	}
-	acc, found := s.store.AcquireTextAccount(cmd.AccountID, cmd.Model, cmd.Capability)
-	if !found {
-		result.Set(nil, cd.NewError(cd.Unexpected, "saved text account is unavailable"))
-		return
-	}
-	result.Set(events.AcquireTextAccountResult{AccessToken: acc.AccessToken, Account: acc}, nil)
 }
 
 func (s *Account) handleRecordTextResult(ev event.Event, result event.Result) {

@@ -9,7 +9,7 @@ import (
 	codexevents "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 )
 
-// chatGPTAccountImportBody normalizes legacy wrapped imports and direct JSON
+// chatGPTAccountImportBody normalizes the supported wrapped imports and direct JSON
 // credential input at the Admin HTTP boundary.
 type chatGPTAccountImportBody struct {
 	Tokens     []string

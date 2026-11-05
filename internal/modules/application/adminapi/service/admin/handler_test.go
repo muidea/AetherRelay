@@ -1269,7 +1269,7 @@ func TestBuiltinLocalClientAPIKeyIsListedButImmutable(t *testing.T) {
 	}
 
 	imageScopeResponse := httptest.NewRecorder()
-	imageScope, ok := handler.imageAPIKeyID(imageScopeResponse, context.Background(), "", "")
+	imageScope, ok := handler.imageAPIKeyID(imageScopeResponse, context.Background(), "")
 	if !ok || imageScope != config.BuiltinClientAPIKeyID {
 		t.Fatalf("empty Admin image scope = %q ok=%v response=%d", imageScope, ok, imageScopeResponse.Code)
 	}

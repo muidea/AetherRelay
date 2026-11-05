@@ -18,7 +18,7 @@
 
 13.2.0 仅补齐 Anthropic 停止序列的本地输出控制及本地拒绝观测，不改变本文的身份、缓存、UA/Originator 或账号选择规则。停止序列不作为跨协议字段发送给 Codex；客户端 Sonnet 映射缺失也不能通过修改上游身份或隐式模型别名解决，配置与验证记录见[转换设计](responses-anthropic-conversion.md)。
 
-本文是首要维护合同中 `CP-VER-006` 与 `CP-HDR-024` 的规范性说明。凡修改下列任一行为，必须在**同一提交**中同步更新本文、首要维护合同的版本/规则、对应自动化测试和实施追踪表：
+本文是首要维护合同中 `CP-VER-006` 与 `CP-HDR-024` 的规范性说明。凡修改下列任一行为，必须在**同一提交**中同步更新本文、首要维护合同的规则、对应自动化测试和实施追踪表：
 
 - 客户端会话信号的解析优先级；
 - `sessionHash`、上游 Session/Thread/Window 的派生或格式；
@@ -30,7 +30,7 @@
 - Turn-State scope、记录或回填边界；
 - API Key ID、模型或客户端身份对上述命名空间的影响。
 
-只修改代码或测试而不刷新本文，视为合同未完成；只补充现场证据而不改变行为时，按 PATCH 更新合同版本与本文“现场证据”章节。
+只修改代码或测试而不刷新本文，视为合同未完成；只补充现场证据而不改变行为时，更新本文及合同“现场证据”章节，保留当前版本号。
 
 ## 1. 必须区分的四层身份
 
@@ -124,7 +124,7 @@ API Key 明文不得进入派生。替换同一 Key ID 槽位中的 Key 明文�
 | `off` | `sessionHash` |
 | `scoped` | 账号 seed 与 LogicalConversation（`sessionHash`）共同派生 |
 
-升级 Session 派生格式会改变可观察身份与默认 cache key，必须按 `CP-VER-001` 评估 MAJOR 版本影响。
+升级 Session 派生格式会改变可观察身份与默认 cache key，必须同步评估会话及缓存身份影响，并更新规则与测试。
 
 ### 2.5 Thread
 
@@ -188,7 +188,7 @@ Turn 是一次逻辑交互，生命周期短于 Session，但不必等于一次 
 - Codex 账号池共享一个最高版本，off/scoped、所有账号、原生与转换推理入口、refresh、授权码交换、模型发现和用量查询共同使用它。
 - 候选只允许 `codex-tui`、严格三段版本、最低 `0.154.0`；长度有界、无控制字符、family/Originator 与首尾版本自述一致。出站以内置 `0.155.0` 为最低兜底，不设静态最高版本；有效更高版本严格单调晋升，同版本保留已有平台文本。
 - Claude、codex_exec、残缺或非法身份不能覆盖共享值，也不因此拒绝业务请求。它们的 Codex 出站同样使用当前最高 profile。
-- profile 在账号之外独立加密持久化，不进入管理视图、日志或普通凭据导出；启动合并有效历史账号观察值，账号删除、禁用、重认证、凭据替换与重启不能降级。
+- profile 在账号之外独立加密持久化，不进入管理视图、日志或普通凭据导出；启动只读取当前独立共享记录，不合并历史账号观察值，账号删除、禁用、重认证、凭据替换与重启不能降级。
 - 模型发现 query `client_version` 来自同次原子 profile，缓存记录实际发现版本。共享值提升后自动安排旧缓存重同步，刷新期间保留仍有效的模型成员资格；晚到的旧版本结果仍须再次同步。后台排队请求及刷新后的重试发出前重读共享最高值。
 
 已准入请求和已建立 WebSocket 使用当时快照。共享客户端版本不合并账号凭据、Installation、Session/Thread 或 Turn-State。最低版本、family 准入或版本选择规则变化属于协议决策，必须同步修改合同、测试与本文。
@@ -264,7 +264,7 @@ Turn-State Scope =
 
 HTTP、SSE、compact 和 WebSocket 握手必须使用同一份不可变 attempt snapshot。failover 到另一个账号时必须重新生成，不得残留上一账号的 Installation、Session、Thread、Window 或 Turn-State。
 
-运行时、管理 API、账号池导入和管理页只接受 `off/scoped`。缺失或空值默认 `scoped`；加密存量中的未知值和已删除的 `device/session/full` 在加载时直接重写为 `scoped`。显式 `off` 保留为排障和快速回退开关。统一账号池与独立 Codex 账号列表都必须显示账号当前模式并允许在两者间切换；不得因 `off` 非默认而隐藏其状态，否则存量账号将失去恢复默认 `scoped` 的正常运维路径。
+运行时、管理 API、账号池导入和管理页只接受 `off/scoped`。缺失或空值默认 `scoped`；持久化记录必须包含有效模式和所需 seed；缺失、未知或已删除的 `device/session/full` 明确拒绝加载，不自动重写。显式 `off` 保留为排障和快速回退开关。统一账号池与独立 Codex 账号列表都必须显示账号当前模式并允许在两者间切换；不得因 `off` 非默认而隐藏其状态，否则存量账号将失去恢复默认 `scoped` 的正常运维路径。
 
 ### 6.2 scoped 投影
 
@@ -294,7 +294,7 @@ Upstream Window       = Upstream Thread + ":" + ClientWindowNumber
 
 转换后的正文统一通过 Codex normalizer；目标层负责 instructions、stream=true、store=false、缓存身份及每次尝试的 client_metadata，账号层负责鉴权、账号头及 Session/Thread/Window/Turn 投影。Installation 只在 scoped 下发送，Turn-State 遵循既有来源和回填规则。源协议的 Anthropic/Stainless/Claude 封装不进入上游协议，业务文本及工具 schema 中的同名字段不误删。
 
-客户端实现版本由账号池共享，账号物理身份和 LogicalConversation 仍分别隔离；两个账号可以使用同一最高 UA/Originator，同时保持不同凭据、Installation、Session/Thread 与 Turn-State。历史账号 profile 仅用于启动迁移，不再参与逐账号选择。
+客户端实现版本由账号池共享，账号物理身份和 LogicalConversation 仍分别隔离；两个账号可以使用同一最高 UA/Originator，同时保持不同凭据、Installation、Session/Thread 与 Turn-State。历史账号 profile 不再读取、合并或迁移。
 
 ### 6.4 信息守恒与账号切换
 
@@ -457,5 +457,5 @@ ephemeral 缓存提示（可选 ttl=5m/1h）在系统/消息内容块中校验�
 - [ ] 验证 failover 不残留上一账号身份；
 - [ ] 验证无状态请求不会获得共享 Turn-State bucket；
 - [ ] 验证无状态请求不会共享调度 Session、默认 cache identity，且客户端复用 `X-Request-ID` 不会破坏隔离；
-- [ ] 同步更新本文、首要维护合同版本/规则、自动化测试与实施追踪表；
+- [ ] 同步更新本文、首要维护合同规则、自动化测试与实施追踪表；
 - [ ] 如使用真实归档，只记录脱敏统计和关系，不提交原始身份或凭据。

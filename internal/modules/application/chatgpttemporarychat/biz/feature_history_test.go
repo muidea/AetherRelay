@@ -14,7 +14,7 @@ func TestBuildFeatureMessagesSkipsFailedTurnsAndReloadsHistoricalFiles(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	conversation, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb", "")
+	conversation, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +72,11 @@ func TestBuildFeatureMessagesNeverReadsAnotherConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	first, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb", "")
+	first, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb", "")
+	second, err := s.CreateConversation("ops", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}

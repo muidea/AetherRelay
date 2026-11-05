@@ -149,7 +149,7 @@ func TestResponsesAnthropicLevel3RoundTripThroughHTTP(t *testing.T) {
 			config.ProviderEndpointMessages: {Level: 3, Text: true, Tools: true},
 		}},
 	}}
-	h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
+	h := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses?beta=client-only", strings.NewReader(`{"model":"claude-test","input":[{"type":"message","role":"user","content":"look"},{"type":"function_call","call_id":"call_history","name":"lookup","arguments":"{\"q\":\"x\"}"},{"type":"function_call_output","call_id":"call_history","output":"history result"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	rec := httptest.NewRecorder()
@@ -189,7 +189,7 @@ func TestAnthropicResponsesLevel3RoundTripThroughHTTP(t *testing.T) {
 			config.ProviderEndpointResponses: {Level: 3, Text: true, Tools: true},
 		}},
 	}}
-	h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
+	h := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=client-only", strings.NewReader(`{"model":"gpt-test","max_tokens":32,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":[{"type":"tool_use","id":"call_history","name":"lookup","input":{"q":"x"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_history","content":"history result"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	rec := httptest.NewRecorder()
@@ -266,7 +266,7 @@ func TestResponsesAnthropicLevel2StreamingThroughHTTP(t *testing.T) {
 					}},
 				},
 			})
-			h := NewHandler(cfg, store, recorder, registry)
+			h := newTestProxyHandler(cfg, store, recorder, registry)
 			h.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Path != tc.wantUpstreamPath {
 					t.Fatalf("upstream path=%s, want %s", r.URL.Path, tc.wantUpstreamPath)
@@ -296,7 +296,7 @@ func TestResponsesAnthropicLevel2StreamingThroughHTTP(t *testing.T) {
 				t.Fatalf("usage event=%+v", event)
 			}
 
-			roundDir := filepath.Join(interactionRoot, "000001")
+			roundDir := filepath.Join(interactionRoot, "test-client", "000001")
 			assertFileContains(t, filepath.Join(roundDir, "response.sse"), tc.wantResponseFragments[len(tc.wantResponseFragments)-1])
 			assertFileContains(t, filepath.Join(roundDir, "metadata.json"), `"conversion_mode": "`+tc.wantConversionMode+`"`)
 			assertFileContains(t, filepath.Join(roundDir, "metadata.json"), `"conversion_level": 2`)
@@ -329,7 +329,7 @@ func TestResponsesAnthropicConversionCancellationBeforeFirstEvent(t *testing.T) 
 				}}},
 			})
 			cfg.StreamFirstEventTimeout = time.Second
-			h := NewHandler(cfg, store, recorder, registry)
+			h := newTestProxyHandler(cfg, store, recorder, registry)
 			upstreamStarted := make(chan struct{})
 			h.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				close(upstreamStarted)
@@ -356,8 +356,8 @@ func TestResponsesAnthropicConversionCancellationBeforeFirstEvent(t *testing.T) 
 			if len(events) != 1 || events[0].Outcome != "client_canceled" || events[0].ErrorCode != "client_canceled" || events[0].HTTPStatus != 499 || events[0].ConversionMode != tc.direction || events[0].ConversionLevel != 2 {
 				t.Fatalf("usage events=%+v", events)
 			}
-			assertFileContains(t, filepath.Join(interactionRoot, "000001", "metadata.json"), `"outcome": "client_canceled"`)
-			assertFileContains(t, filepath.Join(interactionRoot, "000001", "metadata.json"), `"http_status": 499`)
+			assertFileContains(t, filepath.Join(interactionRoot, "test-client", "000001", "metadata.json"), `"outcome": "client_canceled"`)
+			assertFileContains(t, filepath.Join(interactionRoot, "test-client", "000001", "metadata.json"), `"http_status": 499`)
 			var prometheus strings.Builder
 			if err := registry.WritePrometheus(&prometheus); err != nil {
 				t.Fatal(err)
@@ -382,7 +382,7 @@ func TestConvertedSSEClientWriteFailureIsSettled(t *testing.T) {
 			config.ProviderEndpointMessages: {Level: 2, Text: true, Streaming: true},
 		}}},
 	})
-	h := NewHandler(cfg, store, recorder, metrics.NewRegistry())
+	h := newTestProxyHandler(cfg, store, recorder, metrics.NewRegistry())
 	h.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
 		body := "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"shared-model\",\"usage\":{\"input_tokens\":1}}}\n\n"
 		return testResponse(http.StatusOK, "text/event-stream", body), nil
@@ -398,7 +398,7 @@ func TestConvertedSSEClientWriteFailureIsSettled(t *testing.T) {
 	if len(events) != 1 || events[0].Outcome != "client_write" || events[0].ErrorCode != "client_write" || events[0].HTTPStatus != http.StatusOK {
 		t.Fatalf("usage events=%+v", events)
 	}
-	assertFileContains(t, filepath.Join(interactionRoot, "000001", "metadata.json"), `"outcome": "client_write"`)
+	assertFileContains(t, filepath.Join(interactionRoot, "test-client", "000001", "metadata.json"), `"outcome": "client_write"`)
 }
 
 func TestResponsesAnthropicConversionPreflightRejectsBeforeUpstream(t *testing.T) {
@@ -430,7 +430,7 @@ func TestResponsesAnthropicConversionPreflightRejectsBeforeUpstream(t *testing.T
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			upstreamCalls := 0
-			h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
+			h := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
 			h.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
 				upstreamCalls++
 				return nil, fmt.Errorf("unexpected upstream request")
@@ -473,7 +473,7 @@ func TestResponsesNativeSelectionAndAnthropicFallback(t *testing.T) {
 					}},
 				},
 			}
-			h := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
+			h := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, metrics.NewRegistry())
 			h.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				hosts = append(hosts, r.URL.Host)
 				if r.URL.Host == "openai.test" {
@@ -1123,7 +1123,7 @@ func TestConvertedSSEFirstEventFailureSettlesConversionMetricsOnce(t *testing.T)
 		},
 	})
 	cfg.StreamFirstEventTimeout = 25 * time.Millisecond
-	h := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, registry)
+	h := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, registry)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claude-test","stream":true,"input":"hello"}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")
 	rec := httptest.NewRecorder()

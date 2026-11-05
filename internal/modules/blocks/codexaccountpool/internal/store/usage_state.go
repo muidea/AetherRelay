@@ -119,8 +119,7 @@ func newerUsageWindow(candidate, previous events.UsageWindow) bool {
 	if !a.Equal(b) {
 		return a.After(b)
 	}
-	// Older snapshots stamped both duplicate header and endpoint IDs with one
-	// time. In that legacy tie, prefer the endpoint's canonical window.
+	// Equal-time observations prefer the canonical endpoint over headers.
 	return previous.Source == "response_header" && candidate.Source != "response_header"
 }
 
@@ -289,15 +288,6 @@ func freshQuotaHeadroom(item *account, now time.Time, model string) bool {
 	return positive
 }
 
-// Old data can be identified as quota-derived only by matching the scoped
-// exhausted observation and its reset. Unknown rate limits stay untouched.
-func legacyQuotaCooldown(item *account, model string, entry cooldown) bool {
-	observation, ok := item.QuotaObservations[model]
-	reset, valid := parseExpiry(observation.ResetAt)
-	_, observed := parseExpiry(observation.ObservedAt)
-	return entry.Source == "" && entry.ErrorClass == events.ErrorRateLimit && ok && observation.State == "exhausted" && observed && valid && reset.Equal(entry.Until)
-}
-
 func singleWeeklyQuotaRecovery(snapshot events.AccountUsageSnapshot) bool {
 	// The observed prolite contract has one weekly primary window. Do not
 	// interpret a missing secondary on other plans or shorter windows as a
@@ -356,11 +346,6 @@ func reconcileQuotaRecovery(item *account, incoming events.AccountUsageSnapshot,
 	}
 	for model, observation := range item.QuotaObservations {
 		observed, ok := parseExpiry(observation.ObservedAt)
-		if ok && !strings.Contains(observation.ObservedAt, ".") {
-			// Legacy timestamps had only second precision. Require a request
-			// beginning beyond that whole second before treating it as newer.
-			observed = observed.Add(time.Second)
-		}
 		if observation.State != "exhausted" || !ok || !started.After(observed) {
 			continue
 		}
@@ -370,7 +355,7 @@ func reconcileQuotaRecovery(item *account, incoming events.AccountUsageSnapshot,
 		}
 		entry, cooling := item.Cooldowns[model]
 		if cooling {
-			quotaDerived := entry.Source == "usage_limit" || legacyQuotaCooldown(item, model, entry)
+			quotaDerived := entry.Source == "usage_limit"
 			entryObserved, _ := parseExpiry(entry.ObservedAt)
 			if quotaDerived && (entryObserved.IsZero() || started.After(entryObserved)) {
 				delete(item.Cooldowns, model)

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	config "aetherrelay/internal/pkg/aetherrelayconfig"
 	usage "aetherrelay/internal/pkg/aetherrelayusage"
 	"bytes"
 	"context"
@@ -133,7 +134,7 @@ func (s *chatGPTAccountRuntimeStub) FinishChatGPTOAuth(_ context.Context, sessio
 
 func TestChatGPTOAuthStartForwardsStableTarget(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/oauth/start", strings.NewReader(`{"email_hint":"operator@example.invalid","target_id":"account-1"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -150,7 +151,7 @@ func TestChatGPTOAuthFinishReturnsAutomaticAccountRefresh(t *testing.T) {
 		Item:           accevents.AccountView{ID: "account-1", Email: "operator@example.invalid"},
 		AccountRefresh: &accevents.RefreshResult{ProgressID: "refresh-1"},
 	}}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts/oauth/finish", strings.NewReader(`{"session_id":"oauth-session","callback":"http://localhost/callback?code=oauth-code"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -303,7 +304,7 @@ func (s *chatGPTAccountRuntimeStub) DeleteTemporaryConversation(context.Context,
 
 func TestChatGPTAccountAdminUsesStableIDsAndDisplaysEmail(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 
 	list := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/accounts", nil)
 	list.RemoteAddr = "127.0.0.1:1234"
@@ -366,9 +367,9 @@ func TestChatGPTImageTaskRetryGeneration(t *testing.T) {
 
 func TestChatGPTImageTaskCancelAndDelete(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 
-	cancel := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/cancel", strings.NewReader(`{"owner_id":"owner-1"}`))
+	cancel := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/cancel", strings.NewReader(`{"api_key_id":"owner-1"}`))
 	cancel.RemoteAddr = "127.0.0.1:1234"
 	cancel.Header.Set("X-AetherRelay-Admin", "1")
 	cancelRecorder := httptest.NewRecorder()
@@ -377,7 +378,7 @@ func TestChatGPTImageTaskCancelAndDelete(t *testing.T) {
 		t.Fatalf("cancel status=%d owner=%q task=%q body=%s", cancelRecorder.Code, runtime.cancelOwner, runtime.cancelTaskID, cancelRecorder.Body.String())
 	}
 
-	deleteRequest := httptest.NewRequest(http.MethodDelete, "/admin/api/chatgpt/image-tasks/task-1", strings.NewReader(`{"owner_id":"owner-1"}`))
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/admin/api/chatgpt/image-tasks/task-1", strings.NewReader(`{"api_key_id":"owner-1"}`))
 	deleteRequest.RemoteAddr = "127.0.0.1:1234"
 	deleteRequest.Header.Set("X-AetherRelay-Admin", "1")
 	deleteRecorder := httptest.NewRecorder()
@@ -389,7 +390,7 @@ func TestChatGPTImageTaskCancelAndDelete(t *testing.T) {
 
 func TestAdminFeatureSearchUsesScopedProxyCommand(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/features/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -405,7 +406,7 @@ func TestAdminFeatureSearchHistoryUsesScopedProxyQueries(t *testing.T) {
 		searchHistory:     proxyevents.ListFeatureSearchHistoryResult{Items: []proxyevents.FeatureSearchHistoryItem{{ID: "search-1", Query: "latest news", Model: "gpt-5"}}},
 		searchHistoryItem: proxyevents.GetFeatureSearchHistoryResult{FeatureSearchHistoryItem: proxyevents.FeatureSearchHistoryItem{ID: "search-1", Query: "latest news", Model: "gpt-5"}, Text: "answer", Sources: []proxyevents.FeatureSearchSource{{URL: "https://example.test"}}},
 	}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/features/search/history", nil)
 	listReq.RemoteAddr = "127.0.0.1:1234"
 	listReq.Header.Set("X-AetherRelay-Admin", "1")
@@ -467,7 +468,7 @@ func TestChatGPTAccountImportAcceptsDirectCredentialShapes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runtime := &chatGPTAccountRuntimeStub{}
-			handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+			handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 			req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/accounts", strings.NewReader(tt.payload))
 			req.RemoteAddr = "127.0.0.1:1234"
 			req.Header.Set("X-AetherRelay-Admin", "1")
@@ -497,7 +498,7 @@ func TestChatGPTAccountImportAcceptsDirectCredentialShapes(t *testing.T) {
 
 func TestChatGPTAccountImportRejectsMoreThanLimit(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	accounts := make([]accevents.ExportItem, maxAccountImportItems+1)
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(map[string]any{"accounts": accounts}); err != nil {
@@ -521,7 +522,7 @@ func TestChatGPTImageListRewritesToAdminContentURLs(t *testing.T) {
 			URL:  "http://evil.example/images/2026-07-26/demo.png",
 		}}},
 	}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
@@ -533,7 +534,7 @@ func TestChatGPTImageListRewritesToAdminContentURLs(t *testing.T) {
 	if strings.Contains(body, "evil.example") || strings.Contains(body, `"/images/`) {
 		t.Fatalf("list still exposes public image URLs: %s", body)
 	}
-	if !strings.Contains(body, "/admin/api/chatgpt/images/content?path=") || !strings.Contains(body, "thumb=1") {
+	if !strings.Contains(body, "/admin/api/chatgpt/images/content?api_key_id=builtin-local") || !strings.Contains(body, "thumb=1") {
 		t.Fatalf("list missing admin content URLs: %s", body)
 	}
 	var response struct {
@@ -546,9 +547,9 @@ func TestChatGPTImageListRewritesToAdminContentURLs(t *testing.T) {
 
 func TestChatGPTImageContentEndpoint(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 
-	okReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=2026-07-26%2Fdemo.png&thumb=1", nil)
+	okReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?api_key_id=builtin-local&path=2026-07-26%2Fdemo.png&thumb=1", nil)
 	okReq.RemoteAddr = "127.0.0.1:1234"
 	okRec := httptest.NewRecorder()
 	handler.ServeHTTP(okRec, okReq)
@@ -556,7 +557,7 @@ func TestChatGPTImageContentEndpoint(t *testing.T) {
 		t.Fatalf("content ok=%d cache=%q thumbs=%v body=%d", okRec.Code, okRec.Header().Get("Cache-Control"), runtime.imageThumbs, okRec.Body.Len())
 	}
 
-	badReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=../secret.png", nil)
+	badReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?api_key_id=builtin-local&path=../secret.png", nil)
 	badReq.RemoteAddr = "127.0.0.1:1234"
 	badRec := httptest.NewRecorder()
 	handler.ServeHTTP(badRec, badReq)
@@ -564,7 +565,7 @@ func TestChatGPTImageContentEndpoint(t *testing.T) {
 		t.Fatalf("traversal path should be rejected, got %d %s", badRec.Code, badRec.Body.String())
 	}
 
-	absReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=%2Fetc%2Fpasswd", nil)
+	absReq := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?api_key_id=builtin-local&path=%2Fetc%2Fpasswd", nil)
 	absReq.RemoteAddr = "127.0.0.1:1234"
 	absRec := httptest.NewRecorder()
 	handler.ServeHTTP(absRec, absReq)
@@ -573,7 +574,7 @@ func TestChatGPTImageContentEndpoint(t *testing.T) {
 	}
 
 	nilHandler := NewHandler("", &testRuntime{})
-	unavail := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?path=a.png", nil)
+	unavail := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/images/content?api_key_id=builtin-local&path=a.png", nil)
 	unavail.RemoteAddr = "127.0.0.1:1234"
 	unavailRec := httptest.NewRecorder()
 	nilHandler.ServeHTTP(unavailRec, unavail)
@@ -584,7 +585,7 @@ func TestChatGPTImageContentEndpoint(t *testing.T) {
 
 func TestTemporaryChatAdminUsesServerOwnerAndNoStore(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/chatgpt/temporary-conversations", strings.NewReader(`{"model":"gpt-5","owner_id":"forged-owner"}`))
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-AetherRelay-Admin", "1")
@@ -597,7 +598,7 @@ func TestTemporaryChatAdminUsesServerOwnerAndNoStore(t *testing.T) {
 
 func TestTemporaryChatExpiredConversationMapsToGone(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{temporaryGetErr: fmt.Errorf("conversation expired")}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/chatgpt/temporary-conversations/conversation-1", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
@@ -609,7 +610,7 @@ func TestTemporaryChatExpiredConversationMapsToGone(t *testing.T) {
 
 func TestTemporaryChatTurnAcceptsMultipartImagesAndServesOwnerScopedContent(t *testing.T) {
 	runtime := &chatGPTAccountRuntimeStub{}
-	handler := NewHandler("", &testRuntime{}).WithChatGPTRuntime(runtime)
+	handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("content", "inspect this"); err != nil {
@@ -641,5 +642,34 @@ func TestTemporaryChatTurnAcceptsMultipartImagesAndServesOwnerScopedContent(t *t
 	handler.ServeHTTP(imageRec, imageReq)
 	if imageRec.Code != http.StatusOK || imageRec.Header().Get("Content-Type") != "image/png" || imageRec.Header().Get("Cache-Control") != "no-store" || imageRec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("image status=%d headers=%v body=%x", imageRec.Code, imageRec.Header(), imageRec.Body.Bytes())
+	}
+}
+
+func imageScopeTestStore(t *testing.T) *usage.MemoryStore {
+	t.Helper()
+	store := usage.NewMemoryStore()
+	for _, id := range []string{config.BuiltinClientAPIKeyID, "owner-1"} {
+		if err := store.EnsureClientAPIKey(context.Background(), id, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
+}
+
+func TestImageTaskMutationsRejectRemovedOwnerField(t *testing.T) {
+	for _, action := range []struct{ method, path string }{
+		{http.MethodPost, "/admin/api/chatgpt/image-tasks/task-1/cancel"},
+		{http.MethodDelete, "/admin/api/chatgpt/image-tasks/task-1"},
+	} {
+		runtime := &chatGPTAccountRuntimeStub{}
+		handler := NewHandlerWithUsage("", &testRuntime{}, imageScopeTestStore(t)).WithChatGPTRuntime(runtime)
+		req := httptest.NewRequest(action.method, action.path, strings.NewReader(`{"owner_id":"owner-1"}`))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-AetherRelay-Admin", "1")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != http.StatusBadRequest || runtime.cancelOwner != "" || runtime.deleteOwner != "" {
+			t.Fatalf("removed owner field reached a default scope: status=%d body=%s", response.Code, response.Body.String())
+		}
 	}
 }

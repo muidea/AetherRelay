@@ -21,7 +21,7 @@
 - 进程始终注入只读内建 Provider `chatgptweb`；`config.yaml` 不声明任何 Provider。
 - 模型来自账号池对 `/backend-api/models` 的枚举并集，并与 Provider 精确模型合成同一有效目录；`model_metadata` 为同 ID 模型补充容量与可选 reasoning 能力声明。同名来源保留全部候选，`priority` 默认 `10` 且不作为回退候选。
 - 账号列表返回稳定本地 ID、邮箱、状态、结果计数、冷却与最近刷新状态；token、账号代理与原始 OAuth 错误绝不返回。
-- 设备身份缺失或空字符串时，首次持久化生成 UUIDv4；已有非法格式或非字符串值保持原样，并通过 `device_identity_error=invalid_device_identity` 显示账号本地异常。该账号停止文本/图片调度、任务恢复、发现和自动刷新，不影响其它 Web 账号或 Codex 号池启动。启用或更新凭据不解除设备身份限制；共享存储的加载、解密与写入故障仍明确报错。
+- 新账号创建时生成 UUIDv4 设备身份，保存成功后才对外发布；加载已有记录时，设备身份缺失或为空字符串明确报错，不自动补齐。已有非法格式或非字符串值保持原样，并通过 `device_identity_error=invalid_device_identity` 显示账号本地异常。畸形身份账号停止文本/图片调度、任务恢复、发现和自动刷新，不影响其它 Web 账号或 Codex 号池启动。启用或更新凭据不解除设备身份限制；共享存储的加载、解密与写入故障仍明确报错。
 - 账号导出是唯一有意返回明文 token 的接口：固定返回可直接作为 `accounts` 重新导入的 JSON 数组，二次确认、`Cache-Control: no-store`、不写 Web Storage、Blob 即用即销。导入同时支持纯 access token 和完整 OAuth 对象；完整对象保留 refresh/id token 与账号代理，不会退化为单 token。OAuth 授权 URL、callback 与 session 仅存页面内存态，完成或取消后销毁。
 - 账号行重新认证时 OAuth session 绑定稳定本地 ID；通用 OAuth 入口按精确上游 `account_id`（缺失时仅按唯一邮箱）识别 token 轮换。更新保留本地元数据并清理旧凭据失败，不会合并不同 `account_id` 的同邮箱 workspace。新增或重新认证成功后立即为该本地 ID 提交后台账号信息刷新，OAuth 完成响应返回刷新进度 ID，管理页静默轮询并重载额度与状态；刷新任务无法启动或上游信息刷新失败不回滚已经成功写入的 OAuth 凭据。
 - `provider_enabled` 只控制内建 Provider 是否参与路由（可热更新）；不影响账号刷新、图片或临时对话。
@@ -30,7 +30,7 @@
 
 - UA、Client Hints 和 TLS 档位继续使用固定 Windows Chrome 133 环境。语言以现有中文环境为基准；时间、文本/搜索/图片的 `timezone` 统一使用 `Asia/Singapore`，UTC+08:00，`timezone_offset_min=-480`。日期转换到当地时间，Unix 时间戳保持绝对时刻。
 - 首页 bootstrap 模拟直接导航：导航 Priority/缓存语义，不携带 API Bearer、Origin、Referer 或 oai-* 头。JSON GET 保留认证与同源 Fetch Metadata，省略 Origin；JSON POST 保留 Origin 与 JSON Content-Type；生成 SSE 的专用 token、路由与头保持既有规则。
-- 账号池在启动迁移和新账号保存时初始化密码学随机 UUIDv4，以 `web_device_id` 存入加密账号文档。事务提交成功后才发布；同主体凭据刷新和重启延续设备值，正常请求不按 token 重新生成。上游命令只接收不可变设备值；缺少或非法设备值明确失败，不随机降级。
+- 账号池仅在创建新账号时初始化密码学随机 UUIDv4，以 `web_device_id` 存入加密账号文档。创建与凭据替换在独立副本上准备，事务提交成功后才发布账号、设备身份、凭据别名与并发占用状态；保存失败保留原内存状态，重试不会把未提交的新账号当作已存在。同主体凭据刷新和重启延续设备值，正常请求不按 token 重新生成。上游命令只接收不可变设备值；缺少或非法设备值明确失败，不随机降级。
 - 每次独立执行尝试新建 Client、Session ID 和 Cookie Jar；同次链路保留 Cookie，安全重试按既有预算新建尝试并重新准备临时 token，同账号设备值延续。上游设置的设备 Cookie 保留在当前 Jar，不合成为额外头、不覆盖本地设备，也不跨操作共享。
 - 普通凭据导出和整体账号 bundle 不包含设备身份。导入新账号生成本实例设备，更新已有账号保留目标设备；完整数据库备份恢复保留设备。模型快照失效、冷却、重试和账号状态策略维持既有合同。
 
@@ -114,3 +114,5 @@
 - 2026-07-27：用量统计接入设计 → 归档 `docs/archive/chatgptweb-usage-accounting-design-2026-07-27.md`
 - 2026-07-27：临时对话设计 → 归档 `docs/archive/chatgpt-temporary-chat-design-2026-07-27.md`
 - 2026-08-03：强制联网搜索设计 → 归档 `docs/archive/chatgpt-web-search-design-2026-08-03.md`
+
+当前历史兼容清理范围及数据库读取边界见[清理清单与数据影响](history-compatibility-cleanup.md)。临时聊天只使用当前 feature 执行器；旧账号绑定会话保留查看与删除，继续发送须新建会话。新 Web 账号在创建时生成设备标识，加载已有账号不自动补齐缺失标识。

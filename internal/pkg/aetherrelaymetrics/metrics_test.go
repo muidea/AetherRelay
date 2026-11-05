@@ -95,13 +95,13 @@ func TestRegistryConversionMetricsExposeBoundedContract(t *testing.T) {
 
 func TestProviderHealthSnapshotTracksLatestOutcome(t *testing.T) {
 	r := NewRegistry()
-	r.RecordRequestPlan("healthy", "m", "chat_completions", http.StatusOK, time.Millisecond, "success", "", "", "", "")
-	r.RecordRequestPlan("degraded", "m", "chat_completions", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+	r.RecordRequestPlanWithLevel("healthy", "m", "chat_completions", http.StatusOK, time.Millisecond, "success", "", "", "", "", 0)
+	r.RecordRequestPlanWithLevel("degraded", "m", "chat_completions", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	for range 3 {
-		r.RecordRequestPlan("unavailable", "m", "chat_completions", http.StatusServiceUnavailable, time.Millisecond, "upstream_failed", "", "", "", "")
+		r.RecordRequestPlanWithLevel("unavailable", "m", "chat_completions", http.StatusServiceUnavailable, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
-	r.RecordRequestPlan("credential", "m", "chat_completions", http.StatusUnauthorized, time.Millisecond, "upstream_failed", "", "", "", "")
-	r.RecordRequestPlan("drift", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift", "", "", "", "")
+	r.RecordRequestPlanWithLevel("credential", "m", "chat_completions", http.StatusUnauthorized, time.Millisecond, "upstream_failed", "", "", "", "", 0)
+	r.RecordRequestPlanWithLevel("drift", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift", "", "", "", "", 0)
 
 	payload, err := r.StatsJSON()
 	if err != nil {
@@ -162,12 +162,12 @@ func TestProviderHealthRetainsFailureDetailsAfterRecovery(t *testing.T) {
 
 func TestProviderHealthIgnoresLocalClientAndConversionErrors(t *testing.T) {
 	r := NewRegistry()
-	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "conversion", "", "", "", "openai_to_anthropic")
-	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusUnprocessableEntity, time.Millisecond, "error", "", "", "", "")
+	r.RecordRequestPlanWithLevel("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "conversion", "", "", "", "openai_to_anthropic", 0)
+	r.RecordRequestPlanWithLevel("openai", "m", "chat_completions", http.StatusUnprocessableEntity, time.Millisecond, "error", "", "", "", "", 0)
 	if got := r.ProviderHealthSnapshot(); len(got) != 0 {
 		t.Fatalf("local request errors must not affect provider health: %#v", got)
 	}
-	r.RecordRequestPlan("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift", "", "", "", "")
+	r.RecordRequestPlanWithLevel("openai", "m", "chat_completions", http.StatusBadRequest, time.Millisecond, "endpoint_drift", "", "", "", "", 0)
 	if got := r.ProviderHealthSnapshot()["openai"]; got.Status != "endpoint_drift" || got.SampleCount != 1 {
 		t.Fatalf("endpoint drift must remain observable: %#v", got)
 	}
@@ -175,12 +175,12 @@ func TestProviderHealthIgnoresLocalClientAndConversionErrors(t *testing.T) {
 
 func TestProviderHealthUsesLowSampleUnknownAndOpensCircuit(t *testing.T) {
 	r := NewRegistry()
-	r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusOK, 10*time.Millisecond, "success", "", "", "", "")
+	r.RecordRequestPlanWithLevel("provider", "m", "chat_completions", http.StatusOK, 10*time.Millisecond, "success", "", "", "", "", 0)
 	if got := r.ProviderHealthSnapshot()["provider"]; got.Status != "unknown" || got.SampleCount != 1 || got.Score != 100 || got.CircuitState != "closed" {
 		t.Fatalf("low-sample health=%#v", got)
 	}
 	for range 3 {
-		r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusBadGateway, 20*time.Millisecond, "upstream_failed", "", "", "", "")
+		r.RecordRequestPlanWithLevel("provider", "m", "chat_completions", http.StatusBadGateway, 20*time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
 	if got := r.ProviderHealthSnapshot()["provider"]; got.Status != "unhealthy" || got.CircuitState != "open" || got.CircuitRetryAt.IsZero() {
 		t.Fatalf("circuit health=%#v", got)
@@ -190,8 +190,8 @@ func TestProviderHealthUsesLowSampleUnknownAndOpensCircuit(t *testing.T) {
 func TestResetProviderHealthClearsOnlyTargetCircuit(t *testing.T) {
 	r := NewRegistry()
 	for range 3 {
-		r.RecordRequestPlan("changed", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
-		r.RecordRequestPlan("unchanged", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+		r.RecordRequestPlanWithLevel("changed", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "", 0)
+		r.RecordRequestPlanWithLevel("unchanged", "m", "responses", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
 	r.ResetProviderHealth("changed")
 	if _, ok := r.ProviderHealthSnapshot()["changed"]; ok {
@@ -204,8 +204,8 @@ func TestResetProviderHealthClearsOnlyTargetCircuit(t *testing.T) {
 
 func TestProviderModelHealthIsolatesCredentialFailure(t *testing.T) {
 	r := NewRegistry()
-	r.RecordRequestPlan("shared", "unauthorized-model", "messages", http.StatusForbidden, time.Millisecond, "error", "", "", "", "")
-	r.RecordRequestPlan("shared", "authorized-model", "messages", http.StatusOK, time.Millisecond, "success", "", "", "", "")
+	r.RecordRequestPlanWithLevel("shared", "unauthorized-model", "messages", http.StatusForbidden, time.Millisecond, "error", "", "", "", "", 0)
+	r.RecordRequestPlanWithLevel("shared", "authorized-model", "messages", http.StatusOK, time.Millisecond, "success", "", "", "", "", 0)
 	unauthorized, ok := r.ProviderModelHealth("shared", "unauthorized-model")
 	if !ok || unauthorized.Status != "credential_error" {
 		t.Fatalf("unauthorized model health=%#v found=%v", unauthorized, ok)
@@ -219,7 +219,7 @@ func TestProviderModelHealthIsolatesCredentialFailure(t *testing.T) {
 func TestProviderHealthHalfOpenIsRoutableRecoveryProbe(t *testing.T) {
 	r := NewRegistry()
 	for range 3 {
-		r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+		r.RecordRequestPlanWithLevel("provider", "m", "chat_completions", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
 	// Do not wait for the production cooldown in a test. The expired circuit
 	// must become a half-open, routable probe rather than remain unhealthy.
@@ -238,7 +238,7 @@ func TestProviderHealthHalfOpenIsRoutableRecoveryProbe(t *testing.T) {
 func TestProviderHealthHalfOpenOverridesCredentialErrorForRecovery(t *testing.T) {
 	r := NewRegistry()
 	for range 3 {
-		r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusUnauthorized, time.Millisecond, "upstream_failed", "", "", "", "")
+		r.RecordRequestPlanWithLevel("provider", "m", "chat_completions", http.StatusUnauthorized, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
 	r.mu.Lock()
 	value := r.providerHealth["provider"]
@@ -253,7 +253,7 @@ func TestProviderHealthHalfOpenOverridesCredentialErrorForRecovery(t *testing.T)
 
 	// A successful probe must clear both the circuit and the consecutive-failure
 	// state so subsequent requests are not immediately re-quarantined.
-	r.RecordRequestPlan("provider", "m", "chat_completions", http.StatusOK, time.Millisecond, "success", "", "", "", "")
+	r.RecordRequestPlanWithLevel("provider", "m", "chat_completions", http.StatusOK, time.Millisecond, "success", "", "", "", "", 0)
 	got = r.ProviderHealthSnapshot()["provider"]
 	if got.CircuitState != "closed" || got.ConsecutiveFailures != 0 || got.Status == "credential_error" {
 		t.Fatalf("successful recovery probe did not restore provider: %#v", got)

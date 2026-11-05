@@ -73,12 +73,12 @@ func TestTextCompletionResponsesRejectsPartialAndUnknown(t *testing.T) {
 							return execute()
 						}}
 						cfg := mustHandlerConfig(config.Config{InteractionDir: t.TempDir(), ArchiveInteractions: true, ArchiveFullContent: true})
-						recorder, err := archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+						recorder, err := archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10})
 						if err != nil {
 							t.Fatal(err)
 						}
 						registry := metrics.NewRegistry()
-						h := NewHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(exec)
+						h := newTestProxyHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(exec)
 						h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-11-04T00:00:00Z"))
 						body := fmt.Sprintf(`{"model":"gpt-5","stream":%v,"input":"hi"}`, stream)
 						req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))

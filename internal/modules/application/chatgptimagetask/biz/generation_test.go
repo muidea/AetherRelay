@@ -82,7 +82,7 @@ func TestRunGenerationRecordsRecoveryMetadataOnFailure(t *testing.T) {
 
 func TestResumableConversationFailure(t *testing.T) {
 	if !isResumableConversationFailure(imgevents.TaskView{Status: imgevents.StatusError, ConversationID: "conversation-1", Error: "<nil>"}) {
-		t.Fatal("legacy typed-nil task should be recoverable by polling its existing conversation")
+		t.Fatal("failed task should be recoverable by polling its existing conversation")
 	}
 	if isResumableConversationFailure(imgevents.TaskView{Status: imgevents.StatusError}) {
 		t.Fatal("task without an upstream conversation must not be resumed")

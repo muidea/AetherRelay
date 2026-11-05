@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
@@ -95,7 +96,7 @@ func TestDeviceIdentityIsStableAcrossConcurrencyRotationAndRestart(t *testing.T)
 	}
 }
 
-func TestLegacyDeviceMigrationPreservesStateAndUnknownFields(t *testing.T) {
+func TestMissingDeviceIdentityIsRejectedWithoutRewritingState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.duckdb")
 	codec := encryptedTestCodec(t)
 	s := New(path, 1, codec)
@@ -129,39 +130,128 @@ func TestLegacyDeviceMigrationPreservesStateAndUnknownFields(t *testing.T) {
 	if err := s.documents.ApplySecureDocuments(secureDocumentScope, []aetherrelaystate.SecureDocumentRow{row}, nil); err != nil {
 		t.Fatal(err)
 	}
+	stored, err := s.documents.LoadSecureDocuments(secureDocumentScope)
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("rows=%d err=%v", len(stored), err)
+	}
+	row = stored[0]
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	migrated := New(path, 1, codec)
-	acc := migrated.items["token"]
-	requireDevice(t, acc.DeviceID)
-	device := acc.DeviceID
-	if acc.ID != row.ID || acc.Quota != 7 || acc.Extra["unknown_extension"] != "keep" {
-		t.Fatal("migration changed existing state")
+	if pool, err := Open(path, "128MB", 1, 1, codec); err == nil {
+		_ = pool.Close()
+		t.Fatal("missing device identity was accepted")
 	}
-	if err := migrated.Close(); err != nil {
+	docs, err := aetherrelaystate.Open(path, "128MB", 1)
+	if err != nil {
 		t.Fatal(err)
 	}
-	reopened := New(path, 1, codec)
-	defer reopened.Close()
-	if reopened.items["token"].DeviceID != device {
-		t.Fatal("migration did not persist identity")
+	defer docs.Close()
+	after, err := docs.LoadSecureDocuments(secureDocumentScope)
+	if err != nil || len(after) != 1 {
+		t.Fatalf("rows=%d err=%v", len(after), err)
+	}
+	if !bytes.Equal(after[0].Payload, row.Payload) || !after[0].UpdatedAt.Equal(row.UpdatedAt) {
+		t.Fatal("rejected account was rewritten")
 	}
 }
 
 func TestDeviceIdentityIsPublishedOnlyAfterSuccessfulSave(t *testing.T) {
-	s := New(filepath.Join(t.TempDir(), "state.duckdb"), 1, encryptedTestCodec(t))
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name   string
+		create func(*Store) error
+	}{
+		{"add", func(s *Store) error { _, _, err := s.Add([]string{"new-token"}, "web"); return err }},
+		{"token import", func(s *Store) error { _, _, _, err := s.Import([]string{"new-token"}, nil, "web"); return err }},
+		{"oauth import", func(s *Store) error {
+			_, _, _, err := s.Import(nil, []events.ExportItem{{AccessToken: "new-token", RefreshToken: "refresh"}}, "oauth_import")
+			return err
+		}},
+		{"oauth login", func(s *Store) error { _, _, err := s.AddOAuth("new-token", "refresh", ""); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, codec := filepath.Join(t.TempDir(), "state.duckdb"), encryptedTestCodec(t)
+			s := New(path, 1, codec)
+			defer s.Close()
+			if _, _, err := s.AddOAuth("existing-token", "existing-refresh", ""); err != nil {
+				t.Fatal(err)
+			}
+			before, version := s.List(), s.CatalogVersion()
+			if err := s.documents.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.create(s); err == nil {
+				t.Fatal("expected persistence failure")
+			}
+			if _, found := s.ViewForAccessToken("new-token"); found {
+				t.Fatal("failed creation published an uncommitted account or device identity")
+			}
+			if !reflect.DeepEqual(s.List(), before) || s.CatalogVersion() != version {
+				t.Fatal("failed creation changed existing accounts or catalog version")
+			}
+			candidates, err := s.ListDiscoveryCandidates()
+			if err != nil || len(candidates.Candidates) != 1 || candidates.Candidates[0].AccountID != before[0].ID {
+				t.Fatalf("failed creation reached discovery: %+v err=%v", candidates, err)
+			}
+			s.documents, err = aetherrelaystate.Open(path, "128MB", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.create(s); err != nil {
+				t.Fatalf("retry after storage recovery: %v", err)
+			}
+			created, found := s.ViewForAccessToken("new-token")
+			if !found {
+				t.Fatal("successful retry did not publish the new account")
+			}
+			requireDevice(t, created.DeviceID)
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restored := New(path, 1, codec)
+			defer restored.Close()
+			persisted, found := restored.ViewForAccessToken("new-token")
+			if !found || persisted.DeviceID != created.DeviceID || persisted.ID != created.ID {
+				t.Fatal("successful retry published an identity that was not persisted")
+			}
+		})
 	}
-	acc := &Account{ID: "test", AccessToken: "token", Status: StatusNormal, SourceType: "web"}
-	s.items["token"] = acc
-	s.order = []string{"token"}
-	if err := s.saveLocked(); err == nil {
-		t.Fatal("expected persistence failure")
-	}
-	if acc.DeviceID != "" {
-		t.Fatal("uncommitted device identity published")
+}
+
+func TestFailedCredentialReplacementPreservesAccountAndSchedulingState(t *testing.T) {
+	for _, oauth := range []bool{false, true} {
+		t.Run(map[bool]string{false: "import", true: "oauth"}[oauth], func(t *testing.T) {
+			s := New(filepath.Join(t.TempDir(), "state.duckdb"), 2, encryptedTestCodec(t))
+			defer s.Close()
+			before, _, err := s.AddOAuth("old-token", "old-refresh", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeDocument := accountToMap(s.items["old-token"])
+			s.imageInflight["old-token"] = 1
+			version := s.CatalogVersion()
+			if err := s.documents.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if oauth {
+				_, _, err = s.UpsertOAuth("new-token", "new-refresh", "", before.ID)
+			} else {
+				_, _, _, err = s.Import(nil, []events.ExportItem{
+					{AccessToken: "new-token", RefreshToken: "new-refresh", TargetID: before.ID},
+					{AccessToken: "another-token", RefreshToken: "another-refresh"},
+				}, "oauth_import")
+			}
+			if err == nil {
+				t.Fatal("expected persistence failure")
+			}
+			after, found := s.ViewForAccessToken("old-token")
+			if !found || !reflect.DeepEqual(after, before) || !reflect.DeepEqual(accountToMap(s.items["old-token"]), beforeDocument) || len(s.List()) != 1 {
+				t.Fatal("failed replacement changed the original account")
+			}
+			if _, found := s.ViewForAccessToken("new-token"); found || len(s.aliases) != 0 || !reflect.DeepEqual(s.imageInflight, map[string]int{"old-token": 1}) || s.CatalogVersion() != version {
+				t.Fatal("failed replacement published credentials, aliases, leases or catalog changes")
+			}
+		})
 	}
 }
 
@@ -273,8 +363,8 @@ func TestMalformedDeviceIsQuarantinedWithoutRotationOrBlockingHealthyAccounts(t 
 				if _, _, err := pool.Update("bad-token", "plus", status, nil, ""); err != nil {
 					t.Fatal(err)
 				}
-				if _, ok := pool.AcquireTextAccount(bad.ID, "gpt-6-sol", events.ModelCapabilityTextGeneration); ok {
-					t.Fatal("identity block bypassed through targeted text acquisition")
+				if _, ok := pool.AcquireTextToken([]string{"good-token"}, "gpt-6-sol", events.ModelCapabilityTextGeneration); ok {
+					t.Fatal("identity block bypassed through text acquisition")
 				}
 				if _, ok := pool.AcquireImageAccount(bad.ID); ok {
 					t.Fatal("identity block bypassed through image resume")

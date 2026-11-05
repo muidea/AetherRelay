@@ -173,7 +173,7 @@ func (s codexResponsesExecutorStub) CloseCodexWebsocket(ctx context.Context, ses
 func newCodexResponsesHandler(t *testing.T, store usage.Store, executor codexresponses.Executor) *Handler {
 	t.Helper()
 	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{}})
-	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(executor)
+	handler := newTestProxyHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(executor)
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
 	return handler
 }
@@ -182,11 +182,11 @@ func newArchivedCodexResponsesHandler(t *testing.T, executor codexresponses.Exec
 	t.Helper()
 	root := t.TempDir()
 	cfg := mustHandlerConfig(config.Config{InteractionDir: filepath.Join(root, "interactions"), CodexOAuth: config.CodexOAuthConfig{}})
-	recorder, err := aetherrelayarchive.NewRecorderOptions(cfg.InteractionDir, aetherrelayarchive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+	recorder, err := aetherrelayarchive.NewRecorderOptions(cfg.InteractionDir, aetherrelayarchive.RecorderOptions{MaxRounds: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, nil).WithCodexResponsesExecutor(executor)
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), recorder, nil).WithCodexResponsesExecutor(executor)
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
 	return handler, cfg.InteractionDir
 }
@@ -417,7 +417,7 @@ func TestCodexOAuthInvalidRequestReturnsClientError(t *testing.T) {
 	failure.HTTPStatus = http.StatusBadRequest
 	registry := aetherrelaymetrics.NewRegistry()
 	cfg := mustHandlerConfig(config.Config{CodexOAuth: config.CodexOAuthConfig{}})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), nil, registry).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, registry).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(context.Context, codexresponses.Request) (codexresponses.Result, error) {
 		return codexresponses.Result{}, failure
 	}})
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
@@ -817,8 +817,8 @@ func TestCodexCompactStripsInputNamespacesAndParallelFlag(t *testing.T) {
 	}
 }
 
-func TestCodexRequestNormalizesLegacyFunctionsAndToolContinuation(t *testing.T) {
-	raw := []byte(`{"model":"gpt-test","functions":[{"name":"lookup","description":"lookup","parameters":{"type":"object"}}],"function_call":{"name":"lookup"},"input":[{"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_lookup","output":"done"}]}`)
+func TestCodexRequestPreservesCurrentToolsAndContinuation(t *testing.T) {
+	raw := []byte(`{"model":"gpt-test","tools":[{"type":"function","name":"lookup","description":"lookup","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"lookup"},"input":[{"type":"function_call","call_id":"call_lookup","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_lookup","output":"done"}]}`)
 	normalized, body, _, err := normalizeCodexRequest(raw, false)
 	if err != nil {
 		t.Fatal(err)
@@ -1343,7 +1343,7 @@ func TestResponsesFallsBackFromDirectProviderToCodexOAuth(t *testing.T) {
 		},
 	})
 	store := usage.NewMemoryStore()
-	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
+	handler := newTestProxyHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
 		usagetarget.Record(ctx, "codexoauth", "fallback-slot", "fallback@example.com")
 		return codexresponses.Result{Body: []byte(`{"object":"response","id":"resp_fallback","usage":{"input_tokens":3,"output_tokens":2}}`)}, nil
 	}})
@@ -1388,7 +1388,7 @@ func TestResponsesFallsBackFromCodexOAuthToDirectProvider(t *testing.T) {
 	store := usage.NewMemoryStore()
 	failure := codexresponses.NewFailure(codexresponses.KindUpstream, 0, fmt.Errorf("Codex upstream failed"))
 	failure.HTTPStatus = http.StatusBadGateway
-	handler := NewHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
+	handler := newTestProxyHandler(cfg, store, nil, nil).WithCodexResponsesExecutor(codexResponsesExecutorStub{complete: func(ctx context.Context, _ codexresponses.Request) (codexresponses.Result, error) {
 		usagetarget.Record(ctx, "codexoauth", "failed-slot", "first@example.com")
 		return codexresponses.Result{}, failure
 	}})

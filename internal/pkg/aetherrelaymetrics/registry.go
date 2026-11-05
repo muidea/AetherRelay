@@ -437,14 +437,8 @@ func (r *Registry) RecordRequest(provider, model, route string, status int, dura
 	r.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome, "", "", "", "", 0)
 }
 
-// RecordRequestPlan 记录请求,并附带 TransportPlan 有界 label。
-func (r *Registry) RecordRequestPlan(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string) {
-	r.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode, 0)
-}
-
 // RecordRequestPlanWithLevel records a request with the validated conversion
-// capability level. The legacy RecordRequestPlan API remains available and
-// records level 0 for callers that do not have a conversion declaration.
+// capability level.
 func (r *Registry) RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int) {
 	if r == nil {
 		return

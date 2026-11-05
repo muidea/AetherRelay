@@ -75,7 +75,7 @@ func TestResponsesInputTokensAuthenticatesAndEstimatesLocally(t *testing.T) {
 			Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointResponses},
 		},
 	}}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, nil)
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", strings.NewReader(`{"model":"gpt-test","input":"hello world"}`))
 	request.Header.Set("Authorization", "Bearer test-client-key")

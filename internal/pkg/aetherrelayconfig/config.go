@@ -2075,7 +2075,7 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// EffectiveProviderPriority returns the compatibility default for an omitted
+// EffectiveProviderPriority returns the default for an omitted
 // priority. It is also safe for focused tests that construct Provider values
 // without first running Load, where a zero value means "unspecified".
 func EffectiveProviderPriority(provider Provider) int {
@@ -2085,7 +2085,7 @@ func EffectiveProviderPriority(provider Provider) int {
 	return provider.Priority
 }
 
-// EffectiveProviderFallback returns the compatibility default for an omitted
+// EffectiveProviderFallback returns the default for an omitted
 // fallback key. Focused in-memory Config fixtures do not carry YAML presence
 // metadata, so their zero-value Provider follows the production default too.
 func EffectiveProviderFallback(provider Provider) bool {
@@ -2096,7 +2096,7 @@ func EffectiveProviderFallback(provider Provider) bool {
 }
 
 // EffectiveChatGPTWebProviderPriority returns the persisted builtin priority
-// or its stable default for focused in-memory tests and legacy configs.
+// or its default when omitted.
 func EffectiveChatGPTWebProviderPriority(web ChatGPTWebConfig) int {
 	if web.Priority == 0 && !web.priorityConfigured {
 		return DefaultChatGPTWebProviderPriority
@@ -2111,7 +2111,7 @@ func EffectiveChatGPTWebProviderEnabled(web ChatGPTWebConfig) bool {
 }
 
 // EffectiveCodexOAuthProviderPriority returns the persisted builtin priority
-// or its stable default for focused in-memory tests and legacy configs.
+// or its default when omitted.
 func EffectiveCodexOAuthProviderPriority(codex CodexOAuthConfig) int {
 	if codex.Priority == 0 && !codex.priorityConfigured {
 		return DefaultCodexOAuthProviderPriority

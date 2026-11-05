@@ -60,7 +60,7 @@ func TestCodexPermanentAuthenticationFailureContract(t *testing.T) {
 func TestCodexModelBlacklistIs404AndHealthNeutral(t *testing.T) {
 	registry := metrics.NewRegistry()
 	h := &Handler{metricsRegistry: metricsport.AsPort(registry)}
-	registry.RecordRequestPlan("codexoauth", "gpt-sol", "responses", 502, time.Second, "upstream_failed", "", "", "", "")
+	registry.RecordRequestPlanWithLevel("codexoauth", "gpt-sol", "responses", 502, time.Second, "upstream_failed", "", "", "", "", 0)
 	before := registry.ProviderHealthSnapshot()["codexoauth"]
 	for _, endpoint := range []string{"/v1/responses", "/v1/messages"} {
 		for _, streaming := range []bool{false, true} {
@@ -89,7 +89,7 @@ func TestCodexAdmissionAndLocalFailuresDoNotOpenProviderCircuit(t *testing.T) {
 	// CP-FAIL-019: exercise the HTTP error writer, not just the metrics helper.
 	registry := metrics.NewRegistry()
 	h := &Handler{metricsRegistry: metricsport.AsPort(registry)}
-	registry.RecordRequestPlan("codexoauth", "gpt-test", "responses", 502, time.Second, "upstream_failed", "", "", "", "")
+	registry.RecordRequestPlanWithLevel("codexoauth", "gpt-test", "responses", 502, time.Second, "upstream_failed", "", "", "", "", 0)
 	for _, kind := range []codexresponses.ErrorKind{codexresponses.KindProviderUnavailable, codexresponses.KindFirstEventTimeout, codexresponses.KindStreamLifetime, codexresponses.KindClientCanceled, codexresponses.KindClientWrite, codexresponses.KindServiceShutdown} {
 		for range 4 {
 			f := codexresponses.NewFailure(kind, 0, nil)
@@ -125,7 +125,7 @@ func TestCodexAdmissionAndLocalFailuresDoNotOpenProviderCircuit(t *testing.T) {
 	if !strings.Contains(exposition.String(), `aetherrelay_provider_admission_denials_total{provider="codexoauth",model="gpt-test",reason="accounts_cooling"} 4`) {
 		t.Fatalf("missing admission denial metric:\n%s", exposition.String())
 	}
-	registry.RecordRequestPlan("codexoauth", "gpt-test", "responses", 200, time.Second, "success", "", "", "", "")
+	registry.RecordRequestPlanWithLevel("codexoauth", "gpt-test", "responses", 200, time.Second, "success", "", "", "", "", 0)
 	if got := registry.ProviderHealthSnapshot()["codexoauth"]; got.ConsecutiveFailures != 0 {
 		t.Fatalf("recovery=%+v", got)
 	}
@@ -170,9 +170,9 @@ func TestActiveCircuitProvidesRetryAfter(t *testing.T) {
 		"p": {Name: "p", Protocol: "openai", BaseURL: "https://example.invalid", APIKey: "test", Models: []string{"gpt-test"}, Endpoints: []string{config.ProviderEndpointResponses}},
 	}})
 	registry := metrics.NewRegistry()
-	h := NewHandler(cfg, usage.NewMemoryStore(), nil, registry)
+	h := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, registry)
 	for range 3 {
-		registry.RecordRequestPlan("p", "gpt-test", "responses", 502, time.Second, "upstream_failed", "", "", "", "")
+		registry.RecordRequestPlanWithLevel("p", "gpt-test", "responses", 502, time.Second, "upstream_failed", "", "", "", "", 0)
 	}
 	req := httptest.NewRequest("POST", "/v1/responses", nil)
 	req = req.WithContext(clientauth.WithClientIdentity(req.Context(), clientauth.ClientIdentity{KeyID: "test", ProviderAccess: clientaccess.All()}))

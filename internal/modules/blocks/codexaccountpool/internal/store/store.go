@@ -94,11 +94,6 @@ type account struct {
 	// FingerprintSeed is encrypted with the rest of the account document. It is
 	// deliberately absent from management views and credential exports.
 	FingerprintSeed string `json:"fingerprint_seed,omitempty"`
-	// ClientIdentityProfile is a legacy account observation used only to seed
-	// the shared highest identity on startup.
-	// It stays inside the encrypted account document and is never exported by
-	// management credential APIs.
-	ClientIdentityProfile *codexidentity.ObservedProfile `json:"client_identity_profile,omitempty"`
 }
 
 type Store struct {
@@ -188,7 +183,6 @@ func (s *Store) loadEncrypted() error {
 	if err != nil {
 		return err
 	}
-	migrated := false
 	for _, row := range rows {
 		payload, err := s.credentials.Open(secureDocumentScope, row.ID, row.Payload)
 		if err != nil {
@@ -198,29 +192,10 @@ func (s *Store) loadEncrypted() error {
 		if err := json.Unmarshal(payload, &item); err != nil {
 			return fmt.Errorf("decode account %q: %w", row.ID, err)
 		}
-		// The scoped-only schema intentionally removes device/session/full. Empty,
-		// unknown, and removed values are rewritten to the new default in place.
-		if mode, valid := normalizeFingerprintMode(item.FingerprintMode); !valid || item.FingerprintMode != mode {
-			item.FingerprintMode = events.FingerprintModeScoped
-			migrated = true
-		}
 		if clean, err := events.NormalizeBlockedModels(item.BlockedModels); err != nil {
 			return fmt.Errorf("invalid account model policy: %w", err)
 		} else {
 			item.BlockedModels = clean
-		}
-		if item.MaxConcurrency == 0 {
-			item.MaxConcurrency = events.DefaultMaxConcurrency
-			migrated = true
-		}
-		if reconcileFingerprintSeed(&item) {
-			migrated = true
-		}
-		if reconcileClientIdentityProfile(&item) {
-			migrated = true
-		}
-		if item.ClientIdentityProfile != nil {
-			s.clientIdentity = codexidentity.HighestObserved(s.clientIdentity, *item.ClientIdentityProfile)
 		}
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
 		if err := validatePersistedAccount(row.ID, &item); err != nil {
@@ -229,10 +204,7 @@ func (s *Store) loadEncrypted() error {
 		s.items[item.ID] = &item
 		s.order = append(s.order, item.ID)
 	}
-	if migrated {
-		return s.saveLocked()
-	}
-	return s.saveClientIdentityLocked()
+	return nil
 }
 
 func validatePersistedAccount(documentID string, item *account) error {
@@ -554,7 +526,6 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		}
 		if rotateFingerprintSeed {
 			existing.FingerprintSeed = ""
-			existing.ClientIdentityProfile = nil
 		}
 		reconcileFingerprintSeed(existing)
 		if existing.Status == "" || (reauthenticated && existing.Status == events.StatusAbnormal) {
@@ -1184,7 +1155,7 @@ func (s *Store) RecordResultContext(ctx context.Context, id, model string, succe
 					candidate.Until = existing.Until
 					// Retain unrelated, longer failure evidence. Quota failures still
 					// advance their observation time even with a shorter reset hint.
-					if !quotaExhausted || existing.Source != "usage_limit" && !legacyQuotaCooldown(item, cooldownModel, existing) {
+					if !quotaExhausted || existing.Source != "usage_limit" {
 						candidate = existing
 					}
 				}
@@ -1988,22 +1959,6 @@ func reconcileFingerprintSeed(item *account) bool {
 		return true
 	}
 	return false
-}
-
-func reconcileClientIdentityProfile(item *account) bool {
-	if item == nil || item.ClientIdentityProfile == nil {
-		return false
-	}
-	normalized, valid := codexidentity.ParseObserved(item.ClientIdentityProfile.UserAgent, item.ClientIdentityProfile.Originator)
-	if !valid {
-		item.ClientIdentityProfile = nil
-		return true
-	}
-	if *item.ClientIdentityProfile == normalized {
-		return false
-	}
-	item.ClientIdentityProfile = &normalized
-	return true
 }
 
 func unique(values []string) []string {

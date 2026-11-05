@@ -9,7 +9,6 @@ import (
 	"time"
 
 	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
-	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 )
 
 func sharedIdentityCandidate(version string) events.ClientIdentityCandidate {
@@ -110,7 +109,7 @@ func TestSharedHighestIdentityAppliesAcrossAccountsModesAndBackgroundRequests(t 
 	}
 }
 
-func TestHighestIdentityRecoversLegacyProfilesAndSurvivesAccountDeletion(t *testing.T) {
+func TestHighestIdentityPersistsAndSurvivesAccountDeletion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "aetherrelay.duckdb")
 	codec := encryptedTestCodec(t)
 	s, err := Open(path, "256MB", 1, codec)
@@ -119,11 +118,9 @@ func TestHighestIdentityRecoversLegacyProfilesAndSurvivesAccountDeletion(t *test
 	}
 	ids := addSharedIdentityAccounts(t, s)
 	newest := sharedIdentityCandidate("0.162.1")
-	profile, _ := codexidentity.ParseObserved(newest.UserAgent, newest.Originator)
-	s.items[ids[0]].ClientIdentityProfile = &profile
-	older := sharedIdentityCandidate("0.155.0")
-	oldProfile, _ := codexidentity.ParseObserved(older.UserAgent, older.Originator)
-	s.items[ids[1]].ClientIdentityProfile = &oldProfile
+	if !s.promoteSharedClientIdentityLocked(newest) {
+		t.Fatal("current client observation was not promoted")
+	}
 	if err := s.saveLocked(); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +132,7 @@ func TestHighestIdentityRecoversLegacyProfilesAndSurvivesAccountDeletion(t *test
 		t.Fatal(err)
 	}
 	if got := s.SharedClientIdentity(); got.UserAgent != newest.UserAgent || got.Version != "0.162.1" {
-		t.Fatalf("startup failed to recover highest legacy observation: %+v", got)
+		t.Fatalf("startup lost current shared observation: %+v", got)
 	}
 	for _, id := range ids {
 		if _, err := s.Delete([]string{id}); err != nil {
@@ -178,20 +175,4 @@ func TestConcurrentClientObservationsKeepTheGlobalMaximum(t *testing.T) {
 	if got := s.SharedClientIdentity(); got.Version != "0.164.0" {
 		t.Fatalf("concurrent observations lost maximum: %+v", got)
 	}
-}
-
-// Seed historical encrypted account records for migration coverage.
-func seedLegacyClientIdentityProfile(item *account, candidate events.ClientIdentityCandidate) bool {
-	if item == nil || item.FingerprintMode != events.FingerprintModeScoped {
-		return false
-	}
-	current := codexidentity.ObservedProfile{}
-	if item.ClientIdentityProfile != nil {
-		current = *item.ClientIdentityProfile
-	}
-	next, promoted := codexidentity.PromoteObserved(current, codexidentity.ObservedProfile{UserAgent: candidate.UserAgent, Originator: candidate.Originator})
-	if promoted {
-		item.ClientIdentityProfile = &next
-	}
-	return promoted
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"sort"
 	"strings"
@@ -32,8 +33,7 @@ const (
 	modelDiscoveryRetryBase = 30 * time.Second
 	modelDiscoveryRetryMax  = 5 * time.Minute
 
-	// Keep the account/model scheduling behavior compatible with the source
-	// gateway's legacy transient cooldown. A 429 is intentionally treated as
+	// A 429 is intentionally treated as
 	// the same short, persisted recovery window here: ChatGPT Web does not
 	// expose a reliable retry-after value on every text transport.
 	textRateLimitCooldown    = time.Minute
@@ -115,12 +115,6 @@ func Open(databasePath, memoryLimit string, threads, concurrency int, codec *aet
 		_ = documents.Close()
 		return nil, fmt.Errorf("load account state: %w", err)
 	}
-	// Migrate old records before publishing the store to any caller. Device
-	// values become visible only after the encrypted transaction commits.
-	if err := s.saveLocked(); err != nil {
-		_ = documents.Close()
-		return nil, fmt.Errorf("initialize account device identity: %w", err)
-	}
 	return s, nil
 }
 
@@ -187,7 +181,7 @@ func (s *Store) loadEncrypted() error {
 		}
 		acc := mapToAccount(item)
 		s.persisted[row.ID] = secureDocumentRevision{Digest: sha256.Sum256(payload), Position: row.Position}
-		if acc.ID == "" || acc.ID != row.ID || acc.AccessToken == "" || !validStatus(acc.Status) || acc.SourceType == "" || acc.CreatedAt == "" {
+		if acc.ID == "" || acc.ID != row.ID || acc.AccessToken == "" || !validStatus(acc.Status) || acc.SourceType == "" || acc.CreatedAt == "" || (acc.DeviceID == "" && deviceIdentityError(acc) == "") {
 			return fmt.Errorf("account %q is not encoded with the final document schema", row.ID)
 		}
 		if reason := deviceIdentityError(acc); reason != "" {
@@ -227,10 +221,36 @@ func (s *Store) saveLocked() error {
 	return s.saveEncryptedLocked()
 }
 
+// stageAccountWriteLocked isolates account creation and credential replacement
+// until their encrypted documents commit. Callers hold the owner's mutex.
+func (s *Store) stageAccountWriteLocked() *Store {
+	items := make(map[string]*Account, len(s.items))
+	for token, acc := range s.items {
+		if acc == nil {
+			items[token] = nil
+			continue
+		}
+		copy := *acc
+		copy.Extra = cloneMap(acc.Extra)
+		items[token] = &copy
+	}
+	return &Store{
+		documents: s.documents, credentials: s.credentials,
+		items: items, order: append([]string(nil), s.order...),
+		aliases: maps.Clone(s.aliases), imageInflight: maps.Clone(s.imageInflight),
+		persisted: s.persisted, catalogVersion: s.catalogVersion,
+	}
+}
+
+func (s *Store) publishAccountWriteLocked(staged *Store) {
+	s.items, s.order = staged.items, staged.order
+	s.aliases, s.imageInflight = staged.aliases, staged.imageInflight
+	s.persisted, s.catalogVersion = staged.persisted, staged.catalogVersion
+}
+
 func (s *Store) saveEncryptedLocked() error {
 	upserts := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
 	next := make(map[string]secureDocumentRevision, len(s.order))
-	initialized := make(map[*Account]string)
 	for position, token := range s.order {
 		acc := s.items[token]
 		if acc == nil {
@@ -239,15 +259,10 @@ func (s *Store) saveEncryptedLocked() error {
 		if strings.TrimSpace(acc.ID) == "" {
 			return fmt.Errorf("account document id is required")
 		}
-		deviceID := acc.DeviceID
-		if deviceID == "" && deviceIdentityError(acc) == "" {
-			deviceID = uuid.NewString()
-			initialized[acc] = deviceID
+		if acc.DeviceID == "" && deviceIdentityError(acc) == "" {
+			return fmt.Errorf("account device identity is required")
 		}
 		document := accountToMap(acc)
-		if deviceIdentityError(acc) == "" {
-			document["web_device_id"] = deviceID
-		}
 		payload, err := json.Marshal(document)
 		if err != nil {
 			return err
@@ -274,9 +289,6 @@ func (s *Store) saveEncryptedLocked() error {
 	}
 	if err := s.documents.ApplySecureDocuments(secureDocumentScope, upserts, deletes); err != nil {
 		return err
-	}
-	for acc, deviceID := range initialized {
-		acc.DeviceID = deviceID
 	}
 	s.persisted = next
 	return nil
@@ -1017,41 +1029,7 @@ func (s *Store) RecordRefreshError(token, message string) error {
 }
 
 func (s *Store) Add(tokens []string, sourceType string) (added, skipped int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer func() {
-		if added > 0 {
-			s.bumpCatalogLocked()
-		}
-	}()
-	if sourceType == "" {
-		sourceType = "web"
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, token := range tokens {
-		token = trim(token)
-		if token == "" {
-			continue
-		}
-		if _, exists := s.items[token]; exists {
-			skipped++
-			continue
-		}
-		acc := &Account{
-			ID:          shortID(token),
-			AccessToken: token,
-			SourceType:  sourceType,
-			Status:      StatusNormal,
-			Quota:       0,
-			CreatedAt:   now,
-		}
-		s.items[token] = acc
-		s.order = append(s.order, token)
-		added++
-	}
-	if added > 0 {
-		err = s.saveLocked()
-	}
+	added, _, skipped, err = s.Import(tokens, nil, sourceType)
 	return
 }
 
@@ -1061,6 +1039,15 @@ func (s *Store) Add(tokens []string, sourceType string) (added, skipped int, err
 func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType string) (added, updated, skipped int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	staged := s.stageAccountWriteLocked()
+	added, updated, skipped, err = staged.importLocked(tokens, accounts, sourceType)
+	if err == nil {
+		s.publishAccountWriteLocked(staged)
+	}
+	return
+}
+
+func (s *Store) importLocked(tokens []string, accounts []events.ExportItem, sourceType string) (added, updated, skipped int, err error) {
 	if sourceType == "" {
 		sourceType = "web"
 	}
@@ -1139,7 +1126,7 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 				skipped++
 				continue
 			}
-			s.items[entry.token] = &Account{ID: shortID(entry.token), AccessToken: entry.token, SourceType: sourceType, Status: StatusNormal, CreatedAt: now}
+			s.items[entry.token] = &Account{DeviceID: uuid.NewString(), ID: shortID(entry.token), AccessToken: entry.token, SourceType: sourceType, Status: StatusNormal, CreatedAt: now}
 			s.order = append(s.order, entry.token)
 			added++
 			changed = true
@@ -1148,7 +1135,7 @@ func (s *Store) Import(tokens []string, accounts []events.ExportItem, sourceType
 
 		item := entry.account
 		if !exists {
-			acc = &Account{ID: shortID(entry.token), AccessToken: entry.token, Status: StatusNormal, CreatedAt: now, Extra: map[string]any{}}
+			acc = &Account{DeviceID: uuid.NewString(), ID: shortID(entry.token), AccessToken: entry.token, Status: StatusNormal, CreatedAt: now, Extra: map[string]any{}}
 			s.items[entry.token] = acc
 			s.order = append(s.order, entry.token)
 			added++
@@ -1342,6 +1329,15 @@ func (s *Store) AddOAuth(accessToken, refreshToken, idToken string) (events.Acco
 func (s *Store) UpsertOAuth(accessToken, refreshToken, idToken, targetID string) (events.AccountView, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	staged := s.stageAccountWriteLocked()
+	view, added, err := staged.upsertOAuthLocked(accessToken, refreshToken, idToken, targetID)
+	if err == nil {
+		s.publishAccountWriteLocked(staged)
+	}
+	return view, added, err
+}
+
+func (s *Store) upsertOAuthLocked(accessToken, refreshToken, idToken, targetID string) (events.AccountView, bool, error) {
 	accessToken, refreshToken, idToken = trim(accessToken), trim(refreshToken), trim(idToken)
 	if accessToken == "" || refreshToken == "" {
 		return events.AccountView{}, false, fmt.Errorf("oauth access and refresh tokens are required")
@@ -1353,7 +1349,7 @@ func (s *Store) UpsertOAuth(accessToken, refreshToken, idToken, targetID string)
 	}
 	added := acc == nil
 	if added {
-		acc = &Account{ID: shortID(accessToken), AccessToken: accessToken, RefreshToken: refreshToken, SourceType: "oauth_login", Status: StatusNormal, CreatedAt: time.Now().UTC().Format(time.RFC3339), Extra: map[string]any{}}
+		acc = &Account{DeviceID: uuid.NewString(), ID: shortID(accessToken), AccessToken: accessToken, RefreshToken: refreshToken, SourceType: "oauth_login", Status: StatusNormal, CreatedAt: time.Now().UTC().Format(time.RFC3339), Extra: map[string]any{}}
 		s.items[accessToken] = acc
 		s.order = append(s.order, accessToken)
 	} else if acc.AccessToken != accessToken {
@@ -1700,36 +1696,6 @@ func (s *Store) AcquireTextToken(exclude []string, model, capability string) (ev
 		}
 		if !accountSupportsModelLocked(acc, model, capability) {
 			continue
-		}
-		acc.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
-		return toView(acc, true), true
-	}
-	return events.AccountView{}, false
-}
-
-// AcquireTextAccount reacquires a specific account ID for text turns. It does
-// not touch image in-flight slots and only requires the account to remain usable
-// for the requested model/capability.
-func (s *Store) AcquireTextAccount(accountID, model, capability string) (events.AccountView, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	accountID = trim(accountID)
-	if accountID == "" {
-		return events.AccountView{}, false
-	}
-	for _, token := range s.order {
-		acc := s.items[token]
-		if acc == nil || acc.ID != accountID {
-			continue
-		}
-		if accountStatus(acc) == StatusDisabled || accountStatus(acc) == StatusAbnormal {
-			return events.AccountView{}, false
-		}
-		if textCooldownActiveLocked(acc, model, time.Now().UTC()) {
-			return events.AccountView{}, false
-		}
-		if !accountSupportsModelLocked(acc, model, capability) {
-			return events.AccountView{}, false
 		}
 		acc.LastUsedAt = time.Now().UTC().Format(time.RFC3339)
 		return toView(acc, true), true
@@ -2207,7 +2173,7 @@ func accountSupportsModelLocked(acc *Account, model, capability string) bool {
 	model = strings.TrimSpace(model)
 	capability = strings.TrimSpace(capability)
 	if model == "" && capability == "" {
-		// Pre-discovery / non-catalog callers keep legacy acquire behavior.
+		// A credential-only acquisition has no model or capability constraint.
 		return true
 	}
 	if acc == nil || acc.ModelSnapshot == nil {
@@ -2500,7 +2466,7 @@ func (s *Store) tokensForIDsLocked(ids []string) []string {
 	return tokens
 }
 
-// tokenForIDLocked rejects an ambiguous legacy data file rather than applying
+// tokenForIDLocked rejects ambiguous account IDs rather than applying
 // a destructive operation to an arbitrary account.
 func (s *Store) tokenForIDLocked(id string) (string, bool) {
 	if id == "" {

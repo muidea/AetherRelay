@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -303,14 +301,8 @@ func changedProviderNames(current, next map[string]config.Provider) []string {
 
 // NewHandler 装配代理处理器。usageStore 可为 nil(仅健康检查/测试),业务请求 Start 将失败。
 func NewHandler(cfg config.Config, usageStore usage.Store, interactionRecorder *archive.Recorder, metricsSource any) *Handler {
-	if ms, ok := usageStore.(*usage.MemoryStore); ok {
-		if records, err := ms.ListClientAPIKeys(context.Background()); err == nil && len(records) == 0 {
-			sum := sha256.Sum256([]byte("test-client-key"))
-			_ = ms.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()})
-		}
-	}
 	if err := requireResolvedConfig(cfg); err != nil {
-		panic("proxy.NewHandler: " + err.Error() + "; call config.Load or tests.MustHandlerConfig")
+		panic("proxy.NewHandler: " + err.Error() + "; call config.Load")
 	}
 	h := &Handler{
 		cfg:                   cfg,
@@ -1124,9 +1116,6 @@ func isSupportedInbound(method, path string) bool {
 func (h *Handler) startRound(apiKeyID string) (*archive.Round, error) {
 	if h.interactionRecorder == nil {
 		return archive.NewObservationRound(), nil
-	}
-	if strings.TrimSpace(apiKeyID) == "" {
-		return h.interactionRecorder.Start()
 	}
 	return h.interactionRecorder.StartForAPIKey(apiKeyID)
 }
@@ -2232,13 +2221,8 @@ func recordRequestPlanMetric(reg metricsport.Port, plan TransportPlan, route str
 	if reg == nil {
 		return
 	}
-	if levelReporter, ok := reg.(metricsport.PlanLevelReporter); ok {
-		levelReporter.RecordRequestPlanWithLevel(plan.RouteOwner, plan.ModelID, route, status, duration, outcome,
-			plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode, plan.ConversionLevel)
-		return
-	}
-	reg.RecordRequestPlan(plan.RouteOwner, plan.ModelID, route, status, duration, outcome,
-		plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode)
+	reg.RecordRequestPlanWithLevel(plan.RouteOwner, plan.ModelID, route, status, duration, outcome,
+		plan.ClientEndpoint, plan.UpstreamProtocol, plan.UpstreamEndpoint, plan.Mode, plan.ConversionLevel)
 }
 
 func (h *Handler) doUpstreamPath(r *http.Request, round *archive.Round, providerName string, provider config.Provider, body []byte, bodyBytes int, stream bool, path, rawQuery, method string) (upstreamResult, error) {
@@ -2853,13 +2837,8 @@ func (h *Handler) recordAndPrintFail(round *archive.Round, r *http.Request, prov
 			}
 		}
 		route := RouteLabel(r)
-		if levelReporter, ok := h.metricsRegistry.(metricsport.PlanLevelReporter); ok {
-			levelReporter.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome,
-				clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode, conversionLevel)
-		} else {
-			h.metricsRegistry.RecordRequestPlan(provider, model, route, status, duration, outcome,
-				clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode)
-		}
+		h.metricsRegistry.RecordRequestPlanWithLevel(provider, model, route, status, duration, outcome,
+			clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode, conversionLevel)
 		// 普通 HTTP upstream 已在转发器中计数；ChatGPT Web 的 executor
 		// 路径没有该入口，因此也要记录其尚未提交响应的上游失败。
 		if shouldCountUpstreamError(fail, stream) {

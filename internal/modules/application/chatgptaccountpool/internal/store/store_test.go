@@ -589,7 +589,7 @@ func testJWTWithClaims(claims map[string]any) string {
 	return "header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
 }
 
-func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
+func TestAcquireTextTokenAndRecordTextResult(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounts.json")
 	s := New(path, 1, encryptedTestCodec(t))
 	if _, _, err := s.Add([]string{"token-a"}, "web"); err != nil {
@@ -601,7 +601,7 @@ func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
 		t.Fatalf("update found=%v err=%v", found, err)
 	}
 	// Text acquire must not consume image slots.
-	acquired, ok := s.AcquireTextAccount(account.ID, "", "")
+	acquired, ok := s.AcquireTextToken(nil, "", "")
 	if !ok || acquired.AccessToken != "token-a" {
 		t.Fatalf("acquire text account=%+v ok=%v", acquired, ok)
 	}
@@ -622,7 +622,7 @@ func TestAcquireTextAccountAndRecordTextResult(t *testing.T) {
 	if !marked || result.Status != StatusAbnormal {
 		t.Fatalf("invalid_token must mark abnormal: %+v", result)
 	}
-	if _, ok := s.AcquireTextAccount(account.ID, "", ""); ok {
+	if _, ok := s.AcquireTextToken(nil, "", ""); ok {
 		t.Fatal("abnormal account must not be reacquired")
 	}
 }

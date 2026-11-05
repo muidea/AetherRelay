@@ -1,11 +1,9 @@
 package proxy
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"testing"
 
 	"aetherrelay/internal/modules/application/proxyapi/pkg/effectivecatalog"
@@ -15,7 +13,7 @@ import (
 )
 
 func TestUnsupportedCodexCompatibilityEndpointsReturnNotFound(t *testing.T) {
-	handler := NewHandler(mustHandlerConfig(config.Config{}), usage.NewMemoryStore(), nil, nil)
+	handler := newTestProxyHandler(mustHandlerConfig(config.Config{}), usage.NewMemoryStore(), nil, nil)
 	for _, testCase := range []struct {
 		method string
 		path   string
@@ -51,7 +49,7 @@ func TestCodexModelsManifestUsesEffectiveCatalogCapabilities(t *testing.T) {
 	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
 		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
 	})
-	manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), "")
+	manifest := buildCodexModelsManifest(snapshot, clientaccess.All())
 	if len(manifest.Models) != 1 {
 		t.Fatalf("CP-EP-013 models=%#v", manifest.Models)
 	}
@@ -68,56 +66,8 @@ func TestCodexModelsManifestExcludesModelsWithoutResponses(t *testing.T) {
 	snapshot := effectivecatalog.Snapshot{Candidates: map[string][]effectivecatalog.Candidate{
 		"emb": {{ModelID: "emb", RouteOwner: "openai", SupportedEndpoints: []string{"/v1/embeddings"}}},
 	}}
-	if manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), ""); len(manifest.Models) != 0 {
+	if manifest := buildCodexModelsManifest(snapshot, clientaccess.All()); len(manifest.Models) != 0 {
 		t.Fatalf("CP-EP-013 manifest=%#v", manifest)
-	}
-}
-
-// CP-CAP-007: legacy clients must not receive reasoning levels they cannot parse.
-func TestCodexModelsManifestFiltersExtendedReasoningForLegacyClients(t *testing.T) {
-	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
-		"gpt-codex": {
-			ID: "gpt-codex", ReasoningDeclared: true, ReasoningSupported: true,
-			ReasoningDefaultEffort: "ultra", ReasoningEfforts: []string{"medium", "high", "max", "ultra"},
-		},
-	}}
-	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
-		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
-	})
-	legacy := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.143.9")
-	if len(legacy.Models) != 1 || !reflect.DeepEqual(legacy.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}}) || legacy.Models[0].DefaultReasoningLevel != "medium" {
-		t.Fatalf("legacy manifest=%#v", legacy.Models)
-	}
-	for _, version := range []string{"0.144.0", "v0.149.1", "0.159.2", "1.0.0", "unparseable", ""} {
-		modern := buildCodexModelsManifest(snapshot, clientaccess.All(), version)
-		if len(modern.Models) != 1 || !reflect.DeepEqual(modern.Models[0].SupportedReasoningLevels, []CodexReasoningLevelRecord{{Effort: "medium"}, {Effort: "high"}, {Effort: "max"}, {Effort: "ultra"}}) {
-			t.Fatalf("modern version=%q manifest=%#v", version, modern.Models)
-		}
-	}
-}
-
-// CP-CAP-007: a known empty legacy result remains distinct from an unknown
-// reasoning manifest while the now-invalid default is omitted.
-func TestCodexModelsManifestPreservesFullyFilteredLegacyReasoning(t *testing.T) {
-	cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{
-		"gpt-codex": {
-			ID: "gpt-codex", ReasoningDeclared: true, ReasoningSupported: true,
-			ReasoningDefaultEffort: "ultra", ReasoningEfforts: []string{"max", "ultra"},
-		},
-	}}
-	snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
-		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-codex"}},
-	})
-	manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.143.9")
-	if len(manifest.Models) != 1 || manifest.Models[0].DefaultReasoningLevel != "" || len(manifest.Models[0].SupportedReasoningLevels) != 0 {
-		t.Fatalf("legacy manifest=%#v", manifest.Models)
-	}
-	encoded, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), "default_reasoning_level") || !strings.Contains(string(encoded), `"supported_reasoning_levels":[]`) {
-		t.Fatalf("CP-CAP-007 filtered reasoning levels must be an explicit empty array: %s", encoded)
 	}
 }
 
@@ -127,7 +77,7 @@ func TestCodexModelsManifestUsesTrustedAstraProfile(t *testing.T) {
 	snapshot := effectivecatalog.BuildWithCodex(config.Config{}, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
 		Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-6-astra"}},
 	})
-	manifest := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.153.4")
+	manifest := buildCodexModelsManifest(snapshot, clientaccess.All())
 	if len(manifest.Models) != 1 {
 		t.Fatalf("models=%#v", manifest.Models)
 	}
@@ -169,7 +119,7 @@ func TestCodexAstraManifestHonorsExplicitMetadata(t *testing.T) {
 			snapshot := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
 				Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: metadata.ID}},
 			})
-			model := buildCodexModelsManifest(snapshot, clientaccess.All(), "0.153.4").Models[0]
+			model := buildCodexModelsManifest(snapshot, clientaccess.All()).Models[0]
 			if model.ContextWindow != 64000 || model.MaxContextWindow != 128000 ||
 				!reflect.DeepEqual(model.InputModalities, []string{"text"}) || model.SupportsImageDetailOriginal {
 				t.Fatalf("explicit capacity/image metadata ignored: %+v", model)
@@ -177,7 +127,7 @@ func TestCodexAstraManifestHonorsExplicitMetadata(t *testing.T) {
 			if model.DefaultReasoningLevel != metadata.ReasoningDefaultEffort || len(model.SupportedReasoningLevels) != len(metadata.ReasoningEfforts) || model.MultiAgentReasoningEffort != metadata.ReasoningDefaultEffort {
 				t.Fatalf("explicit reasoning metadata ignored: %+v", model)
 			}
-			handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, nil)
+			handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), nil, nil)
 			for index, level := range model.SupportedReasoningLevels {
 				if level.Effort != metadata.ReasoningEfforts[index] {
 					t.Fatalf("unexpected effort: %+v", level)

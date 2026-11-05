@@ -29,7 +29,7 @@ curl http://127.0.0.1:8080/stats
 - 镜像发布到 GitHub Container Registry：`ghcr.io/muidea/aetherrelay`。`main` 成功构建后更新 `latest` 与 `main`，发布 `vX.Y.Z` tag 后会推送对应的 `X.Y.Z`、`X.Y` 与 Git SHA 标签；生产部署应固定到完整版本或 SHA，不要仅依赖 `latest`。每个标签同时提供 Linux `amd64` 与 `arm64` 镜像。
 - 容器内程序最终以 UID/GID `10001`（`aetherrelay`）运行。入口程序只在启动时以 root 初始化 `/var/lib/aetherrelay` 这个持久化数据目录的所有权，随后立即降权；它不会修改主机挂载的配置目录。
 - 宿主机 `deploy/data/` 保存 DuckDB、图片、缩略图与交互归档；DuckDB 内的 Provider、ChatGPT Web 和 Codex OAuth 可恢复凭据均由外部主密钥加密。`deploy/.env` 中的 `AETHERRELAY_CREDENTIAL_KEY` 必须与数据目录一起安全备份，任一丢失都无法恢复凭据。
-- 先按[备份与维护](#备份与维护)停止写入并备份，再进行跨大版本升级或迁移宿主机。不要并发运行两个容器指向同一个数据目录。
+- 先按[备份与维护](#备份与维护)停止写入并备份，再进行程序替换或搬迁宿主机。不要并发运行两个容器指向同一个数据目录。
 
 ## 调用明细保留与磁盘维护
 
@@ -286,7 +286,7 @@ Codex 调用详情另外展示 `upstream_error_type/code/param/message`，来自
 
 仓库 Compose 与部署脚本生成的 Compose 均使用 `stop_grace_period: 120s`。部署脚本在 `up` 前显式停止旧容器，检查退出状态、OOM 状态以及从该容器当前 StartedAt 起的停机完成记录；检查失败保留旧容器和数据库并中止发布。退出码 0 本身不是数据库安全关闭的证明。直接 `docker compose up -d` 不具备脚本的回执检查，升级使用 `scripts/deploy-docker.sh`。首次从没有完成记录的旧版本切换时，脚本会中止：停止所有写入后成对备份数据库/WAL，使用目标镜像执行离线 checkpoint（存在故障 WAL 时使用恢复命令）并验证普通打开，再由运维显式切换镜像；不添加跳过校验的发布参数。
 
-后续 schema 变更使用独立离线迁移及备份、checkpoint、重开验证，业务启动继续只支持最终 schema。异常断电或 SIGKILL 仍需 WAL 与备份恢复能力；不能通过删除 WAL 强行恢复。
+未经明确要求不增加 schema 迁移流程；业务启动只支持当前 schema。若后续明确要求调整数据格式，应另行评估现有数据并确定处理方案。异常断电或 SIGKILL 仍需 WAL 与备份恢复能力；不能通过删除 WAL 强行恢复。
 
 2026-10-08 第二次现场核对：Docker 在 20:49:49 向旧 `1985354` 容器发送 SIGTERM，20:49:59 记录 `Container failed to exit within 10s of signal 15 - using the force` 并发送 SIGKILL；事件同时报告退出码 0。紧接着 `1de0829` 在配置 Block 打开数据库时回放旧 ALTER WAL 失败。证据保存在 x600 `/home/workspace/deploy/recovery-20261008-final/{deploy-events.txt,docker-journal.txt,before.log}`。旧容器已删除，无法进一步从其应用日志确定卡住的具体排空阶段；强制终止及旧 DDL WAL 留存已得到验证。代码核对发现临时聊天 purgeLoop 注册为长期 BackgroundRoutine 任务，停止信号原先只在 Teardown 发送，而框架先等待后台任务退出再执行 Teardown，构成等待循环。维护任务/聊天回合、图片任务及账号刷新现已在 BeginShutdown 取消，保留数据库及 EventHub 直到真实排空。入口回归加载与生产相同的全部组件，并显式启用临时聊天维护任务。
 

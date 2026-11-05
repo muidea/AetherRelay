@@ -578,7 +578,6 @@ func normalizeCodexRequestObject(body map[string]any, options codexNormalization
 		body["store"] = false
 		ensureCodexReasoningInclude(body)
 	}
-	convertLegacyCodexFunctions(body)
 	aetherrelaycodex.NormalizeToolSchemas(body["tools"])
 	normalizeCodexInputToolSchemas(body["input"])
 	streamOptionsIgnored, err := normalizeCodexStreamOptions(body, options.compact)
@@ -1237,38 +1236,12 @@ func ensureCodexReasoningInclude(body map[string]any) {
 	body["include"] = append(values, "reasoning.encrypted_content")
 }
 
-func convertLegacyCodexFunctions(body map[string]any) {
-	if functions, ok := body["functions"].([]any); ok {
-		tools := make([]any, 0, len(functions))
-		for _, function := range functions {
-			definition, ok := function.(map[string]any)
-			if !ok {
-				continue
-			}
-			tool := make(map[string]any, len(definition)+1)
-			tool["type"] = "function"
-			for key, value := range definition {
-				tool[key] = value
-			}
-			tools = append(tools, tool)
-		}
-		body["tools"] = tools
-		delete(body, "functions")
-	}
-	if choice, ok := body["function_call"]; ok {
-		switch value := choice.(type) {
-		case string:
-			body["tool_choice"] = value
-		case map[string]any:
-			if name, _ := value["name"].(string); strings.TrimSpace(name) != "" {
-				body["tool_choice"] = map[string]any{"type": "function", "name": name}
-			}
-		}
-		delete(body, "function_call")
-	}
-}
-
 func validateCodexRequest(body map[string]any, options codexNormalizationOptions) error {
+	for _, field := range []string{"functions", "function_call"} {
+		if _, exists := body[field]; exists {
+			return fmt.Errorf("%s is not supported; use tools and tool_choice", field)
+		}
+	}
 	if previous, exists := body["previous_response_id"]; exists && previous != nil && strings.TrimSpace(fmt.Sprint(previous)) != "" {
 		if !options.allowPreviousID {
 			return fmt.Errorf("previous_response_id is not supported without an AetherRelay-owned response store")

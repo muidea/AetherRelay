@@ -49,7 +49,7 @@ func (s chatGPTTextExecutorStub) Stream(ctx context.Context, req chatgpttext.Req
 func newChatGPTWebHandler(t *testing.T, store usage.Store, exec chatgpttext.Executor) *Handler {
 	t.Helper()
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}})
-	h := NewHandler(cfg, store, nil, metrics.NewRegistry()).WithChatGPTTextExecutor(exec)
+	h := newTestProxyHandler(cfg, store, nil, metrics.NewRegistry()).WithChatGPTTextExecutor(exec)
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 1, []effectivecatalog.PoolModel{{
 		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z"))
@@ -320,7 +320,7 @@ func TestChatGPTWebTextClientCancelSettlesUsage(t *testing.T) {
 
 func TestUpdateConfigKeepsBuiltinCatalogUntilDiscoveryRefresh(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}})
-	h := NewHandler(cfg, usage.NewMemoryStore(), nil, nil)
+	h := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, nil)
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 7, 1, []effectivecatalog.PoolModel{{
 		ID: "gpt-5",
 	}}, "2026-07-26T00:00:00Z"))
@@ -391,13 +391,13 @@ func TestChatGPTWebStructuredOutputRejectionPersistsDiagnostics(t *testing.T) {
 			var recorder *archive.Recorder
 			if durable {
 				var err error
-				recorder, err = archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+				recorder, err = archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10})
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
 			calls := 0
-			h := NewHandler(cfg, store, recorder, nil).WithChatGPTTextExecutor(chatGPTTextExecutorStub{complete: func(context.Context, chatgpttext.Request) (chatgpttext.Result, error) {
+			h := newTestProxyHandler(cfg, store, recorder, nil).WithChatGPTTextExecutor(chatGPTTextExecutorStub{complete: func(context.Context, chatgpttext.Request) (chatgpttext.Result, error) {
 				calls++
 				return chatgpttext.Result{}, nil
 			}})
@@ -466,7 +466,7 @@ func TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive(t *testing.T) {
 				store := usage.NewMemoryStore()
 				defer store.Close()
 				cfg := mustHandlerConfig(config.Config{InteractionDir: t.TempDir(), ArchiveInteractions: true, ArchiveFullContent: true})
-				recorder, err := archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+				recorder, err := archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{MaxRounds: 10})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -483,7 +483,7 @@ func TestChatGPTWebAttemptDiagnosticsMatchUsageAndArchive(t *testing.T) {
 					usagetarget.RecordTextAttempt(ctx, chatgptattempt.Observation{Index: 2, AccountID: "second", AccountLabel: "second@example.com", UpstreamStatus: 200, Success: true})
 					return chatgpttext.Result{Completion: textEvidence("hello"), Text: "hello", ActualModel: "auto"}, nil
 				}
-				h := NewHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(chatGPTTextExecutorStub{
+				h := newTestProxyHandler(cfg, store, recorder, registry).WithChatGPTTextExecutor(chatGPTTextExecutorStub{
 					complete: func(ctx context.Context, request chatgpttext.Request) (chatgpttext.Result, error) {
 						return execute(ctx)
 					},

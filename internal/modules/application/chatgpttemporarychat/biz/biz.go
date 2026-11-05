@@ -8,24 +8,14 @@ import (
 	"sync"
 	"time"
 
-	acccommon "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/common"
-	accevents "aetherrelay/internal/modules/application/chatgptaccountpool/pkg/events"
 	"aetherrelay/internal/modules/application/chatgpttemporarychat/internal/store"
 	"aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/common"
 	events "aetherrelay/internal/modules/application/chatgpttemporarychat/pkg/events"
 	proxycommon "aetherrelay/internal/modules/application/proxyapi/pkg/common"
 	proxyevents "aetherrelay/internal/modules/application/proxyapi/pkg/events"
 	basebiz "aetherrelay/internal/modules/base/biz"
-	upcommon "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/common"
-	upevents "aetherrelay/internal/modules/blocks/chatgptwebupstream/pkg/events"
 	configevents "aetherrelay/internal/modules/blocks/configruntime/pkg/events"
-	usageevents "aetherrelay/internal/modules/blocks/usageruntime/pkg/events"
-	completion "aetherrelay/internal/pkg/aetherrelaycompletion"
-	"aetherrelay/internal/pkg/aetherrelayconfig"
-	"aetherrelay/internal/pkg/aetherrelayusage"
 	"aetherrelay/internal/pkg/chatattachment"
-	"aetherrelay/internal/pkg/chatgpttokenusage"
-	"github.com/google/uuid"
 	cd "github.com/muidea/magicCommon/def"
 	"github.com/muidea/magicCommon/event"
 	"github.com/muidea/magicCommon/task"
@@ -34,7 +24,6 @@ import (
 type TemporaryChat struct {
 	basebiz.Base
 	store  *store.Store
-	usage  usage.Store
 	topics []string
 
 	turnMu   sync.Mutex
@@ -54,18 +43,8 @@ type turnRuntime struct {
 	turnID            string
 	userSequence      int64
 	assistantSequence int64
-	streamID          string
-	startCommand      upevents.StartTextCommand
-	refreshRetried    bool
-	content           string
-	actualModel       string
-	usageEventID      string
 	model             string
-	systemPrompt      string
-	userContent       string
-	firstTurn         bool
 	webSearch         bool
-	startedAt         time.Time
 	done              bool
 	errorClass        string
 	errorMessage      string
@@ -110,13 +89,6 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 	if _, err := b.store.InterruptStreaming(); err != nil {
 		return nil, cd.NewError(cd.Unexpected, "recover temporary chat streams: "+err.Error())
 	}
-	usageStore, usageErr := usageevents.RequestStore(ctx, b.EventHub(), b.ID())
-	if usageErr != nil {
-		_ = b.store.Close()
-		b.store = nil
-		return nil, cd.NewError(cd.Unexpected, "usage store unavailable: "+usageErr.Error())
-	}
-	b.usage = usageStore
 	b.topics = []string{
 		events.TopicCreate,
 		events.TopicList,
@@ -245,7 +217,7 @@ func (s *TemporaryChat) handleCreate(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.Unexpected, "no compatible provider for selected model"))
 		return
 	}
-	view, err := s.store.CreateConversation(cmd.OwnerID, cmd.Model, cmd.ThinkingEffort, cmd.SystemPrompt, provider, "")
+	view, err := s.store.CreateConversation(cmd.OwnerID, cmd.Model, cmd.ThinkingEffort, cmd.SystemPrompt, provider)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
@@ -328,15 +300,6 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, err.Error()))
 		return
 	}
-	if started.AccountID != "" {
-		if cmd.WebSearch {
-			_, _ = s.store.CompleteFeatureTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", false, "conversion_unsupported", "web search is unavailable for legacy account-pinned conversations")
-			result.Set(nil, cd.NewError(cd.IllegalParam, "web search is unavailable for legacy account-pinned conversations; create a new conversation"))
-			return
-		}
-		s.startLegacyTurn(cmd, started, result)
-		return
-	}
 	var messages []proxyevents.FeatureTextMessage
 	if cmd.WebSearch {
 		// Forced Web search is intentionally an isolated query. Earlier temporary
@@ -369,10 +332,7 @@ func (s *TemporaryChat) handleStartTurn(ev event.Event, result event.Result) {
 		userSequence:      started.UserSequence,
 		assistantSequence: started.AssistantSequence,
 		model:             started.Model,
-		systemPrompt:      started.SystemPrompt,
-		userContent:       cmd.Content,
 		webSearch:         cmd.WebSearch,
-		startedAt:         time.Now().UTC(),
 		requestCancel:     cancel,
 		updates:           make(chan turnUpdate, 64),
 	}
@@ -466,79 +426,6 @@ func (s *TemporaryChat) buildFeatureMessages(ownerID, conversationID string, det
 	return messages, nil
 }
 
-// startLegacyTurn preserves continuation semantics for conversations created
-// before feature routing became Provider-neutral. New conversations never pin
-// an account and therefore never enter this compatibility path.
-func (s *TemporaryChat) startLegacyTurn(cmd events.StartTurnCommand, started store.TurnStart, result event.Result) {
-	eventID := uuid.NewString()
-	startedAt := time.Now().UTC()
-	if err := s.startTurnUsage(cmd.OwnerID, eventID, started.Model, startedAt); err != nil {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "usage_unavailable", "usage store unavailable")
-		result.Set(nil, cd.NewError(cd.Unexpected, "usage store unavailable"))
-		return
-	}
-	account, err := s.acquireTextAccount(started.AccountID, started.Model)
-	if err != nil {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "provider_unavailable", "original account unavailable")
-		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, started.UpstreamConversationID == "", "", httpStatusServiceUnavailable, "upstream_failed", "provider_unavailable", startedAt, true)
-		result.Set(nil, cd.NewError(cd.Unexpected, "original account unavailable; create a new conversation"))
-		return
-	}
-	messages := make([]upevents.TextMessage, 0, 2)
-	firstTurn := started.UpstreamConversationID == ""
-	if firstTurn && strings.TrimSpace(started.SystemPrompt) != "" {
-		messages = append(messages, upevents.TextMessage{Role: "system", Content: started.SystemPrompt})
-	}
-	messages = append(messages, upevents.TextMessage{Role: "user", Content: cmd.Content, Images: started.Images, Files: started.Files})
-	startCommand := upevents.StartTextCommand{
-		AccessToken: account.AccessToken, Proxy: account.Account.Proxy, DeviceID: account.Account.DeviceID, Model: started.Model, Messages: messages,
-		ThinkingEffort: started.ThinkingEffort, ConversationID: started.UpstreamConversationID, ParentMessageID: started.ParentMessageID,
-		TimeoutMillis: int(s.turnTimeout / time.Millisecond),
-	}
-	streamID, streamErr := s.startTextStream(startCommand)
-	if streamErr != nil {
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, false, false, "upstream", "failed to start upstream stream")
-		s.recordTextResult(started.AccountID, false, "upstream")
-		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusBadGateway, "upstream_failed", "upstream", startedAt, true)
-		result.Set(nil, cd.NewError(cd.Unexpected, "failed to start upstream stream"))
-		return
-	}
-	runtime := &turnRuntime{
-		ownerID: cmd.OwnerID, conversationID: cmd.ConversationID, turnID: started.TurnID,
-		userSequence: started.UserSequence, assistantSequence: started.AssistantSequence,
-		streamID: streamID, startCommand: startCommand, usageEventID: eventID, model: started.Model,
-		systemPrompt: started.SystemPrompt, userContent: cmd.Content, firstTurn: firstTurn, startedAt: startedAt,
-		updates: make(chan turnUpdate, 64),
-	}
-	s.turnMu.Lock()
-	if s.stopping {
-		s.turnMu.Unlock()
-		s.cancelUpstream(streamID)
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, true, true, "interrupted", "stream interrupted by process shutdown")
-		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusServiceUnavailable, "process_interrupted", "process_interrupted", startedAt, true)
-		result.Set(nil, cd.NewError(cd.Unexpected, "temporary chat unavailable"))
-		return
-	}
-	s.turns[turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID)] = runtime
-	s.turnWG.Add(1)
-	s.turnMu.Unlock()
-	if err := s.AsyncTask(func() {
-		defer s.turnWG.Done()
-		s.runTurn(runtime, started.AccountID)
-	}); err != nil {
-		s.turnWG.Done()
-		s.cancelUpstream(streamID)
-		s.turnMu.Lock()
-		delete(s.turns, turnKey(cmd.OwnerID, cmd.ConversationID, started.TurnID))
-		s.turnMu.Unlock()
-		_, _ = s.store.CompleteTurn(cmd.OwnerID, cmd.ConversationID, started.UserSequence, started.AssistantSequence, "", "", "", "", false, true, true, "interrupted", "task admission unavailable")
-		s.completeTurnUsage(eventID, started.Model, "", cmd.OwnerID, started.SystemPrompt, cmd.Content, firstTurn, "", httpStatusServiceUnavailable, "process_interrupted", "process_interrupted", startedAt, true)
-		result.Set(nil, cd.NewError(cd.ResourceExhausted, "temporary chat task unavailable"))
-		return
-	}
-	result.Set(events.StartTurnResult{TurnID: started.TurnID, Conversation: started.Conversation, UserMessage: started.UserMessage, AssistantMessage: started.AssistantMessage}, nil)
-}
-
 func (s *TemporaryChat) runFeatureTurn(ctx context.Context, runtime *turnRuntime, messages []proxyevents.FeatureTextMessage, thinkingEffort string) {
 	defer runtime.requestCancel()
 	value, requestErr := s.SendEvent(event.NewEventWithContext(proxyevents.TopicExecuteFeatureText, s.ID(), proxycommon.UnitID, event.NewHeader(), ctx, proxyevents.ExecuteFeatureTextCommand{
@@ -585,226 +472,10 @@ func (s *TemporaryChat) runFeatureTurn(ctx context.Context, runtime *turnRuntime
 	s.turnMu.Unlock()
 }
 
-func (s *TemporaryChat) startTextStream(command upevents.StartTextCommand) (string, error) {
-	value, err := s.SendEvent(event.NewEvent(upevents.TopicStartText, s.ID(), upcommon.UnitID, nil, command)).Get()
-	if err != nil {
-		return "", fmt.Errorf("start upstream text stream: %w", err)
-	}
-	started, ok := value.(upevents.StartTextResult)
-	if !ok || strings.TrimSpace(started.StreamID) == "" {
-		return "", fmt.Errorf("invalid upstream stream")
-	}
-	return started.StreamID, nil
-}
-
-func (s *TemporaryChat) runTurn(runtime *turnRuntime, accountID string) {
-	var (
-		finalConversationID string
-		finalAssistantID    string
-		finalErrClass       string
-		finalErrMessage     string
-		interrupted         bool
-		recoveryRequired    bool
-	)
-	for {
-		cancelled, stopping := s.turnFlags(runtime)
-		if cancelled {
-			s.cancelUpstream(runtime.streamID)
-			if stopping {
-				interrupted, recoveryRequired = true, true
-				finalErrClass, finalErrMessage = "interrupted", "stream interrupted by process shutdown"
-			} else {
-				finalErrClass, finalErrMessage = "cancelled", "cancelled by user"
-			}
-			break
-		}
-		value, err := s.SendEvent(event.NewEvent(upevents.TopicPullText, s.ID(), upcommon.UnitID, nil, upevents.PullTextCommand{
-			StreamID:      runtime.streamID,
-			TimeoutMillis: 1000,
-		})).Get()
-		if err != nil {
-			cancelled, stopping := s.turnFlags(runtime)
-			if cancelled && !stopping {
-				finalErrClass, finalErrMessage = "cancelled", "cancelled by user"
-			} else if stopping {
-				interrupted, recoveryRequired = true, true
-				finalErrClass, finalErrMessage = "interrupted", "stream interrupted by process shutdown"
-			} else {
-				s.cancelUpstream(runtime.streamID)
-				finalErrClass, finalErrMessage = "upstream", "upstream stream interrupted"
-				interrupted, recoveryRequired = true, true
-			}
-			break
-		}
-		update, ok := value.(upevents.PullTextResult)
-		if !ok {
-			s.cancelUpstream(runtime.streamID)
-			finalErrClass, finalErrMessage = "upstream", "invalid upstream stream result"
-			interrupted, recoveryRequired = true, true
-			break
-		}
-		if update.ConversationID != "" {
-			finalConversationID = update.ConversationID
-		}
-		if update.AssistantMessageID != "" {
-			finalAssistantID = update.AssistantMessageID
-		}
-		if update.ActualModel != "" {
-			runtime.actualModel = update.ActualModel
-		}
-		if update.Delta != "" {
-			if len(runtime.content)+len(update.Delta) > completion.MaxTextBytes {
-				s.cancelUpstream(runtime.streamID)
-				finalErrClass, finalErrMessage = "text_budget", "text output limit exceeded"
-				interrupted, recoveryRequired = true, true
-				break
-			}
-			runtime.content += update.Delta
-			_ = s.store.UpdateAssistantDelta(runtime.ownerID, runtime.conversationID, runtime.assistantSequence, runtime.content)
-			s.publishTurn(runtime, turnUpdate{delta: update.Delta, actualModel: runtime.actualModel})
-		}
-		if update.Done {
-			cancelled, stopping := s.turnFlags(runtime)
-			if cancelled && !stopping {
-				finalErrClass, finalErrMessage = "cancelled", "cancelled by user"
-				break
-			}
-			if stopping {
-				finalErrClass, finalErrMessage = "interrupted", "stream interrupted by process shutdown"
-				interrupted, recoveryRequired = true, true
-				break
-			}
-			if update.ErrorClass == "" && (!update.Completion.Valid(runtime.content) || strings.TrimSpace(finalConversationID) == "" || strings.TrimSpace(finalAssistantID) == "") {
-				update.ErrorClass = upevents.ErrClassTextIncomplete
-			}
-			if update.ErrorClass != "" {
-				slog.Warn("temporary text generation failed", "usage_event_id", runtime.usageEventID, "error_class", update.ErrorClass, "completion", update.Completion, "upstream_status", update.UpstreamStatus, "generation_not_sent", update.GenerationNotSent)
-				if update.ErrorClass == upevents.ErrClassInvalidToken && runtime.content == "" && finalConversationID == "" && finalAssistantID == "" && update.GenerationNotSent && !runtime.refreshRetried {
-					if restarted, retryFailure := s.retryTurnAfterInvalidToken(runtime); restarted {
-						// No assistant delta was exposed, so the caller can safely
-						// resume this same turn with the rotated access token.
-						continue
-					} else if retryFailure != "" {
-						finalErrClass = string(retryFailure)
-						finalErrMessage = safeTurnError(finalErrClass)
-						recoveryRequired = requiresRecovery(finalErrClass)
-						interrupted = recoveryRequired
-						break
-					}
-				}
-				finalErrClass = string(update.ErrorClass)
-				finalErrMessage = safeTurnError(finalErrClass)
-				recoveryRequired = requiresRecovery(finalErrClass) || !update.GenerationNotSent
-				interrupted = recoveryRequired
-			}
-			if update.ConversationID != "" {
-				finalConversationID = update.ConversationID
-			}
-			if update.AssistantMessageID != "" {
-				finalAssistantID = update.AssistantMessageID
-			}
-			break
-		}
-	}
-	cancelled := finalErrClass == "cancelled"
-	completed, err := s.store.CompleteTurn(
-		runtime.ownerID,
-		runtime.conversationID,
-		runtime.userSequence,
-		runtime.assistantSequence,
-		runtime.content,
-		runtime.actualModel,
-		finalConversationID,
-		finalAssistantID,
-		cancelled,
-		interrupted,
-		recoveryRequired,
-		finalErrClass,
-		finalErrMessage,
-	)
-	if err != nil {
-		slog.Warn("temporary chat complete turn failed", "error_class", "store")
-		s.publishTurn(runtime, turnUpdate{done: true, errorClass: "store", errorMessage: "failed to persist turn"})
-	} else {
-		message := completed.Message
-		s.publishTurn(runtime, turnUpdate{
-			done:         true,
-			message:      &message,
-			errorClass:   finalErrClass,
-			errorMessage: finalErrMessage,
-		})
-	}
-	if !cancelled && finalErrClass != "interrupted" {
-		s.recordTextResult(accountID, finalErrClass == "", finalErrClass)
-	}
-	outcome, errorCode := usageOutcomeFromTurn(finalErrClass, cancelled, interrupted)
-	actual := runtime.actualModel
-	if err == nil && completed.Message.ActualModel != "" {
-		actual = completed.Message.ActualModel
-	}
-	s.completeTurnUsage(runtime.usageEventID, runtime.model, actual, runtime.ownerID, runtime.systemPrompt, runtime.userContent, runtime.firstTurn, runtime.content, httpStatusAccepted, outcome, errorCode, runtime.startedAt, true)
-	s.turnMu.Lock()
-	delete(s.turns, turnKey(runtime.ownerID, runtime.conversationID, runtime.turnID))
-	s.turnMu.Unlock()
-}
-
-// retryTurnAfterInvalidToken refreshes once before the first assistant delta.
-// Reusing the persisted conversation/parent IDs preserves temporary-chat
-// continuity while avoiding a duplicate visible assistant response.
-func (s *TemporaryChat) retryTurnAfterInvalidToken(runtime *turnRuntime) (bool, upevents.ErrorClass) {
-	runtime.refreshRetried = true
-	previousStreamID := runtime.streamID
-	s.cancelUpstream(previousStreamID)
-
-	value, err := s.SendEvent(event.NewEvent(accevents.TopicRefreshTextToken, s.ID(), acccommon.UnitID, nil, accevents.RefreshTextTokenCommand{
-		AccessToken: runtime.startCommand.AccessToken,
-	})).Get()
-	if err != nil {
-		return false, upevents.ErrClassUpstream
-	}
-	refreshed, ok := value.(accevents.RefreshTextTokenResult)
-	if !ok {
-		return false, upevents.ErrClassUpstream
-	}
-	if !refreshed.Refreshed || strings.TrimSpace(refreshed.AccessToken) == "" {
-		if refreshed.PermanentFailure {
-			return false, upevents.ErrClassInvalidToken
-		}
-		return false, upevents.ErrClassUpstream
-	}
-	command := runtime.startCommand
-	command.AccessToken = refreshed.AccessToken
-	command.Proxy = refreshed.Account.Proxy
-	command.DeviceID = refreshed.Account.DeviceID
-	streamID, startErr := s.startTextStream(command)
-	if startErr != nil {
-		return false, upevents.ErrClassUpstream
-	}
-	s.turnMu.Lock()
-	if runtime.cancelRequested || s.stopping {
-		s.turnMu.Unlock()
-		s.cancelUpstream(streamID)
-		return false, upevents.ErrClassUpstream
-	}
-	runtime.streamID = streamID
-	runtime.startCommand = command
-	s.turnMu.Unlock()
-	return true, ""
-}
-
 func (s *TemporaryChat) turnFlags(runtime *turnRuntime) (cancelled, stopping bool) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 	return runtime.cancelRequested, s.stopping
-}
-
-func requiresRecovery(errorClass string) bool {
-	switch strings.ToLower(strings.TrimSpace(errorClass)) {
-	case "tls", "timeout", "upstream", "interrupted", "text_incomplete", "text_protocol", "text_budget", "text_model_length":
-		return true
-	default:
-		return false
-	}
 }
 
 func safeTurnError(errorClass string) string {
@@ -897,10 +568,8 @@ func (s *TemporaryChat) handleCancelTurn(ev event.Event, result event.Result) {
 	runtime := s.turns[turnKey(cmd.OwnerID, cmd.ConversationID, cmd.TurnID)]
 	if runtime != nil {
 		runtime.cancelRequested = true
-		streamID := runtime.streamID
 		requestCancel := runtime.requestCancel
 		s.turnMu.Unlock()
-		s.cancelUpstream(streamID)
 		if requestCancel != nil {
 			requestCancel()
 		}
@@ -950,7 +619,6 @@ func (s *TemporaryChat) handleDelete(ev event.Event, result event.Result) {
 	for key, runtime := range s.turns {
 		if runtime.ownerID == cmd.OwnerID && runtime.conversationID == cmd.ConversationID {
 			runtime.cancelRequested = true
-			s.cancelUpstream(runtime.streamID)
 			if runtime.requestCancel != nil {
 				runtime.requestCancel()
 			}
@@ -1015,62 +683,6 @@ func (s *TemporaryChat) handleGetAttachment(ev event.Event, result event.Result)
 	result.Set(events.GetMessageAttachmentResult{Bytes: attachment.Bytes, FileName: attachment.FileName, ContentType: attachment.ContentType}, nil)
 }
 
-func (s *TemporaryChat) acquireTextAccount(accountID, model string) (accevents.AcquireTextAccountResult, error) {
-	if accountID != "" {
-		value, err := s.SendEvent(event.NewEvent(accevents.TopicAcquireTextAccount, s.ID(), acccommon.UnitID, nil, accevents.AcquireTextAccountCommand{
-			AccountID:  accountID,
-			Model:      model,
-			Capability: accevents.ModelCapabilityTextGeneration,
-		})).Get()
-		if err != nil {
-			return accevents.AcquireTextAccountResult{}, fmt.Errorf("original account unavailable")
-		}
-		result, ok := value.(accevents.AcquireTextAccountResult)
-		if !ok || result.AccessToken == "" {
-			return accevents.AcquireTextAccountResult{}, fmt.Errorf("original account unavailable")
-		}
-		return result, nil
-	}
-	value, err := s.SendEvent(event.NewEvent(accevents.TopicAcquireTextToken, s.ID(), acccommon.UnitID, nil, accevents.AcquireTextTokenCommand{
-		Model:      model,
-		Capability: accevents.ModelCapabilityTextGeneration,
-	})).Get()
-	if err != nil {
-		return accevents.AcquireTextAccountResult{}, fmt.Errorf("no available text account")
-	}
-	tokenResult, ok := value.(accevents.AcquireTextTokenResult)
-	if !ok || tokenResult.AccessToken == "" {
-		return accevents.AcquireTextAccountResult{}, fmt.Errorf("no available text account")
-	}
-	return accevents.AcquireTextAccountResult{AccessToken: tokenResult.AccessToken, Account: tokenResult.Account}, nil
-}
-
-func (s *TemporaryChat) recordTextResult(accountID string, success bool, errorClass string) {
-	if accountID == "" {
-		return
-	}
-	if !success {
-		switch errorClass {
-		case "invalid_token", "rate_limit", "tls", "timeout", "upstream":
-		default:
-			return
-		}
-	}
-
-	_, _ = s.SendEvent(event.NewEvent(accevents.TopicRecordTextResult, s.ID(), acccommon.UnitID, nil, accevents.RecordTextResultCommand{
-		AccountID:  accountID,
-		Success:    success,
-		ErrorClass: errorClass,
-	})).Get()
-}
-
-func (s *TemporaryChat) cancelUpstream(streamID string) {
-	if streamID == "" {
-		return
-	}
-	_, _ = s.SendEvent(event.NewEvent(upevents.TopicCancelText, s.ID(), upcommon.UnitID, nil, upevents.CancelTextCommand{StreamID: streamID})).Get()
-}
-
 func (s *TemporaryChat) publishTurn(runtime *turnRuntime, update turnUpdate) {
 	select {
 	case runtime.updates <- update:
@@ -1080,92 +692,4 @@ func (s *TemporaryChat) publishTurn(runtime *turnRuntime, update turnUpdate) {
 
 func turnKey(ownerID, conversationID, turnID string) string {
 	return ownerID + "/" + conversationID + "/" + turnID
-}
-
-const (
-	httpStatusAccepted           = 202
-	httpStatusBadGateway         = 502
-	httpStatusServiceUnavailable = 503
-)
-
-func (s *TemporaryChat) startTurnUsage(ownerID, eventID, model string, startedAt time.Time) error {
-	if s == nil || s.usage == nil {
-		return fmt.Errorf("usage store unavailable")
-	}
-	return s.usage.Start(context.Background(), usage.StartRecord{
-		EventID:        eventID,
-		StartedAt:      startedAt,
-		APIKeyID:       config.BuiltinClientAPIKeyID,
-		Operation:      "text_generation",
-		Route:          "admin_temporary_chat",
-		ClientEndpoint: "/admin/chatgpt/temporary-chat",
-		ClientProtocol: "admin",
-		Provider:       "chatgptweb",
-		Model:          model,
-	})
-}
-
-func (s *TemporaryChat) completeTurnUsage(eventID, model, actualModel, ownerID, systemPrompt, userContent string, firstTurn bool, completion string, httpStatus int, outcome, errorCode string, startedAt time.Time, stream bool) {
-	if s == nil || s.usage == nil || strings.TrimSpace(eventID) == "" {
-		return
-	}
-	parts := make([]string, 0, 2)
-	if firstTurn && strings.TrimSpace(systemPrompt) != "" {
-		parts = append(parts, systemPrompt)
-	}
-	parts = append(parts, userContent)
-	est := tokenusage.EstimateChatTextUsage(parts, completion)
-	prompt, out := 0, 0
-	if est != nil {
-		prompt, out = est.PromptTokens, est.CompletionTokens
-	}
-	billingModel := strings.TrimSpace(actualModel)
-	if billingModel == "" {
-		billingModel = model
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := s.usage.Complete(ctx, usage.CompleteRecord{
-		EventID:          eventID,
-		CompletedAt:      time.Now().UTC(),
-		Provider:         "chatgptweb",
-		Model:            billingModel,
-		UpstreamProtocol: "chatgptweb",
-		UpstreamEndpoint: "chatgptweb_temporary_chat",
-		ConversionMode:   "native",
-		InputTokens:      int64(prompt),
-		OutputTokens:     int64(out),
-		HTTPStatus:       httpStatus,
-		Outcome:          outcome,
-		ErrorCode:        errorCode,
-		Duration:         time.Since(startedAt),
-		Stream:           stream,
-		Estimated:        true,
-	}); err != nil {
-		slog.Warn("temporary chat usage complete failed", "event_id", eventID, "error", err)
-	}
-}
-
-func usageOutcomeFromTurn(errorClass string, cancelled, interrupted bool) (outcome, errorCode string) {
-	if cancelled {
-		return "client_canceled", "client_canceled"
-	}
-	switch errorClass {
-	case "text_budget", "invalid_request":
-		return "error", errorClass
-	case "text_protocol", "text_incomplete", "text_model_length":
-		return "upstream_failed", errorClass
-	}
-	if errorClass == "interrupted" || interrupted && errorClass == "" {
-		return "process_interrupted", "process_interrupted"
-	}
-	if errorClass == "" {
-		return "success", ""
-	}
-	switch strings.ToLower(strings.TrimSpace(errorClass)) {
-	case "invalid_token", "rate_limit", "content_policy", "tls", "timeout", "upstream", "provider_unavailable":
-		return "upstream_failed", strings.ToLower(strings.TrimSpace(errorClass))
-	default:
-		return "upstream_failed", "upstream"
-	}
 }

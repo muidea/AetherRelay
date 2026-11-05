@@ -316,7 +316,7 @@ func TestCodexProjectionHandlerFailureUsageAndArchive(t *testing.T) {
 						},
 					}
 					h, root := newArchivedCodexResponsesHandler(t, executor)
-					recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true, FullContent: full})
+					recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, FullContent: full})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -455,7 +455,7 @@ func TestCodexProjectionHandlerSuccessHasSameStreamSemantics(t *testing.T) {
 			},
 		}
 		h, root := newArchivedCodexResponsesHandler(t, executor)
-		recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true, FullContent: true})
+		recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, FullContent: true})
 		if err != nil {
 			t.Fatal(err)
 		}

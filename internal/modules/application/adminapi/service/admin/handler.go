@@ -556,7 +556,7 @@ func (h *Handler) listChatGPTImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// BaseURL is unused for public serving; rewrite below to Admin-authenticated content URLs.
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"))
 	if !ok {
 		return
 	}
@@ -577,7 +577,7 @@ func (h *Handler) serveChatGPTImageContent(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"))
 	if !ok {
 		return
 	}
@@ -648,7 +648,7 @@ func (h *Handler) chatGPTImageStorage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"))
 	if !ok {
 		return
 	}
@@ -665,7 +665,7 @@ func (h *Handler) listChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "chatgpt image store is unavailable")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), "")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"))
 	if !ok {
 		return
 	}
@@ -691,7 +691,7 @@ func (h *Handler) setChatGPTImageTags(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, "")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -716,7 +716,7 @@ func (h *Handler) deleteChatGPTImages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, "")
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -780,7 +780,7 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request, rel stri
 		return
 	}
 	if h.metricsRegistry != nil {
-		h.metricsRegistry.RecordRequestPlan(name, result.Model, result.Endpoint, result.Status, time.Duration(result.DurationMS)*time.Millisecond, mapProbeOutcome(result.Conclusion), "", result.Protocol, result.UpstreamPath, "probe")
+		h.metricsRegistry.RecordRequestPlanWithLevel(name, result.Model, result.Endpoint, result.Status, time.Duration(result.DurationMS)*time.Millisecond, mapProbeOutcome(result.Conclusion), "", result.Protocol, result.UpstreamPath, "probe", 0)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"provider": name, "status": result.Status, "duration_ms": result.DurationMS, "conclusion": result.Conclusion, "summary": result.Summary})
 }

@@ -11,7 +11,7 @@ import (
 func TestRecorderRetainsLatestNumericRoundDirs(t *testing.T) {
 	root := t.TempDir()
 	for i := 1; i <= 5; i++ {
-		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("%06d", i)), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "anonymous", fmt.Sprintf("%06d", i)), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -23,11 +23,11 @@ func TestRecorderRetainsLatestNumericRoundDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDirMissing(t, root, "000001")
-	assertDirMissing(t, root, "000002")
-	assertDirExists(t, root, "000003")
-	assertDirExists(t, root, "000004")
-	assertDirExists(t, root, "000005")
+	assertDirMissing(t, root, "anonymous", "000001")
+	assertDirMissing(t, root, "anonymous", "000002")
+	assertDirExists(t, root, "anonymous", "000003")
+	assertDirExists(t, root, "anonymous", "000004")
+	assertDirExists(t, root, "anonymous", "000005")
 	assertDirExists(t, root, "notes")
 
 	round, err := recorder.Start()
@@ -41,10 +41,10 @@ func TestRecorderRetainsLatestNumericRoundDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertDirMissing(t, root, "000003")
-	assertDirExists(t, root, "000004")
-	assertDirExists(t, root, "000005")
-	assertDirExists(t, root, "000006")
+	assertDirMissing(t, root, "anonymous", "000003")
+	assertDirExists(t, root, "anonymous", "000004")
+	assertDirExists(t, root, "anonymous", "000005")
+	assertDirExists(t, root, "anonymous", "000006")
 	assertDirExists(t, root, "notes")
 }
 
@@ -74,21 +74,21 @@ func TestRecorderDoesNotDeleteActiveRounds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertDirExists(t, root, "000001")
-	assertDirExists(t, root, "000002")
-	assertDirExists(t, root, "000003")
+	assertDirExists(t, root, "anonymous", "000001")
+	assertDirExists(t, root, "anonymous", "000002")
+	assertDirExists(t, root, "anonymous", "000003")
 
 	if err := active.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
 		t.Fatal(err)
 	}
-	assertDirMissing(t, root, "000001")
-	assertDirExists(t, root, "000002")
-	assertDirExists(t, root, "000003")
+	assertDirMissing(t, root, "anonymous", "000001")
+	assertDirExists(t, root, "anonymous", "000002")
+	assertDirExists(t, root, "anonymous", "000003")
 }
 
 func TestRecorderScopesRoundsByAPIKey(t *testing.T) {
 	root := t.TempDir()
-	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 2, FullContent: false, ScopeByAPIKey: true})
+	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 2, FullContent: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,9 +117,51 @@ func TestRecorderScopesRoundsByAPIKey(t *testing.T) {
 	assertDirExists(t, root, "other-key", "000005")
 }
 
+func TestRecorderUsesNumericKeyScopesAndLeavesFlatArchivesUntouched(t *testing.T) {
+	root := t.TempDir()
+	flat := filepath.Join(root, "000099")
+	if err := os.Mkdir(flat, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flat, "request.json"), []byte(`{"model":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := recorder.StartForAPIKey("123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if round.ID != 1 || round.Dir != filepath.Join(root, "123", "000001") {
+		t.Fatalf("unexpected current archive path: %s", round.Dir)
+	}
+	if err := round.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := reopened.StartForAPIKey("123")
+	if err != nil || next.ID != 2 {
+		t.Fatalf("numeric scope sequence lost: %+v err=%v", next, err)
+	}
+	if err := next.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(flat, "metadata.json")); !os.IsNotExist(err) {
+		t.Fatalf("flat archive was recovered or modified: %v", err)
+	}
+	assertDirExists(t, root, "000099")
+	assertDirMissing(t, root, "123", "000001")
+	assertDirExists(t, root, "123", "000002")
+}
+
 func TestRemoveAPIKeyScope(t *testing.T) {
 	root := t.TempDir()
-	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+	recorder, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +189,7 @@ func TestRecorderRecoversIncompleteScopedRound(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "request.json"), []byte(`{"model":"test"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true}); err != nil {
+	if _, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
@@ -361,9 +403,9 @@ func TestWriteMetadataReleasesActiveOnWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	// maxRounds=1:只保留最新 000003;000001/000002 应删除。
-	assertDirMissing(t, root, "000001")
-	assertDirMissing(t, root, "000002")
-	assertDirExists(t, root, "000003")
+	assertDirMissing(t, root, "anonymous", "000001")
+	assertDirMissing(t, root, "anonymous", "000002")
+	assertDirExists(t, root, "anonymous", "000003")
 	// Abort 幂等
 	if err := failing.Abort(); err != nil {
 		t.Fatal(err)
@@ -398,9 +440,9 @@ func TestAbortReleasesActiveWithoutMetadata(t *testing.T) {
 	if err := r3.WriteMetadata(Metadata{HTTPStatus: 200}); err != nil {
 		t.Fatal(err)
 	}
-	assertDirMissing(t, root, "000001")
-	assertDirMissing(t, root, "000002")
-	assertDirExists(t, root, "000003")
+	assertDirMissing(t, root, "anonymous", "000001")
+	assertDirMissing(t, root, "anonymous", "000002")
+	assertDirExists(t, root, "anonymous", "000003")
 }
 
 func TestRoundClientResponseKeepsFirstSnapshot(t *testing.T) {
@@ -471,7 +513,7 @@ func TestRecorderRecoversResponseMetaPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "response.meta.json"), []byte(`{"status":200}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true}); err != nil {
+	if _, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 10}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
@@ -485,7 +527,7 @@ func TestRecorderRecoversResponseMetaPath(t *testing.T) {
 
 func TestInspectEvidenceChecksExactAttemptAndRetention(t *testing.T) {
 	root := t.TempDir()
-	recorder, err := NewRecorderOptions(root, RecorderOptions{FullContent: true, ScopeByAPIKey: true, MaxRounds: 1})
+	recorder, err := NewRecorderOptions(root, RecorderOptions{FullContent: true, MaxRounds: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

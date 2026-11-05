@@ -82,10 +82,6 @@ func (c client) SetUsageStoreHealthy(healthy bool) {
 	c.record(RecordCommand{Kind: UsageStoreHealthy, Healthy: healthy})
 }
 
-func (c client) RecordRequestPlan(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string) {
-	c.record(RecordCommand{Kind: RequestPlan, Provider: provider, Model: model, Route: route, Status: status, Duration: duration, Outcome: outcome, ClientEndpoint: clientEndpoint, UpstreamProtocol: upstreamProtocol, UpstreamEndpoint: upstreamEndpoint, ConversionMode: conversionMode})
-}
-
 func (c client) RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int) {
 	c.record(RecordCommand{Kind: RequestPlan, Provider: provider, Model: model, Route: route, Status: status, Duration: duration, Outcome: outcome, ClientEndpoint: clientEndpoint, UpstreamProtocol: upstreamProtocol, UpstreamEndpoint: upstreamEndpoint, ConversionMode: conversionMode, ConversionLevel: conversionLevel})
 }

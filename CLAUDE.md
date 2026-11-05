@@ -2,11 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+项目基础开发规范以根目录 `AGENTS.md` 为准：只维护当前合同，不新增历史版本兼容或自动迁移逻辑；当前版本值、加密格式及数据库结构保持不变。
+
 ## 项目定位
 
 `AetherRelay` 是单进程、单二进制的本地 LLM API 网关。客户端只访问标准入站 path（OpenAI / Anthropic），代理**仅按请求 body 中的 exact `model`** 解析有序上游候选链；必要时做基础协议转换，并仅在响应未提交的可重试失败时回退。不依赖外部数据库服务、消息队列或常驻中间件；用量明细使用进程内嵌 DuckDB。
 
-当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。涉及 Codex 访问反向代理时，`docs/design/codex-proxy-maintenance-contract.md` 是首要维护合同：必须先更新其版本化规则与验收，再改变实现。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
+当前运行合同以 `README.md`、`docs/configuration.md`、`docs/operations.md`、`docs/structure.md` 和自动化测试为准。涉及 Codex 访问反向代理时，同步更新 `docs/design/codex-proxy-maintenance-contract.md` 的当前规则与验收，不额外升版或保留历史兼容分支。`prd.md` 的 Goals / DoD ID 是历史验收记录，可用于追溯，但不覆盖当前配置和运行语义。
 
 ## 常用命令
 
@@ -99,7 +101,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 
 ## 请求处理路径（proxy）
 
-`proxyapi/service/proxy.Handler.ServeHTTP`：路径白名单 → `clientauth` 身份解析（缺失、未知、禁用、格式错误或冲突 Key 均为 401，且不记账）→ `UsageStore.Start`（失败 503，不访问上游）→ 读限大体 → 解析 model → `ResolveTransportPlan` → native 或 conversion → `doUpstream*` → 缓冲或 SSE 流式 → `UsageStore.Complete` / metrics / archive。归档启用时 `ServeHTTP` 用 `archiveResponseWriter` 包装出站 `ResponseWriter`，在响应定型时快照状态与 header 写入 `response.meta.json`；该包装器必须透传 `Flush` / `Hijack` / `Unwrap`，否则 SSE 与 WebSocket 会静默退化。
+`proxyapi/service/proxy.Handler.ServeHTTP`：路径白名单 → `clientauth` 身份解析（缺失、未知、禁用、格式错误或冲突 Key 均为 401，且不记账）→ `UsageStore.Start`（失败 503，不访问上游）→ 读限大体 → 解析 model → `ResolveTransportPlans` → native 或 conversion → `doUpstream*` → 缓冲或 SSE 流式 → `UsageStore.Complete` / metrics / archive。归档启用时 `ServeHTTP` 用 `archiveResponseWriter` 包装出站 `ResponseWriter`，在响应定型时快照状态与 header 写入 `response.meta.json`；该包装器必须透传 `Flush` / `Hijack` / `Unwrap`，否则 SSE 与 WebSocket 会静默退化。
 
 流式：首包写出后 HTTP 状态不可改写；真实结束态用 **outcome**（`success`、`client_canceled`、`idle_timeout`、`upstream_truncated`、`upstream_failed` 等）统一写入 DuckDB / Prometheus / `metadata.json`。客户端取消不得计为 upstream 故障。
 
@@ -123,7 +125,7 @@ ChatGPT Web 与 Codex OAuth 账号池始终装配，并分别自动注入内建 
 ## 修改时注意
 
 - **model id 严格大小写敏感**；catalog 与 body 必须原文 exact 匹配。
-- 改路由/能力矩阵时同步：`internal/pkg/aetherrelayconfig` 校验、`ResolveTransportPlan`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
+- 改路由/能力矩阵时同步：`internal/pkg/aetherrelayconfig` 校验、`ResolveTransportPlans`、相关 `*_test.go` 与当前 `README.md` / `docs/`。
 - 不引入请求侧 provider override、`default_provider`、旧 `fallbacks` 列表，或从 protocol 推断 `endpoints`。`priority` / `fallback` 是唯一的静态候选策略配置。
 - `Makefile` 默认 `-buildvcs=false`，避免非完整 git worktree 下 build 失败。
 - 文档、管理 UI 文案以中文为主；代码标识符保持英文。

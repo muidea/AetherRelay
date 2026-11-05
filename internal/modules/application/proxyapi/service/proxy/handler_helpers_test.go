@@ -143,7 +143,7 @@ func newTestHandler(cfg config.Config, usageFile string) *Handler {
 	if err != nil {
 		panic(err)
 	}
-	return NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	return newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 }
 
 // memoryStore 从 Handler 取出测试用 MemoryStore。
@@ -236,4 +236,17 @@ func withClientKey(h *Handler, id, secret string) {
 	if records, err := h.usageStore.ListClientAPIKeys(context.Background()); err == nil {
 		h.clientKeyIndex.Store(buildClientKeyIndexFromRecords(records))
 	}
+}
+
+// Test identities are provisioned explicitly by the test harness.
+func newTestProxyHandler(cfg config.Config, usageStore usage.Store, recorder *archive.Recorder, metricsSource any) *Handler {
+	if memory, ok := usageStore.(*usage.MemoryStore); ok {
+		if records, err := memory.ListClientAPIKeys(context.Background()); err == nil && len(records) == 0 {
+			sum := sha256.Sum256([]byte("test-client-key"))
+			if err := memory.CreateClientAPIKey(context.Background(), usage.ClientAPIKeyRecord{ID: "test-client", Hash: "sha256:" + hex.EncodeToString(sum[:]), Enabled: true, CreatedAt: time.Now().UTC(), ProviderAccess: clientaccess.All()}); err != nil {
+				panic(err)
+			}
+		}
+	}
+	return NewHandler(cfg, usageStore, recorder, metricsSource)
 }

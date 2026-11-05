@@ -205,10 +205,10 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, apiErr := ResolveTransportPlan(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, tc.path, tc.model)
+			plans, apiErr := ResolveTransportPlans(cfg, effectivecatalog.FromStatic(cfg), http.MethodPost, tc.path, tc.model)
 			if tc.wantCode != "" {
 				if apiErr == nil {
-					t.Fatalf("expected error %s, got plan %#v", tc.wantCode, plan)
+					t.Fatalf("expected error %s, got plans %#v", tc.wantCode, plans)
 				}
 				if apiErr.Code != tc.wantCode {
 					t.Fatalf("code = %q want %q msg=%s", apiErr.Code, tc.wantCode, apiErr.Message)
@@ -218,6 +218,7 @@ func TestResolveTransportPlanMatrix(t *testing.T) {
 			if apiErr != nil {
 				t.Fatalf("unexpected error: %#v", apiErr)
 			}
+			plan := plans[0]
 			if plan.Mode != tc.wantMode {
 				t.Fatalf("mode = %q want %q", plan.Mode, tc.wantMode)
 			}

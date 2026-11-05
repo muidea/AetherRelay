@@ -13,7 +13,6 @@ import (
 
 type chatGPTTaskBody struct {
 	APIKeyID         string   `json:"api_key_id"`
-	OwnerID          string   `json:"owner_id,omitempty"` // test/client compatibility; production uses api_key_id
 	ClientTaskID     string   `json:"client_task_id"`
 	Prompt           string   `json:"prompt"`
 	Model            string   `json:"model"`
@@ -26,7 +25,7 @@ type chatGPTTaskBody struct {
 }
 
 func (h *Handler) listChatGPTImageTasks(w http.ResponseWriter, r *http.Request) {
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"), r.URL.Query().Get("owner_id"))
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), r.URL.Query().Get("api_key_id"))
 	if !ok {
 		return
 	}
@@ -40,12 +39,12 @@ func (h *Handler) listChatGPTImageTasks(w http.ResponseWriter, r *http.Request) 
 }
 func (h *Handler) submitChatGPTImageGeneration(w http.ResponseWriter, r *http.Request) {
 	var body chatGPTTaskBody
-	if !decodeAdminBody(w, r, &body) {
+	if !decodeChatGPTTaskBody(w, r, &body) {
 		return
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -68,12 +67,12 @@ func (h *Handler) submitChatGPTImageGeneration(w http.ResponseWriter, r *http.Re
 }
 func (h *Handler) submitChatGPTImageEdit(w http.ResponseWriter, r *http.Request) {
 	var body chatGPTTaskBody
-	if !decodeAdminBody(w, r, &body) {
+	if !decodeChatGPTTaskBody(w, r, &body) {
 		return
 	}
 	h.updateMu.Lock()
 	defer h.updateMu.Unlock()
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -112,7 +111,7 @@ func validateChatGPTTaskImageOptions(w http.ResponseWriter, body chatGPTTaskBody
 }
 func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request, rel string) {
 	var body chatGPTTaskBody
-	if !decodeAdminBody(w, r, &body) {
+	if !decodeChatGPTTaskBody(w, r, &body) {
 		return
 	}
 	h.updateMu.Lock()
@@ -122,7 +121,7 @@ func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -142,7 +141,7 @@ func (h *Handler) resumeChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 
 func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Request, rel string) {
 	var body chatGPTTaskBody
-	if !decodeAdminBody(w, r, &body) {
+	if !decodeChatGPTTaskBody(w, r, &body) {
 		return
 	}
 	h.updateMu.Lock()
@@ -152,7 +151,7 @@ func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -169,7 +168,7 @@ func (h *Handler) retryChatGPTImageGeneration(w http.ResponseWriter, r *http.Req
 
 func (h *Handler) cancelChatGPTImageTask(w http.ResponseWriter, r *http.Request, rel string) {
 	var body chatGPTTaskBody
-	if !decodeAdminBody(w, r, &body) {
+	if !decodeChatGPTTaskBody(w, r, &body) {
 		return
 	}
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
@@ -177,7 +176,7 @@ func (h *Handler) cancelChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -191,7 +190,7 @@ func (h *Handler) cancelChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 
 func (h *Handler) deleteChatGPTImageTask(w http.ResponseWriter, r *http.Request, rel string) {
 	var body chatGPTTaskBody
-	if !decodeAdminBody(w, r, &body) {
+	if !decodeChatGPTTaskBody(w, r, &body) {
 		return
 	}
 	parts := strings.Split(strings.Trim(rel, "/"), "/")
@@ -199,7 +198,7 @@ func (h *Handler) deleteChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "task_id is required")
 		return
 	}
-	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID, body.OwnerID)
+	apiKeyID, ok := h.imageAPIKeyID(w, r.Context(), body.APIKeyID)
 	if !ok {
 		return
 	}
@@ -211,26 +210,9 @@ func (h *Handler) deleteChatGPTImageTask(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (h *Handler) imageAPIKeyID(w http.ResponseWriter, ctx context.Context, apiKeyID, legacyOwner string) (string, bool) {
-	// Keep the old owner-only path solely for lightweight handlers that have no
-	// usage store (the test/runtime stub path).  A production Admin request
-	// without an explicit scope must always resolve to the server-owned scope;
-	// arbitrary owner strings must not create or select ad-hoc image scopes.
-	if strings.TrimSpace(apiKeyID) == "" && h.usageStore == nil {
-		apiKeyID = legacyOwner
-	}
-	// The Admin feature/tool surface has one durable local scope.  Keep the
-	// legacy owner fallback only for isolated tests that do not have a usage
-	// store; production requests should always land in builtin-local unless the
-	// caller explicitly selects another existing client scope.
-	if strings.TrimSpace(apiKeyID) == "" && h.usageStore != nil {
+func (h *Handler) imageAPIKeyID(w http.ResponseWriter, ctx context.Context, apiKeyID string) (string, bool) {
+	if strings.TrimSpace(apiKeyID) == "" {
 		apiKeyID = config.BuiltinClientAPIKeyID
-	}
-	if h.usageStore == nil && strings.TrimSpace(apiKeyID) == "" {
-		apiKeyID = "default"
-	}
-	if h.usageStore == nil && strings.TrimSpace(apiKeyID) != "" {
-		return strings.TrimSpace(apiKeyID), true
 	}
 	return h.requireExistingClientAPIKeyID(w, ctx, apiKeyID)
 }
@@ -249,4 +231,14 @@ func splitAdminCSV(value string) []string {
 		}
 	}
 	return out
+}
+
+func decodeChatGPTTaskBody(w http.ResponseWriter, r *http.Request, target *chatGPTTaskBody) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid task json; use current fields including api_key_id")
+		return false
+	}
+	return true
 }

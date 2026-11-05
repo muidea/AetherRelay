@@ -148,7 +148,7 @@ func TestArchiveResponseMetaRecordsClientAndUpstreamHeaders(t *testing.T) {
 	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/responses",
 		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	responseMeta := filepath.Join(interactionDir, "response.meta.json")
 	assertFileContains(t, responseMeta, `"status": 200`)
 	assertFileContains(t, responseMeta, `"Content-Type"`)
@@ -176,7 +176,7 @@ func TestArchiveRedactsSensitiveHeadersButKeepsRateLimit(t *testing.T) {
 	handler.ServeHTTP(newResponseRecorder(), newRequest(http.MethodPost, "/v1/responses",
 		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	for _, name := range []string{"response.meta.json", "upstream_response.json"} {
 		path := filepath.Join(interactionDir, name)
 		assertFileContains(t, path, `<redacted>`)
@@ -205,7 +205,7 @@ func TestArchiveSSEResponseMetaKeepsNegotiatedHeaders(t *testing.T) {
 	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/responses",
 		`{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`))
 
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	responseMeta := filepath.Join(interactionDir, "response.meta.json")
 	// 快照取在 WriteHeader 之前已由 prepareSSEHeaders 定型的头。
 	assertFileContains(t, responseMeta, `"status": 200`)
@@ -228,7 +228,7 @@ func TestArchiveResponseMetaSurvivesEarlyReturnWithoutMetadata(t *testing.T) {
 	handler.ServeHTTP(response, newRequest(http.MethodPost, "/v1/responses",
 		`{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`))
 
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.meta.json"), `"status": 503`)
 	if _, err := os.Stat(filepath.Join(interactionDir, "metadata.json")); !os.IsNotExist(err) {
 		t.Fatalf("metadata.json must not exist on this path, stat err = %v", err)
@@ -247,12 +247,11 @@ func TestArchiveHeadersWithoutFullContent(t *testing.T) {
 		},
 	})
 	recorder, err := archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{
-		MaxRounds: 500, FullContent: false, ScopeByAPIKey: true,
-	})
+		MaxRounds: 500, FullContent: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), recorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`), nil
 	})
@@ -285,7 +284,7 @@ func TestArchiveDisabledLeavesResponseUntouched(t *testing.T) {
 		},
 	})
 	// recorder 为 nil ⇔ archive_interactions 关闭。
-	handler := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(`{"id":"chatcmpl-1","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]}`), nil
 	})
@@ -297,7 +296,7 @@ func TestArchiveDisabledLeavesResponseUntouched(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(cfg.InteractionDir, "000001")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(cfg.InteractionDir, "test-client", "000001")); !os.IsNotExist(err) {
 		t.Fatalf("interaction archive must stay empty, stat err = %v", err)
 	}
 }

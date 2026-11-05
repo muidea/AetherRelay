@@ -2,12 +2,9 @@
 package events
 
 const (
-	TopicList   = "aetherrelay.chatgpt.accountpool.command.list"
-	TopicAdd    = "aetherrelay.chatgpt.accountpool.command.add"
-	TopicDelete = "aetherrelay.chatgpt.accountpool.command.delete"
-	TopicUpdate = "aetherrelay.chatgpt.accountpool.command.update"
-	// The ID-based commands are the public management contract. Access-token
-	// selectors are retained only for owner-local compatibility flows.
+	TopicList = "aetherrelay.chatgpt.accountpool.command.list"
+	TopicAdd  = "aetherrelay.chatgpt.accountpool.command.add"
+	// Management commands select accounts by their stable IDs.
 	TopicDeleteByID          = "aetherrelay.chatgpt.accountpool.command.delete_by_id"
 	TopicUpdateByID          = "aetherrelay.chatgpt.accountpool.command.update_by_id"
 	TopicExportByID          = "aetherrelay.chatgpt.accountpool.command.export_by_id"
@@ -17,7 +14,6 @@ const (
 	TopicReleaseImageSlot    = "aetherrelay.chatgpt.accountpool.command.release_image_slot"
 	TopicMarkImageResult     = "aetherrelay.chatgpt.accountpool.command.mark_image_result"
 	TopicAcquireTextToken    = "aetherrelay.chatgpt.accountpool.command.acquire_text_token"
-	TopicAcquireTextAccount  = "aetherrelay.chatgpt.accountpool.command.acquire_text_account"
 	TopicRecordTextResult    = "aetherrelay.chatgpt.accountpool.command.record_text_result"
 	// TopicRefreshTextToken renews an OAuth-backed text credential after the
 	// upstream has classified it as invalid. The account pool keeps refresh
@@ -119,18 +115,10 @@ type AddResult struct {
 	Skipped int `json:"skipped"`
 }
 
-type DeleteCommand struct{ Tokens []string }
 type DeleteResult struct {
 	Deleted int `json:"deleted"`
 }
 
-type UpdateCommand struct {
-	AccessToken string
-	Type        string
-	Status      string
-	Quota       *int
-	Proxy       string
-}
 type UpdateResult struct {
 	Item AccountView `json:"item"`
 }
@@ -148,8 +136,8 @@ type AcquireImageTokenCommand struct {
 	SourceType string
 	Exclude    []string
 	// Model and Capability filter candidates by the account's latest model
-	// snapshot. Empty values keep the pre-discovery acquire behavior so
-	// non-catalog callers (for example image task recovery) still work.
+	// snapshot. Empty values request a credential without a model constraint,
+	// for example during image task recovery.
 	Model      string
 	Capability string
 }
@@ -162,8 +150,8 @@ type ReleaseImageSlotCommand struct{ AccessToken string }
 type ReleaseImageSlotResult struct{ OK bool }
 type MarkImageResultCommand struct {
 	AccessToken string
-	// Model scopes retry cooling to the affected image model. Empty keeps
-	// compatibility with pre-catalog task recovery callers.
+	// Model scopes retry cooling to the affected image model. Empty selects
+	// the credential-wide result scope used by task recovery.
 	Model      string
 	Success    bool
 	ErrorClass string
@@ -172,24 +160,11 @@ type MarkImageResultResult struct{ Account AccountView }
 type AcquireTextTokenCommand struct {
 	Exclude []string
 	// Model and Capability filter candidates by the account's latest model
-	// snapshot. Empty values keep the pre-discovery acquire behavior.
+	// snapshot. Empty values request a credential without a model constraint.
 	Model      string
 	Capability string
 }
 type AcquireTextTokenResult struct {
-	AccessToken string
-	Account     AccountView
-}
-
-// AcquireTextAccountCommand acquires a specific account for text turns. It does
-// not reuse image in-flight slots and requires the account to support the model
-// for chat_completions when Model/Capability are provided.
-type AcquireTextAccountCommand struct {
-	AccountID  string
-	Model      string
-	Capability string
-}
-type AcquireTextAccountResult struct {
 	AccessToken string
 	Account     AccountView
 }

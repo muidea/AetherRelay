@@ -85,7 +85,7 @@ func TestOpenAICompatibleBufferedUsage(t *testing.T) {
 	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.5714" {
 		t.Fatalf("cache hit rate = %s", got)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "request.json"), `"model": "gpt-test"`)
 	assertFileContains(t, filepath.Join(interactionDir, "request.meta.json"), `"path": "/v1/responses"`)
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"url": "https://upstream.test/v1/responses"`)
@@ -163,7 +163,7 @@ func TestOpenAICompatibleGzipResponseUsage(t *testing.T) {
 	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.4874" {
 		t.Fatalf("cache hit rate = %s", got)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"input_tokens":27575`)
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"cached_input_tokens": 13440`)
 }
@@ -211,7 +211,7 @@ func TestOpenAICompatibleStreamingUsage(t *testing.T) {
 	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.4000" {
 		t.Fatalf("cache hit rate = %s", got)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "request.json"), `"stream": true`)
 	assertFileContains(t, filepath.Join(interactionDir, "response.sse"), "response.completed")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"response_path": "response.sse"`)
@@ -263,7 +263,7 @@ func TestOpenAIStreamingReadErrorLogsRoundAndMetadata(t *testing.T) {
 	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "round=1") {
 		t.Fatalf("expected final warning with round=1, got: %s", logs)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"error": "read raw stream: context deadline exceeded"`)
 }
 
@@ -309,7 +309,7 @@ func TestOpenAIStreamingClientCancelIsIdentified(t *testing.T) {
 	if !strings.Contains(logs, "client canceled downstream request") {
 		t.Fatalf("expected client cancel log, got: %s", logs)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"error": "read raw stream: client canceled downstream request"`)
 }
 
@@ -343,7 +343,7 @@ func TestAnthropicNativeAvoidsDuplicateV1AndArchives(t *testing.T) {
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test/v1", APIKey: "test-key"},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/messages?beta=true", `{"model":"claude-test","messages":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set("Anthropic-Version", "2023-06-01")
@@ -356,7 +356,7 @@ func TestAnthropicNativeAvoidsDuplicateV1AndArchives(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "request.json"), `"model": "claude-test"`)
 	assertFileContains(t, filepath.Join(interactionDir, "request.meta.json"), `"Authorization":`)
 	assertFileContains(t, filepath.Join(interactionDir, "request.meta.json"), `<redacted>`)
@@ -396,7 +396,7 @@ func TestAnthropicRawRequestInfersAnthropicProvider(t *testing.T) {
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key", Models: []string{"claude-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/messages?beta=true", `{"model":"claude-test","messages":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set("Anthropic-Version", "2023-06-01")
@@ -409,7 +409,7 @@ func TestAnthropicRawRequestInfersAnthropicProvider(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "anthropic"`)
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"url": "https://anthropic.test/v1/messages?beta=true"`)
 	records := readUsageFromStore(t, handler)
@@ -432,7 +432,7 @@ func TestUnmatchedModelWithoutDefaultProviderReturns400(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Models: []string{"deepseek-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/v1/messages" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
@@ -470,7 +470,7 @@ func TestMultipleProvidersMatchingSameModelReturns400(t *testing.T) {
 			"backup":  {Name: "backup", Protocol: "openai", BaseURL: "https://backup.test", APIKey: "k2", Models: []string{"shared-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
@@ -504,7 +504,7 @@ func TestDefaultProviderNoLongerRoutesUnknownModel(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Models: []string{"deepseek-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
@@ -546,7 +546,7 @@ func TestLocalModelsEndpointReturnsCatalog(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("GET /v1/models should not reach upstream: %s", r.URL.String())
 		return nil, nil
@@ -582,7 +582,7 @@ func TestLocalModelsEndpointReturnsCatalog(t *testing.T) {
 	if strings.Contains(response.Body.String(), `"capabilities"`) {
 		t.Fatalf("model catalog must not expose capabilities: %s", response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"object":"list"`)
 }
 
@@ -613,7 +613,7 @@ func TestOpenAICompatibleProviderSelectionByExplicitModelPattern(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
@@ -623,7 +623,7 @@ func TestOpenAICompatibleProviderSelectionByExplicitModelPattern(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "deepseek"`)
 }
 
@@ -648,7 +648,7 @@ func TestOpenAICompatibleProviderSelectionByConfiguredModelPattern(t *testing.T)
 			"custom-openai": {Name: "custom-openai", Protocol: "openai", BaseURL: "https://custom-openai.test", APIKey: "custom-key", Models: []string{"kimi-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"kimi-k2","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
@@ -658,7 +658,7 @@ func TestOpenAICompatibleProviderSelectionByConfiguredModelPattern(t *testing.T)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "custom-openai"`)
 }
 
@@ -727,7 +727,7 @@ func TestRawProxyUsesBodyModelToResolveProvider(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Models: []string{"deepseek-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":"hi"}`)
 	response := newResponseRecorder()
@@ -737,7 +737,7 @@ func TestRawProxyUsesBodyModelToResolveProvider(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "deepseek"`)
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"ok":true`)
 	records := readUsageFromStore(t, handler)
@@ -760,7 +760,7 @@ func TestOpenAIResponsesRequiresModel(t *testing.T) {
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "openai-key"},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
@@ -790,7 +790,7 @@ func TestOpenAIResponsesRejectsAnthropicProvider(t *testing.T) {
 		},
 		ModelMetadata: map[string]config.ModelMetadata{"claude-test": {ID: "claude-test", ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointMessages: {Level: 1, Text: true}}}},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/v1/messages" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
@@ -843,7 +843,7 @@ func TestExplicitProviderHeaderIsIgnored(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Models: []string{"deepseek-*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set("X-AI-Provider", "openai")
@@ -854,7 +854,7 @@ func TestExplicitProviderHeaderIsIgnored(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "upstream_request.json"), `"provider": "deepseek"`)
 }
 
@@ -889,7 +889,7 @@ func TestRawResponsesStreamArchivesEventsAndOutcome(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Models: []string{"deepseek*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","stream":true,"input":"hi"}`)
 	response := newResponseRecorder()
@@ -902,7 +902,7 @@ func TestRawResponsesStreamArchivesEventsAndOutcome(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "response.completed") {
 		t.Fatalf("client body missing response.completed: %s", response.Body.String())
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.sse"), "response.completed")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"outcome": "success"`)
 	// 不应误判为截断
@@ -946,7 +946,7 @@ func TestAnthropicRawStreamRecordsCacheUsage(t *testing.T) {
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://anthropic.test", APIKey: "anthropic-key"},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = transport
 	request := newRequest(http.MethodPost, "/v1/messages", `{"model":"claude-test","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	request.Header.Set("Anthropic-Version", "2023-06-01")
@@ -973,7 +973,7 @@ func TestAnthropicRawStreamRecordsCacheUsage(t *testing.T) {
 		t.Fatalf("cache hit rate = %s", got)
 	}
 	// The archived Anthropic message keeps the upstream wire shape: no double count.
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"input_tokens": 20,`)
 	assertFileContains(t, filepath.Join(interactionDir, "response.json"), `"cache_read_input_tokens": 8`)
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"cache_hit_rate": 0.2580645`)
@@ -994,7 +994,7 @@ func TestDisabledProviderIsSkippedForModelSelection(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Disabled: true},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Fatalf("request should not reach upstream")
 		return nil, nil
@@ -1023,7 +1023,7 @@ func TestDisabledProviderIsNotMatchedByModel(t *testing.T) {
 			"deepseek": {Name: "deepseek", Protocol: "openai", BaseURL: "https://deepseek.test", APIKey: "deepseek-key", Disabled: true},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	request := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","input":[{"role":"user","content":"hi"}]}`)
 	response := newResponseRecorder()
 	handler.ServeHTTP(response, request)
@@ -1228,7 +1228,7 @@ func TestRequestIDPassesThroughClientHeader(t *testing.T) {
 	if got := response.Header().Get(RequestIDHeader); got != "client-supplied-123" {
 		t.Fatalf("X-Request-ID = %q, want client-supplied-123", got)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"request_id": "client-supplied-123"`)
 	records := readUsageFromStore(t, handler)
 	if got := csvField(t, records, 1, "event_id"); got == "client-supplied-123" {
@@ -1278,7 +1278,7 @@ func TestRequestIDGeneratedWhenAbsent(t *testing.T) {
 	if len(generated) != 32 {
 		t.Fatalf("generated request id length = %d (%q), want 32 hex chars", len(generated), generated)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"request_id": "`+generated+`"`)
 }
 
@@ -1315,7 +1315,7 @@ func TestRequestIDRawProxyAttachesToRound(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000001")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000001")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"request_id": "raw-req-7"`)
 }
 
@@ -1337,7 +1337,7 @@ func TestStablePrefixFingerprintAndDriftRecordedInMetadata(t *testing.T) {
 		req := newRequest(http.MethodPost, "/v1/responses", body)
 		handler.ServeHTTP(newResponseRecorder(), req)
 	}
-	interactionDir := filepath.Join(tmpDir, "interactions", "000003")
+	interactionDir := filepath.Join(tmpDir, "interactions", "test-client", "000003")
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"stable_prefix_hash"`)
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"request_fingerprint"`)
 	assertFileContains(t, filepath.Join(interactionDir, "metadata.json"), `"stable_prefix_drift": true`)
@@ -1628,7 +1628,7 @@ func TestStreamCleanEOFWithoutDONEIsTruncated(t *testing.T) {
 	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","stream":true,"input":[{"role":"user","content":"hi"}]}`)
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, req)
-	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "000001", "metadata.json"))
+	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "test-client", "000001", "metadata.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1693,7 +1693,7 @@ func TestResponsesStreamFailedOutcome(t *testing.T) {
 	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"deepseek-chat","stream":true,"input":"hi"}`)
 	handler.ServeHTTP(newResponseRecorder(), req)
 
-	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "000001", "metadata.json"))
+	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "test-client", "000001", "metadata.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1755,7 +1755,7 @@ func TestResponsesStreamRecordsUsageFromCompleted(t *testing.T) {
 	if got := csvField(t, records, 1, "cache_hit_rate"); got != "0.4545" {
 		t.Fatalf("cache hit rate = %s, want read/input only", got)
 	}
-	assertFileContains(t, filepath.Join(tmpDir, "interactions", "000001", "metadata.json"), `"cache_creation_input_tokens": 3`)
+	assertFileContains(t, filepath.Join(tmpDir, "interactions", "test-client", "000001", "metadata.json"), `"cache_creation_input_tokens": 3`)
 	if got := csvField(t, records, 1, "outcome"); got != "success" {
 		t.Fatalf("outcome = %s", got)
 	}
@@ -1777,7 +1777,7 @@ func TestBufferedErrorMetadataOutcomeNotSuccess(t *testing.T) {
 	handler.client.Transport = transport
 	req := newRequest(http.MethodPost, "/v1/responses", `{"model":"gpt-test","input":[{"role":"user","content":"hi"}]}`)
 	handler.ServeHTTP(newResponseRecorder(), req)
-	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "000001", "metadata.json"))
+	meta, err := os.ReadFile(filepath.Join(tmpDir, "interactions", "test-client", "000001", "metadata.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1952,7 +1952,7 @@ func TestResponsesToMessagesReturnsAfterCompletedWithoutWaitingEOF(t *testing.T)
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://upstream.test", APIKey: "k", Models: []string{"gpt*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -2045,7 +2045,7 @@ func TestMessagesToResponsesReturnsAfterMessageStop(t *testing.T) {
 			"anthropic": {Name: "anthropic", Protocol: "anthropic", BaseURL: "https://upstream.test", APIKey: "k", Models: []string{"claude*"}},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/v1/messages" {
 			t.Errorf("upstream path = %s", r.URL.Path)
@@ -2100,7 +2100,7 @@ func TestEndpointUnsupportedRejectsBeforeUpstream(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	upstreamHits := 0
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstreamHits++
@@ -2140,7 +2140,7 @@ func TestSupportedOperationForwardsUpstream(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host != "openai.test" {
 			t.Fatalf("host = %s", r.URL.Host)
@@ -2173,7 +2173,7 @@ func TestModelsListResponseUsesTypedDTO(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	req := newRequest(http.MethodGet, "/v1/models", "")
 	resp := newResponseRecorder()
 	handler.ServeHTTP(resp, req)
@@ -2209,7 +2209,7 @@ func TestDisablingProviderRefreshesModelsAndFeatureCatalog(t *testing.T) {
 		},
 		ModelMetadata: map[string]config.ModelMetadata{"only-model": {ID: "only-model"}},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	if catalog := handler.FeatureCatalog(context.Background()); len(catalog.TextModels) != 1 || catalog.TextModels[0].ID != "only-model" {
 		t.Fatalf("initial feature catalog = %+v", catalog.TextModels)
 	}
@@ -2258,7 +2258,7 @@ func TestModelsListOmitsUnknownCapacityForExactProviderModel(t *testing.T) {
 			},
 		},
 	}
-	handler := NewHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(mustHandlerConfig(cfg), usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	resp := newResponseRecorder()
 	handler.ServeHTTP(resp, newRequest(http.MethodGet, "/v1/models", ""))
 	if resp.Code != http.StatusOK {
@@ -2297,7 +2297,7 @@ func TestModelsGETReturnsStableCatalogAndPOSTIsRejected(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	getRec := newResponseRecorder()
 	handler.ServeHTTP(getRec, newRequest(http.MethodGet, "/v1/models", ""))
 	postRec := newResponseRecorder()
@@ -2343,7 +2343,7 @@ func TestEmbeddingOnlyRejectsTextEndpoints(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	hits := 0
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		hits++
@@ -2382,7 +2382,7 @@ func TestAPIErrorDoesNotLeakSecrets(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	rec := newResponseRecorder()
 	handler.ServeHTTP(rec, newRequest(http.MethodPost, "/v1/embeddings", `{"model":"gpt-chat","input":"hi"}`))
 	body := rec.Body.String()
@@ -2400,7 +2400,7 @@ func TestNewHandlerRejectsUnresolvedConfig(t *testing.T) {
 			t.Fatal("expected panic for unresolved config")
 		}
 	}()
-	_ = NewHandler(config.Config{
+	_ = newTestProxyHandler(config.Config{
 		Providers: map[string]config.Provider{
 			"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://x", APIKey: "k"},
 		},
@@ -2421,7 +2421,7 @@ func TestNewHandlerAllowsEmptyCatalog(t *testing.T) {
 		},
 		ModelMetadata: map[string]config.ModelMetadata{},
 	}
-	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry())
+	h := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry())
 	if h == nil {
 		t.Fatal("handler nil")
 	}
@@ -2520,7 +2520,7 @@ func TestRetryableUpstreamErrorDoesNotSwitchProvider(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		hosts = append(hosts, r.URL.Host)
 		return testResponse(http.StatusBadGateway, "application/json", `{"error":"bad gateway"}`), nil
@@ -2556,7 +2556,7 @@ func TestRetryableUpstreamErrorFallsBackToLowerPriorityCandidate(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, registry)
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, registry)
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		hosts = append(hosts, r.URL.Host)
 		if r.URL.Host == "primary.test" {
@@ -2601,7 +2601,7 @@ func TestNetworkErrorDoesNotSwitchProvider(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		hosts = append(hosts, r.URL.Host)
 		return nil, fmt.Errorf("connection refused")
@@ -2636,7 +2636,7 @@ func TestFirstStreamEventFailureDoesNotSwitchProvider(t *testing.T) {
 			},
 		},
 	})
-	handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		hosts = append(hosts, r.URL.Host)
 		return testResponse(http.StatusOK, "text/event-stream", "data: incomplete-first-event"), nil
@@ -2792,7 +2792,7 @@ func TestSingleRouteOwnerDoesNotSwitchOnRetryableStatuses(t *testing.T) {
 					},
 				},
 			})
-			handler := NewHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
+			handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), interactionRecorder, metrics.NewRegistry())
 			handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				hosts = append(hosts, r.URL.Host)
 				return testResponse(status, "application/json", `{"error":"retryable"}`), nil
@@ -2878,7 +2878,7 @@ func TestUpstreamHeaderAllowlistAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(mustHandlerConfig(config.Config{
+	handler := newTestProxyHandler(mustHandlerConfig(config.Config{
 		ListenAddr:     ":0",
 		InteractionDir: filepath.Join(tmpDir, "interactions"),
 		VerboseLogging: true,
@@ -2936,9 +2936,9 @@ func TestUpdateConfigResetsHealthOnlyForChangedProvider(t *testing.T) {
 		ModelMetadata: map[string]config.ModelMetadata{"deepseek-test": {ID: "deepseek-test"}},
 	})
 	registry := metrics.NewRegistry()
-	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, registry)
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), recorder, registry)
 	for range 3 {
-		registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+		registry.RecordRequestPlanWithLevel("deepseek", "deepseek-test", "messages", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
 	if got := registry.ProviderHealthSnapshot()["deepseek"]; got.CircuitState != "open" {
 		t.Fatalf("circuit was not opened: %#v", got)
@@ -2956,7 +2956,7 @@ func TestUpdateConfigResetsHealthOnlyForChangedProvider(t *testing.T) {
 	}
 
 	for range 3 {
-		registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "")
+		registry.RecordRequestPlanWithLevel("deepseek", "deepseek-test", "messages", http.StatusBadGateway, time.Millisecond, "upstream_failed", "", "", "", "", 0)
 	}
 	unchanged := handler.ConfigSnapshot()
 	unchanged.RequestTimeout += time.Second
@@ -2985,7 +2985,7 @@ func TestCredentialFailureDoesNotQuarantineSiblingModel(t *testing.T) {
 		},
 	})
 	registry := metrics.NewRegistry()
-	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, registry)
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), recorder, registry)
 	handler.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -3026,11 +3026,11 @@ func TestRollingUnhealthyScoreDoesNotBlockRecoveryRequest(t *testing.T) {
 		ModelMetadata: map[string]config.ModelMetadata{"deepseek-test": {ID: "deepseek-test"}},
 	})
 	registry := metrics.NewRegistry()
-	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, registry)
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), recorder, registry)
 	for range 3 {
-		registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusOK, time.Millisecond, "success", "", "", "", "")
+		registry.RecordRequestPlanWithLevel("deepseek", "deepseek-test", "messages", http.StatusOK, time.Millisecond, "success", "", "", "", "", 0)
 	}
-	registry.RecordRequestPlan("deepseek", "deepseek-test", "messages", http.StatusOK, time.Millisecond, "upstream_truncated", "", "", "", "")
+	registry.RecordRequestPlanWithLevel("deepseek", "deepseek-test", "messages", http.StatusOK, time.Millisecond, "upstream_truncated", "", "", "", "", 0)
 	before := registry.ProviderHealthSnapshot()["deepseek"]
 	if before.Status != "unhealthy" || before.CircuitState != "closed" {
 		t.Fatalf("test requires a closed circuit with an unhealthy rolling score: %#v", before)

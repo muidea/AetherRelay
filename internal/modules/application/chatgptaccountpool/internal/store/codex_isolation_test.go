@@ -11,8 +11,8 @@ import (
 )
 
 // Both pools share a database. Even colliding record IDs must remain isolated
-// when Web startup migrates a device, records a limit, or deletes an account.
-func TestWebDeviceMigrationAndFeedbackPreserveCodexDocuments(t *testing.T) {
+// when Web startup rejects a missing device, records a limit, or deletes an account.
+func TestWebIdentityValidationAndFeedbackPreserveCodexDocuments(t *testing.T) {
 	for _, malformed := range []bool{false, true} {
 		name := "legacy_missing_device"
 		if malformed {
@@ -50,10 +50,17 @@ func TestWebDeviceMigrationAndFeedbackPreserveCodexDocuments(t *testing.T) {
 				t.Fatalf("seed Codex: %v, rows=%d", err, len(before))
 			}
 			pool, err := Open(path, "128MB", 1, 6, codec)
-			if err != nil {
+			if !malformed {
+				if err == nil {
+					_ = pool.Close()
+					t.Fatal("missing device identity was accepted")
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
-			defer pool.Close()
+			if pool != nil {
+				defer pool.Close()
+			}
 			if malformed {
 				view, ok := pool.ViewForAccessToken("web-token")
 				if !ok || view.Status != StatusAbnormal || view.DeviceIdentityError != "invalid_device_identity" || view.DeviceID != "malformed-device" {
@@ -63,18 +70,15 @@ func TestWebDeviceMigrationAndFeedbackPreserveCodexDocuments(t *testing.T) {
 				if err != nil || strings.Contains(string(encoded), "malformed-device") {
 					t.Fatal("management JSON exposed stored device value")
 				}
-			} else {
-				view, ok := pool.ViewForAccessToken("web-token")
-				if !ok {
-					t.Fatal("Web migration lost account")
+
+			}
+			if malformed {
+				if _, ok := pool.RecordTextResult(id, "gpt-6-sol", false, "rate_limit"); !ok {
+					t.Fatal("Web feedback lost account")
 				}
-				requireDevice(t, view.DeviceID)
-			}
-			if _, ok := pool.RecordTextResult(id, "gpt-6-sol", false, "rate_limit"); !ok {
-				t.Fatal("Web feedback lost account")
-			}
-			if deleted, err := pool.DeleteByIDs([]string{id}); err != nil || deleted != 1 {
-				t.Fatalf("Web deletion: deleted=%d, err=%v", deleted, err)
+				if deleted, err := pool.DeleteByIDs([]string{id}); err != nil || deleted != 1 {
+					t.Fatalf("Web deletion: deleted=%d, err=%v", deleted, err)
+				}
 			}
 			after, err := documents.LoadSecureDocuments(codexScope)
 			if err != nil || len(after) != 1 {

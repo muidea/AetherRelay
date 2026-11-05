@@ -147,7 +147,7 @@
 3. 其它 `docs/design/` 文档；
 4. 历史归档、参考项目和实现注释。
 
-参考项目只提供兼容证据，不能自动改变本合同。合同变化必须先修改本文版本、规则和验收，再修改实现。
+参考项目只提供协议证据，不能自动改变本合同。修改实现时同步更新当前规则和验收。项目初期只维护现行合同；保留当前版本号，不强制升版，不新增历史兼容或自动迁移逻辑，基础规范见根目录 `AGENTS.md`。
 
 ## 1. 目标与非目标
 
@@ -174,13 +174,9 @@
 
 `CP-NON-004` Realtime、语音、SIP 和 Codex Live 不属于当前合同；如需支持，必须另立合同并显式接入。
 
-## 2. 合同变更与版本管理
+## 2. 当前合同维护
 
-`CP-VER-001` 本合同使用语义化版本：
-
-- `PATCH`：说明澄清、证据和测试链接变化，不改变外部行为；
-- `MINOR`：向后兼容地新增端点、字段或能力；
-- `MAJOR`：删除能力、改变默认身份、重试边界或客户端可观察行为。
+`CP-VER-001` 保留当前合同版本及现有格式版本取值。未经明确要求，不引入额外版本管理、历史兼容、版本协商或自动迁移机制；行为变更同步更新规则、文档和测试即可。
 
 `CP-VER-002` 每个外部行为必须有稳定规则 ID。测试名称或测试注释必须引用覆盖的规则 ID；实施追踪表必须记录代码与测试证据。
 
@@ -190,7 +186,7 @@
 
 `CP-VER-005` 从 CLIProxyAPI、sub2api 或真实流量吸收新行为时，必须记录来源版本、最小脱敏样本和选择理由。历史补丁不能无依据进入通用兼容层。
 
-`CP-VER-006` [Codex 身份与会话语义基准](codex-identity-semantics.md) 是 `CP-HDR-007..024`、`CP-FP-001..008`、`CP-SCHED-002..003` 与 `CP-HDR-022..023` 的规范性说明。凡修改 Installation、Session、Thread、`X-Client-Request-Id`、Window、Turn、`sessionHash`、fingerprint 或 Turn-State scope 的语义、来源、格式、优先级和用途，必须在同一提交中更新本文版本/规则、该语义基准、自动化测试与实施追踪表。现场证据变化但外部行为不变时按 PATCH；遗漏同步视为合同未完成。
+`CP-VER-006` [Codex 身份与会话语义基准](codex-identity-semantics.md) 是 `CP-HDR-007..024`、`CP-FP-001..008`、`CP-SCHED-002..003` 与 `CP-HDR-022..023` 的规范性说明。凡修改 Installation、Session、Thread、`X-Client-Request-Id`、Window、Turn、`sessionHash`、fingerprint 或 Turn-State scope 的语义、来源、格式、优先级和用途，必须在同一提交中更新本文规则、该语义基准、自动化测试与实施追踪表。现场证据变化同步更新证据；遗漏同步视为合同未完成。
 
 版本记录：`4.0.2` 同步 Codex CLI `0.153.2` flat `client_metadata` 投影并保持未知键 fail closed。`4.0.1` 收口可信 manifest 与有效目录交集、delegation 历史配对和过期 quota reset。`4.0.0` 将默认出站身份更新为本机实测 Codex CLI `0.153.4` 的当前 UA，加入 GPT-6 Astra 的本地可信 manifest profile、multi-agent `agent_message`、历史 delegation、automation heartbeat、credential-wide 单调 quota cooldown 与共享正文的有界 WebSocket replay，并修正旧客户端 reasoning level 全部过滤后的空数组语义。`3.8.0` 固化 Codex delegation/scheduled automation 初始 bootstrap 的窄范围兼容、JWT access-token `exp` 的刷新调度提示，以及旧客户端 reasoning level 全部被过滤时的字段省略语义。`3.7.0` 固化 WebSocket 握手 quota/error 语义、非流式 terminal 统一分类、旧客户端 reasoning manifest 过滤、大整数无损规范化、Claude Code 路由专用会话信号和 HTTPS 代理 HTTP/1.1 ALPN。`3.6.0` 新增本地 Responses input-token preflight、默认/最大上下文双容量、nested cache breakpoint 清洗、compact availability-neutral 反馈、OAuth 统一身份，以及后续 WebSocket turn 的有界安全迁移。`3.5.0` 将 compact 上游切换为原生 remote compaction v2，固化会话级 beta、Turn-State 来源保护，以及默认关闭、显式 opt-in 的账号级指纹收敛。`3.4.0` 固化 HTML 403 的 endpoint-level 分类、真实 HTTP 状态保留和新鲜额度快照准入。`3.0.0` 固化 capacity 降载错误的客户端安全投影，并明确 Chat adapter 必须按 incomplete reason 精确映射终止原因。`2.6.0` 固化 SSE 延迟提交、typed terminal 唯一裁决和 sequential-cutoff reasoning summary 交付。`2.5.0` 固化 `response.incomplete` 合法终态、输出前流内错误切换、WebSocket 终态分类与失败连接处置。`2.4.0` 固化不支持字段清洗、空 `response.completed` 拒绝、确定性 400 安全错误投影和 WebSocket turn 级账号结果登记。`2.3.0` 固化 remote compaction v2、Responses Lite 工具布局、拼接 JSON 文档修复、WebSocket `response.done` 终态、凭据替换能力失效和成功响应额度头观察规则。
 
@@ -252,7 +248,7 @@
 | `include` | 去重并补 `reasoning.encrypted_content` | 不注入普通 Responses 专属值 | `CP-REQ-007` |
 | `tools` | 支持 `function`、`custom`、递归 `namespace`、`tool_search` 与顶层标准 `web_search`；Responses Lite 把顶层 `namespace` 迁移到 `input.additional_tools`，搜索工具仍留在顶层 | 保序；不自动注入图片工具 | `CP-REQ-008` |
 | `tool_choice` | 规范化；目标不支持则拒绝 | 删除或拒绝，以能力合同为准 | `CP-REQ-009` |
-| `functions/function_call` | 转为 `tools/tool_choice` | 同左 | `CP-REQ-010` |
+| `functions/function_call` | 明确拒绝，使用 `tools/tool_choice` | 同左 | `CP-REQ-010` |
 | `parallel_tool_calls` | boolean 且存在工具时保留；无工具时删除；Responses Lite 强制 false | 删除 | `CP-REQ-011` |
 | function/custom/MCP `call_id` | 原样保留，call 与 output 必须一致；禁止改写到 `fc_` 命名空间；只有 `CP-REQ-031` 的初始 bootstrap 例外可降级为 user message | 同左 | `CP-REQ-012` |
 | input item `id` | 按 item 类型规范为 `msg_`/`rs_`/`fc_`/`ctc_`/`ctco_`，最长 64 字符，稳定压缩并处理冲突 | 保留顺序并执行同一规范化 | `CP-REQ-013` |
@@ -357,9 +353,9 @@
 
 `CP-HDR-024` 身份术语必须按 [Codex 身份与会话语义基准](codex-identity-semantics.md) 分层使用：Installation 是安装/设备层身份，Client Session 是 CLI 会话，`sessionHash` 是 Key ID + 模型 + 客户端会话信号派生的代理 UUID，Upstream Session/Thread/Window 是 attempt 级出站身份，Turn 是可跨多个 HTTP/tool 请求的逻辑交互，Turn-State scope 是账号与客户端声明会话共同决定的独立记录单位。API Key 明文不得进入身份派生；同一 Key ID 槽位替换明文不构成新命名空间。`X-Client-Request-Id` 取 attempt 的 `Thread-Id`，不得误用为 AetherRelay 单请求诊断 ID。实现、测试、日志分析和文档不得用无所有权前缀的“Session”替代这些不同层级。
 
-`CP-HDR-025` 客户端来源 profile 由 Codex 账号池 owner 全局共享，并把同一次原生请求的 `User-Agent` 与 `Originator` 作为不可拆分候选，在账号准入时观察。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；仅允许 `codex-tui` family，最低候选版本为 `0.154.0`，出站最低版本为内置兜底 `0.155.0`，不设静态最高版本。有效更高版本一经观察，后续所有账号、off/scoped、原生与跨协议推理、模型发现、用量、OAuth 刷新及授权码交换统一使用最高版本的完整原子组。只允许严格升版；同版本保留已选平台，低版本、残缺、未知 family、不一致或非法版本均不能覆盖共享值；非 Codex 身份不参与观察，也不因此拒绝业务请求。最高值在账号记录之外独立加密持久化，启动时合并有效历史账号 profile，账号删除、禁用、重认证或凭据替换不得降级。选择结果不进入管理视图、日志或普通凭据导出。已准入请求及既有 WebSocket 保持当时 identity 快照；新准入、failover 和凭据刷新重试使用当时共享值。版本收敛不改变各账号凭据、Installation、Session/Thread 与 Turn-State 隔离。
+`CP-HDR-025` 客户端来源 profile 由 Codex 账号池 owner 全局共享，并把同一次原生请求的 `User-Agent` 与 `Originator` 作为不可拆分候选，在账号准入时观察。只有长度有界、无控制字符、首 token 与尾部自述中的 family/version 一致、且 `Originator` 等于 family 的候选可参与选择；仅允许 `codex-tui` family，最低候选版本为 `0.154.0`，出站最低版本为内置兜底 `0.155.0`，不设静态最高版本。有效更高版本一经观察，后续所有账号、off/scoped、原生与跨协议推理、模型发现、用量、OAuth 刷新及授权码交换统一使用最高版本的完整原子组。只允许严格升版；同版本保留已选平台，低版本、残缺、未知 family、不一致或非法版本均不能覆盖共享值；非 Codex 身份不参与观察，也不因此拒绝业务请求。最高值在账号记录之外独立加密持久化，启动只读取当前共享记录，不合并历史账号 profile，账号删除、禁用、重认证或凭据替换不得降级。选择结果不进入管理视图、日志或普通凭据导出。已准入请求及既有 WebSocket 保持当时 identity 快照；新准入、failover 和凭据刷新重试使用当时共享值。版本收敛不改变各账号凭据、Installation、Session/Thread 与 Turn-State 隔离。
 
-`CP-FP-001` 账号 `fingerprint_mode` 只允许 `off/scoped`，缺失和空值默认 `scoped`。管理 API 与导入对其它显式值直接拒绝；加密存量中的缺失、未知或已删除值加载时直接重写为 `scoped`。
+`CP-FP-001` 账号 `fingerprint_mode` 只允许 `off/scoped`，缺失和空值默认 `scoped`。管理 API 与导入对其它显式值直接拒绝；持久化记录必须已包含有效模式、所需 seed 和并发上限，缺失、未知或已删除值明确拒绝加载，不自动改写。
 
 `CP-FP-002` `scoped` 收敛账号级 Installation；Session 按账号 seed 与 LogicalConversation 派生；Thread 按账号 seed、LogicalConversation 与显式不同的 LogicalThread 派生，没有独立 LogicalThread 时等于 scoped Session。每个逻辑 turn 只生成一次 fallback Turn ID/开始时间，header 与 `client_metadata` 使用同一组解析结果。
 
@@ -583,7 +579,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-CAP-006` 模型容量必须区分客户端默认 `context_window` 与服务端允许的 `max_context_window`。两者缺失时使用同一个保守默认值；显式最大值不得小于默认值。OpenAI-compatible 模型目录分别发布 `contextWindowTokens` 与可选 `maxContextWindowTokens`，Codex manifest 分别发布 `context_window` 与 `max_context_window`。当前 Codex 客户端快照中 `gpt-6-astra` 与 `gpt-5.6-luna/sol/terra` 为 272,000 / 872,000；GPT-5.6 的旧 921,000 值不再作为默认配置基线。公共 API 标称 1,050,000 不能覆盖这份 Codex 配额；真实账号允许容量仍由上游裁决。
 
-`CP-CAP-007` `GET /v1/models?client_version=...` 必须解析可识别的 dotted Codex CLI 版本；低于 `0.144.0` 时从 manifest 删除 `max`、`ultra` reasoning level 并回退被删除的默认值。若过滤后没有兼容 level，必须保留 `supported_reasoning_levels: []` 并省略 `default_reasoning_level`，让旧客户端明确区分“已知无兼容 level”和字段未知；缺失或无法解析的版本保持现代能力，避免错误降级。
+`CP-CAP-007` Codex manifest 始终投影当前有效模型能力，不根据入站 `client_version` 查询参数裁剪 reasoning level 或改变默认值；保留 profile 中当前 `minimal_client_version` 等上游字段。
 
 `CP-CAP-008` Codex manifest 必须先匹配本地可信 per-model profile，未知模型才使用通用保守 profile。`gpt-6-astra` 的已验证 profile 为：显示名 `GPT-6-Astra`、272,000 默认上下文、872,000 最大上下文、最小客户端 `0.153.0`、Responses Lite、文本/图片输入、search、multi-agent v2、multi-agent reasoning `xhigh`、comp hash `3000`、默认 reasoning `medium`、`low|medium|high|xhigh|max|ultra` levels 和 `priority` service tier；`prefer_websockets` 仍必须与当前路由真实 transport 能力相交，不能仅凭静态 profile 宣称。
 
@@ -880,7 +876,7 @@ WS 诊断投影使用 `websocket_failure_stage`（read/decode/write）、有界 
 | 永久鉴权失败终态 | CP-FAIL-020 | implemented | `codexaccountpool/internal/store/store.go`, `codexaccountpool/internal/store/model_availability.go`, `proxyapi/biz/codex_responses.go`, `proxy/codex_responses.go`, `proxy/codex_websocket.go` | `codexaccountpool/internal/store/store_test.go`, `codexaccountpool/internal/store/admission_retry_test.go`, `proxyapi/biz/codex_responses_test.go`, `proxy/codex_health_test.go`, `proxy/codex_websocket_test.go` |
 | 端点级 403 与真实状态保留 | CP-FAIL-015 | implemented | `codexupstream/biz/biz.go`, `proxy/codex_responses.go` | `codexupstream/biz/biz_test.go` |
 | 新鲜额度快照准入 | CP-CAP-005 | implemented | `codexaccountpool/internal/store/store.go` | `store_test.go` |
-| Codex manifest profile 与客户端版本过滤 | CP-CAP-007..009 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `model_profiles_test.go`, `aetherrelayconfig/config_test.go` |
+| Codex manifest profile 与当前能力投影 | CP-CAP-007..009 | implemented | `proxy/models.go`, `config.example.yaml` | `models_test.go`, `model_profiles_test.go`, `aetherrelayconfig/config_test.go` |
 | HTTPS 账号代理 ALPN | CP-SEC-002, CP-SEC-004 | implemented | `aetherrelayproxy/transport.go`, `codexupstream/biz/biz.go` | `aetherrelayproxy/transport_test.go`, `codexupstream/biz/biz_test.go` |
 | Responses WebSocket | CP-EP-002, CP-WS-001..018 | implemented | `proxy/codex_websocket.go`, `proxy/codex_websocket_replay.go`, `codexupstream/biz/responses_transport.go`, `codexupstream/biz/websocket_http_fallback.go`, `codexupstream/biz/biz.go`, `~/codespace/magicEngine/http/response_writer.go` | `codex_websocket_test.go`, `codex_websocket_observation_test.go`, `codex_websocket_replay_test.go`, `codex_websocket_fallback_test.go`, `codexupstream/biz/websocket_handshake_test.go`, `routes_test.go`, `codexupstream/biz/biz_test.go`, `magicEngine/http/response_writer_test.go` |
 | 默认/最大上下文容量 | CP-CAP-003, CP-CAP-006 | implemented | `aetherrelayconfig/config.go`, `effectivecatalog/catalog.go`, `proxy/models.go` | `config_test.go`, `models_test.go`, `model_metadata_test.go` |

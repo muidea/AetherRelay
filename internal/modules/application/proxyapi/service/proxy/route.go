@@ -109,17 +109,6 @@ func ProviderHasDirectEndpoint(provider config.Provider, endpoint string) bool {
 	return config.ProviderHasDirectEndpoint(provider, endpoint)
 }
 
-// ResolveTransportPlan returns the first compatible candidate for compatibility
-// callers. Request executors that can safely retry must use
-// ResolveTransportPlans to obtain the complete ordered chain.
-func ResolveTransportPlan(cfg config.Config, snap effectivecatalog.Snapshot, method, path, modelID string) (TransportPlan, *APIError) {
-	plans, apiErr := ResolveTransportPlans(cfg, snap, method, path, modelID)
-	if apiErr != nil {
-		return TransportPlan{}, apiErr
-	}
-	return plans[0], nil
-}
-
 // ResolveTransportPlans validates the inbound request and returns every
 // compatible candidate in deterministic priority order. It never creates an
 // upstream request and is shared by routing, fallback, and Admin projections.

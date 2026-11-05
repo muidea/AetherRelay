@@ -29,7 +29,7 @@ func openTestStore(t *testing.T) *Store {
 
 func TestStartTurnPersistsAndOwnerScopesFileAttachments(t *testing.T) {
 	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb", "")
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,11 +58,11 @@ func TestStartTurnPersistsAndOwnerScopesFileAttachments(t *testing.T) {
 
 func TestCreateListGetAndDeleteConversation(t *testing.T) {
 	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "medium", "be concise", "account-1")
+	created, err := s.CreateConversation("admin", "gpt-5", "medium", "be concise", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.Status != common.StatusIdle || created.AccountID != "" || created.AccountDisplay == "" {
+	if created.ID == "" || created.Status != common.StatusIdle || created.AccountID != "" || created.Provider != "chatgptweb" {
 		t.Fatalf("created=%+v", created)
 	}
 	list, err := s.ListConversations("admin", "", 10)
@@ -81,9 +81,9 @@ func TestCreateListGetAndDeleteConversation(t *testing.T) {
 	}
 }
 
-func TestStartTurnAndCompleteTurnPersistAnchors(t *testing.T) {
+func TestStartTurnAndCompleteFeatureTurnPersistMessages(t *testing.T) {
 	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestStartTurnAndCompleteTurnPersistAnchors(t *testing.T) {
 	if _, err := s.StartTurn("admin", created.ID, "second while streaming"); err == nil {
 		t.Fatal("concurrent start must fail while streaming")
 	}
-	completed, err := s.CompleteTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "assistant reply", "gpt-5-5", "upstream-conv-1", "assistant-msg-1", false, false, false, "", "")
+	completed, err := s.CompleteFeatureTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "assistant reply", "gpt-5-5", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,21 +117,17 @@ func TestStartTurnAndCompleteTurnPersistAnchors(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("load row found=%v err=%v", found, err)
 	}
-	if row.UpstreamConversationID != "upstream-conv-1" || row.ParentMessageID != "assistant-msg-1" {
-		t.Fatalf("anchors not persisted: %+v", row)
+	if row.UpstreamConversationID != "" || row.ParentMessageID != "" {
+		t.Fatalf("feature execution persisted upstream anchors: %+v", row)
 	}
-	second, err := s.StartTurn("admin", created.ID, "follow up")
-	if err != nil {
+	if _, err := s.StartTurn("admin", created.ID, "follow up"); err != nil {
 		t.Fatal(err)
-	}
-	if second.UpstreamConversationID != "upstream-conv-1" || second.ParentMessageID != "assistant-msg-1" {
-		t.Fatalf("second turn anchors=%+v", second)
 	}
 }
 
 func TestStartTurnPersistsAndOwnerScopesImageAttachments(t *testing.T) {
 	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +157,7 @@ func TestStartTurnPersistsAndOwnerScopesImageAttachments(t *testing.T) {
 
 func TestInterruptStreamingMarksRecoveryRequired(t *testing.T) {
 	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,31 +187,9 @@ func TestInterruptStreamingMarksRecoveryRequired(t *testing.T) {
 	_ = started
 }
 
-func TestUncertainUpstreamFailureRequiresRecovery(t *testing.T) {
-	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	started, err := s.StartTurn("admin", created.ID, "please answer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	completed, err := s.CompleteTurn("admin", created.ID, started.UserSequence, started.AssistantSequence, "partial", "", "", "", false, true, true, "timeout", "upstream request timed out")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if completed.Conversation.Status != common.StatusRecoveryRequired || completed.Message.Status != common.MessageStatusInterrupted {
-		t.Fatalf("completed=%+v", completed)
-	}
-	if _, err := s.StartTurn("admin", created.ID, "continue"); err == nil {
-		t.Fatal("uncertain upstream turn must not be continued")
-	}
-}
-
 func TestExpiredConversationCannotBeReadOrListed(t *testing.T) {
 	s := openTestStore(t)
-	created, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
+	created, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,21 +212,21 @@ func TestExpiredConversationCannotBeReadOrListed(t *testing.T) {
 
 func TestSystemPromptUsesMessageBound(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.CreateConversation("admin", "gpt-5", "", strings.Repeat("x", 1025), "account-1"); err == nil {
+	if _, err := s.CreateConversation("admin", "gpt-5", "", strings.Repeat("x", 1025), "chatgptweb"); err == nil {
 		t.Fatal("expected oversized system prompt to be rejected")
 	}
 }
 
 func TestConversationLimitAndPurgeExpired(t *testing.T) {
 	s := openTestStore(t)
-	first, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1")
+	first, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1"); err != nil {
+	if _, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateConversation("admin", "gpt-5", "", "", "account-1"); err == nil {
+	if _, err := s.CreateConversation("admin", "gpt-5", "", "", "chatgptweb"); err == nil {
 		t.Fatal("max conversations must reject silent growth")
 	}
 	row, found, err := s.LoadConversationRow("admin", first.ID)

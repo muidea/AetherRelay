@@ -25,7 +25,7 @@ func TestAgeRetentionAtStartupAndIdleProtectsActive(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 500, ScopeByAPIKey: true})
+	r, err := NewRecorderOptions(root, RecorderOptions{MaxRounds: 500})
 	if err != nil {
 		t.Fatal(err)
 	}

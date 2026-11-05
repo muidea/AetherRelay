@@ -2,7 +2,6 @@ package store
 
 import "github.com/google/uuid"
 
-// A missing/empty legacy value is initialized once by saveEncryptedLocked.
 // A malformed value is preserved for diagnosis, never silently rotated.
 func deviceIdentityError(acc *Account) string {
 	if raw, present := acc.Extra["web_device_id"]; present {

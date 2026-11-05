@@ -191,7 +191,7 @@ func TestConverted400ArchivesErrorEvidence(t *testing.T) {
 		return codexresponses.Result{}, failure
 	}})
 	var recorderErr error
-	h.interactionRecorder, recorderErr = archive.NewRecorderOptions(dir, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true, FullContent: true})
+	h.interactionRecorder, recorderErr = archive.NewRecorderOptions(dir, archive.RecorderOptions{MaxRounds: 10, FullContent: true})
 	if recorderErr != nil {
 		t.Fatal(recorderErr)
 	}

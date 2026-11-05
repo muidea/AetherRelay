@@ -41,7 +41,7 @@ func TestFeatureTurnPreservesSafeTLSFailureClass(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer temporary.Teardown(context.Background())
-	conversation, createErr := temporary.store.CreateConversation("ops", "gpt-5", "", "", "chatgptweb", "")
+	conversation, createErr := temporary.store.CreateConversation("ops", "gpt-5", "", "", "chatgptweb")
 	if createErr != nil {
 		t.Fatal(createErr)
 	}

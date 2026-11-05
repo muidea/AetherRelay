@@ -144,8 +144,7 @@ func newInteractionRecorder(cfg config.Config) (*archive.Recorder, error) {
 			"setting", "archive_unredacted_headers", "scope", "archive only; logs, metrics and management views stay redacted")
 	}
 	return archive.NewRecorderOptions(cfg.InteractionDir, archive.RecorderOptions{
-		MaxRounds: cfg.InteractionRetention, FullContent: cfg.ArchiveFullContent, ScopeByAPIKey: true,
-	})
+		MaxRounds: cfg.InteractionRetention, FullContent: cfg.ArchiveFullContent})
 }
 
 // archiveUnredactedHeaders reports the CP-OBS-009 fidelity switch. It only takes

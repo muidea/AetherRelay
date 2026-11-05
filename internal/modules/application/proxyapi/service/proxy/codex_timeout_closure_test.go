@@ -104,7 +104,7 @@ func TestCodexTimeoutSettlementRetainsPhaseAndHTTPFacts(t *testing.T) {
 
 func TestCodexAttemptArchiveIdempotentAndFinalErrorUpdated(t *testing.T) {
 	h, root := newArchivedCodexResponsesHandler(t, codexResponsesExecutorStub{})
-	recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{FullContent: true, ScopeByAPIKey: true})
+	recorder, err := archive.NewRecorderOptions(root, archive.RecorderOptions{FullContent: true})
 	if err != nil {
 		t.Fatal(err)
 	}

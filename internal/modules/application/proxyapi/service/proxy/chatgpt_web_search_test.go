@@ -69,7 +69,7 @@ func TestChatGPTWebSearchEndpointForcesBuiltinProviderDespiteModelConflict(t *te
 			"gpt-5": {ID: "gpt-5", ContextWindowTokens: 128000, MaxOutputTokens: 16384},
 		},
 	})
-	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
+	h := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{search: func(_ context.Context, request chatgptsearch.Request) (chatgptsearch.Result, error) {
 		received = request
 		return chatgptsearch.Result{Completion: searchEvidence("Answer"), ConversationID: "search-1", ActualModel: "gpt-5-search", Text: "Answer", Sources: []chatgptsearch.Source{{Title: "Example", URL: "https://example.test", Snippet: "source excerpt"}}}, nil
 	}})
@@ -104,7 +104,7 @@ func TestChatGPTWebSearchEndpointRejectsUnsupportedFields(t *testing.T) {
 
 func TestChatGPTWebSearchEndpointReportsUnavailableAccountPool(t *testing.T) {
 	cfg := mustHandlerConfig(config.Config{ChatGPTWeb: config.ChatGPTWebConfig{}})
-	h := NewHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{})
+	h := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, metrics.NewRegistry()).WithChatGPTSearchExecutor(chatGPTSearchExecutorStub{})
 	h.ReplaceEffectiveCatalog(effectivecatalog.Build(cfg, 1, 0, []effectivecatalog.PoolModel{{ID: "gpt-5"}}, "2026-08-03T00:00:00Z"))
 	req := httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"model":"gpt-5","query":"latest news"}`))
 	req.Header.Set("Authorization", "Bearer test-client-key")

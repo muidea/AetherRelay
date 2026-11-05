@@ -55,7 +55,7 @@ func TestCodexProfilesAndExampleMetadataAgree(t *testing.T) {
 				snap := effectivecatalog.BuildWithCodex(input, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{
 					Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: tc.id}},
 				})
-				manifest := buildCodexModelsManifest(snap, clientaccess.All(), "0.153.4")
+				manifest := buildCodexModelsManifest(snap, clientaccess.All())
 				if len(manifest.Models) != 1 {
 					t.Fatalf("manifest=%+v", manifest)
 				}
@@ -78,25 +78,20 @@ func TestCodexProfilesAndExampleMetadataAgree(t *testing.T) {
 						record.Capabilities.Codex.FunctionTools != "supported" || record.Capabilities.Codex.ImageInput != "supported" {
 						t.Fatalf("models list disagrees: %+v", record)
 					}
-					handler := NewHandler(mustHandlerConfig(input), usage.NewMemoryStore(), nil, nil)
+					handler := newTestProxyHandler(mustHandlerConfig(input), usage.NewMemoryStore(), nil, nil)
 					for _, effort := range efforts {
 						if err := handler.applyModelReasoning(tc.id, map[string]any{"reasoning": map[string]any{"effort": effort}}); err != nil {
 							t.Fatalf("advertised effort %s rejected: %v", effort, err)
 						}
 					}
 				}
-				old := buildCodexModelsManifest(snap, clientaccess.All(), "0.143.0").Models[0]
-				for _, level := range old.SupportedReasoningLevels {
-					if level.Effort == "max" || level.Effort == "ultra" {
-						t.Fatalf("old client received unsupported effort: %+v", old)
-					}
-				}
+
 			}
 		})
 	}
 	// Profiles and metadata never create routable models themselves.
 	empty := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{})
-	if len(buildCodexModelsManifest(empty, clientaccess.All(), "0.153.4").Models) != 0 {
+	if len(buildCodexModelsManifest(empty, clientaccess.All()).Models) != 0 {
 		t.Fatal("metadata created models without a route")
 	}
 }
@@ -114,7 +109,7 @@ func TestCodexProfilesHonorExplicitRestrictions(t *testing.T) {
 			}
 			cfg := config.Config{ModelMetadata: map[string]config.ModelMetadata{tc.id: metadata}}
 			snap := effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: tc.id}}})
-			model := buildCodexModelsManifest(snap, clientaccess.All(), "0.153.4").Models[0]
+			model := buildCodexModelsManifest(snap, clientaccess.All()).Models[0]
 			if model.ContextWindow != 64000 || model.MaxContextWindow != 128000 || model.DefaultReasoningLevel != metadata.ReasoningDefaultEffort ||
 				len(model.SupportedReasoningLevels) != len(metadata.ReasoningEfforts) || !reflect.DeepEqual(model.InputModalities, []string{"text"}) || model.SupportsImageDetailOriginal {
 				t.Fatalf("explicit restrictions ignored: %+v", model)
@@ -129,7 +124,7 @@ func TestCodexProfilesRequireExactKnownID(t *testing.T) {
 			t.Fatalf("unknown model %q got a trusted profile", id)
 		}
 		snap := effectivecatalog.BuildWithCodex(config.Config{}, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: id}}})
-		model := buildCodexModelsManifest(snap, clientaccess.All(), "0.153.4").Models[0]
+		model := buildCodexModelsManifest(snap, clientaccess.All()).Models[0]
 		if model.Slug != id || model.ContextWindow != 128000 || model.MaxContextWindow != 128000 || model.UseResponsesLite || model.SupportsSearchTool {
 			t.Fatalf("unknown model was rewritten or expanded: %+v", model)
 		}

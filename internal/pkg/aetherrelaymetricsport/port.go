@@ -17,17 +17,10 @@ type Reporter interface {
 	RecordUsageStoreQuery(duration time.Duration, err error, healthy bool)
 	RecordUsageStoreRecovered(count int64)
 	SetUsageStoreHealthy(healthy bool)
-	RecordRequestPlan(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string)
+	RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int)
 	RecordTokens(provider, model string, input, output, cached, cacheCreation int)
 	RecordUpstreamAttempt(provider string, duration time.Duration, kind metrics.AttemptLatencyKind)
 	RecordUpstreamError(provider string, status int)
-}
-
-// PlanLevelReporter is implemented by metrics reporters that expose the
-// validated conversion capability level. It is kept separate from Reporter
-// so older in-process/test reporters remain source compatible.
-type PlanLevelReporter interface {
-	RecordRequestPlanWithLevel(provider, model, route string, status int, duration time.Duration, outcome, clientEndpoint, upstreamProtocol, upstreamEndpoint, conversionMode string, conversionLevel int)
 }
 
 // AdmissionReporter exposes bounded local provider-admission denials without

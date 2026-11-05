@@ -203,11 +203,6 @@ func parseTerminalSSELine(proto streamProtocol, line []byte) terminalResult {
 	}
 }
 
-// isTerminalSSELine 兼容旧 bool API。
-func isTerminalSSELine(proto streamProtocol, line []byte) bool {
-	return parseTerminalSSELine(proto, line).Terminal
-}
-
 func requiresTerminalEvent(proto streamProtocol) bool {
 	switch proto {
 	case streamProtoResponses, streamProtoAnthropic:

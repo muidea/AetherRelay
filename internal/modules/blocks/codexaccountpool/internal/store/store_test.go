@@ -239,7 +239,7 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 		t.Fatalf("items=%+v", items)
 	}
 	oldSeed := store.items[items[0].ID].FingerprintSeed
-	seedLegacyClientIdentityProfile(store.items[items[0].ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
+	store.promoteSharedClientIdentityLocked(events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
 	if _, err := store.RecordTransportCapability(items[0].ID, events.TransportCompact, false); err != nil {
 		t.Fatal(err)
 	}
@@ -264,9 +264,7 @@ func TestImportCanReplaceCredentialForExplicitTargetID(t *testing.T) {
 	if newSeed := store.items[items[0].ID].FingerprintSeed; newSeed == "" || newSeed == oldSeed {
 		t.Fatalf("explicit credential replacement retained private seed: old=%q new=%q", oldSeed, newSeed)
 	}
-	if store.items[items[0].ID].ClientIdentityProfile != nil {
-		t.Fatalf("explicit credential replacement retained observed identity: %+v", store.items[items[0].ID].ClientIdentityProfile)
-	}
+
 }
 
 func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *testing.T) {
@@ -277,8 +275,8 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	}
 	view := store.List()[0]
 	seed := store.items[view.ID].FingerprintSeed
-	seedLegacyClientIdentityProfile(store.items[view.ID], events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
-	identity := *store.items[view.ID].ClientIdentityProfile
+	store.promoteSharedClientIdentityLocked(events.ClientIdentityCandidate{UserAgent: "codex-tui/0.155.0 (Ubuntu 24.4.0; x86_64) gnome-terminal (codex-tui; 0.155.0)", Originator: "codex-tui"})
+	identity := store.SharedClientIdentity()
 	status := events.StatusAbnormal
 	if _, err := store.Update(view.ID, &status, nil, nil); err != nil {
 		t.Fatal(err)
@@ -306,8 +304,8 @@ func TestOAuthReauthenticationConvergesRotatedCredentialByUpstreamIdentity(t *te
 	if store.items[view.ID].FingerprintSeed != seed {
 		t.Fatalf("reauthentication rotated fingerprint seed: old=%q new=%q", seed, store.items[view.ID].FingerprintSeed)
 	}
-	if store.items[view.ID].ClientIdentityProfile == nil || *store.items[view.ID].ClientIdentityProfile != identity {
-		t.Fatalf("reauthentication changed observed identity: before=%+v after=%+v", identity, store.items[view.ID].ClientIdentityProfile)
+	if store.SharedClientIdentity() != identity {
+		t.Fatalf("reauthentication changed observed identity: before=%+v after=%+v", identity, store.SharedClientIdentity())
 	}
 	exported := store.ExportByIDs([]string{view.ID})
 	if len(exported) != 1 || exported[0].AccessToken != "new-access" || exported[0].RefreshToken != "new-refresh" || exported[0].Proxy != first.Proxy {

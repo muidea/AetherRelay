@@ -26,7 +26,6 @@ type Recorder struct {
 	root           string
 	maxRounds      int
 	fullContent    bool
-	scopeByAPIKey  bool
 	mu             sync.Mutex
 	next           int
 	active         map[int]struct{}
@@ -387,8 +386,6 @@ func NewRecorder(root string, maxRounds ...int) (*Recorder, error) {
 type RecorderOptions struct {
 	MaxRounds   int
 	FullContent bool
-	// ScopeByAPIKey partitions rounds by the authenticated client key ID.
-	ScopeByAPIKey bool
 }
 
 // NewRecorderOptions 使用显式选项构造归档器。
@@ -408,11 +405,9 @@ func NewRecorderOptions(root string, opts RecorderOptions) (*Recorder, error) {
 	if max <= 0 {
 		max = 500
 	}
-	recorder := &Recorder{root: root, maxRounds: max, fullContent: opts.FullContent, next: next, active: map[int]struct{}{}, scopeByAPIKey: opts.ScopeByAPIKey}
-	if opts.ScopeByAPIKey {
-		if err := recorder.recoverIncompleteLocked(); err != nil {
-			return nil, err
-		}
+	recorder := &Recorder{root: root, maxRounds: max, fullContent: opts.FullContent, next: next, active: map[int]struct{}{}}
+	if err := recorder.recoverIncompleteLocked(); err != nil {
+		return nil, err
 	}
 	if err := recorder.cleanupLocked(); err != nil {
 		return nil, err
@@ -447,19 +442,12 @@ func firstInt(values []int, fallback int) int {
 }
 
 func (r *Recorder) Start() (*Round, error) {
-	return r.start("", true)
+	return r.StartForAPIKey("")
 }
 
 // StartForAPIKey starts an archive round in a dedicated API-key scope.
 // The key ID is an internal stable identifier, never the raw secret.
 func (r *Recorder) StartForAPIKey(apiKeyID string) (*Round, error) {
-	if !r.scopeByAPIKey {
-		return r.Start()
-	}
-	return r.start(apiKeyID, false)
-}
-
-func (r *Recorder) start(apiKeyID string, legacy bool) (*Round, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -471,10 +459,6 @@ func (r *Recorder) start(apiKeyID string, legacy bool) (*Round, error) {
 
 	scope := archiveScope(apiKeyID)
 	dir := filepath.Join(r.root, scope, fmt.Sprintf("%06d", id))
-	if legacy {
-		scope = ""
-		dir = filepath.Join(r.root, fmt.Sprintf("%06d", id))
-	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		r.mu.Lock()
 		delete(r.active, id)
@@ -709,10 +693,7 @@ func (r *Recorder) cleanupAt(ctx context.Context, now time.Time) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			path := filepath.Join(r.root, dir.name)
-			if dir.scope != "" {
-				path = filepath.Join(r.root, dir.scope, dir.name)
-			}
+			path := filepath.Join(r.root, dir.scope, dir.name)
 			if err := os.RemoveAll(path); err != nil {
 				return err
 			}
@@ -726,7 +707,7 @@ func (r *Recorder) cleanupAt(ctx context.Context, now time.Time) error {
 
 func archiveTime(path string) (time.Time, error) {
 	// Read only the timestamp; archive bodies and credentials are never needed
-	// for retention. Directory mtime covers legacy/missing/broken metadata.
+	// for retention. Directory mtime covers missing or broken metadata.
 	var metadata struct {
 		StartedAt time.Time `json:"started_at"`
 	}
@@ -751,9 +732,6 @@ func (r *Recorder) recoverIncompleteLocked() error {
 		return err
 	}
 	for _, item := range dirs {
-		if item.scope == "" {
-			continue
-		}
 		dir := filepath.Join(r.root, item.scope, item.name)
 		metadataPath := filepath.Join(dir, "metadata.json")
 		if _, err := os.Stat(metadataPath); err == nil {
@@ -823,10 +801,6 @@ func listScopedNumericDirs(root string) ([]archiveDir, error) {
 			continue
 		}
 		scope := entry.Name()
-		if id, err := strconv.Atoi(scope); err == nil {
-			dirs = append(dirs, archiveDir{scope: "", id: id, name: scope})
-			continue
-		}
 		scopeEntries, err := os.ReadDir(filepath.Join(root, scope))
 		if err != nil {
 			return nil, err

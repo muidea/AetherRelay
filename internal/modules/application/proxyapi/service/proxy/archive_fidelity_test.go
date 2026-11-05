@@ -42,11 +42,11 @@ func newArchiveFidelityHandler(t *testing.T, unredacted bool, executor codexresp
 		ArchiveFullContent:       true,
 		CodexOAuth:               config.CodexOAuthConfig{},
 	})
-	recorder, err := aetherrelayarchive.NewRecorderOptions(cfg.InteractionDir, aetherrelayarchive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true})
+	recorder, err := aetherrelayarchive.NewRecorderOptions(cfg.InteractionDir, aetherrelayarchive.RecorderOptions{MaxRounds: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(cfg, usage.NewMemoryStore(), recorder, nil).WithCodexResponsesExecutor(executor)
+	handler := newTestProxyHandler(cfg, usage.NewMemoryStore(), recorder, nil).WithCodexResponsesExecutor(executor)
 	handler.ReplaceEffectiveCatalog(effectivecatalog.BuildWithCodex(cfg, effectivecatalog.CatalogInput{}, effectivecatalog.CatalogInput{Version: 1, AvailableAccounts: 1, Models: []effectivecatalog.PoolModel{{ID: "gpt-5.2-codex"}}}))
 	return handler, cfg.InteractionDir
 }

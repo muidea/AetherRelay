@@ -295,13 +295,6 @@
           <p>ChatGPT Web 的账号与功能服务。敏感凭据不会在页面展示，也不会保存到浏览器。</p>
         </div>
       </section>
-      <div id="cgLegacySubnav" class="subnav hidden" role="tablist" aria-label="ChatGPT Web 子页签">
-        <button type="button" id="cgSubAccounts" class="active" data-cg-sub="accounts">账号池</button>
-        <button type="button" id="cgSubChat" data-cg-sub="chat">临时对话</button>
-        <button type="button" id="cgSubSearch" data-cg-sub="search">在线搜索</button>
-        <button type="button" id="cgSubTasks" data-cg-sub="tasks">图片任务</button>
-        <button type="button" id="cgSubImages" data-cg-sub="images">图片库</button>
-      </div>
       <div id="cgUnavailable" class="notice" style="display:none">ChatGPT Web 服务当前不可用。<button type="button" class="btn" id="cgRetry" style="margin-left:10px">重新加载</button></div>
 
       <div id="cgPanelAccounts">
@@ -1326,7 +1319,6 @@ function parseHash(){
   const [path,qs]=h.replace(/^#\/?/,"").split("?");
   const p=new URLSearchParams(qs||"");
   const apiKeyID=p.get("api_key_id")||"";
-  const ownerID=p.get("owner_id")||"";
   let tab="providers";
   let cgSub="accounts";
   let poolSub="chatgptweb";
@@ -1344,12 +1336,7 @@ function parseHash(){
     if(part==="tasks"||part==="images"||part==="search"||part==="chat")featureSub=part;
     cgSub=featureSub;
   }
-  else if(path.startsWith("chatgpt")){
-    const parts=path.split("/");
-    if(parts[1]==="tasks"||parts[1]==="images"||parts[1]==="accounts"||parts[1]==="search"||parts[1]==="chat")cgSub=parts[1];
-    if(cgSub==="accounts"){tab="account-pools";poolSub="chatgptweb"}else{tab="features";featureSub=cgSub}
-  }else if(path.startsWith("codex")){tab="account-pools";poolSub="codex"}
-  const owner=tab==="features"&&featureSub==="tasks"?(ownerID||apiKeyID):ownerID;
+  const owner=apiKeyID;
   return {tab,cgSub,poolSub,featureSub,usageView:p.get("view")||"overview",resultFilter:p.get("result")||"",accountFilter:p.get("account_id")||"",searchFilter:p.get("search")||"",missingDimension:p.get("missing_dimension")||"",causeFilter:p.get("cause")||"",transportFilter:p.get("transport")||"",revisionFilter:p.get("revision")||"",range:p.get("range")||"today",apiKeyFilter:apiKeyID,providerFilter:p.get("provider")||"",modelFilter:p.get("model")||"",outcomeFilter:p.get("outcome")||"",estimatedFilter:p.get("estimated")||"",from:p.get("from")||"",to:p.get("to")||"",owner,conversationId:p.get("id")||""};
 }
 function setHash(silent=false){
@@ -1428,11 +1415,6 @@ function showChatGPTSub(sub){
   $("cgPanelImages").classList.toggle("hidden",state.cg.sub!=="images");
   $("cgPanelSearch").classList.toggle("hidden",state.cg.sub!=="search");
   $("cgPanelChat").classList.toggle("hidden",state.cg.sub!=="chat");
-  $("cgSubAccounts").classList.toggle("active",state.cg.sub==="accounts");
-  $("cgSubTasks").classList.toggle("active",state.cg.sub==="tasks");
-  $("cgSubImages").classList.toggle("active",state.cg.sub==="images");
-  $("cgSubSearch").classList.toggle("active",state.cg.sub==="search");
-  $("cgSubChat").classList.toggle("active",state.cg.sub==="chat");
   if(state.tab==="features")setHash();
   if(state.cg.sub==="accounts")loadChatGPTAccounts();
   else if(state.cg.sub==="tasks"){
@@ -2723,24 +2705,24 @@ function isTerminalTask(task){
 function canResumeTask(task){
   if(!task)return false;
   const status=String(task.status||"").toLowerCase();
-  return (status==="error"||status==="failed")&&Boolean(String(task.conversation_id||"").trim());
+  return status==="error"&&Boolean(String(task.conversation_id||"").trim());
 }
 function canRetryGenerationTask(task){
   if(!task)return false;
   const status=String(task.status||"").toLowerCase();
   const error=String(task.error||"").toLowerCase();
-  return (status==="error"||status==="failed")&&String(task.mode||"")==="generate"&&!String(task.conversation_id||"").trim()&&(error.includes("bootstrap: tls:")||error.includes("bootstrap: timeout:"));
+  return status==="error"&&String(task.mode||"")==="generate"&&!String(task.conversation_id||"").trim()&&(error.includes("bootstrap: tls:")||error.includes("bootstrap: timeout:"));
 }
 function taskImageSrc(item){
   if(!item)return "";
   if(item.b64_json)return `data:image/png;base64,${item.b64_json}`;
   const url=String(item.url||"");
-  // rewrite legacy /images/ paths to admin content endpoint when possible
+  // Task images use scoped image-store URLs; Admin reads use authenticated content URLs.
   const m=url.match(/\/images\/(.+)$/);
   if(m){
     let path=decodeURIComponent(m[1]);
     const key=String(state.cg.tasks.owner||"").trim();
-    if(key&&key!=="default"){const slash=path.indexOf("/");if(slash>0)path=path.slice(slash+1)}
+    if(key){const slash=path.indexOf("/");if(slash>0)path=path.slice(slash+1)}
     const query=key?`api_key_id=${encodeURIComponent(key)}&`:"";
     return apiURL(`/api/chatgpt/images/content?${query}path=${encodeURIComponent(path)}`);
   }
@@ -4496,7 +4478,6 @@ $("codexAccOAuth").onclick=()=>openCodexOAuth();
 $("codexOAuthClose").onclick=$("codexOAuthCancel").onclick=()=>{clearCodexOAuthMemory();$("codexOAuthDialog").close()};
 $("codexOAuthStart").onclick=startCodexOAuth;
 $("codexOAuthForm").onsubmit=finishCodexOAuth;
-document.querySelectorAll("[data-cg-sub]").forEach(btn=>btn.onclick=()=>{state.cg.sub=btn.dataset.cgSub;setHash();showChatGPTSub(state.cg.sub)});
 $("cgRetry").onclick=()=>showChatGPTSub(state.cg.sub||"accounts");
 $("cgAccSearch").oninput=e=>{state.cg.query=e.target.value;renderChatGPTAccounts()};
 $("cgAccStatusFilter").onchange=e=>{state.cg.status=e.target.value;renderChatGPTAccounts()};

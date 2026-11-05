@@ -9,7 +9,7 @@ import (
 func TestConversionIsNeutralToProviderHealthAtEveryHTTPStatus(t *testing.T) {
 	r := NewRegistry()
 	record := func(status int, outcome string) {
-		r.RecordRequestPlan("codexoauth", "model", "messages", status, time.Millisecond, outcome, "", "", "", "anthropic_to_codex")
+		r.RecordRequestPlanWithLevel("codexoauth", "model", "messages", status, time.Millisecond, outcome, "", "", "", "anthropic_to_codex", 0)
 	}
 	for range 3 {
 		for _, status := range []int{200, 400, 502, 503} {

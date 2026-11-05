@@ -120,7 +120,7 @@ func TestAnthropicStopsCodexEndToEnd(t *testing.T) {
 			}
 			h, root := newArchiveFidelityHandler(t, false, executor)
 			var err error
-			h.interactionRecorder, err = archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, ScopeByAPIKey: true, FullContent: true})
+			h.interactionRecorder, err = archive.NewRecorderOptions(root, archive.RecorderOptions{MaxRounds: 10, FullContent: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,7 +163,7 @@ func TestAnthropicStopsResponsesHTTP(t *testing.T) {
 				Providers:     map[string]config.Provider{"openai": {Name: "openai", Protocol: "openai", BaseURL: "https://openai.test", APIKey: "test", Models: []string{"shared-model"}, Endpoints: []string{config.ProviderEndpointResponses}}},
 				ModelMetadata: map[string]config.ModelMetadata{"shared-model": {ID: "shared-model", ContextWindowTokens: 128000, MaxOutputTokens: 4096, ConversionCapabilities: map[string]config.ConversionCapability{config.ProviderEndpointResponses: {Level: 2, Text: true, Streaming: true}}}},
 			})
-			h := NewHandler(cfg, usage.NewMemoryStore(), nil, nil)
+			h := newTestProxyHandler(cfg, usage.NewMemoryStore(), nil, nil)
 			h.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				raw, err := io.ReadAll(r.Body)
 				if err != nil {
