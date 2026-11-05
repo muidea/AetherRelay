@@ -9,12 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	codexmodel "aetherrelay/internal/pkg/aetherrelaycodexmodel"
 	"aetherrelay/internal/pkg/aetherrelayconfig"
+	"aetherrelay/internal/pkg/aetherrelaylock"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
@@ -34,7 +34,7 @@ type DuckDBStore struct {
 	db       *sql.DB
 	path     string
 	cfg      config.UsageStoreConfig
-	write    sync.Mutex
+	write    aetherrelaylock.Mutex
 	closed   atomic.Bool
 	closeErr error // guarded by write; database/sql cannot retry a failed driver Close
 	// healthy 为 1 表示写入路径可用;失败降级为 0,成功写入可恢复。
@@ -170,7 +170,9 @@ func (s *DuckDBStore) Start(ctx context.Context, rec StartRecord) error {
 	}
 	usageDate := startedAt.Format("2006-01-02")
 
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.write.Unlock()
 
 	_, err := s.db.ExecContext(ctx, `
@@ -243,7 +245,9 @@ func (s *DuckDBStore) Complete(ctx context.Context, rec CompleteRecord) error {
 		completedAt = time.Now().UTC()
 	}
 
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.write.Unlock()
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -403,7 +407,9 @@ func (s *DuckDBStore) RecoverInterrupted(ctx context.Context, at time.Time) (int
 		at = at.UTC()
 	}
 
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.write.Unlock()
 
 	res, err := s.db.ExecContext(ctx, `
@@ -438,7 +444,9 @@ func (s *DuckDBStore) Checkpoint(ctx context.Context) error {
 	if s.closed.Load() {
 		return ErrStoreClosed
 	}
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.write.Unlock()
 	if _, err := s.db.ExecContext(ctx, `CHECKPOINT`); err != nil {
 		return ErrStoreUnavailable
@@ -457,7 +465,9 @@ func (s *DuckDBStore) CloseContext(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.write.Unlock()
 	if s.closed.Load() {
 		return s.closeErr

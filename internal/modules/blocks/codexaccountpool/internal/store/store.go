@@ -13,13 +13,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	"aetherrelay/internal/pkg/accountidentity"
 	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
 	"aetherrelay/internal/pkg/aetherrelaycredential"
+	"aetherrelay/internal/pkg/aetherrelaylock"
 	"aetherrelay/internal/pkg/aetherrelaystate"
 	"github.com/google/uuid"
 )
@@ -47,6 +47,7 @@ type quotaObservation struct {
 }
 
 type account struct {
+	CredentialVersion string `json:"-"` // Runtime epoch for credential replacement and rotation.
 	// Runtime execution epoch, deliberately unchanged by normal Token refresh.
 	ProbeConfigVersion   string                      `json:"-"`
 	ID                   string                      `json:"id"`
@@ -101,7 +102,7 @@ type account struct {
 }
 
 type Store struct {
-	mu          sync.Mutex
+	mu          aetherrelaylock.Mutex
 	documents   *aetherrelaystate.Documents
 	credentials *aetherrelaycredential.Codec
 	items       map[string]*account
@@ -120,6 +121,17 @@ type Store struct {
 type secureDocumentRevision struct {
 	Digest   [sha256.Size]byte
 	Position int
+}
+
+// HasAccountContext checks counter label admission without waiting indefinitely
+// behind an unrelated state transaction.
+func (s *Store) HasAccountContext(ctx context.Context, id string) (bool, error) {
+	if err := s.mu.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.mu.Unlock()
+	_, found := s.items[id]
+	return found, nil
 }
 
 func Open(databasePath, memoryLimit string, threads int, codec *aetherrelaycredential.Codec) (*Store, error) {
@@ -154,7 +166,9 @@ func (s *Store) CloseContext(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
+	if err := s.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	if s.documents == nil {
 		return nil
@@ -258,11 +272,13 @@ func validPersistedStatus(status string) bool {
 }
 
 func (s *Store) saveLocked() error {
-	return s.saveEncryptedLocked()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.saveLockedContext(ctx)
 }
 
-func (s *Store) saveEncryptedLocked() error {
-	if err := s.saveClientIdentityLocked(); err != nil {
+func (s *Store) saveLockedContext(ctx context.Context) error {
+	if err := s.saveClientIdentityLockedContext(ctx); err != nil {
 		return err
 	}
 	upserts := make([]aetherrelaystate.SecureDocumentRow, 0, len(s.order))
@@ -293,7 +309,7 @@ func (s *Store) saveEncryptedLocked() error {
 			deletes = append(deletes, id)
 		}
 	}
-	if err := s.documents.ApplySecureDocuments(secureDocumentScope, upserts, deletes); err != nil {
+	if err := s.documents.ApplySecureDocumentsContext(ctx, secureDocumentScope, upserts, deletes); err != nil {
 		return err
 	}
 	s.persisted = next
@@ -505,6 +521,9 @@ func (s *Store) ImportWithIDs(inputs []events.CredentialInput) (added, updated, 
 		ids = append(ids, existing.ID)
 		changed = true
 		existing.ProbeConfigVersion = uuid.NewString()
+		if existing.CredentialVersion == "" || reauthenticated || existing.AccessToken != input.AccessToken || existing.RefreshToken != input.RefreshToken {
+			existing.CredentialVersion = uuid.NewString()
+		}
 		existing.AccessToken = input.AccessToken
 		existing.RefreshToken = input.RefreshToken
 		if value := strings.TrimSpace(input.IDToken); value != "" || !reauthenticated {
@@ -879,12 +898,21 @@ func transportSupport(item *account, transport string) int {
 }
 
 func (s *Store) RecordTransportCapability(id, transport string, supported bool) (events.AccountView, error) {
-	s.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.RecordTransportCapabilityContext(ctx, id, transport, supported)
+}
+
+func (s *Store) RecordTransportCapabilityContext(ctx context.Context, id, transport string, supported bool) (events.AccountView, error) {
+	if err := s.mu.LockContext(ctx); err != nil {
+		return events.AccountView{}, err
+	}
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil {
 		return events.AccountView{}, fmt.Errorf("account not found")
 	}
+	old := *item
 	value := supported
 	changed := false
 	switch strings.TrimSpace(transport) {
@@ -908,7 +936,8 @@ func (s *Store) RecordTransportCapability(id, transport string, supported bool) 
 	if !changed {
 		return toView(item, time.Now().UTC()), nil
 	}
-	if err := s.saveLocked(); err != nil {
+	if err := s.saveLockedContext(ctx); err != nil {
+		*item = old
 		return events.AccountView{}, err
 	}
 	s.bumpCatalogLocked()
@@ -925,7 +954,11 @@ func (s *Store) RefreshCredentialVersion(id, version string) (events.CredentialI
 	if item == nil || strings.TrimSpace(item.RefreshToken) == "" || version != "" && item.ProbeConfigVersion != version {
 		return events.CredentialInput{}, false
 	}
-	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency, BlockedModels: append(events.ModelBlacklist{}, item.BlockedModels...)}, true
+	return refreshCredential(item), true
+}
+
+func refreshCredential(item *account) events.CredentialInput {
+	return events.CredentialInput{AccessToken: item.AccessToken, RefreshToken: item.RefreshToken, IDToken: item.IDToken, AccountID: item.AccountIDHeader, Email: item.Email, Expired: item.Expired, Proxy: item.Proxy, FingerprintMode: item.FingerprintMode, MaxConcurrency: item.MaxConcurrency, BlockedModels: append(events.ModelBlacklist{}, item.BlockedModels...)}
 }
 
 func (s *Store) SharedClientIdentity() events.ClientIdentityProfile {
@@ -962,11 +995,18 @@ func (s *Store) ApplyRefresh(id string, input events.CredentialInput) (events.Re
 	return s.ApplyRefreshVersion(id, input, "")
 }
 func (s *Store) ApplyRefreshVersion(id string, input events.CredentialInput, version string) (events.RefreshTokenResult, error) {
+	return s.applyRefresh(id, input, version, "")
+}
+
+func (s *Store) applyRefresh(id string, input events.CredentialInput, version, credentialVersion string) (events.RefreshTokenResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil || version != "" && item.ProbeConfigVersion != version {
 		return events.RefreshTokenResult{}, fmt.Errorf("account not found")
+	}
+	if credentialVersion != "" && item.CredentialVersion != credentialVersion {
+		return events.RefreshTokenResult{}, fmt.Errorf("account credentials changed during refresh")
 	}
 	if strings.TrimSpace(input.AccessToken) == "" {
 		return events.RefreshTokenResult{}, fmt.Errorf("refreshed access token is empty")
@@ -997,6 +1037,7 @@ func (s *Store) ApplyRefreshVersion(id string, input events.CredentialInput, ver
 		item.Status = events.StatusNormal
 		catalogChanged = true
 	}
+	item.CredentialVersion = uuid.NewString()
 	if err := s.saveLocked(); err != nil {
 		return events.RefreshTokenResult{}, err
 	}
@@ -1010,11 +1051,18 @@ func (s *Store) RecordRefreshFailure(id, errorClass string, permanent bool) (eve
 	return s.RecordRefreshFailureVersion(id, errorClass, permanent, "")
 }
 func (s *Store) RecordRefreshFailureVersion(id, errorClass string, permanent bool, version string) (events.RefreshTokenResult, error) {
+	return s.recordRefreshFailure(id, errorClass, permanent, version, "")
+}
+
+func (s *Store) recordRefreshFailure(id, errorClass string, permanent bool, version, credentialVersion string) (events.RefreshTokenResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil || version != "" && item.ProbeConfigVersion != version {
 		return events.RefreshTokenResult{}, fmt.Errorf("account not found")
+	}
+	if credentialVersion != "" && item.CredentialVersion != credentialVersion {
+		return events.RefreshTokenResult{}, fmt.Errorf("account credentials changed during refresh")
 	}
 	item.LastRefreshErrAt = time.Now().UTC().Format(time.RFC3339)
 	item.LastRefreshErrClass = strings.TrimSpace(errorClass)
@@ -1037,7 +1085,15 @@ func (s *Store) RecordRefreshFailureVersion(id, errorClass string, permanent boo
 }
 
 func (s *Store) RecordResult(id, model string, success bool, errorClass string, retryAfterSeconds int, quotaExhausted bool, quotaResetAt string, availabilityNeutral bool) (events.AccountView, error) {
-	s.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.RecordResultContext(ctx, id, model, success, errorClass, retryAfterSeconds, quotaExhausted, quotaResetAt, availabilityNeutral)
+}
+
+func (s *Store) RecordResultContext(ctx context.Context, id, model string, success bool, errorClass string, retryAfterSeconds int, quotaExhausted bool, quotaResetAt string, availabilityNeutral bool) (events.AccountView, error) {
+	if err := s.mu.LockContext(ctx); err != nil {
+		return events.AccountView{}, err
+	}
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(id)]
 	if item == nil {
@@ -1136,7 +1192,7 @@ func (s *Store) RecordResult(id, model string, success bool, errorClass string, 
 			}
 		}
 	}
-	if err := s.saveLocked(); err != nil {
+	if err := s.saveLockedContext(ctx); err != nil {
 		*item = old
 		return events.AccountView{}, err
 	}
@@ -1616,8 +1672,16 @@ func (s *Store) MergeUsageSnapshot(accountID string, snapshot events.AccountUsag
 
 // Partial observations never clear full-refresh errors, reschedule that poll,
 // or prove recovery from a request-derived credential-wide quota limit.
-func (s *Store) MergeUsageSnapshotWithSchedule(accountID string, snapshot events.AccountUsageSnapshot, source, _ string) (bool, error) {
-	s.mu.Lock()
+func (s *Store) MergeUsageSnapshotWithSchedule(accountID string, snapshot events.AccountUsageSnapshot, source, nextRefreshAt string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.MergeUsageSnapshotWithScheduleContext(ctx, accountID, snapshot, source, nextRefreshAt)
+}
+
+func (s *Store) MergeUsageSnapshotWithScheduleContext(ctx context.Context, accountID string, snapshot events.AccountUsageSnapshot, source, _ string) (bool, error) {
+	if err := s.mu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.mu.Unlock()
 	item := s.items[strings.TrimSpace(accountID)]
 	if item == nil {
@@ -1627,7 +1691,7 @@ func (s *Store) MergeUsageSnapshotWithSchedule(accountID string, snapshot events
 	clean := prepareUsageSnapshot(snapshot, source)
 	clean.Complete = false
 	item.UsageSnapshot = mergeUsageObservations(item.UsageSnapshot, clean)
-	if err := s.saveLocked(); err != nil {
+	if err := s.saveLockedContext(ctx); err != nil {
 		*item = old
 		return false, err
 	}

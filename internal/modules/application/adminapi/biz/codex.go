@@ -80,7 +80,7 @@ func (s *Admin) UpdateCodexAccount(ctx context.Context, command events.UpdateCom
 	return result, nil
 }
 func (s *Admin) RefreshCodexAccounts(ctx context.Context, ids []string) (codexmanagement.RefreshResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(events.TopicRefreshByID, s.ID(), common.UnitID, event.NewHeader(), ctx, events.RefreshByIDCommand{IDs: ids})).Get()
+	value, err := s.SendEvent(events.BindCommandLane(event.NewEventWithContext(events.TopicRefreshByID, s.ID(), common.UnitID, event.NewHeader(), ctx, events.RefreshByIDCommand{IDs: ids}))).Get()
 	if err != nil {
 		return codexmanagement.RefreshResult{}, fmt.Errorf("Codex account refresh failed")
 	}
@@ -126,7 +126,7 @@ func (s *Admin) StartCodexOAuth(ctx context.Context, hint, proxy, targetID strin
 	return result, nil
 }
 func (s *Admin) FinishCodexOAuth(ctx context.Context, sessionID, callback string) (codexmanagement.OAuthFinishResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(events.TopicOAuthFinish, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthFinishCommand{SessionID: sessionID, Callback: callback})).Get()
+	value, err := s.SendEvent(events.BindCommandLane(event.NewEventWithContext(events.TopicOAuthFinish, s.ID(), common.UnitID, event.NewHeader(), ctx, events.OAuthFinishCommand{SessionID: sessionID, Callback: callback}))).Get()
 	if err != nil {
 		return codexmanagement.OAuthFinishResult{}, fmt.Errorf("Codex OAuth finish failed")
 	}

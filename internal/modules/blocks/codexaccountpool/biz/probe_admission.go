@@ -27,11 +27,13 @@ func (s *Account) handleProbeAdmission(ev event.Event, result event.Result) {
 		result.Set(events.ProbeAdmissionResult{Reason: "pool_stopping"}, nil)
 		return
 	}
+	s.leaseMu.Lock()
 	inflight := s.inflight[cmd.AccountID]
 	leaseValid := cmd.LeaseID == "" || (s.leases[cmd.LeaseID].AccountID == cmd.AccountID && inflight > 0)
 	if cmd.LeaseID != "" && leaseValid {
 		inflight--
 	}
+	s.leaseMu.Unlock()
 	out := s.store.ProbeAdmission(cmd, inflight)
 	if cmd.Acquire && out.Reason == "accounts_busy" {
 		s.logSlotsExhaustedLocked(cmd.Request, cmd.Model, s.now().UTC())
@@ -41,8 +43,10 @@ func (s *Account) handleProbeAdmission(ev event.Event, result event.Result) {
 	}
 	if out.Allowed && cmd.Acquire {
 		lease := uuid.NewString()
+		s.leaseMu.Lock()
 		s.addLeaseLocked(lease, out.Credential.AccountID, cmd.Model, events.TransportResponses, events.LeaseProbe, cmd.Request, s.now().UTC())
 		s.inflight[out.Credential.AccountID]++
+		s.leaseMu.Unlock()
 		out.Credential.LeaseID = lease
 	}
 	result.Set(out, nil)
@@ -54,9 +58,9 @@ func (s *Account) refreshTokenForProbe(ctx context.Context, cmd events.RefreshTo
 	if ctx.Err() != nil || s.stopping.Load() {
 		return events.RefreshTokenResult{}, context.Canceled
 	}
-	s.scheduleMu.Lock()
+	s.leaseMu.Lock()
 	leased := s.leases[cmd.ProbeLeaseID].AccountID == cmd.AccountID
-	s.scheduleMu.Unlock()
+	s.leaseMu.Unlock()
 	if !leased || cmd.ProbeConfigVersion == "" {
 		return events.RefreshTokenResult{}, fmt.Errorf("probe lease unavailable")
 	}

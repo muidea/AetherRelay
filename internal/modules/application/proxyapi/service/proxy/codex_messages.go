@@ -14,6 +14,9 @@ import (
 )
 
 func (h *Handler) handleAnthropicToCodex(w http.ResponseWriter, r *http.Request, started time.Time, plan TransportPlan, model string, stream bool, body map[string]any) {
+	w, finishWrites := guardCodexClientWrites(w, r.Context(), codexClientWriteTimeout)
+	defer finishWrites()
+
 	round := archiveRoundFromContext(r.Context())
 	if h.codexResponses == nil {
 		h.writeCodexResponsesError(w, r, round, started, plan.RouteOwner, model, stream, codexresponses.NewFailure(codexresponses.KindProviderUnavailable, 0, fmt.Errorf("Codex Responses executor is unavailable")))
@@ -191,10 +194,7 @@ func (h *Handler) streamAnthropicToCodex(w http.ResponseWriter, r *http.Request,
 			return err
 		}
 		archive.Write(encoded)
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return nil
+		return http.NewResponseController(w).Flush()
 	}
 	err := h.codexResponses.StreamCodexResponses(r.Context(), request, startStream, emit)
 	h.archiveCodexProjection(round, upstreamArchive.body.Bytes(), true, upstreamArchive.truncated)

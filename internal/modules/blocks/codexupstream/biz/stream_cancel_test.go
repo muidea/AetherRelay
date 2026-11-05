@@ -12,6 +12,33 @@ import (
 	"github.com/muidea/magicCommon/task"
 )
 
+func TestSlowStreamCloseDoesNotHoldUpstreamRegistryLock(t *testing.T) {
+	closing, unblock, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	defer close(unblock)
+	up := &Upstream{streams: map[string]*responseStream{
+		"slow":  {cancel: func() { close(closing); <-unblock }},
+		"other": {cancel: func() {}},
+	}}
+	go func() { up.removeStream("slow"); close(closed) }()
+	select {
+	case <-closing:
+	case <-time.After(time.Second):
+		t.Fatal("close did not start")
+	}
+	other := make(chan bool, 1)
+	go func() { other <- up.removeStream("other") }()
+	select {
+	case removed := <-other:
+		if !removed {
+			t.Fatal("other stream missing")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("one slow transport close blocked every upstream command")
+	}
+	// Let cleanup join the canceled reader after releasing its simulated close.
+	t.Cleanup(func() { <-closed })
+}
+
 func TestStreamCancelClosesBlockedUpstreamBody(t *testing.T) {
 	// CP-STREAM-013 / CP-ARCH-004: explicit owner cancellation must unblock
 	// readLine even when the HTTP request's original context is still alive.

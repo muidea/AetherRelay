@@ -61,10 +61,12 @@ func (w *archiveResponseWriter) Unwrap() http.ResponseWriter {
 // 但那次 WriteHeader 不会回流到本包装器，因此这里必须自己补一次快照，
 // 否则「只 Flush 不 Write」的路径会缺失响应归档。
 func (w *archiveResponseWriter) Flush() {
+	_ = w.FlushError()
+}
+
+func (w *archiveResponseWriter) FlushError() error {
 	w.capture(http.StatusOK, false)
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // Hijack 透传协议升级。WebSocket 的 101 握手响应由升级方直接写到底层连接,

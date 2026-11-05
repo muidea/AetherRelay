@@ -221,7 +221,7 @@ func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCa
 // refreshCodexUsageCredential keeps a 401-driven refresh/retry within the
 // existing account-pool owner. Only proxyapi sees the transient credential.
 func (s *Proxy) refreshCodexUsageCredential(ctx context.Context, accountID string) (codexevents.RefreshTokenResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRefreshToken, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RefreshTokenCommand{AccountID: accountID})).Get()
+	value, err := s.SendEvent(codexevents.BindCommandLane(event.NewEventWithContext(codexevents.TopicRefreshToken, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RefreshTokenCommand{AccountID: accountID}))).Get()
 	if err != nil {
 		return codexevents.RefreshTokenResult{}, err
 	}

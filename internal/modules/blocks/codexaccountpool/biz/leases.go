@@ -35,11 +35,14 @@ func (s *Account) addLeaseLocked(id, accountID, model, transport, kind string, r
 	}}
 }
 
-// All scheduler facts are copied under the same lock used by admission/release.
+// Read account metadata before the lease lock: persistence must never block release.
 func (s *Account) leaseSnapshotLocked(now time.Time) events.LeaseSnapshotResult {
+	configured := s.store.List()
+	s.leaseMu.Lock()
+	defer s.leaseMu.Unlock()
 	out := events.LeaseSnapshotResult{At: now, Accounts: []events.AccountSlots{}}
 	accounts := make(map[string]events.AccountSlots)
-	for _, a := range s.store.List() {
+	for _, a := range configured {
 		accounts[a.ID] = events.AccountSlots{AccountID: a.ID, AccountLabel: a.Email, MaxConcurrency: a.MaxConcurrency, Leases: []events.LeaseView{}, ReleaseFailures: s.releaseFailures[a.ID]}
 	}
 	for id := range s.releaseFailures {
@@ -97,7 +100,7 @@ func (s *Account) handleLeaseState(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex lease state command"))
 		return
 	}
-	s.scheduleMu.Lock()
+	s.leaseMu.Lock()
 	l, found := s.leases[cmd.LeaseID]
 	if found && l.Kind == events.LeaseWebsocket {
 		if l.State != cmd.State {
@@ -111,7 +114,7 @@ func (s *Account) handleLeaseState(ev event.Event, result event.Result) {
 	} else {
 		found = false
 	}
-	s.scheduleMu.Unlock()
+	s.leaseMu.Unlock()
 	result.Set(events.LeaseStateResult{Updated: found}, nil)
 }
 
@@ -124,26 +127,30 @@ func (s *Account) handleReleaseFailure(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex release failure command"))
 		return
 	}
-	s.scheduleMu.Lock()
+	s.leaseMu.Lock()
 	accountID := cmd.AccountID
 	known := false
 	if l, found := s.leases[cmd.LeaseID]; found {
 		accountID = l.AccountID
 		known = true
 	}
+	s.leaseMu.Unlock()
 	// Only configured accounts or existing leases can create counter labels.
-	for _, a := range s.store.List() {
-		if a.ID == accountID {
-			known = true
-			break
+	if !known {
+		var err error
+		known, err = s.store.HasAccountContext(ev.Context(), accountID)
+		if err != nil {
+			result.Set(nil, cd.NewError(cd.Timeout, "Codex release failure counter unavailable"))
+			return
 		}
 	}
+	s.leaseMu.Lock()
 	if known {
 		if s.releaseFailures == nil {
 			s.releaseFailures = map[string]uint64{}
 		}
 		s.releaseFailures[accountID]++
 	}
-	s.scheduleMu.Unlock()
+	s.leaseMu.Unlock()
 	result.Set(events.ReleaseFailureResult{}, nil)
 }

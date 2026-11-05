@@ -795,12 +795,12 @@ func (s *Upstream) stream(id string) *responseStream {
 }
 func (s *Upstream) removeStream(id string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	stream := s.streams[id]
+	delete(s.streams, id)
+	s.mu.Unlock()
 	if stream == nil {
 		return false
 	}
-	delete(s.streams, id)
 	stream.cancel()
 	return true
 }

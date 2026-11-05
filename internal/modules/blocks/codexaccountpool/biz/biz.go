@@ -56,11 +56,13 @@ type Account struct {
 	shutdown        context.CancelFunc
 	refreshEvery    time.Duration
 	oauthTimeout    time.Duration
+	oauthRefresh    func(context.Context, oauth.Request) (oauth.Result, error)
 	refreshMu       sync.Mutex
 	refreshes       map[string]*refreshFlight
 	oauthMu         sync.Mutex
 	oauthSessions   map[string]oauthSession
 	scheduleMu      sync.Mutex
+	leaseMu         sync.Mutex // In-memory leases only; never held during storage or network I/O.
 	sessions        map[string]*sessionBinding
 	sessionCounts   map[string]int
 	sessionExpiry   sessionExpiryHeap
@@ -92,6 +94,7 @@ func New(ctx context.Context, hub event.Hub, background task.BackgroundRoutine) 
 func newAccount(hub event.Hub, background task.BackgroundRoutine, st *store.Store, refreshEvery, oauthTimeout time.Duration) *Account {
 	shutdownCtx, shutdown := context.WithCancel(context.Background())
 	b := &Account{Base: basebiz.New(common.UnitID, hub, background), store: st, shutdownCtx: shutdownCtx, shutdown: shutdown, refreshEvery: refreshEvery, oauthTimeout: oauthTimeout, refreshes: map[string]*refreshFlight{}, oauthSessions: map[string]oauthSession{}, sessions: map[string]*sessionBinding{}, sessionCounts: map[string]int{}, leases: map[string]accountLease{}, releaseFailures: map[string]uint64{}, inflight: map[string]int{}, now: time.Now}
+	b.oauthRefresh = oauth.Refresh
 	if st == nil {
 		return b
 	}
@@ -148,9 +151,11 @@ func (s *Account) Teardown(ctx context.Context) {
 	s.sessions = map[string]*sessionBinding{}
 	s.sessionCounts = map[string]int{}
 	s.sessionExpiry = nil
+	s.leaseMu.Lock()
 	s.leases = map[string]accountLease{}
 	s.releaseFailures = map[string]uint64{}
 	s.inflight = map[string]int{}
+	s.leaseMu.Unlock()
 	s.scheduleMu.Unlock()
 	if s.store != nil {
 		if err := s.store.CloseContext(ctx); err != nil {
@@ -249,6 +254,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 		preferred = binding.accountID
 	}
 	limits := s.store.ConcurrencyLimits()
+	s.leaseMu.Lock()
 	for accountID, count := range s.inflight {
 		load := loads[accountID]
 		load.Inflight = count
@@ -261,6 +267,7 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 			busy = append(busy, accountID)
 		}
 	}
+	s.leaseMu.Unlock()
 	item, err := s.store.AcquireScheduledTransport(cmd.Model, exclude, busy, preferred, cmd.Transport, cmd.ClientIdentity, loads)
 	if err != nil {
 		if item.UnavailableReason == "accounts_busy" {
@@ -270,8 +277,10 @@ func (s *Account) handleAcquire(ev event.Event, result event.Result) {
 		return
 	}
 	leaseID := uuid.NewString()
+	s.leaseMu.Lock()
 	s.addLeaseLocked(leaseID, item.AccountID, cmd.Model, cmd.Transport, cmd.LeaseKind, cmd.Request, now)
 	s.inflight[item.AccountID]++
+	s.leaseMu.Unlock()
 	if sessionHash := strings.TrimSpace(cmd.SessionHash); sessionHash != "" {
 		s.bindSessionLocked(sessionHash, item.AccountID, now.Add(defaultSessionAffinityTTL))
 	}
@@ -304,7 +313,7 @@ func (s *Account) handleRelease(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account release command"))
 		return
 	}
-	s.scheduleMu.Lock()
+	s.leaseMu.Lock()
 	lease, found := s.leases[cmd.LeaseID]
 	accountID := lease.AccountID
 	if found {
@@ -315,7 +324,7 @@ func (s *Account) handleRelease(ev event.Event, result event.Result) {
 			s.inflight[accountID]--
 		}
 	}
-	s.scheduleMu.Unlock()
+	s.leaseMu.Unlock()
 	result.Set(events.ReleaseResult{Released: found}, nil)
 }
 
@@ -328,7 +337,7 @@ func (s *Account) handleRecordResult(ev event.Event, result event.Result) {
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex account result command"))
 		return
 	}
-	item, err := s.store.RecordResult(cmd.AccountID, cmd.Model, cmd.Success, cmd.ErrorClass, cmd.RetryAfterSeconds, cmd.QuotaExhausted, cmd.QuotaResetAt, cmd.AvailabilityNeutral)
+	item, err := s.store.RecordResultContext(ev.Context(), cmd.AccountID, cmd.Model, cmd.Success, cmd.ErrorClass, cmd.RetryAfterSeconds, cmd.QuotaExhausted, cmd.QuotaResetAt, cmd.AvailabilityNeutral)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -345,7 +354,7 @@ func (s *Account) handleRecordTransportCapability(ev event.Event, result event.R
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid Codex transport capability command"))
 		return
 	}
-	item, err := s.store.RecordTransportCapability(cmd.AccountID, cmd.Transport, cmd.Supported)
+	item, err := s.store.RecordTransportCapabilityContext(ev.Context(), cmd.AccountID, cmd.Transport, cmd.Supported)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -527,7 +536,7 @@ func (s *Account) handleMergeUsageSnapshot(ev event.Event, result event.Result) 
 		result.Set(nil, cd.NewError(cd.IllegalParam, "invalid merge usage snapshot command"))
 		return
 	}
-	updated, err := s.store.MergeUsageSnapshotWithSchedule(command.AccountID, command.Snapshot, command.Source, command.NextRefreshAt)
+	updated, err := s.store.MergeUsageSnapshotWithScheduleContext(ev.Context(), command.AccountID, command.Snapshot, command.Source, command.NextRefreshAt)
 	if err != nil {
 		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
 		return
@@ -654,9 +663,13 @@ func (s *Account) refreshTokenOnce(ctx context.Context, accountID string) (event
 	return s.refreshTokenOnceVersion(ctx, accountID, "")
 }
 func (s *Account) refreshTokenOnceVersion(ctx context.Context, accountID, version string) (out events.RefreshTokenResult, retErr error) {
-	credential, found := s.store.RefreshCredentialVersion(accountID, version)
+	snapshot, found := s.store.RefreshCredentialSnapshot(accountID, version)
 	if !found {
-		out, recordErr := s.store.RecordRefreshFailureVersion(accountID, events.ErrorInvalidToken, true, version)
+		return out, fmt.Errorf("OAuth refresh credential is unavailable")
+	}
+	credential := snapshot.Credential
+	if strings.TrimSpace(credential.RefreshToken) == "" {
+		out, recordErr := s.store.RecordRefreshFailureSnapshot(snapshot, events.ErrorInvalidToken, true)
 		if recordErr != nil {
 			return out, recordErr
 		}
@@ -676,19 +689,19 @@ func (s *Account) refreshTokenOnceVersion(ctx context.Context, accountID, versio
 	defer cancel()
 	identity := s.store.SharedClientIdentity()
 	defer func() { out.RequestSent = true }()
-	result, err := oauth.Refresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
+	result, err := s.oauthRefresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
 	if err != nil {
 		class, permanent := events.ErrorUpstream, false
 		if oauthErr, ok := err.(*oauth.Error); ok {
 			class, permanent = oauthErr.Class, oauthErr.Permanent
 		}
-		out, recordErr := s.store.RecordRefreshFailureVersion(accountID, class, permanent, version)
+		out, recordErr := s.store.RecordRefreshFailureSnapshot(snapshot, class, permanent)
 		if recordErr != nil {
 			return out, recordErr
 		}
 		return out, err
 	}
-	return s.store.ApplyRefreshVersion(accountID, events.CredentialInput{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, IDToken: result.IDToken, AccountID: result.AccountID, Email: result.Email, Expired: result.Expired}, version)
+	return s.store.ApplyRefreshSnapshot(snapshot, events.CredentialInput{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, IDToken: result.IDToken, AccountID: result.AccountID, Email: result.Email, Expired: result.Expired})
 }
 
 func (s *Account) refreshExpiring() {

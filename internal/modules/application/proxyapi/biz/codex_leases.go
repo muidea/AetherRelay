@@ -25,7 +25,7 @@ func (s *Proxy) observeCodexLeaseState(ctx context.Context, leaseID, state strin
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
-	result := s.SendEvent(event.NewEventWithContext(accevents.TopicLeaseState, s.ID(), acccommon.UnitID, event.NewHeader(), cleanup, accevents.LeaseStateCommand{LeaseID: leaseID, State: state, Request: codexLeaseRequest(ctx)}))
+	result := s.SendEvent(accevents.BindCommandLane(event.NewEventWithContext(accevents.TopicLeaseState, s.ID(), acccommon.UnitID, event.NewHeader(), cleanup, accevents.LeaseStateCommand{LeaseID: leaseID, State: state, Request: codexLeaseRequest(ctx)})))
 	var err error
 	if result == nil {
 		err = fmt.Errorf("missing Codex lease state result")
@@ -46,7 +46,9 @@ func (s *Proxy) observeCodexLeaseState(ctx context.Context, leaseID, state strin
 
 // Release is idempotent at the owner. A valid Released=false acknowledgment
 // means the lease is already absent; it must not decrement occupancy again.
-// Retries share a single cleanup budget independent of client cancellation.
+// Retries share a cleanup budget independent of client cancellation. Accepted
+// releases use a separate lane and no execution deadline, so they cannot be
+// discarded while queued. The owner touches only its short-lived lease lock.
 func (s *Proxy) releaseCodexAccount(ctx context.Context, leaseID string) {
 	_ = s.releaseCodexAccountChecked(ctx, leaseID)
 }
@@ -61,7 +63,7 @@ func (s *Proxy) releaseCodexAccountChecked(ctx context.Context, leaseID string) 
 	accountID := usagetarget.Snapshot(ctx).AccountID
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		result := s.SendEvent(event.NewEventWithContext(accevents.TopicRelease, s.ID(), acccommon.UnitID, event.NewHeader(), cleanup, accevents.ReleaseCommand{LeaseID: leaseID}))
+		result := s.SendEvent(accevents.BindCommandLane(event.NewEventWithContext(accevents.TopicRelease, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.ReleaseCommand{LeaseID: leaseID})))
 		if result == nil {
 			lastErr = fmt.Errorf("missing Codex lease release result")
 		} else {
@@ -80,7 +82,9 @@ func (s *Proxy) releaseCodexAccountChecked(ctx context.Context, leaseID string) 
 		slog.Error("Codex lease release failed", "lease_id", leaseID, "account_id", accountID, "request_id", identity.RequestID, "event_id", identity.EventID, "api_key_id", identity.APIKeyID, "attempt", attempt, "error", lastErr)
 		// Telemetry is best effort when the owner itself is unavailable. The
 		// original failure above remains visible even if its counter cannot be sent.
-		report := s.SendEvent(event.NewEventWithContext(accevents.TopicReleaseFailure, s.ID(), acccommon.UnitID, event.NewHeader(), cleanup, accevents.ReleaseFailureCommand{LeaseID: leaseID, AccountID: accountID}))
+		reportCtx, reportCancel := context.WithTimeout(context.WithoutCancel(ctx), 250*time.Millisecond)
+		report := s.SendEvent(accevents.BindCommandLane(event.NewEventWithContext(accevents.TopicReleaseFailure, s.ID(), acccommon.UnitID, event.NewHeader(), reportCtx, accevents.ReleaseFailureCommand{LeaseID: leaseID, AccountID: accountID})))
+		reportCancel()
 		if report != nil {
 			value, err := report.Get()
 			if err != nil {

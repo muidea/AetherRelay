@@ -934,9 +934,9 @@ func transportExplicitlyUnsupported(transport string, status int) bool {
 }
 
 func (s *Proxy) recordCodexTransportCapability(ctx context.Context, id, transport string, supported bool) {
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordTransportCapability, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordTransportCapabilityCommand{
+	s.recordCodexAccountObservation(ctx, accevents.TopicRecordTransportCapability, accevents.RecordTransportCapabilityCommand{
 		AccountID: id, Transport: transport, Supported: supported,
-	})).Get()
+	})
 }
 
 func (s *Proxy) completeCodexOnce(ctx context.Context, account accevents.AcquireResult, request codexresponses.Request) (out codexresponses.Result, failure *codexresponses.Failure) {
@@ -1077,6 +1077,8 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("invalid Codex stream result"))
 	}
 	observedAttempt = toCodexHTTPAttempt(startedUpstream.Attempt)
+	// Register cleanup before diagnostics or header persistence can fail or time out.
+	streamID = startedUpstream.StreamID
 	usagetarget.SetCodexModels(ctx, observedAttempt.Response.Observation)
 	// Publish headers before waiting for the first business event. Completion
 	// reports any later error for the same attempt; the adapter deduplicates it.
@@ -1097,7 +1099,6 @@ func (s *Proxy) streamCodexOnce(ctx context.Context, account accevents.AcquireRe
 	if strings.TrimSpace(startedUpstream.StreamID) == "" {
 		return codexresponses.NewFailure(codexresponses.KindProtocol, 0, fmt.Errorf("Codex stream id is missing"))
 	}
-	streamID = startedUpstream.StreamID
 	clientStarted := false
 	prelude := make([][]byte, 0, 8)
 	preludeBytes := 0
@@ -1221,7 +1222,7 @@ func (s *Proxy) mergeCodexUsageHeaders(ctx context.Context, accountID string, he
 		return
 	}
 	// Partial headers neither postpone the full usage poll nor clear its errors.
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicMergeUsageSnapshot, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot, Source: "response_header"})).Get()
+	s.recordCodexAccountObservation(ctx, accevents.TopicMergeUsageSnapshot, accevents.MergeUsageSnapshotCommand{AccountID: accountID, Snapshot: snapshot, Source: "response_header"})
 }
 
 func (s *Proxy) refreshCodexAccount(ctx context.Context, id string) (accevents.RefreshTokenResult, error) {
@@ -1232,7 +1233,7 @@ func (s *Proxy) refreshCodexAccountWithinBudget(ctx context.Context, id string) 
 	if c := trace.FromContext(ctx); c != nil {
 		c.Action("credential_refresh", "invalid_token")
 	}
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshTokenCommand{AccountID: id})).Get()
+	value, err := s.SendEvent(accevents.BindCommandLane(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshTokenCommand{AccountID: id}))).Get()
 	result, ok := value.(accevents.RefreshTokenResult)
 	if !ok {
 		if err != nil {
@@ -1266,11 +1267,11 @@ func (s *Proxy) recordCodexResult(ctx context.Context, id, model string, success
 	if class == string(codexresponses.KindFirstEventTimeout) || class == string(codexresponses.KindIdleTimeout) {
 		class = accevents.ErrorTimeout
 	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
+	s.recordCodexAccountObservation(ctx, accevents.TopicRecordResult, accevents.RecordResultCommand{
 		AccountID: id, Model: model, Success: success, ErrorClass: class, RetryAfterSeconds: retryAfter,
 		QuotaExhausted: quotaExhausted, QuotaResetAt: quotaResetAt,
 		AvailabilityNeutral: availabilityNeutral,
-	})).Get()
+	})
 }
 
 func (s *Proxy) recordCodexAvailabilityNeutralResult(ctx context.Context, id, model string, failure *codexresponses.Failure) {
@@ -1281,10 +1282,10 @@ func (s *Proxy) recordCodexAvailabilityNeutralResult(ctx context.Context, id, mo
 	if failure.Kind == codexresponses.KindFirstEventTimeout || failure.Kind == codexresponses.KindIdleTimeout {
 		class = accevents.ErrorTimeout
 	}
-	_, _ = s.SendEvent(event.NewEventWithContext(accevents.TopicRecordResult, s.ID(), acccommon.UnitID, event.NewHeader(), context.WithoutCancel(ctx), accevents.RecordResultCommand{
+	s.recordCodexAccountObservation(ctx, accevents.TopicRecordResult, accevents.RecordResultCommand{
 		AccountID: id, Model: model, Success: false, ErrorClass: class,
 		RetryAfterSeconds: failure.RetryAfterSeconds, AvailabilityNeutral: true,
-	})).Get()
+	})
 }
 
 func toCodexHeaders(headers []upevents.Header) []codexresponses.Header {

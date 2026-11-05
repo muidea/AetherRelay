@@ -31,7 +31,9 @@ func (s *DuckDBStore) WriteTrace(ctx context.Context, id string, t trace.Trace) 
 	if s.closed.Load() {
 		return ErrStoreClosed
 	}
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.write.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

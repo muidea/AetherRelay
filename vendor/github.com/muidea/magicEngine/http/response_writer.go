@@ -55,12 +55,15 @@ func (rw *responseWriter) Written() bool {
 }
 
 func (rw *responseWriter) Flush() {
-	if flusher, ok := rw.responseWriter.(http.Flusher); ok {
-		if !rw.Written() {
-			rw.WriteHeader(http.StatusOK)
-		}
-		flusher.Flush()
+	_ = rw.FlushError()
+}
+
+// FlushError preserves transport failures for ResponseController callers.
+func (rw *responseWriter) FlushError() error {
+	if !rw.Written() {
+		rw.WriteHeader(http.StatusOK)
 	}
+	return http.NewResponseController(rw.responseWriter).Flush()
 }
 
 // Hijack preserves protocol upgrades through the accounting wrapper. Marking

@@ -17,6 +17,9 @@ import (
 var codexCompactHeartbeatInterval = 15 * time.Second
 
 func (h *Handler) handleCodexCompact(w http.ResponseWriter, r *http.Request, requestID string) {
+	w, finishWrites := guardCodexClientWrites(w, r.Context(), codexClientWriteTimeout)
+	defer finishWrites()
+
 	started := time.Now()
 	round := archiveRoundFromContext(r.Context())
 	raw, err := h.readLimitedBody(w, r)
@@ -219,6 +222,9 @@ func codexCompactSSE(raw []byte) ([]byte, error) {
 // converting it through the ChatGPT Web message-tree adapter. This preserves
 // native output items and tools within the documented HTTP Responses P0.
 func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Request, started time.Time, provider, model string, raw []byte, body map[string]any, stream bool, sessionHash string, features codexRequestFeatures) {
+	w, finishWrites := guardCodexClientWrites(w, r.Context(), codexClientWriteTimeout)
+	defer finishWrites()
+
 	round := archiveRoundFromContext(r.Context())
 	executor := h.codexResponses
 	if executor == nil {
@@ -277,8 +283,8 @@ func (h *Handler) handleCodexOAuthResponses(w http.ResponseWriter, r *http.Reque
 		if _, err := w.Write(line); err != nil {
 			return err
 		}
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			return err
 		}
 		return nil
 	}

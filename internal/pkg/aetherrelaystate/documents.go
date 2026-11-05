@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"aetherrelay/internal/pkg/aetherrelaylock"
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
@@ -125,7 +126,7 @@ type WebSearchHistoryRow struct {
 // catch-all document-key API: each business owner writes only its own table.
 type Documents struct {
 	shared   *sharedDatabase
-	mu       sync.Mutex
+	mu       aetherrelaylock.Mutex
 	closed   bool // guarded by sharedDatabasesMu
 	closeErr error
 }
@@ -441,6 +442,13 @@ func (s *Documents) ReplaceSecureDocuments(scope string, values []SecureDocument
 // removes explicitly deleted IDs. High-frequency callers must derive the delta
 // before encryption so unchanged plaintext is not resealed and rewritten.
 func (s *Documents) ApplySecureDocuments(scope string, upserts []SecureDocumentRow, deleteIDs []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.ApplySecureDocumentsContext(ctx, scope, upserts, deleteIDs)
+}
+
+// ApplySecureDocumentsContext bounds lock admission and every SQL statement.
+func (s *Documents) ApplySecureDocumentsContext(ctx context.Context, scope string, upserts []SecureDocumentRow, deleteIDs []string) error {
 	if s == nil || s.shared == nil || strings.TrimSpace(scope) == "" {
 		return fmt.Errorf("secure document scope is required")
 	}
@@ -468,15 +476,17 @@ func (s *Documents) ApplySecureDocuments(scope string, upserts []SecureDocumentR
 		return nil
 	}
 
-	s.mu.Lock()
+	if err := s.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
-	tx, err := s.shared.db.Begin()
+	tx, err := s.shared.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, value := range upserts {
-		if _, err := tx.Exec(`INSERT INTO secure_documents(scope, id, position, payload, updated_at)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO secure_documents(scope, id, position, payload, updated_at)
 VALUES (?, ?, ?, ?, NOW())
 ON CONFLICT(scope, id) DO UPDATE SET
 position = excluded.position, payload = excluded.payload, updated_at = excluded.updated_at`,
@@ -485,7 +495,7 @@ position = excluded.position, payload = excluded.payload, updated_at = excluded.
 		}
 	}
 	for _, id := range deleteIDs {
-		if _, err := tx.Exec(`DELETE FROM secure_documents WHERE scope = ? AND id = ?`, scope, strings.TrimSpace(id)); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM secure_documents WHERE scope = ? AND id = ?`, scope, strings.TrimSpace(id)); err != nil {
 			return err
 		}
 	}

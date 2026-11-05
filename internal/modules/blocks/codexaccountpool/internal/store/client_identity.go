@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	events "aetherrelay/internal/modules/blocks/codexaccountpool/pkg/events"
 	codexidentity "aetherrelay/internal/pkg/aetherrelaycodexidentity"
@@ -40,6 +42,12 @@ func (s *Store) loadClientIdentityLocked() error {
 }
 
 func (s *Store) saveClientIdentityLocked() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.saveClientIdentityLockedContext(ctx)
+}
+
+func (s *Store) saveClientIdentityLockedContext(ctx context.Context) error {
 	if s.clientIdentity == codexidentity.HighestObserved() && s.persistedClientIdentity == ([sha256.Size]byte{}) {
 		return nil
 	}
@@ -55,7 +63,7 @@ func (s *Store) saveClientIdentityLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := s.documents.ApplySecureDocuments(sharedClientIdentityScope, []aetherrelaystate.SecureDocumentRow{{ID: sharedClientIdentityID, Payload: sealed}}, nil); err != nil {
+	if err := s.documents.ApplySecureDocumentsContext(ctx, sharedClientIdentityScope, []aetherrelaystate.SecureDocumentRow{{ID: sharedClientIdentityID, Payload: sealed}}, nil); err != nil {
 		return err
 	}
 	s.persistedClientIdentity = digest
