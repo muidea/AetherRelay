@@ -72,3 +72,58 @@ func TestLeaseReleaseDoesNotWaitForRefreshOrAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestCapacityPublicationDoesNotBlockReleaseAndSwitch(t *testing.T) {
+	s, hub, ids := newSchedulingAccount(t)
+	lease := acquireForTest(t, s, events.AcquireCommand{Model: "gpt-test", PreferredID: ids[0]})
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	resume := func() { once.Do(func() { close(unblock) }) }
+	defer resume()
+	s.UnsubscribeFunc(events.TopicPutUsageSnapshot)
+	s.SubscribeFunc(events.TopicPutUsageSnapshot, func(ev event.Event, result event.Result) {
+		close(entered)
+		<-unblock // Simulate a slow persistent capacity publication.
+		s.handlePutUsageSnapshot(ev, result)
+	})
+	published := make(chan event.Result, 1)
+	go func() {
+		now := time.Now().UTC()
+		published <- hub.Send(event.NewEvent(events.TopicPutUsageSnapshot, "test", s.ID(), nil, events.PutUsageSnapshotCommand{
+			AccountID: ids[0], Source: "manual", Snapshot: events.AccountUsageSnapshot{
+				StartedAt: now.Format(time.RFC3339Nano), ObservedAt: now.Format(time.RFC3339Nano), Complete: true,
+			},
+		}))
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("capacity publication did not enter handler")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := hub.Send(events.BindCommandLane(event.NewEventWithContext(events.TopicRelease, "test", s.ID(), nil, ctx, events.ReleaseCommand{LeaseID: lease.LeaseID})))
+	if value, err := result.Get(); err != nil || !value.(events.ReleaseResult).Released {
+		t.Fatal("capacity publication blocked release", value, err)
+	}
+	// An admission queued behind publication must be cancelable before dispatch.
+	queuedCtx, queuedCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer queuedCancel()
+	if _, err := hub.Send(event.NewEventWithContext(events.TopicAcquire, "test", s.ID(), nil, queuedCtx, events.AcquireCommand{Model: "gpt-test"})).Get(); err == nil {
+		t.Fatal("queued admission ignored its deadline")
+	}
+	resume()
+	select {
+	case result := <-published:
+		if _, err := result.Get(); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capacity publication did not finish")
+	}
+	next := acquireForTest(t, s, events.AcquireCommand{Model: "gpt-test", Exclude: []string{ids[0]}})
+	defer releaseForTest(t, s, next.LeaseID)
+	if next.AccountID != ids[1] || slotsForTest(t, s, ids[0]).Inflight != 0 {
+		t.Fatal("release or subsequent account switch failed", next.AccountID)
+	}
+}

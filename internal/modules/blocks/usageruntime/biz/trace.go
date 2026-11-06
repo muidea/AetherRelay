@@ -26,7 +26,7 @@ func (s *UsageRuntime) handleWriteTrace(ev event.Event, result event.Result) {
 		return
 	}
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.WriteTraceResult{}, nil)
@@ -43,7 +43,7 @@ func (s *UsageRuntime) handleExecutionTrace(ev event.Event, result event.Result)
 	}
 	value, err := s.runtime.Store().ExecutionTrace(ev.Context(), c.EventID)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	out := usageevents.ExecutionTraceResult{Found: value != nil}
@@ -64,7 +64,7 @@ func (s *UsageRuntime) handleAnomalies(ev event.Event, result event.Result) {
 	}
 	value, err := s.runtime.Store().Anomalies(ev.Context(), c.Filter, c.GroupBy)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.AnomaliesResult{Value: value}, nil)

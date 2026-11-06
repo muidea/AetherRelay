@@ -12,7 +12,7 @@ import (
 // Background candidates can wait behind the concurrency limit. Resolve the
 // shared maximum again at dispatch, including after a credential refresh.
 func (s *Proxy) currentCodexClientIdentity(ctx context.Context) (codexevents.ClientIdentityProfile, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicClientIdentity, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, nil)).Get()
+	value, err := s.sendCodexAccountCommand(event.NewEventWithContext(codexevents.TopicClientIdentity, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, nil), "client_identity", "")
 	if err != nil {
 		return codexevents.ClientIdentityProfile{}, fmt.Errorf("resolve Codex client identity failed")
 	}

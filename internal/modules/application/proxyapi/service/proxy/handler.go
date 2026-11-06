@@ -701,15 +701,23 @@ func (h *Handler) beginUsage(w http.ResponseWriter, r *http.Request, eventID str
 
 // startUsage also serves response.create after a WS upgrade, where writing an
 // HTTP error is no longer legal. Each response has its own durable event.
-func (h *Handler) startUsage(r *http.Request, eventID string, round *archive.Round) error {
-	if h.usageStore == nil {
-		return fmt.Errorf("usage store unavailable")
-	}
+func (h *Handler) startUsage(r *http.Request, eventID string, round *archive.Round) (retErr error) {
+	started := time.Now()
 	identity, internal := internalFeatureIdentity(r.Context())
 	if !internal {
 		identity = clientauth.ClientIdentityFromContext(r.Context())
 	}
 	path := NormalizeClientEndpoint(r.URL.Path)
+	defer func() {
+		if retErr != nil {
+			slog.ErrorContext(r.Context(), "usage start failed", "request_id", requestIDFromContext(r.Context()),
+				"event_id", eventID, "api_key_id", identity.KeyID, "method", r.Method, "endpoint", path,
+				"stage", "start", "duration_ms", time.Since(started).Milliseconds(), "reason", usage.FailureReason(retErr))
+		}
+	}()
+	if h.usageStore == nil {
+		return usage.ErrStoreUnavailable
+	}
 	rec := usage.StartRecord{
 		EventID:        eventID,
 		StartedAt:      time.Now().UTC(),

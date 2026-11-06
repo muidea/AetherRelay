@@ -35,7 +35,9 @@ func (s *DuckDBStore) PruneBefore(ctx context.Context, cutoff time.Time) (int64,
 }
 
 func (s *DuckDBStore) pruneBatch(ctx context.Context, cutoff time.Time) (int64, error) {
-	s.write.Lock()
+	if err := s.write.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.write.Unlock()
 	if s.closed.Load() {
 		return 0, ErrStoreClosed

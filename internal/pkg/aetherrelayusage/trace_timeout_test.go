@@ -46,6 +46,7 @@ func TestUsageSettlementAndShutdownDeadlineIncludeWriterLockWait(t *testing.T) {
 			return s.Complete(ctx, CompleteRecord{EventID: "event", HTTPStatus: 503, Outcome: "provider_unavailable"})
 		},
 		"recover":    func(ctx context.Context) error { _, err := s.RecoverInterrupted(ctx, time.Now()); return err },
+		"retention":  func(ctx context.Context) error { _, err := s.PruneBefore(ctx, time.Now()); return err },
 		"checkpoint": s.Checkpoint,
 		"close":      s.CloseContext,
 	} {
@@ -65,5 +66,17 @@ func TestUsageSettlementAndShutdownDeadlineIncludeWriterLockWait(t *testing.T) {
 				t.Fatal("usage mutation ignored its deadline")
 			}
 		})
+	}
+}
+
+func TestTraceStateQueryFailureIsNotSettledEvent(t *testing.T) {
+	s := openTestStore(t)
+	// Corrupt only this isolated test database to exercise a real SQL failure.
+	if _, err := s.db.ExecContext(context.Background(), `DROP TABLE usage_events`); err != nil {
+		t.Fatal(err)
+	}
+	err := s.WriteTrace(context.Background(), "event", trace.Trace{})
+	if !errors.Is(err, ErrStoreUnavailable) || errors.Is(err, ErrEventNotStarted) {
+		t.Fatalf("database failure classified as settled event: %v", err)
 	}
 }

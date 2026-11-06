@@ -519,7 +519,7 @@ Anthropic Messages→Responses（含 Codex）接受经校验的 `metadata.user_i
 
 `CP-FAIL-011` refresh 必须区分过期、撤销、重复使用和临时错误；HTTP 400 不能一律标记永久失效。
 
-`CP-FAIL-012` 同账号 refresh 使用 singleflight。成功 rotation 必须原子更新 access/refresh/id token 和 expires；失败不能破坏最近可用 access token。
+`CP-FAIL-012` 同账号 refresh 使用 singleflight。成功 rotation 必须原子更新 access/refresh/id token 和 expires；失败不能破坏最近可用 access token。等待预算使用现有 `request_timeout`，包含后台任务提交、排队及共享结果等待，避免后台工作位耗尽时等待同一工作池的子任务而无法退出。单个等待者退出不取消已接纳的 owner rotation，结果仍须落盘；容量刷新必须保留临时超时与永久凭据失效的区别。租约释放走独立命令通道，不等待调度锁、容量持久化或网络刷新；`refresh_wait_test.go`、`release_isolation_test.go` 与 `codex_usage_failure_test.go` 覆盖上述边界。
 
 `CP-FAIL-013` 确定性 upstream 400 必须保持 HTTP 400 且不得切换账号。代理只允许从结构化 JSON 错误中投影经过长度限制和脱敏的 `type`、`code`、`param`、`message`；原始正文、未知字段和凭据形态不得跨 `codexupstream` Block。
 

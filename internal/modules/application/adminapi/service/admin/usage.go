@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -14,7 +15,11 @@ import (
 	"aetherrelay/internal/pkg/aetherrelayusage"
 )
 
-func (h *Handler) observeUsageQuery(start time.Time, err error) {
+func (h *Handler) observeUsageQuery(r *http.Request, operation string, start time.Time, err error) {
+	if err != nil {
+		slog.WarnContext(r.Context(), "admin usage query failed", "method", r.Method, "endpoint", r.URL.Path,
+			"stage", operation, "duration_ms", time.Since(start).Milliseconds(), "reason", usage.FailureReason(err))
+	}
 	if h.metricsRegistry != nil {
 		healthy := h.usageStore != nil && h.usageStore.Healthy()
 		h.metricsRegistry.RecordUsageStoreQuery(time.Since(start), err, healthy)
@@ -48,6 +53,7 @@ func (h *Handler) usageAPI(w http.ResponseWriter, r *http.Request, rel string) {
 		return
 	}
 	if h.usageStore == nil {
+		h.observeUsageQuery(r, "store", time.Now(), usage.ErrStoreUnavailable)
 		writeError(w, http.StatusServiceUnavailable, "usage store unavailable")
 		return
 	}
@@ -98,7 +104,7 @@ func (h *Handler) usageDashboard(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	started := time.Now()
 	dash, err := h.usageStore.Dashboard(ctx, filter)
-	h.observeUsageQuery(started, err)
+	h.observeUsageQuery(r, "dashboard", started, err)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "usage query failed")
 		return
@@ -136,7 +142,7 @@ func (h *Handler) usageEvents(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	started := time.Now()
 	page, err := h.usageStore.Events(ctx, ef)
-	h.observeUsageQuery(started, err)
+	h.observeUsageQuery(r, "events", started, err)
 	if err != nil {
 		if strings.Contains(err.Error(), "cursor") || strings.Contains(err.Error(), "page_size") || strings.Contains(err.Error(), "event_ids") {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -241,7 +247,7 @@ func (h *Handler) usageFilterOptions(w http.ResponseWriter, r *http.Request) {
 		To:      filter.To,
 		AllTime: filter.AllTime,
 	})
-	h.observeUsageQuery(started, usageErr)
+	h.observeUsageQuery(r, "filter_options", started, usageErr)
 
 	usageOK := usageErr == nil
 	if !usageOK {

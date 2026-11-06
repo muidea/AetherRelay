@@ -869,7 +869,7 @@ func (s *Proxy) acquireCodexAccountWithIdentity(ctx context.Context, model strin
 
 func (s *Proxy) acquireCodexAccountForTransportWithIdentity(ctx context.Context, model string, exclude []string, sessionHash, transport string, identity accevents.ClientIdentityCandidate, leaseKind ...string) (accevents.AcquireResult, error) {
 	command := accevents.AcquireCommand{Request: codexLeaseRequest(ctx), LeaseKind: firstString(leaseKind), Model: model, Exclude: exclude, SessionHash: sessionHash, Transport: transport, ClientIdentity: identity}
-	value, err := s.SendEvent(event.NewEventWithContext(accevents.TopicAcquire, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, command)).Get()
+	value, err := s.sendCodexAccountCommand(event.NewEventWithContext(accevents.TopicAcquire, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, command), "acquire", "")
 	account, ok := value.(accevents.AcquireResult)
 	if ctx.Err() != nil {
 		s.releaseCodexAccount(ctx, account.LeaseID)
@@ -1233,7 +1233,7 @@ func (s *Proxy) refreshCodexAccountWithinBudget(ctx context.Context, id string) 
 	if c := trace.FromContext(ctx); c != nil {
 		c.Action("credential_refresh", "invalid_token")
 	}
-	value, err := s.SendEvent(accevents.BindCommandLane(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshTokenCommand{AccountID: id}))).Get()
+	value, err := s.sendCodexAccountCommand(accevents.BindCommandLane(event.NewEventWithContext(accevents.TopicRefreshToken, s.ID(), acccommon.UnitID, event.NewHeader(), ctx, accevents.RefreshTokenCommand{AccountID: id})), "refresh_credential", id)
 	result, ok := value.(accevents.RefreshTokenResult)
 	if !ok {
 		if err != nil {

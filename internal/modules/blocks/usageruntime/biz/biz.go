@@ -130,7 +130,7 @@ func (s *UsageRuntime) handleStart(ev event.Event, result event.Result) {
 		return
 	}
 	if err := s.runtime.Store().Start(ev.Context(), command.Record); err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(struct{}{}, nil)
@@ -151,7 +151,7 @@ func (s *UsageRuntime) handleComplete(ev event.Event, result event.Result) {
 			result.Set(usageevents.CompleteResult{EventNotStarted: true}, nil)
 			return
 		}
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.CompleteResult{}, nil)
@@ -169,7 +169,7 @@ func (s *UsageRuntime) handleDashboard(ev event.Event, result event.Result) {
 	}
 	value, err := s.runtime.Store().Dashboard(ev.Context(), command.Filter)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.DashboardResult{Value: value}, nil)
@@ -187,7 +187,7 @@ func (s *UsageRuntime) handleCount(ev event.Event, result event.Result) {
 	}
 	value, err := s.runtime.Store().Count(ev.Context(), command.Filter)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.CountResult{Value: value}, nil)
@@ -205,7 +205,7 @@ func (s *UsageRuntime) handleEvents(ev event.Event, result event.Result) {
 	}
 	value, err := s.runtime.Store().Events(ev.Context(), command.Filter)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.EventsResult{Value: value}, nil)
@@ -223,7 +223,7 @@ func (s *UsageRuntime) handleExport(ev event.Event, result event.Result) {
 	}
 	var buffer bytes.Buffer
 	if err := s.runtime.Store().ExportCSV(ev.Context(), command.Filter, &buffer); err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.ExportResult{Data: buffer.Bytes()}, nil)
@@ -241,7 +241,7 @@ func (s *UsageRuntime) handleFilterOptions(ev event.Event, result event.Result) 
 	}
 	value, err := s.runtime.Store().FilterOptions(ev.Context(), command.Query)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.FilterOptionsResult{Value: value}, nil)
@@ -259,7 +259,7 @@ func (s *UsageRuntime) handleRecover(ev event.Event, result event.Result) {
 	}
 	count, err := s.runtime.Store().RecoverInterrupted(ev.Context(), command.At)
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.RecoverResult{Count: count}, nil)
@@ -275,7 +275,7 @@ func (s *UsageRuntime) handleCheckpoint(ev event.Event, result event.Result) {
 		return
 	}
 	if err := s.runtime.Store().Checkpoint(ev.Context()); err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(struct{}{}, nil)
@@ -304,7 +304,7 @@ func (s *UsageRuntime) handleAllTime(ev event.Event, result event.Result) {
 	}
 	value, err := s.runtime.Store().AllTimeByKey(ev.Context())
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.AllTimeResult{Value: value}, nil)
@@ -351,7 +351,7 @@ func (s *UsageRuntime) handleClientKeyCommand(ev event.Event, result event.Resul
 		err = fmt.Errorf("invalid client key command")
 	}
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(struct{}{}, nil)
@@ -368,7 +368,7 @@ func (s *UsageRuntime) handleClientKeyEnsure(ev event.Event, result event.Result
 		return
 	}
 	if err := s.runtime.Store().EnsureClientAPIKey(ev.Context(), cmd.ID, cmd.CreatedAt); err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(struct{}{}, nil)
@@ -384,7 +384,7 @@ func (s *UsageRuntime) handleClientKeyTouch(ev event.Event, result event.Result)
 		return
 	}
 	if err := s.runtime.Store().TouchClientAPIKey(ev.Context(), cmd.ID, cmd.UsedAt); err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(struct{}{}, nil)
@@ -400,7 +400,7 @@ func (s *UsageRuntime) handleClientKeyMetadata(ev event.Event, result event.Resu
 	}
 	value, err := s.runtime.Store().ClientAPIKeyMetadata(ev.Context())
 	if err != nil {
-		result.Set(nil, cd.NewError(cd.Unexpected, err.Error()))
+		result.Set(nil, &cd.Error{Code: cd.Unexpected, Message: err.Error(), Cause: err})
 		return
 	}
 	result.Set(usageevents.ClientKeyMetadataResult{Value: value}, nil)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,8 @@ const (
 	codexUsageSnapshotTTL        = 15 * time.Minute
 	codexScheduledUsageBatchSize = 100
 )
+
+type codexUsageProgressKey struct{}
 
 // StartCodexUsageRefresh begins an explicit refresh of the redacted Codex
 // usage-window cache. It deliberately does not schedule a high-frequency
@@ -78,8 +81,15 @@ func (s *Proxy) CodexUsageRefreshProgress(progressID string) (proxyevents.CodexU
 }
 
 func (s *Proxy) runCodexUsageRefreshJob(ctx context.Context, progressID string, accountIDs []string, dueOnly bool) {
+	ctx = context.WithValue(ctx, codexUsageProgressKey{}, progressID)
 	// A manual refresh waits behind another manual refresh to prevent a click
 	// storm from issuing duplicate account-scoped upstream requests.
+	started := time.Now()
+	slog.Info("Codex usage refresh started", "progress_id", progressID, "due_only", dueOnly)
+	defer func() {
+		progress, _ := s.CodexUsageRefreshProgress(progressID)
+		slog.Info("Codex usage refresh finished", "progress_id", progressID, "duration_ms", time.Since(started).Milliseconds(), "processed", progress.Processed, "failed", progress.Failed)
+	}()
 	s.codexUsageMu.Lock()
 	defer s.codexUsageMu.Unlock()
 
@@ -129,7 +139,11 @@ func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.
 	if usage.ErrorClass == codexupevents.ErrorInvalidToken {
 		refreshed, refreshErr := s.refreshCodexUsageCredential(ctx, candidate.AccountID)
 		if refreshErr != nil || !refreshed.Refreshed || strings.TrimSpace(refreshed.AccessToken) == "" {
-			return s.recordCodexUsageFailure(ctx, candidate.AccountID, "invalid_token", source)
+			class := refreshFailureClass(refreshed)
+			if refreshed.PermanentFailure {
+				class = "invalid_token"
+			}
+			return s.recordCodexUsageFailure(ctx, candidate.AccountID, class, source)
 		}
 		candidate.AccessToken = refreshed.AccessToken
 		candidate.AccountIDHeader = refreshed.AccountIDHeader
@@ -174,7 +188,7 @@ func (s *Proxy) refreshOneCodexUsage(ctx context.Context, candidate codexevents.
 	if interval := time.Duration(s.config.CodexOAuth.UsageRefreshIntervalMinute) * time.Minute; interval > 0 {
 		nextRefreshAt = nextCodexUsageRefreshAt(candidate.AccountID, now, interval)
 	}
-	stored, putErr := s.SendEvent(event.NewEventWithContext(codexevents.TopicPutUsageSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutUsageSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot, Source: source, NextRefreshAt: nextRefreshAt})).Get()
+	stored, putErr := s.sendCodexAccountCommand(event.NewEventWithContext(codexevents.TopicPutUsageSnapshot, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.PutUsageSnapshotCommand{AccountID: candidate.AccountID, Snapshot: snapshot, Source: source, NextRefreshAt: nextRefreshAt}), "persist_usage_snapshot", candidate.AccountID)
 	if putErr != nil {
 		return s.recordCodexUsageFailure(ctx, candidate.AccountID, "storage", source)
 	}
@@ -202,12 +216,12 @@ func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCa
 
 	reqCtx, cancel := context.WithTimeout(ctx, discoveryAccountTimeout)
 	defer cancel()
-	value, err := s.SendEvent(codexupevents.BindCommandLane(event.NewEventWithContext(codexupevents.TopicGetUsage, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.GetUsageCommand{
+	value, err := s.sendCodexAccountCommand(codexupevents.BindCommandLane(event.NewEventWithContext(codexupevents.TopicGetUsage, s.ID(), codexupcommon.UnitID, event.NewHeader(), reqCtx, codexupevents.GetUsageCommand{
 		AccessToken:     candidate.AccessToken,
 		AccountIDHeader: candidate.AccountIDHeader,
 		Proxy:           candidate.Proxy,
 		ClientIdentity:  toUpstreamAccountClientIdentity(candidate.ClientIdentity),
-	}))).Get()
+	})), "fetch_usage", candidate.AccountID)
 	if err != nil {
 		return codexupevents.GetUsageResult{}, err
 	}
@@ -221,25 +235,29 @@ func (s *Proxy) getCodexUsage(ctx context.Context, candidate codexevents.UsageCa
 // refreshCodexUsageCredential keeps a 401-driven refresh/retry within the
 // existing account-pool owner. Only proxyapi sees the transient credential.
 func (s *Proxy) refreshCodexUsageCredential(ctx context.Context, accountID string) (codexevents.RefreshTokenResult, error) {
-	value, err := s.SendEvent(codexevents.BindCommandLane(event.NewEventWithContext(codexevents.TopicRefreshToken, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RefreshTokenCommand{AccountID: accountID}))).Get()
-	if err != nil {
-		return codexevents.RefreshTokenResult{}, err
-	}
+	value, err := s.sendCodexAccountCommand(codexevents.BindCommandLane(event.NewEventWithContext(codexevents.TopicRefreshToken, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RefreshTokenCommand{AccountID: accountID})), "refresh_usage_credential", accountID)
 	result, ok := value.(codexevents.RefreshTokenResult)
 	if !ok {
+		if err != nil {
+			return codexevents.RefreshTokenResult{ErrorClass: codexevents.ErrorUpstream}, err
+		}
 		return codexevents.RefreshTokenResult{}, fmt.Errorf("invalid Codex usage refresh credential result")
+	}
+	if err != nil {
+		return result, err
 	}
 	return result, nil
 }
 
 func (s *Proxy) recordCodexUsageFailure(ctx context.Context, accountID, class, source string) error {
 	class = boundedCodexUsageError(class)
-	_, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicRecordUsageFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordUsageFailureCommand{
+	slog.Warn("Codex usage refresh failed", "account_id", accountID, "source", source, "error_class", class)
+	_, err := s.sendCodexAccountCommand(event.NewEventWithContext(codexevents.TopicRecordUsageFailure, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.RecordUsageFailureCommand{
 		AccountID:     accountID,
 		Error:         class,
 		Source:        source,
 		ScheduleRetry: s.config.CodexOAuth.UsageRefreshIntervalMinute > 0,
-	})).Get()
+	}), "record_usage_failure", accountID)
 	if err != nil {
 		return fmt.Errorf("record Codex usage failure")
 	}
@@ -247,7 +265,7 @@ func (s *Proxy) recordCodexUsageFailure(ctx context.Context, accountID, class, s
 }
 
 func (s *Proxy) listCodexUsageCandidates(ctx context.Context, accountIDs []string, dueOnly bool, limit int) (codexevents.ListUsageCandidatesResult, error) {
-	value, err := s.SendEvent(event.NewEventWithContext(codexevents.TopicListUsageCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListUsageCandidatesCommand{AccountIDs: accountIDs, DueOnly: dueOnly, Limit: limit, Now: time.Now().UTC()})).Get()
+	value, err := s.sendCodexAccountCommand(event.NewEventWithContext(codexevents.TopicListUsageCandidates, s.ID(), codexcommon.UnitID, event.NewHeader(), ctx, codexevents.ListUsageCandidatesCommand{AccountIDs: accountIDs, DueOnly: dueOnly, Limit: limit, Now: time.Now().UTC()}), "list_usage_candidates", "")
 	if err != nil {
 		return codexevents.ListUsageCandidatesResult{}, fmt.Errorf("list Codex usage candidates failed")
 	}

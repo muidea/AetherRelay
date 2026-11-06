@@ -200,7 +200,7 @@ INSERT INTO usage_events (
 			return ErrDuplicateEvent
 		}
 		s.markDegraded()
-		return ErrStoreUnavailable
+		return fmt.Errorf("%w: start usage event: %w", ErrStoreUnavailable, err)
 	}
 	s.markHealthy()
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -37,18 +38,25 @@ func (s *DuckDBStore) WriteTrace(ctx context.Context, id string, t trace.Trace) 
 	defer s.write.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ErrStoreUnavailable
+		return fmt.Errorf("%w: begin trace: %w", ErrStoreUnavailable, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var state string
-	if err = tx.QueryRowContext(ctx, `SELECT state FROM usage_events WHERE event_id=?`, id).Scan(&state); err != nil || state != StateStarted {
+	err = tx.QueryRowContext(ctx, `SELECT state FROM usage_events WHERE event_id=?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrEventNotStarted
+	}
+	if err != nil {
+		return fmt.Errorf("%w: read trace event state: %w", ErrStoreUnavailable, err)
+	}
+	if state != StateStarted {
 		return ErrEventNotStarted
 	}
 	if err = saveExecutionTrace(ctx, tx, id, t); err != nil {
-		return fmt.Errorf("%w: trace: %v", ErrStoreUnavailable, err)
+		return fmt.Errorf("%w: trace: %w", ErrStoreUnavailable, err)
 	}
 	if err = tx.Commit(); err != nil {
-		return ErrStoreUnavailable
+		return fmt.Errorf("%w: commit trace: %w", ErrStoreUnavailable, err)
 	}
 	s.cache.clear() // request IDs and diagnostic filters can change before settlement
 	return nil

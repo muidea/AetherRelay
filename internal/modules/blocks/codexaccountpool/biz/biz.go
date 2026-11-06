@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -379,7 +380,7 @@ func (s *Account) handleRefreshToken(ev event.Event, result event.Result) {
 		refreshed, err = s.refreshToken(ev.Context(), cmd.AccountID)
 	}
 	if err != nil {
-		result.Set(refreshed, cd.NewError(cd.Unexpected, "Codex token refresh failed"))
+		result.Set(refreshed, &cd.Error{Code: cd.Unexpected, Message: "Codex token refresh failed", Cause: err})
 		return
 	}
 	result.Set(refreshed, nil)
@@ -620,6 +621,15 @@ func (s *Account) refreshToken(ctx context.Context, accountID string) (events.Re
 	if s.stopping.Load() {
 		return events.RefreshTokenResult{}, context.Canceled
 	}
+	// A background caller may itself occupy a worker from this same pool. Bound
+	// its entire wait, including task admission and queueing, so saturation
+	// cannot leave that caller waiting forever for a nested refresh worker.
+	// The accepted rotation still belongs to shutdownCtx, not this waiter.
+	if s.oauthTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.oauthTimeout)
+		defer cancel()
+	}
 	if ctx.Err() != nil {
 		return events.RefreshTokenResult{}, ctx.Err()
 	}
@@ -634,7 +644,11 @@ func (s *Account) refreshToken(ctx context.Context, accountID string) (events.Re
 	}
 	select {
 	case <-ctx.Done():
-		return events.RefreshTokenResult{}, ctx.Err()
+		out := events.RefreshTokenResult{}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			out.ErrorClass = events.ErrorTimeout
+		}
+		return out, ctx.Err()
 	case <-flight.done:
 		return flight.result, flight.err
 	}

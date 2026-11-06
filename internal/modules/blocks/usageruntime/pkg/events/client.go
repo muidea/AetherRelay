@@ -283,7 +283,7 @@ func send(hub event.Hub, ev event.Event, name string) (event.Result, error) {
 		return nil, fmt.Errorf("%s command received no response", name)
 	}
 	if err := result.Error(); err != nil {
-		return nil, fmt.Errorf("%s command failed: %s", name, err.Message)
+		return nil, fmt.Errorf("%s command failed: %w", name, err)
 	}
 	return result, nil
 }

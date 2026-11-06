@@ -18,10 +18,11 @@ func (r *Runtime) pruneDetails(ctx context.Context, now time.Time) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cutoff := retention.Cutoff(now)
+	started := time.Now()
 	n, err := pruner.PruneBefore(ctx, cutoff)
 	if err != nil {
-		slog.Warn("usage retention incomplete; retrying next sweep", "cutoff", cutoff, "deleted", n, "error", err)
+		slog.Warn("usage retention incomplete; retrying next sweep", "cutoff", cutoff, "deleted", n, "duration_ms", time.Since(started).Milliseconds(), "error", err)
 	} else if n > 0 {
-		slog.Info("usage retention completed", "cutoff", cutoff, "deleted", n, "retention_months", retention.Months)
+		slog.Info("usage retention completed", "cutoff", cutoff, "deleted", n, "retention_months", retention.Months, "duration_ms", time.Since(started).Milliseconds())
 	}
 }

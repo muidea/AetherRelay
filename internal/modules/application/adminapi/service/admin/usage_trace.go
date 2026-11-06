@@ -23,7 +23,7 @@ func (h *Handler) usageTrace(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	started := time.Now()
 	page, err := h.usageStore.Events(ctx, f)
-	h.observeUsageQuery(started, err)
+	h.observeUsageQuery(r, "trace_event", started, err)
 	if err != nil {
 		writeError(w, 503, "usage query failed")
 		return
@@ -32,7 +32,9 @@ func (h *Handler) usageTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "usage event not found")
 		return
 	}
+	started = time.Now()
 	t, err := h.usageStore.ExecutionTrace(ctx, id)
+	h.observeUsageQuery(r, "execution_trace", started, err)
 	if err != nil {
 		writeError(w, 503, "execution trace query failed")
 		return
@@ -92,7 +94,7 @@ func (h *Handler) usageAnomalies(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	started := time.Now()
 	out, err := h.usageStore.Anomalies(ctx, f, group)
-	h.observeUsageQuery(started, err)
+	h.observeUsageQuery(r, "anomalies", started, err)
 	if err != nil {
 		writeError(w, 503, "anomaly query failed")
 		return
@@ -119,7 +121,9 @@ func (h *Handler) usageEventsCSV(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	started := time.Now()
 	n, err := h.usageStore.Count(ctx, f)
+	h.observeUsageQuery(r, "export_count", started, err)
 	if err != nil {
 		writeError(w, 503, "usage query failed")
 		return
@@ -129,7 +133,10 @@ func (h *Handler) usageEventsCSV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var buf usageCSVBuffer
-	if err = h.usageStore.ExportCSV(ctx, f, &buf); err != nil {
+	started = time.Now()
+	err = h.usageStore.ExportCSV(ctx, f, &buf)
+	h.observeUsageQuery(r, "export_csv", started, err)
+	if err != nil {
 		writeError(w, 503, "usage export failed; narrow the filters")
 		return
 	}
