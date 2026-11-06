@@ -14,6 +14,7 @@ type filterOptionsCache struct {
 	ttl     time.Duration
 	maxSize int
 	mu      sync.Mutex
+	epoch   uint64 // prevents an in-flight read from repopulating an invalidated cache
 	items   map[string]*filterOptionsCacheEntry
 	order   []string
 }
@@ -35,31 +36,34 @@ func newFilterOptionsCache(seconds, maxSize int) *filterOptionsCache {
 	}
 }
 
-func (c *filterOptionsCache) get(key string) (FilterOptionsResult, bool) {
+func (c *filterOptionsCache) get(key string) (FilterOptionsResult, bool, uint64) {
 	if c == nil || c.ttl <= 0 {
-		return FilterOptionsResult{}, false
+		return FilterOptionsResult{}, false, 0
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.items[key]
 	if !ok {
-		return FilterOptionsResult{}, false
+		return FilterOptionsResult{}, false, c.epoch
 	}
 	if time.Now().After(e.expiresAt) {
 		delete(c.items, key)
 		c.removeOrder(key)
-		return FilterOptionsResult{}, false
+		return FilterOptionsResult{}, false, c.epoch
 	}
 	c.touchOrder(key)
-	return e.value, true
+	return e.value, true, c.epoch
 }
 
-func (c *filterOptionsCache) put(key string, value FilterOptionsResult) {
+func (c *filterOptionsCache) put(key string, value FilterOptionsResult, epoch uint64) {
 	if c == nil || c.ttl <= 0 {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if epoch != c.epoch {
+		return
+	}
 	if _, ok := c.items[key]; !ok && len(c.items) >= c.maxSize {
 		if len(c.order) > 0 {
 			old := c.order[0]
@@ -77,6 +81,7 @@ func (c *filterOptionsCache) clear() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.epoch++
 	c.items = make(map[string]*filterOptionsCacheEntry)
 	c.order = nil
 }
@@ -114,25 +119,34 @@ func (s *DuckDBStore) FilterOptions(ctx context.Context, q FilterOptionsQuery) (
 	}
 	// 缓存键用解析后的窗口；保留 allTime 以区分查询语义。
 	key := filterOptionsCacheKey(from, to, q.AllTime)
-	if cached, ok := s.optionsCache.get(key); ok {
+	cached, ok, epoch := s.optionsCache.get(key)
+	if ok {
 		return cached, nil
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return FilterOptionsResult{}, s.queryFailure("filter_options", "begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	out := FilterOptionsResult{From: from, To: to}
-	out.APIKeyIDs, out.Truncated.APIKeyIDs, err = s.queryDistinctColumn(ctx, "api_key_id", from, to)
+	out.APIKeyIDs, out.Truncated.APIKeyIDs, err = s.queryDistinctColumn(ctx, tx, "api_key_id", from, to)
 	if err != nil {
 		return FilterOptionsResult{}, err
 	}
-	out.Providers, out.Truncated.Providers, err = s.queryDistinctColumn(ctx, "provider", from, to)
+	out.Providers, out.Truncated.Providers, err = s.queryDistinctColumn(ctx, tx, "provider", from, to)
 	if err != nil {
 		return FilterOptionsResult{}, err
 	}
-	out.Models, out.Truncated.Models, err = s.queryDistinctColumn(ctx, "model", from, to)
+	out.Models, out.Truncated.Models, err = s.queryDistinctColumn(ctx, tx, "model", from, to)
 	if err != nil {
 		return FilterOptionsResult{}, err
 	}
 
-	s.optionsCache.put(key, out)
+	if err := tx.Commit(); err != nil {
+		return FilterOptionsResult{}, s.queryFailure("filter_options", "commit", err)
+	}
+	s.optionsCache.put(key, out, epoch)
 	return out, nil
 }
 
@@ -143,7 +157,7 @@ var allowedDistinctColumns = map[string]struct{}{
 	"model":      {},
 }
 
-func (s *DuckDBStore) queryDistinctColumn(ctx context.Context, column string, from, to time.Time) ([]string, bool, error) {
+func (s *DuckDBStore) queryDistinctColumn(ctx context.Context, tx *sql.Tx, column string, from, to time.Time) ([]string, bool, error) {
 	if _, ok := allowedDistinctColumns[column]; !ok {
 		return nil, false, ErrStoreUnavailable
 	}
@@ -157,9 +171,9 @@ WHERE started_at >= ? AND started_at < ?
 ORDER BY value
 LIMIT ` + strconv.Itoa(limit)
 
-	rows, err := s.db.QueryContext(ctx, q, from.UTC(), to.UTC())
+	rows, err := tx.QueryContext(ctx, q, from.UTC(), to.UTC())
 	if err != nil {
-		return nil, false, ErrStoreUnavailable
+		return nil, false, s.queryFailure("filter_options", "query", err)
 	}
 	defer rows.Close()
 
@@ -167,7 +181,7 @@ LIMIT ` + strconv.Itoa(limit)
 	for rows.Next() {
 		var v sql.NullString
 		if err := rows.Scan(&v); err != nil {
-			return nil, false, ErrStoreUnavailable
+			return nil, false, s.queryFailure("filter_options", "scan", err)
 		}
 		if !v.Valid || v.String == "" {
 			continue
@@ -175,7 +189,7 @@ LIMIT ` + strconv.Itoa(limit)
 		values = append(values, v.String)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, ErrStoreUnavailable
+		return nil, false, s.queryFailure("filter_options", "rows", err)
 	}
 	truncated := len(values) > MaxFilterOptionValues
 	if truncated {

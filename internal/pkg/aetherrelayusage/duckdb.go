@@ -202,6 +202,8 @@ INSERT INTO usage_events (
 		s.markDegraded()
 		return fmt.Errorf("%w: start usage event: %w", ErrStoreUnavailable, err)
 	}
+	s.cache.clear()
+	s.optionsCache.clear()
 	s.markHealthy()
 	return nil
 }
@@ -392,6 +394,7 @@ WHERE event_id = ?
 		return fmt.Errorf("%w: commit completion: %v", ErrStoreUnavailable, err)
 	}
 	s.cache.clear()
+	s.optionsCache.clear()
 	s.markHealthy()
 	return nil
 }
@@ -434,6 +437,9 @@ WHERE state = ?`,
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, ErrStoreUnavailable
+	}
+	if n > 0 {
+		s.cache.clear()
 	}
 	s.markHealthy()
 	return n, nil

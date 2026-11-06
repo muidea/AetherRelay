@@ -17,8 +17,15 @@ import (
 
 func (h *Handler) observeUsageQuery(r *http.Request, operation string, start time.Time, err error) {
 	if err != nil {
-		slog.WarnContext(r.Context(), "admin usage query failed", "method", r.Method, "endpoint", r.URL.Path,
-			"stage", operation, "duration_ms", time.Since(start).Milliseconds(), "reason", usage.FailureReason(err))
+		attrs := []any{"method", r.Method, "endpoint", r.URL.Path,
+			"stage", operation, "duration_ms", time.Since(start).Milliseconds(), "reason", usage.FailureReason(err)}
+		if details, ok := usage.QueryFailureDetailsFromError(err); ok {
+			attrs = append(attrs, "query_operation", details.Operation, "query_stage", details.Stage,
+				"duckdb_error_code", details.DriverCode, "db_pool_open", details.PoolOpen,
+				"db_pool_in_use", details.PoolInUse, "db_pool_idle", details.PoolIdle,
+				"db_pool_wait_count", details.PoolWaitCount, "db_pool_wait_ms", details.PoolWaitDurationMS)
+		}
+		slog.WarnContext(r.Context(), "admin usage query failed", attrs...)
 	}
 	if h.metricsRegistry != nil {
 		healthy := h.usageStore != nil && h.usageStore.Healthy()

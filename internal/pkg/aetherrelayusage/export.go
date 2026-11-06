@@ -102,7 +102,7 @@ ORDER BY started_at ASC, event_id ASC LIMIT 10001`
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return ErrStoreUnavailable
+		return s.queryFailure("export_csv", "query", err)
 	}
 	defer rows.Close()
 
@@ -161,7 +161,7 @@ ORDER BY started_at ASC, event_id ASC LIMIT 10001`
 			&cachedKnown, &creationKnown, &firstOutputAt, &generationNS, &partial, &buffered, &outputKnown, &accountID, &accountLabel, &upstreamRequestModel, &responseModel, &modelSubstituted, &upstreamErrorType, &upstreamErrorCode, &upstreamErrorParam, &upstreamErrorMessage,
 			&traceSummary.TraceState, &traceSummary.AttemptCount, &traceSummary.FailedAttempts, &traceSummary.HadAnomaly, &traceSummary.PrimaryCause, &traceSummary.TraceTransport, &traceSummary.TraceRevision, &traceSummary.TraceRequestID,
 		); err != nil {
-			return ErrStoreUnavailable
+			return s.queryFailure("export_csv", "scan", err)
 		}
 		if len(usageDate) > 10 {
 			usageDate = usageDate[:10]
@@ -250,7 +250,7 @@ ORDER BY started_at ASC, event_id ASC LIMIT 10001`
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return ErrStoreUnavailable
+		return s.queryFailure("export_csv", "rows", err)
 	}
 	cw.Flush()
 	if err := cw.Error(); err != nil {

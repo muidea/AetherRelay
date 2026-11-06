@@ -16,6 +16,7 @@ type dashboardCache struct {
 	ttl     time.Duration
 	maxSize int
 	mu      sync.Mutex
+	epoch   uint64 // prevents an in-flight read from repopulating an invalidated cache
 	items   map[string]*dashCacheEntry
 	order   []string // 简单 LRU:尾部最新
 }
@@ -37,32 +38,35 @@ func newDashboardCache(seconds, maxSize int) *dashboardCache {
 	}
 }
 
-func (c *dashboardCache) get(key string) (Dashboard, bool) {
+func (c *dashboardCache) get(key string) (Dashboard, bool, uint64) {
 	if c == nil || c.ttl <= 0 {
-		return Dashboard{}, false
+		return Dashboard{}, false, 0
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.items[key]
 	if !ok {
-		return Dashboard{}, false
+		return Dashboard{}, false, c.epoch
 	}
 	if time.Now().After(e.expiresAt) {
 		delete(c.items, key)
 		c.removeOrder(key)
-		return Dashboard{}, false
+		return Dashboard{}, false, c.epoch
 	}
 	// 触碰 LRU。
 	c.touchOrder(key)
-	return e.value, true
+	return e.value, true, c.epoch
 }
 
-func (c *dashboardCache) put(key string, value Dashboard) {
+func (c *dashboardCache) put(key string, value Dashboard, epoch uint64) {
 	if c == nil || c.ttl <= 0 {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if epoch != c.epoch {
+		return
+	}
 	if _, ok := c.items[key]; !ok && len(c.items) >= c.maxSize {
 		// 淘汰最旧。
 		if len(c.order) > 0 {
@@ -81,6 +85,7 @@ func (c *dashboardCache) clear() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.epoch++
 	c.items = make(map[string]*dashCacheEntry)
 	c.order = nil
 }
@@ -110,7 +115,8 @@ func (s *DuckDBStore) Dashboard(ctx context.Context, filter UsageFilter) (Dashbo
 		return Dashboard{}, err
 	}
 	key := dashboardCacheKey(filter)
-	if cached, ok := s.cache.get(key); ok {
+	cached, ok, epoch := s.cache.get(key)
+	if ok {
 		return cached, nil
 	}
 
@@ -127,15 +133,21 @@ func (s *DuckDBStore) Dashboard(ctx context.Context, filter UsageFilter) (Dashbo
 
 	where, args := buildFilterWhere(filter, from, to)
 
-	summary, err := s.querySummary(ctx, where, args)
+	// Keep all dashboard aggregates on one connection and MVCC snapshot.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Dashboard{}, s.queryFailure("dashboard", "begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	summary, err := s.querySummary(ctx, tx, where, args)
 	if err != nil {
 		return Dashboard{}, err
 	}
-	daily, err := s.queryDaily(ctx, where, args, filter.Timezone)
+	daily, err := s.queryDaily(ctx, tx, where, args, filter.Timezone)
 	if err != nil {
 		return Dashboard{}, err
 	}
-	byKey, err := s.queryByAPIKey(ctx, where, args)
+	byKey, err := s.queryByAPIKey(ctx, tx, where, args)
 	if err != nil {
 		return Dashboard{}, err
 	}
@@ -154,7 +166,10 @@ func (s *DuckDBStore) Dashboard(ctx context.Context, filter UsageFilter) (Dashbo
 		Daily:    daily,
 		ByAPIKey: byKey,
 	}
-	s.cache.put(key, out)
+	if err := tx.Commit(); err != nil {
+		return Dashboard{}, s.queryFailure("dashboard", "commit", err)
+	}
+	s.cache.put(key, out, epoch)
 	return out, nil
 }
 
@@ -178,12 +193,12 @@ func (s *DuckDBStore) Count(ctx context.Context, filter UsageFilter) (int64, err
 	where, args := buildFilterWhere(filter, from, to)
 	var count int64
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM usage_events WHERE `+where, args...).Scan(&count); err != nil {
-		return 0, ErrStoreUnavailable
+		return 0, s.queryFailure("count", "query", err)
 	}
 	return count, nil
 }
 
-func (s *DuckDBStore) querySummary(ctx context.Context, where string, args []any) (Summary, error) {
+func (s *DuckDBStore) querySummary(ctx context.Context, tx *sql.Tx, where string, args []any) (Summary, error) {
 	q := `
 SELECT
     count(*) AS requests,
@@ -200,7 +215,7 @@ SELECT
 FROM ` + tpsEvents + `
 WHERE ` + where
 	var sum Summary
-	err := s.db.QueryRowContext(ctx, q, args...).Scan(
+	err := tx.QueryRowContext(ctx, q, args...).Scan(
 		&sum.Requests,
 		&sum.SuccessRequests,
 		&sum.FailedRequests,
@@ -215,14 +230,14 @@ WHERE ` + where
 		&sum.ObservedTPSSamples, &sum.ObservedTPSEstimatedSamples, &sum.ObservedTPSPartialSamples, &sum.ObservedTPSBufferedSamples, &sum.ObservedTPSOutputTokens, &sum.ObservedTPSGenerationDurationMS,
 	)
 	if err != nil {
-		return Summary{}, ErrStoreUnavailable
+		return Summary{}, s.queryFailure("summary", "query", err)
 	}
 	sum.TPSStats.finish()
 	fillSummaryRates(&sum)
 	return sum, nil
 }
 
-func (s *DuckDBStore) queryDaily(ctx context.Context, where string, args []any, zone string) ([]DailyBucket, error) {
+func (s *DuckDBStore) queryDaily(ctx context.Context, tx *sql.Tx, where string, args []any, zone string) ([]DailyBucket, error) {
 	day := `cast(usage_date AS VARCHAR)`
 	if zone == "Asia/Singapore" {
 		day = `cast(cast(timezone('UTC',started_at)+INTERVAL '8 hours' AS DATE) AS VARCHAR)`
@@ -243,9 +258,9 @@ FROM ` + tpsEvents + `
 WHERE ` + where + `
 GROUP BY bucket_date
 ORDER BY bucket_date`
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, ErrStoreUnavailable
+		return nil, s.queryFailure("daily", "query", err)
 	}
 	defer rows.Close()
 
@@ -255,7 +270,7 @@ ORDER BY bucket_date`
 		if err := rows.Scan(&b.Date, &b.Requests, &b.InputTokens, &b.OutputTokens, &b.TotalTokens, &b.CacheInputTokens, &b.CachedInputTokens, &b.CacheCreationInputTokens, &b.CachedInputTokensKnown, &b.CacheCreationInputTokensKnown,
 			&b.TPSSamples, &b.TPSEstimatedSamples, &b.TPSPartialSamples, &b.TPSOutputTokens, &b.TPSDurationMS,
 			&b.ObservedTPSSamples, &b.ObservedTPSEstimatedSamples, &b.ObservedTPSPartialSamples, &b.ObservedTPSBufferedSamples, &b.ObservedTPSOutputTokens, &b.ObservedTPSGenerationDurationMS); err != nil {
-			return nil, ErrStoreUnavailable
+			return nil, s.queryFailure("daily", "scan", err)
 		}
 		b.TPSStats.finish()
 		b.CacheHitRate = cacheHitRate(b.CachedInputTokens, b.CacheInputTokens)
@@ -266,12 +281,12 @@ ORDER BY bucket_date`
 		out = append(out, b)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, ErrStoreUnavailable
+		return nil, s.queryFailure("daily", "rows", err)
 	}
 	return out, nil
 }
 
-func (s *DuckDBStore) queryByAPIKey(ctx context.Context, where string, args []any) ([]KeySummary, error) {
+func (s *DuckDBStore) queryByAPIKey(ctx context.Context, tx *sql.Tx, where string, args []any) ([]KeySummary, error) {
 	q := `
 SELECT
     api_key_id,
@@ -291,9 +306,9 @@ FROM ` + tpsEvents + `
 WHERE ` + where + `
 GROUP BY api_key_id
 ORDER BY total_tokens DESC, api_key_id ASC`
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, ErrStoreUnavailable
+		return nil, s.queryFailure("by_api_key", "query", err)
 	}
 	defer rows.Close()
 
@@ -317,7 +332,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 			&k.TPSSamples, &k.TPSEstimatedSamples, &k.TPSPartialSamples, &k.TPSOutputTokens, &k.TPSDurationMS,
 			&k.ObservedTPSSamples, &k.ObservedTPSEstimatedSamples, &k.ObservedTPSPartialSamples, &k.ObservedTPSBufferedSamples, &k.ObservedTPSOutputTokens, &k.ObservedTPSGenerationDurationMS,
 		); err != nil {
-			return nil, ErrStoreUnavailable
+			return nil, s.queryFailure("by_api_key", "scan", err)
 		}
 		if last.Valid {
 			t := last.Time.UTC()
@@ -328,7 +343,7 @@ ORDER BY total_tokens DESC, api_key_id ASC`
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, ErrStoreUnavailable
+		return nil, s.queryFailure("by_api_key", "rows", err)
 	}
 	return out, nil
 }
@@ -398,7 +413,7 @@ LIMIT ?`
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return EventPage{}, ErrStoreUnavailable
+		return EventPage{}, s.queryFailure("events", "query", err)
 	}
 	defer rows.Close()
 
@@ -433,7 +448,7 @@ LIMIT ?`
 			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered, &e.OutputTokensKnown, &e.UpstreamErrorType, &e.UpstreamErrorCode, &e.UpstreamErrorParam, &e.UpstreamErrorMessage,
 			&e.TraceState, &e.AttemptCount, &e.FailedAttempts, &e.HadAnomaly, &e.PrimaryCause, &e.TraceTransport, &e.TraceRevision, &e.TraceRequestID,
 		); err != nil {
-			return EventPage{}, ErrStoreUnavailable
+			return EventPage{}, s.queryFailure("events", "scan", err)
 		}
 		e.GenerationBuffered = buffered
 		if firstOutputAt.Valid && generationNS.Valid {
@@ -481,7 +496,7 @@ LIMIT ?`
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
-		return EventPage{}, ErrStoreUnavailable
+		return EventPage{}, s.queryFailure("events", "rows", err)
 	}
 
 	page := EventPage{}
@@ -521,7 +536,7 @@ FROM ` + tpsEvents + `
 GROUP BY api_key_id`
 	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, ErrStoreUnavailable
+		return nil, s.queryFailure("all_time_by_key", "query", err)
 	}
 	defer rows.Close()
 
@@ -544,14 +559,14 @@ GROUP BY api_key_id`
 			&sum.TPSSamples, &sum.TPSEstimatedSamples, &sum.TPSPartialSamples, &sum.TPSOutputTokens, &sum.TPSDurationMS,
 			&sum.ObservedTPSSamples, &sum.ObservedTPSEstimatedSamples, &sum.ObservedTPSPartialSamples, &sum.ObservedTPSBufferedSamples, &sum.ObservedTPSOutputTokens, &sum.ObservedTPSGenerationDurationMS,
 		); err != nil {
-			return nil, ErrStoreUnavailable
+			return nil, s.queryFailure("all_time_by_key", "scan", err)
 		}
 		sum.TPSStats.finish()
 		fillSummaryRates(&sum)
 		out[id] = sum
 	}
 	if err := rows.Err(); err != nil {
-		return nil, ErrStoreUnavailable
+		return nil, s.queryFailure("all_time_by_key", "rows", err)
 	}
 	return out, nil
 }

@@ -43,7 +43,13 @@ Usage Block 在启动时清理，运行期间通过 framework 后台任务每小
 
 ## 快速 503 与账号等待诊断
 
+Usage Block 的 EventHub port 将 Dashboard、事件列表、Count、CSV、筛选项、累计统计、轨迹读取和异常分析放在同一个固定 `/query` lane，最多执行一个此类查询；`Start`、`Complete`、`WriteTrace`、健康查询、客户端 Key 生命周期、恢复和数据库 Checkpoint 保留在原 owner lane。慢查询不再占住调用登记与结算的命令队列，写入仍受现有数据库写锁保护。查询按顺序使用连接，Dashboard 与筛选项分别通过单个读事务保持结果快照一致；现有连接池上限为 4，不因拆 lane 增加查询并发。两条 lane 仍共享 DuckDB 的 CPU、内存和 I/O，不能据此保证资源耗尽时写入一定成功。
+
+查询取消沿用调用 context：未执行的命令超时后不再派发，已执行的命令等待真实结束并释放事务与结果集。关闭仍先停止输入、排空后台任务与全部 EventHub lane，再释放 Usage owner。统计与筛选缓存使用失效序号阻止旧查询在写入清空缓存后重新回填旧结果；登记、结算、轨迹更新、恢复与删除按各自影响失效缓存，不变更数据库结构或持久化版本。
+
 仅有 `request completed status=503` 和总耗时不足以区分用量登记失败、命令队列拥堵与账号不可用。默认日志级别下，`usage start failed` 提供 `request_id`、`event_id`、`api_key_id`、入站接口、阶段、耗时与固定原因分类；管理用量查询失败使用 `admin usage query failed`，包含接口及查询阶段。这些失败摘要不记录原始数据库错误、查询参数、正文或认证头。用量错误通过进程内命令保留原始 cause，供分类使用。
+
+调用明细、Dashboard 聚合及 CSV 查询失败保留底层错误类别：`reason=duckdb_out_of_memory` 表示 DuckDB 内存预算不足，`duckdb_interrupted` 表示数据库执行被中断，`duckdb_io` 表示 I/O 故障，`duckdb_catalog` / `duckdb_binder` 表示表或 SQL 绑定问题，`row_scan_failed` 表示结果字段转换失败。若同时观测到 context 超时或取消，优先显示 `deadline_exceeded` / `canceled`，并保留 `duckdb_error_code` 数值；没有驱动类型时为 -1。`query_operation` 指出具体查询，`query_stage=begin|query|scan|rows|commit` 区分事务建立、查询执行、字段转换、结果迭代和事务提交。连接池快照 `db_pool_open`、`db_pool_in_use`、`db_pool_idle` 及进程累计 `db_pool_wait_count` / `db_pool_wait_ms` 用于辅助判断连接池压力；累计等待时间不代表本次请求的排队耗时。这些字段不包含驱动错误原文，也不会自动修改内存配置、修补数据或重建数据库。
 
 账号准入、共享身份查询、凭据刷新及容量刷新各命令，等待超过 3 秒会记录 `Codex account command still waiting`；失败或慢命令结束后记录 `Codex account command completed`。按 `stage` 区分 `acquire`、`client_identity`、`refresh_credential`、`refresh_usage_credential`、`fetch_usage`、`persist_usage_snapshot` 等阶段，按 `request_id` / `event_id` 关联推理请求，按 `progress_id` 关联容量刷新任务。`duration_ms` 包含命令准入、排队和执行，不能单独当作数据库锁等待时间。`command_admission_timeout` 表示命令未完成准入；`unavailable_reason=accounts_busy` 表示账号池已经执行了调度并返回容量不足，两者应分别排查。容量任务另有开始、结束和失败计数日志。
 

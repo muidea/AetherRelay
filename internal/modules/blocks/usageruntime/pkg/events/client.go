@@ -278,6 +278,7 @@ func send(hub event.Hub, ev event.Event, name string) (event.Result, error) {
 	if hub == nil {
 		return nil, fmt.Errorf("%s command event hub is unavailable", name)
 	}
+	bindCommandLane(ev)
 	result := hub.Send(ev)
 	if result == nil {
 		return nil, fmt.Errorf("%s command received no response", name)
