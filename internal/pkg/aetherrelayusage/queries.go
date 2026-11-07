@@ -385,12 +385,39 @@ func (s *DuckDBStore) Events(ctx context.Context, filter EventFilter) (EventPage
 	}
 
 	limit := filter.PageSize
-	// 多取 1 条判断 has_more。
+	// Select only IDs before loading wide diagnostic projections. All reads
+	// share a snapshot so concurrent completion/deletion cannot change the page.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return EventPage{}, s.queryFailure("events", "begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	pageArgs := append(args, limit+1)
+	idRows, err := tx.QueryContext(ctx, `SELECT event_id FROM usage_events WHERE `+where+` ORDER BY started_at DESC, event_id DESC LIMIT ?`, pageArgs...)
+	if err != nil {
+		return EventPage{}, s.queryFailure("events_page", "query", err)
+	}
+	var ids []string
+	for idRows.Next() {
+		var id string
+		if err := idRows.Scan(&id); err != nil {
+			_ = idRows.Close()
+			return EventPage{}, s.queryFailure("events_page", "scan", err)
+		}
+		ids = append(ids, id)
+	}
+	err = idRows.Err()
+	_ = idRows.Close()
+	if err != nil {
+		return EventPage{}, s.queryFailure("events_page", "rows", err)
+	}
+	whereIDs, detailArgs := eventPageIDs(ids)
+	// Load only the selected page, including the extra row for has_more.
 	q := `
 SELECT
     event_id, coalesce(round_id, 0), started_at, completed_at,
     cast(usage_date AS VARCHAR), api_key_id,
-    coalesce(provider, ''), coalesce(model, ''), account_id, account_label, upstream_request_model, response_model, model_substituted,
+    coalesce(provider, ''), coalesce(model, ''),
     coalesce(operation, ''), coalesce(route, ''),
     coalesce(client_endpoint, ''), coalesce(client_protocol, ''),
     coalesce(upstream_protocol, ''), coalesce(upstream_endpoint, ''),
@@ -404,14 +431,12 @@ SELECT
     coalesce(failure_class, ''), retryable, retry_after_seconds,
     duration_ms, first_event_duration_ms, upstream_duration_ms,
     upstream_status, coalesce(upstream_content_type, ''), upstream_content_length, coalesce(upstream_transfer_encoding, ''),
-    stream, estimated, state, first_output_at, generation_duration_ns, coalesce(generation_partial, false), generation_buffered, output_tokens_known, upstream_error_type, upstream_error_code, upstream_error_param, upstream_error_message, trace_state, attempt_count, failed_attempts, had_anomaly, primary_cause, trace_transport, trace_revision, trace_request_id
-FROM ` + anomalyEventSource + `
-WHERE ` + where + `
-ORDER BY started_at DESC, event_id DESC
-LIMIT ?`
-	args = append(args, limit+1)
+    stream, estimated, state
+FROM usage_events
+WHERE ` + whereIDs + `
+ORDER BY started_at DESC, event_id DESC`
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := tx.QueryContext(ctx, q, detailArgs...)
 	if err != nil {
 		return EventPage{}, s.queryFailure("events", "query", err)
 	}
@@ -420,9 +445,6 @@ LIMIT ?`
 	var events []Event
 	for rows.Next() {
 		var e Event
-		var firstOutputAt sql.NullTime
-		var generationNS sql.NullInt64
-		var partial, buffered bool
 		var completedAt sql.NullTime
 		var httpStatus sql.NullInt64
 		var durationMS, firstEventMS, upstreamMS, retryAfter sql.NullInt64
@@ -433,7 +455,7 @@ LIMIT ?`
 		if err := rows.Scan(
 			&e.EventID, &e.RoundID, &e.StartedAt, &completedAt,
 			&usageDate, &e.APIKeyID,
-			&e.Provider, &e.Model, &e.AccountID, &e.AccountLabel, &e.UpstreamRequestModel, &e.ResponseModel, &e.ModelSubstituted,
+			&e.Provider, &e.Model,
 			&e.Operation, &e.Route,
 			&e.ClientEndpoint, &e.ClientProtocol,
 			&e.UpstreamProtocol, &e.UpstreamEndpoint,
@@ -445,17 +467,12 @@ LIMIT ?`
 			&httpStatus, &e.Outcome, &e.ErrorCode,
 			&e.FailureClass, &retryable, &retryAfter,
 			&durationMS, &firstEventMS, &upstreamMS, &upstreamStatus, &e.UpstreamContentType, &contentLength, &e.UpstreamTransferEncoding,
-			&e.Stream, &e.Estimated, &e.State, &firstOutputAt, &generationNS, &partial, &buffered, &e.OutputTokensKnown, &e.UpstreamErrorType, &e.UpstreamErrorCode, &e.UpstreamErrorParam, &e.UpstreamErrorMessage,
-			&e.TraceState, &e.AttemptCount, &e.FailedAttempts, &e.HadAnomaly, &e.PrimaryCause, &e.TraceTransport, &e.TraceRevision, &e.TraceRequestID,
+			&e.Stream, &e.Estimated, &e.State,
 		); err != nil {
 			return EventPage{}, s.queryFailure("events", "scan", err)
 		}
-		e.GenerationBuffered = buffered
-		if firstOutputAt.Valid && generationNS.Valid {
-			known := e.OutputTokensKnown
-			e.GenerationSample = makeGenerationSample(firstOutputAt.Time.UTC(), generationNS.Int64, e.OutputTokens, partial, buffered, known)
-			e.OutputTokensKnown = known
-		}
+		e.TraceState = "not_collected"
+		e.OutputTokensKnown = e.OutputTokens > 0
 		e.UpstreamContentLengthKnown = contentLength.Valid
 		e.UpstreamContentLength = contentLength.Int64
 		e.StartedAt = e.StartedAt.UTC()
@@ -492,11 +509,20 @@ LIMIT ?`
 		if strings.TrimSpace(unsupported) != "" && unsupported != "null" {
 			_ = json.Unmarshal([]byte(unsupported), &e.UnsupportedFeatures)
 		}
-		setE2ETPS(&e)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
 		return EventPage{}, s.queryFailure("events", "rows", err)
+	}
+
+	if err := rows.Close(); err != nil {
+		return EventPage{}, s.queryFailure("events", "rows", err)
+	}
+	if err := s.loadEventPageDetails(ctx, tx, ids, events); err != nil {
+		return EventPage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return EventPage{}, s.queryFailure("events", "commit", err)
 	}
 
 	page := EventPage{}

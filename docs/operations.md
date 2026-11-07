@@ -45,6 +45,8 @@ Usage Block 在启动时清理，运行期间通过 framework 后台任务每小
 
 Usage Block 的 EventHub port 将 Dashboard、事件列表、Count、CSV、筛选项、累计统计、轨迹读取和异常分析放在同一个固定 `/query` lane，最多执行一个此类查询；`Start`、`Complete`、`WriteTrace`、健康查询、客户端 Key 生命周期、恢复和数据库 Checkpoint 保留在原 owner lane。慢查询不再占住调用登记与结算的命令队列，写入仍受现有数据库写锁保护。查询按顺序使用连接，Dashboard 与筛选项分别通过单个读事务保持结果快照一致；现有连接池上限为 4，不因拆 lane 增加查询并发。两条 lane 仍共享 DuckDB 的 CPU、内存和 I/O，不能据此保证资源耗尽时写入一定成功。
 
+用量明细先在主表按完整筛选条件与 `(started_at, event_id)` 游标选择至多 `page_size + 1` 个 ID，再只读取这些 ID 的主记录与关联观测。关联表逐表读取并及时释放结果集，避免分页之前同时建立多个大关联结果；全部读取共用一个事务快照，分页和最终结算、删除并行时不混入不同状态。返回字段与筛选语义保持不变，不读取完整轨迹 payload，也不改变表、索引或内存配置。`query_operation=events_page` 表示分页 ID 查询，`events` 表示主记录读取，`events_usage_*` 表示对应关联表读取；事务建立或提交仍分别标记 `begin` / `commit`。
+
 查询取消沿用调用 context：未执行的命令超时后不再派发，已执行的命令等待真实结束并释放事务与结果集。关闭仍先停止输入、排空后台任务与全部 EventHub lane，再释放 Usage owner。统计与筛选缓存使用失效序号阻止旧查询在写入清空缓存后重新回填旧结果；登记、结算、轨迹更新、恢复与删除按各自影响失效缓存，不变更数据库结构或持久化版本。
 
 仅有 `request completed status=503` 和总耗时不足以区分用量登记失败、命令队列拥堵与账号不可用。默认日志级别下，`usage start failed` 提供 `request_id`、`event_id`、`api_key_id`、入站接口、阶段、耗时与固定原因分类；管理用量查询失败使用 `admin usage query failed`，包含接口及查询阶段。这些失败摘要不记录原始数据库错误、查询参数、正文或认证头。用量错误通过进程内命令保留原始 cause，供分类使用。

@@ -47,7 +47,7 @@ func TestAdminUsageQueryLogsRealDriverClassAndQueryStage(t *testing.T) {
 	if w.Code != 503 {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	for _, field := range []string{`"reason":"duckdb_catalog"`, `"query_operation":"events"`, `"query_stage":"query"`, `"duckdb_error_code":`, `"db_pool_in_use":`} {
+	for _, field := range []string{`"reason":"duckdb_catalog"`, `"query_operation":"events_usage_generation"`, `"query_stage":"query"`, `"duckdb_error_code":`, `"db_pool_in_use":`} {
 		if !strings.Contains(logs.String(), field) {
 			t.Fatalf("missing %s: %s", field, logs.String())
 		}

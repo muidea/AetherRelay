@@ -57,7 +57,7 @@ func TestEventsPoolDeadlinePreservesCauseAndPoolOccupancy(t *testing.T) {
 	defer cancel()
 	_, err = s.Events(ctx, EventFilter{UsageFilter: UsageFilter{AllTime: true}})
 	details, ok := QueryFailureDetailsFromError(err)
-	if !errors.Is(err, context.DeadlineExceeded) || FailureReason(err) != "deadline_exceeded" || !ok || details.Stage != "query" || details.PoolInUse != 1 || details.PoolWaitCount == 0 {
+	if !errors.Is(err, context.DeadlineExceeded) || FailureReason(err) != "deadline_exceeded" || !ok || details.Stage != "begin" || details.PoolInUse != 1 || details.PoolWaitCount == 0 {
 		t.Fatalf("err=%v details=%+v ok=%v", err, details, ok)
 	}
 }

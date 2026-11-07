@@ -49,7 +49,7 @@ func TestUsagePortPreservesRealQueryFailureDetails(t *testing.T) {
 	}
 	_, err = port.Events(context.Background(), usage.EventFilter{UsageFilter: usage.UsageFilter{AllTime: true}})
 	details, ok := usage.QueryFailureDetailsFromError(err)
-	if usage.FailureReason(err) != "duckdb_catalog" || !errors.Is(err, usage.ErrStoreUnavailable) || !ok || details.Stage != "query" || details.Operation != "events" || details.DriverCode < 0 {
+	if usage.FailureReason(err) != "duckdb_catalog" || !errors.Is(err, usage.ErrStoreUnavailable) || !ok || details.Stage != "query" || details.Operation != "events_usage_generation" || details.DriverCode < 0 {
 		t.Fatalf("query evidence lost across EventHub: err=%v details=%+v", err, details)
 	}
 }
