@@ -1018,3 +1018,61 @@ func TestStreamCredentialRetryUsesSharedHighestIdentity(t *testing.T) {
 		t.Fatalf("attempts=%d err=%v", attempts, err)
 	}
 }
+
+func TestOpenCodexWebsocketHonorsExcludeAccountIDsAndReturnsAccountID(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	var seenExclude []string
+	accounts.Subscribe(accevents.TopicAcquire, func(ev event.Event, result event.Result) {
+		cmd := ev.Data().(accevents.AcquireCommand)
+		seenExclude = append([]string(nil), cmd.Exclude...)
+		result.Set(accevents.AcquireResult{AccountID: "acct-2", AccessToken: "token-2", LeaseID: "lease-2"}, nil)
+	})
+	accounts.Subscribe(accevents.TopicRelease, func(_ event.Event, result event.Result) { result.Set(accevents.ReleaseResult{Released: true}, nil) })
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicWSOpen, func(_ event.Event, result event.Result) {
+		result.Set(upevents.WSOpenResult{SessionID: "ws-2"}, nil)
+	})
+	proxy := &Proxy{Base: basebiz.New(proxycommon.UnitID, hub, background)}
+	opened, err := proxy.OpenCodexWebsocket(context.Background(), codexresponses.WebsocketOpenRequest{
+		Model:             "gpt-6.1-sol",
+		ExcludeAccountIDs: []string{"acct-1", "", "acct-1"},
+	})
+	if err != nil {
+		t.Fatalf("OpenCodexWebsocket err=%v", err)
+	}
+	if opened.AccountID != "acct-2" || len(seenExclude) != 1 || seenExclude[0] != "acct-1" {
+		t.Fatalf("opened=%+v seenExclude=%v", opened, seenExclude)
+	}
+}
+
+func TestPullCodexWebsocketPreservesSafeErrorAndRetryAfter(t *testing.T) {
+	hub := event.NewHub(24)
+	background := task.NewBackgroundRoutine(8)
+	t.Cleanup(func() { background.Shutdown(nil); hub.Terminate(context.Background()) })
+	accounts := event.NewSimpleObserver(acccommon.UnitID, hub)
+	accounts.Subscribe(accevents.TopicRecordResult, func(_ event.Event, result event.Result) { result.Set(accevents.RecordResultResult{}, nil) })
+	upstream := event.NewSimpleObserver(upcommon.UnitID, hub)
+	upstream.Subscribe(upevents.TopicWSPull, func(_ event.Event, result event.Result) {
+		result.Set(upevents.WSPullResult{
+			Payload:           []byte(`{"type":"error","error":{"type":"invalid_request_error","code":"bio_policy","message":"blocked"}}`),
+			Done:              true,
+			ErrorClass:        upevents.ErrorInvalidRequest,
+			RetryAfterSeconds: 17,
+			SafeError:         upevents.SafeError{Type: "invalid_request_error", Code: "bio_policy", Message: "blocked"},
+		}, nil)
+	})
+	proxy := &Proxy{
+		Base:            basebiz.New(proxycommon.UnitID, hub, background),
+		codexWebsockets: map[string]codexWebsocketBinding{"ws-1": {leaseID: "lease-1", accountID: "acct-1", model: "gpt-6.1-sol"}},
+	}
+	update, err := proxy.PullCodexWebsocket(context.Background(), "ws-1")
+	if err != nil || update.Failure == nil {
+		t.Fatalf("update=%+v err=%v", update, err)
+	}
+	if update.Failure.Kind != codexresponses.KindInvalidRequest || update.Failure.UpstreamCode != "bio_policy" || update.Failure.UpstreamMessage != "blocked" || update.Failure.RetryAfterSeconds != 17 {
+		t.Fatalf("failure=%+v", update.Failure)
+	}
+}

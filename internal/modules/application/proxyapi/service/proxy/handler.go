@@ -1292,15 +1292,13 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 	if NormalizeClientEndpoint(r.URL.Path) == "/v1/responses" {
 		var request map[string]any
 		if err := json.Unmarshal(body, &request); err == nil {
-			// Validate an explicitly supplied reasoning object before routing, but
-			// defer default-effort injection until we know the selected plan is
-			// native. A conversion candidate must not receive a synthetic
-			// reasoning field that it is required to reject.
-			if reasoning, present := request["reasoning"]; present && reasoning != nil {
-				if err := h.applyModelReasoning(rawModel, request); err != nil {
-					h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
-					return
-				}
+			// Validate an explicitly supplied reasoning object or configuration_update
+			// effort before routing, but defer default-effort injection until we know
+			// the selected plan is native. A conversion candidate must not receive a
+			// synthetic reasoning field that it is required to reject.
+			if err := h.validateExplicitModelReasoning(rawModel, request); err != nil {
+				h.writeArchivedAPIError(w, round, r, start, "", rawModel, rawStream, http.StatusBadRequest, *err)
+				return
 			}
 		}
 	}
@@ -1642,10 +1640,26 @@ func (h *Handler) handlePreparedNativeResponses(w http.ResponseWriter, r *http.R
 	h.handleBufferedResponse(w, resp, round, start, result.ProviderName, model, stream, requestBody, r)
 }
 
+func (h *Handler) validateExplicitModelReasoning(model string, body map[string]any) *APIError {
+	metadata, ok := h.currentConfig().ModelMetadata[model]
+	if !ok || !metadata.ReasoningDeclared {
+		return nil
+	}
+	if raw, present := body["reasoning"]; present && raw != nil {
+		if err := validateModelReasoningValue(model, metadata, raw); err != nil {
+			return err
+		}
+	}
+	return validateConfigurationUpdateReasoning(model, metadata, body)
+}
+
 func (h *Handler) applyModelReasoning(model string, body map[string]any) *APIError {
 	metadata, ok := h.currentConfig().ModelMetadata[model]
 	if !ok || !metadata.ReasoningDeclared {
 		return nil
+	}
+	if err := validateConfigurationUpdateReasoning(model, metadata, body); err != nil {
+		return err
 	}
 	raw, present := body["reasoning"]
 	if !metadata.ReasoningSupported {
@@ -1660,6 +1674,34 @@ func (h *Handler) applyModelReasoning(model string, body map[string]any) *APIErr
 	}
 	if !present {
 		return nil
+	}
+	return validateModelReasoningValue(model, metadata, raw)
+}
+
+func validateConfigurationUpdateReasoning(model string, metadata config.ModelMetadata, body map[string]any) *APIError {
+	items, ok := body["input"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item["type"] != "configuration_update" {
+			continue
+		}
+		raw, present := item["reasoning"]
+		if !present || raw == nil {
+			continue
+		}
+		if err := validateModelReasoningValue(model, metadata, raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateModelReasoningValue(model string, metadata config.ModelMetadata, raw any) *APIError {
+	if !metadata.ReasoningSupported {
+		return &APIError{Code: ErrorCodeInvalidRequest, Message: "reasoning is not supported for model " + model, Feature: "reasoning", Model: model}
 	}
 	obj, ok := raw.(map[string]any)
 	if !ok {

@@ -64,3 +64,21 @@ func TestRefreshDoesNotOverwriteReauthenticatedCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshDistinguishesPreSendErrorsInRequestSent(t *testing.T) {
+	s, _, ids := newSchedulingAccount(t)
+	s.oauthRefresh = func(context.Context, oauth.Request) (oauth.Result, error) {
+		return oauth.Result{}, &oauth.Error{PreSend: true, Class: "invalid_request", Cause: fmt.Errorf("invalid proxy")}
+	}
+	out, err := s.refreshTokenOnce(context.Background(), ids[0])
+	if err == nil || out.RequestSent {
+		t.Fatalf("pre-send error must report RequestSent=false, out=%+v err=%v", out, err)
+	}
+	s.oauthRefresh = func(context.Context, oauth.Request) (oauth.Result, error) {
+		return oauth.Result{}, &oauth.Error{Class: "network", Cause: fmt.Errorf("reset")}
+	}
+	out, err = s.refreshTokenOnce(context.Background(), ids[0])
+	if err == nil || !out.RequestSent {
+		t.Fatalf("post-send error must report RequestSent=true, out=%+v err=%v", out, err)
+	}
+}

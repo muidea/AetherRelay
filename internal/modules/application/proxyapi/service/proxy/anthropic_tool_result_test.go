@@ -137,7 +137,8 @@ func TestInvalidImageToolResultHasExactPathAndNoUpstreamAttempt(t *testing.T) {
 		{"bad base64", ".source.data", "tool_result.image", map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "private-invalid-base64"}}},
 		{"wrong media type", ".source.media_type", "tool_result.image", map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/jpeg", "data": toolResultPNG}}},
 		{"URL", ".source.type", "tool_result.image", map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": "https://private.invalid/image.png"}}},
-		{"document", ".type", "tool_result.content.type", map[string]any{"type": "document", "source": map[string]any{}}},
+		{"document", ".source.type", "tool_result.document", map[string]any{"type": "document", "source": map[string]any{}}},
+		{"pdf document", ".source.type", "tool_result.document", map[string]any{"type": "document", "source": map[string]any{"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := imageToolContinuation([]any{tc.block})

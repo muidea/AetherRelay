@@ -702,19 +702,22 @@ func (s *Account) refreshTokenOnceVersion(ctx context.Context, accountID, versio
 	}
 	defer cancel()
 	identity := s.store.SharedClientIdentity()
-	defer func() { out.RequestSent = true }()
+	requestSent := false
+	defer func() { out.RequestSent = requestSent }()
 	result, err := s.oauthRefresh(oauthCtx, oauth.Request{RefreshToken: credential.RefreshToken, Proxy: credential.Proxy, UserAgent: identity.UserAgent, Originator: identity.Originator})
 	if err != nil {
-		class, permanent := events.ErrorUpstream, false
+		class, permanent, preSend := events.ErrorUpstream, false, false
 		if oauthErr, ok := err.(*oauth.Error); ok {
-			class, permanent = oauthErr.Class, oauthErr.Permanent
+			class, permanent, preSend = oauthErr.Class, oauthErr.Permanent, oauthErr.PreSend
 		}
+		requestSent = !preSend
 		out, recordErr := s.store.RecordRefreshFailureSnapshot(snapshot, class, permanent)
 		if recordErr != nil {
 			return out, recordErr
 		}
 		return out, err
 	}
+	requestSent = true
 	return s.store.ApplyRefreshSnapshot(snapshot, events.CredentialInput{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, IDToken: result.IDToken, AccountID: result.AccountID, Email: result.Email, Expired: result.Expired})
 }
 

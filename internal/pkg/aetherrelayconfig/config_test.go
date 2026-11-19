@@ -99,6 +99,20 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.VerboseLogging {
 		t.Fatal("example config must keep verbose logging disabled")
 	}
+	for _, want := range []struct {
+		id         string
+		ctx, maxCt int
+	}{
+		{id: "gpt-6.2-astra", ctx: 272000, maxCt: 872000},
+		{id: "gpt-6.2-sol", ctx: 500000, maxCt: 872000},
+	} {
+		meta, ok := cfg.ModelMetadata[want.id]
+		if !ok || meta.ContextWindowTokens != want.ctx || meta.MaxContextWindowTokens != want.maxCt || meta.MaxOutputTokens != 128000 ||
+			!meta.ReasoningSupported || meta.ReasoningDefaultEffort != "low" || len(meta.ReasoningEfforts) != 6 ||
+			!meta.NativeResponsesTools || !meta.NativeResponsesImages {
+			t.Fatalf("example metadata %s=%+v", want.id, meta)
+		}
+	}
 }
 
 func TestVerboseLoggingDefaultsOffAndSupportsExplicitOptIn(t *testing.T) {

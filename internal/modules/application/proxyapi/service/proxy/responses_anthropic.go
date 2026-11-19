@@ -1087,6 +1087,42 @@ func buildResponsesObjectFromAnthropic(body map[string]any, model string, stream
 	if err := validateConversionTree(msgs, "messages"); err != nil {
 		return nil, nil, err
 	}
+	var toolChoiceMapped any
+	forcedToolName := ""
+	if choice, ok := body["tool_choice"]; ok {
+		mapped, err := anthropicToolChoiceToResponses(choice)
+		if err != nil {
+			return nil, nil, err
+		}
+		toolChoiceMapped = mapped
+		if choiceObj, ok := choice.(map[string]any); ok && choiceObj["type"] == "tool" {
+			forcedToolName, _ = choiceObj["name"].(string)
+			forcedToolName = strings.TrimSpace(forcedToolName)
+		}
+	}
+	var toolsOut []any
+	var codexTools *codexAnthropicToolRegistry
+	if projectSystem != nil {
+		codexTools = newCodexAnthropicToolRegistry()
+	}
+	if rawTools, ok := body["tools"]; ok {
+		convertedTools, err := anthropicToolsToResponsesWithDefer(rawTools, projectSystem != nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		toolsOut = make([]any, 0, len(convertedTools))
+		for _, entry := range convertedTools {
+			if codexTools != nil {
+				codexTools.register(entry)
+				if entry.deferred && (forcedToolName == "" || entry.name != forcedToolName) {
+					continue
+				}
+				codexTools.markEmitted(entry.name)
+			}
+			toolCopy := cloneAnthropicToolDef(entry.tool, projectSystem != nil)
+			toolsOut = append(toolsOut, toolCopy)
+		}
+	}
 	input := make([]any, 0, len(msgs))
 	registry := newToolCallRegistry()
 	instructions, err := anthropicSystemText(body["system"])
@@ -1103,7 +1139,7 @@ func buildResponsesObjectFromAnthropic(body map[string]any, model string, stream
 		}
 		role, _ := m["role"].(string)
 		contentRaw := m["content"]
-		content, blocks, err := anthropicMessageContentToResponses(contentRaw, role, registry, capability.Images, projectSystem != nil)
+		content, blocks, err := anthropicMessageContentToResponsesWithDiscovery(contentRaw, role, registry, capability.Images, projectSystem != nil, codexTools)
 		if err != nil {
 			path := fmt.Sprintf("messages[%d].content", i)
 			var located *conversionLocationError
@@ -1155,26 +1191,11 @@ func buildResponsesObjectFromAnthropic(body map[string]any, model string, stream
 	if instructions != "" {
 		out["instructions"] = instructions
 	}
-	if rawTools, ok := body["tools"]; ok {
-		mapped, err := anthropicToolsToResponses(rawTools)
-		if err != nil {
-			return nil, nil, err
-		}
-		tools := make([]any, len(mapped))
-		for i, tool := range mapped {
-			if projectSystem != nil {
-				tool["parameters"] = cloneConversionJSON(tool["parameters"])
-			}
-			tools[i] = tool
-		}
-		out["tools"] = tools
+	if toolsOut != nil {
+		out["tools"] = toolsOut
 	}
-	if choice, ok := body["tool_choice"]; ok {
-		mapped, err := anthropicToolChoiceToResponses(choice)
-		if err != nil {
-			return nil, nil, err
-		}
-		out["tool_choice"] = mapped
+	if toolChoiceMapped != nil {
+		out["tool_choice"] = toolChoiceMapped
 	}
 	for _, key := range []string{"temperature", "top_p"} {
 		if value, ok := body[key]; ok {
@@ -1309,6 +1330,10 @@ func applyAnthropicThinkingAdapter(request map[string]any, rawThinking any, thin
 }
 
 func anthropicMessageContentToResponses(raw any, role string, registry *toolCallRegistry, toolResultImages, preserveOrder bool) (textOut string, itemsOut []map[string]any, resultErr error) {
+	return anthropicMessageContentToResponsesWithDiscovery(raw, role, registry, toolResultImages, preserveOrder, nil)
+}
+
+func anthropicMessageContentToResponsesWithDiscovery(raw any, role string, registry *toolCallRegistry, toolResultImages, preserveOrder bool, codexTools *codexAnthropicToolRegistry) (textOut string, itemsOut []map[string]any, resultErr error) {
 	blockIndex := -1
 	defer func() {
 		if resultErr != nil && blockIndex >= 0 {
@@ -1333,6 +1358,14 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 	}
 	var text strings.Builder
 	items := make([]map[string]any, 0)
+	flushDiscoveredTools := func() {
+		if codexTools == nil {
+			return
+		}
+		if item := codexTools.flushAdditionalTools(); item != nil {
+			items = append(items, item)
+		}
+	}
 	flushText := func() {
 		if preserveOrder && role != "system" && text.Len() > 0 {
 			items = append(items, map[string]any{"type": "message", "role": role, "content": text.String()})
@@ -1348,6 +1381,7 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 		typ, _ := block["type"].(string)
 		switch typ {
 		case "text":
+			flushDiscoveredTools()
 			if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "text": {}}); err != nil {
 				return "", nil, err
 			}
@@ -1356,7 +1390,18 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 				return "", nil, fmt.Errorf("content.text")
 			}
 			text.WriteString(value)
+		case "document":
+			flushDiscoveredTools()
+			docText, err := anthropicDocumentText(block)
+			if err != nil {
+				return "", nil, err
+			}
+			if text.Len() > 0 && !strings.HasSuffix(text.String(), "\n") && docText != "" {
+				text.WriteByte('\n')
+			}
+			text.WriteString(docText)
 		case "tool_use":
+			flushDiscoveredTools()
 			flushText()
 			if role != "assistant" {
 				return "", nil, fmt.Errorf("tool_use requires assistant role")
@@ -1369,12 +1414,30 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 				return "", nil, err
 			}
 			items = append(items, mapped)
+		case "tool_reference":
+			if codexTools == nil {
+				return "", nil, fmt.Errorf("content.%s", typ)
+			}
+			flushText()
+			if _, err := codexTools.recordReference(block); err != nil {
+				return "", nil, err
+			}
+		case "tool_search_tool_result":
+			if codexTools == nil {
+				return "", nil, fmt.Errorf("content.%s", typ)
+			}
+			flushText()
+			if err := codexTools.recordSearchToolResult(block); err != nil {
+				return "", nil, err
+			}
+			flushDiscoveredTools()
 		case "tool_result":
+			flushDiscoveredTools()
 			flushText()
 			if role != "user" {
 				return "", nil, fmt.Errorf("tool_result requires user role")
 			}
-			mapped, err := anthropicToolBlockToResponsesWithImages(block, toolResultImages)
+			mapped, err := anthropicToolBlockToResponsesWithOptions(block, toolResultImages, codexTools)
 			if err != nil {
 				return "", nil, err
 			}
@@ -1382,11 +1445,13 @@ func anthropicMessageContentToResponses(raw any, role string, registry *toolCall
 				return "", nil, err
 			}
 			items = append(items, mapped)
+			flushDiscoveredTools()
 		default:
 			return "", nil, fmt.Errorf("content.%s", typ)
 		}
 	}
 	flushText()
+	flushDiscoveredTools()
 	return text.String(), items, nil
 }
 
@@ -1519,7 +1584,124 @@ func responsesToolsToAnthropic(raw any) ([]map[string]any, error) {
 	return out, nil
 }
 
+type anthropicConvertedTool struct {
+	name     string
+	deferred bool
+	tool     map[string]any
+}
+
+type codexAnthropicToolRegistry struct {
+	declared   map[string]map[string]any
+	emitted    map[string]struct{}
+	discovered []any
+}
+
+func newCodexAnthropicToolRegistry() *codexAnthropicToolRegistry {
+	return &codexAnthropicToolRegistry{
+		declared: make(map[string]map[string]any),
+		emitted:  make(map[string]struct{}),
+	}
+}
+
+func (r *codexAnthropicToolRegistry) register(entry anthropicConvertedTool) {
+	if r == nil || entry.name == "" {
+		return
+	}
+	if _, exists := r.declared[entry.name]; !exists {
+		r.declared[entry.name] = entry.tool
+	}
+}
+
+func (r *codexAnthropicToolRegistry) markEmitted(name string) {
+	if r == nil || name == "" {
+		return
+	}
+	r.emitted[name] = struct{}{}
+}
+
+func (r *codexAnthropicToolRegistry) recordReference(block map[string]any) (string, error) {
+	if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "tool_name": {}, "name": {}}); err != nil {
+		return "", err
+	}
+	refName := strings.TrimSpace(stringValue(block["tool_name"]))
+	if refName == "" {
+		refName = strings.TrimSpace(stringValue(block["name"]))
+	}
+	if refName == "" {
+		return "", fmt.Errorf("tool_reference.tool_name")
+	}
+	if r != nil {
+		if def, exists := r.declared[refName]; exists {
+			if _, emitted := r.emitted[refName]; !emitted {
+				r.emitted[refName] = struct{}{}
+				r.discovered = append(r.discovered, cloneAnthropicToolDef(def, true))
+			}
+		}
+	}
+	encoded, err := json.Marshal(block)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func (r *codexAnthropicToolRegistry) recordSearchToolResult(block map[string]any) error {
+	if err := rejectConversionFields(block, map[string]struct{}{"type": {}, "tool_use_id": {}, "content": {}, "is_error": {}}); err != nil {
+		return err
+	}
+	content, ok := block["content"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("tool_search_tool_result.content")
+	}
+	refs, ok := content["tool_references"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, rawRef := range refs {
+		ref, ok := rawRef.(map[string]any)
+		if !ok || ref["type"] != "tool_reference" {
+			continue
+		}
+		if _, err := r.recordReference(ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *codexAnthropicToolRegistry) flushAdditionalTools() map[string]any {
+	if r == nil || len(r.discovered) == 0 {
+		return nil
+	}
+	tools := append([]any(nil), r.discovered...)
+	r.discovered = r.discovered[:0]
+	return map[string]any{"type": "additional_tools", "role": "developer", "tools": tools}
+}
+
+func cloneAnthropicToolDef(tool map[string]any, cloneParams bool) map[string]any {
+	cloned := make(map[string]any, len(tool))
+	for k, v := range tool {
+		cloned[k] = v
+	}
+	if cloneParams {
+		cloned["parameters"] = cloneConversionJSON(tool["parameters"])
+	}
+	return cloned
+}
+
 func anthropicToolsToResponses(raw any) ([]map[string]any, error) {
+	converted, err := anthropicToolsToResponsesWithDefer(raw, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, len(converted))
+	for i, entry := range converted {
+		out[i] = entry.tool
+	}
+	return out, nil
+}
+
+func anthropicToolsToResponsesWithDefer(raw any, allowDefer bool) ([]anthropicConvertedTool, error) {
 	items, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("tools")
@@ -1527,18 +1709,30 @@ func anthropicToolsToResponses(raw any) ([]map[string]any, error) {
 	if len(items) > maxConversionTools {
 		return nil, fmt.Errorf("tools exceeds %d definitions", maxConversionTools)
 	}
-	out := make([]map[string]any, 0, len(items))
+	allowed := map[string]struct{}{"name": {}, "description": {}, "input_schema": {}}
+	if allowDefer {
+		allowed["defer_loading"] = struct{}{}
+	}
+	out := make([]anthropicConvertedTool, 0, len(items))
 	for i, item := range items {
 		tool, ok := item.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("tools[%d]", i)
 		}
-		if err := rejectConversionFields(tool, map[string]struct{}{"name": {}, "description": {}, "input_schema": {}}); err != nil {
+		if err := rejectConversionFields(tool, allowed); err != nil {
 			return nil, fmt.Errorf("tools[%d].%w", i, err)
 		}
 		name, _ := tool["name"].(string)
 		if name == "" {
 			return nil, fmt.Errorf("tools[%d].name", i)
+		}
+		deferred := false
+		if rawDefer, exists := tool["defer_loading"]; exists {
+			val, ok := rawDefer.(bool)
+			if !ok {
+				return nil, fmt.Errorf("tools[%d].defer_loading", i)
+			}
+			deferred = val
 		}
 		mapped := map[string]any{"type": "function", "name": name}
 		if description, exists := tool["description"]; exists {
@@ -1560,7 +1754,7 @@ func anthropicToolsToResponses(raw any) ([]map[string]any, error) {
 		} else {
 			mapped["parameters"] = map[string]any{"type": "object"}
 		}
-		out = append(out, mapped)
+		out = append(out, anthropicConvertedTool{name: name, deferred: deferred, tool: mapped})
 	}
 	return out, nil
 }
@@ -1618,10 +1812,14 @@ func stringifyToolOutput(raw any) (string, error) {
 }
 
 func anthropicToolBlockToResponses(block map[string]any) (map[string]any, error) {
-	return anthropicToolBlockToResponsesWithImages(block, false)
+	return anthropicToolBlockToResponsesWithOptions(block, false, nil)
 }
 
 func anthropicToolBlockToResponsesWithImages(block map[string]any, images bool) (map[string]any, error) {
+	return anthropicToolBlockToResponsesWithOptions(block, images, nil)
+}
+
+func anthropicToolBlockToResponsesWithOptions(block map[string]any, images bool, codexTools *codexAnthropicToolRegistry) (map[string]any, error) {
 	typ, _ := block["type"].(string)
 	switch typ {
 	case "tool_use":
@@ -1647,7 +1845,7 @@ func anthropicToolBlockToResponsesWithImages(block map[string]any, images bool) 
 			return nil, fmt.Errorf("tool_result.%w", err)
 		}
 		id, _ := block["tool_use_id"].(string)
-		content, err := anthropicToolResultOutput(block["content"], images)
+		content, err := anthropicToolResultOutputWithDiscovery(block["content"], images, codexTools)
 		if err != nil {
 			return nil, err
 		}

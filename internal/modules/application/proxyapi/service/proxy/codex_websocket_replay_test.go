@@ -153,6 +153,7 @@ func TestCodexWebsocketReplaySharesImmutableItemBodies(t *testing.T) {
 func TestCodexWebsocketLaterTurnRateLimitMigratesWithFullReplay(t *testing.T) {
 	var mu sync.Mutex
 	openCount := 0
+	var openedExcludes [][]string
 	pulls := map[string]int{}
 	var sends []struct {
 		session string
@@ -160,11 +161,15 @@ func TestCodexWebsocketLaterTurnRateLimitMigratesWithFullReplay(t *testing.T) {
 	}
 	closed := make(chan string, 4)
 	executor := codexResponsesExecutorStub{
-		wsOpen: func(context.Context, codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
+		wsOpen: func(_ context.Context, req codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			openCount++
-			return codexresponses.WebsocketOpenResult{SessionID: "session-" + string(rune('0'+openCount))}, nil
+			openedExcludes = append(openedExcludes, append([]string(nil), req.ExcludeAccountIDs...))
+			return codexresponses.WebsocketOpenResult{
+				AccountID: "acct-" + string(rune('0'+openCount)),
+				SessionID: "session-" + string(rune('0'+openCount)),
+			}, nil
 		},
 		wsSend: func(_ context.Context, sessionID string, payload []byte) error {
 			mu.Lock()
@@ -228,6 +233,9 @@ func TestCodexWebsocketLaterTurnRateLimitMigratesWithFullReplay(t *testing.T) {
 	mu.Unlock()
 	if gotOpenCount != 2 || len(gotSends) != 3 || gotSends[2].session != "session-2" {
 		t.Fatalf("opens=%d sends=%+v", gotOpenCount, gotSends)
+	}
+	if len(openedExcludes) != 2 || len(openedExcludes[0]) != 0 || len(openedExcludes[1]) != 1 || openedExcludes[1][0] != "acct-1" {
+		t.Fatalf("openedExcludes=%v", openedExcludes)
 	}
 	retry := gotSends[2].payload
 	if bytes.Contains(retry, []byte("previous_response_id")) || strings.Count(string(retry), `"call_id":"call_1"`) != 2 || !bytes.Contains(retry, []byte("first-ok")) || !bytes.Contains(retry, []byte("second")) {

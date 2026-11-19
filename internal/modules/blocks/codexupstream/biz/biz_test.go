@@ -1256,4 +1256,58 @@ func TestErrorClassifiesHTML403AsEndpoint(t *testing.T) {
 	if got := errorClassWithBody(http.StatusForbidden, []byte(`{"error":{"type":"forbidden"}}`), events.RateLimitObservation{}); got != events.ErrorUpstream {
 		t.Fatalf("structured class=%q", got)
 	}
+	for _, code := range []string{"bio_policy", "cyber_policy", "cyber_policy_violation", "misalignment_policy_violation", "content_policy_violation", "image_content_policy_violation"} {
+		body := fmt.Sprintf(`{"error":{"type":"invalid_request_error","code":%q,"message":"blocked"}}`, code)
+		if got := errorClassWithBody(http.StatusForbidden, []byte(body), events.RateLimitObservation{}); got != events.ErrorInvalidRequest {
+			t.Fatalf("policy 403 code=%s class=%q", code, got)
+		}
+	}
+}
+
+func TestCodexTerminalFailurePolicyFaultsStringsAndRetryAfter(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"bio_policy","message":"blocked"}}}`,
+		`{"type":"error","error":{"code":"cyber_policy_violation","message":"blocked"}}`,
+		`{"type":"error","body":{"error":{"code":"misalignment_policy_violation","message":"blocked"}}}`,
+		`{"type":"response.failed","response":{"error":{"code":"image_content_policy_violation","message":"blocked"}}}`,
+	} {
+		class, _, _, safeErr := codexTerminalFailureWithRetry([]byte(payload))
+		if class != events.ErrorInvalidRequest || safeErr.Message != "blocked" {
+			t.Fatalf("payload=%s class=%q safeErr=%+v", payload, class, safeErr)
+		}
+	}
+
+	strClass, _, _, strSafe := codexTerminalFailureWithRetry([]byte(`{"type":"error","error":"upstream string failure"}`))
+	if strClass != events.ErrorUpstream || strSafe.Message != "upstream string failure" {
+		t.Fatalf("string error class=%q safeErr=%+v", strClass, strSafe)
+	}
+
+	nonError := []byte(`{"type":"response.metadata","body":{"error":{"code":"bio_policy","message":"ignored"}}}`)
+	if done, _, _, _, _ := terminalOutcomeDetail(nonError); done {
+		t.Fatal("non-error event with body.error must not terminate as failure")
+	}
+	if class, _, _ := codexTerminalFailure(nonError); class != "" {
+		t.Fatalf("non-error event classified as %q", class)
+	}
+
+	wsOverload := []byte(`{"type":"error","headers":{"retry-after":"19"},"error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"busy"}}`)
+	class, _, retryAfter, safeErr := codexTerminalFailureWithRetry(wsOverload)
+	if class != events.ErrorUpstream || retryAfter != 19 || safeErr.Code != "server_is_overloaded" {
+		t.Fatalf("ws overload class=%q retryAfter=%d safeErr=%+v", class, retryAfter, safeErr)
+	}
+
+	nestedOverload := []byte(`{"type":"response.failed","body":{"headers":{"Retry-After":"23"},"error":{"code":"server_is_overloaded"}}}`)
+	_, _, retryAfter, _ = codexTerminalFailureWithRetry(nestedOverload)
+	if retryAfter != 23 {
+		t.Fatalf("nested body.headers retryAfter=%d", retryAfter)
+	}
+
+	_, _, outerWins, _ := readErrorObservationParts(http.Header{"Retry-After": []string{"11"}}, strings.NewReader(`{"headers":{"retry-after":"29"},"error":{"code":"server_is_overloaded"}}`))
+	if outerWins != 11 {
+		t.Fatalf("outer header precedence=%d want=11", outerWins)
+	}
+	_, _, fallbackNested, _ := readErrorObservationParts(http.Header{}, strings.NewReader(`{"body":{"headers":{"retry-after":"27"}},"error":{"code":"server_is_overloaded"}}`))
+	if fallbackNested != 27 {
+		t.Fatalf("nested fallback retryAfter=%d want=27", fallbackNested)
+	}
 }

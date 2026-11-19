@@ -139,6 +139,19 @@ func TestCodexAstraManifestHonorsExplicitMetadata(t *testing.T) {
 			if err := handler.applyModelReasoning(metadata.ID, map[string]any{"reasoning": map[string]any{"effort": "ultra"}}); err == nil {
 				t.Fatal("undeclared effort accepted")
 			}
+			if len(metadata.ReasoningEfforts) > 0 {
+				supportedUpdate := map[string]any{"input": []any{map[string]any{"type": "configuration_update", "reasoning": map[string]any{"effort": metadata.ReasoningEfforts[0]}}}}
+				if err := handler.validateExplicitModelReasoning(metadata.ID, supportedUpdate); err != nil {
+					t.Fatalf("supported configuration_update effort rejected: %v", err)
+				}
+				if _, injected := supportedUpdate["reasoning"]; injected {
+					t.Fatal("validateExplicitModelReasoning mutated top-level reasoning")
+				}
+			}
+			unsupportedUpdate := map[string]any{"input": []any{map[string]any{"type": "configuration_update", "reasoning": map[string]any{"effort": "ultra"}}}}
+			if err := handler.applyModelReasoning(metadata.ID, unsupportedUpdate); err == nil {
+				t.Fatal("undeclared configuration_update effort accepted")
+			}
 		})
 	}
 }

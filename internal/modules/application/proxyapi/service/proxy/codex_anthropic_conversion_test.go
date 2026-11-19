@@ -181,6 +181,168 @@ func TestCodexConvertedObjectMatchesBytePathAndOwnsSchemas(t *testing.T) {
 	}
 }
 
+func TestAnthropicDocumentTextAndContentBlocksInMessagesAndToolResults(t *testing.T) {
+	body := map[string]any{
+		"model":      "gpt-5.2-codex",
+		"max_tokens": 256,
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "intro"},
+					map[string]any{
+						"type":    "document",
+						"title":   "Spec",
+						"context": "design doc",
+						"source":  map[string]any{"type": "text", "media_type": "text/plain", "data": "line one"},
+					},
+					map[string]any{
+						"type":   "document",
+						"title":  "Notes",
+						"source": map[string]any{"type": "content", "content": []any{map[string]any{"type": "text", "text": "alpha"}, "beta"}},
+					},
+				},
+			},
+			map[string]any{
+				"role":    "assistant",
+				"content": []any{map[string]any{"type": "tool_use", "id": "call_doc", "name": "read_doc", "input": map[string]any{}}},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "call_doc",
+						"content": []any{
+							map[string]any{"type": "document", "title": "ResultDoc", "source": map[string]any{"type": "text", "data": "tool body"}},
+							map[string]any{"type": "document", "source": map[string]any{"type": "content", "content": []any{toolResultImageBlock()}}},
+						},
+					},
+				},
+			},
+		},
+	}
+	object, _, err := buildResponsesObjectFromAnthropic(body, "gpt-5.2-codex", true, config.ConversionCapability{Tools: true, Images: true}, historicalSystemDeveloperMessage)
+	if err != nil {
+		t.Fatalf("buildResponsesObjectFromAnthropic err=%v", err)
+	}
+	if _, err := normalizeCodexRequestObject(object, codexNormalizationOptions{}); err != nil {
+		t.Fatalf("normalizeCodexRequestObject err=%v", err)
+	}
+	input := object["input"].([]any)
+	msgContent, _ := input[0].(map[string]any)["content"].(string)
+	for _, want := range []string{"intro", "Document: Spec", "Context: design doc", "line one", "Document: Notes", "alpha", "beta"} {
+		if !strings.Contains(msgContent, want) {
+			t.Fatalf("message content missing %q: %q", want, msgContent)
+		}
+	}
+	toolOut := input[2].(map[string]any)["output"].([]any)
+	if len(toolOut) != 2 || !strings.Contains(toolOut[0].(map[string]any)["text"].(string), "Document: ResultDoc\ntool body") || toolOut[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("unexpected tool_result output=%#v", toolOut)
+	}
+
+	// Text-only document inside tool_result keeps string encoding.
+	textOnly := imageToolContinuation([]any{
+		map[string]any{"type": "document", "title": "Plain", "source": map[string]any{"type": "text", "data": "only text"}},
+	})
+	encoded, _, err := buildCodexResponsesFromAnthropicWithCapability(textOnly, "gpt-5.2-codex", false, config.ConversionCapability{Tools: true})
+	if err != nil {
+		t.Fatalf("text-only document tool_result err=%v", err)
+	}
+	var parsed map[string]any
+	_ = json.Unmarshal(encoded, &parsed)
+	if got, _ := parsed["input"].([]any)[2].(map[string]any)["output"].(string); got != "Document: Plain\nonly text" {
+		t.Fatalf("text-only tool_result output=%q", got)
+	}
+}
+
+func TestAnthropicCodexToolSearchDeferLoadingPreservesPrefixAndDeduplicates(t *testing.T) {
+	body := map[string]any{
+		"model":      "gpt-5.2-codex",
+		"max_tokens": 256,
+		"system":     "You are Claude Code.",
+		"tools": []any{
+			map[string]any{"name": "ToolSearch", "description": "Search tools", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}},
+			map[string]any{"name": "WebFetch", "description": "Fetch URL", "defer_loading": true, "input_schema": map[string]any{"type": "object", "properties": map[string]any{"url": map[string]any{"type": "string"}}}},
+			map[string]any{"name": "WebSearch", "description": "Search web", "defer_loading": true, "input_schema": map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}}}},
+			map[string]any{"name": "ForcedDeferred", "description": "Forced", "defer_loading": true, "input_schema": map[string]any{"type": "object"}},
+			map[string]any{"name": "Write", "description": "Write file", "input_schema": map[string]any{"type": "object"}},
+		},
+		"tool_choice": map[string]any{"type": "tool", "name": "ForcedDeferred"},
+		"messages": []any{
+			map[string]any{"role": "user", "content": "find tools"},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call_ts_1", "name": "ToolSearch", "input": map[string]any{"query": "web"}}}},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "call_ts_1",
+						"content": []any{
+							map[string]any{"type": "tool_reference", "tool_name": "WebFetch"},
+							map[string]any{"type": "tool_reference", "tool_name": "WebSearch"},
+							map[string]any{"type": "tool_reference", "tool_name": "ForcedDeferred"},
+						},
+					},
+				},
+			},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call_ts_2", "name": "ToolSearch", "input": map[string]any{"query": "fetch"}}}},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "call_ts_2",
+						"content": []any{
+							map[string]any{"type": "tool_reference", "tool_name": "WebFetch"},
+						},
+					},
+				},
+			},
+		},
+	}
+	object, _, err := buildResponsesObjectFromAnthropic(body, "gpt-5.2-codex", true, config.ConversionCapability{Tools: true}, historicalSystemDeveloperMessage)
+	if err != nil {
+		t.Fatalf("buildResponsesObjectFromAnthropic err=%v", err)
+	}
+	if _, err := normalizeCodexRequestObject(object, codexNormalizationOptions{}); err != nil {
+		t.Fatalf("normalizeCodexRequestObject err=%v", err)
+	}
+	topTools := object["tools"].([]any)
+	if len(topTools) != 3 {
+		t.Fatalf("expected 3 top-level tools (ToolSearch, ForcedDeferred, Write), got %d: %#v", len(topTools), topTools)
+	}
+	for _, raw := range topTools {
+		tool := raw.(map[string]any)
+		if _, hasDefer := tool["defer_loading"]; hasDefer {
+			t.Fatalf("defer_loading leaked to upstream tool: %#v", tool)
+		}
+		if tool["name"] == "WebFetch" || tool["name"] == "WebSearch" {
+			t.Fatalf("deferred tool emitted at top-level: %#v", tool)
+		}
+	}
+	input := object["input"].([]any)
+	var additionalItems []map[string]any
+	for _, raw := range input {
+		item := raw.(map[string]any)
+		if item["type"] == "additional_tools" {
+			additionalItems = append(additionalItems, item)
+		}
+	}
+	if len(additionalItems) != 1 {
+		t.Fatalf("expected exactly 1 additional_tools item after deduplication, got %d: %#v", len(additionalItems), input)
+	}
+	discovered := additionalItems[0]["tools"].([]any)
+	if len(discovered) != 2 || discovered[0].(map[string]any)["name"] != "WebFetch" || discovered[1].(map[string]any)["name"] != "WebSearch" {
+		t.Fatalf("unexpected discovered tools=%#v", discovered)
+	}
+
+	// Generic (non-Codex) Anthropic -> Responses conversion remains fail-closed on defer_loading.
+	if _, _, err := buildResponsesFromAnthropicWithCapability(body, "model", false, config.ConversionCapability{Tools: true}); err == nil {
+		t.Fatal("generic conversion unexpectedly accepted defer_loading")
+	}
+}
+
 func BenchmarkCodexAnthropicConversion(b *testing.B) {
 	body := mixedAnthropicTranscript()
 	body["messages"].([]any)[0].(map[string]any)["content"] = strings.Repeat("stable context <value> & data ", 10000)

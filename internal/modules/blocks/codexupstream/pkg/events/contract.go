@@ -353,6 +353,7 @@ type WSPullResult struct {
 	ErrorClass        ErrorClass
 	RetryAfterSeconds int
 	RateLimit         RateLimitObservation
+	SafeError         SafeError
 }
 
 type WSCloseCommand struct{ SessionID string }

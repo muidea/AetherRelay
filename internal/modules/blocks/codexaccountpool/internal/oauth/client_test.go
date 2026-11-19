@@ -109,3 +109,52 @@ func TestAuthorizationCodeExchangeUsesSharedClientIdentity(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+func TestRefreshValidatesExpiresInAndMarksPreSendErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		expiresIn string
+		wantExp   bool
+		wantErr   bool
+	}{
+		{name: "integer", expiresIn: `3600`, wantExp: true},
+		{name: "float zero fraction", expiresIn: `3600.0`, wantExp: true},
+		{name: "scientific notation", expiresIn: `3.6e3`, wantExp: true},
+		{name: "numeric string", expiresIn: `"3600"`, wantExp: true},
+		{name: "null", expiresIn: `null`},
+		{name: "fractional", expiresIn: `3600.5`, wantErr: true},
+		{name: "overflow", expiresIn: `1e20`, wantErr: true},
+		{name: "infinity string", expiresIn: `"Inf"`, wantErr: true},
+		{name: "zero", expiresIn: `0`, wantErr: true},
+		{name: "negative", expiresIn: `-10`, wantErr: true},
+		{name: "object", expiresIn: `{}`, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"access_token":"access-new","refresh_token":"refresh-new","expires_in":` + tc.expiresIn + `}`))
+			}))
+			defer server.Close()
+			res, err := refresh(context.Background(), Request{RefreshToken: "refresh-secret"}, server.URL)
+			if tc.wantErr {
+				oauthErr, ok := err.(*Error)
+				if err == nil || !ok || oauthErr.PreSend {
+					t.Fatalf("expected post-send error, got res=%+v err=%#v", res, err)
+				}
+				return
+			}
+			if err != nil || (tc.wantExp && res.Expired == "") || (!tc.wantExp && res.Expired != "") {
+				t.Fatalf("res=%+v err=%v", res, err)
+			}
+		})
+	}
+
+	_, err := refresh(context.Background(), Request{RefreshToken: "refresh-secret", Proxy: "://bad-proxy"}, "https://auth.openai.com/oauth/token")
+	if oauthErr, ok := err.(*Error); !ok || !oauthErr.PreSend {
+		t.Fatalf("expected pre-send error on invalid proxy, got %#v", err)
+	}
+	_, err = refresh(context.Background(), Request{RefreshToken: ""}, "https://auth.openai.com/oauth/token")
+	if oauthErr, ok := err.(*Error); !ok || !oauthErr.PreSend {
+		t.Fatalf("expected pre-send error on empty refresh token, got %#v", err)
+	}
+}

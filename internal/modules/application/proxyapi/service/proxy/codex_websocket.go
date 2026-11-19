@@ -111,6 +111,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 	}()
 	model := ""
 	sessionID := ""
+	sessionAccountID := ""
 	httpFallback := false
 	lastResponseID := ""
 	var sessionFeatures codexRequestFeatures
@@ -260,6 +261,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 			round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 			sessionID = opened.SessionID
+			sessionAccountID = opened.AccountID
 			httpFallback = opened.HTTPFallback
 		}
 		if requestModel != model {
@@ -303,6 +305,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 			attemptPayload = full
 		}
 		migrationAttempts := 0
+		var excludedAccounts []string
 		var turnResult codexWebsocketForwardResult
 		for {
 			sendErr := h.codexResponses.SendCodexWebsocket(turnCtx, sessionID, attemptPayload)
@@ -336,9 +339,15 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 					return
 				}
 				if retrySafe {
+					if sessionAccountID != "" {
+						excludedAccounts = append(excludedAccounts, sessionAccountID)
+					}
 					h.codexResponses.CloseCodexWebsocket(context.WithoutCancel(turnCtx), sessionID)
 					sessionID = ""
-					opened, openErr := h.codexResponses.OpenCodexWebsocket(turnCtx, sessionOpenRequest)
+					sessionAccountID = ""
+					reopenRequest := sessionOpenRequest
+					reopenRequest.ExcludeAccountIDs = append([]string(nil), excludedAccounts...)
+					opened, openErr := h.codexResponses.OpenCodexWebsocket(turnCtx, reopenRequest)
 					if openErr != nil {
 						if failure, ok := codexresponses.AsFailure(openErr); ok {
 							h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, failure.Attempt, openErr)
@@ -354,6 +363,7 @@ func (h *Handler) handleCodexWebsocket(w http.ResponseWriter, r *http.Request, r
 					h.archiveCodexUpstreamAttempt(round, r, effectivecatalog.CodexOAuthProviderID, opened.Attempt, nil)
 					round.SetTurnStateFallback(codexresponses.TurnStateFallback(opened.TurnStateSource))
 					sessionID = opened.SessionID
+					sessionAccountID = opened.AccountID
 					httpFallback = opened.HTTPFallback
 					attemptPayload = retryPayload
 					migrationAttempts++

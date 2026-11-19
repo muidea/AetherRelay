@@ -208,9 +208,11 @@ type WebsocketOpenRequest struct {
 	ClientUserAgent  string
 	ClientOriginator string
 	// TurnMetadata carries the bounded client projection; identity stays proxy-owned.
-	TurnMetadata TurnMetadata
+	TurnMetadata      TurnMetadata
+	ExcludeAccountIDs []string
 }
 type WebsocketOpenResult struct {
+	AccountID       string
 	HTTPFallback    bool
 	SessionID       string
 	Attempt         HTTPAttempt

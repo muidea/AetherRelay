@@ -207,8 +207,10 @@ func (s *Upstream) pullHTTPWebsocketTurn(ev event.Event, result event.Result, se
 			}
 			class := update.errorClass
 			quota := update.rateLimit
+			retryAfter := update.retryAfterSeconds
+			var safeError events.SafeError
 			if terminal {
-				class, quota = websocketTerminalFailure(payload)
+				class, quota, retryAfter, safeError = codexTerminalFailureWithRetry(payload)
 			}
 			if !ok && !terminal && class == "" {
 				class = events.ErrorProtocol
@@ -220,7 +222,7 @@ func (s *Upstream) pullHTTPWebsocketTurn(ev event.Event, result event.Result, se
 			if !publish {
 				attempt = events.HTTPAttempt{}
 			}
-			result.Set(events.WSPullResult{Attempt: attempt, Payload: bytes.Clone(payload), Done: update.done || !ok, ErrorClass: class, RateLimit: quota, RetryAfterSeconds: max(update.retryAfterSeconds, retryAfterFromObservation(quota))}, nil)
+			result.Set(events.WSPullResult{Attempt: attempt, Payload: bytes.Clone(payload), Done: update.done || !ok, ErrorClass: class, RateLimit: quota, RetryAfterSeconds: max(update.retryAfterSeconds, retryAfter), SafeError: safeError}, nil)
 			return
 		case <-timer.C:
 			result.Set(events.WSPullResult{}, nil)

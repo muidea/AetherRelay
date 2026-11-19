@@ -37,7 +37,7 @@ type codexWebsocketBinding struct {
 
 func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.WebsocketOpenRequest) (codexresponses.WebsocketOpenResult, error) {
 	freezeCodexTurnMetadata(&request.TurnMetadata)
-	tried := make([]string, 0, 2)
+	tried := uniqueNonEmptyAccountIDs(request.ExcludeAccountIDs)
 	var lastFailure *codexresponses.Failure
 	for {
 		account, err := s.acquireCodexAccountForTransportWithIdentity(ctx, request.Model, tried, request.SessionHash, accevents.TransportResponses, codexClientIdentityCandidate(request.ClientUserAgent, request.ClientOriginator), accevents.LeaseWebsocket)
@@ -105,8 +105,28 @@ func (s *Proxy) OpenCodexWebsocket(ctx context.Context, request codexresponses.W
 		if !opened.HTTPFallback {
 			s.recordCodexTransportCapability(ctx, account.AccountID, accevents.TransportWebsocket, true)
 		}
-		return codexresponses.WebsocketOpenResult{HTTPFallback: opened.HTTPFallback, SessionID: opened.SessionID, Attempt: toCodexHTTPAttempt(opened.Attempt), TurnStateSource: turnStateSource}, nil
+		return codexresponses.WebsocketOpenResult{AccountID: account.AccountID, HTTPFallback: opened.HTTPFallback, SessionID: opened.SessionID, Attempt: toCodexHTTPAttempt(opened.Attempt), TurnStateSource: turnStateSource}, nil
 	}
+}
+
+func uniqueNonEmptyAccountIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return make([]string, 0, 2)
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids)+2)
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *Proxy) SendCodexWebsocket(ctx context.Context, sessionID string, payload []byte) error {
@@ -179,7 +199,7 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 	}
 	result := codexresponses.WebsocketUpdate{Attempt: toCodexHTTPAttempt(update.Attempt), Payload: update.Payload, Done: update.Done}
 	if update.ErrorClass != "" && len(update.Payload) == 0 {
-		failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+		failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
 		failure.Attempt = result.Attempt
 		preventUncertainWebsocketReplay(failure)
 		s.recordCodexWebsocketTurnResult(ctx, sessionID, false, string(failure.Kind), failure.RetryAfterSeconds, failure.QuotaExhausted, failure.QuotaResetAt)
@@ -202,7 +222,7 @@ func (s *Proxy) PullCodexWebsocket(ctx context.Context, sessionID string) (codex
 		s.mu.Unlock()
 		if success, terminal, class := codexWebsocketTurnOutcomeWithOutputEvidence(update.Payload, turnEvidence, turnOutputEvidence); terminal {
 			if update.ErrorClass != "" {
-				failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0)
+				failure := failureFromUpstream(update.ErrorClass, update.RetryAfterSeconds, update.RateLimit, 0, update.SafeError)
 				failure.Attempt = result.Attempt
 				preventUncertainWebsocketReplay(failure)
 				class = string(failure.Kind)

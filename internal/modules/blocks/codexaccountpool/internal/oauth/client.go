@@ -2,6 +2,7 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -9,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +55,7 @@ type Result struct {
 
 type Error struct {
 	Permanent bool
+	PreSend   bool
 	Class     string
 	Cause     error
 }
@@ -70,7 +74,7 @@ func ExchangeAuthorizationCode(ctx context.Context, request AuthorizationCodeReq
 func exchangeAuthorizationCode(ctx context.Context, request AuthorizationCodeRequest, endpoint string) (Result, error) {
 	form := url.Values{"client_id": {ClientID}, "grant_type": {"authorization_code"}, "code": {strings.TrimSpace(request.Code)}, "redirect_uri": {RedirectURI}, "code_verifier": {strings.TrimSpace(request.CodeVerifier)}}
 	if strings.TrimSpace(request.Code) == "" {
-		return Result{}, &Error{Permanent: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
+		return Result{}, &Error{Permanent: true, PreSend: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
 	}
 	return exchange(ctx, endpoint, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", request.Proxy, request.UserAgent, request.Originator)
 }
@@ -78,7 +82,7 @@ func exchangeAuthorizationCode(ctx context.Context, request AuthorizationCodeReq
 func refresh(ctx context.Context, request Request, endpoint string) (Result, error) {
 	refreshToken := strings.TrimSpace(request.RefreshToken)
 	if refreshToken == "" {
-		return Result{}, &Error{Permanent: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
+		return Result{}, &Error{Permanent: true, PreSend: true, Class: "invalid_token", Cause: fmt.Errorf("OAuth credential is required")}
 	}
 	body, err := json.Marshal(struct {
 		ClientID     string `json:"client_id"`
@@ -86,7 +90,7 @@ func refresh(ctx context.Context, request Request, endpoint string) (Result, err
 		RefreshToken string `json:"refresh_token"`
 	}{ClientID: ClientID, GrantType: "refresh_token", RefreshToken: refreshToken})
 	if err != nil {
-		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("encode OAuth refresh request: %w", err)}
+		return Result{}, &Error{PreSend: true, Class: "upstream", Cause: fmt.Errorf("encode OAuth refresh request: %w", err)}
 	}
 	return exchange(ctx, endpoint, strings.NewReader(string(body)), "application/json", request.Proxy, request.UserAgent, request.Originator)
 }
@@ -94,11 +98,11 @@ func refresh(ctx context.Context, request Request, endpoint string) (Result, err
 func exchange(ctx context.Context, endpoint string, requestBody io.Reader, contentType, proxy string, observedIdentity ...string) (Result, error) {
 	client, err := newHTTPClient(proxy)
 	if err != nil {
-		return Result{}, &Error{Permanent: true, Class: "invalid_request", Cause: err}
+		return Result{}, &Error{Permanent: true, PreSend: true, Class: "invalid_request", Cause: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, requestBody)
 	if err != nil {
-		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("create OAuth request: %w", err)}
+		return Result{}, &Error{PreSend: true, Class: "upstream", Cause: fmt.Errorf("create OAuth request: %w", err)}
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
@@ -127,10 +131,10 @@ func exchange(ctx context.Context, endpoint string, requestBody io.Reader, conte
 		return Result{}, &Error{Permanent: permanent, Class: class, Cause: fmt.Errorf("OAuth token endpoint returned HTTP %d (%s)", resp.StatusCode, class)}
 	}
 	var decoded struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		IDToken      string `json:"id_token"`
-		ExpiresIn    int    `json:"expires_in"`
+		AccessToken  string          `json:"access_token"`
+		RefreshToken string          `json:"refresh_token"`
+		IDToken      string          `json:"id_token"`
+		ExpiresIn    json.RawMessage `json:"expires_in"`
 	}
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("decode OAuth response: %w", err)}
@@ -138,12 +142,55 @@ func exchange(ctx context.Context, endpoint string, requestBody io.Reader, conte
 	if strings.TrimSpace(decoded.AccessToken) == "" {
 		return Result{}, &Error{Class: "upstream", Cause: fmt.Errorf("OAuth response has no access token")}
 	}
+	expiresIn, err := parseOAuthExpiresIn(decoded.ExpiresIn)
+	if err != nil {
+		return Result{}, &Error{Class: "upstream", Cause: err}
+	}
 	accountID, email := claims(decoded.IDToken)
 	result := Result{AccessToken: decoded.AccessToken, RefreshToken: decoded.RefreshToken, IDToken: decoded.IDToken, AccountID: accountID, Email: email}
-	if decoded.ExpiresIn > 0 {
-		result.Expired = time.Now().UTC().Add(time.Duration(decoded.ExpiresIn) * time.Second).Format(time.RFC3339)
+	if expiresIn > 0 {
+		result.Expired = time.Now().UTC().Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339)
 	}
 	return result, nil
+}
+
+func parseOAuthExpiresIn(raw json.RawMessage) (int64, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return 0, nil
+	}
+	const maxExpiresInSeconds = math.MaxInt64 / int64(time.Second)
+	parseScalar := func(text string) (int64, error) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return 0, fmt.Errorf("OAuth response has invalid expires_in")
+		}
+		if i, err := strconv.ParseInt(text, 10, 64); err == nil {
+			if i <= 0 || i > maxExpiresInSeconds {
+				return 0, fmt.Errorf("OAuth response has invalid expires_in")
+			}
+			return i, nil
+		}
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil || f <= 0 || math.IsInf(f, 0) || math.IsNaN(f) || f != math.Trunc(f) || f > float64(maxExpiresInSeconds) {
+			return 0, fmt.Errorf("OAuth response has invalid expires_in")
+		}
+		return int64(f), nil
+	}
+	if trimmed[0] == '"' {
+		var str string
+		if err := json.Unmarshal(trimmed, &str); err != nil {
+			return 0, fmt.Errorf("OAuth response has invalid expires_in")
+		}
+		return parseScalar(str)
+	}
+	var number json.Number
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&number); err != nil {
+		return 0, fmt.Errorf("OAuth response has invalid expires_in")
+	}
+	return parseScalar(number.String())
 }
 
 func classifyOAuthResponse(status int, body []byte) (string, bool) {

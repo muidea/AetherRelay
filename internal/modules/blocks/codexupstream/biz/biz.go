@@ -84,6 +84,7 @@ type websocketUpdate struct {
 	errorClass        events.ErrorClass
 	retryAfterSeconds int
 	rateLimit         events.RateLimitObservation
+	safeError         events.SafeError
 }
 
 type websocketSession struct {
@@ -162,10 +163,10 @@ func (s *Upstream) handleCompact(ev event.Event, result event.Result) {
 		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, HTTPStatus: response.StatusCode, ErrorClass: errorClassWithBody(response.StatusCode, body, observation), RetryAfterSeconds: retryAfter, RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
-	payload, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes, &attempt.Response)
+	payload, class, observation, retryAfter, safeError, err := completedResponseWithRetry(response, cmd.MaxResponseBytes, &attempt.Response)
 	if err != nil {
 		attempt.Response.TransportReason = completedTransportReason(class, err)
-		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.CompactResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: maxRetryAfter(retryAfterSeconds(response.Header), retryAfter), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	payload, supported, err := nativeCompactResponse(payload)
@@ -375,7 +376,7 @@ func (s *Upstream) handleWSPull(ev event.Event, result event.Result) {
 		if update.done {
 			s.closeWebsocket(cmd.SessionID)
 		}
-		result.Set(events.WSPullResult{Attempt: update.attempt, Payload: update.payload, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit}, nil)
+		result.Set(events.WSPullResult{Attempt: update.attempt, Payload: update.payload, Done: update.done, ErrorClass: update.errorClass, RetryAfterSeconds: update.retryAfterSeconds, RateLimit: update.rateLimit, SafeError: update.safeError}, nil)
 	case <-time.After(timeout):
 		result.Set(events.WSPullResult{}, nil)
 	case <-ev.Context().Done():
@@ -470,9 +471,9 @@ func (s *Upstream) runWebsocket(ctx context.Context, id string, session *websock
 				observed := websocketFailure(ctx, "decode", err, transport.WebsocketDiagnostics{WebsocketMessageLimitBytes: session.handshake.Response.WebsocketMessageLimitBytes, WebsocketLastMessageObserved: true, WebsocketLastMessageBytes: int64(len(payload))})
 				slog.WarnContext(ctx, "Codex websocket decode failed", append([]any{"diagnostic_only", true, "transport_reason", observed.reason}, observed.diagnostic.LogAttrs()...)...)
 			}
-			class, observation := websocketTerminalFailure(document)
+			class, observation, retryAfter, safeErr := codexTerminalFailureWithRetry(document)
 			select {
-			case session.updates <- websocketUpdate{attempt: session.observePayload(document, false), payload: document, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation}:
+			case session.updates <- websocketUpdate{attempt: session.observePayload(document, false), payload: document, errorClass: class, retryAfterSeconds: retryAfter, rateLimit: observation, safeError: safeErr}:
 			case <-ctx.Done():
 				return
 			}
@@ -561,11 +562,11 @@ func (s *Upstream) completeBounded(ev event.Event, result event.Result, maxWireB
 	if maxWireBytes > 0 {
 		response.Body = &limitedSampleBody{Reader: io.LimitReader(response.Body, maxWireBytes), Closer: response.Body}
 	}
-	completed, class, observation, safeError, err := completedResponse(response, cmd.MaxResponseBytes, &attempt.Response)
+	completed, class, observation, retryAfter, safeError, err := completedResponseWithRetry(response, cmd.MaxResponseBytes, &attempt.Response)
 	if err != nil {
 		attempt.Response.WebsocketDiagnostics = attempt.Response.WebsocketDiagnostics.Merge(websocketDiagnostic(err))
 		attempt.Response.TransportReason = completedTransportReason(class, err)
-		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: retryAfterFromObservation(observation), RateLimit: observation, SafeError: safeError}, nil)
+		result.Set(events.CompleteResult{Headers: responseHeaders(response.Header), Attempt: attempt, ErrorClass: class, RetryAfterSeconds: maxRetryAfter(retryAfterSeconds(response.Header), retryAfter), RateLimit: observation, SafeError: safeError}, nil)
 		return
 	}
 	result.Set(events.CompleteResult{Body: completed, Headers: responseHeaders(response.Header), Attempt: attempt}, nil)
@@ -745,7 +746,7 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: events.ErrorUpstream})
 					return
 				}
-				done, class, observation := terminalOutcome(expanded)
+				done, class, observation, retryAfter, safeErr := terminalOutcomeDetail(expanded)
 				if done {
 					// CP-STREAM-011: returning after a terminal data line skips
 					// the upstream blank line. Deliver a dispatchable event first.
@@ -771,7 +772,7 @@ func (s *Upstream) runStream(ctx context.Context, streamID string, stream *respo
 					}
 				}
 				if done {
-					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfterFromObservation(observation), rateLimit: observation, safeError: safeUpstreamError(sseData(expanded))})
+					sendUpdate(ctx, stream, streamUpdate{done: true, errorClass: class, retryAfterSeconds: retryAfter, rateLimit: observation, safeError: safeErr})
 					return
 				}
 			}
@@ -1342,8 +1343,13 @@ func forceStream(body []byte) ([]byte, error) {
 }
 
 func completedResponse(response *http.Response, maxBytes int64, observations ...*events.HTTPResponseObservation) ([]byte, events.ErrorClass, events.RateLimitObservation, events.SafeError, error) {
+	payload, class, observation, _, safeError, err := completedResponseWithRetry(response, maxBytes, observations...)
+	return payload, class, observation, safeError, err
+}
+
+func completedResponseWithRetry(response *http.Response, maxBytes int64, observations ...*events.HTTPResponseObservation) ([]byte, events.ErrorClass, events.RateLimitObservation, int, events.SafeError, error) {
 	if response == nil || response.Body == nil {
-		return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response body is unavailable")
+		return nil, events.ErrorProtocol, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex response body is unavailable")
 	}
 	readStarted := time.Now()
 	var clock generation.Clock
@@ -1370,16 +1376,16 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 			observation.WireBytes = int64(len(payload))
 		}
 		if err != nil {
-			return nil, classifyResponseTransport(response, err), events.RateLimitObservation{}, events.SafeError{}, err
+			return nil, classifyResponseTransport(response, err), events.RateLimitObservation{}, 0, events.SafeError{}, err
 		}
 		if int64(len(payload)) > maxBytes {
-			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
+			return nil, events.ErrorProtocol, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex response exceeds limit of %d bytes", maxBytes)
 		}
 		var object struct {
 			Object string `json:"object"`
 		}
 		if err := json.Unmarshal(payload, &object); err != nil || object.Object != "response" {
-			return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("invalid native Codex response object")
+			return nil, events.ErrorProtocol, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("invalid native Codex response object")
 		}
 		if observation != nil {
 			observation.EventCount = 1
@@ -1390,9 +1396,9 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 		}
 		model.Observe(payload)
 		if aetherrelaycodex.EmptyIncompleteResponse(payload) {
-			return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
+			return nil, events.ErrorUpstream, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
 		}
-		return payload, "", events.RateLimitObservation{}, events.SafeError{}, nil
+		return payload, "", events.RateLimitObservation{}, 0, events.SafeError{}, nil
 	}
 	reader := bufio.NewReader(response.Body)
 	var outputText strings.Builder
@@ -1472,25 +1478,25 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 								completed = responseWithWebSearchItems(completed, outputItems)
 								completed = responseWithCompactionItems(completed, compactionItems)
 								if responseObjectIsEmpty(completed) && !semanticEvidence {
-									return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.completed")
+									return nil, events.ErrorUpstream, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.completed")
 								}
-								return completed, "", events.RateLimitObservation{}, events.SafeError{}, nil
+								return completed, "", events.RateLimitObservation{}, 0, events.SafeError{}, nil
 							}
 						case "response.incomplete":
 							if len(event.Response) > 0 {
 								if aetherrelaycodex.EmptyIncomplete(payload, len(outputItems), outputEvidence) {
-									return nil, events.ErrorUpstream, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
+									return nil, events.ErrorUpstream, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex upstream returned an empty response.incomplete")
 								}
 								completed := responseWithOutputItems(event.Response, outputItems, outputText.String())
-								return responseWithWebSearchItems(completed, outputItems), "", events.RateLimitObservation{}, events.SafeError{}, nil
+								return responseWithWebSearchItems(completed, outputItems), "", events.RateLimitObservation{}, 0, events.SafeError{}, nil
 							}
-							return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response.incomplete omitted response")
+							return nil, events.ErrorProtocol, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex response.incomplete omitted response")
 						case "response.failed", "error":
-							class, observation, safeError := codexTerminalFailure(payload)
+							class, observation, retryAfter, safeError := codexTerminalFailureWithRetry(payload)
 							if class == "" {
 								class = events.ErrorUpstream
 							}
-							return nil, class, observation, safeError, fmt.Errorf("Codex response did not complete")
+							return nil, class, observation, retryAfter, safeError, fmt.Errorf("Codex response did not complete")
 						}
 					}
 				}
@@ -1498,9 +1504,9 @@ func completedResponse(response *http.Response, maxBytes int64, observations ...
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, events.ErrorProtocol, events.RateLimitObservation{}, events.SafeError{}, fmt.Errorf("Codex response ended without response.completed: %w", err)
+				return nil, events.ErrorProtocol, events.RateLimitObservation{}, 0, events.SafeError{}, fmt.Errorf("Codex response ended without response.completed: %w", err)
 			}
-			return nil, classifyResponseTransport(response, err), events.RateLimitObservation{}, events.SafeError{}, err
+			return nil, classifyResponseTransport(response, err), events.RateLimitObservation{}, 0, events.SafeError{}, err
 		}
 	}
 }
@@ -1767,16 +1773,22 @@ func terminalClass(line []byte) (bool, events.ErrorClass) {
 }
 
 func terminalOutcome(line []byte) (bool, events.ErrorClass, events.RateLimitObservation) {
+	done, class, observation, _, _ := terminalOutcomeDetail(line)
+	return done, class, observation
+}
+
+func terminalOutcomeDetail(line []byte) (bool, events.ErrorClass, events.RateLimitObservation, int, events.SafeError) {
 	done, class := terminalClass(line)
 	if !done {
-		return false, "", events.RateLimitObservation{}
+		return false, "", events.RateLimitObservation{}, 0, events.SafeError{}
 	}
 	payload := sseData(line)
-	if terminalClass, observation := websocketTerminalFailure(payload); terminalClass != "" {
-		return true, terminalClass, observation
+	if terminalClass, observation, retryAfter, safeErr := codexTerminalFailureWithRetry(payload); terminalClass != "" {
+		return true, terminalClass, observation, retryAfter, safeErr
 	}
 	observation := rateLimitObservation(payload, time.Now().UTC())
-	return true, class, observation
+	retryAfter := maxRetryAfter(retryAfterFromPayload(payload), retryAfterFromObservation(observation))
+	return true, class, observation, retryAfter, safeUpstreamError(payload)
 }
 
 func sseData(line []byte) []byte {
@@ -1792,29 +1804,22 @@ func websocketTerminalFailure(payload []byte) (events.ErrorClass, events.RateLim
 	return class, observation
 }
 
-func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitObservation, events.SafeError) {
-	var event struct {
-		Type  string `json:"type"`
-		Error struct {
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-		Response struct {
-			Error struct {
-				Type    string `json:"type"`
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		} `json:"response"`
+func codexTerminalFailureWithRetry(payload []byte) (events.ErrorClass, events.RateLimitObservation, int, events.SafeError) {
+	class, observation, safeErr := codexTerminalFailure(payload)
+	if class == "" {
+		return "", events.RateLimitObservation{}, 0, events.SafeError{}
 	}
-	if json.Unmarshal(payload, &event) != nil || event.Type != "response.failed" && event.Type != "error" {
+	return class, observation, maxRetryAfter(retryAfterFromPayload(payload), retryAfterFromObservation(observation)), safeErr
+}
+
+func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitObservation, events.SafeError) {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil || envelope.Type != "response.failed" && envelope.Type != "error" {
 		return "", events.RateLimitObservation{}, events.SafeError{}
 	}
-	errorType, errorCode, errorMessage := event.Error.Type, event.Error.Code, event.Error.Message
-	if errorType == "" && errorCode == "" && errorMessage == "" {
-		errorType, errorCode, errorMessage = event.Response.Error.Type, event.Response.Error.Code, event.Response.Error.Message
-	}
+	errorType, errorCode, _, errorMessage := extractCodexErrorFields(payload)
 	observation := rateLimitObservation(payload, time.Now().UTC())
 	safeError := safeUpstreamError(payload)
 	if safeError.Code == "model_not_found" {
@@ -1826,17 +1831,44 @@ func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitOb
 	combined := strings.ToLower(strings.TrimSpace(errorType + " " + errorCode))
 	message := strings.ToLower(strings.TrimSpace(errorMessage))
 	switch {
-	case strings.Contains(combined, "server_is_overloaded"), strings.Contains(combined, "slow_down"), strings.Contains(combined, "temporarily_unavailable"), strings.Contains(message, "at capacity"), strings.Contains(message, "temporarily overloaded"):
+	case isCodexTransientCapacityMessage(combined, message):
 		return events.ErrorUpstream, observation, safeError
 	case strings.Contains(combined, "authentication"), strings.Contains(combined, "unauthorized"), strings.Contains(combined, "invalid_api_key"):
 		return events.ErrorInvalidToken, observation, safeError
 	case strings.Contains(combined, "rate_limit"):
 		return events.ErrorRateLimit, observation, safeError
-	case strings.Contains(combined, "invalid_request"), strings.Contains(combined, "bad_request"), strings.Contains(combined, "context_length"), strings.Contains(combined, "content_policy"), strings.Contains(combined, "content_filter"):
+	case isCodexRequestFaultTokens(combined):
 		return events.ErrorInvalidRequest, observation, safeError
 	default:
 		return events.ErrorUpstream, observation, safeError
 	}
+}
+
+func isCodexTransientCapacityMessage(combined, message string) bool {
+	return strings.Contains(combined, "server_is_overloaded") ||
+		strings.Contains(combined, "slow_down") ||
+		strings.Contains(combined, "temporarily_unavailable") ||
+		strings.Contains(message, "at capacity") ||
+		strings.Contains(message, "temporarily overloaded")
+}
+
+func isCodexRequestFaultTokens(combined string) bool {
+	for _, token := range []string{
+		"invalid_request",
+		"bad_request",
+		"context_length",
+		"content_policy",
+		"content_filter",
+		"bio_policy",
+		"cyber_policy",
+		"misalignment_policy",
+		"image_content_policy",
+	} {
+		if strings.Contains(combined, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func readErrorObservation(response *http.Response) ([]byte, events.RateLimitObservation, int, events.SafeError) {
@@ -1852,53 +1884,75 @@ func readErrorObservationParts(headers headerGetter, bodyReader io.Reader) ([]by
 	}
 	body, _ := io.ReadAll(io.LimitReader(bodyReader, 64<<10))
 	observation := rateLimitObservation(body, time.Now().UTC())
-	return body, observation, maxRetryAfter(retryAfterSeconds(headers), retryAfterFromObservation(observation)), safeUpstreamError(body)
+	headerRetry := retryAfterSeconds(headers)
+	if headerRetry == 0 {
+		headerRetry = retryAfterFromPayload(body)
+	}
+	return body, observation, maxRetryAfter(headerRetry, retryAfterFromObservation(observation)), safeUpstreamError(body)
 }
 
-func safeUpstreamError(body []byte) events.SafeError {
-	// Some OAuth rejections use a top-level detail or string error rather than
-	// the standard nested error object. Do not expose arbitrary JSON fields.
+func extractCodexErrorFields(body []byte) (errorType, errorCode, param, message string) {
+	type rawErrorObj struct {
+		Type    string          `json:"type"`
+		Code    string          `json:"code"`
+		Param   json.RawMessage `json:"param"`
+		Message string          `json:"message"`
+	}
 	var envelope map[string]json.RawMessage
-	if json.Unmarshal(body, &envelope) == nil {
-		for _, key := range []string{"error", "detail"} {
-			var message string
-			if json.Unmarshal(envelope[key], &message) == nil && message != "" {
-				return events.SafeError{Message: safeErrorText(message, 512)}
+	if json.Unmarshal(body, &envelope) != nil {
+		return "", "", "", ""
+	}
+	decodeNode := func(raw json.RawMessage) (rawErrorObj, bool) {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			return rawErrorObj{}, false
+		}
+		var str string
+		if json.Unmarshal(trimmed, &str) == nil && str != "" {
+			return rawErrorObj{Message: str}, true
+		}
+		var obj rawErrorObj
+		if json.Unmarshal(trimmed, &obj) == nil && (obj.Type != "" || obj.Code != "" || obj.Message != "" || rawPresent(obj.Param)) {
+			return obj, true
+		}
+		return rawErrorObj{}, false
+	}
+	extractParam := func(raw json.RawMessage) string {
+		if !rawPresent(raw) {
+			return ""
+		}
+		return strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	}
+	if obj, ok := decodeNode(envelope["error"]); ok {
+		return obj.Type, obj.Code, extractParam(obj.Param), obj.Message
+	}
+	for _, wrapperKey := range []string{"response", "body"} {
+		var wrapper struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(envelope[wrapperKey], &wrapper) == nil {
+			if obj, ok := decodeNode(wrapper.Error); ok {
+				return obj.Type, obj.Code, extractParam(obj.Param), obj.Message
 			}
 		}
 	}
-	var payload struct {
-		Error struct {
-			Type    string          `json:"type"`
-			Code    string          `json:"code"`
-			Param   json.RawMessage `json:"param"`
-			Message string          `json:"message"`
-		} `json:"error"`
-		Response struct {
-			Error struct {
-				Type    string          `json:"type"`
-				Code    string          `json:"code"`
-				Param   json.RawMessage `json:"param"`
-				Message string          `json:"message"`
-			} `json:"error"`
-		} `json:"response"`
+	var detail string
+	if json.Unmarshal(envelope["detail"], &detail) == nil && detail != "" {
+		return "", "", "", detail
 	}
-	if json.Unmarshal(body, &payload) != nil {
+	return "", "", "", ""
+}
+
+func safeUpstreamError(body []byte) events.SafeError {
+	errorType, errorCode, param, message := extractCodexErrorFields(body)
+	if errorType == "" && errorCode == "" && param == "" && message == "" {
 		return events.SafeError{}
 	}
-	errorValue := payload.Error
-	if errorValue.Type == "" && errorValue.Code == "" && errorValue.Message == "" && !rawPresent(errorValue.Param) {
-		errorValue = payload.Response.Error
-	}
-	param := ""
-	if rawPresent(errorValue.Param) {
-		param = strings.Trim(strings.TrimSpace(string(errorValue.Param)), `"`)
-	}
 	return events.SafeError{
-		Type:    safeErrorToken(errorValue.Type, 64),
-		Code:    safeErrorToken(errorValue.Code, 96),
+		Type:    safeErrorToken(errorType, 64),
+		Code:    safeErrorToken(errorCode, 96),
 		Param:   safeErrorToken(param, 256),
-		Message: safeErrorText(errorValue.Message, 512),
+		Message: safeErrorText(message, 512),
 	}
 }
 
@@ -2024,13 +2078,31 @@ func errorClassWithRateLimit(statusCode int, observation events.RateLimitObserva
 
 func errorClassWithBody(statusCode int, body []byte, observation events.RateLimitObservation) events.ErrorClass {
 	// CP-FAIL-018: never infer model availability from a generic 404/message.
-	if statusCode == http.StatusNotFound && safeUpstreamError(body).Code == "model_not_found" {
+	safe := safeUpstreamError(body)
+	if statusCode == http.StatusNotFound && safe.Code == "model_not_found" {
 		return events.ErrorModelNotFound
 	}
 	if statusCode == http.StatusForbidden && responseLooksHTML(body) {
 		return events.ErrorEndpoint
 	}
+	if observation.UsageLimited {
+		return events.ErrorRateLimit
+	}
+	combined := strings.ToLower(strings.TrimSpace(safe.Type + " " + safe.Code))
+	message := strings.ToLower(strings.TrimSpace(safe.Message))
+	if !isCodexTransientCapacityMessage(combined, message) && isCodexPolicyFaultCode(safe.Code) {
+		return events.ErrorInvalidRequest
+	}
 	return errorClassWithRateLimit(statusCode, observation)
+}
+
+func isCodexPolicyFaultCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "bio_policy", "cyber_policy", "cyber_policy_violation", "misalignment_policy_violation", "content_policy_violation", "image_content_policy_violation":
+		return true
+	default:
+		return false
+	}
 }
 
 func responseLooksHTML(body []byte) bool {
@@ -2081,8 +2153,68 @@ func retryAfterSeconds(headers headerGetter) int {
 	if headers == nil {
 		return 0
 	}
-	value := strings.TrimSpace(headers.Get("Retry-After"))
-	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 && seconds <= 3600 {
+	return parseRetryAfterValue(headers.Get("Retry-After"), time.Now().UTC())
+}
+
+func retryAfterFromPayload(body []byte) int {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return 0
+	}
+	var payload struct {
+		Headers map[string]json.RawMessage `json:"headers"`
+		Body    struct {
+			Headers map[string]json.RawMessage `json:"headers"`
+		} `json:"body"`
+		Response struct {
+			Headers map[string]json.RawMessage `json:"headers"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return 0
+	}
+	now := time.Now().UTC()
+	for _, headerMap := range []map[string]json.RawMessage{payload.Headers, payload.Response.Headers, payload.Body.Headers} {
+		for key, raw := range headerMap {
+			if !strings.EqualFold(strings.TrimSpace(key), "Retry-After") {
+				continue
+			}
+			var str string
+			if json.Unmarshal(raw, &str) == nil {
+				if seconds := parseRetryAfterValue(str, now); seconds > 0 {
+					return seconds
+				}
+			}
+			var num int64
+			if json.Unmarshal(raw, &num) == nil && num > 0 {
+				if num > 3600 {
+					return 3600
+				}
+				return int(num)
+			}
+		}
+	}
+	return 0
+}
+
+func parseRetryAfterValue(raw string, now time.Time) int {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		if seconds > 3600 {
+			return 3600
+		}
+		return seconds
+	}
+	if target, err := http.ParseTime(value); err == nil && target.After(now) {
+		seconds := int(target.Sub(now).Seconds())
+		if seconds < 1 {
+			seconds = 1
+		}
+		if seconds > 3600 {
+			seconds = 3600
+		}
 		return seconds
 	}
 	return 0
