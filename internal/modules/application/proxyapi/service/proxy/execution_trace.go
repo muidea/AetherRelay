@@ -196,6 +196,20 @@ func (h *Handler) finishExecutionTrace(r *http.Request, rec *usage.CompleteRecor
 				a.FirstOutputAt = &at
 			}
 			c.Observe(a)
+		} else if a.Transport == "http" && a.Failed {
+			updated := false
+			if a.UpstreamError.Empty() && !rec.UpstreamError.Empty() {
+				a.UpstreamError = rec.UpstreamError
+				updated = true
+			}
+			if a.ErrorCode == "" && rec.ErrorCode != "" {
+				a.ErrorCode = rec.ErrorCode
+				updated = true
+			}
+			if updated {
+				a.ObservedAt = rec.CompletedAt
+				c.Observe(a)
+			}
 		}
 	}
 	if rec.Outcome != "success" {

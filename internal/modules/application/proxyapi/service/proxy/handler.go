@@ -1608,8 +1608,7 @@ func (h *Handler) forwardRaw(w http.ResponseWriter, r *http.Request, requestID s
 		usage = usageFromRawResponse(provider, responseBody, rawBody)
 	}
 	duration := time.Since(start)
-	h.recordAndPrint(round, r, providerName, rawModel, rawStream, resp.StatusCode, duration, usage, "")
-	h.writeArchiveMetadata(round, providerName, rawModel, rawStream, resp.StatusCode, duration, usage, responsePath, "", "", "")
+	h.settleBufferedUpstreamResponse(round, r, providerName, rawModel, rawStream, resp, responseBody, duration, usage, responsePath)
 }
 
 func hasTransportMode(plans []TransportPlan, mode string) bool {
@@ -1777,8 +1776,19 @@ func (h *Handler) handleBufferedResponse(w http.ResponseWriter, resp *http.Respo
 		log.Printf("archive response: %v", err)
 	}
 	duration := time.Since(start)
-	h.recordAndPrint(round, r, providerName, model, stream, resp.StatusCode, duration, usage, "")
-	h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, usage, responsePath, "", "", "")
+	h.settleBufferedUpstreamResponse(round, r, providerName, model, stream, resp, responseBody, duration, usage, responsePath)
+}
+
+func (h *Handler) settleBufferedUpstreamResponse(round *archive.Round, r *http.Request, providerName, model string, stream bool, resp *http.Response, rawUpstreamBody []byte, duration time.Duration, usage tokenUsage, responsePath string) {
+	fail := streamFailFromUpstreamHTTP(resp.StatusCode, resp.Header, rawUpstreamBody)
+	if fail == nil {
+		h.recordAndPrint(round, r, providerName, model, stream, resp.StatusCode, duration, usage, "")
+		h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, usage, responsePath, "", "", "")
+		return
+	}
+	h.archiveUpstreamHTTPResponseError(round, fail)
+	h.recordAndPrintFail(round, r, providerName, model, stream, resp.StatusCode, duration, usage, fail)
+	h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, usage, responsePath, fail.Error(), "", outcomeFromStreamFail(fail, resp.StatusCode))
 }
 
 func parseRawRequestBody(body []byte) (map[string]any, string, bool) {

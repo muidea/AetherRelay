@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"aetherrelay/internal/pkg/aetherrelaycodex"
@@ -41,9 +43,10 @@ const (
 
 // terminalResult 描述一次 SSE 行是否构成协议终止,以及对应业务结果。
 type terminalResult struct {
-	Terminal bool
-	Kind     streamKind // success / upstream_failed / incomplete / ...
-	Detail   string     // 可选原因(如 incomplete reason)
+	Terminal      bool
+	Kind          streamKind // success / upstream_failed / incomplete / ...
+	Detail        string     // 可选原因(如 incomplete reason)
+	UpstreamError aetherrelaycodex.UpstreamError
 }
 
 // streamFail 是带类型的流式/处理错误，避免依赖错误字符串做 outcome 分类。
@@ -132,7 +135,9 @@ func streamFailFromTerminal(term terminalResult) *streamFail {
 		if term.Detail != "" {
 			msg = msg + ": " + term.Detail
 		}
-		return newStreamFail(streamKindUpstreamFailed, msg, fmt.Errorf("%s", msg), true)
+		fail := newStreamFail(streamKindUpstreamFailed, msg, fmt.Errorf("%s", msg), true)
+		fail.UpstreamError = term.UpstreamError.Bounded()
+		return fail
 	case streamKindIncomplete:
 		msg := "upstream response.incomplete"
 		if term.Detail != "" {
@@ -158,6 +163,60 @@ func outcomeFromStreamFail(f *streamFail, httpStatus int) string {
 		return string(f.Kind)
 	}
 	return string(streamKindError)
+}
+
+func streamFailFromUpstreamHTTP(status int, header http.Header, body []byte) *streamFail {
+	if status < http.StatusBadRequest {
+		return nil
+	}
+	upstreamErr := aetherrelaycodex.ExtractUpstreamError(body)
+	errorCode := "upstream_http_error"
+	switch {
+	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
+		errorCode = ErrorCodeInvalidRequest
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		errorCode = ErrorCodeUpstreamAuthRequired
+	case status == http.StatusNotFound:
+		errorCode = "not_found"
+	case status == http.StatusRequestEntityTooLarge:
+		errorCode = ErrorCodeRequestTooLarge
+	case status == http.StatusTooManyRequests:
+		errorCode = "rate_limit"
+	case status >= http.StatusInternalServerError:
+		errorCode = ErrorCodeUpstreamUnavailable
+	}
+	code := upstreamErr.UpstreamErrorCode
+	typ := upstreamErr.UpstreamErrorType
+	msg := upstreamErr.UpstreamErrorMessage
+	var message string
+	switch {
+	case code != "" && msg != "":
+		message = code + ": " + msg
+	case typ != "" && msg != "":
+		message = typ + ": " + msg
+	case msg != "":
+		message = msg
+	case code != "":
+		message = code
+	case typ != "":
+		message = typ
+	default:
+		message = fmt.Sprintf("upstream returned HTTP %d", status)
+	}
+	retryAfterSeconds := 0
+	if (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) && header != nil {
+		if secs, err := strconv.Atoi(strings.TrimSpace(header.Get("Retry-After"))); err == nil && secs > 0 {
+			retryAfterSeconds = secs
+		}
+	}
+	return &streamFail{
+		UpstreamError:     upstreamErr,
+		Kind:              streamKindError,
+		ErrorCode:         errorCode,
+		Message:           message,
+		RetryAfterSeconds: retryAfterSeconds,
+		CountUpstream:     false,
+	}
 }
 
 // shouldCountUpstreamError 仅 midflight 上游读失败 / 上游显式失败计入 provider 错误率。
@@ -240,7 +299,12 @@ func parseResponsesTerminal(payload string) terminalResult {
 				detail = event.Response.Error.Code
 			}
 		}
-		return terminalResult{Terminal: true, Kind: streamKindUpstreamFailed, Detail: detail}
+		return terminalResult{
+			Terminal:      true,
+			Kind:          streamKindUpstreamFailed,
+			Detail:        detail,
+			UpstreamError: aetherrelaycodex.ExtractUpstreamError([]byte(payload)),
+		}
 	case "response.incomplete":
 		detail := ""
 		if event.Response.IncompleteDetails != nil {

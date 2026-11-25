@@ -1819,7 +1819,6 @@ func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitOb
 	if json.Unmarshal(payload, &envelope) != nil || envelope.Type != "response.failed" && envelope.Type != "error" {
 		return "", events.RateLimitObservation{}, events.SafeError{}
 	}
-	errorType, errorCode, _, errorMessage := extractCodexErrorFields(payload)
 	observation := rateLimitObservation(payload, time.Now().UTC())
 	safeError := safeUpstreamError(payload)
 	if safeError.Code == "model_not_found" {
@@ -1828,8 +1827,8 @@ func codexTerminalFailure(payload []byte) (events.ErrorClass, events.RateLimitOb
 	if observation.UsageLimited {
 		return events.ErrorRateLimit, observation, safeError
 	}
-	combined := strings.ToLower(strings.TrimSpace(errorType + " " + errorCode))
-	message := strings.ToLower(strings.TrimSpace(errorMessage))
+	combined := strings.ToLower(strings.TrimSpace(safeError.Type + " " + safeError.Code))
+	message := strings.ToLower(strings.TrimSpace(safeError.Message))
 	switch {
 	case isCodexTransientCapacityMessage(combined, message):
 		return events.ErrorUpstream, observation, safeError
@@ -1891,73 +1890,18 @@ func readErrorObservationParts(headers headerGetter, bodyReader io.Reader) ([]by
 	return body, observation, maxRetryAfter(headerRetry, retryAfterFromObservation(observation)), safeUpstreamError(body)
 }
 
-func extractCodexErrorFields(body []byte) (errorType, errorCode, param, message string) {
-	type rawErrorObj struct {
-		Type    string          `json:"type"`
-		Code    string          `json:"code"`
-		Param   json.RawMessage `json:"param"`
-		Message string          `json:"message"`
-	}
-	var envelope map[string]json.RawMessage
-	if json.Unmarshal(body, &envelope) != nil {
-		return "", "", "", ""
-	}
-	decodeNode := func(raw json.RawMessage) (rawErrorObj, bool) {
-		trimmed := bytes.TrimSpace(raw)
-		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-			return rawErrorObj{}, false
-		}
-		var str string
-		if json.Unmarshal(trimmed, &str) == nil && str != "" {
-			return rawErrorObj{Message: str}, true
-		}
-		var obj rawErrorObj
-		if json.Unmarshal(trimmed, &obj) == nil && (obj.Type != "" || obj.Code != "" || obj.Message != "" || rawPresent(obj.Param)) {
-			return obj, true
-		}
-		return rawErrorObj{}, false
-	}
-	extractParam := func(raw json.RawMessage) string {
-		if !rawPresent(raw) {
-			return ""
-		}
-		return strings.Trim(strings.TrimSpace(string(raw)), `"`)
-	}
-	if obj, ok := decodeNode(envelope["error"]); ok {
-		return obj.Type, obj.Code, extractParam(obj.Param), obj.Message
-	}
-	for _, wrapperKey := range []string{"response", "body"} {
-		var wrapper struct {
-			Error json.RawMessage `json:"error"`
-		}
-		if json.Unmarshal(envelope[wrapperKey], &wrapper) == nil {
-			if obj, ok := decodeNode(wrapper.Error); ok {
-				return obj.Type, obj.Code, extractParam(obj.Param), obj.Message
-			}
-		}
-	}
-	var detail string
-	if json.Unmarshal(envelope["detail"], &detail) == nil && detail != "" {
-		return "", "", "", detail
-	}
-	return "", "", "", ""
-}
-
 func safeUpstreamError(body []byte) events.SafeError {
-	errorType, errorCode, param, message := extractCodexErrorFields(body)
-	if errorType == "" && errorCode == "" && param == "" && message == "" {
+	extracted := aetherrelaycodex.ExtractUpstreamError(body)
+	if extracted.Empty() {
 		return events.SafeError{}
 	}
 	return events.SafeError{
-		Type:    safeErrorToken(errorType, 64),
-		Code:    safeErrorToken(errorCode, 96),
-		Param:   safeErrorToken(param, 256),
-		Message: safeErrorText(message, 512),
+		Type:    extracted.UpstreamErrorType,
+		Code:    extracted.UpstreamErrorCode,
+		Param:   extracted.UpstreamErrorParam,
+		Message: extracted.UpstreamErrorMessage,
 	}
 }
-
-func safeErrorToken(value string, limit int) string { return aetherrelaycodex.ErrorToken(value, limit) }
-func safeErrorText(value string, limit int) string  { return aetherrelaycodex.ErrorText(value, limit) }
 
 func rateLimitObservation(body []byte, now time.Time) events.RateLimitObservation {
 	var payload struct {

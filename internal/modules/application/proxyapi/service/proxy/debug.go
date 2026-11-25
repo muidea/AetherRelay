@@ -9,6 +9,8 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -263,6 +265,30 @@ func (h *Handler) archiveAndLogUpstreamResponse(round *archive.Round, r *http.Re
 		headerSummary(logHeaders),
 	)
 	h.logUpstreamAlert(round, providerName, provider.Protocol, info.Status, duration, info.Error)
+}
+
+func (h *Handler) archiveUpstreamHTTPResponseError(round *archive.Round, fail *streamFail) {
+	if round == nil || fail == nil || round.Dir == "" || !round.HasFile("upstream_response.json") {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(round.Dir, "upstream_response.json"))
+	if err != nil {
+		return
+	}
+	var info upstreamResponseDebugInfo
+	if json.Unmarshal(raw, &info) != nil {
+		return
+	}
+	bounded := fail.UpstreamError.Bounded()
+	info.UpstreamErrorType = bounded.UpstreamErrorType
+	info.UpstreamErrorCode = bounded.UpstreamErrorCode
+	info.UpstreamErrorParam = bounded.UpstreamErrorParam
+	info.UpstreamErrorMessage = bounded.UpstreamErrorMessage
+	info.RetryAfterSeconds = fail.RetryAfterSeconds
+	info.Error = fail.Error()
+	if err := round.WriteJSON("upstream_response.json", info); err != nil {
+		log.Printf("archive upstream response error: %v", err)
+	}
 }
 
 // archiveCodexUpstreamAttempt persists the credential-safe HTTP observation

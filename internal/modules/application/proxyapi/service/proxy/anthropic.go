@@ -163,8 +163,7 @@ func (h *Handler) writePreparedAnthropicNativeResponse(w http.ResponseWriter, r 
 		usage = usageFromRawResponse(provider, responseBody, body)
 	}
 	duration := time.Since(start)
-	h.recordAndPrint(round, r, providerName, model, stream, resp.StatusCode, duration, usage, "")
-	h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, usage, responsePath, "", "", "")
+	h.settleBufferedUpstreamResponse(round, r, providerName, model, stream, resp, responseBody, duration, usage, responsePath)
 }
 
 type conversionLocationError struct {
@@ -296,11 +295,10 @@ func (h *Handler) writeConversionUpstreamError(w http.ResponseWriter, r *http.Re
 		log.Printf("archive converted upstream error: %v", err)
 	}
 	duration := time.Since(start)
-	h.recordAndPrint(round, r, providerName, model, stream, resp.StatusCode, duration, tokenUsage{}, "")
-	h.writeArchiveMetadata(round, providerName, model, stream, resp.StatusCode, duration, tokenUsage{}, responsePath, "", "", "")
+	h.settleBufferedUpstreamResponse(round, r, providerName, model, stream, resp, responseBody, duration, tokenUsage{}, responsePath)
 }
 
-// convertUpstreamErrorForClient 将上游错误体转换为客户端协议 envelope,并脱敏。
+// convertUpstreamErrorForClient 将上游错误体转换为客户端协议 envelope,并限制消息长度。
 func convertUpstreamErrorForClient(plan TransportPlan, status int, upstreamBody []byte, routeOwner string) ([]byte, string) {
 	safeMsg := summarizeUpstreamError(upstreamBody, status, routeOwner)
 	switch plan.ClientProtocol {
@@ -356,7 +354,6 @@ func summarizeUpstreamError(body []byte, status int, routeOwner string) string {
 			msg = m
 		}
 	}
-	msg = redactSecrets(msg)
 	if len(msg) > 240 {
 		msg = msg[:240] + "..."
 	}
@@ -367,15 +364,6 @@ func summarizeUpstreamError(body []byte, status int, routeOwner string) string {
 		return fmt.Sprintf("%s (route_owner=%s)", msg, routeOwner)
 	}
 	return msg
-}
-
-func redactSecrets(s string) string {
-	// 粗粒度脱敏:去掉看起来像 Bearer/sk-/key 的片段。
-	lower := strings.ToLower(s)
-	if strings.Contains(lower, "bearer ") || strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") || strings.Contains(s, "sk-") {
-		return "upstream error (details redacted)"
-	}
-	return s
 }
 
 // hasNonEmptyConversionFeature 判断上游可选字段是否包含真实不支持内容。

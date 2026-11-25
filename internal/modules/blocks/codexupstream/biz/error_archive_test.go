@@ -51,8 +51,8 @@ func TestErrorArchiveMalformedAndTruncated(t *testing.T) {
 			t.Fatal("malformed payload treated as JSON")
 		}
 	}
-	if got := safeUpstreamError([]byte(`{"detail":"Authorization bearer secret"}`)); got.Message != "" {
-		t.Fatal("unsafe message leaked")
+	if got := safeUpstreamError([]byte(`{"detail":"Authorization bearer secret"}`)); got.Message != "Authorization bearer secret" {
+		t.Fatal("message was unexpectedly wiped")
 	}
 	if got := safeUpstreamError([]byte(`{"error":"Invalid role"}`)); got.Message != "Invalid role" {
 		t.Fatal("string error lost")

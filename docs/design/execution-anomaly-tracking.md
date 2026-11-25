@@ -10,7 +10,7 @@
 
 执行编号不同于归档文件编号。一次 WS 握手和一次生成发送属于同次执行；发出请求前的 WS → HTTP 回退保留在该执行上。同账号刷新凭据后的再次执行和切换账号后的执行分别编号。原生 WS 连接首回合保留开连接握手，后续回合使用各自追踪，不复制握手成新尝试。账号准入/转换拒绝未访问上游时不伪造执行。
 
-Codex HTTP/SSE、compact、原生 WS 和跨协议入口复用 typed observation。ChatGPT Web 文本记录现有有限恢复流程的执行结果；通用 HTTP Provider 记录实际请求和响应头，最终结果由已有结算补齐。未接入逐次观测的工具、图片后台任务与内部连接探测不冒充具有完整追踪，细粒度的 ChatGPT Web bootstrap/sentinel 子请求也未在此扩展。
+Codex HTTP/SSE、compact、原生 WS 和跨协议入口复用 typed observation。ChatGPT Web 文本记录现有有限恢复流程的执行结果；通用 HTTP Provider 记录实际请求和响应头，并在非 2xx JSON 响应或 SSE `response.failed` 结算时从上游错误体提取有界的结构化上游错误附加到执行追踪尝试与 `usage_upstream_error`（无需开启 `archive_full_content`），最终结果由已有结算补齐。未接入逐次观测的工具、图片后台任务与内部连接探测不冒充具有完整追踪，细粒度的 ChatGPT Web bootstrap/sentinel 子请求也未在此扩展。
 
 ## 持久化和边界
 

@@ -1,6 +1,8 @@
 package aetherrelaycodex
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"unicode/utf8"
 )
@@ -14,12 +16,98 @@ type UpstreamError struct {
 	UpstreamErrorMessage string `json:"upstream_error_message,omitempty"`
 }
 
+func (e UpstreamError) Empty() bool {
+	return e.UpstreamErrorType == "" && e.UpstreamErrorCode == "" && e.UpstreamErrorParam == "" && e.UpstreamErrorMessage == ""
+}
+
 func (e UpstreamError) Bounded() UpstreamError {
 	e.UpstreamErrorType = ErrorToken(e.UpstreamErrorType, 64)
 	e.UpstreamErrorCode = ErrorToken(e.UpstreamErrorCode, 96)
 	e.UpstreamErrorParam = ErrorToken(e.UpstreamErrorParam, 256)
 	e.UpstreamErrorMessage = ErrorText(e.UpstreamErrorMessage, 512)
 	return e
+}
+
+// ExtractUpstreamError extracts bounded structured fields from an upstream JSON
+// error body across OpenAI, DeepSeek, Anthropic, and Codex envelopes. Non-JSON,
+// HTML, and empty bodies return the zero value.
+func ExtractUpstreamError(body []byte) UpstreamError {
+	type rawErrorObj struct {
+		Type    string          `json:"type"`
+		Code    json.RawMessage `json:"code"`
+		Param   json.RawMessage `json:"param"`
+		Message string          `json:"message"`
+	}
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(body, &envelope) != nil {
+		return UpstreamError{}
+	}
+	hasRawValue := func(raw json.RawMessage) bool {
+		trimmed := bytes.TrimSpace(raw)
+		return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+	}
+	extractScalarToken := func(raw json.RawMessage) string {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			return ""
+		}
+		var str string
+		if json.Unmarshal(trimmed, &str) == nil {
+			return str
+		}
+		var num json.Number
+		dec := json.NewDecoder(bytes.NewReader(trimmed))
+		dec.UseNumber()
+		if dec.Decode(&num) == nil {
+			return num.String()
+		}
+		return ""
+	}
+	decodeNode := func(raw json.RawMessage) (rawErrorObj, bool) {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			return rawErrorObj{}, false
+		}
+		var str string
+		if json.Unmarshal(trimmed, &str) == nil && str != "" {
+			return rawErrorObj{Message: str}, true
+		}
+		var obj rawErrorObj
+		if json.Unmarshal(trimmed, &obj) == nil && (obj.Type != "" || hasRawValue(obj.Code) || obj.Message != "" || hasRawValue(obj.Param)) {
+			return obj, true
+		}
+		return rawErrorObj{}, false
+	}
+	toBounded := func(obj rawErrorObj) UpstreamError {
+		return UpstreamError{
+			UpstreamErrorType:    obj.Type,
+			UpstreamErrorCode:    extractScalarToken(obj.Code),
+			UpstreamErrorParam:   extractScalarToken(obj.Param),
+			UpstreamErrorMessage: obj.Message,
+		}.Bounded()
+	}
+
+	if obj, ok := decodeNode(envelope["error"]); ok {
+		return toBounded(obj)
+	}
+	for _, wrapperKey := range []string{"response", "body"} {
+		var wrapper struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(envelope[wrapperKey], &wrapper) == nil {
+			if obj, ok := decodeNode(wrapper.Error); ok {
+				return toBounded(obj)
+			}
+		}
+	}
+	var detail string
+	if json.Unmarshal(envelope["detail"], &detail) == nil && detail != "" {
+		return UpstreamError{UpstreamErrorMessage: detail}.Bounded()
+	}
+	if obj, ok := decodeNode(body); ok && (obj.Message != "" || (obj.Type != "" && hasRawValue(obj.Code))) {
+		return toBounded(obj)
+	}
+	return UpstreamError{}
 }
 
 // ErrorToken and ErrorText retain the existing Codex error projection policy.
@@ -40,11 +128,6 @@ func ErrorText(value string, limit int) string {
 		}
 		return char
 	}, strings.TrimSpace(value))
-	for _, marker := range []string{"bearer ", "authorization", "api_key", "access_token", "refresh_token", "cookie", "sk-", "sess-"} {
-		if strings.Contains(strings.ToLower(value), marker) {
-			return ""
-		}
-	}
 	return strings.TrimSpace(boundedErrorString(value, limit))
 }
 

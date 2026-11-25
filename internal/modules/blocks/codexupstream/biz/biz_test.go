@@ -261,14 +261,14 @@ func TestCompletedResponseRejectsEmptyIncomplete(t *testing.T) {
 	}
 }
 
-func TestSafeUpstreamErrorIsBoundedAndRedacted(t *testing.T) {
+func TestSafeUpstreamErrorIsBoundedAndPreservesMessage(t *testing.T) {
 	safe := safeUpstreamError([]byte(`{"error":{"type":"invalid_request_error","code":"invalid_function_parameters","param":"input[1].tools[2]","message":"Invalid schema"}}`))
 	if safe.Type != "invalid_request_error" || safe.Code != "invalid_function_parameters" || safe.Param != "input[1].tools[2]" || safe.Message != "Invalid schema" {
 		t.Fatalf("CP-FAIL-013 safe=%+v", safe)
 	}
-	redacted := safeUpstreamError([]byte(`{"error":{"message":"Authorization: Bearer secret"}}`))
-	if redacted.Message != "" {
-		t.Fatalf("CP-FAIL-013 secret message=%q", redacted.Message)
+	preserved := safeUpstreamError([]byte(`{"error":{"message":"Authorization: Bearer secret"}}`))
+	if preserved.Message != "Authorization: Bearer secret" {
+		t.Fatalf("CP-FAIL-013 preserved message=%q", preserved.Message)
 	}
 }
 
