@@ -212,7 +212,7 @@
         <div class="stat"><div class="stat-label usage-card-label">缓存使用率<button type="button" class="usage-tip" aria-label="缓存读取 Token / 同批请求的输入 Token；仅统计缓存读取已知的成功请求。">?</button></div><div class="stat-value" id="uCacheRate">—</div></div>
         <div class="stat"><div class="stat-label usage-card-label">TPS (Token/s)<button type="button" class="usage-tip" aria-label="输出 Token 合计 / 请求总耗时合计（含首输出等待）；仅统计有效样本。">?</button></div><div class="stat-value" id="uTPS">—</div></div>
         <div class="stat"><div class="stat-label usage-card-label">缓存读取 / 创建 Token<button type="button" class="usage-tip" aria-label="成功请求中已报告的缓存读取与创建 Token，分别显示。">?</button></div><div class="stat-value" id="uCacheTokens">—</div></div>
-        <div class="stat"><div class="stat-label usage-card-label">当前并发<button type="button" class="usage-tip" aria-label="全局正在处理的请求数（含流式请求），每 2 秒刷新；不受历史筛选影响。">?</button></div><div class="stat-value" id="uInflight">—</div></div>
+        <div class="stat"><div class="stat-label usage-card-label">当前并发<button type="button" class="usage-tip" aria-label="全局正在处理的请求数（含流式请求），每 5 秒刷新；不受历史筛选影响。">?</button></div><div class="stat-value" id="uInflight">—</div></div>
       </section>
       <section class="charts">
         <div class="card chart-card"><div class="chart-title usage-card-label">调用次数趋势<button type="button" class="usage-tip" aria-label="按 UTC+8 日期汇总全部请求，含待完成与结果未知；应用当前筛选。">?</button></div><div id="chartRequests" class="chart-svg"></div></div>
@@ -797,7 +797,7 @@ Object.assign(enUS,{
   "缓存读取 Token / 同批请求的输入 Token；仅统计缓存读取已知的成功请求。":"Cache read tokens / input tokens for the same successful requests with known cache reads.",
   "输出 Token 合计 / 请求总耗时合计（含首输出等待）；仅统计有效样本。":"Total output tokens / total request duration, including the wait for first output; valid samples only.",
   "成功请求中已报告的缓存读取与创建 Token，分别显示。":"Reported cache read and creation tokens from successful requests, shown separately.",
-  "全局正在处理的请求数（含流式请求），每 2 秒刷新；不受历史筛选影响。":"Active global requests, including streams; refreshes every 2s, independently of historical filters.",
+  "全局正在处理的请求数（含流式请求），每 5 秒刷新；不受历史筛选影响。":"Active global requests, including streams; refreshes every 5s, independently of historical filters.",
   "按 UTC+8 日期汇总全部请求，含待完成与结果未知；应用当前筛选。":"Daily requests in UTC, including successes and failures, matching the current filters.",
   "按 UTC+8 日期汇总输入与输出 Token；浅蓝为输入，深蓝为输出。":"Daily input and output tokens in UTC; light blue is input, dark blue is output.",
   "按 UTC+8 日期计算缓存使用率；仅统计缓存读取已知的成功请求。":"Daily cache usage rate in UTC, using successful requests with known cache reads.",
@@ -1363,6 +1363,7 @@ function setHash(silent=false){
   location.hash="#/"+state.tab;
 }
 function showTab(tab){
+  if(state.tab==="usage"&&tab!=="usage")abortUsageRequests();
   if(state.tab==="features"&&tab!=="features"){stopAllTaskPolling();invalidateTemporaryChatContext();}
   state.tab=tab;
   $("panelProviders").classList.toggle("active",tab==="providers");
@@ -1380,7 +1381,7 @@ function showTab(tab){
   $("navAccountPools").classList.toggle("active",tab==="account-pools");
   $("navFeatures").classList.toggle("active",tab==="features");
   $("navSystem").classList.toggle("active",tab==="system");
-  if(tab==="usage"){loadFilterOptions(false);loadUsage(true)}
+  if(tab==="usage")reloadUsageData(false);
   else if(tab==="client-keys")loadClientKeys();
   else if(tab==="account-pools"){loadUnifiedAccounts();setHash()}
   else if(tab==="features")showFeatureSub(state.featureSub||"chat");
@@ -3224,10 +3225,21 @@ function renderUsageFilters(resetDraft=false){
   fillFilterOptions(state.filterOptions);
   renderUsageFilterHints();
 }
+function shouldPollUsageRuntime(){return state.tab==="usage"&&(state.usageView||"overview")==="overview"&&!document.hidden}
+function abortUsageController(name){const controller=state[name];if(controller&&typeof controller.abort==="function")controller.abort();state[name]=null}
+function abortUsageRequests(){abortUsageController("filterOptionsAbort");abortUsageController("usageDashboardAbort");abortUsageController("eventsLoadAbort");abortUsageController("usageDiagnosticsAbort");abortUsageController("usageRuntimeAbort")}
+async function reloadUsageData(forceOptions=false){
+  const optionsKey=filterOptionsCacheKey();
+  const needOptions=forceOptions||!state.filterOptions||state.filterOptionsKey!==optionsKey;
+  const query=loadUsage(true);
+  const version=state.usageLoadVersion;
+  await query;
+  if(version!==state.usageLoadVersion||filterOptionsCacheKey()!==optionsKey)return;
+  if(needOptions)await loadFilterOptions(forceOptions);
+}
 function reloadUsageQuery(forceOptions=false){
   setHash(true);
-  loadFilterOptions(forceOptions);
-  return loadUsage(true);
+  return reloadUsageData(forceOptions);
 }
 function applyUsageFilters(){
   captureUsageDraft();
@@ -3298,11 +3310,14 @@ function fillFilterOptions(data){
 async function loadFilterOptions(force=false){
   const key=filterOptionsCacheKey();
   if(!force&&state.filterOptions&&state.filterOptionsKey===key)return;
+  abortUsageController("filterOptionsAbort");
+  const controller=new AbortController();
+  state.filterOptionsAbort=controller;
   const version=(state.filterOptionsVersion||0)+1;state.filterOptionsVersion=version;
   try{
-    const data=await request(apiURL(`/api/usage/filter-options?${usageRangeParams().toString()}`));
+    const data=await request(apiURL(`/api/usage/filter-options?${usageRangeParams().toString()}`),{signal:controller.signal});
     // 时间范围变更后，过期请求不得覆盖当前下拉选项。
-    if(version!==state.filterOptionsVersion||key!==filterOptionsCacheKey())return;
+    if(controller.signal.aborted||version!==state.filterOptionsVersion||key!==filterOptionsCacheKey())return;
     state.filterOptionsKey=key;
     fillFilterOptions(data);
     if(data&&data.history_query_ok===false&&!state.filterOptionsWarned){
@@ -3310,38 +3325,42 @@ async function loadFilterOptions(force=false){
       toast("历史筛选选项加载失败，已仅显示配置项","error");
     }
   }catch(e){
-    if(version!==state.filterOptionsVersion||key!==filterOptionsCacheKey())return;
+    if(controller.signal.aborted||version!==state.filterOptionsVersion||key!==filterOptionsCacheKey())return;
     // 保留现有选项；注入 orphan 以保证当前筛选值可见
     fillFilterOptions(state.filterOptions||{api_key_ids:[],providers:[],models:[],outcomes:[]});
     if(!state.filterOptionsWarned){state.filterOptionsWarned=true;toast(e.message||"筛选选项加载失败","error")}
-  }
+  }finally{if(state.filterOptionsAbort===controller)state.filterOptionsAbort=null}
 }
 async function loadUsageRuntime(){
   if(state.usageRuntimeBusy)return;
   state.usageRuntimeBusy=true;
   const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),5000);
+  state.usageRuntimeAbort=controller;
+  let timedOut=false;
+  const timeout=setTimeout(()=>{timedOut=true;controller.abort()},5000);
   try{
     const data=await request(apiURL("/api/usage/runtime"),{signal:controller.signal});
+    if(controller.signal.aborted)return;
     if(data?.scope!=="process"||!Number.isSafeInteger(data.inflight)||data.inflight<0)throw new Error("invalid runtime metrics");
     $("uInflight").textContent=formatNumber(data.inflight);
     setLocalizedAttribute($("uInflight"),"title",()=>usageCardHint("inflight",data));
   }catch(e){
+    if(controller.signal.aborted&&!timedOut)return;
     $("uInflight").textContent="—";
     setLocalizedAttribute($("uInflight"),"title","当前并发数据不可用");
   }finally{
     clearTimeout(timeout);
+    if(state.usageRuntimeAbort===controller)state.usageRuntimeAbort=null;
     state.usageRuntimeBusy=false;
   }
 }
-async function loadUsage(resetEvents=true){
-  loadUsageRuntime();
-  loadUsageDiagnostics();
-  const key=usageParams().toString(),version=(state.usageLoadVersion||0)+1;state.usageLoadVersion=version;
-  const eventUpdate=resetEvents?loadEvents(true):refreshUsageEvents();
+async function loadUsageDashboard(key,version){
+  abortUsageController("usageDashboardAbort");
+  const controller=new AbortController();
+  state.usageDashboardAbort=controller;
   try{
-    const data=await request(apiURL(`/api/usage/dashboard?${key}`));
-    if(version!==state.usageLoadVersion||key!==usageParams().toString())return;
+    const data=await request(apiURL(`/api/usage/dashboard?${key}`),{signal:controller.signal});
+    if(controller.signal.aborted||version!==state.usageLoadVersion||key!==usageParams().toString())return;
     state.usage=data;
     const s=data.summary||{};
     $("uRequests").textContent=compact(s.requests);setLocalizedAttribute($("uRequests"),"title",()=>usageCardHint("requests",s));
@@ -3354,10 +3373,48 @@ async function loadUsage(resetEvents=true){
     $("uTPS").textContent=usageTPS(s);setLocalizedAttribute($("uTPS"),"title",()=>usageCardHint("tps",s));
     renderKeyTable(data.by_api_key||[]);
   }catch(e){
-    if(version!==state.usageLoadVersion||key!==usageParams().toString())return;
+    if(controller.signal.aborted||version!==state.usageLoadVersion||key!==usageParams().toString())return;
     $("keyTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
     toast(e.message,"error");
-  }finally{await eventUpdate}
+  }finally{if(state.usageDashboardAbort===controller)state.usageDashboardAbort=null}
+}
+async function loadUsage(resetEvents=true){
+  if(!resetEvents&&state.usageLoading)return;
+  const key=usageParams().toString(),view=state.usageView||"overview",version=(state.usageLoadVersion||0)+1;state.usageLoadVersion=version;
+  const current=()=>version===state.usageLoadVersion&&key===usageParams().toString();
+  if(resetEvents){
+    state.usageLoading=true;
+    abortUsageController("usageDashboardAbort");
+    abortUsageController("eventsLoadAbort");
+    abortUsageController("usageDiagnosticsAbort");
+    try{
+      if(view==="calls"){
+        await Promise.allSettled([loadEvents(true),loadUsageDiagnostics()]);
+        if(!current())return;
+        await loadUsageDashboard(key,version);
+      }else if(view==="anomalies"){
+        await loadUsageDiagnostics();
+        if(!current())return;
+        await Promise.allSettled([loadUsageDashboard(key,version),loadEvents(true)]);
+      }else{
+        await Promise.allSettled([loadUsageDashboard(key,version),loadUsageDiagnostics()]);
+        if(!current())return;
+        await Promise.allSettled([loadEvents(true),loadUsageRuntime()]);
+      }
+    }finally{if(version===state.usageLoadVersion)state.usageLoading=false}
+    return;
+  }
+  if(view==="calls"){
+    await refreshUsageEvents();
+    return;
+  }
+  if(view==="anomalies"){
+    await Promise.allSettled([loadUsageDiagnostics(),refreshUsageEvents()]);
+    return;
+  }
+  await loadUsageDashboard(key,version);
+  if(!current())return;
+  await Promise.allSettled([loadUsageDiagnostics(),refreshUsageEvents()]);
 }
 function usageParams(){const p=new URLSearchParams({timezone:"Asia/Singapore"});if(state.range!=="today")p.set("range",state.range);[["api_key_id",state.apiKeyFilter],["provider",state.providerFilter],["model",state.modelFilter],["outcome",state.outcomeFilter],["estimated",state.estimatedFilter],["from",state.from],["to",state.to], ["result",state.resultFilter],["account_id",state.accountFilter],["search",state.searchFilter],["missing_dimension",state.missingDimension],["cause",state.causeFilter],["transport",state.transportFilter],["revision",state.revisionFilter]].forEach(([k,v])=>{if(v)p.set(k,v)});return p}
 function renderCharts(daily){
@@ -3485,6 +3542,9 @@ function mergeUsageEvents(previous,incoming){
 }
 async function loadEvents(reset=false){
   if(state.eventsLoadBusy&&!reset)return;
+  abortUsageController("eventsLoadAbort");
+  const controller=new AbortController();
+  state.eventsLoadAbort=controller;
   const key=usageParams().toString(),version=(state.eventsVersion||0)+1;state.eventsVersion=version;
   state.eventsLoadBusy=true;
   if(reset){state.events=[];state.cursor="";state.eventsFilterKey=key}
@@ -3492,14 +3552,17 @@ async function loadEvents(reset=false){
   try{
     const params=new URLSearchParams(key);params.set("page_size","50");
     if(cursor)params.set("cursor",cursor);
-    const page=await request(apiURL(`/api/usage/events?${params}`));
-    if(version!==state.eventsVersion||key!==usageParams().toString())return;
+    const page=await request(apiURL(`/api/usage/events?${params}`),{signal:controller.signal});
+    if(controller.signal.aborted||version!==state.eventsVersion||key!==usageParams().toString())return;
     state.events=mergeUsageEvents(reset?[]:state.events,page.events||[]);
     state.cursor=page.next_cursor||"";
     renderUsageEvents();
   }catch(e){
-    if(version===state.eventsVersion&&key===usageParams().toString())$("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
-  }finally{if(version===state.eventsVersion)state.eventsLoadBusy=false}
+    if(!controller.signal.aborted&&version===state.eventsVersion&&key===usageParams().toString())$("eventTable").innerHTML=`<div class="empty">${esc(e.message)}</div>`;
+  }finally{
+    if(state.eventsLoadAbort===controller)state.eventsLoadAbort=null;
+    if(version===state.eventsVersion)state.eventsLoadBusy=false;
+  }
 }
 function usageEventMatchesFilters(event){
   const unknown=event.state!=="completed"||event.outcome==="process_interrupted",failed=!unknown&&event.outcome!=="success",recovered=!unknown&&event.outcome==="success"&&event.had_anomaly;
@@ -3551,6 +3614,7 @@ function setUsageView(view){state.usageView=view;document.querySelectorAll("[dat
 function switchUsageView(view){
   if(!["overview","calls","anomalies"].includes(view)||view===state.usageView)return;
   setUsageView(view);
+  if(view!=="overview")abortUsageController("usageRuntimeAbort");
   setHash(true);
 }
 function setUsageTraceTab(tab){state.usageTraceTab=tab;for(const [key,id] of Object.entries({overview:"usageTraceOverview",attempts:"usageTraceAttempts",evidence:"usageTraceEvidence",fields:"usageTraceFields"}))$(id).className="usage-trace-tab"+(key===tab?" active":"");document.querySelectorAll("[data-trace-tab]").forEach(b=>{b.classList.toggle("active",b.dataset.traceTab===tab);b.setAttribute("aria-selected",String(b.dataset.traceTab===tab))})}
@@ -3582,12 +3646,17 @@ function renderUsageTrace(data){
 }
 async function loadUsageDiagnostics(){
   $("uSuccess").textContent="—";
+  abortUsageController("usageDiagnosticsAbort");
+  const controller=new AbortController();
+  state.usageDiagnosticsAbort=controller;
   const key=usageParams().toString(),group=$("usageAnomalyGroup").value||"cause",version=(state.usageDiagnosticsVersion||0)+1;state.usageDiagnosticsVersion=version;
   try{
-    const data=await request(apiURL(`/api/usage/anomalies?${key}&group_by=${encodeURIComponent(group)}`));
-    if(version!==state.usageDiagnosticsVersion||key!==usageParams().toString()||group!==($("usageAnomalyGroup").value||"cause"))return;
+    const data=await request(apiURL(`/api/usage/anomalies?${key}&group_by=${encodeURIComponent(group)}`),{signal:controller.signal});
+    if(controller.signal.aborted||version!==state.usageDiagnosticsVersion||key!==usageParams().toString()||group!==($("usageAnomalyGroup").value||"cause"))return;
     state.usageDiagnostics=data;renderUsageDiagnostics(data);
-  }catch(e){if(version===state.usageDiagnosticsVersion&&key===usageParams().toString()&&group===($("usageAnomalyGroup").value||"cause")){$("usageDiagnosticsSummary").innerHTML="";$("usageDiagnosticsHint").textContent=t("异常统计查询失败")+"："+e.message;$("usageAnomalyBody").innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
+  }catch(e){
+    if(!controller.signal.aborted&&version===state.usageDiagnosticsVersion&&key===usageParams().toString()&&group===($("usageAnomalyGroup").value||"cause")){$("usageDiagnosticsSummary").innerHTML="";$("usageDiagnosticsHint").textContent=t("异常统计查询失败")+"："+e.message;$("usageAnomalyBody").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  }finally{if(state.usageDiagnosticsAbort===controller)state.usageDiagnosticsAbort=null}
 }
 function renderUsageDiagnostics(data){
   const s=data.summary||{};$("uSuccess").textContent=s.completed?((s.success||0)/s.completed*100).toFixed(1)+"%":"—";setLocalizedAttribute($("uSuccess"),"title",t("成功请求 / 已完成请求；结果未知不计入分母"));const metrics=[["已完成请求",s.completed],["最终失败",s.failed],["其中：输出中断",s.partial],["成功 · 曾有异常",s.recovered],["待完成 / 结果未知",s.unknown]];
@@ -3633,7 +3702,7 @@ $("protocol").onchange=()=>renderEndpoints();
 $("providerForm").onsubmit=submitForm;
 $("builtinProviderForm").onsubmit=submitBuiltinProviderForm;
 $("search").oninput=e=>{state.query=e.target.value;renderProviders()};
-$("usageRefresh").onclick=()=>{loadFilterOptions(true);loadUsage(true)};
+$("usageRefresh").onclick=()=>reloadUsageData(true);
 $("addClientKey").onclick=openCreateClientKey;
 $("closeClientKeyDialog").onclick=$("cancelClientKey").onclick=()=>$("clientKeyDialog").close();
 $("clientKeyForm").onsubmit=async e=>{e.preventDefault();const mode=clientKeyAccessMode("clientKeyAccessMode"),provider_ids=mode==="selected"?clientKeyProviderSelection("clientKey"):[];if(mode==="selected"&&!provider_ids.length){updateClientKeyAccessUI("clientKey","clientKeyAccessMode");return}const button=$("createClientKeySubmit");button.disabled=true;try{const d=await request(apiURL("/api/client-api-keys"),{method:"POST",headers:authHeaders({"Content-Type":"application/json"}),body:JSON.stringify({id:$("clientKeyID").value.trim(),enabled:$("clientKeyEnabled").checked,provider_access:{mode,provider_ids}})});$("clientKeyDialog").close();showClientSecret(d.api_key);loadClientKeys()}catch(err){toast(err.message,"error")}finally{button.disabled=false}};
@@ -3690,7 +3759,7 @@ window.addEventListener("hashchange",()=>{
   applyChatGPTState(p);
   showTab(p.tab);
 });
-window.addEventListener("pagehide",()=>{stopAllTaskPolling();invalidateTemporaryChatContext();clearTemporaryPendingImages();clearOAuthMemory();clearCodexOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
+window.addEventListener("pagehide",()=>{abortUsageRequests();stopAllTaskPolling();invalidateTemporaryChatContext();clearTemporaryPendingImages();clearOAuthMemory();clearCodexOAuthMemory();if(state.cg.refresh.timer){clearTimeout(state.cg.refresh.timer);state.cg.refresh.timer=null}});
 
 
 // Temporary chat (server-persisted; no Web Storage)
@@ -4600,7 +4669,7 @@ Promise.allSettled([initAuthSession(),loadAdminPreferences()]).finally(()=>{
   setTaskMode(state.cg.tasks.mode||"generation",false);
   showTab(boot.tab);
   state.usageTimer=setInterval(()=>{if(state.tab==="usage"&&!document.hidden)loadUsage(false)},15000);
-  state.usageRuntimeTimer=setInterval(()=>{if(state.tab==="usage"&&!document.hidden)loadUsageRuntime()},2000);
+  state.usageRuntimeTimer=setInterval(()=>{if(shouldPollUsageRuntime())loadUsageRuntime()},5000);
 });
 
 

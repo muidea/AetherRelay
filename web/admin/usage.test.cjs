@@ -22,7 +22,7 @@ function harness() {
   });
   context.history={entries:[],pushState(_state,_title,hash){this.entries.push(hash);context.location.hash=hash}};
   vm.runInContext(source.match(/^const esc=.*$/m)[0], context);
-  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'loadUsageRuntime', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel','formatUsageDate','usageInputISO','usageInputValue','usageCause','usageCauseLabel','usageEvidenceLabel','usageReplayLabel','setUsageTraceTab','renderUsageTrace','renderUsageEventFields', 'showUsageEvent','usageFilterControls','usageDraftFromState','captureUsageDraft','renderUsageFilterHints','renderUsageFilters','reloadUsageQuery','applyUsageFilters','resetUsageFilters','setUsageRange','commitUsageDrill','usageRangeParams','filterOptionsCacheKey','fillSelect','fillFilterOptions','loadFilterOptions','applyUsageState','setUsageView','switchUsageView','parseHash','setHash']) {
+  for (const name of ['formatNumber', 'compact', 'usageCardHint', 'usageCacheRate', 'usageCacheTokens', 'usageCacheHint', 'usageTokensUnavailable', 'usageTokenValue', 'usageDurationSeconds', 'svgBars', 'svgStacked', 'renderCharts', 'usageTPS', 'usageTPSHint', 'renderKeyTable', 'eventStatusMeta', 'usageUpstreamMeta', 'usageParams', 'shouldPollUsageRuntime', 'abortUsageController', 'abortUsageRequests', 'reloadUsageData', 'loadUsageRuntime', 'loadUsageDashboard', 'loadUsage', 'renderUsageEventTable', 'renderUsageEvents', 'mergeUsageEvents', 'usageEventMatchesFilters', 'refreshUsageEvents', 'loadEvents', 'usageAccountLabel','formatUsageDate','usageInputISO','usageInputValue','usageCause','usageCauseLabel','usageEvidenceLabel','usageReplayLabel','setUsageTraceTab','renderUsageTrace','renderUsageEventFields', 'showUsageEvent','usageFilterControls','usageDraftFromState','captureUsageDraft','renderUsageFilterHints','renderUsageFilters','reloadUsageQuery','applyUsageFilters','resetUsageFilters','setUsageRange','commitUsageDrill','usageRangeParams','filterOptionsCacheKey','fillSelect','fillFilterOptions','loadFilterOptions','applyUsageState','setUsageView','switchUsageView','parseHash','setHash']) {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?(?=\\n(?:async )?function |\\n\\n// events)`, 'm'));
     assert.ok(match, `missing function ${name}`);
     // Some helpers share a line with other declarations; a fresh VM isolates tests.
@@ -652,18 +652,32 @@ test('reset rejects late successes and failures even when the previous query has
   const {context:c,elements}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
   c.applyUsageState({});c.loadUsageRuntime=()=>{};
   const messages=[],pending=[];c.toast=message=>messages.push(message);
-  c.request=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));
+  c.request=(url,options)=>new Promise((resolve,reject)=>pending.push({url,options,resolve,reject}));
   const oldOptions=c.loadFilterOptions(true),oldQuery=c.loadUsage(true);
-  const reset=c.resetUsageFilters();assert.equal(pending.length,8);
+  const reset=c.resetUsageFilters();
+  // oldOptions (0) + old wave1 (1,2) + new wave1 (3,4)
+  assert.equal(pending.length,5);
+  assert.equal(pending[1].options.signal.aborted,true);
+  assert.equal(pending[2].options.signal.aborted,true);
   function response(url,current){
    if(url.includes('/filter-options?'))return {models:[current?'current-model':'old-model']};
    if(url.includes('/events?'))return {events:[{event_id:current?'current-event':'old-event',state:'completed'}],next_cursor:current?'current-cursor':'old-cursor'};
    if(url.includes('/anomalies?'))return {summary:{completed:current?2:100,success:1},groups:[],daily:[]};
    return {summary:{requests:current?2:100}};
   }
-  for(const request of pending.slice(4))request.resolve(response(request.url,true));
+  pending[3].resolve(response(pending[3].url,true));
+  pending[4].resolve(response(pending[4].url,true));
+  await new Promise(resolve=>setImmediate(resolve));
+  // new wave2 events (5)
+  assert.equal(pending.length,6);
+  pending[5].resolve(response(pending[5].url,true));
+  await new Promise(resolve=>setImmediate(resolve));
+  // new filter-options (6) aborts oldOptions (0)
+  assert.equal(pending.length,7);
+  assert.equal(pending[0].options.signal.aborted,true);
+  pending[6].resolve(response(pending[6].url,true));
   await reset;
-  for(const request of pending.slice(0,4)){
+  for(const request of pending.slice(0,3)){
    if(fail)request.reject(Error('obsolete failure'));else request.resolve(response(request.url,false));
   }
   await Promise.all([oldOptions,oldQuery]);
@@ -673,4 +687,116 @@ test('reset rejects late successes and failures even when the previous query has
   assert.match(elements.usageModelFilter.innerHTML,/current-model/);assert.doesNotMatch(elements.usageModelFilter.innerHTML,/old-model/);
   assert.doesNotMatch(elements.eventTable.innerHTML,/obsolete failure/);assert.deepEqual(messages,[]);
  }
+});
+
+test('runtime polling runs only on visible overview view at 5s interval',()=>{
+ const {context:c}=harness();
+ assert.equal(c.shouldPollUsageRuntime(),true);
+ c.state.usageView='calls';assert.equal(c.shouldPollUsageRuntime(),false);
+ c.state.usageView='anomalies';assert.equal(c.shouldPollUsageRuntime(),false);
+ c.state.usageView='overview';c.state.tab='providers';assert.equal(c.shouldPollUsageRuntime(),false);
+ c.state.tab='usage';c.document.hidden=true;assert.equal(c.shouldPollUsageRuntime(),false);
+ assert.match(html,/setInterval\(\(\)=>\{if\(shouldPollUsageRuntime\(\)\)loadUsageRuntime\(\)\},5000\)/);
+ assert.match(html,/每 5 秒刷新/);assert.match(html,/refreshes every 5s/);
+ assert.doesNotMatch(html,/每 2 秒刷新/);assert.doesNotMatch(html,/every 2s/);
+});
+
+test('calls view prioritizes events and anomalies, avoids runtime, and caps peak concurrency at 2',async()=>{
+ const {context:c}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
+ c.applyUsageState({usageView:'calls'});
+ let active=0,maxActive=0;const pending=[],order=[];
+ c.request=url=>{
+  active++;maxActive=Math.max(maxActive,active);order.push(url.split('?')[0]);
+  return new Promise(resolve=>pending.push({url,resolve:val=>{active--;resolve(val)}}));
+ };
+ const query=c.reloadUsageQuery(true);
+ assert.equal(pending.length,2);
+ assert.deepEqual(order,['/api/usage/events','/api/usage/anomalies']);
+ pending[0].resolve({events:[],next_cursor:''});
+ pending[1].resolve({summary:{completed:0,success:0},groups:[],daily:[]});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(pending.length,3);
+ assert.equal(order[2],'/api/usage/dashboard');
+ pending[2].resolve({summary:{},daily:[],by_api_key:[]});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(pending.length,4);
+ assert.equal(order[3],'/api/usage/filter-options');
+ pending[3].resolve({api_key_ids:[],providers:[],models:[],outcomes:[]});
+ await query;
+ assert.equal(maxActive,2);
+ assert.equal(order.some(u=>u.includes('/runtime')),false);
+});
+
+test('calls view 15s auto-refresh skips idle ticks and only refreshes started events',async()=>{
+ const {context:c}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
+ c.applyUsageState({usageView:'calls'});
+ c.state.events=[{event_id:'done-1',state:'completed',outcome:'success'}];
+ c.state.eventsFilterKey=c.usageParams().toString();
+ const urls=[];
+ c.request=async url=>{urls.push(url);return {events:[{event_id:'run-1',state:'completed',http_status:200,outcome:'success'}]}};
+ await c.loadUsage(false);
+ assert.equal(urls.length,0);
+ c.state.events.push({event_id:'run-1',state:'started'});
+ await c.loadUsage(false);
+ assert.equal(urls.length,1);
+ assert.match(urls[0],/^\/api\/usage\/events\?.*event_id=run-1/);
+ assert.equal(c.state.events[1].state,'completed');
+});
+
+test('overview auto-refresh stages dashboard before anomalies without runtime or manual overlap',async()=>{
+ const {context:c}=harness();installUsageFunctions(c,['loadUsageDiagnostics','renderUsageDiagnostics']);
+ c.applyUsageState({usageView:'overview'});
+ c.state.events=[{event_id:'run-1',state:'started'}];
+ c.state.eventsFilterKey=c.usageParams().toString();
+ const pending=[],urls=[];
+ c.request=url=>{urls.push(url.split('?')[0]);return new Promise(resolve=>pending.push({url,resolve}))};
+ const manual=c.loadUsage(true);
+ assert.equal(pending.length,2);
+ await c.loadUsage(false);
+ assert.equal(pending.length,2);
+ pending[0].resolve({summary:{},daily:[],by_api_key:[]});
+ pending[1].resolve({summary:{},groups:[],daily:[]});
+ await new Promise(resolve=>setImmediate(resolve));
+ pending[2].resolve({events:[{event_id:'run-1',state:'started'}],next_cursor:''});
+ pending[3].resolve({scope:'process',inflight:1});
+ await manual;
+ urls.length=0;pending.length=0;
+ const autoTick=c.loadUsage(false);
+ assert.deepEqual(urls,['/api/usage/dashboard']);
+ pending[0].resolve({summary:{requests:1},daily:[],by_api_key:[]});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(urls,['/api/usage/dashboard','/api/usage/anomalies','/api/usage/events']);
+ pending[1].resolve({summary:{},groups:[],daily:[]});
+ pending[2].resolve({events:[{event_id:'run-1',state:'completed',http_status:200,outcome:'success'}]});
+ await autoTick;
+ assert.equal(urls.some(u=>u.includes('/runtime')),false);
+});
+
+test('superseded queries and view switches abort in-flight requests cleanly without false errors',async()=>{
+ const {context:c,elements}=harness();
+ c.applyUsageState({usageView:'overview'});
+ c.$('uInflight').textContent='7';
+ const messages=[];c.toast=m=>messages.push(m);
+ c.request=(_url,options)=>new Promise((_resolve,reject)=>{
+  options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})));
+ });
+ const rt=c.loadUsageRuntime();
+ c.switchUsageView('calls');
+ await rt;
+ assert.equal(elements.uInflight.textContent,'7');
+ assert.equal(c.state.usageRuntimeBusy,false);
+ let secondResolve;const signals=[];
+ c.request=(_url,options)=>{
+  signals.push(options.signal);
+  return new Promise((resolve,reject)=>{
+   options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})));
+   if(signals.length===2)secondResolve=resolve;
+  });
+ };
+ const firstOpts=c.loadFilterOptions(true);
+ const secondOpts=c.loadFilterOptions(true);
+ assert.equal(signals[0].aborted,true);
+ secondResolve({api_key_ids:[],providers:[],models:[],outcomes:[]});
+ await Promise.all([firstOpts,secondOpts]);
+ assert.deepEqual(messages,[]);
 });
